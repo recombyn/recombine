@@ -1,70 +1,68 @@
-# Getting Started with Create React App
+# Recombine
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+简历场景图模板制作工具 — 前后端同仓 monorepo。
 
-## Available Scripts
+- **Web**：React + Fabric.js，按 Canvas Scene JSON 坐标直绘
+- **API**：FastAPI，解析 PDF / DOCX / 图片，统一输出 Scene JSON
 
-In the project directory, you can run:
+## 目录结构
 
-### `npm start`
+```
+apps/web/          React 前端编辑器
+apps/api/          Python 解析服务
+packages/          共享协议与核心库
+docs/              架构与 API 文档
+deploy/            Docker / Nginx
+scripts/           开发脚本
+```
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## 快速开始
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+### 前端
 
-### `npm test`
+```bash
+npm install
+npm run dev:web
+```
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+访问 http://localhost:3000
 
-### `npm run build`
+### 后端（阶段一：FastAPI + Celery + Redis）
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```bash
+# Redis
+docker compose up -d redis
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+cd apps/api
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+pip install -e ../../packages/scene-builder-py
+pip install -e .
+# 复制 .env.example → .env，按需改 POPPLER_PATH / LIBREOFFICE_PATH
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+uvicorn main:app --reload --port 8000
+# 另开终端：
+celery -A worker.celery_app.celery worker -l info --pool=solo
+```
 
-### `npm run eject`
+访问 http://localhost:8000/docs  
+详情见 [apps/api/README.md](apps/api/README.md)
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## 解析链路
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+| 来源 | 流程 |
+|------|------|
+| PDF | 转页图 →（可选）PPStructure/PaddleOCR + KMeans；失败回退 pdfplumber → Scene |
+| DOCX | LibreOffice→PDF → 同上 |
+| 图片 | 页图 → OpenCV + OCR/布局 → Scene |
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+异步任务：`POST /api/v1/import/jobs` → `GET /api/v1/import/jobs/{id}`（页图在 `storage/results/{job_id}/pages/`）
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
 
-## Learn More
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+## 文档
 
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+- [架构说明](docs/architecture.md)
+- [导入管线](docs/import-pipeline.md)
+- [Scene JSON 规范](docs/scene-json-spec.md)
+- [API 文档](docs/api.md)

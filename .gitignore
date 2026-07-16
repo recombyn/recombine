@@ -1,22 +1,46 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
-/node_modules
-/.pnp
+node_modules/
+apps/web/node_modules/
+.pnp
 .pnp.js
 
-# testing
-/coverage
-
 # production
-/build
+build/
+apps/web/build/
+apps/web/dist/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# api runtime
+apps/api/storage/uploads/*
+apps/api/storage/results/*
+!apps/api/storage/uploads/.gitkeep
+!apps/api/storage/results/.gitkeep
+
+# testing
+coverage/
 
 # misc
 .DS_Store
+.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# typescript incremental cache (looks like garbled JSON — not source)
+*.tsbuildinfo
+
+# vite.config.ts is the source of truth; ignore accidental tsc emit
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
 
 npm-debug.log*
 yarn-debug.log*

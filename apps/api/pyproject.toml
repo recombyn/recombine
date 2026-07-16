@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "resume-scene-api"
+version = "0.1.0"
+description = "Resume scene import API — PDF/DOCX/Image/Design to Canvas JSON"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "python-multipart>=0.0.12",
+  "pydantic>=2.9.0",
+  "pydantic-settings>=2.6.0",
+  "pdfplumber>=0.11.0",
+  "celery[redis]>=5.4.0",
+  "redis>=5.0.0",
+  "pdf2image>=1.17.0",
+  "python-docx>=1.1.0",
+  "httpx>=0.27.0",
+  "google-auth>=2.35.0",
+]
+
+[project.optional-dependencies]
+ocr = [
+  "opencv-python-headless>=4.10.0",
+  "numpy>=1.26.0",
+  "paddleocr>=2.9.0",
+]
+# PaddlePaddle wheel is platform-specific; install separately, e.g.:
+#   pip install paddlepaddle -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+# On paddle 3.3.x + CPU, OCR init uses enable_mkldnn=False to avoid the known
+# oneDNN/PIR ConvertPirAttribute crash (or pin paddlepaddle==3.2.2).
+vision = [
+  "opencv-python-headless>=4.10.0",
+  "numpy>=1.26.0",
+  "paddleocr>=2.9.0",
+]
+storage = ["boto3>=1.35.0"]
+# Photoshop PSD composite + Pillow (XD/Axure/legacy .fig use stdlib zipfile)
+design = [
+  "psd-tools>=1.9.0",
+  "Pillow>=10.0.0",
+]
+dev = ["pytest>=8.0.0", "httpx>=0.27.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["api*", "config*", "schemas*", "services*", "worker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

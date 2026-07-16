@@ -1,0 +1,52 @@
+/* Dark theme — deep black base (not muddy gray), light surfaces on cards */
+html[data-theme='dark'] {
+  --surface: #1e1e1e;
+  --canvas: #0c0c0d;
+  --rail: #1a1a1a;
+  --ink: #e3e3e3;
+  --muted: #949494;
+  --line: #383838;
+  --accent: #e3e3e3;
+  --accent-soft: #2c2c2c;
+  --on-brand: #0c0c0d;
+
+  /* Slider: light fill on dark panels (avoid near-black active track) */
+  --slider-active: #e3e3e3;
+  --slider-inactive: #3a3a3a;
+  --slider-thumb-ring: #0c0c0d;
+
+  --color-brand-base: #e3e3e3;
+  --color-brand-base-hover: #ffffff;
+  --color-brand-secondary: #b3b3b3;
+
+  --color-background-default-base: #1e1e1e;
+  --color-background-default-base-hover: #2c2c2c;
+  --color-background-default-secondary: #141416;
+  --color-background-default-secondary-hover: #2c2c2c;
+  --color-background-default-tertiary: #444444;
+  --color-background-neutral-tertiary: #242424;
+
+  --color-border-default-base: #383838;
+  --color-border-default-base-hover: #555555;
+  --color-border-default-secondary: #757575;
+
+  --color-text-default-base: #e3e3e3;
+  --color-text-default-secondary: #cdcdcd;
+  --color-text-default-tertiary: #949494;
+  --color-text-on-button-base: #0c0c0d;
+  --color-text-solid: #0c0c0d;
+
+  --color-icon-base: rgba(255, 255, 255, 0.85);
+  --color-icon-secondary: rgba(255, 255, 255, 0.7);
+  --color-icon-secondary-hover: rgba(255, 255, 255, 0.8);
+
+  --color-background-success-base: #e3e3e3;
+  --color-background-success-base-hover: #ffffff;
+  --color-background-warning-base: #e8b931;
+  --color-background-warning-base-hover: #bf6a02;
+  --color-background-error-base: #c00f0c;
+  --color-background-error-base-hover: #900b09;
+
+  --color-shadow-scrim: rgba(255, 255, 255, 0.05);
+  --color-shadow-blanket: rgba(255, 255, 255, 0.08);
+}

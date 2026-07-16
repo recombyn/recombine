@@ -1,0 +1,36 @@
+{
+  "app": {
+    "name": "Recombine",
+    "tagline": "场景模板"
+  },
+  "home": {
+    "recent": "最�?,
+    "mine": "我的模板",
+    "search": "搜索模板名称",
+    "create": "新建模板",
+    "createDesc": "空白画布开始编�?,
+    "import": "导入文件",
+    "importDesc": "导入 Scene JSON",
+    "allTemplates": "全部模板",
+    "recentOpened": "最近打开",
+    "fileCount": "{{count}} 个文�?,
+    "empty": "还没有模�?,
+    "emptyHint": "点击上方新建模板开始制�?
+  },
+  "editor": {
+    "save": "保存",
+    "preview": "预览",
+    "undo": "撤销",
+    "redo": "重做",
+    "unsaved": "未保�?,
+    "design": "设计",
+    "layers": "图层",
+    "assets": "资源"
+  },
+  "common": {
+    "edit": "编辑",
+    "delete": "删除",
+    "export": "导出 JSON",
+    "back": "返回"
+  }
+}

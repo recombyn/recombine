@@ -1,0 +1,121 @@
+.slider-container {
+  position: relative;
+  /* Room for thumb larger than the track */
+  min-height: var(--slider-thumb-height, 16px);
+}
+
+.slider-value-tooltip {
+  position: absolute;
+  top: -42px;
+  background: var(--color-background-neutral-base);
+  color: var(--color-text-disabled-secondary);
+  font-size: 14px;
+  line-height: 20px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 10;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.slider-value-tooltip-arrow {
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  background: var(--color-background-neutral-base);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/**
+ * Thick pill track + white circular thumb with black ring (geometry from ref;
+ * colors stay black / gray — not accent blue).
+ * Input height = thumb; track is painted as a centered pill via background-size.
+ */
+.custom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: var(--slider-input-height, 16px);
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+  margin: 0;
+  border: none;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% var(--slider-track-height, 12px);
+}
+
+.custom-slider:focus,
+.custom-slider:focus-visible {
+  outline: none;
+}
+
+.custom-slider:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.custom-slider::-webkit-slider-runnable-track {
+  height: var(--slider-track-height, 12px);
+  border-radius: 9999px;
+  background: transparent;
+  border: none;
+}
+
+.custom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--slider-thumb-width, 16px);
+  height: var(--slider-thumb-height, 16px);
+  margin-top: calc((var(--slider-track-height, 12px) - var(--slider-thumb-height, 16px)) / 2);
+  border-radius: 50%;
+  background: var(--slider-thumb-color, #ffffff);
+  cursor: pointer;
+  border: none;
+  box-sizing: border-box;
+  box-shadow:
+    0 0 0 1.5px var(--slider-thumb-ring, #1a1a1a),
+    0 1px 3px rgba(0, 0, 0, 0.14);
+}
+
+.custom-slider:disabled::-webkit-slider-thumb {
+  cursor: default;
+}
+
+.custom-slider::-moz-range-track {
+  height: var(--slider-track-height, 12px);
+  border-radius: 9999px;
+  background: transparent;
+  border: none;
+}
+
+.custom-slider::-moz-range-thumb {
+  width: var(--slider-thumb-width, 16px);
+  height: var(--slider-thumb-height, 16px);
+  border-radius: 50%;
+  background: var(--slider-thumb-color, #ffffff);
+  cursor: pointer;
+  border: none;
+  box-sizing: border-box;
+  box-shadow:
+    0 0 0 1.5px var(--slider-thumb-ring, #1a1a1a),
+    0 1px 3px rgba(0, 0, 0, 0.14);
+}
+
+.custom-slider:disabled::-moz-range-thumb {
+  cursor: default;
+}
+
+/* vertical */
+.custom-slider-vertical {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  height: 100%;
+  width: var(--slider-input-height, 16px);
+  background-size: var(--slider-track-height, 12px) 100%;
+}

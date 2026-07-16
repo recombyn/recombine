@@ -1,0 +1,270 @@
+@import './fonts.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* fallback before data-theme applies */
+    --surface: #ffffff;
+    --canvas: #f3f3f3;
+    --rail: #f3f3f3;
+    --ink: #434343;
+    --muted: #767676;
+    --line: #d9d9d9;
+    --accent: #383838;
+    --accent-soft: #e6e6e6;
+    --on-brand: #ffffff;
+    --font-sans: 'Alibaba PuHuiTi', '阿里巴巴普惠体', 'PingFang SC', 'Microsoft YaHei',
+      'Noto Sans SC', system-ui, sans-serif;
+  }
+
+  html {
+    font-family: var(--font-sans);
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    letter-spacing: normal;
+    word-spacing: normal;
+    background: var(--canvas);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  /* Force chrome controls to inherit PuHuiTi (Tailwind/preflight + portaled UI). */
+  button,
+  input,
+  textarea,
+  select,
+  optgroup {
+    font-family: inherit;
+  }
+
+  html[lang='zh-TW'],
+  html[lang='zh-CN'],
+  html[lang='ja'] {
+    letter-spacing: 0;
+  }
+
+  #root {
+    height: 100vh;
+    overflow: hidden;
+    font-family: var(--font-sans);
+  }
+}
+
+/* Outside @layer so it reliably overrides Tailwind `transition` utilities during theme swaps */
+html.theme-switching,
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+.canvas-stage {
+  @apply relative flex min-h-full w-full items-start justify-center py-2;
+}
+
+/* Real artboard paper (frames / standalone export). */
+.canvas-paper {
+  position: relative;
+  background: var(--color-background-default-base);
+  box-shadow:
+    0 1px 0 var(--color-shadow-scrim),
+    0 8px 28px var(--color-shadow-blanket);
+  outline: 1px solid var(--color-border-default-base);
+}
+
+/* Infinite-world draw plane: invisible, no fixed “page” chrome. */
+.canvas-world {
+  position: relative;
+  overflow: visible;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Only the drawing surface needs an opaque fill.
+   Fabric's .upper-canvas must stay transparent or it hides all content. */
+.canvas-paper canvas.lower-canvas {
+  display: block;
+  background: #ffffff;
+}
+
+.canvas-paper canvas.upper-canvas,
+.canvas-paper canvas.lower-canvas {
+  /* Avoid browser upscaling blur when CSS size and buffer temporarily diverge. */
+  image-rendering: auto;
+}
+
+.canvas-paper canvas.upper-canvas {
+  background: transparent !important;
+}
+
+.panel-card {
+  @apply rounded-xl border p-4 shadow-sm;
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.panel-tip {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.form-grid {
+  @apply mb-3 grid grid-cols-2 gap-3;
+}
+
+.form-grid label,
+.full-width {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.form-grid input,
+.form-grid textarea,
+.full-width input,
+.full-width textarea {
+  @apply mt-1 w-full rounded-lg border px-3 py-2 text-sm focus:outline-none;
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.form-grid input:focus,
+.form-grid textarea:focus,
+.full-width input:focus,
+.full-width textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.form-grid input[type='number'] {
+  @apply h-9 py-0;
+}
+
+.checkbox-row {
+  @apply mt-2 flex items-center gap-2 text-sm;
+  color: var(--ink);
+}
+
+.empty-card {
+  @apply rounded-xl border p-8 text-center text-sm shadow-sm;
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.skeleton-bone {
+  border-radius: 4px;
+  background-image: linear-gradient(
+    90deg,
+    #e8e8e8 0%,
+    #e8e8e8 36%,
+    #f4f4f4 50%,
+    #e8e8e8 64%,
+    #e8e8e8 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+/** Image process loading plate — vertical sweep (band moves left ↔ right). */
+.image-process-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    rgba(255, 255, 255, 0.7) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.55s ease-in-out infinite;
+}
+
+html[data-theme='dark'] .skeleton-bone {
+  background-image: linear-gradient(
+    90deg,
+    #2f2f2f 0%,
+    #2f2f2f 36%,
+    #3a3a3a 50%,
+    #2f2f2f 64%,
+    #2f2f2f 100%
+  );
+}
+
+/* Global thin scrollbar with track inset */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: #cfcfcf transparent;
+}
+
+html[data-theme='dark'] *:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 12px;
+  margin-inline: 12px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background-color: #cfcfcf;
+}
+
+*:hover::-webkit-scrollbar-thumb:hover {
+  background-color: #b5b5b5;
+}
+
+html[data-theme='dark'] *:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.28);
+}
+
+html[data-theme='dark'] *:hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.4);
+}
+
+/* Table body: keep scrollbar gutter inside the bordered scrollport */
+.table-scroll-body {
+  scrollbar-gutter: stable;
+}
+
+.table-scroll-body::-webkit-scrollbar-track {
+  margin-block: 6px;
+  margin-inline: 2px;
+}

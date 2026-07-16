@@ -1,0 +1,169 @@
+[
+  {
+    "family": "Alibaba PuHuiTi",
+    "displayName": "阿里巴巴普惠体",
+    "children": [
+      {
+        "family": "Alibaba PuHuiTi Thin",
+        "displayName": "Thin",
+        "weight": 300,
+        "url": "https://cdn.jsdelivr.net/npm/c1-alibaba-puhui-ti@1.0.0/fonts/AlibabaPuHuiTi-3-35-Thin.woff2",
+        "format": "woff2"
+      },
+      {
+        "family": "Alibaba PuHuiTi",
+        "displayName": "Regular",
+        "weight": 400,
+        "url": "https://cdn.jsdelivr.net/npm/c1-alibaba-puhui-ti@1.0.0/fonts/AlibabaPuHuiTi-3-55-Regular.woff2",
+        "format": "woff2"
+      },
+      {
+        "family": "Alibaba PuHuiTi Medium",
+        "displayName": "Medium",
+        "weight": 500,
+        "url": "https://cdn.jsdelivr.net/npm/c1-alibaba-puhui-ti@1.0.0/fonts/AlibabaPuHuiTi-3-55-Regular.woff2",
+        "format": "woff2"
+      },
+      {
+        "family": "Alibaba PuHuiTi Bold",
+        "displayName": "Bold",
+        "weight": 700,
+        "url": "https://cdn.jsdelivr.net/npm/c1-alibaba-puhui-ti@1.0.0/fonts/AlibabaPuHuiTi-3-85-Bold.woff2",
+        "format": "woff2"
+      }
+    ]
+  },
+  {
+    "family": "Microsoft YaHei",
+    "displayName": "微软雅黑",
+    "children": [
+      {
+        "family": "Microsoft YaHei",
+        "displayName": "Light",
+        "weight": 300
+      },
+      {
+        "family": "Microsoft YaHei",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "Microsoft YaHei",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  },
+  {
+    "family": "SimSun",
+    "displayName": "宋体",
+    "children": [
+      {
+        "family": "SimSun",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "SimSun",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  },
+  {
+    "family": "SimHei",
+    "displayName": "黑体",
+    "children": [
+      {
+        "family": "SimHei",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "SimHei",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  },
+  {
+    "family": "KaiTi",
+    "displayName": "楷体",
+    "children": [
+      {
+        "family": "KaiTi",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "KaiTi",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  },
+  {
+    "family": "Arial",
+    "displayName": "Arial",
+    "children": [
+      {
+        "family": "Arial",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "Arial",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  },
+  {
+    "family": "Georgia",
+    "displayName": "Georgia",
+    "children": [
+      {
+        "family": "Georgia",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "Georgia",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  },
+  {
+    "family": "Times New Roman",
+    "displayName": "Times New Roman",
+    "children": [
+      {
+        "family": "Times New Roman",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "Times New Roman",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  },
+  {
+    "family": "Courier New",
+    "displayName": "Courier New",
+    "children": [
+      {
+        "family": "Courier New",
+        "displayName": "Regular",
+        "weight": 400
+      },
+      {
+        "family": "Courier New",
+        "displayName": "Bold",
+        "weight": 700
+      }
+    ]
+  }
+]

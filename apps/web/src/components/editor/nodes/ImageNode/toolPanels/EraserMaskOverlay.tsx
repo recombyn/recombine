@@ -1,0 +1,253 @@
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
+import {
+  CameraOverlayPortal,
+  useCamera,
+  worldToStage,
+} from '@/components/editor/Canvas/stage/CameraContext';
+
+/**
+ * Opaque mask fill — preview opacity is applied via CSS on the canvas so
+ * overlapping strokes do not stack / darken (single flat alpha layer).
+ */
+const MASK_FILL = '#9333EA';
+const PREVIEW_OPACITY = 0.38;
+
+export type EraserMaskOverlayHandle = {
+  clear: () => void;
+  hasStrokes: () => boolean;
+  /** Erase painted regions from `src` → PNG data URL. */
+  applyErase: (src: string) => Promise<string>;
+};
+
+type Props = {
+  imageBox: { left: number; top: number; width: number; height: number };
+  /** Brush diameter in world (image) pixels. */
+  brushSize: number;
+  onDirtyChange?: (dirty: boolean) => void;
+};
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    if (!src) {
+      reject(new Error('empty image src'));
+      return;
+    }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('image load failed'));
+    img.src = src;
+  });
+}
+
+/**
+ * On-image eraser brush: paint a purple mask, then punch holes on confirm.
+ */
+const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
+  function EraserMaskOverlay({ imageBox, brushSize, onDirtyChange }, ref): ReactNode {
+    const camera = useCamera();
+    const z = Math.max(0.05, camera.zoom || 1);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const paintingRef = useRef(false);
+    const lastRef = useRef<{ x: number; y: number } | null>(null);
+    const dirtyRef = useRef(false);
+    const onDirtyRef = useRef(onDirtyChange);
+    onDirtyRef.current = onDirtyChange;
+    const brushRef = useRef(brushSize);
+    brushRef.current = brushSize;
+
+    const origin = worldToStage(camera, imageBox.left, imageBox.top);
+    const stageW = Math.max(1, imageBox.width * z);
+    const stageH = Math.max(1, imageBox.height * z);
+
+    const markDirty = () => {
+      if (dirtyRef.current) return;
+      dirtyRef.current = true;
+      onDirtyRef.current?.(true);
+    };
+
+    const clear = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      dirtyRef.current = false;
+      onDirtyRef.current?.(false);
+    };
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        clear,
+        hasStrokes: () => dirtyRef.current,
+        applyErase: async (src: string) => {
+          const maskEl = canvasRef.current;
+          if (!maskEl || !dirtyRef.current) return src;
+          const img = await loadImage(src);
+          const nw = Math.max(1, img.naturalWidth || img.width || 1);
+          const nh = Math.max(1, img.naturalHeight || img.height || 1);
+
+          const out = document.createElement('canvas');
+          out.width = nw;
+          out.height = nh;
+          const ctx = out.getContext('2d');
+          if (!ctx) throw new Error('canvas unsupported');
+          ctx.drawImage(img, 0, 0, nw, nh);
+
+          // Hard mask from preview alpha → full erase under strokes.
+          const hard = document.createElement('canvas');
+          hard.width = nw;
+          hard.height = nh;
+          const hctx = hard.getContext('2d');
+          if (!hctx) throw new Error('canvas unsupported');
+          hctx.drawImage(maskEl, 0, 0, nw, nh);
+          const data = hctx.getImageData(0, 0, nw, nh);
+          const px = data.data;
+          for (let i = 0; i < px.length; i += 4) {
+            if (px[i + 3] > 8) {
+              px[i] = 0;
+              px[i + 1] = 0;
+              px[i + 2] = 0;
+              px[i + 3] = 255;
+            } else {
+              px[i + 3] = 0;
+            }
+          }
+          hctx.putImageData(data, 0, 0);
+
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.drawImage(hard, 0, 0);
+          return out.toDataURL('image/png');
+        },
+      }),
+      []
+    );
+
+    // Keep backing-store resolution tied to stage size; preserve strokes across zoom.
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const w = Math.max(1, Math.round(stageW));
+      const h = Math.max(1, Math.round(stageH));
+      if (canvas.width === w && canvas.height === h) return;
+      const prev = document.createElement('canvas');
+      prev.width = canvas.width || 1;
+      prev.height = canvas.height || 1;
+      const pctx = prev.getContext('2d');
+      if (pctx && canvas.width && canvas.height) {
+        pctx.drawImage(canvas, 0, 0);
+      }
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (ctx && prev.width > 1 && prev.height > 1) {
+        ctx.drawImage(prev, 0, 0, w, h);
+      }
+    }, [stageW, stageH]);
+
+    const localFromClient = (clientX: number, clientY: number) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      return {
+        x: ((clientX - rect.left) / rect.width) * canvas.width,
+        y: ((clientY - rect.top) / rect.height) * canvas.height,
+      };
+    };
+
+    const strokeTo = (x: number, y: number, from: { x: number; y: number } | null) => {
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (!canvas || !ctx) return;
+      // brushSize is world px; canvas is stage px → multiply by zoom.
+      const r = Math.max(1, (brushRef.current * z) / 2);
+      // Paint opaque; CSS opacity on the canvas keeps the whole mask at one alpha.
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = MASK_FILL;
+      ctx.fillStyle = MASK_FILL;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = r * 2;
+      if (!from) {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      }
+      markDirty();
+    };
+
+    useEffect(() => {
+      const onMove = (e: PointerEvent) => {
+        if (!paintingRef.current) return;
+        const p = localFromClient(e.clientX, e.clientY);
+        if (!p) return;
+        strokeTo(p.x, p.y, lastRef.current);
+        lastRef.current = p;
+      };
+      const onUp = () => {
+        paintingRef.current = false;
+        lastRef.current = null;
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      return () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+      };
+    }, [z]);
+
+    const style: CSSProperties = {
+      position: 'absolute',
+      left: origin.x,
+      top: origin.y,
+      width: stageW,
+      height: stageH,
+      zIndex: 34,
+      cursor: 'crosshair',
+      touchAction: 'none',
+      opacity: PREVIEW_OPACITY,
+    };
+
+    return (
+      <CameraOverlayPortal>
+        <canvas
+          ref={canvasRef}
+          data-eraser-mask
+          data-image-tool-panel
+          className="pointer-events-auto absolute"
+          style={style}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.nativeEvent.stopImmediatePropagation?.();
+            const p = localFromClient(e.clientX, e.clientY);
+            if (!p) return;
+            paintingRef.current = true;
+            lastRef.current = p;
+            strokeTo(p.x, p.y, null);
+            (e.target as HTMLCanvasElement).setPointerCapture?.(e.pointerId);
+          }}
+        />
+      </CameraOverlayPortal>
+    );
+  }
+);
+
+export default EraserMaskOverlay;

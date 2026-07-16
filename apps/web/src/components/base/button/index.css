@@ -1,0 +1,155 @@
+.btn {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+}
+
+.btn-disabled {
+  cursor: not-allowed !important;
+}
+
+.btn-small {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  height: 1.75rem; /* 28px — panel / dialog compact actions */
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+}
+
+.btn-medium {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  height: 1.75rem; /* 28px — match panel reference height */
+  font-size: 12px;
+  line-height: 1rem;
+  font-weight: 500;
+}
+
+.btn-large {
+  padding-left: 1rem;
+  padding-right: 1rem;
+  height: 2rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+}
+
+.btn-shape-default {
+  border-radius: 0.25rem;
+}
+
+.btn-shape-round {
+  border-radius: 9999px;
+}
+
+.btn-shape-circle {
+  border-radius: 9999px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+}
+
+.btn-primary {
+  box-shadow:
+    0 1px 3px 0 rgb(0 0 0 / 0.1),
+    0 1px 2px -1px rgb(0 0 0 / 0.1);
+  background-color: var(--color-brand-base);
+  border: 1px solid var(--color-brand-base);
+  color: var(--color-text-on-button-base);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--color-background-success-base-hover);
+  border-color: var(--color-background-success-base-hover);
+}
+
+.btn-primary.btn-destructive {
+  background-color: var(--color-background-error-base);
+  border-color: var(--color-background-error-base);
+  color: var(--color-text-on-button-base);
+}
+
+.btn-primary.btn-destructive:hover:not(:disabled) {
+  background-color: var(--color-background-error-base-hover);
+  border-color: var(--color-background-error-base-hover);
+}
+
+.btn-primary.btn-disabled,
+.btn-primary:disabled {
+  box-shadow: none;
+  background-color: var(--color-background-neutral-secondary);
+  border-color: var(--color-background-neutral-secondary);
+  color: var(--color-text-default-tertiary);
+}
+
+.btn-primary.btn-destructive.btn-disabled,
+.btn-primary.btn-destructive:disabled {
+  box-shadow: none;
+  background-color: var(--color-background-neutral-secondary);
+  border-color: var(--color-background-neutral-secondary);
+  color: var(--color-text-default-tertiary);
+}
+
+.btn-default {
+  border-width: 0.5px;
+  border-style: solid;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  background-color: var(--color-background-default-base);
+  border-color: var(--color-border-default-base);
+  color: var(--color-text-text-default-base);
+}
+
+.btn-default:hover:not(:disabled) {
+  background-color: var(--color-background-default-base-hover);
+  border-color: var(--color-border-default-base);
+}
+
+.btn-default.btn-disabled,
+.btn-default:disabled {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  background-color: var(--color-background-neutral-tertiary);
+  border-color: var(--color-background-neutral-tertiary);
+  color: var(--color-text-default-tertiary);
+}
+
+.btn-default.btn-destructive {
+  background-color: var(--color-background-error-base);
+  border-color: var(--color-background-error-base);
+  color: var(--color-text-on-button-base);
+}
+
+.btn-default.btn-destructive:hover:not(:disabled) {
+  background-color: var(--color-background-error-base-hover);
+  border-color: var(--color-background-error-base-hover);
+}
+
+.btn-default.btn-destructive.btn-disabled,
+.btn-default.btn-destructive:disabled {
+  background-color: var(--color-background-neutral-tertiary);
+  border-color: var(--color-background-neutral-tertiary);
+  color: var(--color-text-default-tertiary);
+}
+
+.btn-dark {
+  background-color: var(--color-icon-base-hover);
+  color: var(--color-text-solid);
+}
+
+.btn-dark:hover:not(:disabled) {
+  background-color: var(--color-icon-secondary-hover);
+}
+
+.btn-dark.btn-disabled,
+.btn-dark:disabled {
+  background-color: var(--color-background-neutral-tertiary);
+  color: var(--color-text-default-tertiary);
+}

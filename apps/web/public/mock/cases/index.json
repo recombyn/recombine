@@ -1,0 +1,41 @@
+{
+  "categories": ["resume", "poster", "ui"],
+  "cases": [
+    {
+      "id": "case-resume-fresh",
+      "nameKey": "caseResumeFresh",
+      "category": "resume",
+      "file": "/mock/cases/resume-fresh.json"
+    },
+    {
+      "id": "case-resume-classic",
+      "nameKey": "caseResumeClassic",
+      "category": "resume",
+      "file": "/mock/cases/resume-classic.json"
+    },
+    {
+      "id": "case-poster-event",
+      "nameKey": "casePosterEvent",
+      "category": "poster",
+      "file": "/mock/cases/poster-event.json"
+    },
+    {
+      "id": "case-poster-promo",
+      "nameKey": "casePosterPromo",
+      "category": "poster",
+      "file": "/mock/cases/poster-promo.json"
+    },
+    {
+      "id": "case-ui-dashboard",
+      "nameKey": "caseUiDashboard",
+      "category": "ui",
+      "file": "/mock/cases/ui-dashboard.json"
+    },
+    {
+      "id": "case-ui-mobile",
+      "nameKey": "caseUiMobile",
+      "category": "ui",
+      "file": "/mock/cases/ui-mobile.json"
+    }
+  ]
+}

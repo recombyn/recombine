@@ -1,0 +1,30 @@
+FROM python:3.11-slim
+WORKDIR /app
+
+# poppler: pdf2image | libreoffice: docx→pdf | libgl: opencv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-writer \
+    poppler-utils \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY packages/scene-builder-py ./packages/scene-builder-py
+COPY apps/api ./apps/api
+
+ARG INSTALL_OCR=false
+
+RUN pip install --no-cache-dir ./packages/scene-builder-py \
+    && pip install --no-cache-dir ./apps/api \
+    && if [ "$INSTALL_OCR" = "true" ]; then \
+         pip install --no-cache-dir "./apps/api[ocr]" \
+         && pip install --no-cache-dir paddlepaddle -i https://www.paddlepaddle.org.cn/packages/stable/cpu/; \
+       fi
+
+WORKDIR /app/apps/api
+ENV PYTHONUNBUFFERED=1 \
+    LIBREOFFICE_PATH=/usr/bin/soffice \
+    USE_VISION=true
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

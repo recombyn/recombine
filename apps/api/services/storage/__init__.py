@@ -1,0 +1,119 @@
+"""Object storage backends — local disk or S3-compatible (OSS/COS)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Protocol
+
+from config.settings import settings
+
+
+class ObjectStorage(Protocol):
+    def put_file(self, key: str, path: Path, content_type: str | None = None) -> str: ...
+
+    def url_for(self, key: str) -> str: ...
+
+    def enabled_remote(self) -> bool: ...
+
+
+class LocalStorage:
+    """Keep files on disk under result_dir / upload_dir; keys are relative paths."""
+
+    def put_file(self, key: str, path: Path, content_type: str | None = None) -> str:
+        # Already on disk in phase-1/2 layout — record key only.
+        return key.replace("\\", "/")
+
+    def url_for(self, key: str) -> str:
+        return key.replace("\\", "/")
+
+    def enabled_remote(self) -> bool:
+        return False
+
+
+class S3Storage:
+    """boto3 S3 API — works with AWS S3, MinIO, Aliyun OSS, Tencent COS gateway."""
+
+    def __init__(self) -> None:
+        import boto3
+        from botocore.client import Config
+
+        kwargs: dict = {
+            "service_name": "s3",
+            "aws_access_key_id": settings.s3_access_key,
+            "aws_secret_access_key": settings.s3_secret_key,
+            "region_name": settings.s3_region,
+        }
+        if settings.s3_endpoint_url:
+            kwargs["endpoint_url"] = settings.s3_endpoint_url
+            kwargs["config"] = Config(s3={"addressing_style": settings.s3_addressing_style})
+
+        self._client = boto3.client(**kwargs)
+        self._bucket = settings.s3_bucket
+
+    def put_file(self, key: str, path: Path, content_type: str | None = None) -> str:
+        if content_type:
+            self._client.upload_file(
+                str(path), self._bucket, key, ExtraArgs={"ContentType": content_type}
+            )
+        else:
+            self._client.upload_file(str(path), self._bucket, key)
+        return key
+
+    def url_for(self, key: str) -> str:
+        if settings.s3_public_base_url:
+            return f"{settings.s3_public_base_url.rstrip('/')}/{key}"
+        if settings.s3_endpoint_url:
+            return f"{settings.s3_endpoint_url.rstrip('/')}/{self._bucket}/{key}"
+        return f"s3://{self._bucket}/{key}"
+
+    def enabled_remote(self) -> bool:
+        return True
+
+
+_storage: ObjectStorage | None = None
+
+
+def get_storage() -> ObjectStorage:
+    global _storage
+    if _storage is not None:
+        return _storage
+    if settings.s3_enabled:
+        try:
+            _storage = S3Storage()
+        except Exception:
+            _storage = LocalStorage()
+    else:
+        _storage = LocalStorage()
+    return _storage
+
+
+def upload_page_images(job_id: str | None, page_paths: list[Path]) -> tuple[list[str], list[str], list[str]]:
+    """
+    Persist page images via storage backend.
+    Returns (local_rel_paths, object_keys, urls).
+    """
+    storage = get_storage()
+    root = Path(settings.result_dir).resolve()
+    local_rels: list[str] = []
+    keys: list[str] = []
+    urls: list[str] = []
+    prefix = f"results/{job_id or '_sync'}/pages"
+
+    for path in page_paths:
+        try:
+            rel = str(path.resolve().relative_to(root)).replace("\\", "/")
+        except ValueError:
+            rel = str(path).replace("\\", "/")
+        local_rels.append(rel)
+
+        key = f"{prefix}/{path.name}"
+        ctype = "image/png" if path.suffix.lower() == ".png" else None
+        try:
+            stored = storage.put_file(key, path, content_type=ctype)
+            keys.append(stored)
+            urls.append(storage.url_for(stored))
+        except Exception:
+            keys.append(rel)
+            urls.append(rel)
+
+    return local_rels, keys, urls

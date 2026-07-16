@@ -1,0 +1,205 @@
+import type { FC, ReactNode } from 'react';
+import { useState, useCallback } from 'react';
+import {
+  autoUpdate,
+  flip,
+  offset as offsetMiddleware,
+  shift,
+  useDismiss,
+  useFloating,
+  useFocus,
+  useHover,
+  useInteractions,
+  useRole,
+  FloatingPortal,
+  type Placement,
+  type Strategy,
+} from '@floating-ui/react';
+import { cn } from '@/utils/classnames';
+import MenuItem, { type MenuItemType } from './MenuItem';
+import { DropdownPanel } from './DropdownPanel';
+
+export type DropdownProps = {
+  items: MenuItemType[];
+  onClick?: (key: string, item: MenuItemType) => void;
+  selectedKeys?: string[];
+  trigger?: 'hover' | 'click';
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  placement?: Placement;
+  expandIcon?: ReactNode;
+  popupRender?: (menu: ReactNode) => ReactNode;
+  popupClassName?: string;
+  itemClassName?: string;
+  /** Gap between trigger and menu (px). @default 8 */
+  offset?: number;
+  /** Floating positioning strategy. @default 'absolute' */
+  strategy?: Strategy;
+  /** Portal root container. Defaults to document.body. */
+  getPopupContainer?: () => HTMLElement;
+  /** Extra classes for the trigger wrapper (e.g. `block w-full` for full-width triggers). */
+  referenceClassName?: string;
+  /** Extra classes for the floating menu layer (e.g. higher z-index when nested in modals). */
+  floatingClassName?: string;
+  /**
+   * When false, clicking/focusing the reference does not toggle open.
+   * Use with controlled `open` for a nested trigger (e.g. corner chevron).
+   * @default true
+   */
+  referenceToggle?: boolean;
+  children: ReactNode;
+};
+
+/**
+ * Dropdown menu with optional nested items.
+ */
+const Dropdown: FC<DropdownProps> = ({
+  items,
+  onClick,
+  selectedKeys = [],
+  trigger = 'hover',
+  open: controlledOpen,
+  onOpenChange,
+  placement = 'bottom-start',
+  expandIcon,
+  popupRender,
+  popupClassName,
+  itemClassName,
+  offset = 8,
+  strategy = 'absolute',
+  getPopupContainer,
+  referenceClassName,
+  floatingClassName,
+  referenceToggle = true,
+  children,
+}) => {
+  const [localOpen, setLocalOpen] = useState(false);
+  const [activeSubMenuKey, setActiveSubMenuKey] = useState<string | null>(null);
+
+  const isClickTrigger = trigger === 'click';
+  const open = controlledOpen ?? localOpen;
+
+  const handleOpenChange = useCallback(
+    (newOpen: boolean) => {
+      if (controlledOpen === undefined) {
+        setLocalOpen(newOpen);
+      }
+      onOpenChange?.(newOpen);
+      if (!newOpen) {
+        setActiveSubMenuKey(null);
+      }
+    },
+    [controlledOpen, onOpenChange]
+  );
+
+  const { refs, floatingStyles, context } = useFloating({
+    open,
+    onOpenChange: handleOpenChange,
+    placement,
+    strategy,
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offsetMiddleware(offset),
+      flip({
+        padding: 5,
+        fallbackPlacements: ['top-start'],
+      }),
+      shift({ padding: 5, crossAxis: false }),
+    ],
+  });
+
+  const hover = useHover(context, {
+    enabled: trigger === 'hover',
+    move: true,
+    delay: {
+      open: 80,
+      close: 180,
+    },
+  });
+
+  const focus = useFocus(context, {
+    enabled: isClickTrigger && referenceToggle,
+  });
+
+  const dismiss = useDismiss(context);
+  const role = useRole(context, { role: 'menu' });
+
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus, dismiss, role]);
+
+  const handleSubMenuOpenChange = useCallback((key: string, isOpen: boolean) => {
+    if (isOpen) {
+      setActiveSubMenuKey(key);
+    } else {
+      setActiveSubMenuKey((prev) => (prev === key ? null : prev));
+    }
+  }, []);
+
+  const handleClick = useCallback(
+    (key: string, item: MenuItemType) => {
+      onClick?.(key, item);
+      if (!item.children && !item.interactive) {
+        handleOpenChange(false);
+      }
+    },
+    [onClick, handleOpenChange]
+  );
+
+  const menuContent = (
+    <DropdownPanel className={popupClassName}>
+      {items.map((item) => (
+        <MenuItem
+          key={item.key}
+          item={item}
+          selectedKeys={selectedKeys}
+          onClick={handleClick}
+          expandIcon={expandIcon}
+          itemClassName={itemClassName}
+          onSubMenuOpenChange={handleSubMenuOpenChange}
+          activeSubMenuKey={activeSubMenuKey}
+        />
+      ))}
+    </DropdownPanel>
+  );
+
+  return (
+    <>
+      <div
+        ref={refs.setReference}
+        className={cn('inline-block', referenceClassName)}
+        {...getReferenceProps({
+          onClick: () => {
+            if (isClickTrigger && referenceToggle) {
+              handleOpenChange(!open);
+            }
+          },
+        })}
+      >
+        {children}
+      </div>
+      <FloatingPortal root={getPopupContainer?.()}>
+        <div
+          ref={refs.setFloating}
+          style={{
+            ...floatingStyles,
+            visibility: open ? 'visible' : 'hidden',
+            pointerEvents: open ? 'auto' : 'none',
+          }}
+          className={cn('z-[500]', floatingClassName)}
+          {...getFloatingProps()}
+        >
+          <div
+            className={cn(open ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0')}
+          >
+            {popupRender ? popupRender(menuContent) : menuContent}
+          </div>
+        </div>
+      </FloatingPortal>
+    </>
+  );
+};
+
+Dropdown.displayName = 'Dropdown';
+
+export default Dropdown;
+export type { MenuItemType } from './MenuItem';
+export { DropdownPanel, DropdownPanelItem } from './DropdownPanel';

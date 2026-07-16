@@ -1,0 +1,188 @@
+{
+  "x": 0,
+  "y": 0,
+  "width": 390,
+  "height": 844,
+  "backgroundColor": "#ffffff",
+  "pages": [
+    {
+      "id": "page1",
+      "children": [
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+        "m10",
+        "m11"
+      ]
+    }
+  ],
+  "activePageId": "page1",
+  "deltaSetLike": {
+    "ROOT": {
+      "id": "ROOT",
+      "key": "entry",
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "attrs": {},
+      "children": [
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+        "m10",
+        "m11"
+      ]
+    },
+    "m1": {
+      "id": "m1",
+      "key": "shape",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "width": 390,
+      "height": 844,
+      "attrs": {
+        "shapeType": "rect",
+        "fill-color": "#FFFFFF",
+        "border-color": "transparent",
+        "border-width": 0,
+        "L": "true",
+        "R": "true",
+        "T": "true",
+        "B": "true",
+        "opacity": 1,
+        "angle": 0,
+        "radiusTL": 0,
+        "radiusTR": 0,
+        "radiusBR": 0,
+        "radiusBL": 0
+      },
+      "children": []
+    },
+    "m2": {
+      "id": "m2",
+      "key": "shape",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "width": 390,
+      "height": 88,
+      "attrs": {
+        "shapeType": "rect",
+        "fill-color": "#111827",
+        "border-color": "transparent",
+        "border-width": 0,
+        "L": "true",
+        "R": "true",
+        "T": "true",
+        "B": "true",
+        "opacity": 1,
+        "angle": 0,
+        "radiusTL": 0,
+        "radiusTR": 0,
+        "radiusBR": 0,
+        "radiusBL": 0
+      },
+      "children": []
+    },
+    "m3": {
+      "id": "m3",
+      "key": "text",
+      "x": 24,
+      "y": 36,
+      "z": 0,
+      "width": 200,
+      "height": 28,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"今\",\"config\":{\"SIZE\":18,\"COLOR\":\"#F9FAFB\",\"WEIGHT\":\"bold\"}},{\"char\":\"日\",\"config\":{\"SIZE\":18,\"COLOR\":\"#F9FAFB\",\"WEIGHT\":\"bold\"}},{\"char\":\"任\",\"config\":{\"SIZE\":18,\"COLOR\":\"#F9FAFB\",\"WEIGHT\":\"bold\"}},{\"char\":\"务\",\"config\":{\"SIZE\":18,\"COLOR\":\"#F9FAFB\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"今日任务\",\"bold\":true,\"font-base\":{\"fontSize\":18,\"color\":\"#F9FAFB\"}}]}]"
+      },
+      "children": []
+    },
+    "m4": {
+      "id": "m4",
+      "key": "shape",
+      "x": 20,
+      "y": 120,
+      "z": 0,
+      "width": 350,
+      "height": 96,
+      "attrs": {
+        "shapeType": "rect",
+        "fill-color": "#F9FAFB",
+        "border-color": "#E5E7EB",
+        "border-width": 1,
+        "L": "true",
+        "R": "true",
+        "T": "true",
+        "B": "true",
+        "opacity": 1,
+        "angle": 0,
+        "radiusTL": 0,
+        "radiusTR": 0,
+        "radiusBR": 0,
+        "radiusBL": 0
+      },
+      "children": []
+    },
+    "m5": {
+      "id": "m5",
+      "key": "text",
+      "x": 40,
+      "y": 144,
+      "z": 0,
+      "width": 280,
+      "height": 24,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"完\",\"config\":{\"SIZE\":15,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}},{\"char\":\"成\",\"config\":{\"SIZE\":15,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}},{\"char\":\"简\",\"config\":{\"SIZE\":15,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}},{\"char\":\"历\",\"config\":{\"SIZE\":15,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}},{\"char\":\"初\",\"config\":{\"SIZE\":15,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}},{\"char\":\"稿\",\"config\":{\"SIZE\":15,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"完成简历初稿\",\"bold\":true,\"font-base\":{\"fontSize\":15,\"color\":\"#333333\"}}]}]"
+      },
+      "children": []
+    },
+    "m10": {
+      "id": "m10",
+      "key": "shape",
+      "x": 120,
+      "y": 740,
+      "z": 0,
+      "width": 150,
+      "height": 44,
+      "attrs": {
+        "shapeType": "rect",
+        "fill-color": "#111827",
+        "border-color": "transparent",
+        "border-width": 0,
+        "L": "true",
+        "R": "true",
+        "T": "true",
+        "B": "true",
+        "opacity": 1,
+        "angle": 0,
+        "radiusTL": 0,
+        "radiusTR": 0,
+        "radiusBR": 0,
+        "radiusBL": 0
+      },
+      "children": []
+    },
+    "m11": {
+      "id": "m11",
+      "key": "text",
+      "x": 152,
+      "y": 752,
+      "z": 0,
+      "width": 90,
+      "height": 24,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"新\",\"config\":{\"SIZE\":15,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}},{\"char\":\"建\",\"config\":{\"SIZE\":15,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"新建\",\"bold\":true,\"font-base\":{\"fontSize\":15,\"color\":\"#FFFFFF\"}}]}]"
+      },
+      "children": []
+    }
+  }
+}

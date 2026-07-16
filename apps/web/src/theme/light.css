@@ -1,0 +1,51 @@
+html[data-theme='light'] {
+  --surface: #ffffff;
+  --canvas: #f5f5f5;
+  --rail: #f3f3f3;
+  --ink: #434343;
+  --muted: #767676;
+  --line: #d9d9d9;
+  --accent: #383838;
+  --accent-soft: #e6e6e6;
+  --on-brand: #ffffff;
+
+  /* Slider: filled track vs remainder */
+  --slider-active: #1a1a1a;
+  --slider-inactive: #e8e8e8;
+  --slider-thumb-ring: #1a1a1a;
+
+  --color-brand-base: #383838;
+  --color-brand-base-hover: #1e1e1e;
+  --color-brand-secondary: #5a5a5a;
+
+  --color-background-default-base: #ffffff;
+  --color-background-default-base-hover: #e6e6e6;
+  --color-background-default-secondary: #f3f3f3;
+  --color-background-default-secondary-hover: #d9d9d9;
+  --color-background-default-tertiary: #b3b3b3;
+  --color-background-neutral-tertiary: #e3e3e3;
+
+  --color-border-default-base: #d9d9d9;
+  --color-border-default-base-hover: #b3b3b3;
+  --color-border-default-secondary: #757575;
+
+  --color-text-default-base: #434343;
+  --color-text-default-secondary: #767676;
+  --color-text-default-tertiary: #b2b2b2;
+  --color-text-on-button-base: #ffffff;
+  --color-text-solid: #ffffff;
+
+  --color-icon-base: #383838;
+  --color-icon-secondary: #757575;
+  --color-icon-secondary-hover: #444444;
+
+  --color-background-success-base: #383838;
+  --color-background-success-base-hover: #1e1e1e;
+  --color-background-warning-base: #ffe8a3;
+  --color-background-warning-base-hover: #e5a000;
+  --color-background-error-base: #ec221f;
+  --color-background-error-base-hover: #c00f0c;
+
+  --color-shadow-scrim: rgba(12, 12, 13, 0.05);
+  --color-shadow-blanket: rgba(12, 12, 13, 0.1);
+}

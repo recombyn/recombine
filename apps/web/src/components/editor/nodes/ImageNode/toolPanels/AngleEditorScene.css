@@ -1,0 +1,362 @@
+.angle-editor-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  user-select: none;
+  background: #fff;
+}
+
+.angle-editor-scene .unified-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  perspective: 1200px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.angle-editor-scene .unified-scene.is-dragging {
+  cursor: grabbing;
+}
+
+.angle-editor-scene .unified-scene-cube-container {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.angle-editor-scene .angle-editor-scene-container {
+  perspective: 1200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.angle-editor-scene .angle-editor-cube-wrapper {
+  transform-style: preserve-3d;
+}
+
+.angle-editor-scene .angle-editor-cube {
+  position: relative;
+  transform-style: preserve-3d;
+}
+
+.angle-editor-scene .angle-editor-cube-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  border: 1px solid #d0d0d0;
+  background: #fff;
+  overflow: hidden;
+  backface-visibility: hidden;
+  color: #c4c4c4;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* Skybox: wireframe cube — thin edges, inset preview, letter faces (fig.2). */
+.angle-editor-scene .mode-skybox .angle-editor-cube-face {
+  border-color: #cfcfcf;
+  background: #fff;
+  font-size: 28px;
+  font-weight: 500;
+  color: #c8c8c8;
+}
+
+.angle-editor-scene .mode-skybox .angle-editor-face-front.has-image {
+  border: 1px solid #cfcfcf;
+  background: #fff;
+}
+
+.angle-editor-scene .mode-skybox .angle-editor-face-image-content {
+  width: 64%;
+  height: 64%;
+  object-fit: contain;
+  border-radius: 2px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.angle-editor-scene .angle-editor-face-image-content {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+}
+
+.angle-editor-scene .mode-camera .angle-editor-face-front.has-image {
+  border: 1px solid #d4d4d4;
+  background: #fff;
+}
+
+.angle-editor-scene .mode-camera .angle-editor-face-front.has-image .angle-editor-face-image-content {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 3px;
+}
+
+.angle-editor-scene .angle-editor-face-front {
+  transform: translateZ(var(--angle-cube-half, 46px));
+}
+.angle-editor-scene .angle-editor-face-back {
+  transform: rotateY(180deg) translateZ(var(--angle-cube-half, 46px));
+}
+.angle-editor-scene .angle-editor-face-right {
+  transform: rotateY(90deg) translateZ(var(--angle-cube-half, 46px));
+}
+.angle-editor-scene .angle-editor-face-left {
+  transform: rotateY(-90deg) translateZ(var(--angle-cube-half, 46px));
+}
+.angle-editor-scene .angle-editor-face-top {
+  transform: rotateX(90deg) translateZ(var(--angle-cube-half, 46px));
+}
+.angle-editor-scene .angle-editor-face-bottom {
+  transform: rotateX(-90deg) translateZ(var(--angle-cube-half, 46px));
+}
+
+.angle-editor-scene .angle-editor-sphere-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.angle-editor-scene .angle-editor-sphere-grid-inner {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  transform-style: preserve-3d;
+}
+
+.angle-editor-scene .angle-editor-sphere-grid-meridian,
+.angle-editor-scene .angle-editor-sphere-grid-parallel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border: 1px solid #bdbdbd;
+  border-radius: 50%;
+  opacity: 0.28;
+  transform-style: preserve-3d;
+  box-sizing: border-box;
+}
+
+.angle-editor-scene .angle-editor-sphere-grid-meridian {
+  width: 150px;
+  height: 150px;
+  margin-left: -75px;
+  margin-top: -75px;
+}
+
+.angle-editor-scene .angle-editor-sphere-grid-helper-vertical {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0.2px;
+  height: 150px;
+  transform: translate(-50%, -50%);
+  background: #bdbdbd;
+  opacity: 0.22;
+}
+
+.angle-editor-scene .angle-editor-scene-camera {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Let orbit drag hit the scene; only arrow buttons capture clicks. */
+  pointer-events: none;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-pivot {
+  position: relative;
+  width: 1px;
+  height: 1px;
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-position {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  transform-style: preserve-3d;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-body {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-style: preserve-3d;
+  background: #e8e4e4;
+  box-sizing: border-box;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-front,
+.angle-editor-scene .angle-editor-camera-3d-back {
+  width: 22px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-front {
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.angle-editor-scene .angle-editor-camera-3d-back {
+  background: #f3f0f0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.angle-editor-scene .angle-editor-camera-3d-lens-outer {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  margin: 3px auto 0;
+  border-radius: 50%;
+  background: #b4b4b4;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-lens-inner {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: #1f1f1f;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-screen {
+  position: absolute;
+  inset: 2px;
+  border-radius: 2px;
+  background-color: #111;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-top,
+.angle-editor-scene .angle-editor-camera-3d-bottom {
+  width: 22px;
+  height: 16px;
+  border-radius: 2px;
+  background: #ddd8d8;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-side {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  background: #d8d3d3;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-shutter {
+  width: 6px;
+  height: 6px;
+  margin: 4px auto 0;
+  border-radius: 50%;
+  background: #9a9a9a;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-hotshoe {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-hotshoe-body {
+  width: 10px;
+  height: 4px;
+  margin-left: -5px;
+  border-radius: 1px;
+  background: #cfcaca;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-hotshoe-mount {
+  width: 6px;
+  height: 2px;
+  margin: 1px auto 0;
+  border-radius: 1px;
+  background: #aaa;
+}
+
+.angle-editor-scene .angle-editor-camera-3d-line {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1px;
+  background: #9a9a9a;
+  opacity: 0.75;
+  transform-origin: top center;
+}
+
+.angle-editor-scene .angle-editor-direction-btn {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9a9a9a;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.angle-editor-scene .angle-editor-direction-btn:hover {
+  color: #333;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.angle-editor-scene .angle-editor-direction-btn-up {
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.angle-editor-scene .angle-editor-direction-btn-down {
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.angle-editor-scene .angle-editor-direction-btn-left {
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.angle-editor-scene .angle-editor-direction-btn-right {
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.angle-editor-scene .mode-skybox .angle-editor-skybox-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+  background: #fff;
+  pointer-events: none;
+}
