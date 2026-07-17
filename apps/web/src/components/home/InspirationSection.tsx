@@ -14,9 +14,9 @@ import {
   type OfficialCaseMeta,
 } from '@/cases/officialCases';
 import InspirationCasePreview from '@/components/home/InspirationCasePreview';
+import LazyTemplateThumb from '@/components/home/LazyTemplateThumb';
 import { projectThumbFrameClass } from '@/components/home/projectThumb';
 import SegmentTabs from '@/components/home/SegmentTabs';
-import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
 import {
   formatStatCount,
   isCaseLiked,
@@ -25,6 +25,7 @@ import {
   toggleLikedCase,
 } from '@/store/likedCases';
 import { loadFollowedUsers } from '@/store/followedUsers';
+import { useInfiniteList } from '@/hooks/useInfiniteList';
 import { cn } from '@/utils/classnames';
 import { message } from '@/components/base';
 
@@ -36,6 +37,7 @@ type Props = {
 type PlazaTab = 'recommended' | 'latest' | 'following';
 
 const TABS: PlazaTab[] = ['recommended', 'latest', 'following'];
+const PAGE_SIZE = 20;
 
 function feedToMeta(item: {
   id: string;
@@ -91,6 +93,7 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     setFollowedAuthorIds(new Set(loadFollowedUsers(userId).map((x) => x.id)));
   }, [userId]);
 
+  // Metadata only — do not hydrate every document up front (that freezes the UI).
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -98,7 +101,7 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
       loadOfficialCasesIndex().catch(() => ({ cases: [] as OfficialCaseMeta[] })),
       fetchPlazaFeed(100).catch(() => ({ items: [] })),
     ])
-      .then(async ([index, feed]) => {
+      .then(([index, feed]) => {
         if (cancelled) return;
         const official = (index.cases || []).map((c) => ({
           ...c,
@@ -107,26 +110,8 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
           authorName: c.authorName || undefined,
         }));
         const community = (feed.items || []).map(feedToMeta);
-        // Recommended: official first, then approved user posts
-        const merged = [...official, ...community];
-        setCases(merged);
-
-        const entries = await Promise.all(
-          merged.map(async (c) => {
-            try {
-              const doc = await loadCaseDocument(c, {});
-              return [c.id, doc] as const;
-            } catch {
-              return [c.id, null] as const;
-            }
-          })
-        );
-        if (cancelled) return;
-        const map: Record<string, unknown> = {};
-        for (const [id, doc] of entries) {
-          if (doc) map[id] = doc;
-        }
-        setDocs(map);
+        setCases([...official, ...community]);
+        setDocs({});
       })
       .catch(() => {
         if (!cancelled) message.error(t('home.casesLoadFailed'));
@@ -139,7 +124,7 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     };
   }, [t]);
 
-  const visible = useMemo(() => {
+  const visibleAll = useMemo(() => {
     if (tab === 'following') {
       return cases.filter((c) => followedAuthorIds.has(caseAuthorId(c)));
     }
@@ -154,6 +139,76 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     return cases;
   }, [cases, tab, followedAuthorIds]);
 
+  const { visible, hasMore, sentinelRef } = useInfiniteList(visibleAll, {
+    pageSize: PAGE_SIZE,
+    resetKey: tab,
+  });
+
+  // Fetch documents only for currently revealed cards.
+  useEffect(() => {
+    let cancelled = false;
+    const missing = visible.filter((c) => docs[c.id] === undefined);
+    if (!missing.length) return undefined;
+
+    void Promise.all(
+      missing.map(async (c) => {
+        try {
+          const doc = await loadCaseDocument(c, docs);
+          return [c.id, doc] as const;
+        } catch {
+          return [c.id, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setDocs((prev) => {
+        const next = { ...prev };
+        for (const [id, doc] of entries) {
+          if (next[id] === undefined) next[id] = doc;
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: hydrate by visible ids
+  }, [visible.map((c) => c.id).join(',')]);
+
+  // Ensure the open preview (and neighbors) have documents.
+  useEffect(() => {
+    if (!previewId) return;
+    const idx = (previewRail.length ? previewRail : cases).findIndex((c) => c.id === previewId);
+    const rail = previewRail.length ? previewRail : cases;
+    const near = [rail[idx - 1], rail[idx], rail[idx + 1]].filter(Boolean) as OfficialCaseMeta[];
+    const missing = near.filter((c) => docs[c.id] === undefined);
+    if (!missing.length) return;
+    let cancelled = false;
+    void Promise.all(
+      missing.map(async (c) => {
+        try {
+          return [c.id, await loadCaseDocument(c, docs)] as const;
+        } catch {
+          return [c.id, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setDocs((prev) => {
+        const next = { ...prev };
+        for (const [id, doc] of entries) {
+          if (next[id] === undefined) next[id] = doc;
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewId, previewRail, cases]);
+
   const previewMeta = useMemo(
     () => (previewId ? cases.find((c) => c.id === previewId) || null : null),
     [cases, previewId]
@@ -161,8 +216,7 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
 
   const openPreview = (meta: OfficialCaseMeta) => {
     if (disabled) return;
-    // Freeze the rail at open so unfollowing mid-preview doesn't empty navigation.
-    setPreviewRail(visible.length ? visible : cases);
+    setPreviewRail(visibleAll.length ? visibleAll : cases);
     setPreviewId(meta.id);
   };
 
@@ -236,92 +290,87 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
             </div>
           ))}
         </div>
-      ) : visible.length === 0 ? (
+      ) : visibleAll.length === 0 ? (
         <div className="rounded-[12px] bg-[var(--canvas)] px-4 py-16 text-center text-[13px] text-[var(--muted)]">
           {tab === 'following' ? t('home.cases.emptyFollowing') : t('home.cases.empty')}
         </div>
       ) : (
-        <div className={gridClass}>
-          {visible.map((c) => {
-            const liked = likedIds.has(c.id) || isCaseLiked(c.id, userId);
-            const likes = seedStat(c.id, 40, 900) + (liked ? 1 : 0);
-            const comments = seedStat(c.id + ':c', 20, 800);
-            const title = resolveCaseTitle(c, t);
-            const author = caseAuthorLabel(c, t);
-            const initial = (author[0] || 'R').toUpperCase();
-            return (
-              <article key={c.id} className="group min-w-0">
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => openPreview(c)}
-                  className={projectThumbFrameClass(
-                    'block text-left disabled:opacity-60'
-                  )}
-                >
-                  {docs[c.id] ? (
-                    <TemplateThumbnail document={docs[c.id]} fit="cover" />
-                  ) : (
-                    <div className="flex h-full items-center justify-center bg-[var(--accent-soft)] text-[12px] text-[var(--muted)]">
-                      —
-                    </div>
-                  )}
-                </button>
+        <>
+          <div className={gridClass}>
+            {visible.map((c) => {
+              const liked = likedIds.has(c.id) || isCaseLiked(c.id, userId);
+              const likes = seedStat(c.id, 40, 900) + (liked ? 1 : 0);
+              const comments = seedStat(c.id + ':c', 20, 800);
+              const title = resolveCaseTitle(c, t);
+              const author = caseAuthorLabel(c, t);
+              const initial = (author[0] || 'R').toUpperCase();
+              return (
+                <article key={c.id} className="group min-w-0">
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => openPreview(c)}
+                    className="block w-full text-left disabled:opacity-60"
+                  >
+                    <LazyTemplateThumb document={docs[c.id]} fit="cover" />
+                  </button>
 
-                <div className="mt-2.5 flex items-start gap-2">
-                  {c.authorAvatar ? (
-                    <img
-                      src={c.authorAvatar}
-                      alt=""
-                      className="mt-0.5 h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-[var(--line)]"
-                    />
-                  ) : (
-                    <span
-                      className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[9px] font-bold text-[var(--on-brand)]"
-                      aria-hidden
-                    >
-                      {c.source === 'plaza' ? initial : 'RY'}
-                    </span>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => openPreview(c)}
-                      className="block w-full truncate text-left text-[13px] font-semibold leading-snug text-[var(--ink)] hover:underline disabled:opacity-60"
-                      title={title}
-                    >
-                      {title}
-                    </button>
-                    <div className="mt-0.5 truncate text-[12px] text-[var(--muted)]">{author}</div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2.5 pt-1 text-[12px] tabular-nums text-[var(--muted)]">
-                    <button
-                      type="button"
-                      aria-pressed={liked}
-                      aria-label={liked ? t('home.cases.unlike') : t('home.cases.like')}
-                      onClick={(e) => onToggleLike(c, e)}
-                      className={cn(
-                        'inline-flex items-center gap-0.5 transition hover:text-[var(--ink)]',
-                        liked && 'text-[#e11d48]'
-                      )}
-                    >
-                      <HiHeart
-                        className={cn('h-3.5 w-3.5', liked && 'fill-current')}
-                        aria-hidden
+                  <div className="mt-2.5 flex items-start gap-2">
+                    {c.authorAvatar ? (
+                      <img
+                        src={c.authorAvatar}
+                        alt=""
+                        className="mt-0.5 h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-[var(--line)]"
                       />
-                      {formatStatCount(likes)}
-                    </button>
-                    <span className="inline-flex items-center gap-0.5" aria-hidden>
-                      <HiOutlineChatBubbleOvalLeft className="h-3.5 w-3.5" />
-                      {formatStatCount(comments)}
-                    </span>
+                    ) : (
+                      <span
+                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[9px] font-bold text-[var(--on-brand)]"
+                        aria-hidden
+                      >
+                        {c.source === 'plaza' ? initial : 'RY'}
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => openPreview(c)}
+                        className="block w-full truncate text-left text-[13px] font-semibold leading-snug text-[var(--ink)] hover:underline disabled:opacity-60"
+                        title={title}
+                      >
+                        {title}
+                      </button>
+                      <div className="mt-0.5 truncate text-[12px] text-[var(--muted)]">{author}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2.5 pt-1 text-[12px] tabular-nums text-[var(--muted)]">
+                      <button
+                        type="button"
+                        aria-pressed={liked}
+                        aria-label={liked ? t('home.cases.unlike') : t('home.cases.like')}
+                        onClick={(e) => onToggleLike(c, e)}
+                        className={cn(
+                          'inline-flex items-center gap-0.5 transition hover:text-[var(--ink)]',
+                          liked && 'text-[#e11d48]'
+                        )}
+                      >
+                        <HiHeart
+                          className={cn('h-3.5 w-3.5', liked && 'fill-current')}
+                          aria-hidden
+                        />
+                        {formatStatCount(likes)}
+                      </button>
+                      <span className="inline-flex items-center gap-0.5" aria-hidden>
+                        <HiOutlineChatBubbleOvalLeft className="h-3.5 w-3.5" />
+                        {formatStatCount(comments)}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+                </article>
+              );
+            })}
+          </div>
+          {hasMore ? <div ref={sentinelRef} className="h-8 w-full" aria-hidden /> : null}
+        </>
       )}
 
       <InspirationCasePreview

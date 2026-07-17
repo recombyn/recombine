@@ -12,8 +12,9 @@ import {
   type OfficialCaseCategory,
   type OfficialCaseMeta,
 } from '@/cases/officialCases';
-import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
+import LazyTemplateThumb from '@/components/home/LazyTemplateThumb';
 import { projectThumbFrameClass } from '@/components/home/projectThumb';
+import { useInfiniteList } from '@/hooks/useInfiniteList';
 import {
   isFollowingUser,
   loadFollowedUsers,
@@ -44,6 +45,8 @@ function feedToMeta(item: {
   };
 }
 
+const PAGE_SIZE = 20;
+
 /**
  * Public creator profile — published plaza works + follow.
  */
@@ -73,7 +76,6 @@ export default function PublicProfilePage(): ReactNode {
     setFollowing(isFollowingUser(authorId, viewerId));
   }, [authorId, viewerId]);
 
-  // Reset identity when navigating between creators on the same route.
   useEffect(() => {
     const nextState = (location.state || {}) as {
       authorName?: string;
@@ -108,6 +110,7 @@ export default function PublicProfilePage(): ReactNode {
         const pool = [...official, ...community];
         const matched = pool.filter((c) => caseAuthorId(c) === authorId);
         setWorks(matched);
+        setDocs({});
 
         const navState = (location.state || {}) as {
           authorName?: string;
@@ -122,27 +125,6 @@ export default function PublicProfilePage(): ReactNode {
           );
           setAvatar(navState.authorAvatar || null);
         }
-
-        const entries = await Promise.all(
-          matched.map(async (c) => {
-            try {
-              if (c.source === 'plaza' || !c.file) {
-                const res = await fetchPlazaItem(c.id);
-                return [c.id, res.item.document] as const;
-              }
-              const doc = await loadOfficialCaseDocument(c.file);
-              return [c.id, doc] as const;
-            } catch {
-              return [c.id, null] as const;
-            }
-          })
-        );
-        if (cancelled) return;
-        const map: Record<string, unknown> = {};
-        for (const [id, doc] of entries) {
-          if (doc) map[id] = doc;
-        }
-        setDocs(map);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -152,6 +134,44 @@ export default function PublicProfilePage(): ReactNode {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authorId, t]);
+
+  const { visible, hasMore, sentinelRef } = useInfiniteList(works, {
+    pageSize: PAGE_SIZE,
+    resetKey: authorId,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const missing = visible.filter((c) => docs[c.id] === undefined);
+    if (!missing.length) return undefined;
+    void Promise.all(
+      missing.map(async (c) => {
+        try {
+          if (c.source === 'plaza' || !c.file) {
+            const res = await fetchPlazaItem(c.id);
+            return [c.id, res.item.document] as const;
+          }
+          const doc = await loadOfficialCaseDocument(c.file);
+          return [c.id, doc] as const;
+        } catch {
+          return [c.id, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setDocs((prev) => {
+        const next = { ...prev };
+        for (const [id, doc] of entries) {
+          if (next[id] === undefined) next[id] = doc;
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible.map((c) => c.id).join(',')]);
 
   const initial = useMemo(
     () => ((displayName || 'U').trim()[0] || 'U').toUpperCase(),
@@ -171,12 +191,11 @@ export default function PublicProfilePage(): ReactNode {
     );
     setFollowing(next);
     message.success(next ? t('home.cases.followedToast') : t('home.cases.unfollowedToast'));
-    // Keep list in sync for other tabs
     void loadFollowedUsers(viewerId);
   };
 
   return (
-    <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
+    <main className="h-full min-h-0 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
       <div className="mx-auto w-full max-w-[1100px] px-6 pb-12 pt-6 sm:px-10">
         <Link
           to="/home"
@@ -233,30 +252,32 @@ export default function PublicProfilePage(): ReactNode {
             {t('me.tabPublished')}
           </h2>
           {loading ? (
-            <p className="py-16 text-center text-[13px] text-[var(--muted)]">…</p>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className={projectThumbFrameClass('animate-pulse bg-[var(--accent-soft)] shadow-none')}
+                />
+              ))}
+            </div>
           ) : works.length === 0 ? (
             <p className="py-16 text-center text-[13px] text-[var(--muted)]">
               {t('home.cases.profileEmpty')}
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-              {works.map((c) => (
-                <div key={c.id} className="flex flex-col">
-                  <div className={projectThumbFrameClass('bg-[var(--accent-soft)]')}>
-                    {docs[c.id] ? (
-                      <TemplateThumbnail document={docs[c.id]} fit="cover" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[12px] text-[var(--muted)]">
-                        —
-                      </div>
-                    )}
+            <>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+                {visible.map((c) => (
+                  <div key={c.id} className="flex flex-col">
+                    <LazyTemplateThumb document={docs[c.id]} fit="cover" />
+                    <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
+                      {resolveCaseTitle(c, t)}
+                    </div>
                   </div>
-                  <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
-                    {resolveCaseTitle(c, t)}
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+              {hasMore ? <div ref={sentinelRef} className="h-8 w-full" aria-hidden /> : null}
+            </>
           )}
         </section>
       </div>

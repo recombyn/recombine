@@ -48,12 +48,19 @@ export function useHomeActions(
     goEditor({ createNew: true, fromHomeAgent: true });
   };
 
-  /** Inspiration card → clone case into a new project and open editor. */
+  /** Inspiration card → open as session (not Projects until user edits). */
   const handleOpenCase = (meta: OfficialCaseMeta, document: unknown) => {
     const name =
       (meta.name || '').trim() ||
       (meta.nameKey ? t(`home.cases.${meta.nameKey}`) : t('home.untitled'));
-    dispatch(importDocument({ name, document }));
+    dispatch(
+      importDocument({
+        name,
+        document,
+        source: 'case',
+        originCaseId: meta.id,
+      })
+    );
     goEditor();
   };
 
@@ -72,6 +79,7 @@ export function useHomeActions(
         importDocument({
           name: file.name.replace(/\.json$/i, ''),
           document: validation.data,
+          source: 'import',
         })
       );
       message.success(t('home.importSuccess'));
@@ -128,7 +136,7 @@ export function useHomeActions(
         }
         return;
       }
-      dispatch(importDocument({ name, document }));
+      dispatch(importDocument({ name, document, source: 'import' }));
       if (warnings.some((w) => /text-only DOCX|approximate/i.test(w))) {
         message.warning(t('home.importDocxFallback'), 6);
       } else if (warnings.some((w) => /raster-fallback|OCR produced no text/i.test(w))) {

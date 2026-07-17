@@ -157,6 +157,7 @@ export function HomeTemplateList({
             (Number(a.openedAt) || Number(a.updatedAt) || 0)
         )
         .slice(0, RECENT_LIMIT);
+    // Projects (mine): only owned works — not case/scratch open sessions.
     } else {
       list = list.filter((item) => isOwnedTemplate(item));
     }

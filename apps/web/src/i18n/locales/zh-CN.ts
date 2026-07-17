@@ -594,6 +594,30 @@ const zhCN = {
     undo: 'Undo',
     keep: 'Keep',
     review: 'Review',
+    settings: 'Agent 设置',
+    settingsTitle: '执行模式',
+    settingsHint:
+      '设计按固定阶段推进（排版 → 字体 → 配色…）。可选人际协同（逐步确认）、关键节点确认，或完全自动。类似 Cursor 的 human-in-the-loop。',
+    collabModeLabel: '协作模式',
+    pipelineTitle: '{{category}} · 设计步骤',
+    stepConfirmOn: '分步确认',
+    collabMode: {
+      collaborative: {
+        title: '人际协同',
+        desc: '每完成一个阶段就停下来请你确认，再进入下一步。默认推荐。',
+        badge: '协同',
+      },
+      milestone: {
+        title: '关键节点确认',
+        desc: '排版/字体告一段落、细节完成后暂停确认；中间小步自动推进。',
+        badge: '节点',
+      },
+      auto: {
+        title: '完全自动',
+        desc: '按固定流程一口气做完，中途不询问（仍可随时停止生成）。',
+        badge: '自动',
+      },
+    },
   },
   about: {
     title: '关于我们',

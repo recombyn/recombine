@@ -588,6 +588,30 @@ const zhTW = {
     undo: 'Undo',
     keep: 'Keep',
     review: 'Review',
+    settings: 'Agent 設定',
+    settingsTitle: '執行模式',
+    settingsHint:
+      '設計依固定階段推進（排版 → 字體 → 配色…）。可選人機協同、關鍵節點確認，或完全自動。',
+    collabModeLabel: '協作模式',
+    pipelineTitle: '{{category}} · 設計步驟',
+    stepConfirmOn: '分步確認',
+    collabMode: {
+      collaborative: {
+        title: '人機協同',
+        desc: '每完成一個階段就暫停請你確認，再進入下一步。預設推薦。',
+        badge: '協同',
+      },
+      milestone: {
+        title: '關鍵節點確認',
+        desc: '排版／字體告一段落、細節完成後暫停；中間小步自動推進。',
+        badge: '節點',
+      },
+      auto: {
+        title: '完全自動',
+        desc: '依固定流程一次做完，中途不詢問（仍可隨時停止）。',
+        badge: '自動',
+      },
+    },
   },
   about: {
     title: '關於我們',

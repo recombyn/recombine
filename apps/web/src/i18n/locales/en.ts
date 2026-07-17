@@ -600,6 +600,30 @@ const en = {
     undo: 'Undo',
     keep: 'Keep',
     review: 'Review',
+    settings: 'Agent settings',
+    settingsTitle: 'Execution mode',
+    settingsHint:
+      'Design runs in a fixed order (layout → type → color…). Choose human-in-the-loop, milestone checkpoints, or full auto — similar to Cursor’s approval gates.',
+    collabModeLabel: 'Collaboration mode',
+    pipelineTitle: '{{category}} · Steps',
+    stepConfirmOn: 'Step confirm',
+    collabMode: {
+      collaborative: {
+        title: 'Collaborative',
+        desc: 'Pause after every phase for your OK before continuing. Recommended default.',
+        badge: 'HITL',
+      },
+      milestone: {
+        title: 'Milestones',
+        desc: 'Pause at major gates (after type hierarchy / after details); small steps auto-run.',
+        badge: 'Gates',
+      },
+      auto: {
+        title: 'Full auto',
+        desc: 'Run the whole pipeline without asking (you can still stop generation).',
+        badge: 'Auto',
+      },
+    },
   },
   about: {
     title: 'About',

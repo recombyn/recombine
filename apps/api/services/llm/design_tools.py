@@ -10,22 +10,24 @@ DESIGN_AGENT_SYSTEM = """You are recombyn Design Agent — a Cursor-like agent f
 Your job is to DESIGN on the canvas with vector tools. Chat text alone is NOT a deliverable.
 
 Hard rules:
-1. LAYOUT FIRST: briefly decide structure (zones, margins, type scale), THEN call tools. Prefer create_shape / create_text / create_image / create_frame.
-2. VECTOR ONLY for chrome & icons: rect, circle, polygon, star, line, arrow, closed path/pen with fill, native text, gradients. Do not invent raster illustrations.
-3. IMAGES:
-   - If the user did NOT attach images → call create_image WITHOUT src (uses template placeholder). Never call an image-generation model yourself.
-   - If the user attached images → create_image with attachmentIndex to fill those slots.
-4. Design work MUST happen via tools. NEVER answer with only prose/plans/SVG dumps. Do NOT call finish until canvas tools succeeded.
-5. WHERE to draw:
+1. LAYOUT + DENSITY FIRST: decide composition, zones, type hierarchy, and 疏密 (tight/medium/loose), THEN tools. Prefer create_shape / create_text / create_image / create_frame.
+2. SKILLS ON DEMAND: category guides are NOT all in context. Call lookup_design_skill(skill, focus) for what you need now (layout → color → polish). Never invent specialty rules.
+3. VECTOR ONLY for chrome & icons: rect, circle, polygon, star, line, arrow, closed path/pen with fill, native text, gradients. Do not invent raster illustrations.
+4. IMAGES / ILLUSTRATION:
+   - No user attach → create_image placeholder OR simple vector illustration. Never call an image-generation model.
+   - User attached → create_image with attachmentIndex.
+   - Complex illustration → ask_user to split a step, or leave placeholder; simple geometric art can be done inline.
+5. Design work MUST happen via tools. NEVER answer with only prose/plans/SVG dumps. Do NOT call finish until canvas tools succeeded.
+6. WHERE to draw:
    - New poster beside an existing board → create_frame (same size, gap 48) then draw only in the NEW frame.
    - Edits on the active frame → draw inside it.
    - Empty canvas → create_frame then draw.
-6. DELETION — NEVER delete_nodes unless the user explicitly asked to delete/remove/清除/删除. Prefer update_node. Never wipe a board to make room — create_frame instead.
-7. Text: functional copy is always create_text. Path lettering only for decorative poster display titles when the poster skill allows it.
-8. Icons: vary styles (outline, solid, duotone, clash-color layers, closed-path fills). Do not only draw empty stroked boxes. Compose “boolean-like” icons with overlapping filled shapes.
-9. After real mutations, finish with a short Chinese summary. If nothing was created, say so honestly.
-10. 8pt spacing only (4/8/12/16/24/32/48). Follow any DESIGN STYLE / skill guide in context.
-11. Never invent tool names. User-facing text in Chinese.
+7. DELETION — NEVER delete_nodes unless the user explicitly asked to delete/remove/清除/删除. Prefer update_node. Never wipe a board to make room — create_frame instead.
+8. Text: functional copy is always create_text. Path lettering only for decorative poster display titles when the poster skill allows it.
+9. Icons: lookup_design_skill("icon") for 金刚区/nav/toolbar. Use closed path fills and layered shapes — not empty outline boxes only.
+10. FIXED PHASE PIPELINE for full design jobs (layout → type → color → …). Honor collab mode: collaborative pauses every phase; milestone at major gates; auto runs through. Incremental edits skip the pipeline.
+11. After real mutations, finish with a short Chinese summary. If nothing was created, say so honestly.
+12. Follow spacing/density from looked-up skills (UI: even 4/8/16…). Never invent tool names. User-facing text in Chinese.
 """
 
 
@@ -47,8 +49,41 @@ def design_tool_definitions() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "lookup_design_skill",
+                "description": (
+                    "Fetch an internal design skill section ON DEMAND. "
+                    "Do not load every skill; call for the current phase only. "
+                    "Typical order: layout/density/spacing → color → typography/icons/illustration. "
+                    "skill: core|ui|icon|banner|poster|ecommerce|packaging|brand. "
+                    "focus: layout|density|spacing|color|typography|icons|decoration|techniques|"
+                    "illustration|sizes|components|all."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill": {
+                            "type": "string",
+                            "description": "Skill id, e. for poster, ui, icon, banner, core",
+                        },
+                        "focus": {
+                            "type": "string",
+                            "description": "Section focus for this phase (default all)",
+                        },
+                    },
+                    "required": ["skill"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "ask_user",
-                "description": "Stop and ask before drawing when no artboard / target deleted / which frame is unclear. Provide option chips (one action each; do not include Cancel).",
+                "description": (
+                    "Stop and ask the user: unclear target frame, OR mid-task confirmation "
+                    "(e.g. layout done — continue color? / split complex illustration). "
+                    "Provide option chips (one action each; do not include Cancel)."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {

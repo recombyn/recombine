@@ -1,13 +1,24 @@
 const STORAGE_KEY = 'resume-scene-templates-v1';
 
-export type TemplateSource = 'user' | 'import' | 'case';
+/**
+ * Ownership / listing rules:
+ * - `user` / `import` → show in Projects (mine / assets)
+ * - `case` → opened from plaza / inspiration / liked (session only until edited)
+ * - `scratch` → blank / agent new canvas (session only until edited)
+ *
+ * First real edit claims `case` | `scratch` → `user` and then it appears in Projects.
+ */
+export type TemplateSource = 'user' | 'import' | 'case' | 'scratch';
 
 /** Normalize legacy localStorage items (no source / openedAt). */
 export function normalizeTemplate(item: any) {
   if (!item || typeof item !== 'object' || !item.id) return null;
   const updatedAt = Number(item.updatedAt) || Date.now();
   const source: TemplateSource =
-    item.source === 'case' || item.source === 'import' || item.source === 'user'
+    item.source === 'case' ||
+    item.source === 'import' ||
+    item.source === 'user' ||
+    item.source === 'scratch'
       ? item.source
       : 'user';
   return {
@@ -20,8 +31,14 @@ export function normalizeTemplate(item: any) {
   };
 }
 
+/** Listed under Projects / Me assets — not mere open sessions. */
 export function isOwnedTemplate(item: { source?: string } | null | undefined) {
-  return Boolean(item && item.source !== 'case');
+  return Boolean(item && (item.source === 'user' || item.source === 'import'));
+}
+
+/** Temporary open that should not appear in Projects until claimed. */
+export function isSessionTemplate(item: { source?: string } | null | undefined) {
+  return Boolean(item && (item.source === 'case' || item.source === 'scratch'));
 }
 
 export function loadTemplates() {

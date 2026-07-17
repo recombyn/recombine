@@ -277,8 +277,10 @@ export default function InspirationCasePreview({
                   {t('home.cases.switchHint')}
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {rail.map((c) => {
+                  {rail.map((c, i) => {
                     const active = c.id === caseMeta.id;
+                    // Only mount nearby SVG thumbs — full rail would freeze the modal.
+                    const near = Math.abs(i - index) <= 6;
                     return (
                       <button
                         key={c.id}
@@ -292,7 +294,7 @@ export default function InspirationCasePreview({
                             : 'opacity-70 hover:opacity-100'
                         )}
                       >
-                        {docs[c.id] ? (
+                        {near && docs[c.id] ? (
                           <TemplateThumbnail document={docs[c.id]} fit="cover" />
                         ) : null}
                       </button>

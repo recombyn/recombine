@@ -20,7 +20,10 @@ import {
 } from '@/store/scene/sceneDocument';
 import { buildMarkdownTextAttrs, parseNodeTextStyle } from '@/store/scene/sceneText';
 import { serializeFillGradient } from '@/store/scene/sceneFill';
-import { AGENT_TEMPLATES } from '@/components/editor/panels/agent/designStyles';
+import {
+  AGENT_TEMPLATES,
+  lookupDesignSkill,
+} from '@/components/editor/panels/agent/designStyles';
 
 export type AgentToolCall = {
   id: string;
@@ -48,6 +51,7 @@ export type DesignToolContext = {
 
 export const DESIGN_TOOL_NAMES = [
   'get_scene_summary',
+  'lookup_design_skill',
   'ask_user',
   'create_frame',
   'update_frame',
@@ -252,6 +256,33 @@ export function executeDesignTool(
         status: 'success',
         summary: `Scene: ${summary.frames.length} frames, ${summary.nodeCount} nodes`,
         artifacts: summary,
+      };
+    }
+
+    if (name === 'lookup_design_skill') {
+      const skill = String(args.skill || args.name || '').trim();
+      const focus = args.focus != null ? String(args.focus) : 'all';
+      if (!skill) {
+        return {
+          status: 'error',
+          summary: 'skill required (e.g. poster, ui, icon, banner, core)',
+          next_actions: ['lookup_design_skill with skill + optional focus'],
+        };
+      }
+      const hit = lookupDesignSkill(skill, focus);
+      return {
+        status: hit.found ? 'success' : 'warning',
+        summary: hit.found
+          ? `Skill ${hit.skill} · focus=${hit.focus} (${hit.body.length} chars)`
+          : `Skill lookup: ${hit.body.slice(0, 120)}`,
+        artifacts: {
+          skill: hit.skill,
+          focus: hit.focus,
+          guide: hit.body,
+        },
+        next_actions: hit.found
+          ? ['Apply this guide in the current phase, then continue tools']
+          : ['Pick a valid skill id from the catalog'],
       };
     }
 

@@ -594,6 +594,30 @@ const ja = {
     undo: 'Undo',
     keep: 'Keep',
     review: 'Review',
+    settings: 'Agent 設定',
+    settingsTitle: '実行モード',
+    settingsHint:
+      'デザインは固定フェーズ（レイアウト → 書体 → 配色…）で進みます。協調確認・マイルストーン・完全自動から選べます。',
+    collabModeLabel: '協調モード',
+    pipelineTitle: '{{category}} · ステップ',
+    stepConfirmOn: '段階確認',
+    collabMode: {
+      collaborative: {
+        title: 'ヒューマンインザループ',
+        desc: '各フェーズ完了ごとに確認してから次へ。デフォルト推奨。',
+        badge: '協調',
+      },
+      milestone: {
+        title: 'マイルストーン',
+        desc: '主要ゲート（書体階層後／ディテール後）で確認。小さな段階は自動。',
+        badge: 'ゲート',
+      },
+      auto: {
+        title: 'フルオート',
+        desc: 'パイプラインを一気に実行（生成の中止は可能）。',
+        badge: '自動',
+      },
+    },
   },
   about: {
     title: 'について',

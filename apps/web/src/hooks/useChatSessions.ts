@@ -47,6 +47,14 @@ export type ChatUiMessage = {
   durationMs?: number;
   /** Quick-reply chips from ask_user (e.g. create canvas). */
   choices?: string[];
+  /** Fixed design pipeline progress (visible to user). */
+  pipeline?: {
+    category: string;
+    labels: string[];
+    currentIndex: number;
+    stepConfirm: boolean;
+    collabMode?: 'collaborative' | 'milestone' | 'auto';
+  };
 };
 
 function toUiMessages(session: ChatSession): ChatUiMessage[] {

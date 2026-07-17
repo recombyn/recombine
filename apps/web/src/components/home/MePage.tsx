@@ -7,12 +7,13 @@ import {
   HiOutlineClock,
   HiOutlinePhoto,
 } from 'react-icons/hi2';
-import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
 import EditProfileDialog from '@/components/home/EditProfileDialog';
+import LazyTemplateThumb from '@/components/home/LazyTemplateThumb';
 import { projectThumbFrameClass } from '@/components/home/projectThumb';
 import SegmentTabs from '@/components/home/SegmentTabs';
 import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import { useGoEditor } from '@/hooks/useGoEditor';
+import { useInfiniteList } from '@/hooks/useInfiniteList';
 import { fetchMyPlazaSubmissions, fetchPlazaItem } from '@/apis/plaza';
 import {
   loadOfficialCaseDocument,
@@ -90,23 +91,29 @@ function AssetCard({
       onClick={onOpen}
       className="group flex w-full flex-col text-left"
     >
-      <div className={projectThumbFrameClass('bg-[var(--accent-soft)]')}>
-        {item.kind === 'canvas' && item.document ? (
-          <TemplateThumbnail document={item.document} />
-        ) : item.thumbUrl ? (
+      {item.kind === 'canvas' && item.document ? (
+        <LazyTemplateThumb document={item.document} />
+      ) : item.thumbUrl ? (
+        <div className={projectThumbFrameClass('bg-[var(--accent-soft)]')}>
           <img src={item.thumbUrl} alt="" className="h-full w-full object-cover" />
-        ) : (
+        </div>
+      ) : (
+        <div className={projectThumbFrameClass('bg-[var(--accent-soft)]')}>
           <div className="flex h-full w-full items-center justify-center text-[var(--muted)]">
             <HiOutlinePhoto className="h-8 w-8 opacity-40" />
           </div>
-        )}
-      </div>
+        </div>
+      )}
       <div className="mt-2 min-w-0 px-0.5">
         <div className="truncate text-[13px] font-medium text-[var(--ink)]">{item.name}</div>
       </div>
     </button>
   );
 }
+
+const PAGE_SIZE = 20;
+const GRID =
+  'grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5';
 
 /**
  * 「我的」页：左对齐头像资料区 + 项目自有 Segment tabs + 日期分组资产列表。
@@ -133,33 +140,8 @@ export default function MePage(): ReactNode {
 
   useEffect(() => {
     if (tab !== 'liked') return;
-    const list = loadLikedCases(userId);
-    setLiked(list);
-    let cancelled = false;
-    void Promise.all(
-      list.map(async (c) => {
-        try {
-          if (c.source === 'plaza' || !c.file) {
-            const res = await fetchPlazaItem(c.id);
-            return [c.id, res.item.document] as const;
-          }
-          const doc = await loadOfficialCaseDocument(c.file);
-          return [c.id, doc] as const;
-        } catch {
-          return [c.id, null] as const;
-        }
-      })
-    ).then((entries) => {
-      if (cancelled) return;
-      const map: Record<string, unknown> = {};
-      for (const [id, doc] of entries) {
-        if (doc) map[id] = doc;
-      }
-      setLikedDocs(map);
-    });
-    return () => {
-      cancelled = true;
-    };
+    setLiked(loadLikedCases(userId));
+    setLikedDocs({});
   }, [tab, userId]);
 
   useEffect(() => {
@@ -169,7 +151,7 @@ export default function MePage(): ReactNode {
     }
     let cancelled = false;
     void fetchMyPlazaSubmissions()
-      .then(async (res) => {
+      .then((res) => {
         if (cancelled) return;
         const approved = (res.items || [])
           .filter((x) => x.status === 'approved')
@@ -185,22 +167,7 @@ export default function MePage(): ReactNode {
             })
           );
         setPublished(approved);
-        const entries = await Promise.all(
-          approved.map(async (c) => {
-            try {
-              const item = await fetchPlazaItem(c.id);
-              return [c.id, item.item.document] as const;
-            } catch {
-              return [c.id, null] as const;
-            }
-          })
-        );
-        if (cancelled) return;
-        const map: Record<string, unknown> = {};
-        for (const [id, doc] of entries) {
-          if (doc) map[id] = doc;
-        }
-        setPublishedDocs(map);
+        setPublishedDocs({});
       })
       .catch(() => {
         if (!cancelled) setPublished([]);
@@ -209,6 +176,84 @@ export default function MePage(): ReactNode {
       cancelled = true;
     };
   }, [tab, userId]);
+
+  const {
+    visible: visiblePublished,
+    hasMore: hasMorePublished,
+    sentinelRef: publishedSentinel,
+  } = useInfiniteList(published, { pageSize: PAGE_SIZE, resetKey: `pub-${userId}` });
+
+  const {
+    visible: visibleLiked,
+    hasMore: hasMoreLiked,
+    sentinelRef: likedSentinel,
+  } = useInfiniteList(liked, { pageSize: PAGE_SIZE, resetKey: `liked-${userId}` });
+
+  // Hydrate docs only for revealed published cards.
+  useEffect(() => {
+    if (tab !== 'published') return;
+    let cancelled = false;
+    const missing = visiblePublished.filter((c) => publishedDocs[c.id] === undefined);
+    if (!missing.length) return undefined;
+    void Promise.all(
+      missing.map(async (c) => {
+        try {
+          const item = await fetchPlazaItem(c.id);
+          return [c.id, item.item.document] as const;
+        } catch {
+          return [c.id, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setPublishedDocs((prev) => {
+        const next = { ...prev };
+        for (const [id, doc] of entries) {
+          if (next[id] === undefined) next[id] = doc;
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, visiblePublished.map((c) => c.id).join(',')]);
+
+  // Hydrate docs only for revealed liked cards.
+  useEffect(() => {
+    if (tab !== 'liked') return;
+    let cancelled = false;
+    const missing = visibleLiked.filter((c) => likedDocs[c.id] === undefined);
+    if (!missing.length) return undefined;
+    void Promise.all(
+      missing.map(async (c) => {
+        try {
+          if (c.source === 'plaza' || !c.file) {
+            const res = await fetchPlazaItem(c.id);
+            return [c.id, res.item.document] as const;
+          }
+          const doc = await loadOfficialCaseDocument(c.file);
+          return [c.id, doc] as const;
+        } catch {
+          return [c.id, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setLikedDocs((prev) => {
+        const next = { ...prev };
+        for (const [id, doc] of entries) {
+          if (next[id] === undefined) next[id] = doc;
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, visibleLiked.map((c) => c.id).join(',')]);
 
   const openLiked = async (item: LikedCaseItem) => {
     if (openingLikedId) return;
@@ -223,7 +268,14 @@ export default function MePage(): ReactNode {
         }
       }
       const name = resolveCaseTitle(item, t);
-      dispatch(importDocument({ name, document }));
+      dispatch(
+        importDocument({
+          name,
+          document,
+          source: 'case',
+          originCaseId: item.id,
+        })
+      );
       goEditor();
     } catch {
       message.error(t('home.casesOpenFailed'));
@@ -238,7 +290,14 @@ export default function MePage(): ReactNode {
     try {
       const document =
         publishedDocs[item.id] || (await fetchPlazaItem(item.id)).item.document;
-      dispatch(importDocument({ name: resolveCaseTitle(item, t), document }));
+      dispatch(
+        importDocument({
+          name: resolveCaseTitle(item, t),
+          document,
+          source: 'case',
+          originCaseId: item.id,
+        })
+      );
       goEditor();
     } catch {
       message.error(t('home.casesOpenFailed'));
@@ -268,16 +327,32 @@ export default function MePage(): ReactNode {
     return list.sort((a, b) => b.updatedAt - a.updatedAt);
   }, [templates, t]);
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, AssetItem[]>();
+  // Flat infinite list for assets (preserve date group headers for visible window).
+  const {
+    visible: visibleAssets,
+    hasMore: hasMoreAssets,
+    sentinelRef: assetsSentinel,
+  } = useInfiniteList(assets, { pageSize: PAGE_SIZE, resetKey: `assets-${assets.length}` });
+
+  const assetCountByDate = useMemo(() => {
+    const map = new Map<string, number>();
     for (const item of assets) {
+      const key = dateGroupLabel(item.updatedAt, locale) || t('me.unknownDate');
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return map;
+  }, [assets, locale, t]);
+
+  const groupedVisible = useMemo(() => {
+    const map = new Map<string, AssetItem[]>();
+    for (const item of visibleAssets) {
       const key = dateGroupLabel(item.updatedAt, locale) || t('me.unknownDate');
       const bucket = map.get(key) || [];
       bucket.push(item);
       map.set(key, bucket);
     }
     return Array.from(map.entries());
-  }, [assets, locale, t]);
+  }, [visibleAssets, locale, t]);
 
   const profileTabs: { id: ProfileTab; label: string }[] = [
     { id: 'published', label: t('me.tabPublished') },
@@ -288,7 +363,6 @@ export default function MePage(): ReactNode {
   return (
     <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
       <div className="mx-auto w-full max-w-[1700px] px-[60px] pb-10 pt-6">
-        {/* Profile header — avatar + name in one row */}
         <header className="flex items-center gap-4">
           <button
             type="button"
@@ -329,30 +403,27 @@ export default function MePage(): ReactNode {
             ) : published.length === 0 ? (
               <EmptyBlock hint={t('me.emptyPublished')} />
             ) : (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                {published.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    disabled={openingPublishedId === c.id}
-                    onClick={() => void openPublished(c)}
-                    className="group flex w-full flex-col text-left disabled:opacity-60"
-                  >
-                    <div className={projectThumbFrameClass('bg-[var(--accent-soft)]')}>
-                      {publishedDocs[c.id] ? (
-                        <TemplateThumbnail document={publishedDocs[c.id]} fit="cover" />
-                      ) : (
-                        <div className="flex h-full items-center justify-center text-[12px] text-[var(--muted)]">
-                          —
-                        </div>
-                      )}
-                    </div>
-                    <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
-                      {resolveCaseTitle(c, t)}
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <>
+                <div className={GRID}>
+                  {visiblePublished.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={openingPublishedId === c.id}
+                      onClick={() => void openPublished(c)}
+                      className="group flex w-full flex-col text-left disabled:opacity-60"
+                    >
+                      <LazyTemplateThumb document={publishedDocs[c.id]} fit="cover" />
+                      <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
+                        {resolveCaseTitle(c, t)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {hasMorePublished ? (
+                  <div ref={publishedSentinel} className="h-8 w-full" aria-hidden />
+                ) : null}
+              </>
             )
           ) : null}
 
@@ -362,64 +433,72 @@ export default function MePage(): ReactNode {
             ) : liked.length === 0 ? (
               <EmptyBlock hint={t('me.emptyLiked')} />
             ) : (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                {liked.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    disabled={openingLikedId === c.id}
-                    onClick={() => void openLiked(c)}
-                    className="group flex w-full flex-col text-left disabled:opacity-60"
-                  >
-                    <div className={projectThumbFrameClass('bg-[var(--accent-soft)]')}>
-                      {likedDocs[c.id] ? (
-                        <TemplateThumbnail document={likedDocs[c.id]} fit="cover" />
-                      ) : (
-                        <div className="flex h-full items-center justify-center text-[12px] text-[var(--muted)]">
-                          —
-                        </div>
-                      )}
-                      <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--surface)]/90 text-[#e11d48] shadow-sm ring-1 ring-[var(--line)]">
-                        <HiHeart className="h-3.5 w-3.5 fill-current" aria-hidden />
-                      </span>
-                    </div>
-                    <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
-                      {resolveCaseTitle(c, t)}
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <>
+                <div className={GRID}>
+                  {visibleLiked.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={openingLikedId === c.id}
+                      onClick={() => void openLiked(c)}
+                      className="group flex w-full flex-col text-left disabled:opacity-60"
+                    >
+                      <LazyTemplateThumb document={likedDocs[c.id]} fit="cover">
+                        <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--surface)]/90 text-[#e11d48] shadow-sm ring-1 ring-[var(--line)]">
+                          <HiHeart className="h-3.5 w-3.5 fill-current" aria-hidden />
+                        </span>
+                      </LazyTemplateThumb>
+                      <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
+                        {resolveCaseTitle(c, t)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {hasMoreLiked ? (
+                  <div ref={likedSentinel} className="h-8 w-full" aria-hidden />
+                ) : null}
+              </>
             )
           ) : null}
 
           {tab === 'assets' ? (
             <div className="space-y-8">
-              {grouped.length === 0 ? (
+              {assets.length === 0 ? (
                 <EmptyBlock hint={t('me.emptyAssets')} />
               ) : (
-                grouped.map(([dateLabel, items]) => (
-                  <section key={dateLabel}>
-                    <div className="mb-3 flex items-end justify-between gap-3">
-                      <h2 className="text-[15px] font-semibold text-[var(--ink)]">{dateLabel}</h2>
-                      <span className="text-[12px] text-[var(--muted)]">
-                        {t('me.assetCount', { count: items.length })}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                      {items.map((item) => (
-                        <AssetCard
-                          key={item.id}
-                          item={item}
-                          onOpen={() => {
-                            if (item.kind !== 'canvas') return;
-                            dispatch(openTemplate(item.id));
-                            goEditor();
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ))
+                <>
+                  {groupedVisible.map(([dateLabel, items]) => (
+                    <section key={dateLabel}>
+                      <div className="mb-3 flex items-end justify-between gap-3">
+                        <h2 className="text-[15px] font-semibold text-[var(--ink)]">{dateLabel}</h2>
+                        <span className="text-[12px] text-[var(--muted)]">
+                          {t('me.assetCount', {
+                            count: assetCountByDate.get(dateLabel) || items.length,
+                          })}
+                        </span>
+                      </div>
+                      <div className={GRID}>
+                        {items.map((item) => (
+                          <AssetCard
+                            key={item.id}
+                            item={item}
+                            onOpen={() => {
+                              if (item.kind !== 'canvas') return;
+                              // Defer heavy editor mount so the click feels instant.
+                              requestAnimationFrame(() => {
+                                dispatch(openTemplate(item.id));
+                                goEditor();
+                              });
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                  {hasMoreAssets ? (
+                    <div ref={assetsSentinel} className="h-8 w-full" aria-hidden />
+                  ) : null}
+                </>
               )}
             </div>
           ) : null}

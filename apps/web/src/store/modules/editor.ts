@@ -13,7 +13,8 @@ import {
   spawnImportPlaceholderNode,
   removeNodesFromDocument,
 } from '@/store/scene/sceneDocument';
-import { loadTemplates, saveTemplates } from '@/store/templatesStorage';
+import { loadTemplates, saveTemplates, isSessionTemplate } from '@/store/templatesStorage';
+import type { TemplateSource } from '@/store/templatesStorage';
 
 /** Side panel / toolbar kinds for image tools. */
 export type ImageToolPanelKind =
@@ -53,6 +54,23 @@ function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
     height,
     backgroundColor: partial?.backgroundColor || '#FFFFFF',
   };
+}
+
+/** Claim session (`case`/`scratch`) as owned on first real edit; persist snapshot then. */
+function syncLibraryOnEdit(state: any, claim = true) {
+  if (!state.currentId || !state.document) return;
+  const item = state.templates.find((t: any) => t.id === state.currentId);
+  if (!item) return;
+  if (!(claim && isSessionTemplate(item))) return;
+  item.source = 'user' as TemplateSource;
+  item.document = JSON.parse(JSON.stringify(state.document));
+  item.updatedAt = Date.now();
+  saveTemplates(state.templates);
+}
+
+function touchOpened(item: any) {
+  if (!item) return;
+  item.openedAt = Date.now();
 }
 
 const templates = loadTemplates();
@@ -119,6 +137,7 @@ const editorSlice = createSlice({
   reducers: {
     createTemplate(state, action) {
       const id = nanoid();
+      const now = Date.now();
       const doc = normalizeDocument(
         action.payload?.document ||
           createEmptyDocument({
@@ -127,10 +146,19 @@ const editorSlice = createSlice({
             emptyWorld: action.payload?.emptyWorld,
           })
       );
+      const source: TemplateSource =
+        action.payload?.source === 'user' ||
+        action.payload?.source === 'import' ||
+        action.payload?.source === 'case' ||
+        action.payload?.source === 'scratch'
+          ? action.payload.source
+          : 'scratch';
       const item = {
         id,
         name: action.payload?.name || '未命名作品',
-        updatedAt: Date.now(),
+        updatedAt: now,
+        openedAt: now,
+        source,
         document: doc,
       };
       state.templates.unshift(item);
@@ -156,16 +184,20 @@ const editorSlice = createSlice({
       state.historyPast = [];
       state.historyFuture = [];
       state.sceneReloadToken += 1;
+      touchOpened(item);
+      saveTemplates(state.templates);
     },
     setDocument(state, action) {
       pushHistory(state);
       state.document = normalizeDocument(action.payload);
       state.dirty = true;
       state.sceneReloadToken += 1;
+      syncLibraryOnEdit(state);
     },
     setDocumentFromCanvas(state, action) {
       state.document = normalizeDocument(action.payload);
       state.dirty = true;
+      syncLibraryOnEdit(state);
     },
     patchDocumentNode(state, action) {
       const { nodeId, patch, skipHistory } = action.payload || {};
@@ -175,6 +207,7 @@ const editorSlice = createSlice({
       state.dirty = true;
       state.documentPatchToken += 1;
       state.lastPatchedNodeIds = [String(nodeId)];
+      syncLibraryOnEdit(state);
     },
     setSelectedNodeId(state, action) {
       state.selectedNodeId = action.payload;
@@ -217,6 +250,7 @@ const editorSlice = createSlice({
       state.document = next;
       state.dirty = true;
       state.sceneReloadToken += 1;
+      syncLibraryOnEdit(state);
     },
     setActiveFrameId(state, action) {
       if (!state.document) return;
@@ -247,6 +281,7 @@ const editorSlice = createSlice({
       state.document = next;
       state.dirty = true;
       state.sceneReloadToken += 1;
+      syncLibraryOnEdit(state);
     },
     renameArtboardFrame(state, action) {
       if (!state.document) return;
@@ -260,6 +295,7 @@ const editorSlice = createSlice({
       next.frames = frames;
       state.document = next;
       state.dirty = true;
+      syncLibraryOnEdit(state);
     },
     updateArtboardFrame(state, action) {
       if (!state.document) return;
@@ -278,6 +314,7 @@ const editorSlice = createSlice({
       const onlyChrome =
         keys.length > 0 && keys.every((k) => k === 'x' || k === 'y' || k === 'locked');
       if (!onlyChrome) state.sceneReloadToken += 1;
+      syncLibraryOnEdit(state);
     },
     /** Snapshot history without changing the document (e.g. before a live frame drag). */
     pushEditorHistory(state) {
@@ -289,6 +326,8 @@ const editorSlice = createSlice({
       if (item) {
         item.name = action.payload;
         item.updatedAt = Date.now();
+        // Renaming is an explicit claim → show in Projects.
+        if (isSessionTemplate(item)) item.source = 'user';
         saveTemplates(state.templates);
       }
     },
@@ -298,20 +337,61 @@ const editorSlice = createSlice({
       if (!item) return;
       item.document = JSON.parse(JSON.stringify(state.document));
       item.updatedAt = Date.now();
+      if (isSessionTemplate(item)) item.source = 'user';
       state.dirty = false;
       saveTemplates(state.templates);
     },
     importDocument(state, action) {
+      const payload = action.payload || {};
+      const source: TemplateSource =
+        payload.source === 'case' ||
+        payload.source === 'import' ||
+        payload.source === 'user' ||
+        payload.source === 'scratch'
+          ? payload.source
+          : 'import';
+      const originCaseId = payload.originCaseId
+        ? String(payload.originCaseId)
+        : undefined;
+      const now = Date.now();
+
+      // Reuse an unclaimed case session instead of duplicating Projects noise.
+      if (source === 'case' && originCaseId) {
+        const existing = state.templates.find(
+          (t: any) => t.originCaseId === originCaseId && t.source === 'case'
+        );
+        if (existing) {
+          const doc = alignImportedDocumentOrigin(payload.document);
+          doc.activeFrameId = null;
+          existing.document = doc;
+          existing.name = payload.name || existing.name || '导入作品';
+          existing.updatedAt = now;
+          touchOpened(existing);
+          state.currentId = existing.id;
+          state.document = doc;
+          clearSelection(state);
+          state.dirty = false;
+          state.historyPast = [];
+          state.historyFuture = [];
+          state.sceneReloadToken += 1;
+          saveTemplates(state.templates);
+          return;
+        }
+      }
+
       const id = nanoid();
-      const doc = alignImportedDocumentOrigin(action.payload.document);
+      const doc = alignImportedDocumentOrigin(payload.document);
       // Inspiration / import → editor: do not pre-select an artboard.
       doc.activeFrameId = null;
-      const item = {
+      const item: any = {
         id,
-        name: action.payload.name || '导入作品',
-        updatedAt: Date.now(),
+        name: payload.name || '导入作品',
+        updatedAt: now,
+        openedAt: now,
+        source,
         document: doc,
       };
+      if (originCaseId) item.originCaseId = originCaseId;
       state.templates.unshift(item);
       state.currentId = id;
       state.document = doc;
@@ -441,6 +521,7 @@ const editorSlice = createSlice({
       if (!item) return;
       item.name = String(name || item.name || '未命名作品');
       item.updatedAt = Date.now();
+      if (isSessionTemplate(item)) item.source = 'user';
       saveTemplates(state.templates);
     },
     undo(state) {
@@ -449,6 +530,7 @@ const editorSlice = createSlice({
       state.document = state.historyPast.pop();
       state.sceneReloadToken += 1;
       state.dirty = true;
+      syncLibraryOnEdit(state);
     },
     redo(state) {
       if (!state.historyFuture.length || !state.document) return;
@@ -456,6 +538,7 @@ const editorSlice = createSlice({
       state.document = state.historyFuture.shift();
       state.sceneReloadToken += 1;
       state.dirty = true;
+      syncLibraryOnEdit(state);
     },
     setActiveTool(state, action) {
       state.activeTool = action.payload;

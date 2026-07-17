@@ -16,6 +16,7 @@ import { BiExit, BiMessageSquareAdd, BiTimeFive } from 'react-icons/bi';
 import {
   HiCheck,
   HiOutlineChevronRight,
+  HiOutlineCog6Tooth,
   HiOutlineTrash,
 } from 'react-icons/hi2';
 import {
@@ -42,6 +43,16 @@ import {
 import { runDesignAgent } from '@/components/editor/panels/agent/runDesignAgent';
 import ChatTurnList from '@/components/editor/panels/agent/ChatTurnList';
 import AgentComposerShell from '@/components/editor/panels/agent/AgentComposerShell';
+import AgentSettingsDialog from '@/components/editor/panels/agent/AgentSettingsDialog';
+import {
+  categoryLabel,
+  getPipeline,
+  parseContinueChoice,
+  readCollabMode,
+  writeCollabMode,
+  type AgentCollabMode,
+  type DesignCategory,
+} from '@/components/editor/panels/agent/designPipeline';
 import {
   DEFAULT_IMAGE_ASPECT_RATIO,
   DEFAULT_IMAGE_QUALITY,
@@ -346,6 +357,8 @@ export default function AgentDock({
   const pinnedContextKeysRef = useRef<Set<string>>(new Set());
   const contextDismissedKeyRef = useRef<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [collabMode, setCollabMode] = useState<AgentCollabMode>(() => readCollabMode());
   const [newChatTip, setNewChatTip] = useState(false);
   /** Cursor-like: edit a past user message in-place. */
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -374,6 +387,12 @@ export default function AgentDock({
   const [pendingReview, setPendingReview] = useState<{
     userMessageId: string;
     assistantId: string;
+  } | null>(null);
+  /** Paused fixed pipeline — resume when user clicks 继续：… */
+  const pipelineSessionRef = useRef<{
+    category: DesignCategory;
+    brief: string;
+    nextIndex: number;
   } | null>(null);
   const newChatTipTimer = useRef<number | null>(null);
 
@@ -576,6 +595,7 @@ export default function AgentDock({
     setContextChips([]);
     pinnedContextKeysRef.current.clear();
     setPendingReview(null);
+    pipelineSessionRef.current = null;
     contextDismissedKeyRef.current = null;
     setHistoryOpen(false);
     setModelPanelOpen(false);
@@ -941,9 +961,36 @@ export default function AgentDock({
 
     dispatch(setAgentBusy(true));
     try {
+      const resume = pipelineSessionRef.current;
+      let pipelineResume:
+        | { category: DesignCategory; phaseIndex: number; brief: string }
+        | null = null;
+      const rawText = options.raw ? text : null;
+      if (rawText && resume) {
+        const pipe = getPipeline(resume.category);
+        const cont = parseContinueChoice(options.displayContent || rawText, pipe);
+        if (cont === -1) {
+          pipelineSessionRef.current = null;
+        } else if (cont != null) {
+          pipelineResume = {
+            category: resume.category,
+            phaseIndex: cont,
+            brief: resume.brief,
+          };
+        } else if (/^继续/.test(rawText) || /^继续/.test(String(options.displayContent || ''))) {
+          pipelineResume = {
+            category: resume.category,
+            phaseIndex: resume.nextIndex,
+            brief: resume.brief,
+          };
+        }
+      }
+
       await runDesignAgent({
         userMessage: options.raw ? text : buildUserMessage(text),
         styleGuide: AUTO_STYLE_GUIDE,
+        collabMode,
+        pipelineResume,
         model: model || undefined,
         history: history.filter(
           (h): h is { role: 'user' | 'assistant'; content: string } =>
@@ -972,6 +1019,31 @@ export default function AgentDock({
             setMessages((prev) =>
               prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + ev.text } : m))
             );
+            return;
+          }
+          if (ev.type === 'phase') {
+            const p = ev.progress;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      pipeline: {
+                        category: categoryLabel(p.category),
+                        labels: p.labels,
+                        currentIndex: p.currentIndex,
+                        stepConfirm: p.stepConfirm,
+                        collabMode: p.collabMode,
+                      },
+                    }
+                  : m
+              )
+            );
+            pipelineSessionRef.current = {
+              category: p.category,
+              brief: pipelineResume?.brief || (options.raw ? text : buildUserMessage(text)),
+              nextIndex: p.currentIndex + 1,
+            };
             return;
           }
           if (ev.type === 'tool_start') {
@@ -1033,6 +1105,11 @@ export default function AgentDock({
             return;
           }
           if (ev.type === 'done') {
+            if (ev.pipelinePaused && pipelineSessionRef.current) {
+              // keep session for 继续
+            } else if (!ev.choices?.length) {
+              pipelineSessionRef.current = null;
+            }
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.id === assistantId) {
@@ -1319,6 +1396,19 @@ export default function AgentDock({
               <BiTimeFive className="h-[18px] w-[18px]" />
             </button>
           </Tooltip>
+          <Tooltip title={t('agent.settings')} placement="bottom">
+            <button
+              type="button"
+              aria-label={t('agent.settings')}
+              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              onClick={() => {
+                closePopovers();
+                setSettingsOpen(true);
+              }}
+            >
+              <HiOutlineCog6Tooth className="h-[18px] w-[18px]" />
+            </button>
+          </Tooltip>
           <Tooltip title={t('agent.exit')} placement="bottom">
             <button
               type="button"
@@ -1337,6 +1427,16 @@ export default function AgentDock({
           </Tooltip>
         </div>
       </div>
+
+      <AgentSettingsDialog
+        open={settingsOpen}
+        mode={collabMode}
+        onClose={() => setSettingsOpen(false)}
+        onChangeMode={(next) => {
+          setCollabMode(next);
+          writeCollabMode(next);
+        }}
+      />
 
       <div ref={listRef} className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 py-2">
         {historyOpen ? (
@@ -1418,6 +1518,9 @@ export default function AgentDock({
                   '请先创建画板（宽794×高1123），然后继续完成我上一条消息里的设计需求，直接在画布上绘制，不要只回复文字。';
               } else if (/指定|已有/.test(choice)) {
                 text = '请先用 get_scene_summary 列出画板，再问我选哪一块，确认后再绘制。';
+              } else if (/到此为止/.test(choice)) {
+                pipelineSessionRef.current = null;
+                text = '好的，先停在这里，等我下一步指示再继续。';
               }
               void send({ text, raw: true, displayContent: choice });
             }}
