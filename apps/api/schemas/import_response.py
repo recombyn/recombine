@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class ImportMeta(BaseModel):
-    source_type: Literal["pdf", "docx", "image"]
+    source_type: Literal["pdf", "docx", "image", "design"]
     page_count: int = 1
     page_images: list[str] = Field(default_factory=list)
     object_keys: list[str] = Field(default_factory=list)

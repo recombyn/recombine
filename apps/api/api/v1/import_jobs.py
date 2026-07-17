@@ -23,6 +23,7 @@ _SUFFIX: dict[str, str] = {
 }
 
 _DESIGN_SUFFIXES = {".psd", ".xd", ".rp", ".fig"}
+_DESIGN_ACCEPT_HINT = "Supported: .psd, .xd, .rp, .fig"
 
 
 @router.post("/jobs", response_model=JobCreateResponse)
@@ -33,9 +34,12 @@ async def create_import_job(
     if source_type == "image":
         suffix = Path(file.filename or "image.png").suffix or ".png"
     elif source_type == "design":
-        suffix = Path(file.filename or "design.psd").suffix.lower() or ".psd"
+        suffix = Path(file.filename or "").suffix.lower()
         if suffix not in _DESIGN_SUFFIXES:
-            suffix = ".psd"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported design format '{suffix or '(none)'}'. {_DESIGN_ACCEPT_HINT}",
+            )
     else:
         suffix = _SUFFIX[source_type]
 
