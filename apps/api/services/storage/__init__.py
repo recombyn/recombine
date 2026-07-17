@@ -11,6 +11,12 @@ from config.settings import settings
 class ObjectStorage(Protocol):
     def put_file(self, key: str, path: Path, content_type: str | None = None) -> str: ...
 
+    def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str: ...
+
+    def get_bytes(self, key: str) -> bytes | None: ...
+
+    def delete_object(self, key: str) -> None: ...
+
     def url_for(self, key: str) -> str: ...
 
     def enabled_remote(self) -> bool: ...
@@ -22,6 +28,28 @@ class LocalStorage:
     def put_file(self, key: str, path: Path, content_type: str | None = None) -> str:
         # Already on disk in phase-1/2 layout — record key only.
         return key.replace("\\", "/")
+
+    def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:
+        root = Path(settings.result_dir).resolve() / "objects"
+        dest = root / key.replace("\\", "/")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return key.replace("\\", "/")
+
+    def get_bytes(self, key: str) -> bytes | None:
+        root = Path(settings.result_dir).resolve() / "objects"
+        path = root / key.replace("\\", "/")
+        if not path.is_file():
+            return None
+        return path.read_bytes()
+
+    def delete_object(self, key: str) -> None:
+        root = Path(settings.result_dir).resolve() / "objects"
+        path = root / key.replace("\\", "/")
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def url_for(self, key: str) -> str:
         return key.replace("\\", "/")
@@ -59,6 +87,26 @@ class S3Storage:
             self._client.upload_file(str(path), self._bucket, key)
         return key
 
+    def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:
+        extra: dict = {}
+        if content_type:
+            extra["ContentType"] = content_type
+        self._client.put_object(Bucket=self._bucket, Key=key, Body=data, **extra)
+        return key
+
+    def get_bytes(self, key: str) -> bytes | None:
+        try:
+            obj = self._client.get_object(Bucket=self._bucket, Key=key)
+            return obj["Body"].read()
+        except Exception:
+            return None
+
+    def delete_object(self, key: str) -> None:
+        try:
+            self._client.delete_object(Bucket=self._bucket, Key=key)
+        except Exception:
+            pass
+
     def url_for(self, key: str) -> str:
         if settings.s3_public_base_url:
             return f"{settings.s3_public_base_url.rstrip('/')}/{key}"
@@ -85,6 +133,18 @@ def get_storage() -> ObjectStorage:
     else:
         _storage = LocalStorage()
     return _storage
+
+
+def put_bytes(key: str, data: bytes, content_type: str | None = None) -> str:
+    return get_storage().put_bytes(key, data, content_type=content_type)
+
+
+def get_bytes(key: str) -> bytes | None:
+    return get_storage().get_bytes(key)
+
+
+def delete_object(key: str) -> None:
+    get_storage().delete_object(key)
 
 
 def upload_page_images(job_id: str | None, page_paths: list[Path]) -> tuple[list[str], list[str], list[str]]:

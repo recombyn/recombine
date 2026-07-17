@@ -12,7 +12,7 @@ export default function AuthHeader() {
   const user = useSelector((state: any) => state.auth.user);
 
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-3">
+    <div className="flex shrink-0 items-center gap-3">
       {!user ? (
         <>
           <LanguageSwitcher variant="light" />

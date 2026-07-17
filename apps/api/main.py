@@ -3,12 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.router import api_router
 from config.settings import settings
+from services.db import init_schema
 
 app = FastAPI(
     title="Resume Scene API",
     description="Parse PDF/DOCX/Image into Canvas Scene JSON",
     version="0.1.0",
 )
+
+
+@app.on_event("startup")
+def _init_stores() -> None:
+    init_schema()
 
 app.add_middleware(
     CORSMiddleware,

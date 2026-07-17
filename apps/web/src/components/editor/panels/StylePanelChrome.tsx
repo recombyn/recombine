@@ -1,23 +1,33 @@
 import type { ReactNode } from 'react';
 import { BiExit } from 'react-icons/bi';
+import { HiOutlineEyeDropper } from 'react-icons/hi2';
 import Tooltip from '@/components/base/tooltip';
+import { pickScreenColor } from '@/components/editor/color/pickScreenColor';
+import { FillVisibilityIcon } from '@/components/editor/nodes/ShapeNode/FillVisibilityIcon';
 import { cn } from '@/utils/classnames';
 
 /** Shared size for style-panel icon toggles (stroke sides / align / cap / join). */
 export const PANEL_ICON_BTN =
-  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-[var(--muted)] transition-colors';
+  'inline-flex h-full w-full min-w-0 items-center justify-center rounded-[4px] text-[var(--muted)] transition-colors';
 
 export const PANEL_ICON_BTN_ACTIVE =
   'bg-[var(--surface)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)]';
 
+/**
+ * Full-width track; each Tooltip wrapper is flex-1 so N slots split width evenly (1/N).
+ * Tooltip defaults to inline-block — must force flex-1 on the wrapper or slots collapse.
+ */
 export const PANEL_ICON_TRACK =
-  'flex h-8 w-full items-center justify-center gap-0.5 rounded-[4px] bg-[var(--accent-soft)] p-0.5';
+  'flex h-8 w-full items-stretch gap-0.5 rounded-[4px] bg-[var(--accent-soft)] p-0.5';
+
+/** Equal-width slot wrapper (Tooltip trigger). */
+export const PANEL_ICON_SLOT = 'min-w-0 flex-1 basis-0';
 
 export const PANEL_ICON_SVG = 'h-3.5 w-3.5';
 
 /**
  * Equal-sized icon toggle group — one active selection (align / cap / join).
- * All slots share the same square hit target so backgrounds never look mismatched.
+ * Slots share width evenly (3 → 1/3, 5 → 1/5).
  */
 export function PanelSegmentedIcons<T extends string>({
   value,
@@ -35,14 +45,19 @@ export function PanelSegmentedIcons<T extends string>({
       {options.map(({ id, tip, Icon }) => {
         const active = value === id;
         return (
-          <Tooltip key={id} title={tip} placement="top">
+          <Tooltip
+            key={id}
+            title={tip}
+            placement="top"
+            asChild={false}
+            triggerClassName={PANEL_ICON_SLOT}
+          >
             <button
               type="button"
               aria-label={tip}
               aria-pressed={active}
               className={cn(
                 PANEL_ICON_BTN,
-                'flex-1',
                 active && PANEL_ICON_BTN_ACTIVE,
                 !active && 'hover:text-[var(--ink)]'
               )}
@@ -59,32 +74,68 @@ export function PanelSegmentedIcons<T extends string>({
 
 /**
  * Multi-select icon toggles (e.g. stroke T/R/B/L) — each can be on independently.
- * Same square sizing as PanelSegmentedIcons.
+ * Same equal-width slots as PanelSegmentedIcons (5 with「全部」→ 1/5 each).
  */
 export function PanelToggleIcons<T extends string>({
   value,
   options,
   onChange,
   className,
+  /** Optional leading control (e.g. “All sides”) rendered before side toggles. */
+  leading,
 }: {
   value: Record<T, boolean>;
   options: Array<{ id: T; tip: string; Icon: (p: { className?: string }) => ReactNode }>;
   onChange: (next: Record<T, boolean>) => void;
   className?: string;
+  leading?: {
+    tip: string;
+    Icon: (p: { className?: string }) => ReactNode;
+    active: boolean;
+    onClick: () => void;
+  };
 }) {
+  const LeadIcon = leading?.Icon;
   return (
     <div className={cn(PANEL_ICON_TRACK, className)} role="group">
+      {leading && LeadIcon ? (
+        <Tooltip
+          title={leading.tip}
+          placement="top"
+          asChild={false}
+          triggerClassName={PANEL_ICON_SLOT}
+        >
+          <button
+            type="button"
+            aria-label={leading.tip}
+            aria-pressed={leading.active}
+            className={cn(
+              PANEL_ICON_BTN,
+              leading.active && PANEL_ICON_BTN_ACTIVE,
+              !leading.active && 'hover:text-[var(--ink)]'
+            )}
+            onClick={leading.onClick}
+          >
+            <LeadIcon className={PANEL_ICON_SVG} />
+          </button>
+        </Tooltip>
+      ) : null}
       {options.map(({ id, tip, Icon }) => {
         const active = Boolean(value[id]);
         return (
-          <Tooltip key={id} title={tip} placement="top">
+          <Tooltip
+            key={id}
+            title={tip}
+            placement="top"
+            asChild={false}
+            triggerClassName={PANEL_ICON_SLOT}
+          >
             <button
               type="button"
               aria-label={tip}
               aria-pressed={active}
               className={cn(
                 PANEL_ICON_BTN,
-                'flex-1',
                 active && PANEL_ICON_BTN_ACTIVE,
                 !active && 'hover:text-[var(--ink)]'
               )}
@@ -108,6 +159,13 @@ export function StylePanelShell({
   bodyClassName,
   width,
   dataAttr,
+  /** When set, show eyedropper in the header (same as artboard color / ColorPanel). */
+  onEyedropper,
+  /** Layer visibility (eye) — fill / stroke hide toggles live in the panel header. */
+  layerVisible,
+  onLayerVisibleChange,
+  layerVisibleTipShow = '显示',
+  layerVisibleTipHide = '隐藏',
 }: {
   title: string;
   onClose?: () => void;
@@ -117,8 +175,14 @@ export function StylePanelShell({
   bodyClassName?: string;
   width?: number;
   dataAttr?: string;
+  onEyedropper?: (hex: string) => void;
+  layerVisible?: boolean;
+  onLayerVisibleChange?: (visible: boolean) => void;
+  layerVisibleTipShow?: string;
+  layerVisibleTipHide?: string;
 }) {
   const attrs = dataAttr ? { [dataAttr]: true } : {};
+  const showLayerToggle = typeof layerVisible === 'boolean' && Boolean(onLayerVisibleChange);
   return (
     <div
       {...attrs}
@@ -131,18 +195,52 @@ export function StylePanelShell({
     >
       <div className="flex h-11 items-center justify-between px-3">
         <span className="text-[13px] font-medium text-[var(--ink)]">{title}</span>
-        {onClose ? (
-          <Tooltip title={'退出'} placement="bottom">
-            <button
-              type="button"
-              aria-label={'退出'}
-              onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+        <div className="flex items-center gap-0.5">
+          {showLayerToggle ? (
+            <Tooltip
+              title={layerVisible ? layerVisibleTipHide : layerVisibleTipShow}
+              placement="bottom"
             >
-              <BiExit className="h-[18px] w-[18px]" />
-            </button>
-          </Tooltip>
-        ) : null}
+              <button
+                type="button"
+                aria-label={layerVisible ? layerVisibleTipHide : layerVisibleTipShow}
+                aria-pressed={layerVisible}
+                onClick={() => onLayerVisibleChange?.(!layerVisible)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              >
+                <FillVisibilityIcon visible={Boolean(layerVisible)} className="h-[18px] w-[18px]" />
+              </button>
+            </Tooltip>
+          ) : null}
+          {onEyedropper ? (
+            <Tooltip title={'取色'} placement="bottom">
+              <button
+                type="button"
+                aria-label={'取色'}
+                onClick={() => {
+                  void pickScreenColor().then((hex) => {
+                    if (hex) onEyedropper(hex);
+                  });
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              >
+                <HiOutlineEyeDropper className="h-[18px] w-[18px]" />
+              </button>
+            </Tooltip>
+          ) : null}
+          {onClose ? (
+            <Tooltip title={'退出'} placement="bottom">
+              <button
+                type="button"
+                aria-label={'退出'}
+                onClick={onClose}
+                className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              >
+                <BiExit className="h-[18px] w-[18px]" />
+              </button>
+            </Tooltip>
+          ) : null}
+        </div>
       </div>
       <div className={cn('space-y-1.5 p-2.5', bodyClassName)}>{children}</div>
     </div>

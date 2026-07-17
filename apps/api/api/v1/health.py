@@ -37,14 +37,28 @@ def _check_ocr() -> bool:
         return False
 
 
+def _check_db() -> dict:
+    try:
+        from services.db import connect, dialect, init_schema
+
+        init_schema()
+        with connect() as conn:
+            conn.execute("SELECT 1")
+        return {"ok": True, "dialect": dialect()}
+    except Exception as err:
+        return {"ok": False, "error": str(err)[:200]}
+
+
 @router.get("/health")
 def health():
     redis_ok = _check_redis()
     worker_ok = _check_worker() if redis_ok else False
     ocr_ok = _check_ocr()
+    db = _check_db()
 
     checks = {
         "api": True,
+        "database": db,
         "redis": redis_ok,
         "worker": worker_ok,
         "ocr": ocr_ok,
@@ -52,7 +66,9 @@ def health():
         "s3": settings.s3_enabled,
     }
 
-    if redis_ok and worker_ok:
+    if not db.get("ok"):
+        status = "degraded"
+    elif redis_ok and worker_ok:
         status = "ok"
     elif redis_ok:
         status = "degraded"  # sync import may still work; async jobs queue without drain

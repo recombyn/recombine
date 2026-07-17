@@ -1,5 +1,5 @@
 import { nanoid } from '@reduxjs/toolkit';
-import { buildMarkdownTextAttrs, measureWrappedTextSize, DEFAULT_TEXT_BOX_WIDTH } from './sceneText';
+import { buildMarkdownTextAttrs, measurePlainTextSize } from './sceneText';
 import { clampShapeSides, DEFAULT_SHAPE_SIDES } from './sceneShapes';
 
 /** Default canvas size (approx A4 @ 96dpi); user can change freely */
@@ -135,8 +135,17 @@ export function alignImportedDocumentOrigin(doc: any) {
     return next;
   }
 
-  // Prefer shifting node coords over leaving a document.x/y offset —
-  // old saved templates often ignore document origin and look blank off-canvas.
+/** Prefer shifting node coords over leaving a document.x/y offset —
+   * old saved templates often ignore document origin and look blank off-canvas.
+   * Skip when artboard frames exist — cases are already laid out in frame space;
+   * shifting would collapse intended margins and look off-center. */
+  const hasFrames = Array.isArray(next.frames) && next.frames.length > 0;
+  if (hasFrames) {
+    next.x = 0;
+    next.y = 0;
+    return next;
+  }
+
   const ox = (Number(next.x) || 0) + minX;
   const oy = (Number(next.y) || 0) + minY;
   if (ox !== 0 || oy !== 0) {
@@ -242,7 +251,7 @@ export function createTextNode({
 } = {}) {
   const id = nanoid(10);
   const content = String(text ?? '');
-  const measured = measureWrappedTextSize(content || 'M', {}, DEFAULT_TEXT_BOX_WIDTH);
+  const measured = measurePlainTextSize(content || 'M', {});
   // Empty text = caret only: tiny width, one-line height.
   const w = width ?? (content ? measured.width : 2);
   const h = height ?? measured.height;
@@ -623,6 +632,8 @@ export function spawnImageProcessNode(
     targetWidth?: number;
     targetHeight?: number;
     gap?: number;
+    /** Extra JSON for watchers (e.g. multi-angle params). */
+    meta?: Record<string, unknown> | null;
   }
 ) {
   if (!doc || !sourceId) return { document: doc, id: null as string | null };
@@ -656,6 +667,7 @@ export function spawnImageProcessNode(
     processSourceId: sourceId,
     ...(opts.targetWidth != null ? { processTargetWidth: Math.round(opts.targetWidth) } : {}),
     ...(opts.targetHeight != null ? { processTargetHeight: Math.round(opts.targetHeight) } : {}),
+    ...(opts.meta ? { processMeta: JSON.stringify(opts.meta) } : {}),
   };
   return { document: addNodeToDocument(doc, id, node), id };
 }
@@ -663,8 +675,10 @@ export function spawnImageProcessNode(
 /** Clear processing overlay attrs after a job finishes. */
 export function clearImageProcessAttrs(doc: any, nodeId: string) {
   if (!doc || !nodeId) return doc;
-  const node = doc.deltaSetLike?.[nodeId];
+  const next = normalizeDocument(doc);
+  const node = next.deltaSetLike?.[nodeId];
   if (!node?.attrs) return doc;
+  // Must replace attrs — updateNodeInDocument merges and would keep processStatus.
   const attrs = { ...node.attrs };
   delete attrs.processStatus;
   delete attrs.processKind;
@@ -672,7 +686,9 @@ export function clearImageProcessAttrs(doc: any, nodeId: string) {
   delete attrs.processSourceId;
   delete attrs.processTargetWidth;
   delete attrs.processTargetHeight;
-  return updateNodeInDocument(doc, nodeId, { attrs });
+  delete attrs.processMeta;
+  node.attrs = attrs;
+  return next;
 }
 
 
@@ -889,10 +905,12 @@ export function supportsAspectPresets(node: any) {
   if (!node) return false;
   if (node.key === 'image' || node.key === 'frame') return true;
   if (node.key === 'rect' || node.key === 'ellipse') return true;
-  if (node.key === 'path') return false;
-  if (node.key !== 'shape') return false;
-  const t = String(node.attrs?.shapeType || 'rect');
-  return !['line', 'arrow', 'pen', 'pencil', 'path'].includes(t);
+  if (node.key !== 'shape' && node.key !== 'path') return false;
+  const t = String(node.attrs?.shapeType || (node.key === 'path' ? 'path' : 'rect'));
+  // Open strokes have no box aspect; closed path (e.g. boolean result) does.
+  if (['line', 'arrow', 'pen', 'pencil'].includes(t)) return false;
+  if (t === 'path') return String(node.attrs?.closed) !== 'false';
+  return true;
 }
 
 /**

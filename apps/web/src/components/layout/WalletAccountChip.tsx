@@ -2,27 +2,28 @@ import { useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { FaCoins } from 'react-icons/fa6';
-import { HiOutlineUser, HiOutlineUserPlus } from 'react-icons/hi2';
+import { HiOutlineSparkles, HiOutlineUser, HiOutlineUserPlus } from 'react-icons/hi2';
 import { Dropdown } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
-import UserAccountPanel, {
-  formatCny,
-  userInitial,
-} from '@/components/layout/UserAccountPanel';
+import UserAccountPanel, { UserAvatar } from '@/components/layout/UserAccountPanel';
+import { formatTokens } from '@/store/modules/wallet';
 import { cn } from '@/utils/classnames';
 
 type Props = {
   className?: string;
 };
 
-/** Balance + avatar pill (home header / editor chrome). */
+/** Token balance + avatar pill (card-key prepaid, no membership). */
 export default function WalletAccountChip({ className }: Props) {
   const { t } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);
-  const balance = useSelector((state: any) => state.wallet?.balance ?? 0);
+  const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
   const navigate = useNavigate();
   const [accountOpen, setAccountOpen] = useState(false);
+
+  const tip = `${user?.name || user?.email || ''} · ${t('wallet.tokensLeft', {
+    count: formatTokens(tokens),
+  })}`;
 
   const guestMenu: MenuItemType[] = [
     {
@@ -51,20 +52,18 @@ export default function WalletAccountChip({ className }: Props) {
         <button
           type="button"
           className={cn(
-            'pointer-events-auto flex h-8 max-w-[11rem] items-center gap-2 rounded-full bg-[var(--accent-soft)] pl-2.5 pr-0.5 transition hover:opacity-90',
+            'pointer-events-auto flex h-8 max-w-[12rem] items-center gap-2 rounded-full bg-[var(--accent-soft)] pl-2.5 pr-0.5 transition hover:opacity-90',
             className
           )}
-          title={`${user.name || user.email} · ¥${formatCny(balance)}`}
+          title={tip}
         >
-          <span className="inline-flex min-w-0 items-center gap-1.5 text-[var(--ink)]">
-            <FaCoins className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden />
-            <span className="min-w-0 truncate text-[12px] font-medium tabular-nums">
-              ¥{formatCny(balance, { compact: true })}
+          <span className="inline-flex min-w-0 items-center gap-1 text-[var(--ink)]">
+            <HiOutlineSparkles className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden />
+            <span className="min-w-0 truncate text-[12px] font-semibold tabular-nums tracking-tight">
+              {formatTokens(tokens, { compact: true })}
             </span>
           </span>
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[var(--accent)] text-[12px] font-semibold text-[var(--on-brand)]">
-            {userInitial(user.name, user.email)}
-          </span>
+          <UserAvatar name={user.name} email={user.email} avatar={user.avatar} size={28} />
         </button>
       </UserAccountPanel>
     );

@@ -1,10 +1,15 @@
-"""In-memory session tokens for Google (and future) login."""
+"""Persistent auth sessions (LighthouseDB / SQLite)."""
 
 from __future__ import annotations
 
 import secrets
 import time
 from dataclasses import dataclass
+
+from services.auth.email_store import get_user_by_id, upsert_oauth_user
+from services.db import connect, init_schema
+
+_TTL_SECONDS = 60 * 60 * 24 * 14  # 14 days
 
 
 @dataclass
@@ -14,31 +19,73 @@ class SessionUser:
     name: str
     avatar: str | None
     provider: str
-
-
-_SESSIONS: dict[str, tuple[SessionUser, float]] = {}
-_TTL_SECONDS = 60 * 60 * 24 * 14  # 14 days
+    bio: str | None = None
 
 
 def create_session(user: SessionUser) -> str:
+    init_schema()
+    # Ensure a users row exists (email signup already wrote one; OAuth/admin need upsert).
+    sub = user.id.replace("google:", "", 1) if user.id.startswith("google:") else None
+    upsert_oauth_user(
+        user_id=user.id,
+        email=user.email,
+        name=user.name,
+        avatar=user.avatar,
+        provider=user.provider,
+        google_sub=sub if user.provider == "google" else None,
+    )
     token = secrets.token_urlsafe(32)
-    _SESSIONS[token] = (user, time.time() + _TTL_SECONDS)
+    now = time.time()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO auth_sessions (token, user_id, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (token, user.id, now + _TTL_SECONDS, now),
+        )
     return token
 
 
 def get_session(token: str | None) -> SessionUser | None:
     if not token:
         return None
-    row = _SESSIONS.get(token)
-    if not row:
+    init_schema()
+    now = time.time()
+    user_id: str | None = None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT user_id, expires_at FROM auth_sessions WHERE token = ?",
+            (token,),
+        ).fetchone()
+        if not row:
+            return None
+        if float(row["expires_at"]) < now:
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+            return None
+        user_id = row["user_id"]
+    user = get_user_by_id(user_id) if user_id else None
+    if not user:
         return None
-    user, expires = row
-    if time.time() > expires:
-        _SESSIONS.pop(token, None)
-        return None
-    return user
+    return SessionUser(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        avatar=user.avatar,
+        provider=user.provider,
+        bio=user.bio,
+    )
 
 
 def revoke_session(token: str | None) -> None:
-    if token:
-        _SESSIONS.pop(token, None)
+    if not token:
+        return
+    init_schema()
+    with connect() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+
+
+def purge_expired_sessions() -> None:
+    init_schema()
+    with connect() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (time.time(),))

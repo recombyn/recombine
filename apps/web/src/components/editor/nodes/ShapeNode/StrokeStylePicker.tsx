@@ -13,36 +13,61 @@ import { useTranslation } from 'react-i18next';
 import Tooltip from '@/components/base/tooltip';
 import { DropdownPanel, DropdownPanelItem } from '@/components/base';
 import { cn } from '@/utils/classnames';
-import { SEL_ICON_BTN, SEL_ICON_BTN_ACTIVE } from '@/components/editor/Canvas/selection/ToolbarValueSlider';
+import {
+  SEL_ICON_BTN,
+  SEL_ICON_BTN_ACTIVE,
+} from '@/components/editor/Canvas/selection/ToolbarValueSlider';
+import {
+  STROKE_STYLES,
+  parseStrokeStyle,
+  strokeDashPreview,
+  type StrokeStyle,
+} from '@/store/scene/sceneStrokeStyle';
 
-export type StrokeStyle = 'solid' | 'dashed' | 'dotted';
+export type { StrokeStyle };
+export { STROKE_STYLES };
 
-export const STROKE_STYLES: StrokeStyle[] = ['solid', 'dashed', 'dotted'];
-
-function dashFor(style: StrokeStyle) {
-  if (style === 'dashed') return '5 3';
-  if (style === 'dotted') return '1.5 2.5';
-  return undefined;
+export function strokeStyleLabel(
+  style: StrokeStyle,
+  t: (key: string) => string
+): string {
+  const keys: Record<StrokeStyle, string> = {
+    solid: 'editor.strokeSolid',
+    dashed: 'editor.strokeDashed',
+    dotted: 'editor.strokeDotted',
+    'long-dash': 'editor.strokeLongDash',
+    'short-dash': 'editor.strokeShortDash',
+    'dash-dot': 'editor.strokeDashDot',
+    'dash-dot-dot': 'editor.strokeDashDotDot',
+    'dense-dot': 'editor.strokeDenseDot',
+  };
+  return t(keys[style]);
 }
 
-export function StrokeStyleIcon({ style, active }: { style: StrokeStyle; active?: boolean }) {
+export function StrokeStyleIcon({
+  style,
+  active,
+}: {
+  style: StrokeStyle;
+  active?: boolean;
+}) {
   return (
-    <svg viewBox="0 0 20 8" className="h-3.5 w-5 shrink-0" aria-hidden>
+    <svg viewBox="0 0 28 8" className="h-3.5 w-7 shrink-0" aria-hidden>
       <line
         x1="1"
         y1="4"
-        x2="19"
+        x2="27"
         y2="4"
         stroke="currentColor"
         strokeWidth={active ? 1.8 : 1.5}
         strokeLinecap="round"
-        strokeDasharray={dashFor(style)}
+        strokeDasharray={strokeDashPreview(style)}
       />
     </svg>
   );
 }
 
-/** Compact stroke style picker: solid / dashed / dotted (toolbar icon). */
+/** Compact stroke style picker: solid / dashed / dotted / … */
 export default function StrokeStylePicker({
   value,
   onChange,
@@ -52,13 +77,7 @@ export default function StrokeStylePicker({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const current = STROKE_STYLES.includes(value) ? value : 'solid';
-
-  const labels: Record<StrokeStyle, string> = {
-    solid: t('editor.strokeSolid'),
-    dashed: t('editor.strokeDashed'),
-    dotted: t('editor.strokeDotted'),
-  };
+  const current = parseStrokeStyle(value);
 
   const { refs, floatingStyles, context } = useFloating({
     open,
@@ -73,11 +92,11 @@ export default function StrokeStylePicker({
 
   return (
     <>
-      <Tooltip title={labels[current]} placement="top">
+      <Tooltip title={strokeStyleLabel(current, t)} placement="top">
         <button
           type="button"
           ref={refs.setReference}
-          aria-label={labels[current]}
+          aria-label={strokeStyleLabel(current, t)}
           aria-expanded={open}
           className={cn(SEL_ICON_BTN, open && SEL_ICON_BTN_ACTIVE)}
           {...getReferenceProps({
@@ -97,9 +116,7 @@ export default function StrokeStylePicker({
             {...getFloatingProps()}
             onPointerDown={(e) => e.stopPropagation()}
           >
-            <DropdownPanel
-              className="min-w-[132px]"
-            >
+            <DropdownPanel className="min-w-[10.5rem]">
               {STROKE_STYLES.map((style) => (
                 <DropdownPanelItem
                   key={style}
@@ -110,7 +127,7 @@ export default function StrokeStylePicker({
                   }}
                 >
                   <StrokeStyleIcon style={style} active={current === style} />
-                  <span>{labels[style]}</span>
+                  <span>{strokeStyleLabel(style, t)}</span>
                 </DropdownPanelItem>
               ))}
             </DropdownPanel>

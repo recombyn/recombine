@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { BiExit } from 'react-icons/bi';
@@ -120,6 +120,35 @@ function buildCss(opts: {
   return lines.join('\n');
 }
 
+const INSPECT_DOCK_WIDTH_KEY = 'inspect-dock-width';
+const INSPECT_DOCK_MIN_W = 260;
+const INSPECT_DOCK_MAX_W = 560;
+const INSPECT_DOCK_DEFAULT_W = 300;
+
+function clampInspectDockWidth(width: number): number {
+  const viewportCap =
+    typeof window !== 'undefined'
+      ? Math.max(INSPECT_DOCK_MIN_W, window.innerWidth - 360)
+      : INSPECT_DOCK_MAX_W;
+  return Math.min(
+    INSPECT_DOCK_MAX_W,
+    viewportCap,
+    Math.max(INSPECT_DOCK_MIN_W, Math.round(width))
+  );
+}
+
+function readStoredInspectDockWidth(): number {
+  try {
+    const raw = localStorage.getItem(INSPECT_DOCK_WIDTH_KEY);
+    if (!raw) return INSPECT_DOCK_DEFAULT_W;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return INSPECT_DOCK_DEFAULT_W;
+    return clampInspectDockWidth(n);
+  } catch {
+    return INSPECT_DOCK_DEFAULT_W;
+  }
+}
+
 /** Dev-mode inspect panel: geometry, style, CSS, export (replaces chat). */
 export default function DevPropertiesPanel({
   className,
@@ -135,6 +164,66 @@ export default function DevPropertiesPanel({
   const nodeId =
     hoverNodeId || (selectedNodeIds.length === 1 ? selectedNodeIds[0] : null);
   const node = nodeId ? document?.deltaSetLike?.[nodeId] : null;
+
+  const [dockWidth, setDockWidth] = useState(INSPECT_DOCK_DEFAULT_W);
+  const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  useEffect(() => {
+    setDockWidth(readStoredInspectDockWidth());
+  }, []);
+
+  useEffect(
+    () => () => {
+      window.document.body.style.cursor = '';
+      window.document.body.style.userSelect = '';
+    },
+    []
+  );
+
+  const persistDockWidth = (width: number) => {
+    const next = clampInspectDockWidth(width);
+    setDockWidth(next);
+    try {
+      localStorage.setItem(INSPECT_DOCK_WIDTH_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onDockResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizeDragRef.current = { startX: e.clientX, startW: dockWidth };
+    window.document.body.style.cursor = 'col-resize';
+    window.document.body.style.userSelect = 'none';
+  };
+
+  const onDockResizePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag) return;
+    setDockWidth(clampInspectDockWidth(drag.startW + (drag.startX - e.clientX)));
+  };
+
+  const endDockResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current) return;
+    resizeDragRef.current = null;
+    window.document.body.style.cursor = '';
+    window.document.body.style.userSelect = '';
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    setDockWidth((w) => {
+      try {
+        localStorage.setItem(INSPECT_DOCK_WIDTH_KEY, String(w));
+      } catch {
+        /* ignore */
+      }
+      return w;
+    });
+  };
 
   const model = useMemo(() => {
     if (!document || !node || !nodeId) return null;
@@ -175,11 +264,26 @@ export default function DevPropertiesPanel({
   return (
     <aside
       data-dev-props
+      style={{ width: dockWidth }}
       className={cn(
-        'flex w-[300px] shrink-0 flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)]',
+        'relative flex shrink-0 flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)]',
         className
       )}
     >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t('editor.devInspect')}
+        aria-valuemin={INSPECT_DOCK_MIN_W}
+        aria-valuemax={INSPECT_DOCK_MAX_W}
+        aria-valuenow={dockWidth}
+        className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none hover:bg-[var(--accent)]/25 active:bg-[var(--accent)]/40"
+        onPointerDown={onDockResizePointerDown}
+        onPointerMove={onDockResizePointerMove}
+        onPointerUp={endDockResize}
+        onPointerCancel={endDockResize}
+        onDoubleClick={() => persistDockWidth(INSPECT_DOCK_DEFAULT_W)}
+      />
       <header className="flex h-11 shrink-0 items-center justify-between gap-2 px-3">
         <h2 className="text-[13px] font-semibold text-[var(--ink)]">
           {t('editor.devInspect')}

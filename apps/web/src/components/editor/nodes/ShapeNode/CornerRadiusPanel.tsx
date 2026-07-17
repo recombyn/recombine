@@ -41,6 +41,19 @@ function IconLink({ className }: { className?: string }) {
   );
 }
 
+function IconUnlink({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M5 8.5H4a2 2 0 1 1 0-4h3M11 7.5h1a2 2 0 1 1 0 4H9M6.25 9.75l3.5-3.5M7.5 4.5l1-1M7.5 12.5l1-1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 /**
  * Dedicated corner-radius panel (not nested under stroke).
  * Uniform slider when linked; 4 independent inputs when unlinked.
@@ -135,7 +148,11 @@ export function CornerRadiusPanel({
             onChange({ ...value, linked: false });
           }}
         >
-          <IconLink className="h-4 w-4" />
+          {value.linked ? (
+            <IconLink className="h-4 w-4" />
+          ) : (
+            <IconUnlink className="h-4 w-4" />
+          )}
         </button>
       </div>
 

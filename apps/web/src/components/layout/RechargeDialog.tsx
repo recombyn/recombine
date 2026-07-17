@@ -14,7 +14,9 @@ type Props = {
   onClose: () => void;
 };
 
-/** In-app top-up dialog (local mock; real payment later). */
+/** In-app top-up dialog (local mock WeChat/Alipay).
+ * Kept for future restore — current product uses RedeemDialog + Xianyu card keys.
+ */
 export default function RechargeDialog({ open, onClose }: Props) {
   const { t } = useTranslation();
   const dispatch = useDispatch();

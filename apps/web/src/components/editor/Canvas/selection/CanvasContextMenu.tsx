@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 
 type CtxAction =
   | 'upload'
+  | 'addToChat'
   | 'undo'
   | 'redo'
   | 'cut'
@@ -21,11 +22,15 @@ export type ContextMenuState = {
   sceneX: number;
   sceneY: number;
   nodeId: string | null;
+  /** Artboard under cursor / selected when opening the menu. */
+  frameId?: string | null;
 };
 
 type CanvasContextMenuProps = {
   menu: ContextMenuState | null;
   hasNode: boolean;
+  /** Enable 「添加到 Chat」 for selected node or artboard. */
+  canAddToChat?: boolean;
   /** Nodes or active artboard frame. */
   canDelete?: boolean;
   canUndo: boolean;
@@ -45,6 +50,7 @@ const PAD = 8;
 export default function CanvasContextMenu({
   menu,
   hasNode,
+  canAddToChat,
   canDelete,
   canUndo,
   canRedo,
@@ -54,6 +60,7 @@ export default function CanvasContextMenu({
   onClose,
 }: CanvasContextMenuProps) {
   const deleteEnabled = canDelete ?? hasNode;
+  const addToChatEnabled = canAddToChat ?? hasNode;
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
@@ -94,6 +101,14 @@ export default function CanvasContextMenu({
         style={{ left: pos?.left ?? menu.clientX, top: pos?.top ?? menu.clientY }}
         onPointerDown={(e) => e.stopPropagation()}
       >
+        <button
+          type="button"
+          className={itemClass}
+          disabled={!addToChatEnabled}
+          onClick={() => onAction('addToChat')}
+        >
+          <span>{'添加到 Chat'}</span>
+        </button>
         <button
           type="button"
           className={itemClass}

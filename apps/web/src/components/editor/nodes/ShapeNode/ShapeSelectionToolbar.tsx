@@ -1,10 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import {
-  HiOutlineEyeDropper,
-  HiOutlineLockClosed,
-  HiOutlineLockOpen,
-} from 'react-icons/hi2';
+import { useDispatch } from 'react-redux';
 import {
   fillPanelPreview,
   type FillPanelValue,
@@ -15,14 +10,16 @@ import {
   parseFillType,
 } from '@/store/scene/sceneFill';
 import { boolEffectAttr } from '@/store/scene/sceneEffects';
-import { openShapeStylePanel, patchDocumentNode, setAspectLocked } from '@/store/modules/editor';
-import { FillVisibilityIcon } from '@/components/editor/nodes/ShapeNode/FillVisibilityIcon';
-import { StrokeVisibilityIcon } from '@/components/editor/nodes/ShapeNode/StrokeVisibilityIcon';
-import { pickScreenColor } from '@/components/editor/color/pickScreenColor';
+import { openShapeStylePanel, patchDocumentNode } from '@/store/modules/editor';
 import ToolbarValueSlider, {
   SEL_ICON_BTN,
   SEL_TOOL_BTN,
 } from '@/components/editor/Canvas/selection/ToolbarValueSlider';
+import {
+  FillColorSwatch,
+  IconCornerRadius,
+  StrokeColorSwatch,
+} from '@/components/editor/Canvas/selection/StyleToolbarIcons';
 import AspectRatioPresetMenu, {
   ELEMENT_ASPECT_PRESETS,
 } from '@/components/editor/Canvas/selection/AspectRatioPresetMenu';
@@ -50,6 +47,10 @@ import {
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
+/** Stored before first ratio preset so 「原始」 can restore. */
+const ASPECT_ORIG_W = 'aspect-original-width';
+const ASPECT_ORIG_H = 'aspect-original-height';
+
 /** Single-shape floating bar: fill / stroke · corner radius · W·H · ratio · download. */
 export default function ShapeSelectionToolbar({
   nodeId,
@@ -61,7 +62,6 @@ export default function ShapeSelectionToolbar({
   box: SceneBox;
 }) {
   const dispatch = useDispatch();
-  const aspectLocked = useSelector((s: any) => s.editor.aspectLocked) as boolean;
   const [ratioOpen, setRatioOpen] = useState(false);
   const cornerRadius = supportsCornerRadius(node);
   const canFill = supportsFill(node);
@@ -93,6 +93,7 @@ export default function ShapeSelectionToolbar({
   const strokeVisible =
     boolEffectAttr(node?.attrs?.['stroke-enabled'], true) &&
     boolEffectAttr(node?.attrs?.['stroke-visible'], true);
+  const strokeColor = String(node?.attrs?.['border-color'] || node?.attrs?.stroke || '#333333');
   const radius = radiiFromAttrs(node?.attrs).tl;
 
   const patchAttrs = (attrs: Record<string, unknown>) => {
@@ -125,16 +126,8 @@ export default function ShapeSelectionToolbar({
   const setSize = (axis: 'w' | 'h', raw: string) => {
     const n = Math.max(1, Math.round(Number(raw) || 0));
     if (!Number.isFinite(n)) return;
-    const ratio = box.width / Math.max(1, box.height);
-    if (axis === 'w') {
-      const width = n;
-      const height = aspectLocked ? Math.max(1, Math.round(width / ratio)) : Math.round(box.height);
-      patchSize(width, height);
-    } else {
-      const height = n;
-      const width = aspectLocked ? Math.max(1, Math.round(height * ratio)) : Math.round(box.width);
-      patchSize(width, height);
-    }
+    if (axis === 'w') patchSize(n, Math.round(box.height));
+    else patchSize(Math.round(box.width), n);
   };
 
   const applySides = (n: number) => {
@@ -145,117 +138,32 @@ export default function ShapeSelectionToolbar({
     dispatch(openShapeStylePanel({ kind, nodeIds: [nodeId] }));
   };
 
-  const toggleStrokeVisible = () => {
-    const next = !strokeVisible;
-    patchAttrs({
-      'stroke-enabled': next ? 'true' : 'false',
-      'stroke-visible': next ? 'true' : 'false',
-    });
-  };
-
-  const toggleFillVisible = () => {
-    const next = !fillVisible;
-    patchAttrs({
-      'fill-enabled': next ? 'true' : 'false',
-      'fill-visible': next ? 'true' : 'false',
-    });
-  };
-
-  const runEyedropper = async () => {
-    const hex = await pickScreenColor();
-    if (!hex) return;
-    patchAttrs({
-      'fill-enabled': 'true',
-      'fill-visible': 'true',
-      'fill-type': 'solid',
-      'fill-color': hex,
-    });
-  };
-
   return (
     <>
       {canFill ? (
-        <div
-          className={cn(
-            'inline-flex h-8 items-center gap-0.5 rounded-[4px] px-0.5',
-            !fillVisible && 'opacity-55'
-          )}
-        >
-          <Tooltip title={fillVisible ? '隐藏填充' : '显示填充'} placement="top">
-            <button
-              type="button"
-              aria-label={fillVisible ? '隐藏填充' : '显示填充'}
-              aria-pressed={fillVisible}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-              onClick={toggleFillVisible}
-            >
-              <FillVisibilityIcon visible={fillVisible} className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-          <Tooltip title={'颜色'} placement="top">
-            <button
-              type="button"
-              aria-label={'颜色'}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] hover:bg-[var(--accent-soft)]"
-              onClick={() => openStyle('fill')}
-            >
-              <span className="relative inline-flex h-4 w-4 overflow-hidden rounded-[4px] ring-1 ring-[var(--line)]">
-                <span
-                  aria-hidden
-                  className="absolute inset-0"
-                  style={{
-                    backgroundImage:
-                      'linear-gradient(45deg, #d0d0d0 25%, transparent 25%), linear-gradient(-45deg, #d0d0d0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #d0d0d0 75%), linear-gradient(-45deg, transparent 75%, #d0d0d0 75%)',
-                    backgroundSize: '6px 6px',
-                    backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
-                  }}
-                />
-                <span className="absolute inset-0" style={{ background: fillPreview }} />
-              </span>
-            </button>
-          </Tooltip>
-          <Tooltip title={'取色'} placement="top">
-            <button
-              type="button"
-              aria-label={'取色'}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-              onClick={() => void runEyedropper()}
-            >
-              <HiOutlineEyeDropper className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-        </div>
+        <Tooltip title={'颜色'} placement="top">
+          <button
+            type="button"
+            aria-label={'颜色'}
+            className={cn(SEL_ICON_BTN, !fillVisible && 'opacity-55')}
+            onClick={() => openStyle('fill')}
+          >
+            <FillColorSwatch color={fillPreview} />
+          </button>
+        </Tooltip>
       ) : null}
 
       {canStroke ? (
-        <div
-          className={cn(
-            'inline-flex h-8 items-center gap-0.5 rounded-[4px] px-0.5',
-            !strokeVisible && 'opacity-55'
-          )}
-        >
-          <Tooltip
-            title={strokeVisible ? '隐藏描边' : '显示描边'}
-            placement="top"
-          >
-            <button
-              type="button"
-              aria-label={strokeVisible ? '隐藏描边' : '显示描边'}
-              aria-pressed={strokeVisible}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-              onClick={toggleStrokeVisible}
-            >
-              <StrokeVisibilityIcon visible={strokeVisible} className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
+        <Tooltip title={'描边'} placement="top">
           <button
             type="button"
-            className="inline-flex h-7 items-center rounded-[4px] px-1.5 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--accent-soft)]"
+            aria-label={'描边'}
+            className={cn(SEL_ICON_BTN, !strokeVisible && 'opacity-55')}
             onClick={() => openStyle('stroke')}
           >
-            {'描边'}
+            <StrokeColorSwatch color={strokeVisible ? strokeColor : 'var(--line)'} />
           </button>
-        </div>
+        </Tooltip>
       ) : null}
       {cornerRadius ? (
         <Tooltip title={'圆角'} placement="top">
@@ -265,7 +173,7 @@ export default function ShapeSelectionToolbar({
             className={SEL_TOOL_BTN}
             onClick={() => openStyle('radius')}
           >
-            <span className="text-[var(--muted)]">R</span>
+            <IconCornerRadius className="h-4 w-4 text-[var(--muted)]" />
             <span className="tabular-nums">{radius}</span>
           </button>
         </Tooltip>
@@ -290,12 +198,35 @@ export default function ShapeSelectionToolbar({
           activeId={activeRatioId}
           onPick={(preset) => {
             if (preset.id === 'original') {
-              dispatch(setAspectLocked(false));
+              const ow = Number(node?.attrs?.[ASPECT_ORIG_W]);
+              const oh = Number(node?.attrs?.[ASPECT_ORIG_H]);
+              if (Number.isFinite(ow) && ow > 0 && Number.isFinite(oh) && oh > 0) {
+                patchSize(ow, oh);
+              }
               return;
             }
-            dispatch(setAspectLocked(true));
+            const shapeType = node?.attrs?.shapeType;
+            const hasOrig =
+              Number(node?.attrs?.[ASPECT_ORIG_W]) > 0 && Number(node?.attrs?.[ASPECT_ORIG_H]) > 0;
             const next = sizeFromAspectPreset(box, preset.w, preset.h);
-            patchSize(next.width, next.height);
+            dispatch(
+              patchDocumentNode({
+                nodeId,
+                patch: {
+                  width: Math.max(1, Math.round(next.width)),
+                  height: Math.max(1, Math.round(next.height)),
+                  attrs: {
+                    ...(shapeType != null ? { shapeType } : {}),
+                    ...(!hasOrig
+                      ? {
+                          [ASPECT_ORIG_W]: Math.round(box.width),
+                          [ASPECT_ORIG_H]: Math.round(box.height),
+                        }
+                      : {}),
+                  },
+                },
+              })
+            );
           }}
         />
       ) : null}
@@ -324,20 +255,6 @@ export default function ShapeSelectionToolbar({
           }}
         />
       </label>
-      <Tooltip title={aspectLocked ? '解锁比例' : '锁定比例'} placement="top">
-        <button
-          type="button"
-          aria-label={aspectLocked ? '解锁比例' : '锁定比例'}
-          className={SEL_ICON_BTN}
-          onClick={() => dispatch(setAspectLocked(!aspectLocked))}
-        >
-          {aspectLocked ? (
-            <HiOutlineLockClosed className="h-3.5 w-3.5" />
-          ) : (
-            <HiOutlineLockOpen className="h-3.5 w-3.5" />
-          )}
-        </button>
-      </Tooltip>
 
       <ExportSelectionPopover nodeIds={[nodeId]} />
     </>

@@ -133,8 +133,8 @@ export function ptsAttr(pts: Array<[number, number]>) {
 /** Fixed arrowhead length in local (pre-rotation) units. */
 export const ARROW_HEAD = 14;
 
-/** Hit/selection thickness for line & arrow nodes. */
-export const STROKE_HIT = 16;
+/** Hit/selection thickness for line & arrow nodes (world units). */
+export const STROKE_HIT = 24;
 
 export type StrokeEndpoints = { x0: number; y0: number; x1: number; y1: number };
 
@@ -154,6 +154,60 @@ export function strokeNodeFromEndpoints(ep: StrokeEndpoints) {
     height,
     angle: Number(angle.toFixed(2)),
   };
+}
+
+/** World-space endpoints of a line/arrow AABB + angle (local shaft left→right). */
+export function strokeEndpointsFromBox(
+  box: { left: number; top: number; width: number; height: number },
+  angleDeg: number
+): StrokeEndpoints {
+  const cx = box.left + box.width / 2;
+  const cy = box.top + box.height / 2;
+  const rad = ((Number(angleDeg) || 0) * Math.PI) / 180;
+  const hx = (box.width / 2) * Math.cos(rad);
+  const hy = (box.width / 2) * Math.sin(rad);
+  return {
+    x0: cx - hx,
+    y0: cy - hy,
+    x1: cx + hx,
+    y1: cy + hy,
+  };
+}
+
+/**
+ * Drag an endpoint freely: opposite end stays fixed; length + angle update together.
+ * `handle` `e` moves the right/local end; `w` moves the left/local start.
+ */
+export function resizeStrokeByEndpoint(
+  box: { left: number; top: number; width: number; height: number },
+  angleDeg: number,
+  handle: 'e' | 'w',
+  pointerX: number,
+  pointerY: number
+) {
+  const ep = strokeEndpointsFromBox(box, angleDeg);
+  if (handle === 'e') {
+    return strokeNodeFromEndpoints({ x0: ep.x0, y0: ep.y0, x1: pointerX, y1: pointerY });
+  }
+  return strokeNodeFromEndpoints({ x0: pointerX, y0: pointerY, x1: ep.x1, y1: ep.y1 });
+}
+
+/** Distance from point to segment (for line/arrow hit-testing). */
+export function distPointToSegment(
+  px: number,
+  py: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number
+) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-8) return Math.hypot(px - x0, py - y0);
+  let t = ((px - x0) * dx + (py - y0) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
 }
 
 /** Local SVG path for an arrow: shaft + fixed-size head (does not scale with height). */

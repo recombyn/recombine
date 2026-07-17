@@ -1,4 +1,4 @@
-# Recombine
+# recombyn
 
 简历场景图模板制作工具 — 前后端同仓 monorepo。
 

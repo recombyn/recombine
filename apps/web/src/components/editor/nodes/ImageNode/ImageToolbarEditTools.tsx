@@ -58,7 +58,7 @@ export default function ImageToolbarEditTools({
   onEditText: () => void;
   onMultiAngle: () => void;
   moreSlot: ReactNode;
-  /** Optional aspect-ratio lock control before the preview/download group. */
+  /** Optional controls before the preview/download group (e.g. corner radius). */
   aspectLockSlot?: ReactNode;
   previewSlot?: ReactNode;
   downloadSlot: ReactNode;

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600" fill="none">
+  <rect width="800" height="600" fill="#E8ECF1"/>
+  <rect x="1" y="1" width="798" height="598" rx="0" stroke="#C5CCD6" stroke-width="2" stroke-dasharray="10 8"/>
+  <g transform="translate(400 260)">
+    <rect x="-56" y="-40" width="112" height="80" rx="10" fill="#D5DBE4"/>
+    <circle cx="-22" cy="-10" r="12" fill="#B8C0CC"/>
+    <path d="M-48 28 L-20 0 L4 20 L28 -8 L48 28 Z" fill="#B8C0CC"/>
+  </g>
+  <text x="400" y="360" text-anchor="middle" font-family="system-ui,sans-serif" font-size="20" fill="#8B95A5">Image</text>
+  <text x="400" y="388" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#A0AAB8">Replace or AI generate</text>
+</svg>

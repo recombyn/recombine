@@ -21,6 +21,7 @@ venv/
 # api runtime
 apps/api/storage/uploads/*
 apps/api/storage/results/*
+apps/api/storage/*.db
 !apps/api/storage/uploads/.gitkeep
 !apps/api/storage/results/.gitkeep
 
@@ -34,6 +35,10 @@ coverage/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Local design-agent skills (MD guides — do not publish)
+apps/web/agent-skills/
+!apps/web/agent-skills.example/
 
 # typescript incremental cache (looks like garbled JSON — not source)
 *.tsbuildinfo

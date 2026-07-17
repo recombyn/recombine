@@ -8,12 +8,19 @@ import {
   HiOutlineMap,
   HiOutlineMinus,
   HiOutlinePlus,
+  HiOutlineQuestionMarkCircle,
   HiOutlineShare,
   HiOutlineSquare3Stack3D,
   HiOutlineViewfinderCircle,
 } from 'react-icons/hi2';
 import { TbMessage2Filled } from 'react-icons/tb';
 import { Tooltip } from '@/components/base';
+import {
+  takeHomeAgentBoot,
+  attachmentsFromBoot,
+} from '@/lib/homeAgentBoot';
+import { takePendingEditorNav } from '@/lib/pendingEditorNav';
+import type { ComposerContext } from '@/components/editor/panels/AgentComposerInput';
 import AgentDock from '@/components/editor/panels/AgentDock';
 import DevPropertiesPanel from '@/components/editor/panels/DevPropertiesPanel';
 import ShareDialog from '@/components/editor/panels/ShareDialog';
@@ -38,7 +45,9 @@ import AlignGuidesOverlay, {
 import {
   nodeGuideBoxes,
   snapBoxToGuides,
+  snapResizeToGuides,
 } from '@/components/editor/Canvas/selection/alignGuides';
+import type { ResizeHandle } from '@/components/editor/Canvas/selection/resizeGeometry';
 import { cn } from '@/utils/classnames';
 import {
   createTemplate,
@@ -72,6 +81,7 @@ import {
   serializeFillGradient,
 } from '@/store/scene/sceneFill';
 import WalletAccountChip from '@/components/layout/WalletAccountChip';
+import EditorOnboardingTour from '@/components/editor/chrome/EditorOnboardingTour';
 
 const BOOT_MIN_MS = 520;
 const BOOT_EXIT_MS = 280;
@@ -160,6 +170,7 @@ function HudBtn({
   onClick,
   children,
   className,
+  'data-tour': dataTour,
 }: {
   tip: string;
   active?: boolean;
@@ -167,6 +178,7 @@ function HudBtn({
   onClick?: () => void;
   children: ReactNode;
   className?: string;
+  'data-tour'?: string;
 }) {
   return (
     <Tooltip title={tip} placement="top">
@@ -174,6 +186,7 @@ function HudBtn({
         type="button"
         disabled={disabled}
         onClick={onClick}
+        data-tour={dataTour}
         className={cn(
           'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
           active
@@ -203,6 +216,13 @@ export default function EditorPage() {
   const [inspectOpen, setInspectOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [agentDraft, setAgentDraft] = useState<string | null>(null);
+  const [agentAutoSubmit, setAgentAutoSubmit] = useState(false);
+  const [agentDraftAttachments, setAgentDraftAttachments] = useState<ComposerContext[]>([]);
+  const [agentDraftModelId, setAgentDraftModelId] = useState<string | null>(null);
+  const [agentDraftImageAspect, setAgentDraftImageAspect] = useState<string | null>(null);
+  const [agentDraftImageQuality, setAgentDraftImageQuality] = useState<string | null>(null);
+  const [agentDraftImageResolution, setAgentDraftImageResolution] = useState<string | null>(null);
+  const [attachToChatNodeId, setAttachToChatNodeId] = useState<string | null>(null);
   const [layersOpen, setLayersOpen] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [canvasBgOpen, setCanvasBgOpen] = useState(false);
@@ -212,6 +232,7 @@ export default function EditorPage() {
   const [bootOpen, setBootOpen] = useState(true);
   const [bootExiting, setBootExiting] = useState(false);
   const [bootProgress, setBootProgress] = useState(8);
+  const [forceTour, setForceTour] = useState(false);
   const bootStartedAt = useRef(Date.now());
   const bootOpenRef = useRef(true);
   const bootFinishingRef = useRef(false);
@@ -223,9 +244,12 @@ export default function EditorPage() {
   const document = useSelector((state: any) => state.editor.document);
   const sceneReloadToken = useSelector((state: any) => state.editor.sceneReloadToken);
   const documentPatchToken = useSelector((state: any) => state.editor.documentPatchToken);
+  const lastPatchedNodeIds = useSelector(
+    (state: any) => (state.editor.lastPatchedNodeIds as string[]) || []
+  );
   const selectedNodeId = useSelector((state: any) => state.editor.selectedNodeId);
   const selectedNodeIds = useSelector((state: any) => state.editor.selectedNodeIds || []);
-  const aspectLocked = useSelector((state: any) => Boolean(state.editor.aspectLocked));
+  const agentBusy = useSelector((state: any) => Boolean(state.editor.agentBusy));
   const currentTemplate = useSelector((state: any) =>
     state.editor.templates.find((item: any) => item.id === state.editor.currentId)
   );
@@ -273,14 +297,21 @@ export default function EditorPage() {
     if (next === workspaceMode) return;
     if (next === 'dev') {
       setInspectOpen(agentOpen);
+      // Dev is inspect-only: leave design tools / artboard chrome.
+      dispatch(setActiveTool('select'));
+      dispatch(setActiveFrameId(null));
+      setCanvasBgOpen(false);
+      setLayersOpen(false);
+      setMinimapOpen(false);
     } else {
       setAgentOpen(inspectOpen);
     }
     dispatch(setWorkspaceMode(next));
   };
 
+  const isDevMode = workspaceMode === 'dev';
   const panMode = activeTool === 'pan';
-  const frameMode = activeTool === 'frame';
+  const frameMode = !isDevMode && activeTool === 'frame';
 
   const frames: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
   const activeFrameId = document?.activeFrameId ?? null;
@@ -293,12 +324,31 @@ export default function EditorPage() {
     ? framesBounds(frames)
     : { x: 0, y: 0, width: 0, height: 0 };
 
-  // Home "New project" navigates with createNew ? create here so the list
+  // Home "New project" / post-login pending intent → create here so the list
   // is not updated before leaving the home page.
   useEffect(() => {
-    const createNew = Boolean((location.state as { createNew?: boolean } | null)?.createNew);
+    const pending = takePendingEditorNav();
+    const state = (location.state as {
+      createNew?: boolean;
+      fromHomeAgent?: boolean;
+    } | null) || {};
+    const createNew = Boolean(state.createNew || pending?.createNew);
+    const fromHomeAgent = Boolean(state.fromHomeAgent || pending?.fromHomeAgent);
     if (createNew) {
       dispatch(createTemplate({ emptyWorld: true }));
+      if (fromHomeAgent) {
+        const boot = takeHomeAgentBoot();
+        if (boot?.prompt) {
+          setAgentOpen(true);
+          setAgentDraft(boot.prompt);
+          setAgentAutoSubmit(Boolean(boot.autoSubmit));
+          setAgentDraftAttachments(attachmentsFromBoot(boot));
+          setAgentDraftModelId(boot.modelId ?? null);
+          setAgentDraftImageAspect(boot.imageAspectRatio ?? null);
+          setAgentDraftImageQuality(boot.imageQuality ?? null);
+          setAgentDraftImageResolution(boot.imageResolution ?? null);
+        }
+      }
       navigate('/editor', { replace: true, state: {} });
       return;
     }
@@ -396,21 +446,36 @@ export default function EditorPage() {
   );
 
   const onResizeFrame = useCallback(
-    (id: string, box: { left: number; top: number; width: number; height: number }) => {
+    (
+      id: string,
+      box: { left: number; top: number; width: number; height: number },
+      handle: ResizeHandle
+    ) => {
+      const nodes = nodeGuideBoxes(document);
+      const otherFrames = frames
+        .filter((f) => f.id !== id)
+        .map((f) => ({
+          left: Number(f.x) || 0,
+          top: Number(f.y) || 0,
+          width: Math.max(1, Number(f.width) || 1),
+          height: Math.max(1, Number(f.height) || 1),
+        }));
+      const snapped = snapResizeToGuides(box, handle, [...nodes, ...otherFrames], [], undefined, 40);
+      setFrameGuides(snapped.guides);
       dispatch(
         updateArtboardFrame({
           id,
           patch: {
-            x: box.left,
-            y: box.top,
-            width: box.width,
-            height: box.height,
+            x: Math.round(snapped.box.left),
+            y: Math.round(snapped.box.top),
+            width: Math.max(40, Math.round(snapped.box.width)),
+            height: Math.max(40, Math.round(snapped.box.height)),
           },
           skipHistory: true,
         })
       );
     },
-    [dispatch]
+    [dispatch, document, frames]
   );
 
   const frameContentBoxes = useMemo(() => nodeGuideBoxes(document), [document]);
@@ -436,6 +501,11 @@ export default function EditorPage() {
     },
     [dispatch]
   );
+
+  const onClearCanvasSelection = useCallback(() => {
+    dispatch(setSelectedNodeIds([]));
+    dispatch(setActiveFrameId(null));
+  }, [dispatch]);
 
   useEffect(() => {
     if (!bootOpen || bootExiting) return undefined;
@@ -616,7 +686,7 @@ export default function EditorPage() {
             </div>
           </div>
 
-          {activeTool === 'pen' || activeTool === 'pencil' ? (
+          {!isDevMode && (activeTool === 'pen' || activeTool === 'pencil') ? (
             <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2">
               <PenStrokeToolbar
                 mode={activeTool === 'pen' ? 'pen' : 'pencil'}
@@ -642,7 +712,7 @@ export default function EditorPage() {
                   <HtmlArtboardFrame
                     key={`body-${frame.id}`}
                     frame={frame}
-                    selected={frame.id === activeFrameId}
+                    selected={!isDevMode && frame.id === activeFrameId}
                     layer="body"
                   />
                 ))}
@@ -663,6 +733,7 @@ export default function EditorPage() {
                     }}
                     reloadToken={sceneReloadToken}
                     documentPatchToken={documentPatchToken}
+                    lastPatchedNodeIds={lastPatchedNodeIds}
                     selectedNodeId={selectedNodeId}
                     selectedNodeIds={selectedNodeIds}
                     onZoomIn={onZoomIn}
@@ -673,6 +744,11 @@ export default function EditorPage() {
                       if (workspaceMode === 'dev') return;
                       setAgentOpen(true);
                       if (opts?.prompt) setAgentDraft(opts.prompt);
+                    }}
+                    onAddToChat={(nodeId) => {
+                      if (workspaceMode === 'dev') return;
+                      setAgentOpen(true);
+                      setAttachToChatNodeId(nodeId);
                     }}
                   />
                 </div>
@@ -723,15 +799,17 @@ export default function EditorPage() {
                   <HtmlArtboardFrame
                     key={`label-${frame.id}`}
                     frame={frame}
-                    selected={frame.id === activeFrameId}
-                    hideTitle={movingFrameId === frame.id}
-                    onSelect={() => onSelectFrame(frame.id)}
-                    onRename={(name) =>
-                      dispatch(renameArtboardFrame({ id: frame.id, name }))
+                    selected={!isDevMode && frame.id === activeFrameId}
+                    hideTitle={isDevMode || movingFrameId === frame.id}
+                    onSelect={isDevMode ? undefined : () => onSelectFrame(frame.id)}
+                    onRename={
+                      isDevMode
+                        ? undefined
+                        : (name) => dispatch(renameArtboardFrame({ id: frame.id, name }))
                     }
-                    onMove={(x, y) => onMoveFrame(frame.id, x, y)}
-                    onMoveStart={onFrameMoveStart}
-                    onMoveEnd={onFrameMoveEnd}
+                    onMove={isDevMode ? undefined : (x, y) => onMoveFrame(frame.id, x, y)}
+                    onMoveStart={isDevMode ? undefined : onFrameMoveStart}
+                    onMoveEnd={isDevMode ? undefined : onFrameMoveEnd}
                     layer="label"
                   />
                 ))}
@@ -745,7 +823,9 @@ export default function EditorPage() {
                   </div>
                 ) : null}
 
-                {activeFrame &&
+                {!isDevMode &&
+                activeFrame &&
+                !agentBusy &&
                 selectedNodeIds.length === 0 &&
                 movingFrameId !== activeFrame.id ? (
                   <>
@@ -755,22 +835,22 @@ export default function EditorPage() {
                 ) : null}
 
                 <FrameMoveFeature
-                  enabled={activeTool === 'select' && !panMode}
+                  enabled={!isDevMode && activeTool === 'select' && !panMode}
                   frames={frames}
                   camera={camera}
                   stageEl={stageEl}
                   activeFrameId={activeFrameId}
                   onSelect={onSelectFrame}
+                  onClearSelection={onClearCanvasSelection}
                   onMoveStart={onFrameMoveStart}
                   onMove={onMoveFrame}
                   onResize={onResizeFrame}
                   onDraggingChange={onFrameDraggingChange}
                   contentBoxes={frameContentBoxes}
-                  aspectLocked={aspectLocked}
                 />
 
                 <FrameDrawFeature
-                  enabled={frameMode}
+                  enabled={!isDevMode && frameMode}
                   camera={camera}
                   stageEl={stageEl}
                   onCommit={onCommitFrame}
@@ -779,12 +859,17 @@ export default function EditorPage() {
             ) : null}
           </div>
 
-          {/* Fig.2 bottom-center tools only */}
-          <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
-            <div className="pointer-events-auto">
-              <EditorToolStrip />
+          {/* Fig.2 bottom-center tools — Design only */}
+          {!isDevMode ? (
+            <div
+              data-tour="editor-tools"
+              className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
+            >
+              <div className="pointer-events-auto">
+                <EditorToolStrip />
+              </div>
             </div>
-          </div>
+          ) : null}
 
           {/* Bottom-left HUD */}
           <div className="pointer-events-none absolute bottom-4 left-4 z-20">
@@ -804,33 +889,37 @@ export default function EditorPage() {
               </div>
             ) : null}
             <div className="pointer-events-auto flex items-center gap-0.5 rounded-full bg-[var(--surface)] px-1.5 py-1 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)] ring-1 ring-[var(--line)]">
-              <CanvasBgPicker
-                value={canvasFillValue}
-                open={canvasBgOpen}
-                onOpenChange={(next) => {
-                  setCanvasBgOpen(next);
-                  if (next) setCanvasMeshSelectedIndex(0);
-                }}
-                meshSelectedIndex={canvasMeshSelectedIndex}
-                onMeshSelectedIndexChange={setCanvasMeshSelectedIndex}
-                meshShowGuides={canvasMeshShowGuides}
-                onMeshShowGuidesChange={setCanvasMeshShowGuides}
-                onChange={(next) => {
-                  const follow =
-                    next.fillType === 'solid' && isThemeFollowCanvasBg(next.fillColor);
-                  dispatch(setCanvasMeta(canvasFillToDocumentMeta(next, follow)));
-                }}
-              />
-              <HudBtn tip={'图层'} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
-                <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-              </HudBtn>
-              <HudBtn tip={'小地图'} active={minimapOpen} onClick={() => setMinimapOpen((v) => !v)}>
-                <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-              </HudBtn>
+              {!isDevMode ? (
+                <>
+                  <CanvasBgPicker
+                    value={canvasFillValue}
+                    open={canvasBgOpen}
+                    onOpenChange={(next) => {
+                      setCanvasBgOpen(next);
+                      if (next) setCanvasMeshSelectedIndex(0);
+                    }}
+                    meshSelectedIndex={canvasMeshSelectedIndex}
+                    onMeshSelectedIndexChange={setCanvasMeshSelectedIndex}
+                    meshShowGuides={canvasMeshShowGuides}
+                    onMeshShowGuidesChange={setCanvasMeshShowGuides}
+                    onChange={(next) => {
+                      const follow =
+                        next.fillType === 'solid' && isThemeFollowCanvasBg(next.fillColor);
+                      dispatch(setCanvasMeta(canvasFillToDocumentMeta(next, follow)));
+                    }}
+                  />
+                  <HudBtn tip={'图层'} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
+                    <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                  </HudBtn>
+                  <HudBtn tip={'小地图'} active={minimapOpen} onClick={() => setMinimapOpen((v) => !v)}>
+                    <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                  </HudBtn>
+                  <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
+                </>
+              ) : null}
               <HudBtn tip={'适应画布'} onClick={() => zoomAtStageCenter(1)}>
                 <HiOutlineViewfinderCircle className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
               </HudBtn>
-              <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
               <HudBtn tip={'缩小'} onClick={onZoomOut}>
                 <HiOutlineMinus className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
               </HudBtn>
@@ -842,6 +931,18 @@ export default function EditorPage() {
               <HudBtn tip={'放大'} onClick={onZoomIn}>
                 <HiOutlinePlus className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
               </HudBtn>
+              {!isDevMode ? (
+                <>
+                  <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
+                  <HudBtn
+                    tip={t('editor.tour.replay')}
+                    onClick={() => setForceTour(true)}
+                    data-tour="editor-help"
+                  >
+                    <HiOutlineQuestionMarkCircle className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                  </HudBtn>
+                </>
+              ) : null}
             </div>
           </div>
         </main>
@@ -855,13 +956,39 @@ export default function EditorPage() {
             open={agentOpen}
             onClose={() => setAgentOpen(false)}
             draftPrompt={agentDraft}
-            onDraftConsumed={() => setAgentDraft(null)}
+            autoSubmitDraft={agentAutoSubmit}
+            draftAttachments={agentDraftAttachments}
+            draftModelId={agentDraftModelId}
+            draftImageAspectRatio={agentDraftImageAspect}
+            draftImageQuality={agentDraftImageQuality}
+            draftImageResolution={agentDraftImageResolution}
+            onDraftConsumed={() => {
+              setAgentDraft(null);
+              setAgentAutoSubmit(false);
+              setAgentDraftAttachments([]);
+              setAgentDraftModelId(null);
+              setAgentDraftImageAspect(null);
+              setAgentDraftImageQuality(null);
+              setAgentDraftImageResolution(null);
+            }}
+            attachNodeId={attachToChatNodeId}
+            onAttachConsumed={() => setAttachToChatNodeId(null)}
+            dataTour={agentOpen ? 'editor-agent' : undefined}
           />
         )}
       </div>
 
       {bootOpen ? <EditorBootOverlay progress={bootProgress} exiting={bootExiting} /> : null}
       <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
+      <EditorOnboardingTour
+        ready={!bootOpen}
+        forceOpen={forceTour}
+        onForceOpenConsumed={() => setForceTour(false)}
+        onOpenAgent={() => {
+          dispatch(setWorkspaceMode('design'));
+          setAgentOpen(true);
+        }}
+      />
     </div>
   );
 }

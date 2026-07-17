@@ -2,51 +2,27 @@ import { useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import { Button, Input, message } from '@/components/base';
 import LanguageSwitcher from '@/components/layout/LanguageSwitcher';
 import ThemeSwitcher from '@/components/layout/ThemeSwitcher';
 import GitHubLink from '@/components/layout/GitHubLink';
-import { loginGoogle } from '@/apis/auth';
-import { setSession, setUser } from '@/store/modules/auth';
+import {
+  completeEmailRegister,
+  loginEmail,
+  sendEmailCode,
+  verifyEmailCode,
+} from '@/apis/auth';
+import { setSession } from '@/store/modules/auth';
 import { cn } from '@/utils/classnames';
+import { GOOGLE_CLIENT_ID, startGoogleOAuthRedirect } from '@/utils/googleOAuth';
 
 type Step = 'entry' | 'code' | 'password';
 
-const CODE_KEY = 'resume-scene-email-code-v1';
-const MOCK_CODE_TTL_MS = 10 * 60 * 1000;
-
-declare const __GOOGLE_CLIENT_ID__: string;
-const GOOGLE_CLIENT_ID =
-  typeof __GOOGLE_CLIENT_ID__ !== 'undefined' ? __GOOGLE_CLIENT_ID__ : '';
-
-function savePendingCode(email: string, code: string) {
-  sessionStorage.setItem(
-    CODE_KEY,
-    JSON.stringify({ email, code, expiresAt: Date.now() + MOCK_CODE_TTL_MS })
-  );
-}
-
-function readPendingCode(): { email: string; code: string; expiresAt: number } | null {
-  try {
-    const raw = sessionStorage.getItem(CODE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function clearPendingCode() {
-  sessionStorage.removeItem(CODE_KEY);
-}
-
-async function sendVerificationEmail(email: string): Promise<string> {
-  await new Promise((r) => setTimeout(r, 450));
-  const code = String(Math.floor(100000 + Math.random() * 900000));
-  savePendingCode(email, code);
-  console.info(`[mock Tencent SES] verification code for ${email}: ${code}`);
-  return code;
+function apiDetail(err: unknown): string | null {
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail) && detail[0]?.msg) return String(detail[0].msg);
+  return null;
 }
 
 function GoogleIcon() {
@@ -82,8 +58,8 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [ticket, setTicket] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [devCodeHint, setDevCodeHint] = useState<string | null>(null);
   const isRegisterHint = initialMode === 'register';
   const redirectTo = (() => {
     const from = (location.state as { from?: string } | null)?.from;
@@ -97,58 +73,29 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
     provider: 'email' | 'google';
     avatar?: string | null;
     id?: string;
-    token?: string;
+    token: string;
   }) => {
-    if (payload.token) {
-      dispatch(
-        setSession({
-          user: {
-            email: payload.email,
-            name: payload.name,
-            provider: payload.provider,
-            avatar: payload.avatar,
-            id: payload.id,
-          },
-          token: payload.token,
-        })
-      );
-    } else {
-      dispatch(
-        setUser({
+    dispatch(
+      setSession({
+        user: {
           email: payload.email,
           name: payload.name,
           provider: payload.provider,
           avatar: payload.avatar,
           id: payload.id,
-        })
-      );
-    }
-    clearPendingCode();
+        },
+        token: payload.token,
+      })
+    );
     message.success(t('auth.success'));
     navigate(redirectTo, { replace: true });
   };
 
-  const onGoogleCredential = async (credential?: string) => {
-    if (!credential) {
-      message.error(t('auth.googleFailed') || 'Google login failed');
-      return;
-    }
-    setBusy(true);
+  const onGoogleContinue = () => {
     try {
-      const res = await loginGoogle(credential);
-      finishSession({
-        email: res.user.email,
-        name: res.user.name,
-        provider: 'google',
-        avatar: res.user.avatar,
-        id: res.user.id,
-        token: res.token,
-      });
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail || err?.message || 'Google login failed';
-      message.error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-    } finally {
-      setBusy(false);
+      startGoogleOAuthRedirect(redirectTo);
+    } catch {
+      message.error(t('auth.googleFailed') || 'Google login failed');
     }
   };
 
@@ -158,59 +105,100 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
       message.error(t('auth.invalidEmail'));
       return;
     }
+
+    // Login mode with password filled → password login (no SES code).
+    if (!isRegisterHint && password.length >= 6) {
+      setBusy(true);
+      try {
+        const res = await loginEmail(trimmed, password);
+        finishSession({
+          email: res.user.email,
+          name: res.user.name,
+          provider: 'email',
+          avatar: res.user.avatar,
+          id: res.user.id,
+          token: res.token,
+        });
+      } catch (err) {
+        message.error(apiDetail(err) || t('auth.loginFailed'));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     setBusy(true);
     try {
-      const sent = await sendVerificationEmail(trimmed);
-      setDevCodeHint(sent);
+      await sendEmailCode(trimmed);
       setEmail(trimmed);
+      setTicket(null);
       setStep('code');
       message.success(t('auth.codeSent'));
-    } catch {
-      message.error(t('auth.sendFailed'));
+    } catch (err) {
+      message.error(apiDetail(err) || t('auth.sendFailed'));
     } finally {
       setBusy(false);
     }
   };
 
-  const onVerifyCode = () => {
-    const pending = readPendingCode();
-    if (!pending || pending.email !== email.trim().toLowerCase()) {
-      message.error(t('auth.codeMissing'));
-      setStep('entry');
-      return;
-    }
-    if (Date.now() > pending.expiresAt) {
-      message.error(t('auth.codeExpired'));
-      clearPendingCode();
-      setStep('entry');
-      return;
-    }
-    if (code.trim() !== pending.code) {
+  const onVerifyCode = async () => {
+    if (code.trim().length < 4) {
       message.error(t('auth.codeInvalid'));
       return;
     }
-    setStep('password');
+    setBusy(true);
+    try {
+      const res = await verifyEmailCode(email.trim().toLowerCase(), code.trim());
+      setTicket(res.ticket);
+      setStep('password');
+    } catch (err) {
+      message.error(apiDetail(err) || t('auth.codeInvalid'));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const onCompleteEmail = () => {
+  const onCompleteEmail = async () => {
     if (password.length < 6) {
       message.error(t('auth.passwordShort'));
       return;
     }
-    finishSession({
-      email: email.trim().toLowerCase(),
-      name: name.trim() || email.split('@')[0],
-      provider: 'email',
-    });
+    if (!ticket) {
+      message.error(t('auth.codeMissing'));
+      setStep('entry');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await completeEmailRegister({
+        email: email.trim().toLowerCase(),
+        ticket,
+        password,
+        name: name.trim() || undefined,
+      });
+      finishSession({
+        email: res.user.email,
+        name: res.user.name,
+        provider: 'email',
+        avatar: res.user.avatar,
+        id: res.user.id,
+        token: res.token,
+      });
+    } catch (err) {
+      message.error(apiDetail(err) || t('auth.sendFailed'));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const resendCode = async () => {
     setBusy(true);
     try {
-      const sent = await sendVerificationEmail(email);
-      setDevCodeHint(sent);
+      await sendEmailCode(email);
       setCode('');
       message.success(t('auth.resent'));
+    } catch (err) {
+      message.error(apiDetail(err) || t('auth.sendFailed'));
     } finally {
       setBusy(false);
     }
@@ -234,7 +222,7 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
       <header className="flex shrink-0 items-center justify-between px-6 py-5">
         <Link to="/home" className="inline-flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-[12px] font-bold text-[var(--on-brand)]">
-            RC
+            RY
           </span>
           <span className="text-[15px] font-semibold text-[var(--ink)]">{t('app.name')}</span>
         </Link>
@@ -249,7 +237,7 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
         <div className="w-full max-w-[380px]">
           <div className="mb-8 flex flex-col items-center text-center">
             <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent)] text-[16px] font-bold text-[var(--on-brand)] shadow-sm">
-              RC
+              RY
             </span>
             <h1 className="text-[26px] font-semibold tracking-tight text-[var(--ink)]">{title}</h1>
             <p className="mt-2 text-[14px] text-[var(--muted)]">{subtitle}</p>
@@ -258,20 +246,15 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
           {step === 'entry' ? (
             <>
               {GOOGLE_CLIENT_ID ? (
-                <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-                  <div className="flex w-full justify-center [&_div]:w-full [&_iframe]:mx-auto">
-                    <GoogleLogin
-                      onSuccess={(res) => void onGoogleCredential(res.credential)}
-                      onError={() => message.error(t('auth.googleFailed') || 'Google login failed')}
-                      useOneTap={false}
-                      theme="outline"
-                      size="large"
-                      width="380"
-                      text="continue_with"
-                      shape="pill"
-                    />
-                  </div>
-                </GoogleOAuthProvider>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onGoogleContinue}
+                  className="flex h-12 w-full items-center justify-center gap-2.5 rounded-full border border-[var(--line)] bg-[var(--surface)] text-[14px] font-medium text-[var(--ink)] transition-colors hover:bg-[var(--accent-soft)] disabled:opacity-60"
+                >
+                  <GoogleIcon />
+                  {t('auth.google')}
+                </button>
               ) : (
                 <button
                   type="button"
@@ -280,7 +263,7 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
                   className="flex h-12 w-full items-center justify-center gap-2.5 rounded-full border border-[var(--line)] bg-[var(--surface)] text-[14px] font-medium text-[var(--muted)] opacity-70"
                 >
                   <GoogleIcon />
-                  {t('auth.google')}（未配置）
+                  {t('auth.google')}
                 </button>
               )}
 
@@ -303,14 +286,49 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
                 className="!h-12 !rounded-full !px-5 !bg-white"
               />
 
+              {!isRegisterHint ? (
+                <Input
+                  size="large"
+                  type="outlined"
+                  inputType="password"
+                  placeholder={t('auth.password')}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void onContinueEmail();
+                  }}
+                  className="!mt-3 !h-12 !rounded-full !px-5 !bg-white"
+                />
+              ) : null}
+
               <Button
                 type="primary"
                 className="!mt-4 !h-12 !w-full !rounded-full !text-[15px]"
                 disabled={busy}
                 onClick={() => void onContinueEmail()}
               >
-                {busy ? t('auth.sending') : t('auth.continue')}
+                {busy
+                  ? t('auth.sending')
+                  : !isRegisterHint && password.length >= 6
+                    ? t('auth.login')
+                    : t('auth.continue')}
               </Button>
+
+              {!isRegisterHint ? (
+                <p className="mt-3 text-center text-[12px] text-[var(--muted)]">
+                  {t('auth.noAccount')}{' '}
+                  <Link to="/register" className="text-[var(--accent)] hover:underline">
+                    {t('auth.goRegister')}
+                  </Link>
+                </p>
+              ) : (
+                <p className="mt-3 text-center text-[12px] text-[var(--muted)]">
+                  {t('auth.hasAccount')}{' '}
+                  <Link to="/login" className="text-[var(--accent)] hover:underline">
+                    {t('auth.goLogin')}
+                  </Link>
+                </p>
+              )}
             </>
           ) : null}
 
@@ -323,19 +341,15 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
                 value={code}
                 onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') onVerifyCode();
+                  if (e.key === 'Enter') void onVerifyCode();
                 }}
                 className="!h-12 !rounded-full !px-5 !tracking-[0.2em] !bg-white"
               />
-              {devCodeHint ? (
-                <p className="rounded-xl bg-[#e8f0ff] px-3 py-2 text-center text-[12px] text-[var(--accent)]">
-                  {t('auth.devCodeHint', { code: devCodeHint })}
-                </p>
-              ) : null}
               <Button
                 type="primary"
                 className="!h-12 !w-full !rounded-full !text-[15px]"
-                onClick={onVerifyCode}
+                disabled={busy}
+                onClick={() => void onVerifyCode()}
               >
                 {t('auth.verify')}
               </Button>
@@ -346,7 +360,7 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
                   onClick={() => {
                     setStep('entry');
                     setCode('');
-                    setDevCodeHint(null);
+                    setTicket(null);
                   }}
                 >
                   {t('auth.backEmail')}
@@ -381,14 +395,15 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') onCompleteEmail();
+                  if (e.key === 'Enter') void onCompleteEmail();
                 }}
                 className="!h-12 !rounded-full !px-5 !bg-white"
               />
               <Button
                 type="primary"
                 className="!mt-1 !h-12 !w-full !rounded-full !text-[15px]"
-                onClick={onCompleteEmail}
+                disabled={busy}
+                onClick={() => void onCompleteEmail()}
               >
                 {t('auth.done')}
               </Button>
@@ -400,9 +415,13 @@ export default function LoginPage({ initialMode = 'login' }: { initialMode?: 'lo
               {t('auth.backHome')}
             </Link>
             <span className="mx-2 text-[#d0d3d6]">|</span>
-            <span>{t('auth.terms')}</span>
+            <Link to="/terms" className="underline decoration-[var(--line)] underline-offset-2 hover:text-[var(--ink)]">
+              {t('auth.terms')}
+            </Link>
             <span className="mx-2 text-[#d0d3d6]">|</span>
-            <span>{t('auth.privacy')}</span>
+            <Link to="/privacy" className="underline decoration-[var(--line)] underline-offset-2 hover:text-[var(--ink)]">
+              {t('auth.privacy')}
+            </Link>
           </p>
         </div>
       </div>

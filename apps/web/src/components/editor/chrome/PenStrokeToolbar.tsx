@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { HiOutlinePlus, HiOutlineTrash } from 'react-icons/hi2';
+import { HiOutlineTrash } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
 import { message, DropdownPanel, DropdownPanelItem } from '@/components/base';
@@ -11,16 +11,13 @@ import {
   brushPreviewPath,
   findPencilBrush,
   listPencilBrushes,
-  makeCustomStampBrush,
   type PencilBrushId,
 } from '@/components/editor/nodes/ShapeNode/pencilBrushes';
 import {
-  addCustomPencilBrush,
   hydrateCustomPencilBrushes,
-  readBrushImageFile,
   removeCustomPencilBrush,
 } from '@/components/editor/nodes/ShapeNode/customPencilBrushes';
-import { getTintedStampSrc, preloadStampSrc } from '@/components/editor/nodes/ShapeNode/stampTint';
+import { getTintedStampSrc } from '@/components/editor/nodes/ShapeNode/stampTint';
 import {
   setPenStrokeColor,
   setPenStrokeWidth,
@@ -116,7 +113,6 @@ export default function PenStrokeToolbar({
   const brush = findPencilBrush(brushId);
   const [brushOpen, setBrushOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const brushCloseTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -152,22 +148,6 @@ export default function PenStrokeToolbar({
   useEffect(() => {
     if (eraseMode) setBrushOpen(false);
   }, [eraseMode]);
-
-  const onUploadBrush = async (file: File | null) => {
-    if (!file) return;
-    try {
-      const { dataUrl, name } = await readBrushImageFile(file);
-      preloadStampSrc(dataUrl);
-      const def = makeCustomStampBrush({ label: name, stampSrc: dataUrl });
-      addCustomPencilBrush(def);
-      dispatch(setPencilBrushId(def.id));
-      setBrushRev((n) => n + 1);
-      message.success(`已添加画笔「${def.label}」`);
-      setBrushOpen(true);
-    } catch (err: any) {
-      message.error(String(err?.message || '上传失败'));
-    }
-  };
 
   const onDeleteCustom = (id: string) => {
     removeCustomPencilBrush(id);
@@ -311,26 +291,6 @@ export default function PenStrokeToolbar({
                     );
                   })}
                 </ul>
-                <div className="mt-1 border-t border-[var(--line)] pt-1">
-                  <DropdownPanelItem onClick={() => fileInputRef.current?.click()}>
-                    <HiOutlinePlus className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
-                    <span>上传自定义画笔</span>
-                  </DropdownPanelItem>
-                  <p className="px-2 pb-1 text-[10px] leading-snug text-[var(--muted)]">
-                    支持 PNG / JPG / SVG / WebP，笔尖图沿路径盖章着色
-                  </p>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0] || null;
-                      e.target.value = '';
-                      void onUploadBrush(f);
-                    }}
-                  />
-                </div>
               </DropdownPanel>
             ) : null}
           </div>

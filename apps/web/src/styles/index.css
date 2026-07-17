@@ -10,10 +10,10 @@
     --surface: #ffffff;
     --canvas: #f3f3f3;
     --rail: #f3f3f3;
-    --ink: #434343;
+    --ink: #141414;
     --muted: #767676;
     --line: #d9d9d9;
-    --accent: #383838;
+    --accent: #141414;
     --accent-soft: #e6e6e6;
     --on-brand: #ffffff;
     --font-sans: 'Alibaba PuHuiTi', '阿里巴巴普惠体', 'PingFang SC', 'Microsoft YaHei',
@@ -184,6 +184,103 @@ html.theme-switching *::after {
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+/* Plaza publish thank-you */
+@keyframes plaza-thanks-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes plaza-thanks-ring {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.7);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.55);
+  }
+}
+
+@keyframes plaza-thanks-float {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(-10px) scale(1.05);
+    opacity: 0.7;
+  }
+}
+
+@keyframes plaza-thanks-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.plaza-thanks-badge {
+  animation: plaza-thanks-pop 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.plaza-thanks-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2px solid color-mix(in srgb, var(--ink) 35%, transparent);
+  animation: plaza-thanks-ring 0.9s ease-out 0.12s both;
+}
+
+.plaza-thanks-copy {
+  animation: plaza-thanks-rise 0.45s ease-out 0.18s both;
+}
+
+.plaza-thanks-orb {
+  position: absolute;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  animation: plaza-thanks-float 2.8s ease-in-out infinite;
+}
+
+.plaza-thanks-orb-a {
+  width: 10px;
+  height: 10px;
+  left: 18%;
+  top: 22%;
+  animation-delay: 0s;
+}
+
+.plaza-thanks-orb-b {
+  width: 7px;
+  height: 7px;
+  right: 20%;
+  top: 28%;
+  animation-delay: 0.4s;
+}
+
+.plaza-thanks-orb-c {
+  width: 8px;
+  height: 8px;
+  left: 28%;
+  bottom: 18%;
+  animation-delay: 0.8s;
 }
 
 /** Image process loading plate — vertical sweep (band moves left ↔ right). */

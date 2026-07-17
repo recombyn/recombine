@@ -91,7 +91,10 @@ const MenuItem: FC<MenuItemProps> = ({
 
   if (item.type === 'divider') {
     return (
-      <div className="my-1 h-px bg-[var(--color-border-default-base)]" role="separator" />
+      <div
+        className="mx-1 my-0.5 h-px shrink-0 bg-[var(--line)]"
+        role="separator"
+      />
     );
   }
 

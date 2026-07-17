@@ -5,7 +5,7 @@ import {
   HiOutlineLockClosed,
   HiOutlineLockOpen,
 } from 'react-icons/hi2';
-import { ColorPanelPopover } from '@/components/base/colorPanel';
+import { ColorPanelPopover, FILL_ALPHA_PRESETS } from '@/components/base/colorPanel';
 import FrameSizePresetMenu, {
   FramePresetIcon,
   FrameRatioPresetMenu,
@@ -39,7 +39,7 @@ export default function FrameContextToolbar({ frame }: Props) {
   const dispatch = useDispatch();
   const [presetOpen, setPresetOpen] = useState(false);
   const [ratioOpen, setRatioOpen] = useState(false);
-  const [aspectLocked, setAspectLocked] = useState(true);
+  const canvasLocked = Boolean(frame.locked);
   const presetKey = matchFramePreset(frame.width, frame.height);
   const presetMeta = findFramePreset(presetKey);
   const isRatio = presetMeta?.category === 'ratio';
@@ -54,20 +54,11 @@ export default function FrameContextToolbar({ frame }: Props) {
   };
 
   const setSize = (axis: 'w' | 'h', raw: string) => {
+    if (canvasLocked) return;
     const n = Math.max(40, Math.round(Number(raw) || 0));
     if (!Number.isFinite(n)) return;
-    const ratio = frame.width / Math.max(1, frame.height);
-    if (axis === 'w') {
-      patch({
-        width: n,
-        height: aspectLocked ? Math.max(40, Math.round(n / ratio)) : frame.height,
-      });
-    } else {
-      patch({
-        height: n,
-        width: aspectLocked ? Math.max(40, Math.round(n * ratio)) : frame.width,
-      });
-    }
+    if (axis === 'w') patch({ width: n });
+    else patch({ height: n });
   };
 
   const fill = frame.backgroundColor || '#FFFFFF';
@@ -85,9 +76,16 @@ export default function FrameContextToolbar({ frame }: Props) {
         value={fillHex}
         opacity={fillOpacity}
         showAlpha
-        onChange={(hex) => patch({ backgroundColor: hex })}
+        presets={FILL_ALPHA_PRESETS}
+        onChange={(hex) => {
+          if (hex === 'transparent') patch({ backgroundColor: 'transparent' });
+          else patch({ backgroundColor: hex });
+        }}
         onOpacityChange={(opacity) => {
           if (opacity <= 0) patch({ backgroundColor: 'transparent' });
+          else if (frame.backgroundColor === 'transparent') {
+            patch({ backgroundColor: '#FFFFFF' });
+          }
         }}
         title={'画板颜色'}
         placement="bottom-start"
@@ -115,6 +113,7 @@ export default function FrameContextToolbar({ frame }: Props) {
       <FrameSizePresetMenu
         open={presetOpen}
         onOpenChange={(v) => {
+          if (canvasLocked) return;
           setPresetOpen(v);
           if (v) setRatioOpen(false);
         }}
@@ -123,9 +122,11 @@ export default function FrameContextToolbar({ frame }: Props) {
         triggerClassName={cn(
           SEL_TOOL_BTN,
           'gap-1.5 px-2.5',
-          presetOpen && 'bg-[var(--accent-soft)]'
+          presetOpen && 'bg-[var(--accent-soft)]',
+          canvasLocked && 'pointer-events-none opacity-50'
         )}
         onPick={(preset) => {
+          if (canvasLocked) return;
           const next = applyFramePreset(frame, preset);
           patch(next);
         }}
@@ -139,8 +140,16 @@ export default function FrameContextToolbar({ frame }: Props) {
           type="button"
           aria-label={isLandscape ? '切换为竖向' : '切换为横向'}
           aria-pressed={isLandscape}
-          className={cn(SEL_ICON_BTN, isLandscape && 'bg-[var(--accent-soft)]')}
-          onClick={() => patch(swapFrameOrientation(frame))}
+          disabled={canvasLocked}
+          className={cn(
+            SEL_ICON_BTN,
+            isLandscape && 'bg-[var(--accent-soft)]',
+            canvasLocked && 'opacity-50'
+          )}
+          onClick={() => {
+            if (canvasLocked) return;
+            patch(swapFrameOrientation(frame));
+          }}
         >
           <HiOutlineArrowsRightLeft className="h-3.5 w-3.5" />
         </button>
@@ -149,6 +158,7 @@ export default function FrameContextToolbar({ frame }: Props) {
       <FrameRatioPresetMenu
         open={ratioOpen}
         onOpenChange={(v) => {
+          if (canvasLocked) return;
           setRatioOpen(v);
           if (v) setPresetOpen(false);
         }}
@@ -157,44 +167,66 @@ export default function FrameContextToolbar({ frame }: Props) {
         triggerClassName={cn(
           SEL_TOOL_BTN,
           'gap-1.5 px-2.5',
-          ratioOpen && 'bg-[var(--accent-soft)]'
+          ratioOpen && 'bg-[var(--accent-soft)]',
+          canvasLocked && 'pointer-events-none opacity-50'
         )}
         onPick={(preset) => {
-          if (preset.key === 'original') return;
+          if (canvasLocked) return;
+          if (preset.key === 'original') {
+            const ow = Number(frame.aspectOriginalWidth);
+            const oh = Number(frame.aspectOriginalHeight);
+            if (Number.isFinite(ow) && ow > 0 && Number.isFinite(oh) && oh > 0) {
+              patch({ width: ow, height: oh });
+            }
+            return;
+          }
           const next = applyFramePreset(frame, preset);
-          patch(next);
+          const hasOrig =
+            Number(frame.aspectOriginalWidth) > 0 && Number(frame.aspectOriginalHeight) > 0;
+          patch({
+            ...next,
+            ...(!hasOrig
+              ? {
+                  aspectOriginalWidth: Math.round(frame.width),
+                  aspectOriginalHeight: Math.round(frame.height),
+                }
+              : {}),
+          });
         }}
       >
         <span>{ratioTitle}</span>
       </FrameRatioPresetMenu>
 
-      <label className={field}>
+      <label className={cn(field, canvasLocked && 'opacity-50')}>
         <span className="text-[var(--muted)]">W</span>
         <input
           className="w-11 bg-transparent text-[12px] outline-none tabular-nums"
           value={Math.round(frame.width)}
+          disabled={canvasLocked}
           onChange={(e) => setSize('w', e.target.value)}
           onPointerDown={(e) => e.stopPropagation()}
         />
       </label>
-      <label className={field}>
+      <label className={cn(field, canvasLocked && 'opacity-50')}>
         <span className="text-[var(--muted)]">H</span>
         <input
           className="w-11 bg-transparent text-[12px] outline-none tabular-nums"
           value={Math.round(frame.height)}
+          disabled={canvasLocked}
           onChange={(e) => setSize('h', e.target.value)}
           onPointerDown={(e) => e.stopPropagation()}
         />
       </label>
 
-      <Tooltip title={aspectLocked ? '解锁比例' : '锁定比例'} placement="top">
+      <Tooltip title={canvasLocked ? '解锁画布' : '锁定画布'} placement="top">
         <button
           type="button"
-          aria-label={aspectLocked ? '解锁比例' : '锁定比例'}
-          className={SEL_ICON_BTN}
-          onClick={() => setAspectLocked((v) => !v)}
+          aria-label={canvasLocked ? '解锁画布' : '锁定画布'}
+          aria-pressed={canvasLocked}
+          className={cn(SEL_ICON_BTN, canvasLocked && 'bg-[var(--accent-soft)]')}
+          onClick={() => patch({ locked: !canvasLocked })}
         >
-          {aspectLocked ? (
+          {canvasLocked ? (
             <HiOutlineLockClosed className="h-3.5 w-3.5" />
           ) : (
             <HiOutlineLockOpen className="h-3.5 w-3.5" />

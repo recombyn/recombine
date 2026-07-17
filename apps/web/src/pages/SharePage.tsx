@@ -63,6 +63,9 @@ export default function SharePage() {
   const selectedNodeId = useSelector((s: any) => s.editor.selectedNodeId);
   const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds || []);
   const documentPatchToken = useSelector((s: any) => s.editor.documentPatchToken);
+  const lastPatchedNodeIds = useSelector(
+    (s: any) => (s.editor.lastPatchedNodeIds as string[]) || []
+  );
   const sceneReloadToken = useSelector((s: any) => s.editor.sceneReloadToken);
   const activeFrameId = useSelector((s: any) => s.editor.activeFrameId as string | null);
   const [record, setRecord] = useState<ShareRecord | null>(null);
@@ -273,6 +276,7 @@ export default function SharePage() {
               }}
               reloadToken={sceneReloadToken}
               documentPatchToken={documentPatchToken}
+              lastPatchedNodeIds={lastPatchedNodeIds}
               selectedNodeId={selectedNodeId}
               selectedNodeIds={selectedNodeIds}
               readOnly={readOnly}

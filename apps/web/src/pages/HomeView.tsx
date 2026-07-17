@@ -13,13 +13,13 @@ export default function HomeView() {
   const [importOpen, setImportOpen] = useState(false);
   const { nav, setNav, query, importing, setImporting, importingName, setImportingName } =
     useHomeNav();
-  const { handleCreate, handleImportJson, handleImportFile } = useHomeActions(
-    jsonInputRef,
-    fileInputRef,
-    setImporting,
-    setImportingName,
-    setImportOpen
-  );
+  const {
+    handleCreate,
+    handleAgentSubmit,
+    handleOpenCase,
+    handleImportJson,
+    handleImportFile,
+  } = useHomeActions(jsonInputRef, fileInputRef, setImporting, setImportingName, setImportOpen);
 
   const openFilePicker = (kind: ImportFileKind) => {
     const input = fileInputRef.current;
@@ -37,7 +37,7 @@ export default function HomeView() {
         importing={importing}
         onCreate={handleCreate}
       />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]">
         <HomeTopBar />
         <HomeTemplateList
           nav={nav}
@@ -46,6 +46,8 @@ export default function HomeView() {
           importing={importing}
           importingName={importingName}
           onCreate={handleCreate}
+          onAgentSubmit={handleAgentSubmit}
+          onOpenCase={handleOpenCase}
         />
       </div>
       <ImportFileDialog

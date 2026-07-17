@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -21,40 +21,77 @@ import {
   HiOutlineComputerDesktop,
   HiOutlineCreditCard,
   HiOutlineDocumentText,
+  HiOutlineInformationCircle,
+  HiOutlineKey,
   HiOutlineMoon,
-  HiOutlineQuestionMarkCircle,
+  HiOutlineSquares2X2,
   HiOutlineSun,
   HiOutlineUser,
 } from 'react-icons/hi2';
 import { MdLanguage } from 'react-icons/md';
-import { FaCoins } from 'react-icons/fa6';
+import { FaBolt } from 'react-icons/fa6';
 import { message } from '@/components/base';
 import BillingDialog from '@/components/layout/BillingDialog';
-import RechargeDialog from '@/components/layout/RechargeDialog';
+import RedeemDialog from '@/components/layout/RedeemDialog';
+import AdminCardKeysDialog from '@/components/layout/AdminCardKeysDialog';
+import AdminPlazaReviewDialog from '@/components/layout/AdminPlazaReviewDialog';
 import { logout as logoutRemote } from '@/apis/auth';
+import { fetchWallet } from '@/apis/wallet';
 import { logout } from '@/store/modules/auth';
+import { clearWallet, formatTokens, syncFromServer, type LedgerEntry } from '@/store/modules/wallet';
 import { SUPPORTED_LANGS } from '@/i18n';
 import { applyTheme, getStoredThemeMode, type ThemeMode } from '@/theme';
 import { cn } from '@/utils/classnames';
+import { isSuperAdmin } from '@/utils/superAdmin';
 
 function userInitial(name?: string, email?: string) {
   const raw = (name || email || 'U').trim();
   return (raw[0] || 'U').toUpperCase();
 }
 
-function formatCny(n: number, opts?: { compact?: boolean }) {
-  const value = Number.isFinite(n) ? n : 0;
-  if (opts?.compact && Math.abs(value) >= 1_000_000) {
-    return value.toLocaleString('zh-CN', {
-      notation: 'compact',
-      compactDisplay: 'short',
-      maximumFractionDigits: 2,
-    });
+/** Shared avatar — same image / brand fallback everywhere (chip + menu). */
+function UserAvatar({
+  name,
+  email,
+  avatar,
+  size = 40,
+  className,
+}: {
+  name?: string | null;
+  email?: string | null;
+  avatar?: string | null;
+  size?: number;
+  className?: string;
+}) {
+  const url = typeof avatar === 'string' && avatar.trim() ? avatar.trim() : null;
+  const dim = `${size}px`;
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt=""
+        width={size}
+        height={size}
+        className={cn(
+          'shrink-0 rounded-full object-cover ring-1 ring-[var(--line)]',
+          className
+        )}
+        style={{ width: dim, height: dim }}
+      />
+    );
   }
-  return value.toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  const fontSize = Math.max(11, Math.round(size * 0.36));
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-semibold text-[var(--on-brand)]',
+        className
+      )}
+      style={{ width: dim, height: dim, fontSize }}
+    >
+      {userInitial(name || undefined, email || undefined)}
+    </span>
+  );
 }
 
 const LANG_LABEL: Record<string, string> = {
@@ -103,12 +140,31 @@ function MenuRow({
   );
 }
 
+/** Prefer opening to the right (chevron direction); flip left only when clipped. */
 function SideFlyout({ children }: { children: ReactNode }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [side, setSide] = useState<'right' | 'left'>('right');
+
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    const row = el?.parentElement;
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
+    const need = 160;
+    const spaceRight = window.innerWidth - rect.right - 8;
+    setSide(spaceRight >= need ? 'right' : 'left');
+  }, []);
+
   return (
-    // Anchored to the menu row (inset by parent px-2 / 0.5rem). Padding =
-    // that inset + ≥10px gap to the panel edge; also a hover bridge so the
-    // flyout stays open while the pointer crosses the gap.
-    <div className="absolute right-full top-0 z-10 pr-[calc(0.5rem+10px)]">
+    <div
+      ref={wrapRef}
+      className={cn(
+        'absolute top-0 z-10',
+        side === 'right'
+          ? 'left-full pl-[calc(0.5rem+10px)]'
+          : 'right-full pr-[calc(0.5rem+10px)]'
+      )}
+    >
       <div
         className={cn(
           'min-w-[148px] overflow-hidden rounded-xl bg-[var(--surface)] py-1',
@@ -124,11 +180,13 @@ function SideFlyout({ children }: { children: ReactNode }) {
 export default function UserAccountPanel({ open, onOpenChange, children }: Props) {
   const { t, i18n } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);
-  const balance = useSelector((state: any) => state.wallet?.balance ?? 0);
+  const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const [billingOpen, setBillingOpen] = useState(false);
-  const [rechargeOpen, setRechargeOpen] = useState(false);
+  const [redeemOpen, setRedeemOpen] = useState(false);
+  const [adminKeysOpen, setAdminKeysOpen] = useState(false);
+  const [adminPlazaOpen, setAdminPlazaOpen] = useState(false);
   const [flyout, setFlyout] = useState<FlyoutKind>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
 
@@ -146,6 +204,20 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
   useEffect(() => {
     if (!open) setFlyout(null);
   }, [open]);
+
+  useEffect(() => {
+    if (!user) return;
+    void fetchWallet()
+      .then((res) => {
+        dispatch(
+          syncFromServer({
+            tokens: res.tokens,
+            ledger: (res.ledger || []) as LedgerEntry[],
+          })
+        );
+      })
+      .catch(() => undefined);
+  }, [user, dispatch]);
 
   const close = () => onOpenChange(false);
 
@@ -165,6 +237,7 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
   const doLogout = () => {
     void logoutRemote().catch(() => undefined);
     dispatch(logout());
+    dispatch(clearWallet());
     message.success(t('home.loggedOut'));
     close();
     navigate('/login');
@@ -192,7 +265,10 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
       key: 'profile',
       icon: HiOutlineUser,
       label: t('wallet.menuProfile'),
-      onClick: () => soon('wallet.comingSoon'),
+      onClick: () => {
+        close();
+        navigate('/home', { state: { homeNav: 'account' } });
+      },
     },
     {
       key: 'billing',
@@ -203,11 +279,40 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
         setBillingOpen(true);
       },
     },
+    ...(isSuperAdmin(user)
+      ? [
+          {
+            key: 'admin-keys',
+            icon: HiOutlineKey,
+            label: t('wallet.menuAdminKeys'),
+            onClick: () => {
+              close();
+              setAdminKeysOpen(true);
+            },
+          },
+          {
+            key: 'admin-plaza',
+            icon: HiOutlineSquares2X2,
+            label: t('wallet.menuAdminPlaza'),
+            onClick: () => {
+              close();
+              setAdminPlazaOpen(true);
+            },
+          },
+        ]
+      : []),
     {
       key: 'feedback',
       icon: HiOutlineChatBubbleBottomCenterText,
       label: t('wallet.menuFeedback'),
-      onClick: () => soon('wallet.comingSoon'),
+      onClick: () => {
+        close();
+        window.open(
+          'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink',
+          '_blank',
+          'noopener,noreferrer'
+        );
+      },
     },
     {
       key: 'docs',
@@ -216,10 +321,13 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
       onClick: () => soon('wallet.comingSoon'),
     },
     {
-      key: 'faq',
-      icon: HiOutlineQuestionMarkCircle,
-      label: t('wallet.menuFaq'),
-      onClick: () => soon('wallet.comingSoon'),
+      key: 'about',
+      icon: HiOutlineInformationCircle,
+      label: t('wallet.menuAbout'),
+      onClick: () => {
+        close();
+        navigate('/about');
+      },
     },
   ];
 
@@ -239,9 +347,12 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
             <div className="overflow-visible rounded-xl bg-[var(--surface)] shadow-[0_12px_40px_rgba(12,12,13,0.18)] ring-1 ring-[var(--line)]">
               <div className="overflow-hidden rounded-t-xl">
                 <div className="flex items-start gap-3 px-4 pb-3 pt-4">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[14px] font-semibold text-[var(--on-brand)]">
-                    {userInitial(user?.name, user?.email)}
-                  </span>
+                  <UserAvatar
+                    name={user?.name}
+                    email={user?.email}
+                    avatar={user?.avatar}
+                    size={40}
+                  />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[14px] font-semibold text-[var(--ink)]">
                       {user?.name || user?.email || t('home.account')}
@@ -250,28 +361,18 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                       <div className="mt-0.5 truncate text-[11px] text-[var(--muted)]">{user.email}</div>
                     ) : null}
                   </div>
-                  <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)] ring-1 ring-[var(--line)]">
-                    {t('wallet.planFree')}
-                  </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 px-4 pb-3">
+                <div className="px-4 pb-3">
                   <button
                     type="button"
                     onClick={() => {
                       close();
-                      setRechargeOpen(true);
+                      setRedeemOpen(true);
                     }}
-                    className="rounded-lg bg-[var(--accent)] px-2 py-2 text-[12px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
+                    className="w-full rounded-lg bg-[var(--accent)] px-2 py-2 text-[12px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
                   >
-                    {t('wallet.topUp')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => soon('wallet.comingSoon')}
-                    className="rounded-lg bg-[var(--canvas)] px-2 py-2 text-[12px] font-medium text-[var(--ink)] ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)]"
-                  >
-                    {t('wallet.upgrade')}
+                    {t('wallet.redeem')}
                   </button>
                 </div>
 
@@ -280,25 +381,25 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                     type="button"
                     onClick={() => {
                       close();
-                      setRechargeOpen(true);
+                      setBillingOpen(true);
                     }}
                     className="w-full overflow-hidden rounded-xl bg-[var(--canvas)] px-3 py-3 text-left transition hover:bg-[var(--accent-soft)]"
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      <FaCoins className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+                      <FaBolt className="h-4 w-4 shrink-0 text-[var(--muted)]" />
                       <span
                         className="min-w-0 flex-1 truncate text-[15px] font-semibold tabular-nums text-[var(--ink)]"
-                        title={`¥${formatCny(balance)}`}
+                        title={t('wallet.tokensLeft', { count: formatTokens(tokens) })}
                       >
-                        ¥{formatCny(balance)}
+                        {formatTokens(tokens)}
                       </span>
                       <span className="inline-flex shrink-0 items-center gap-0.5 text-[12px] text-[var(--muted)]">
-                        {t('wallet.balance')}
+                        {t('wallet.tokens')}
                         <HiOutlineChevronRight className="h-3.5 w-3.5" />
                       </span>
                     </div>
                     <p className="mt-2 break-words text-[11px] leading-snug text-[var(--muted)]">
-                      {t('wallet.balanceTip')}
+                      {t('wallet.tokensTip')}
                     </p>
                   </button>
                 </div>
@@ -314,7 +415,6 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                   />
                 ))}
 
-                {/* Language — fig.2 list + side flyout */}
                 <div
                   className="relative"
                   onMouseEnter={() => setFlyout('lang')}
@@ -350,7 +450,6 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                   ) : null}
                 </div>
 
-                {/* Theme — same list style + side flyout */}
                 <div
                   className="relative"
                   onMouseEnter={() => setFlyout('theme')}
@@ -406,10 +505,12 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
         </FloatingPortal>
       ) : null}
 
-      <RechargeDialog open={rechargeOpen} onClose={() => setRechargeOpen(false)} />
+      <RedeemDialog open={redeemOpen} onClose={() => setRedeemOpen(false)} />
       <BillingDialog open={billingOpen} onClose={() => setBillingOpen(false)} />
+      <AdminCardKeysDialog open={adminKeysOpen} onClose={() => setAdminKeysOpen(false)} />
+      <AdminPlazaReviewDialog open={adminPlazaOpen} onClose={() => setAdminPlazaOpen(false)} />
     </>
   );
 }
 
-export { formatCny, userInitial };
+export { userInitial, UserAvatar };

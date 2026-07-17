@@ -201,7 +201,7 @@ export const MessageContainer: React.FC = () => {
   if (messages.length === 0) return null;
 
   return createPortal(
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[3000] flex flex-col gap-3 items-center pointer-events-none">
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[11000] flex flex-col gap-3 items-center pointer-events-none">
       {messages.map((m) => (
         <div key={m.key} className="pointer-events-auto">
           <ToastItemRow item={m} />

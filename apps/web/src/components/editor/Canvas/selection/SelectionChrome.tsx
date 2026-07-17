@@ -18,7 +18,7 @@ type SelectionChromeProps = {
   /** Multi-select (Fig.1): only four corner knobs. */
   cornerHandlesOnly?: boolean;
   /**
-   * `line`: shaft + two endpoints (length only). No box / corners / rotate.
+   * `line`: shaft + two free endpoints (length + angle). No box / corners / rotate knob.
    * Used for straight line & arrow.
    */
   variant?: 'box' | 'line';
@@ -35,11 +35,18 @@ type SelectionChromeProps = {
   handleDataAttr?: string;
   /** Value for handleDataAttr (default "resize"). */
   handleDataValue?: string;
+  /**
+   * Corner radii in world/scene units (same space as `box`).
+   * Converted to screen px via camera zoom so the chrome follows rounded shapes.
+   */
+  cornerRadii?: { tl: number; tr: number; br: number; bl: number } | null;
 };
 
 /** Fixed on-screen sizes — chrome lives in the unscaled camera overlay. */
 const HANDLE_VIS_PX = 8;
-const HANDLE_HIT_PX = 16;
+const HANDLE_HIT_PX = 18;
+/** Thicker shaft hit for line/arrow selection chrome (screen px). */
+const LINE_SHAFT_HIT_PX = 28;
 const BORDER_PX = 1.5;
 const ROTATE_HIT_PX = 22;
 const ROTATE_ICON_PX = 18;
@@ -129,6 +136,7 @@ export default function SelectionChrome({
   boxDataAttr = 'data-sel-box',
   handleDataAttr = 'data-sel-handle',
   handleDataValue = 'resize',
+  cornerRadii = null,
 }: SelectionChromeProps) {
   const camera = useCamera();
   const z = Math.max(0.05, camera.zoom || 1);
@@ -138,6 +146,17 @@ export default function SelectionChrome({
   const sw = w * z;
   const sh = h * z;
   const lineMode = variant === 'line';
+  const maxR = Math.min(w, h) / 2;
+  const chromeRadius = cornerRadii
+    ? [
+        Math.min(maxR, Math.max(0, cornerRadii.tl)) * z,
+        Math.min(maxR, Math.max(0, cornerRadii.tr)) * z,
+        Math.min(maxR, Math.max(0, cornerRadii.br)) * z,
+        Math.min(maxR, Math.max(0, cornerRadii.bl)) * z,
+      ]
+        .map((n) => `${n}px`)
+        .join(' ')
+    : undefined;
 
   const allKnobs: Array<[ResizeHandle, number, number]> = [
     ['nw', 0, 0],
@@ -194,7 +213,7 @@ export default function SelectionChrome({
               left: lineStart.x,
               top: lineStart.y,
               width: lineLen,
-              height: HANDLE_HIT_PX,
+              height: LINE_SHAFT_HIT_PX,
               transform: `translateY(-50%) rotate(${lineAngleDeg}deg)`,
               transformOrigin: '0 50%',
               cursor: interactiveBox ? 'move' : undefined,
@@ -237,6 +256,7 @@ export default function SelectionChrome({
             style={{
               borderWidth: BORDER_PX,
               borderStyle: 'solid',
+              borderRadius: chromeRadius,
               boxShadow: `0 0 0 ${BORDER_PX}px rgba(255,255,255,0.9)`,
             }}
           />
@@ -268,7 +288,7 @@ export default function SelectionChrome({
                       top: p.y - HANDLE_HIT_PX / 2,
                       width: HANDLE_HIT_PX,
                       height: HANDLE_HIT_PX,
-                      cursor: cursorForResize(dir, angle),
+                      cursor: lineMode ? 'crosshair' : cursorForResize(dir, angle),
                     }}
                   />
                 );
@@ -290,7 +310,7 @@ export default function SelectionChrome({
                   top: p.y - HANDLE_HIT_PX / 2,
                   width: HANDLE_HIT_PX,
                   height: HANDLE_HIT_PX,
-                  cursor: cursorForResize(dir, angle),
+                  cursor: lineMode ? 'crosshair' : cursorForResize(dir, angle),
                 }}
               >
                 <span

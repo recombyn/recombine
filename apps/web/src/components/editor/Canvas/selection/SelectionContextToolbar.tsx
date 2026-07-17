@@ -8,8 +8,6 @@ import {
   HiOutlineBold,
   HiOutlineCodeBracket,
   HiOutlineItalic,
-  HiOutlineLockClosed,
-  HiOutlineLockOpen,
   HiOutlineStrikethrough,
 } from 'react-icons/hi2';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
@@ -17,7 +15,6 @@ import Tooltip from '@/components/base/tooltip';
 import {
   openShapeStylePanel,
   patchDocumentNode,
-  setAspectLocked,
   startImageProcess,
   openImageToolPanel,
 } from '@/store/modules/editor';
@@ -30,18 +27,20 @@ import {
   isTextBold,
   isTextItalic,
   isTextStrike,
-  measureWrappedTextSize,
+  measurePlainTextSize,
   parseNodeMarkdown,
   parseNodeTextStyle,
 } from '@/store/scene/sceneText';
 import { markdownToPlain } from '@/store/scene/sceneMarkdown';
 import { isIconImageNode, type ImageProcessKind } from '@/store/scene/sceneDocument';
 import ToolbarMenuSelect from './ToolbarMenuSelect';
+import BlendModeControl from './BlendModeControl';
 import {
   SEL_ICON_BTN,
   SEL_ICON_BTN_ACTIVE,
   SEL_TOOL_BTN,
 } from './ToolbarValueSlider';
+import { IconCornerRadius } from './StyleToolbarIcons';
 import FontFamilyPicker from '@/components/editor/nodes/TextNode/FontFamilyPicker';
 import TextEditDialog from '@/components/editor/nodes/TextNode/TextEditDialog';
 import IconAnnotateToolbar from '@/components/editor/nodes/ImageNode/IconAnnotateToolbar';
@@ -91,7 +90,6 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
   const { document, nodeId, box } = props;
   const dispatch = useDispatch();
   const { t } = useTranslation();
-  const aspectLocked = useSelector((s: any) => s.editor.aspectLocked) as boolean;
   const imageToolPanel = useSelector(
     (s: any) => s.editor.imageToolPanel as null | { nodeId: string; kind: string }
   );
@@ -122,7 +120,8 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
   const runImageProcess = (
     kind: ImageProcessKind,
     label: string,
-    size?: { targetWidth?: number; targetHeight?: number }
+    size?: { targetWidth?: number; targetHeight?: number },
+    meta?: Record<string, unknown>
   ) => {
     dispatch(
       startImageProcess({
@@ -131,6 +130,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
         label,
         targetWidth: size?.targetWidth,
         targetHeight: size?.targetHeight,
+        meta,
       })
     );
   };
@@ -142,6 +142,18 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
         hasTitleLabel={kind === 'image'}
         bare={kind === 'image' && isIconImageNode(node)}
       >
+          {!(kind === 'image' && isIconImageNode(node)) ? (
+            <BlendModeControl
+              blendMode={node?.attrs?.blendMode}
+              opacity={node?.attrs?.opacity}
+              onBlendModeChange={(mode) =>
+                dispatch(patchDocumentNode({ nodeId, patch: { attrs: { blendMode: mode } } }))
+              }
+              onOpacityChange={(opacity) =>
+                dispatch(patchDocumentNode({ nodeId, patch: { attrs: { opacity } } }))
+              }
+            />
+          ) : null}
           {kind === 'text' && style ? (
             <>
               <ColorPanelPopover
@@ -291,7 +303,10 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                     <ImageToolbarMoreDownload
                       onAction={(key) => {
                         if (key === 'expand') {
-                          dispatch(openImageToolPanel({ nodeId, kind: 'expand' }));
+                          runImageProcess('expand', '扩展中', undefined, {
+                            scale: '1.5x',
+                            direction: 'all',
+                          });
                           return;
                         }
                         if (key === 'crop') {
@@ -306,53 +321,32 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                           dispatch(openImageToolPanel({ nodeId, kind: 'flipRotate' }));
                           return;
                         }
-                        const labels: Record<string, string> = {
-                          vector: '矢量化中',
-                        };
-                        runImageProcess(key, labels[key] || '处理中');
+                        if (key === 'vector') {
+                          runImageProcess('vector', '矢量化中');
+                        }
                       }}
                     />
                   }
                   aspectLockSlot={
-                    <>
-                      {supportsCornerRadius(node) ? (
-                        <Tooltip title={'圆角'} placement="top">
-                          <button
-                            type="button"
-                            aria-label={'圆角'}
-                            className={SEL_TOOL_BTN}
-                            onClick={() =>
-                              dispatch(
-                                openShapeStylePanel({ kind: 'radius', nodeIds: [nodeId] })
-                              )
-                            }
-                          >
-                            <span className="text-[var(--muted)]">R</span>
-                            <span className="tabular-nums">
-                              {radiiFromAttrs(node.attrs).tl}
-                            </span>
-                          </button>
-                        </Tooltip>
-                      ) : null}
-                      <Tooltip
-                        title={aspectLocked ? '解锁比例' : '锁定比例'}
-                        placement="top"
-                      >
+                    supportsCornerRadius(node) ? (
+                      <Tooltip title={'圆角'} placement="top">
                         <button
                           type="button"
-                          aria-label={aspectLocked ? '解锁比例' : '锁定比例'}
-                          aria-pressed={aspectLocked}
-                          className={SEL_ICON_BTN}
-                          onClick={() => dispatch(setAspectLocked(!aspectLocked))}
+                          aria-label={'圆角'}
+                          className={SEL_TOOL_BTN}
+                          onClick={() =>
+                            dispatch(
+                              openShapeStylePanel({ kind: 'radius', nodeIds: [nodeId] })
+                            )
+                          }
                         >
-                          {aspectLocked ? (
-                            <HiOutlineLockClosed className="h-3.5 w-3.5" />
-                          ) : (
-                            <HiOutlineLockOpen className="h-3.5 w-3.5" />
-                          )}
+                          <IconCornerRadius className="h-4 w-4 text-[var(--muted)]" />
+                          <span className="tabular-nums">
+                            {radiiFromAttrs(node.attrs).tl}
+                          </span>
                         </button>
                       </Tooltip>
-                    </>
+                    ) : null
                   }
                   downloadSlot={
                     <ExportSelectionPopover
@@ -382,8 +376,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
             const textStyle = parseNodeTextStyle(node.attrs || {});
             const attrs = buildMarkdownTextAttrs(md, textStyle);
             const plain = markdownToPlain(md);
-            const boxW = Math.max(24, Number(node.width) || 240);
-            const measured = measureWrappedTextSize(plain || ' ', textStyle, boxW);
+            const measured = measurePlainTextSize(plain || ' ', textStyle);
             dispatch(
               patchDocumentNode({
                 nodeId,

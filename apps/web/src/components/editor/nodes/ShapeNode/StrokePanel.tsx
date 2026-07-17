@@ -17,12 +17,18 @@ import {
 } from '@floating-ui/react';
 import { HiOutlineChevronDown } from 'react-icons/hi2';
 import { useTranslation } from 'react-i18next';
-import { COLOR_PANEL_WIDTH, ColorPanel, INPUT_NO_SPIN } from '@/components/base/colorPanel';
+import {
+  COLOR_PANEL_WIDTH,
+  ColorPanel,
+  FILL_SOLID_PRESETS,
+  INPUT_NO_SPIN,
+} from '@/components/base/colorPanel';
 import Tooltip from '@/components/base/tooltip';
 import {
   type StrokeStyle,
   StrokeStyleIcon,
   STROKE_STYLES,
+  strokeStyleLabel,
 } from '@/components/editor/nodes/ShapeNode/StrokeStylePicker';
 import type {
   StrokeAlign,
@@ -143,6 +149,15 @@ function IconStrokeJoinBevel({ className }: { className?: string }) {
   );
 }
 
+/** All four sides emphasized — “全部”. */
+function IconSideAll({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
+      <rect x="3.5" y="3.5" width="9" height="9" rx="1" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
 function IconSideTop({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
@@ -190,11 +205,6 @@ function StrokeStyleField({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const current = STROKE_STYLES.includes(value) ? value : 'solid';
-  const labels: Record<StrokeStyle, string> = {
-    solid: t('editor.strokeSolid'),
-    dashed: t('editor.strokeDashed'),
-    dotted: t('editor.strokeDotted'),
-  };
 
   const { refs, floatingStyles, context } = useFloating({
     open,
@@ -212,13 +222,13 @@ function StrokeStyleField({
       <button
         type="button"
         ref={refs.setReference}
-        aria-label={labels[current]}
+        aria-label={strokeStyleLabel(current, t)}
         aria-expanded={open}
         className="inline-flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)] outline-none hover:bg-[var(--line)]"
         {...getReferenceProps({ onClick: () => setOpen((v) => !v) })}
       >
         <StrokeStyleIcon style={current} active />
-        <span className="min-w-0 flex-1 truncate text-left">{labels[current]}</span>
+        <span className="min-w-0 flex-1 truncate text-left">{strokeStyleLabel(current, t)}</span>
         <HiOutlineChevronDown className="h-3 w-3 shrink-0 text-[var(--muted)]" />
       </button>
 
@@ -233,7 +243,7 @@ function StrokeStyleField({
           >
             <div
               data-stroke-style-menu
-              className="min-w-[132px] overflow-hidden rounded bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
+              className="min-w-[10.5rem] overflow-hidden rounded bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
             >
               {STROKE_STYLES.map((style) => (
                 <button
@@ -249,7 +259,7 @@ function StrokeStyleField({
                   }}
                 >
                   <StrokeStyleIcon style={style} active={current === style} />
-                  <span>{labels[style]}</span>
+                  <span>{strokeStyleLabel(style, t)}</span>
                 </button>
               ))}
             </div>
@@ -272,6 +282,8 @@ export function StrokePanel({
   className,
   showLinecap = true,
   showSides = false,
+  layerVisible = true,
+  onLayerVisibleChange,
 }: {
   value: StrokePanelValue;
   onChange: (next: StrokePanelValue) => void;
@@ -282,6 +294,9 @@ export function StrokePanel({
   showLinecap?: boolean;
   /** Rect-like only — independent T/R/B/L side strokes. */
   showSides?: boolean;
+  /** Show/hide stroke on the canvas (eye control in panel header). */
+  layerVisible?: boolean;
+  onLayerVisibleChange?: (visible: boolean) => void;
 }) {
   const { t } = useTranslation();
   const patch = (partial: Partial<StrokePanelValue>) => onChange({ ...value, ...partial });
@@ -300,6 +315,16 @@ export function StrokePanel({
       width={COLOR_PANEL_WIDTH}
       dataAttr="data-stroke-panel"
       className={className}
+      layerVisible={layerVisible}
+      onLayerVisibleChange={onLayerVisibleChange}
+      layerVisibleTipShow="显示描边"
+      layerVisibleTipHide="隐藏描边"
+      onEyedropper={(hex) =>
+        patch({
+          color: hex,
+          opacity: value.opacity <= 0 ? 100 : value.opacity,
+        })
+      }
     >
       <div className="flex w-full items-center justify-between gap-1.5">
         <label className="inline-flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-[4px] bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]">
@@ -326,11 +351,21 @@ export function StrokePanel({
         <PanelToggleIcons
           value={sides}
           onChange={(next) => patch({ sides: next as StrokeSides })}
+          leading={{
+            tip: t('editor.strokeSideAll'),
+            Icon: IconSideAll,
+            active: Boolean(sides.T && sides.R && sides.B && sides.L),
+            onClick: () => {
+              const allOn = Boolean(sides.T && sides.R && sides.B && sides.L);
+              const next = !allOn;
+              patch({ sides: { T: next, R: next, B: next, L: next } });
+            },
+          }}
           options={[
             { id: 'T', tip: t('editor.strokeSideTop'), Icon: IconSideTop },
-            { id: 'R', tip: t('editor.strokeSideRight'), Icon: IconSideRight },
-            { id: 'B', tip: t('editor.strokeSideBottom'), Icon: IconSideBottom },
             { id: 'L', tip: t('editor.strokeSideLeft'), Icon: IconSideLeft },
+            { id: 'B', tip: t('editor.strokeSideBottom'), Icon: IconSideBottom },
+            { id: 'R', tip: t('editor.strokeSideRight'), Icon: IconSideRight },
           ]}
         />
       ) : null}
@@ -378,6 +413,7 @@ export function StrokePanel({
         onOpacityChange={(opacity) => patch({ opacity })}
         showHeader={false}
         padded={false}
+        presets={FILL_SOLID_PRESETS}
         className="!w-full !shadow-none !ring-0"
       />
     </StylePanelShell>

@@ -28,10 +28,7 @@ import { cn } from '@/utils/classnames';
 export type Rgba = { r: number; g: number; b: number; a: number };
 export type Hsv = { h: number; s: number; v: number };
 
-const DEFAULT_PRESETS = ['#F5F5F5', '#FFFFFF', '#000000', '#E8F5E9', '#EEF2FF', '#FCE7F3'];
-const ALPHA_PRESETS = ['transparent', '#000000', '#FFFFFF', '#A3E635', '#C4B5FD', '#EDE9FE'];
-
-/** Three rows × 6 square swatches (solid fill / canvas bg). */
+/** Three rows × 6 square swatches — shared by fill / stroke / artboard / canvas. */
 export const FILL_SOLID_PRESETS = [
   '#FFFFFF',
   '#F5F5F5',
@@ -52,6 +49,9 @@ export const FILL_SOLID_PRESETS = [
   '#6366F1',
   '#8B5CF6',
 ];
+
+/** Same grid + transparent (artboard / alpha-capable pickers). */
+export const FILL_ALPHA_PRESETS = ['transparent', ...FILL_SOLID_PRESETS];
 
 /** Fixed panel width (fig.1 reference). */
 export const COLOR_PANEL_WIDTH = 250;
@@ -180,7 +180,8 @@ export function ColorPanel({
   showColorPreview = true,
   className,
 }: ColorPanelProps) {
-  const presetList = presets ?? (showAlpha ? ALPHA_PRESETS : DEFAULT_PRESETS);
+  // One swatch set everywhere — artboard / fill / stroke stay visually identical.
+  const presetList = presets ?? (showAlpha ? FILL_ALPHA_PRESETS : FILL_SOLID_PRESETS);
   const hex = normalizeHex(value, '#333333');
   const solidHex = hex === 'transparent' ? '#333333' : hex;
   const opacityPct = clampOpacity(opacity);

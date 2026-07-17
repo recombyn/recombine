@@ -14,11 +14,14 @@ import {
 import SelectionChrome from './SelectionChrome';
 import SelectionContextToolbar from './SelectionContextToolbar';
 import MultiSelectionToolbar from './MultiSelectionToolbar';
+import { radiiFromAttrs } from '@/store/scene/sceneRadii';
+import { supportsCornerRadius } from '@/store/scene/sceneDocument';
 import SpacingInspectOverlay, {
   computeMoveMarginMeasures,
   type SpacingMeasure,
 } from './SpacingInspectOverlay';
 import { resizeFromHandle, rotateBoxesAround, scaleBoxesToUnion, unionOfBoxes, type ResizeHandle } from './resizeGeometry';
+import { resizeStrokeByEndpoint } from '@/store/scene/sceneShapes';
 
 /** Segment guide: thin red line + × marks (fig.1). */
 export type { AlignGuide };
@@ -121,7 +124,6 @@ type DragState = {
   handle?: ResizeHandle;
   angle0?: number;
   aspectRatio?: number;
-  aspectLocked0?: boolean;
   center?: { x: number; y: number };
   pointerAngle0?: number;
 };
@@ -130,6 +132,14 @@ function readNodeAngle(document: any, nodeId: string) {
   const node = document?.deltaSetLike?.[nodeId];
   const n = Number(node?.attrs?.angle);
   return Number.isFinite(n) ? n : 0;
+}
+
+function readNodeShapeType(document: any, nodeId: string) {
+  return String(document?.deltaSetLike?.[nodeId]?.attrs?.shapeType || '');
+}
+
+function isStrokeShapeType(t: string) {
+  return t === 'line' || t === 'arrow';
 }
 
 /**
@@ -159,9 +169,11 @@ export default function SelectionFeature({
   const overlayRoot = useCameraOverlayRoot();
   const dispatch = useDispatch();
   const workspaceMode = useSelector((s: any) => s.editor.workspaceMode) as 'design' | 'dev';
-  const aspectLocked = useSelector((s: any) => s.editor.aspectLocked) as boolean;
-  const aspectLockedRef = useRef(aspectLocked);
-  aspectLockedRef.current = aspectLocked;
+  const shapeStylePanel = useSelector(
+    (s: any) => s.editor.shapeStylePanel as null | { kind: string }
+  );
+  /** Radius panel keeps chrome (rounded outline) but hides floating toolbars. */
+  const suppressToolbars = suppressChrome || shapeStylePanel?.kind === 'radius';
   const dragRef = useRef<DragState | null>(null);
   const liveUnionRef = useRef<SceneBox | null>(null);
   const liveOriginsRef = useRef<Array<{ nodeId: string; box: SceneBox }> | null>(null);
@@ -198,7 +210,10 @@ export default function SelectionFeature({
   const idsKey = selectedNodeIds.join('|');
 
   const baseOrigins = useMemo(() => {
-    return selectedNodeIds
+    // Derive ids from idsKey so a new `selectedNodeIds` array reference does not
+    // recreate origins every render (that caused Maximum update depth loops).
+    const ids = idsKey ? idsKey.split('|').filter(Boolean) : [];
+    return ids
       .map((id) => {
         const box = getNodeBox(id);
         if (!box) {
@@ -218,7 +233,7 @@ export default function SelectionFeature({
         return { nodeId: id, box };
       })
       .filter(Boolean) as Array<{ nodeId: string; box: SceneBox }>;
-  }, [document, idsKey, getNodeBox, selectedNodeIds]);
+  }, [document, idsKey, getNodeBox]);
 
   useEffect(() => {
     if (dragRef.current) return;
@@ -226,12 +241,13 @@ export default function SelectionFeature({
     setLiveUnion(u);
     setLiveOrigins(baseOrigins);
     setGuides([]);
-    if (selectedNodeIds.length === 1) {
-      setLiveAngle(readNodeAngle(document, selectedNodeIds[0]));
+    const onlyId = idsKey.includes('|') ? null : idsKey || null;
+    if (onlyId) {
+      setLiveAngle(readNodeAngle(document, onlyId));
     } else {
       setLiveAngle(0);
     }
-  }, [baseOrigins, document, selectedNodeIds]);
+  }, [baseOrigins, document, idsKey]);
 
   useEffect(() => {
     setMoveMargins(null);
@@ -377,17 +393,24 @@ export default function SelectionFeature({
           // Multi-select union is axis-aligned; single keeps node angle for local resize.
           angle0: liveOriginsNow.length === 1 ? liveAngleNow : 0,
           aspectRatio: liveUnionNow.width / Math.max(1, liveUnionNow.height),
-          aspectLocked0: aspectLockedRef.current,
         };
         setTransformingNotify(true);
         paperEl.setPointerCapture?.(e.pointerId);
         return;
       }
 
-      if (target.closest('[data-sel-box]')) {
-        if (!liveUnionNow || !liveOriginsNow?.length) return;
+      // Hit-test scene nodes (selection chrome is non-blocking so empty clicks pass through).
+      const hitId = hitTest(p.x, p.y);
+      const selectedIds = liveOriginsNow?.map((o) => o.nodeId) ?? [];
+
+      // Drag to move only when pressing an already-selected node — not the empty AABB gap.
+      if (
+        hitId &&
+        selectedIds.includes(hitId) &&
+        liveUnionNow &&
+        liveOriginsNow?.length
+      ) {
         if (readOnly) {
-          // Soft-click on selected box → re-hit for inspect (hover pairing still works).
           e.preventDefault();
           dragRef.current = {
             mode: 'blank',
@@ -417,7 +440,7 @@ export default function SelectionFeature({
         return;
       }
 
-      // Empty canvas or miss on chrome → marquee multi-select.
+      // Empty canvas / unselected node → marquee (soft-click clears or selects).
       // Pan with Space / Hand tool / middle-mouse (not empty left-drag).
       e.preventDefault();
       dragRef.current = {
@@ -536,7 +559,44 @@ export default function SelectionFeature({
       }
 
       if (drag.mode === 'resize' && drag.handle) {
-        const lockAspect = Boolean(drag.aspectLocked0) || e.shiftKey;
+        const strokeId = drag.origins.length === 1 ? drag.origins[0].nodeId : '';
+        const strokeType = strokeId ? readNodeShapeType(document, strokeId) : '';
+        if (
+          strokeId &&
+          isStrokeShapeType(strokeType) &&
+          (drag.handle === 'e' || drag.handle === 'w')
+        ) {
+          // Free endpoint: opposite end fixed → length + angle together.
+          const placed = resizeStrokeByEndpoint(
+            drag.union,
+            drag.angle0 || 0,
+            drag.handle,
+            p.x,
+            p.y
+          );
+          const next = {
+            left: placed.x,
+            top: placed.y,
+            width: placed.width,
+            height: placed.height,
+          };
+          setGuides([]);
+          setLiveUnion(next);
+          setLiveOrigins([{ nodeId: strokeId, box: next }]);
+          setLiveAngle(placed.angle);
+          onGeometryPreview?.([
+            {
+              nodeId: strokeId,
+              left: next.left,
+              top: next.top,
+              width: next.width,
+              height: next.height,
+            },
+          ]);
+          onAnglePreview?.(strokeId, placed.angle);
+          return;
+        }
+        const lockAspect = e.shiftKey;
         let next = resizeFromHandle(drag.union, drag.handle, dx, dy, drag.angle0 || 0, {
           lockAspect,
           aspectRatio: drag.aspectRatio,
@@ -713,14 +773,52 @@ export default function SelectionFeature({
         if (Math.hypot(sdx, sdy) > 0.01) {
           lastTextClickRef.current = null;
           onGeometryCommit(patches);
-        } else if (drag.origins.length === 1 && tryOpenTextEdit(drag.origins[0].nodeId)) {
-          return;
+        } else if (clientMoved <= 4) {
+          // Soft-click on selected node (no drag): keep selection / open text edit.
+          if (drag.origins.length === 1 && tryOpenTextEdit(drag.origins[0].nodeId)) return;
         }
         return;
       }
 
       if (drag.mode === 'resize' && drag.handle) {
-        const lockAspect = Boolean(drag.aspectLocked0) || e.shiftKey;
+        const strokeId = drag.origins.length === 1 ? drag.origins[0].nodeId : '';
+        const strokeType = strokeId ? readNodeShapeType(document, strokeId) : '';
+        if (
+          strokeId &&
+          isStrokeShapeType(strokeType) &&
+          (drag.handle === 'e' || drag.handle === 'w')
+        ) {
+          const placed = resizeStrokeByEndpoint(
+            drag.union,
+            drag.angle0 || 0,
+            drag.handle,
+            p.x,
+            p.y
+          );
+          const next = {
+            left: placed.x,
+            top: placed.y,
+            width: placed.width,
+            height: placed.height,
+          };
+          setLiveUnion(next);
+          setLiveOrigins([{ nodeId: strokeId, box: next }]);
+          setLiveAngle(placed.angle);
+          lastTextClickRef.current = null;
+          // Angle first so geometry rebuild reads the updated attrs.angle.
+          onAngleCommit?.(strokeId, placed.angle);
+          onGeometryCommit([
+            {
+              nodeId: strokeId,
+              left: next.left,
+              top: next.top,
+              width: next.width,
+              height: next.height,
+            },
+          ]);
+          return;
+        }
+        const lockAspect = e.shiftKey;
         let next = resizeFromHandle(drag.union, drag.handle, dx, dy, drag.angle0 || 0, {
           lockAspect,
           aspectRatio: drag.aspectRatio,
@@ -1028,10 +1126,21 @@ export default function SelectionFeature({
           cornerHandlesOnly={!single}
           variant={lineChrome ? 'line' : 'box'}
           showRotate={!readOnly && !lineChrome}
+          // Let empty clicks pass through the AABB; move starts via hit-test on nodes.
+          interactiveBox={false}
+          cornerRadii={
+            single && selectedNodeIds[0]
+              ? (() => {
+                  const n = document?.deltaSetLike?.[selectedNodeIds[0]];
+                  if (!supportsCornerRadius(n)) return null;
+                  return radiiFromAttrs(n?.attrs);
+                })()
+              : null
+          }
         />
       ) : null}
 
-      {!inspectDev && liveUnion && single && !transforming && !suppressChrome ? (
+      {!inspectDev && liveUnion && single && !transforming && !suppressToolbars ? (
         <SelectionContextToolbar
           document={document}
           nodeId={selectedNodeIds[0]}
@@ -1044,7 +1153,7 @@ export default function SelectionFeature({
       liveUnion &&
       single &&
       !transforming &&
-      !suppressChrome &&
+      !suppressToolbars &&
       document?.deltaSetLike?.[selectedNodeIds[0]]?.key === 'image' &&
       String(document?.deltaSetLike?.[selectedNodeIds[0]]?.attrs?.processStatus || '') !==
         'running' ? (
@@ -1060,7 +1169,7 @@ export default function SelectionFeature({
       !single &&
       selectedNodeIds.length > 1 &&
       !transforming &&
-      !suppressChrome ? (
+      !suppressToolbars ? (
         <MultiSelectionToolbar
           document={document}
           nodeIds={selectedNodeIds}

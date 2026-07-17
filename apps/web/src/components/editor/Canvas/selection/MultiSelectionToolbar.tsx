@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import {
-  HiOutlineEyeDropper,
-  HiOutlineLockClosed,
-  HiOutlineLockOpen,
-} from 'react-icons/hi2';
+import { useDispatch } from 'react-redux';
 import { message, DropdownPanel, DropdownPanelItem } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import {
@@ -16,9 +11,6 @@ import {
   fillImageFieldsFromAttrs,
   parseFillType,
 } from '@/store/scene/sceneFill';
-import { FillVisibilityIcon } from '@/components/editor/nodes/ShapeNode/FillVisibilityIcon';
-import { StrokeVisibilityIcon } from '@/components/editor/nodes/ShapeNode/StrokeVisibilityIcon';
-import { pickScreenColor } from '@/components/editor/color/pickScreenColor';
 import { boolEffectAttr } from '@/store/scene/sceneEffects';
 import { nodeLeftTop } from '@/store/scene/sceneToSvg';
 import {
@@ -27,6 +19,7 @@ import {
   groupNodesInDocument,
   removeNodesFromDocument,
   selectionSharedGroupId,
+  supportsAspectPresets,
   supportsCornerRadius,
   supportsFill,
   supportsStroke,
@@ -36,7 +29,6 @@ import {
 import {
   openShapeStylePanel,
   patchDocumentNode,
-  setAspectLocked,
   setDocument,
   setSelectedNodeId,
   setSelectedNodeIds,
@@ -47,9 +39,25 @@ import {
   SEL_ICON_BTN_ACTIVE,
   SEL_TOOL_BTN,
 } from './ToolbarValueSlider';
+import {
+  FillColorSwatch,
+  IconCornerRadius,
+  StrokeColorSwatch,
+} from './StyleToolbarIcons';
+import BlendModeControl from './BlendModeControl';
 import { SelectionToolbarShell } from './SelectionToolbarShell';
+import AspectRatioPresetMenu, {
+  ELEMENT_ASPECT_PRESETS,
+} from './AspectRatioPresetMenu';
+import {
+  matchAspectPresetKey,
+  sizeFromAspectPreset,
+} from './resizeGeometry';
 import { radiiFromAttrs } from '@/store/scene/sceneRadii';
 import { computeShapeBoolean, type BoolMode } from './shapeBoolean';
+
+const ASPECT_ORIG_W = 'aspect-original-width';
+const ASPECT_ORIG_H = 'aspect-original-height';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -62,6 +70,15 @@ type Props = {
 const btn = SEL_TOOL_BTN;
 
 const iconBtn = SEL_ICON_BTN;
+
+function Sep() {
+  return <div className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />;
+}
+
+/** Soft gap between sibling clusters (e.g. H-align vs V-align). */
+function ClusterGap() {
+  return <div className="w-1 shrink-0" aria-hidden />;
+}
 
 type AlignMode = 'left' | 'centerX' | 'right' | 'top' | 'middle' | 'bottom';
 
@@ -250,8 +267,9 @@ export default function MultiSelectionToolbar({
   box,
 }: Props): ReactNode {
   const dispatch = useDispatch();
-  const aspectLocked = useSelector((s: any) => s.editor.aspectLocked) as boolean;
   const [distributeOpen, setDistributeOpen] = useState(false);
+  const [booleanOpen, setBooleanOpen] = useState(false);
+  const [ratioOpen, setRatioOpen] = useState(false);
 
   const boxes = useMemo(() => readBoxes(document, nodeIds), [document, nodeIds]);
 
@@ -272,8 +290,14 @@ export default function MultiSelectionToolbar({
   const showStroke = allSupport(supportsStroke);
   const showFill = allSupport(supportsFill);
   const showCornerRadius = allSupport(supportsCornerRadius);
+  const showAspectPresets = allSupport(supportsAspectPresets);
   const canAlign = boxes.length >= 2;
   const canDistribute = boxes.length >= 3;
+
+  const activeRatioId = useMemo(
+    () => matchAspectPresetKey(box.width, box.height, ELEMENT_ASPECT_PRESETS),
+    [box.width, box.height]
+  );
 
   const patchGeom = (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => {
     dispatch(patchDocumentNode({ nodeId: id, patch }));
@@ -385,6 +409,7 @@ export default function MultiSelectionToolbar({
         if (
           key.startsWith('fill') ||
           key === 'opacity' ||
+          key === 'blendMode' ||
           key.startsWith('gradient') ||
           key.startsWith('mesh')
         ) {
@@ -399,6 +424,7 @@ export default function MultiSelectionToolbar({
     dispatch(setSelectedNodeIds([id]));
     dispatch(setSelectedNodeId(id));
     setDistributeOpen(false);
+    setBooleanOpen(false);
   };
 
   useEffect(() => {
@@ -413,6 +439,18 @@ export default function MultiSelectionToolbar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [document, shapeBoxes]);
 
+  useEffect(() => {
+    if (!distributeOpen && !booleanOpen) return;
+    const onPointer = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('[data-multi-toolbar-menu]')) return;
+      setDistributeOpen(false);
+      setBooleanOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointer, true);
+    return () => window.removeEventListener('pointerdown', onPointer, true);
+  }, [distributeOpen, booleanOpen]);
+
   const openStyle = (kind: 'fill' | 'stroke' | 'radius') => {
     const ids =
       kind === 'fill'
@@ -424,91 +462,15 @@ export default function MultiSelectionToolbar({
     dispatch(openShapeStylePanel({ kind, nodeIds: ids }));
   };
 
-  const toggleStrokeVisible = () => {
-    const strokeIds = nodeIds.filter((id) => supportsStroke(document?.deltaSetLike?.[id]));
-    if (!strokeIds.length) return;
-    const currentlyVisible = strokeIds.every((id) => {
-      const a = document?.deltaSetLike?.[id]?.attrs || {};
-      return (
-        boolEffectAttr(a['stroke-enabled'], true) && boolEffectAttr(a['stroke-visible'], true)
-      );
-    });
-    const next = !currentlyVisible;
-    for (const id of strokeIds) {
-      dispatch(
-        patchDocumentNode({
-          nodeId: id,
-          patch: {
-            attrs: {
-              'stroke-enabled': next ? 'true' : 'false',
-              'stroke-visible': next ? 'true' : 'false',
-            },
-          },
-        })
-      );
-    }
-  };
-
-  const toggleFillVisible = () => {
-    const fillIds = nodeIds.filter((id) => supportsFill(document?.deltaSetLike?.[id]));
-    if (!fillIds.length) return;
-    const currentlyVisible = fillIds.every((id) => {
-      const a = document?.deltaSetLike?.[id]?.attrs || {};
-      return boolEffectAttr(a['fill-enabled'], true) && boolEffectAttr(a['fill-visible'], true);
-    });
-    const next = !currentlyVisible;
-    for (const id of fillIds) {
-      dispatch(
-        patchDocumentNode({
-          nodeId: id,
-          patch: {
-            attrs: {
-              'fill-enabled': next ? 'true' : 'false',
-              'fill-visible': next ? 'true' : 'false',
-            },
-          },
-        })
-      );
-    }
-  };
-
-  const runEyedropper = async () => {
-    const fillIds = nodeIds.filter((id) => supportsFill(document?.deltaSetLike?.[id]));
-    if (!fillIds.length) return;
-    const hex = await pickScreenColor();
-    if (!hex) return;
-    for (const id of fillIds) {
-      dispatch(
-        patchDocumentNode({
-          nodeId: id,
-          patch: {
-            attrs: {
-              'fill-enabled': 'true',
-              'fill-visible': 'true',
-              'fill-type': 'solid',
-              'fill-color': hex,
-            },
-          },
-        })
-      );
-    }
-  };
-
   const setSize = (axis: 'w' | 'h', raw: string) => {
     const n = Math.max(1, Math.round(Number(raw) || 0));
     if (!Number.isFinite(n) || !box) return;
     const oldW = Math.max(1, box.width);
     const oldH = Math.max(1, box.height);
-    const ratio = oldW / oldH;
     let newW = oldW;
     let newH = oldH;
-    if (axis === 'w') {
-      newW = n;
-      if (aspectLocked) newH = Math.max(1, Math.round(newW / ratio));
-    } else {
-      newH = n;
-      if (aspectLocked) newW = Math.max(1, Math.round(newH * ratio));
-    }
+    if (axis === 'w') newW = n;
+    else newH = n;
     const sx = newW / oldW;
     const sy = newH / oldH;
     const cx = box.left + box.width / 2;
@@ -521,49 +483,6 @@ export default function MultiSelectionToolbar({
       const nx = Math.round(cx + (ncx - cx) * sx - nw / 2);
       const ny = Math.round(cy + (ncy - cy) * sy - nh / 2);
       patchGeom(b.id, { x: nx, y: ny, width: nw, height: nh });
-    }
-  };
-
-  const avgAngle = useMemo(() => {
-    if (!boxes.length) return 0;
-    const sum = boxes.reduce((s, b) => {
-      const a = Number(document?.deltaSetLike?.[b.id]?.attrs?.angle);
-      return s + (Number.isFinite(a) ? a : 0);
-    }, 0);
-    return Math.round((sum / boxes.length) * 100) / 100;
-  }, [boxes, document]);
-
-  /** Rotate the selection as a group around its center by delta from current average. */
-  const setGroupRotation = (raw: string) => {
-    const next = Number(raw);
-    if (!Number.isFinite(next) || !box) return;
-    const delta = next - avgAngle;
-    if (Math.abs(delta) < 0.01) return;
-    const center = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
-    const rad = (delta * Math.PI) / 180;
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-    for (const b of boxes) {
-      const ocx = b.left + b.width / 2;
-      const ocy = b.top + b.height / 2;
-      const dx = ocx - center.x;
-      const dy = ocy - center.y;
-      const nx = Math.round(center.x + dx * cos - dy * sin - b.width / 2);
-      const ny = Math.round(center.y + dx * sin + dy * cos - b.height / 2);
-      const prev = Number(document?.deltaSetLike?.[b.id]?.attrs?.angle);
-      const angle = (Number.isFinite(prev) ? prev : 0) + delta;
-      dispatch(
-        patchDocumentNode({
-          nodeId: b.id,
-          patch: {
-            x: nx,
-            y: ny,
-            width: b.width,
-            height: b.height,
-            attrs: { angle: Number(angle.toFixed(2)) },
-          },
-        })
-      );
     }
   };
 
@@ -593,12 +512,15 @@ export default function MultiSelectionToolbar({
       boolEffectAttr(a['stroke-enabled'], true) && boolEffectAttr(a['stroke-visible'], true)
     );
   });
+  const strokeColor = String(firstAttrs['border-color'] || firstAttrs.stroke || '#333333');
   const radiusSample = radiiFromAttrs(firstAttrs).tl;
 
-  const alignItems: Array<{ mode: AlignMode; tip: string; Icon: typeof IconAlignLeft }> = [
+  const alignH: Array<{ mode: AlignMode; tip: string; Icon: typeof IconAlignLeft }> = [
     { mode: 'left', tip: '左对齐', Icon: IconAlignLeft },
     { mode: 'centerX', tip: '水平居中', Icon: IconAlignCenterX },
     { mode: 'right', tip: '右对齐', Icon: IconAlignRight },
+  ];
+  const alignV: Array<{ mode: AlignMode; tip: string; Icon: typeof IconAlignLeft }> = [
     { mode: 'top', tip: '顶部对齐', Icon: IconAlignTop },
     { mode: 'middle', tip: '垂直居中', Icon: IconAlignMiddle },
     { mode: 'bottom', tip: '底部对齐', Icon: IconAlignBottom },
@@ -652,24 +574,13 @@ export default function MultiSelectionToolbar({
     );
   }
 
-  return (
-    <SelectionToolbarShell box={box}>
-          {nodeIds.length >= 2 ? (
-            <Tooltip title={'创建编组'} placement="top">
-              <button
-                type="button"
-                className={btn}
-                aria-label={'创建编组'}
-                onClick={createGroup}
-              >
-                <IconGroup className="h-3.5 w-3.5" />
-                <span>{'创建编组'}</span>
-              </button>
-            </Tooltip>
-          ) : null}
-
-          {canAlign
-            ? alignItems.map(({ mode, tip, Icon }) => (
+  const layoutCluster =
+    canAlign || canDistribute ? (
+      <>
+        {canAlign ? (
+          <>
+            <div className="inline-flex items-center gap-0.5" role="group" aria-label="水平对齐">
+              {alignH.map(({ mode, tip, Icon }) => (
                 <Tooltip key={mode} title={tip} placement="top">
                   <button
                     type="button"
@@ -680,201 +591,266 @@ export default function MultiSelectionToolbar({
                     <Icon className="h-4 w-4" />
                   </button>
                 </Tooltip>
-              ))
-            : null}
+              ))}
+            </div>
+            <ClusterGap />
+            <div className="inline-flex items-center gap-0.5" role="group" aria-label="垂直对齐">
+              {alignV.map(({ mode, tip, Icon }) => (
+                <Tooltip key={mode} title={tip} placement="top">
+                  <button
+                    type="button"
+                    aria-label={tip}
+                    className={iconBtn}
+                    onClick={() => align(mode)}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
+          </>
+        ) : null}
 
-          {canDistribute ? (
-            <div className="relative">
+        {canDistribute ? (
+          <>
+            {canAlign ? <ClusterGap /> : null}
+            <div className="relative" data-multi-toolbar-menu>
               <Tooltip title="分布" placement="top">
                 <button
                   type="button"
                   aria-label="分布"
                   className={cn(iconBtn, distributeOpen && SEL_ICON_BTN_ACTIVE)}
-                  onClick={() => setDistributeOpen((v) => !v)}
+                  onClick={() => {
+                    setBooleanOpen(false);
+                    setDistributeOpen((v) => !v);
+                  }}
                 >
                   <IconDistributeMenu className="h-4 w-4" />
                 </button>
               </Tooltip>
               {distributeOpen ? (
                 <DropdownPanel className="absolute left-0 top-[calc(100%+6px)] z-40 min-w-[9rem]">
-                  <DropdownPanelItem
-                    onClick={() => distribute('h')}
-                  >
-                    水平分布
-                  </DropdownPanelItem>
-                  <DropdownPanelItem
-                    onClick={() => distribute('v')}
-                  >
-                    垂直分布
-                  </DropdownPanelItem>
+                  <DropdownPanelItem onClick={() => distribute('h')}>水平分布</DropdownPanelItem>
+                  <DropdownPanelItem onClick={() => distribute('v')}>垂直分布</DropdownPanelItem>
                 </DropdownPanel>
               ) : null}
             </div>
-          ) : null}
+          </>
+        ) : null}
+      </>
+    ) : null;
 
-          {showBoolean
-            ? boolItems.map(({ mode, tip, Icon }) => (
-                <Tooltip key={mode} title={tip} placement="top">
-                  <button
-                    type="button"
-                    aria-label={tip}
-                    className={iconBtn}
-                    onClick={() => runBoolean(mode)}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </button>
-                </Tooltip>
-              ))
-            : null}
-
-          {showFill ? (
-            <div
-              className={cn(
-                'inline-flex h-8 items-center gap-0.5 rounded-[4px] px-0.5',
-                !fillVisible && 'opacity-55'
-              )}
+  const booleanCluster = showBoolean ? (
+    <div className="relative" data-multi-toolbar-menu>
+      <Tooltip title="布尔运算" placement="top">
+        <button
+          type="button"
+          aria-label="布尔运算"
+          aria-expanded={booleanOpen}
+          className={cn(iconBtn, booleanOpen && SEL_ICON_BTN_ACTIVE)}
+          onClick={() => {
+            setDistributeOpen(false);
+            setBooleanOpen((v) => !v);
+          }}
+        >
+          <IconBoolUnion className="h-4 w-4" />
+        </button>
+      </Tooltip>
+      {booleanOpen ? (
+        <DropdownPanel className="absolute left-0 top-[calc(100%+6px)] z-40 min-w-[10.5rem]">
+          {boolItems.map(({ mode, tip, Icon }) => (
+            <DropdownPanelItem
+              key={mode}
+              onClick={() => runBoolean(mode)}
+              className="gap-2"
             >
-              <Tooltip title={fillVisible ? '隐藏填充' : '显示填充'} placement="top">
-                <button
-                  type="button"
-                  aria-label={fillVisible ? '隐藏填充' : '显示填充'}
-                  aria-pressed={fillVisible}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-                  onClick={toggleFillVisible}
-                >
-                  <FillVisibilityIcon visible={fillVisible} className="h-3.5 w-3.5" />
-                </button>
-              </Tooltip>
-              <Tooltip title={'颜色'} placement="top">
-                <button
-                  type="button"
-                  aria-label={'颜色'}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] hover:bg-[var(--accent-soft)]"
-                  onClick={() => openStyle('fill')}
-                >
-                  <span className="relative inline-flex h-4 w-4 overflow-hidden rounded-[4px] ring-1 ring-[var(--line)]">
-                    <span
-                      aria-hidden
-                      className="absolute inset-0"
-                      style={{
-                        backgroundImage:
-                          'linear-gradient(45deg, #d0d0d0 25%, transparent 25%), linear-gradient(-45deg, #d0d0d0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #d0d0d0 75%), linear-gradient(-45deg, transparent 75%, #d0d0d0 75%)',
-                        backgroundSize: '6px 6px',
-                        backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
-                      }}
-                    />
-                    <span className="absolute inset-0" style={{ background: fillPreview }} />
-                  </span>
-                </button>
-              </Tooltip>
-              <Tooltip title={'取色'} placement="top">
-                <button
-                  type="button"
-                  aria-label={'取色'}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-                  onClick={() => void runEyedropper()}
-                >
-                  <HiOutlineEyeDropper className="h-3.5 w-3.5" />
-                </button>
-              </Tooltip>
-            </div>
-          ) : null}
-          {showStroke ? (
-            <div
-              className={cn(
-                'inline-flex h-8 items-center gap-0.5 rounded-[4px] px-0.5',
-                !strokeVisible && 'opacity-55'
-              )}
-            >
-              <Tooltip
-                title={strokeVisible ? '隐藏描边' : '显示描边'}
-                placement="top"
-              >
-                <button
-                  type="button"
-                  aria-label={strokeVisible ? '隐藏描边' : '显示描边'}
-                  aria-pressed={strokeVisible}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-                  onClick={toggleStrokeVisible}
-                >
-                  <StrokeVisibilityIcon visible={strokeVisible} className="h-3.5 w-3.5" />
-                </button>
-              </Tooltip>
-              <button
-                type="button"
-                className="inline-flex h-7 items-center rounded-[4px] px-1.5 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-                onClick={() => openStyle('stroke')}
-              >
-                {'描边'}
-              </button>
-            </div>
-          ) : null}
-          {showCornerRadius ? (
-            <Tooltip title={'圆角'} placement="top">
-              <button
-                type="button"
-                aria-label={'圆角'}
-                className={SEL_TOOL_BTN}
-                onClick={() => openStyle('radius')}
-              >
-                <span className="text-[var(--muted)]">R</span>
-                <span className="tabular-nums">{radiusSample}</span>
-              </button>
-            </Tooltip>
-          ) : null}
+              <Icon className="h-4 w-4 shrink-0 text-[var(--ink)]" />
+              <span>{tip.replace(/\s*\(.*\)$/, '')}</span>
+            </DropdownPanelItem>
+          ))}
+        </DropdownPanel>
+      ) : null}
+    </div>
+  ) : null;
 
-          <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
-            <span className="text-[var(--muted)]">W</span>
-            <input
-              className="w-10 bg-transparent text-[12px] outline-none"
-              defaultValue={Math.round(box.width)}
-              key={`w-${Math.round(box.width)}`}
-              onBlur={(e) => setSize('w', e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') setSize('w', (e.target as HTMLInputElement).value);
-              }}
-            />
-          </label>
-          <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
-            <span className="text-[var(--muted)]">H</span>
-            <input
-              className="w-10 bg-transparent text-[12px] outline-none"
-              defaultValue={Math.round(box.height)}
-              key={`h-${Math.round(box.height)}`}
-              onBlur={(e) => setSize('h', e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') setSize('h', (e.target as HTMLInputElement).value);
-              }}
-            />
-          </label>
-          <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
-            <span className="text-[var(--muted)]">{'°'}</span>
-            <input
-              className="w-10 bg-transparent text-[12px] outline-none tabular-nums"
-              defaultValue={avgAngle}
-              key={`r-${avgAngle}`}
-              onBlur={(e) => setGroupRotation(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') setGroupRotation((e.target as HTMLInputElement).value);
-              }}
-            />
-          </label>
-          <Tooltip title={aspectLocked ? '解锁比例' : '锁定比例'} placement="top">
+  const styleCluster =
+    showFill || showStroke || showCornerRadius ? (
+      <>
+        {showFill ? (
+          <Tooltip title="填充" placement="top">
             <button
               type="button"
-              aria-label={aspectLocked ? '解锁比例' : '锁定比例'}
-              className={SEL_ICON_BTN}
-              onClick={() => dispatch(setAspectLocked(!aspectLocked))}
+              aria-label="填充"
+              className={cn(SEL_ICON_BTN, !fillVisible && 'opacity-55')}
+              onClick={() => openStyle('fill')}
             >
-              {aspectLocked ? (
-                <HiOutlineLockClosed className="h-3.5 w-3.5" />
-              ) : (
-                <HiOutlineLockOpen className="h-3.5 w-3.5" />
-              )}
+              <FillColorSwatch color={fillPreview} />
             </button>
           </Tooltip>
+        ) : null}
+        {showStroke ? (
+          <Tooltip title="描边" placement="top">
+            <button
+              type="button"
+              aria-label="描边"
+              className={cn(SEL_ICON_BTN, !strokeVisible && 'opacity-55')}
+              onClick={() => openStyle('stroke')}
+            >
+              <StrokeColorSwatch color={strokeVisible ? strokeColor : 'var(--line)'} />
+            </button>
+          </Tooltip>
+        ) : null}
+        {showCornerRadius ? (
+          <Tooltip title="圆角" placement="top">
+            <button
+              type="button"
+              aria-label="圆角"
+              className={SEL_TOOL_BTN}
+              onClick={() => openStyle('radius')}
+            >
+              <IconCornerRadius className="h-4 w-4 text-[var(--muted)]" />
+              <span className="tabular-nums">{radiusSample}</span>
+            </button>
+          </Tooltip>
+        ) : null}
+      </>
+    ) : null;
 
-          <ExportSelectionPopover nodeIds={nodeIds} />
+  const transformCluster = (
+    <>
+      {showAspectPresets ? (
+        <AspectRatioPresetMenu
+          open={ratioOpen}
+          onOpenChange={setRatioOpen}
+          activeId={activeRatioId}
+          onPick={(preset) => {
+            if (preset.id === 'original') {
+              for (const b of boxes) {
+                const node = document?.deltaSetLike?.[b.id];
+                const ow = Number(node?.attrs?.[ASPECT_ORIG_W]);
+                const oh = Number(node?.attrs?.[ASPECT_ORIG_H]);
+                if (Number.isFinite(ow) && ow > 0 && Number.isFinite(oh) && oh > 0) {
+                  patchGeom(b.id, { width: ow, height: oh });
+                }
+              }
+              return;
+            }
+            const unionNext = sizeFromAspectPreset(box, preset.w, preset.h);
+            const sx = unionNext.width / Math.max(1, box.width);
+            const sy = unionNext.height / Math.max(1, box.height);
+            const cx = box.left + box.width / 2;
+            const cy = box.top + box.height / 2;
+            for (const b of boxes) {
+              const node = document?.deltaSetLike?.[b.id];
+              const hasOrig =
+                Number(node?.attrs?.[ASPECT_ORIG_W]) > 0 &&
+                Number(node?.attrs?.[ASPECT_ORIG_H]) > 0;
+              const ncx = b.left + b.width / 2;
+              const ncy = b.top + b.height / 2;
+              const nw = Math.max(1, Math.round(b.width * sx));
+              const nh = Math.max(1, Math.round(b.height * sy));
+              const nx = Math.round(cx + (ncx - cx) * sx - nw / 2);
+              const ny = Math.round(cy + (ncy - cy) * sy - nh / 2);
+              const shapeType = node?.attrs?.shapeType;
+              dispatch(
+                patchDocumentNode({
+                  nodeId: b.id,
+                  patch: {
+                    x: nx,
+                    y: ny,
+                    width: nw,
+                    height: nh,
+                    attrs: {
+                      ...(shapeType != null ? { shapeType } : {}),
+                      ...(!hasOrig
+                        ? {
+                            [ASPECT_ORIG_W]: Math.round(b.width),
+                            [ASPECT_ORIG_H]: Math.round(b.height),
+                          }
+                        : {}),
+                    },
+                  },
+                })
+              );
+            }
+          }}
+        />
+      ) : null}
+      <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
+        <span className="text-[var(--muted)]">W</span>
+        <input
+          className="w-10 bg-transparent text-[12px] outline-none"
+          defaultValue={Math.round(box.width)}
+          key={`w-${Math.round(box.width)}`}
+          onBlur={(e) => setSize('w', e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') setSize('w', (e.target as HTMLInputElement).value);
+          }}
+        />
+      </label>
+      <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
+        <span className="text-[var(--muted)]">H</span>
+        <input
+          className="w-10 bg-transparent text-[12px] outline-none"
+          defaultValue={Math.round(box.height)}
+          key={`h-${Math.round(box.height)}`}
+          onBlur={(e) => setSize('h', e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') setSize('h', (e.target as HTMLInputElement).value);
+          }}
+        />
+      </label>
+    </>
+  );
+
+  const actionCluster = (
+    <>
+      {nodeIds.length >= 2 ? (
+        <Tooltip title="创建编组" placement="top">
+          <button type="button" className={btn} aria-label="创建编组" onClick={createGroup}>
+            <IconGroup className="h-3.5 w-3.5" />
+            <span>创建编组</span>
+          </button>
+        </Tooltip>
+      ) : null}
+      <ExportSelectionPopover nodeIds={nodeIds} />
+    </>
+  );
+
+  const appearanceCluster = (
+    <BlendModeControl
+      blendMode={firstAttrs.blendMode}
+      opacity={firstAttrs.opacity}
+      onBlendModeChange={(mode) => {
+        for (const id of nodeIds) {
+          dispatch(patchDocumentNode({ nodeId: id, patch: { attrs: { blendMode: mode } } }));
+        }
+      }}
+      onOpacityChange={(opacity) => {
+        for (const id of nodeIds) {
+          dispatch(patchDocumentNode({ nodeId: id, patch: { attrs: { opacity } } }));
+        }
+      }}
+    />
+  );
+
+  const sections = [
+    styleCluster,
+    layoutCluster,
+    booleanCluster,
+    appearanceCluster,
+    transformCluster,
+    actionCluster,
+  ].filter(Boolean);
+
+  return (
+    <SelectionToolbarShell box={box}>
+      {sections.map((section, i) => (
+        <div key={i} className="contents">
+          {i > 0 ? <Sep /> : null}
+          {section}
+        </div>
+      ))}
     </SelectionToolbarShell>
   );
 }

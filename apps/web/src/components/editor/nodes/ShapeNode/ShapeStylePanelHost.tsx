@@ -22,7 +22,7 @@ import {
 } from '@/components/editor/nodes/ShapeNode/CornerRadiusPanel';
 import GradientHandlesOverlay from '@/components/editor/nodes/ShapeNode/GradientHandlesOverlay';
 import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesOverlay';
-import type { StrokeStyle } from '@/components/editor/nodes/ShapeNode/StrokeStylePicker';
+import { parseStrokeStyle } from '@/store/scene/sceneStrokeStyle';
 import {
   DEFAULT_FILL_IMAGE_ADJUST,
   fillImageFieldsFromAttrs,
@@ -38,8 +38,8 @@ import {
   resolveStrokeLinejoin,
   boolEffectAttr,
 } from '@/store/scene/sceneEffects';
-import { supportsFill, supportsCornerRadius, supportsSideStroke } from '@/store/scene/sceneDocument';
-import { radiiFromAttrs, radiiEqual, type CornerRadii } from '@/store/scene/sceneRadii';
+import { supportsFill, supportsCornerRadius } from '@/store/scene/sceneDocument';
+import { parseClosedPathRings, radiiFromAttrs } from '@/store/scene/sceneRadii';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -89,14 +89,19 @@ function nodeBox(document: any, node: any): SceneBox | null {
   };
 }
 
-function fillAttrsFromValue(next: FillPanelValue, shapeType?: unknown) {
+function fillAttrsFromValue(
+  next: FillPanelValue,
+  shapeType?: unknown,
+  opts?: { visible?: boolean }
+) {
+  const visible = opts?.visible !== false;
   return {
     ...(shapeType != null ? { shapeType } : {}),
     'fill-color': next.fillColor,
     'fill-type': next.fillType,
     'fill-opacity': next.fillOpacity ?? 100,
-    'fill-enabled': 'true',
-    'fill-visible': 'true',
+    'fill-enabled': visible ? 'true' : 'false',
+    'fill-visible': visible ? 'true' : 'false',
     ...(next.fillType !== 'solid' && next.fillType !== 'image' && next.fillGradient
       ? { 'fill-gradient': next.fillGradient }
       : {}),
@@ -113,9 +118,13 @@ function fillAttrsFromValue(next: FillPanelValue, shapeType?: unknown) {
   };
 }
 
-function strokeAttrsFromValue(next: StrokePanelValue, opts?: { writeSides?: boolean }) {
+function strokeAttrsFromValue(
+  next: StrokePanelValue,
+  opts?: { writeSides?: boolean; visible?: boolean }
+) {
   const linecap = next.linecap ?? 'butt';
   const linejoin = next.linejoin ?? 'miter';
+  const visible = opts?.visible !== false;
   const attrs: Record<string, unknown> = {
     'border-color': next.color,
     stroke: next.color,
@@ -127,8 +136,8 @@ function strokeAttrsFromValue(next: StrokePanelValue, opts?: { writeSides?: bool
     'stroke-linecap': linecap,
     strokeLinejoin: linejoin,
     'stroke-linejoin': linejoin,
-    'stroke-enabled': 'true',
-    'stroke-visible': 'true',
+    'stroke-enabled': visible ? 'true' : 'false',
+    'stroke-visible': visible ? 'true' : 'false',
   };
   if (opts?.writeSides && next.sides) {
     attrs.T = next.sides.T ? 'true' : 'false';
@@ -168,9 +177,7 @@ function readStrokeCorners(attrs: Record<string, unknown> | undefined): CornerRa
 
 function readStrokeValue(attrs: Record<string, unknown> | undefined): StrokePanelValue {
   const a = attrs || {};
-  const rawStyle = String(a.strokeStyle || 'solid');
-  const style: StrokeStyle =
-    rawStyle === 'dashed' || rawStyle === 'dotted' ? rawStyle : 'solid';
+  const style = parseStrokeStyle(a.strokeStyle);
   const widthNum = Number(a['border-width'] ?? a.strokeWidth ?? 1);
   const shapeType = String(a.shapeType || '');
   const freehandCaps =
@@ -214,6 +221,7 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
   const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds as string[]);
   const [meshSelectedIndex, setMeshSelectedIndex] = useState(0);
   const [meshShowGuides, setMeshShowGuides] = useState(true);
+  const [gradientStopIndex, setGradientStopIndex] = useState(0);
 
   const panelFillType = useMemo(() => {
     if (!panel || panel.kind !== 'fill') return null;
@@ -225,6 +233,7 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
 
   useEffect(() => {
     setMeshSelectedIndex(0);
+    setGradientStopIndex(0);
   }, [panel?.nodeIds?.join(','), panel?.kind, panelFillType]);
 
   useEffect(() => {
@@ -302,15 +311,25 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
       })()
     : null;
 
+  const fillLayerVisible =
+    boolEffectAttr(firstAttrs?.['fill-enabled'], true) &&
+    boolEffectAttr(firstAttrs?.['fill-visible'], true);
+  const strokeLayerVisible =
+    boolEffectAttr(firstAttrs?.['stroke-enabled'], true) &&
+    boolEffectAttr(firstAttrs?.['stroke-visible'], true);
+
   const applyFill = (next: FillPanelValue) => {
     for (const id of panel.nodeIds) {
       const node = document?.deltaSetLike?.[id];
       if (!supportsFill(node)) continue;
       const shapeType = node?.attrs?.shapeType;
+      const a = node?.attrs || {};
+      const visible =
+        boolEffectAttr(a['fill-enabled'], true) && boolEffectAttr(a['fill-visible'], true);
       dispatch(
         patchDocumentNode({
           nodeId: id,
-          patch: { attrs: fillAttrsFromValue(next, shapeType) },
+          patch: { attrs: fillAttrsFromValue(next, shapeType, { visible }) },
         })
       );
     }
@@ -328,13 +347,67 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
     for (const id of panel.nodeIds) {
       const node = document?.deltaSetLike?.[id];
       if (!node) continue;
+      const a = node?.attrs || {};
+      const visible =
+        boolEffectAttr(a['stroke-enabled'], true) && boolEffectAttr(a['stroke-visible'], true);
+      const t = String(a.shapeType || node.key || '');
+      const closed =
+        a.closed === true ||
+        a.closed === 'true' ||
+        (typeof a.path === 'string' && /z\s*$/i.test(String(a.path).trim()));
+      const openStroke =
+        t === 'line' ||
+        t === 'arrow' ||
+        t === 'pencil' ||
+        ((t === 'pen' || t === 'path' || node.key === 'path') && !closed);
       dispatch(
         patchDocumentNode({
           nodeId: id,
           patch: {
             attrs: strokeAttrsFromValue(next, {
-              writeSides: supportsSideStroke(node),
+              writeSides: !openStroke,
+              visible,
             }),
+          },
+        })
+      );
+    }
+  };
+
+  const setFillLayerVisible = (visible: boolean) => {
+    for (const id of panel.nodeIds) {
+      const node = document?.deltaSetLike?.[id];
+      if (!supportsFill(node)) continue;
+      const shapeType = node?.attrs?.shapeType;
+      dispatch(
+        patchDocumentNode({
+          nodeId: id,
+          patch: {
+            attrs: {
+              ...(shapeType != null ? { shapeType } : {}),
+              'fill-enabled': visible ? 'true' : 'false',
+              'fill-visible': visible ? 'true' : 'false',
+            },
+          },
+        })
+      );
+    }
+  };
+
+  const setStrokeLayerVisible = (visible: boolean) => {
+    for (const id of panel.nodeIds) {
+      const node = document?.deltaSetLike?.[id];
+      if (!node) continue;
+      const shapeType = node?.attrs?.shapeType;
+      dispatch(
+        patchDocumentNode({
+          nodeId: id,
+          patch: {
+            attrs: {
+              ...(shapeType != null ? { shapeType } : {}),
+              'stroke-enabled': visible ? 'true' : 'false',
+              'stroke-visible': visible ? 'true' : 'false',
+            },
           },
         })
       );
@@ -345,7 +418,7 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
     for (const id of panel.nodeIds) {
       const node = document?.deltaSetLike?.[id];
       if (!node || !supportsCornerRadius(node)) continue;
-      const linked = next.linked || radiiEqual(next as CornerRadii);
+      // Honor explicit link toggle — do not re-link just because four corners match.
       dispatch(
         patchDocumentNode({
           nodeId: id,
@@ -355,7 +428,7 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
               radiusTR: Math.max(0, Math.round(next.tr) || 0),
               radiusBR: Math.max(0, Math.round(next.br) || 0),
               radiusBL: Math.max(0, Math.round(next.bl) || 0),
-              radiusLinked: linked ? 'true' : 'false',
+              radiusLinked: next.linked ? 'true' : 'false',
             },
           },
         })
@@ -368,22 +441,40 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
     firstAttrs?.closed === true ||
     firstAttrs?.closed === 'true' ||
     (typeof firstAttrs?.path === 'string' && /z\s*$/i.test(String(firstAttrs.path).trim()));
-  /** Line caps only affect open strokes (line / arrow / pen / open path). */
-  const showLinecap =
+  /**
+   * Open strokes (line / arrow / open pen / pencil): show linecap, hide side toggles.
+   * Closed shapes (rect / star / closed pen…): same panel as fig.1 — sides + align/join, no cap.
+   */
+  const isOpenStroke =
     shapeType === 'line' ||
     shapeType === 'arrow' ||
-    shapeType === 'pen' ||
     shapeType === 'pencil' ||
-    (shapeType === 'path' && !pathClosed);
-  const showSides = panel.nodeIds.some((id) =>
-    supportsSideStroke(document?.deltaSetLike?.[id])
-  );
+    ((shapeType === 'pen' || shapeType === 'path' || firstNode?.key === 'path') && !pathClosed);
+  const showLinecap = isOpenStroke;
+  const showSides = !isOpenStroke;
   const cornerMax = Math.max(
-    64,
+    8,
     ...panel.nodeIds.map((id) => {
       const n = document?.deltaSetLike?.[id];
       if (!n) return 0;
-      return Math.floor(Math.min(Number(n.width) || 0, Number(n.height) || 0) / 2);
+      const boxCap = Math.floor(Math.min(Number(n.width) || 0, Number(n.height) || 0) / 2);
+      const d = String(n.attrs?.path || '');
+      const shapeType = String(n.attrs?.shapeType || n.key || '');
+      if (d && (shapeType === 'pen' || shapeType === 'path' || n.key === 'path')) {
+        const rings = parseClosedPathRings(d);
+        let shortest = Infinity;
+        for (const ring of rings) {
+          for (let i = 0; i < ring.length; i += 1) {
+            const a = ring[i];
+            const b = ring[(i + 1) % ring.length];
+            shortest = Math.min(shortest, Math.hypot(b[0] - a[0], b[1] - a[1]));
+          }
+        }
+        if (Number.isFinite(shortest) && shortest < Infinity) {
+          return Math.min(boxCap || shortest / 2, Math.max(8, Math.floor(shortest / 2)));
+        }
+      }
+      return boxCap;
     })
   );
 
@@ -395,6 +486,7 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
           angle={Number.isFinite(nodeAngle) ? nodeAngle : 0}
           gradient={gradient}
           onChange={applyGradient}
+          onActiveStopChange={setGradientStopIndex}
         />
       ) : null}
       {showMeshHandles && meshGradient ? (
@@ -425,6 +517,10 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
               onMeshSelectedIndexChange={setMeshSelectedIndex}
               meshShowGuides={meshShowGuides}
               onMeshShowGuidesChange={setMeshShowGuides}
+              activeStopIndex={gradientStopIndex}
+              onActiveStopIndexChange={setGradientStopIndex}
+              layerVisible={fillLayerVisible}
+              onLayerVisibleChange={setFillLayerVisible}
             />
           ) : panel.kind === 'radius' ? (
             <CornerRadiusPanel
@@ -442,6 +538,8 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
               onClose={close}
               showLinecap={showLinecap}
               showSides={showSides}
+              layerVisible={strokeLayerVisible}
+              onLayerVisibleChange={setStrokeLayerVisible}
             />
           )}
         </div>

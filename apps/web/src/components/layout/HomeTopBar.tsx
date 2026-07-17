@@ -1,10 +1,12 @@
 import AuthHeader from '@/components/layout/AuthHeader';
 
-/** Top chrome — account / credits / theme only. */
+/** Floating top-right actions — not a full-width nav bar. */
 export default function HomeTopBar() {
   return (
-    <header className="flex h-14 shrink-0 items-center justify-end gap-2 bg-[var(--surface)] px-6">
-      <AuthHeader />
-    </header>
+    <div className="pointer-events-none absolute right-0 top-0 z-10 flex items-center justify-end px-6 py-3">
+      <div className="pointer-events-auto">
+        <AuthHeader />
+      </div>
+    </div>
   );
 }

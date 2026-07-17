@@ -1,19 +1,27 @@
 ﻿import { useEffect, useState } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BiEditAlt } from 'react-icons/bi';
 import {
   HiOutlineCheck,
   HiOutlineEllipsisHorizontal,
+  HiOutlineGlobeAlt,
   HiOutlineListBullet,
   HiOutlineXMark,
 } from 'react-icons/hi2';
 import { RiDeleteBinLine } from 'react-icons/ri';
 import { Button, Dialog, Dropdown, Input, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
+import {
+  fetchMyPlazaSubmissions,
+  submitToPlaza,
+  type PlazaStatus,
+  type PlazaSubmissionDto,
+} from '@/apis/plaza';
 import { formatTemplateTime } from '@/lib/formatTime';
 import { cn } from '@/utils/classnames';
+import { useGoEditor } from '@/hooks/useGoEditor';
 import {
   deleteTemplate,
   deleteTemplates,
@@ -21,6 +29,7 @@ import {
   renameTemplateById,
 } from '@/store/modules/editor';
 import TemplateThumbnail from './TemplateThumbnail';
+import PlazaPublishDialog from './PlazaPublishDialog';
 
 function ImportSkeletonCard({ name }: { name: string }) {
   const { t } = useTranslation();
@@ -49,28 +58,38 @@ function ImportSkeletonCard({ name }: { name: string }) {
   );
 }
 
+function statusLabelKey(status: PlazaStatus): string {
+  if (status === 'pending') return 'plaza.statusPending';
+  if (status === 'approved') return 'plaza.statusApproved';
+  return 'plaza.statusRejected';
+}
+
 function TemplateCard({
   item,
   selected,
   selectMode,
+  plazaStatus,
   onToggle,
   onDelete,
   onRename,
+  onPublish,
 }: {
   item: any;
   selected: boolean;
   selectMode: boolean;
+  plazaStatus?: PlazaSubmissionDto | null;
   onToggle: () => void;
   onDelete: () => void;
   onRename: () => void;
+  onPublish: () => void;
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
-  const navigate = useNavigate();
+  const goEditor = useGoEditor();
 
   const openEditor = () => {
     dispatch(openTemplate(item.id));
-    navigate('/editor');
+    goEditor();
   };
 
   const menuItems: MenuItemType[] = [
@@ -82,6 +101,17 @@ function TemplateCard({
           {t('home.rename')}
         </span>
       ),
+    },
+    {
+      key: 'publish',
+      label: (
+        <span className="inline-flex items-center gap-2">
+          <HiOutlineGlobeAlt className="h-3.5 w-3.5" />
+          {t('plaza.publish')}
+        </span>
+      ),
+      disabled:
+        plazaStatus?.status === 'pending' || plazaStatus?.status === 'approved',
     },
     {
       key: 'delete',
@@ -97,6 +127,7 @@ function TemplateCard({
   const onMenu = (key: string) => {
     if (key === 'rename') onRename();
     if (key === 'delete') onDelete();
+    if (key === 'publish') onPublish();
   };
 
   return (
@@ -139,6 +170,22 @@ function TemplateCard({
           >
             <HiOutlineCheck className="h-2.5 w-2.5" strokeWidth={3} />
           </button>
+        ) : null}
+
+        {plazaStatus?.status ? (
+          <span
+            className={cn(
+              'absolute right-1.5 top-1.5 z-10 rounded-md px-1.5 py-0.5 text-[10px] font-medium ring-1',
+              plazaStatus.status === 'pending' &&
+                'bg-[var(--surface)]/95 text-amber-700 ring-amber-200',
+              plazaStatus.status === 'approved' &&
+                'bg-[var(--surface)]/95 text-emerald-700 ring-emerald-200',
+              plazaStatus.status === 'rejected' &&
+                'bg-[var(--surface)]/95 text-red-600 ring-red-200'
+            )}
+          >
+            {t(statusLabelKey(plazaStatus.status))}
+          </span>
         ) : null}
       </div>
 
@@ -197,10 +244,37 @@ export default function TemplateGrid({
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const user = useSelector((s: any) => s.auth?.user);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [renameTarget, setRenameTarget] = useState<any | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const [publishTarget, setPublishTarget] = useState<any | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [plazaByProject, setPlazaByProject] = useState<Record<string, PlazaSubmissionDto>>({});
+
+  const reloadPlaza = async () => {
+    if (!user?.id) {
+      setPlazaByProject({});
+      return;
+    }
+    try {
+      const res = await fetchMyPlazaSubmissions();
+      const map: Record<string, PlazaSubmissionDto> = {};
+      for (const item of res.items || []) {
+        if (item.projectId) map[item.projectId] = item;
+      }
+      setPlazaByProject(map);
+    } catch {
+      /* ignore — offline / not logged in */
+    }
+  };
+
+  useEffect(() => {
+    void reloadPlaza();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when user changes
+  }, [user?.id]);
 
   useEffect(() => {
     const ids = new Set(templates.map((item) => item.id));
@@ -249,6 +323,44 @@ export default function TemplateGrid({
     const next = renameDraft.trim() || t('home.untitled');
     dispatch(renameTemplateById({ id: renameTarget.id, name: next }));
     closeRename();
+  };
+
+  const requestPublish = (item: any) => {
+    if (!user?.id) {
+      message.warning(t('plaza.needLogin'));
+      navigate('/login', { state: { from: '/home' } });
+      return;
+    }
+    const st = plazaByProject[item.id]?.status;
+    if (st === 'pending') {
+      message.warning(t('plaza.alreadyPending'));
+      return;
+    }
+    if (st === 'approved') {
+      message.warning(t('plaza.alreadyPublished'));
+      return;
+    }
+    setPublishTarget(item);
+  };
+
+  const commitPublish = async () => {
+    if (!publishTarget) return;
+    setPublishing(true);
+    try {
+      await submitToPlaza({
+        projectId: String(publishTarget.id),
+        title: publishTarget.name || t('home.untitled'),
+        category: 'resume',
+        document: publishTarget.document,
+      });
+      await reloadPlaza();
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message;
+      message.error(typeof detail === 'string' ? detail : t('plaza.submitFailed'));
+      throw err;
+    } finally {
+      setPublishing(false);
+    }
   };
 
   return (
@@ -329,8 +441,10 @@ export default function TemplateGrid({
               item={item}
               selected={selected.includes(item.id)}
               selectMode={selectMode}
+              plazaStatus={plazaByProject[item.id]}
               onToggle={() => toggle(item.id)}
               onRename={() => setRenameTarget(item)}
+              onPublish={() => requestPublish(item)}
               onDelete={() => {
                 dispatch(deleteTemplate(item.id));
                 setSelected((prev) => prev.filter((id) => id !== item.id));
@@ -373,6 +487,15 @@ export default function TemplateGrid({
           className="!rounded-md"
         />
       </Dialog>
+
+      <PlazaPublishDialog
+        open={Boolean(publishTarget)}
+        publishing={publishing}
+        projectName={publishTarget?.name || t('home.untitled')}
+        document={publishTarget?.document}
+        onClose={() => !publishing && setPublishTarget(null)}
+        onSubmit={commitPublish}
+      />
     </div>
   );
 }

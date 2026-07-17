@@ -230,7 +230,22 @@ export default function ImageToolPanelHost({ document }: { document: any }): Rea
       <MultiAngleToolPanel
         imageSrc={String(node?.attrs?.src || '') || undefined}
         onCancel={close}
-        onConfirm={() => runProcess('multiAngle', '多角度生成中')}
+        onConfirm={(opts) => {
+          dispatch(
+            startImageProcess({
+              sourceId: panel.nodeId,
+              kind: 'multiAngle',
+              label: '多角度生成中',
+              meta: {
+                rotate: opts.rotate,
+                tilt: opts.tilt,
+                zoom: opts.zoom,
+                mode: opts.mode,
+              },
+            })
+          );
+          close();
+        }}
       />
     );
   } else if (panel.kind === 'adjust') {

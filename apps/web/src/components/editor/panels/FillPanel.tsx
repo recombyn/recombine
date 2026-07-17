@@ -536,6 +536,10 @@ export function FillPanel({
   onMeshSelectedIndexChange,
   meshShowGuides,
   onMeshShowGuidesChange,
+  layerVisible = true,
+  onLayerVisibleChange,
+  activeStopIndex,
+  onActiveStopIndexChange,
 }: {
   value: FillPanelValue;
   onChange: (next: FillPanelValue) => void;
@@ -547,6 +551,12 @@ export function FillPanel({
   onMeshSelectedIndexChange?: (index: number) => void;
   meshShowGuides?: boolean;
   onMeshShowGuidesChange?: (show: boolean) => void;
+  /** Show/hide fill on the canvas (eye control in panel header). */
+  layerVisible?: boolean;
+  onLayerVisibleChange?: (visible: boolean) => void;
+  /** Sync gradient stop selection with on-canvas handles. */
+  activeStopIndex?: number;
+  onActiveStopIndexChange?: (index: number) => void;
 }) {
   const fillType = parseFillType(value.fillType);
   const panelType = (FILL_PANEL_TYPES.includes(fillType) ? fillType : 'solid') as FillType;
@@ -562,12 +572,26 @@ export function FillPanel({
       ),
     [value.fillGradient, panelType, solid]
   );
-  const [activeStop, setActiveStop] = useState(0);
+  const [localActiveStop, setLocalActiveStop] = useState(0);
+  const activeStop = activeStopIndex ?? localActiveStop;
+  const setActiveStop = (index: number | ((prev: number) => number)) => {
+    const next =
+      typeof index === 'function'
+        ? index(activeStopIndex ?? localActiveStop)
+        : index;
+    setLocalActiveStop(next);
+    onActiveStopIndexChange?.(next);
+  };
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setActiveStop((i) => Math.min(i, Math.max(0, gradient.colorStops.length - 1)));
   }, [gradient.colorStops.length]);
+
+  useEffect(() => {
+    if (activeStopIndex == null) return;
+    setLocalActiveStop(activeStopIndex);
+  }, [activeStopIndex]);
 
   const emit = useCallback(
     (patch: Partial<FillPanelValue>) => {
@@ -681,6 +705,37 @@ export function FillPanel({
       dataAttr="data-fill-panel"
       className={className}
       bodyClassName="max-h-[min(70vh,560px)] space-y-3 overflow-y-auto"
+      layerVisible={layerVisible}
+      onLayerVisibleChange={onLayerVisibleChange}
+      layerVisibleTipShow="显示填充"
+      layerVisibleTipHide="隐藏填充"
+      onEyedropper={(hex) => {
+        if (isGradient) {
+          updateStop(activeStop, { color: hex });
+          return;
+        }
+        if (isDiffuse) {
+          const g =
+            gradient.type === 'diffuse' ? gradient : defaultGradient('diffuse', solid);
+          const points = [...(g.meshPoints || [])];
+          if (!points.length) {
+            emit({ fillType: 'solid', fillColor: hex });
+            return;
+          }
+          const idx = Math.max(
+            0,
+            Math.min(meshSelectedIndex ?? 0, points.length - 1)
+          );
+          points[idx] = { ...points[idx], color: hex };
+          updateGradient({ ...g, meshPoints: points, type: 'diffuse' });
+          return;
+        }
+        emit({
+          fillType: panelType === 'image' ? 'image' : 'solid',
+          fillColor: hex,
+          fillOpacity: (value.fillOpacity ?? 100) <= 0 ? 100 : value.fillOpacity,
+        });
+      }}
     >
         <div className="flex items-center gap-1 rounded bg-[var(--accent-soft)] p-0.5">
           {FILL_PANEL_TYPES.map((t) => {

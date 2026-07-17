@@ -29,7 +29,7 @@ import {
   replaceSvgNode,
 } from '@/store/scene/sceneToSvg';
 import { patchNodesGeometry, sceneToDocumentCoords } from '@/store/scene/svgToScene';
-import { STROKE_HIT, strokeNodeFromEndpoints } from '@/store/scene/sceneShapes';
+import { STROKE_HIT, distPointToSegment, strokeEndpointsFromBox, strokeNodeFromEndpoints } from '@/store/scene/sceneShapes';
 import { useSvgBoard } from '@/hooks/useSvgBoard';
 import {
   cssPreviewForGradient,
@@ -95,6 +95,8 @@ type SvgCanvasProps = {
   selectedNodeId?: string | null;
   selectedNodeIds?: string[];
   documentPatchToken?: number;
+  /** Nodes patched via Redux — refresh SVG even when selection is empty (e.g. agent busy). */
+  lastPatchedNodeIds?: string[];
   /** @deprecated Paper zoom is owned by InfiniteCanvasStage camera. */
   zoom?: number;
   /** @deprecated Prefer onZoomIn / onZoomOut for keyboard shortcuts. */
@@ -105,6 +107,8 @@ type SvgCanvasProps = {
   onReady?: () => void;
   /** Open the editor AI agent dock (selection contextual bar). */
   onOpenAgent?: (opts?: { prompt?: string }) => void;
+  /** Right-click 「添加到 Chat」— attach node to agent composer at caret. */
+  onAddToChat?: (nodeId: string) => void;
   /** When true, paper has no outer shadow (hosted inside HtmlArtboardFrame). */
   embedded?: boolean;
 };
@@ -119,10 +123,12 @@ export default function SvgCanvas({
   selectedNodeId = null,
   selectedNodeIds = [],
   documentPatchToken = 0,
+  lastPatchedNodeIds = [],
   onZoomIn,
   onZoomOut,
   onReady,
   onOpenAgent,
+  onAddToChat,
   embedded = false,
 }: SvgCanvasProps) {
   const dispatch = useDispatch();
@@ -143,7 +149,9 @@ export default function SvgCanvas({
   const canUndo = useSelector((s: any) => (s.editor.historyPast?.length || 0) > 0);
   const canRedo = useSelector((s: any) => (s.editor.historyFuture?.length || 0) > 0);
   const imageToolPanelKind = useSelector((s: any) => s.editor.imageToolPanel?.kind as string | undefined);
-  const shapeStylePanelOpen = useSelector((s: any) => Boolean(s.editor.shapeStylePanel));
+  const shapeStylePanel = useSelector((s: any) => s.editor.shapeStylePanel as null | { kind: string });
+  const shapeStylePanelOpen = Boolean(shapeStylePanel);
+  const agentBusy = useSelector((s: any) => Boolean(s.editor.agentBusy));
   const cropExpandOpen = imageToolPanelKind === 'crop' || imageToolPanelKind === 'expand';
   const eraserOpen = imageToolPanelKind === 'eraser';
   const activeFrameId = useSelector(
@@ -222,16 +230,17 @@ export default function SvgCanvas({
     const board = boardRef.current;
     const doc = documentRef.current;
     if (!board || !doc) return;
-    const ids =
+    const selected =
       selectedIdsRef.current?.length > 0
         ? selectedIdsRef.current
         : selectedNodeId
           ? [selectedNodeId]
           : [];
+    const ids = [...new Set([...lastPatchedNodeIds, ...selected].filter(Boolean))];
     ids.forEach((id) => {
       void replaceSvgNode(board.root, board.layer, doc, board.nodeEls, id);
     });
-  }, [documentPatchToken, selectedNodeId, geometryTransforming]);
+  }, [documentPatchToken, selectedNodeId, lastPatchedNodeIds, geometryTransforming]);
 
   // Stamp tip tint may resolve after first paint ? refresh pencil stamp strokes.
   useEffect(() => {
@@ -273,31 +282,63 @@ export default function SvgCanvas({
 
   const hitTest = useCallback(
     (x: number, y: number) => {
+      const doc = documentRef.current;
+      const paper = paperRef.current;
+      const rect = paper?.getBoundingClientRect();
+      const zoom =
+        rect && paperW > 0 ? Math.max(0.05, rect.width / paperW) : 1;
+      // ~12px on screen, at least half the stroke hit pad in world units.
+      const pad = Math.max(STROKE_HIT / 2, 12 / zoom);
       const order = [...listNodeIds()].reverse();
       for (const id of order) {
+        const node = doc?.deltaSetLike?.[id];
         const box = getNodeBox(id);
-        if (!box) continue;
-        if (x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height) {
+        if (!node || !box) continue;
+        const shapeType = String(node.attrs?.shapeType || '');
+        if (shapeType === 'line' || shapeType === 'arrow') {
+          const angle = Number(node.attrs?.angle) || 0;
+          const ep = strokeEndpointsFromBox(box, angle);
+          if (distPointToSegment(x, y, ep.x0, ep.y0, ep.x1, ep.y1) <= pad) {
+            return id;
+          }
+          continue;
+        }
+        const angle = Number(node.attrs?.angle) || 0;
+        if (Math.abs(angle) > 0.5) {
+          // Rotated AABB ? local test
+          const cx = box.left + box.width / 2;
+          const cy = box.top + box.height / 2;
+          const rad = (-angle * Math.PI) / 180;
+          const dx = x - cx;
+          const dy = y - cy;
+          const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+          const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+          if (
+            Math.abs(lx) <= box.width / 2 + pad * 0.25 &&
+            Math.abs(ly) <= box.height / 2 + pad * 0.25
+          ) {
+            return id;
+          }
+          continue;
+        }
+        if (
+          x >= box.left - pad * 0.15 &&
+          x <= box.left + box.width + pad * 0.15 &&
+          y >= box.top - pad * 0.15 &&
+          y <= box.top + box.height + pad * 0.15
+        ) {
           return id;
         }
       }
       return null;
     },
-    [getNodeBox, listNodeIds]
+    [getNodeBox, listNodeIds, paperW]
   );
 
   const onSelect = useCallback(
     (ids: string[], opts?: { additive?: boolean }) => {
       // Allow selection in read-only Dev/preview so inspect annotations work.
-      // Blur commits text before blank pointerup; keep that node selected instead of clearing.
-      const keepId = keepSelectAfterTextEditRef.current;
-      if (!ids.length && !opts?.additive && keepId) {
-        keepSelectAfterTextEditRef.current = null;
-        dispatch(setSelectedNodeIds([keepId]));
-        dispatch(setSelectedNodeId(keepId));
-        dispatch(setActiveFrameId(null));
-        return;
-      }
+      // Do not re-select after text blur: blank click must clear focus/selection.
       keepSelectAfterTextEditRef.current = null;
       const doc = documentRef.current;
       // Clicking any grouped member selects the whole group.
@@ -568,7 +609,7 @@ export default function SvgCanvas({
     (next: { attrs: Record<string, unknown>; width: number; height: number }) => {
       if (!editingTextId) return;
       const id = editingTextId;
-      keepSelectAfterTextEditRef.current = id;
+      keepSelectAfterTextEditRef.current = null;
       dispatch(
         patchDocumentNode({
           nodeId: id,
@@ -579,9 +620,9 @@ export default function SvgCanvas({
           },
         })
       );
-      dispatch(setSelectedNodeIds([id]));
-      dispatch(setSelectedNodeId(id));
       setEditingTextId(null);
+      // Do not force-select here: blank-canvas pointerup clears selection after blur.
+      // If the node was already selected when editing started, it stays selected.
     },
     [dispatch, editingTextId]
   );
@@ -805,6 +846,7 @@ export default function SvgCanvas({
             'stroke-visible',
             'stroke-opacity',
             'opacity',
+            'blendMode',
             'strokeLinecap',
             'stroke-linecap',
             'strokeLinejoin',
@@ -958,12 +1000,36 @@ export default function SvgCanvas({
         dispatch(setSelectedNodeIds([id]));
         dispatch(setSelectedNodeId(id));
       }
+      let frameId: string | null = activeFrameIdRef.current;
+      if (!id) {
+        const frames = Array.isArray(documentRef.current?.frames)
+          ? documentRef.current.frames
+          : [];
+        for (let i = frames.length - 1; i >= 0; i -= 1) {
+          const f = frames[i];
+          if (!f) continue;
+          const fx = Number(f.x) || 0;
+          const fy = Number(f.y) || 0;
+          const fw = Math.max(1, Number(f.width) || 1);
+          const fh = Math.max(1, Number(f.height) || 1);
+          if (p.x >= fx && p.x <= fx + fw && p.y >= fy && p.y <= fy + fh) {
+            frameId = String(f.id);
+            if (frameId !== activeFrameIdRef.current) {
+              dispatch(setActiveFrameId(frameId));
+              dispatch(setSelectedNodeIds([]));
+              dispatch(setSelectedNodeId(null));
+            }
+            break;
+          }
+        }
+      }
       setCtxMenu({
         clientX: e.clientX,
         clientY: e.clientY,
         sceneX: p.x,
         sceneY: p.y,
         nodeId: id,
+        frameId,
       });
     };
 
@@ -988,6 +1054,7 @@ export default function SvgCanvas({
         ? { x: ctxMenu.sceneX, y: ctxMenu.sceneY }
         : null;
     const hitNodeId = ctxMenu?.nodeId ?? null;
+    const menuFrameId = ctxMenu?.frameId || activeFrameIdRef.current;
     setCtxMenu(null);
 
     if (action === 'upload') {
@@ -995,6 +1062,18 @@ export default function SvgCanvas({
       if (hitNodeId) return;
       imagePlaceAtRef.current = placeAt;
       imageInputRef.current?.click();
+      return;
+    }
+    if (action === 'addToChat') {
+      const id = hitNodeId || ids[0];
+      if (id) {
+        onAddToChat?.(id);
+        return;
+      }
+      // Artboard selected (no node under cursor) — pin the frame into Chat.
+      if (menuFrameId) {
+        onAddToChat?.(`frame:${menuFrameId}`);
+      }
       return;
     }
     if (action === 'undo') {
@@ -1225,7 +1304,12 @@ export default function SvgCanvas({
           onOpenAgent={onOpenAgent}
           onEditText={(id) => setEditingTextId(id)}
           suppressChrome={
-            Boolean(editingTextId) || cropExpandOpen || eraserOpen || shapeStylePanelOpen
+            Boolean(editingTextId) ||
+            cropExpandOpen ||
+            eraserOpen ||
+            // Keep chrome while editing radius so the outline can follow rounded corners.
+            (shapeStylePanelOpen && shapeStylePanel?.kind !== 'radius') ||
+            agentBusy
           }
           onTransformingChange={setGeometryTransforming}
         />
@@ -1299,7 +1383,8 @@ export default function SvgCanvas({
       <CanvasContextMenu
         menu={ctxMenu}
         hasNode={Boolean(ids.length || ctxMenu?.nodeId)}
-        canDelete={Boolean(ids.length || ctxMenu?.nodeId || activeFrameId)}
+        canAddToChat={Boolean(ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || activeFrameId)}
+        canDelete={Boolean(ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || activeFrameId)}
         canUndo={canUndo}
         canRedo={canRedo}
         canPaste={Boolean(clipboard?.nodes?.length)}

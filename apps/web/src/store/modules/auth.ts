@@ -8,6 +8,7 @@ export type AuthUser = {
   name: string;
   provider: 'email' | 'google';
   avatar?: string | null;
+  bio?: string | null;
   id?: string;
 };
 

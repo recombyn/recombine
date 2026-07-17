@@ -15,10 +15,12 @@ type Props = {
   /** Currently selected artboard — used when resizing via chrome handles (portal). */
   activeFrameId?: string | null;
   onSelect: (frameId: string) => void;
+  /** Soft-click on empty stage (no frame / content) — clear node + frame focus. */
+  onClearSelection?: () => void;
   /** First nudge of a gesture — caller should snapshot history. */
   onMoveStart?: () => void;
   onMove: (frameId: string, x: number, y: number) => void;
-  onResize?: (frameId: string, box: SceneBox) => void;
+  onResize?: (frameId: string, box: SceneBox, handle: ResizeHandle) => void;
   /** Fires when a frame drag becomes active / ends (for hiding titles). */
   onDraggingChange?: (frameId: string | null) => void;
   /**
@@ -26,7 +28,6 @@ type Props = {
    * (content click → node selection, not frame toolbar).
    */
   contentBoxes?: SceneBox[];
-  aspectLocked?: boolean;
 };
 
 function clientToWorld(
@@ -100,6 +101,13 @@ type DragState =
       pointerY0: number;
       aspectRatio: number;
       started: boolean;
+    }
+  | {
+      kind: 'deselect';
+      pointerX0: number;
+      pointerY0: number;
+      clientX0: number;
+      clientY0: number;
     };
 
 /**
@@ -113,26 +121,26 @@ export default function FrameMoveFeature({
   stageEl,
   activeFrameId = null,
   onSelect,
+  onClearSelection,
   onMoveStart,
   onMove,
   onResize,
   onDraggingChange,
   contentBoxes = [],
-  aspectLocked = false,
 }: Props) {
   const dragRef = useRef<DragState | null>(null);
   const framesRef = useRef(frames);
   const cameraRef = useRef(camera);
   const contentRef = useRef(contentBoxes);
-  const aspectRef = useRef(aspectLocked);
   const activeFrameIdRef = useRef(activeFrameId);
   const onDraggingChangeRef = useRef(onDraggingChange);
+  const onClearSelectionRef = useRef(onClearSelection);
   framesRef.current = frames;
   cameraRef.current = camera;
   contentRef.current = contentBoxes;
-  aspectRef.current = aspectLocked;
   activeFrameIdRef.current = activeFrameId;
   onDraggingChangeRef.current = onDraggingChange;
+  onClearSelectionRef.current = onClearSelection;
 
   useEffect(() => {
     if (!enabled || !stageEl) return undefined;
@@ -146,7 +154,7 @@ export default function FrameMoveFeature({
         const dir = (resizeEl.getAttribute('data-resize') || 'se') as ResizeHandle;
         const id = activeFrameIdRef.current;
         const f = id ? framesRef.current.find((x) => x.id === id) : null;
-        if (!f) return;
+        if (!f || f.locked) return;
         e.preventDefault();
         e.stopPropagation();
         onSelect(f.id);
@@ -177,10 +185,21 @@ export default function FrameMoveFeature({
       if (hitContent(contentRef.current, p.x, p.y)) return;
 
       const frame = hitFrame(framesRef.current, p.x, p.y);
-      if (!frame) return;
+      if (!frame) {
+        // Empty stage (grid / outside artboards): soft-click will clear focus.
+        dragRef.current = {
+          kind: 'deselect',
+          pointerX0: p.x,
+          pointerY0: p.y,
+          clientX0: e.clientX,
+          clientY0: e.clientY,
+        };
+        return;
+      }
 
       e.stopPropagation();
       onSelect(frame.id);
+      if (frame.locked) return;
       dragRef.current = {
         kind: 'move',
         id: frame.id,
@@ -195,6 +214,12 @@ export default function FrameMoveFeature({
     const onMoveWin = (e: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag) return;
+      if (drag.kind === 'deselect') {
+        if (Math.hypot(e.clientX - drag.clientX0, e.clientY - drag.clientY0) > 4) {
+          dragRef.current = null;
+        }
+        return;
+      }
       const p = clientToWorld(stageEl, cameraRef.current, e.clientX, e.clientY);
       const dx = p.x - drag.pointerX0;
       const dy = p.y - drag.pointerY0;
@@ -219,20 +244,32 @@ export default function FrameMoveFeature({
         onDraggingChangeRef.current?.(drag.id);
       }
       const next = resizeFromHandle(drag.union, drag.handle, dx, dy, 0, {
-        lockAspect: aspectRef.current,
+        lockAspect: e.shiftKey,
         aspectRatio: drag.aspectRatio,
         min: 40,
       });
-      onResize?.(drag.id, {
-        left: Math.round(next.left),
-        top: Math.round(next.top),
-        width: Math.max(40, Math.round(next.width)),
-        height: Math.max(40, Math.round(next.height)),
-      });
+      onResize?.(
+        drag.id,
+        {
+          left: Math.round(next.left),
+          top: Math.round(next.top),
+          width: Math.max(40, Math.round(next.width)),
+          height: Math.max(40, Math.round(next.height)),
+        },
+        drag.handle
+      );
     };
 
-    const onUp = () => {
-      if (dragRef.current?.started) onDraggingChangeRef.current?.(null);
+    const onUp = (e: PointerEvent) => {
+      const drag = dragRef.current;
+      if (drag?.kind === 'deselect') {
+        dragRef.current = null;
+        if (Math.hypot(e.clientX - drag.clientX0, e.clientY - drag.clientY0) <= 4) {
+          onClearSelectionRef.current?.();
+        }
+        return;
+      }
+      if (drag && 'started' in drag && drag.started) onDraggingChangeRef.current?.(null);
       dragRef.current = null;
     };
 

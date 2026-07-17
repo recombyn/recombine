@@ -1,8 +1,11 @@
 import { useDispatch } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { detectImportSourceType, importViaJob } from '@/apis';
 import { message } from '@/components/base';
+import type { HomeAgentSubmitPayload } from '@/components/home/HomeAgentComposer';
+import type { OfficialCaseMeta } from '@/cases/officialCases';
+import { saveHomeAgentBoot } from '@/lib/homeAgentBoot';
+import { useGoEditor } from '@/hooks/useGoEditor';
 import { parseAndValidateSceneJson } from '@/pages/validateSceneDocument';
 import { importDocument } from '@/store/modules/editor';
 
@@ -15,11 +18,43 @@ export function useHomeActions(
 ) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
-  const navigate = useNavigate();
+  const goEditor = useGoEditor();
 
   /** Navigate first; EditorPage creates the blank document after mount. */
   const handleCreate = () => {
-    navigate('/editor', { state: { createNew: true } });
+    goEditor({ createNew: true });
+  };
+
+  /** Home composer send → blank project + agent auto-submit. Requires non-empty text. */
+  const handleAgentSubmit = (payload: HomeAgentSubmitPayload) => {
+    const prompt = payload.prompt.trim();
+    if (!prompt) return;
+    saveHomeAgentBoot({
+      prompt,
+      autoSubmit: true,
+      modelId: payload.modelId ?? null,
+      imageAspectRatio: payload.imageAspectRatio ?? null,
+      imageQuality: payload.imageQuality ?? null,
+      imageResolution: payload.imageResolution ?? null,
+      attachments: payload.attachments
+        .filter((a) => a.dataUrl)
+        .map((a) => ({
+          key: a.key,
+          label: a.label,
+          kind: 'attachment' as const,
+          dataUrl: a.dataUrl,
+        })),
+    });
+    goEditor({ createNew: true, fromHomeAgent: true });
+  };
+
+  /** Inspiration card → clone case into a new project and open editor. */
+  const handleOpenCase = (meta: OfficialCaseMeta, document: unknown) => {
+    const name =
+      (meta.name || '').trim() ||
+      (meta.nameKey ? t(`home.cases.${meta.nameKey}`) : t('home.untitled'));
+    dispatch(importDocument({ name, document }));
+    goEditor();
   };
 
   const handleImportJson = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -40,7 +75,7 @@ export function useHomeActions(
         })
       );
       message.success(t('home.importSuccess'));
-      navigate('/editor');
+      goEditor();
     } catch (error) {
       console.error('Import JSON error:', error);
       message.error(t('home.importJsonFailed'));
@@ -100,7 +135,7 @@ export function useHomeActions(
         message.warning(t('home.importRasterFallback'), 6);
       }
       message.success(t('home.importSuccess'));
-      navigate('/editor');
+      goEditor();
     } catch (err: any) {
       const status = err?.response?.status;
       const code = err?.code;
@@ -122,5 +157,12 @@ export function useHomeActions(
     if (key === 'file') setImportOpen?.(true);
   };
 
-  return { handleCreate, handleImportJson, handleImportFile, onCreateMenu };
+  return {
+    handleCreate,
+    handleAgentSubmit,
+    handleOpenCase,
+    handleImportJson,
+    handleImportFile,
+    onCreateMenu,
+  };
 }

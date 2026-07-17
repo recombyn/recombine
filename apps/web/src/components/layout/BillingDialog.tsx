@@ -3,9 +3,9 @@ import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { Button, Dialog } from '@/components/base';
 import { Table, type TableColumn } from '@/components/base/table';
-import type { LedgerEntry, LedgerKind } from '@/store/modules/wallet';
+import { formatTokens, type LedgerEntry, type LedgerKind } from '@/store/modules/wallet';
 import { cn } from '@/utils/classnames';
-import RechargeDialog from '@/components/layout/RechargeDialog';
+import RedeemDialog from '@/components/layout/RedeemDialog';
 
 type Props = {
   open: boolean;
@@ -15,10 +15,6 @@ type Props = {
 type Filter = 'all' | LedgerKind;
 
 const PAGE_SIZE = 15;
-
-function formatCny(n: number) {
-  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 
 function formatTime(ts: number) {
   try {
@@ -37,11 +33,11 @@ function formatTime(ts: number) {
 
 export default function BillingDialog({ open, onClose }: Props) {
   const { t } = useTranslation();
-  const balance = useSelector((state: any) => state.wallet?.balance ?? 0);
+  const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
   const ledger = useSelector((state: any) => state.wallet?.ledger ?? []) as LedgerEntry[];
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
-  const [rechargeOpen, setRechargeOpen] = useState(false);
+  const [redeemOpen, setRedeemOpen] = useState(false);
 
   const rows = useMemo(() => {
     if (filter === 'all') return ledger;
@@ -72,23 +68,25 @@ export default function BillingDialog({ open, onClose }: Props) {
         title: t('wallet.colType'),
         dataIndex: 'kind',
         key: 'kind',
-        width: 72,
-        render: (value) =>
-          value === 'recharge' ? t('wallet.typeRecharge') : t('wallet.typeSpend'),
+        width: 80,
+        render: (value) => {
+          if (value === 'redeem') return t('wallet.typeRedeem');
+          if (value === 'recharge') return t('wallet.typeRecharge');
+          if (value === 'plan') return t('wallet.typePlan');
+          return t('wallet.typeSpend');
+        },
       },
       {
         title: t('wallet.colDetail'),
         key: 'detail',
         render: (_value, record) => {
           const row = record as LedgerEntry;
-          if (row.kind === 'recharge') {
-            const methodLabel: Record<string, string> = {
-              wechat: t('wallet.wechat'),
-              alipay: t('wallet.alipay'),
-              card: t('wallet.bankCard'),
-            };
-            const method = methodLabel[row.method] || '—';
-            return <span className="text-[12px] text-[var(--ink)]">{method}</span>;
+          if (row.kind === 'redeem') {
+            return (
+              <span className="text-[12px] text-[var(--ink)]">
+                {row.detail || t('wallet.typeRedeem')}
+              </span>
+            );
           }
           return (
             <div className="min-w-0 py-0.5">
@@ -96,7 +94,12 @@ export default function BillingDialog({ open, onClose }: Props) {
                 {row.model || t('wallet.modelUnknown')}
               </div>
               <div className="truncate text-[11px] text-[var(--muted)]">
-                {[row.detail, row.tokens != null ? t('wallet.tokensCount', { count: row.tokens }) : null]
+                {[
+                  row.detail,
+                  row.usageTokens != null
+                    ? t('wallet.tokensCount', { count: row.usageTokens })
+                    : null,
+                ]
                   .filter(Boolean)
                   .join(' · ') || '—'}
               </div>
@@ -112,16 +115,17 @@ export default function BillingDialog({ open, onClose }: Props) {
         width: 100,
         render: (value, record) => {
           const n = Number(value);
-          const text = `¥${formatCny(n)}`;
+          const text = formatTokens(n);
           const kind = (record as LedgerEntry).kind;
+          const positive = kind === 'redeem' || kind === 'recharge' || kind === 'plan';
           return (
             <span
               className={cn(
                 'font-medium tabular-nums',
-                kind === 'recharge' ? 'text-[var(--ink)]' : 'text-red-500'
+                positive ? 'text-[var(--ink)]' : 'text-red-500'
               )}
             >
-              {kind === 'recharge' ? `+${text}` : `-${text}`}
+              {positive ? `+${text}` : `-${text}`}
             </span>
           );
         },
@@ -133,7 +137,7 @@ export default function BillingDialog({ open, onClose }: Props) {
         align: 'right',
         width: 100,
         render: (value) => (
-          <span className="tabular-nums text-[var(--ink)]">¥{formatCny(Number(value))}</span>
+          <span className="tabular-nums text-[var(--ink)]">{formatTokens(Number(value))}</span>
         ),
       },
     ],
@@ -142,7 +146,7 @@ export default function BillingDialog({ open, onClose }: Props) {
 
   const filters: { id: Filter; label: string }[] = [
     { id: 'all', label: t('wallet.filterAll') },
-    { id: 'recharge', label: t('wallet.typeRecharge') },
+    { id: 'redeem', label: t('wallet.typeRedeem') },
     { id: 'spend', label: t('wallet.typeSpend') },
   ];
 
@@ -161,23 +165,16 @@ export default function BillingDialog({ open, onClose }: Props) {
             <Button size="small" type="default" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button
-              size="small"
-              type="primary"
-              onClick={() => setRechargeOpen(true)}
-            >
-              {t('wallet.topUp')}
+            <Button size="small" type="primary" onClick={() => setRedeemOpen(true)}>
+              {t('wallet.redeem')}
             </Button>
           </>
         }
       >
         <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2 text-[13px]">
           <span className="min-w-0 text-[var(--muted)]">{t('wallet.billingHint')}</span>
-          <span
-            className="max-w-full shrink truncate font-medium tabular-nums text-[var(--ink)]"
-            title={`¥${formatCny(balance)}`}
-          >
-            {t('wallet.balance')}: ¥{formatCny(balance)}
+          <span className="max-w-full shrink truncate font-medium tabular-nums text-[var(--ink)]">
+            {t('wallet.tokensLeft', { count: formatTokens(tokens) })}
           </span>
         </div>
 
@@ -222,7 +219,7 @@ export default function BillingDialog({ open, onClose }: Props) {
         />
       </Dialog>
 
-      <RechargeDialog open={rechargeOpen} onClose={() => setRechargeOpen(false)} />
+      <RedeemDialog open={redeemOpen} onClose={() => setRedeemOpen(false)} />
     </>
   );
 }

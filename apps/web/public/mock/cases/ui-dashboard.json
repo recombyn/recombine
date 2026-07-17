@@ -3,7 +3,7 @@
   "y": 0,
   "width": 1440,
   "height": 900,
-  "backgroundColor": "#F3F4F6",
+  "backgroundColor": "",
   "pages": [
     {
       "id": "page1",
@@ -156,5 +156,17 @@
       },
       "children": []
     }
-  }
+  },
+  "frames": [
+    {
+      "id": "frame1",
+      "name": "Admin dashboard",
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900,
+      "backgroundColor": "#F3F4F6"
+    }
+  ],
+  "activeFrameId": "frame1"
 }

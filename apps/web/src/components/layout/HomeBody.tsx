@@ -1,26 +1,26 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useSelector } from 'react-redux';
+import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineFolder,
   HiOutlineHome,
-  HiOutlinePlus,
-  HiOutlineQuestionMarkCircle,
   HiOutlineUser,
 } from 'react-icons/hi2';
+import { FaGithub } from 'react-icons/fa';
 import { IoIosAddCircleOutline } from 'react-icons/io';
 import { Tooltip } from '@/components/base';
+import HomeHero from '@/components/home/HomeHero';
+import InspirationSection from '@/components/home/InspirationSection';
+import MePage from '@/components/home/MePage';
+import type { HomeAgentSubmitPayload } from '@/components/home/HomeAgentComposer';
+import type { OfficialCaseMeta } from '@/cases/officialCases';
 import TemplateGrid from '@/components/templates/TemplateGrid';
-import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
+import { GITHUB_URL } from '@/components/layout/GitHubLink';
 import { isOwnedTemplate } from '@/store/templatesStorage';
-import { formatTemplateTime } from '@/lib/formatTime';
 import { cn } from '@/utils/classnames';
-import { openTemplate } from '@/store/modules/editor';
 
 const RECENT_LIMIT = 20;
-/** Recent strip: New project + this many = 5 cards / row. */
-const RECENT_ROW = 4;
 
 type Props = {
   nav: string;
@@ -29,6 +29,8 @@ type Props = {
   importing?: boolean;
   importingName?: string;
   onCreate: () => void;
+  onAgentSubmit: (payload: HomeAgentSubmitPayload) => void;
+  onOpenCase: (meta: OfficialCaseMeta, document: unknown) => void;
 };
 
 const SIDE_NAV = [
@@ -36,9 +38,6 @@ const SIDE_NAV = [
   { id: 'mine', icon: HiOutlineFolder },
   { id: 'account', icon: HiOutlineUser },
 ] as const;
-
-/** Preview tile height (fig.2). */
-const CARD_PREVIEW = 'h-[170px] w-full';
 
 function RailBtn({
   tip,
@@ -75,7 +74,7 @@ function RailBtn({
   );
 }
 
-/** Narrow icon rail — create blank canvas + nav, all on the left. */
+/** Narrow icon rail � create blank canvas + nav, all on the left. */
 export function HomeSidebar({
   nav,
   setNav,
@@ -91,7 +90,7 @@ export function HomeSidebar({
   return (
     <aside className="flex w-[56px] shrink-0 flex-col items-center border-r border-[var(--line)] bg-[var(--rail)] py-3 text-[var(--ink)]">
       <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--ink)] text-[12px] font-bold text-[var(--on-brand)]">
-        RC
+        RY
       </div>
       <nav className="flex flex-1 flex-col items-center gap-1">
         <RailBtn
@@ -113,8 +112,8 @@ export function HomeSidebar({
               placement="right"
               active={active}
               onClick={() => {
-                if (id === 'account') return;
-                setNav(id === 'mine' ? 'mine' : id);
+                if (id === 'mine') setNav('mine');
+                else setNav(id);
               }}
             >
               <Icon className="h-5 w-5" strokeWidth={1.75} />
@@ -122,92 +121,29 @@ export function HomeSidebar({
           );
         })}
       </nav>
-      <RailBtn tip={t('common.help')} placement="right">
-        <HiOutlineQuestionMarkCircle className="h-5 w-5" strokeWidth={1.75} />
+      <RailBtn
+        tip={t('common.github', { defaultValue: 'GitHub' })}
+        placement="right"
+        onClick={() => window.open(GITHUB_URL, '_blank', 'noopener,noreferrer')}
+      >
+        <FaGithub className="h-5 w-5" aria-hidden />
       </RailBtn>
     </aside>
   );
 }
 
-function NewProjectCard({ onCreate }: { onCreate: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <button type="button" onClick={onCreate} className="group flex w-full flex-col text-left">
-      <div
-        className={cn(
-          CARD_PREVIEW,
-          'flex items-center justify-center rounded-xl border border-dashed border-[var(--line)] bg-[var(--accent-soft)] transition group-hover:border-[var(--ink)]/35 group-hover:bg-[var(--accent-soft)]'
-        )}
-      >
-        <HiOutlinePlus
-          className="h-8 w-8 text-[var(--muted)] transition group-hover:text-[var(--ink)]"
-          strokeWidth={1.5}
-        />
-      </div>
-      <div className="mt-2.5 min-w-0 px-0.5">
-        <div className="truncate text-[13px] font-medium text-[var(--ink)]">{t('home.newProject')}</div>
-      </div>
-    </button>
-  );
-}
-
-function RecentProjectCard({ item }: { item: any }) {
-  const { t } = useTranslation();
-  const dispatch = useDispatch();
-  const navigate = useNavigate();
-  return (
-    <button
-      type="button"
-      className="group flex w-full flex-col text-left"
-      onClick={() => {
-        dispatch(openTemplate(item.id));
-        navigate('/editor');
-      }}
-    >
-      <div
-        className={cn(
-          CARD_PREVIEW,
-          'overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--accent-soft)] transition group-hover:shadow-[0_12px_28px_rgba(15,23,42,0.1)]'
-        )}
-      >
-        <TemplateThumbnail document={item.document} />
-      </div>
-      <div className="mt-2.5 min-w-0 px-0.5">
-        <div className="truncate text-[13px] font-medium text-[var(--ink)]">
-          {item.name || t('home.untitled')}
-        </div>
-        <div className="mt-0.5 truncate text-[11px] text-[var(--muted)]">
-          {t('home.updatedAt', { time: formatTemplateTime(item.updatedAt) })}
-        </div>
-      </div>
-    </button>
-  );
-}
-
 export function HomeTemplateList({
   nav,
-  setNav,
+  setNav: _setNav,
   query,
   importing = false,
   importingName = '',
-  onCreate,
+  onCreate: _onCreate,
+  onAgentSubmit,
+  onOpenCase,
 }: Props) {
   const { t } = useTranslation();
   const templates = useSelector((state: any) => state.editor.templates);
-
-  const owned = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let list = (templates as any[]).filter((item) => isOwnedTemplate(item));
-    list = [...list].sort(
-      (a, b) =>
-        (Number(b.openedAt) || Number(b.updatedAt) || 0) -
-        (Number(a.openedAt) || Number(a.updatedAt) || 0)
-    );
-    if (!q) return list;
-    return list.filter((item) => (item.name || '').toLowerCase().includes(q));
-  }, [templates, query]);
-
-  const recentRow = owned.slice(0, RECENT_ROW);
 
   const listForGrid = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -228,6 +164,10 @@ export function HomeTemplateList({
     return list.filter((item) => (item.name || '').toLowerCase().includes(q));
   }, [templates, nav, query]);
 
+  if (nav === 'account') {
+    return <MePage />;
+  }
+
   if (nav !== 'home') {
     const title = nav === 'recent' ? t('home.recentOpened') : t('home.mine');
     const displayCount = listForGrid.length + (importing ? 1 : 0);
@@ -247,56 +187,30 @@ export function HomeTemplateList({
   }
 
   return (
-    <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
-      <div className="mx-auto w-full max-w-[1700px] space-y-10 px-[60px] pb-10 pt-6">
-        {/* Recent projects — 5 per row */}
-        <section>
-          <div className="mb-4 flex items-end justify-between gap-3">
-            <h2 className="text-[16px] font-semibold tracking-tight text-[var(--ink)]">
-              {t('home.recentProjects')}
-            </h2>
-            <button
-              type="button"
-              className="text-[13px] text-[var(--muted)] transition hover:text-[var(--ink)]"
-              onClick={() => setNav('mine')}
-            >
-              {t('home.viewAll')}
-            </button>
-          </div>
-          <div className="grid grid-cols-5 gap-4">
-            <NewProjectCard onCreate={onCreate} />
-            {importing ? (
-              <div className="w-full">
-                <div className="h-[170px] animate-pulse rounded-xl bg-[var(--accent-soft)]" />
-                <div className="mt-2.5 h-3.5 w-24 rounded bg-[var(--accent-soft)]" />
-                <div className="mt-1.5 h-2.5 w-16 rounded bg-[var(--accent-soft)]" />
-              </div>
-            ) : null}
-            {recentRow.map((item) => (
-              <RecentProjectCard key={item.id} item={item} />
-            ))}
-          </div>
-        </section>
-
-        {/* My Templates */}
-        <TemplateGrid
-          templates={owned}
-          title={t('home.mine')}
-          fileCountLabel={t('home.fileCount', {
-            count: owned.length + (importing ? 1 : 0),
-          })}
-          importing={importing}
-          importingName={importingName}
-        />
+    <main className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
+      <div className="relative mx-auto w-full max-w-[1700px] space-y-12 px-[60px] pb-10 pt-0">
+        <HomeHero onSubmit={onAgentSubmit} />
+        <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
       </div>
     </main>
   );
 }
 
 export function useHomeNav() {
-  const [nav, setNav] = useState('home');
+  const location = useLocation();
+  const initial =
+    typeof (location.state as { homeNav?: string } | null)?.homeNav === 'string'
+      ? String((location.state as { homeNav?: string }).homeNav)
+      : 'home';
+  const [nav, setNav] = useState(initial);
   const [query, setQuery] = useState('');
   const [importing, setImporting] = useState(false);
   const [importingName, setImportingName] = useState('');
+
+  useEffect(() => {
+    const next = (location.state as { homeNav?: string } | null)?.homeNav;
+    if (typeof next === 'string' && next) setNav(next);
+  }, [location.state]);
+
   return { nav, setNav, query, setQuery, importing, setImporting, importingName, setImportingName };
 }

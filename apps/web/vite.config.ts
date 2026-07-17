@@ -46,11 +46,15 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'),
+        '@agent-skills': path.resolve(__dirname, 'agent-skills'),
       },
     },
     server: {
       port: 3000,
       open: true,
+      fs: {
+        allow: [path.resolve(__dirname), path.resolve(__dirname, 'agent-skills')],
+      },
       proxy: {
         '/api': {
           target: 'http://localhost:8000',

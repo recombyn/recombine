@@ -30,6 +30,7 @@ import {
   stampSpacingForBrush,
 } from '@/components/editor/nodes/ShapeNode/pencilBrushes';
 import { getTintedStampSrc } from '@/components/editor/nodes/ShapeNode/stampTint';
+import { strokeDashForStyle } from '@/store/scene/sceneStrokeStyle';
 
 function num(v: any, fallback = 0) {
   const n = Number(v);
@@ -49,15 +50,10 @@ function objectMeta(node: any) {
   return {
     angle: num(node.attrs?.angle, 0),
     opacity: Math.min(1, Math.max(0, num(node.attrs?.opacity, 1))),
+    blendMode: String(node.attrs?.blendMode || 'pass-through'),
     flipX: boolEffectAttr(node.attrs?.flipX, false),
     flipY: boolEffectAttr(node.attrs?.flipY, false),
   };
-}
-
-function strokeDashForStyle(style: unknown): string | undefined {
-  if (style === 'dashed') return '8 4';
-  if (style === 'dotted') return '2 3';
-  return undefined;
 }
 
 type ShapeStrokeOpts = {
@@ -226,6 +222,19 @@ function applyMeta(el: Element, left: number, top: number, meta: ReturnType<type
   anyEl.__sceneFlipY = meta.flipY;
   reapplySceneTransform(el, left, top, width, height);
   el.opacity(meta.opacity);
+  try {
+    const dom = (el as any).node as SVGElement | undefined;
+    if (dom?.style) {
+      const mode = String(meta.blendMode || 'pass-through').toLowerCase();
+      if (!mode || mode === 'pass-through' || mode === 'passthrough') {
+        dom.style.removeProperty('mix-blend-mode');
+      } else {
+        dom.style.mixBlendMode = mode;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
   return el;
 }
 
@@ -348,12 +357,18 @@ function createRectLike(ctx: DrawCtx, document: any, node: any, nodeId: string, 
 
   const g = parent.group();
   const body = g.path(roundedRectPath(width, height, r));
+  body.attr('data-radius-body', '1');
   applySvgFill(root, body, paint, `n-${nodeId}`);
-  if (allSides && !noSides) {
+  const hasRadius = Math.max(r.tl, r.tr, r.br, r.bl) > 0.5;
+  // When corners are rounded, always stroke the rounded path.
+  // Per-side line segments ignore radius and look like a sharp rectangular border.
+  if ((allSides || hasRadius) && !noSides) {
     applyElementStroke(root, body, strokeFull, { hasOpaqueFill: !fillTransparent });
-  } else body.stroke('none');
+  } else {
+    body.stroke('none');
+  }
 
-  if (!allSides && !noSides) {
+  if (!allSides && !noSides && !hasRadius) {
     if (showT) {
       const ln = g.line(0, 0, width, 0).fill('none');
       applyElementStroke(root, ln, strokeOpen);

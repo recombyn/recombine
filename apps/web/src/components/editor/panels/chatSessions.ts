@@ -1,9 +1,11 @@
-/** Persist agent chat sessions in localStorage. */
+/** Persist agent chat sessions in localStorage — scoped per template/document. */
 
 export type ChatSessionMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** DeepSeek reasoning / chain-of-thought (optional). */
+  thinking?: string;
 };
 
 export type ChatSession = {
@@ -13,9 +15,22 @@ export type ChatSession = {
   messages: ChatSessionMessage[];
 };
 
-const SESSIONS_KEY = 'resume-chat-sessions-v1';
-const ACTIVE_KEY = 'resume-chat-active-v1';
+const SESSIONS_PREFIX = 'resume-chat-sessions-v2:';
+const ACTIVE_PREFIX = 'resume-chat-active-v2:';
 const MAX_SESSIONS = 40;
+
+function scopeKey(scopeId: string | null | undefined): string {
+  const id = (scopeId || '').trim();
+  return id || '__none__';
+}
+
+function sessionsKey(scopeId: string | null | undefined): string {
+  return `${SESSIONS_PREFIX}${scopeKey(scopeId)}`;
+}
+
+function activeKey(scopeId: string | null | undefined): string {
+  return `${ACTIVE_PREFIX}${scopeKey(scopeId)}`;
+}
 
 function safeParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -26,30 +41,31 @@ function safeParse<T>(raw: string | null, fallback: T): T {
   }
 }
 
-export function loadChatSessions(): ChatSession[] {
-  const list = safeParse<ChatSession[]>(localStorage.getItem(SESSIONS_KEY), []);
+export function loadChatSessions(scopeId?: string | null): ChatSession[] {
+  const list = safeParse<ChatSession[]>(localStorage.getItem(sessionsKey(scopeId)), []);
   if (!Array.isArray(list)) return [];
   return list
     .filter((s) => s && typeof s.id === 'string' && Array.isArray(s.messages))
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
-export function saveChatSessions(sessions: ChatSession[]) {
+export function saveChatSessions(sessions: ChatSession[], scopeId?: string | null) {
   const trimmed = sessions
     .slice()
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     .slice(0, MAX_SESSIONS);
-  localStorage.setItem(SESSIONS_KEY, JSON.stringify(trimmed));
+  localStorage.setItem(sessionsKey(scopeId), JSON.stringify(trimmed));
 }
 
-export function loadActiveChatId(): string | null {
-  const id = localStorage.getItem(ACTIVE_KEY);
+export function loadActiveChatId(scopeId?: string | null): string | null {
+  const id = localStorage.getItem(activeKey(scopeId));
   return id || null;
 }
 
-export function saveActiveChatId(id: string | null) {
-  if (!id) localStorage.removeItem(ACTIVE_KEY);
-  else localStorage.setItem(ACTIVE_KEY, id);
+export function saveActiveChatId(id: string | null, scopeId?: string | null) {
+  const key = activeKey(scopeId);
+  if (!id) localStorage.removeItem(key);
+  else localStorage.setItem(key, id);
 }
 
 export function titleFromMessages(messages: ChatSessionMessage[]): string {

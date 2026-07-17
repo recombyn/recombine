@@ -225,25 +225,22 @@ export function computePairSpacingMeasures(a: SceneBox, b: SceneBox): SpacingMea
 }
 
 /**
- * Margins while dragging: nearest sibling gaps + insets to containing frames.
- * Prefer the smaller distance on each side (Figma-like move feedback).
+ * Margins while dragging: nearest gap on each side to siblings OR artboard edges.
+ * Every box edge counts (including when the selection straddles / sits just outside),
+ * so canvas frames, shapes, and images all get the same pink tips.
  */
 export function computeMoveMarginMeasures(
   box: SceneBox,
   others: SceneBox[],
   containers: SceneBox[] = []
 ): SpacingMeasure[] {
-  const bySide = new Map<SpacingMeasure['side'], SpacingMeasure>();
-  for (const m of computeSpacingMeasures(box, others)) {
-    bySide.set(m.side, m);
-  }
-
   const L = box.left;
   const T = box.top;
   const R = box.left + box.width;
   const B = box.top + box.height;
   const cx = mid(L, R);
   const cy = mid(T, B);
+  const bySide = new Map<SpacingMeasure['side'], SpacingMeasure>();
 
   const consider = (side: SpacingMeasure['side'], next: SpacingMeasure) => {
     if (next.distance < 0.05) return;
@@ -251,63 +248,119 @@ export function computeMoveMarginMeasures(
     if (!prev || next.distance < prev.distance - OVERLAP_EPS) bySide.set(side, next);
   };
 
-  for (const c of containers) {
-    const cL = c.left;
-    const cT = c.top;
-    const cR = c.left + c.width;
-    const cB = c.top + c.height;
-    // Only when the selection overlaps the container in the orthogonal axis
-    // and sits inside (or flush with) that side.
-    if (overlaps1D(L, R, cL, cR)) {
-      if (T >= cT - OVERLAP_EPS && T <= cB + OVERLAP_EPS) {
-        consider('top', {
-          side: 'top',
-          distance: T - cT,
-          x1: cx,
-          y1: cT,
-          x2: cx,
-          y2: T,
-          mx: cx,
-          my: mid(cT, T),
-        });
-      }
-      if (B <= cB + OVERLAP_EPS && B >= cT - OVERLAP_EPS) {
-        consider('bottom', {
-          side: 'bottom',
-          distance: cB - B,
-          x1: cx,
-          y1: B,
-          x2: cx,
-          y2: cB,
-          mx: cx,
-          my: mid(B, cB),
-        });
+  for (const o of [...others, ...containers]) {
+    const oL = o.left;
+    const oT = o.top;
+    const oR = o.left + o.width;
+    const oB = o.top + o.height;
+    const yHit = overlaps1D(T, B, oT, oB);
+    const xHit = overlaps1D(L, R, oL, oR);
+
+    if (yHit) {
+      for (const edge of [oL, oR]) {
+        if (edge <= L + OVERLAP_EPS) {
+          consider('left', {
+            side: 'left',
+            distance: L - edge,
+            x1: edge,
+            y1: cy,
+            x2: L,
+            y2: cy,
+            mx: mid(edge, L),
+            my: cy,
+          });
+        } else if (edge >= R - OVERLAP_EPS) {
+          consider('right', {
+            side: 'right',
+            distance: edge - R,
+            x1: R,
+            y1: cy,
+            x2: edge,
+            y2: cy,
+            mx: mid(R, edge),
+            my: cy,
+          });
+        } else {
+          const dL = edge - L;
+          const dR = R - edge;
+          if (dL <= dR) {
+            consider('left', {
+              side: 'left',
+              distance: dL,
+              x1: L,
+              y1: cy,
+              x2: edge,
+              y2: cy,
+              mx: mid(L, edge),
+              my: cy,
+            });
+          } else {
+            consider('right', {
+              side: 'right',
+              distance: dR,
+              x1: edge,
+              y1: cy,
+              x2: R,
+              y2: cy,
+              mx: mid(edge, R),
+              my: cy,
+            });
+          }
+        }
       }
     }
-    if (overlaps1D(T, B, cT, cB)) {
-      if (L >= cL - OVERLAP_EPS && L <= cR + OVERLAP_EPS) {
-        consider('left', {
-          side: 'left',
-          distance: L - cL,
-          x1: cL,
-          y1: cy,
-          x2: L,
-          y2: cy,
-          mx: mid(cL, L),
-          my: cy,
-        });
-      }
-      if (R <= cR + OVERLAP_EPS && R >= cL - OVERLAP_EPS) {
-        consider('right', {
-          side: 'right',
-          distance: cR - R,
-          x1: R,
-          y1: cy,
-          x2: cR,
-          y2: cy,
-          mx: mid(R, cR),
-          my: cy,
-        });
+
+    if (xHit) {
+      for (const edge of [oT, oB]) {
+        if (edge <= T + OVERLAP_EPS) {
+          consider('top', {
+            side: 'top',
+            distance: T - edge,
+            x1: cx,
+            y1: edge,
+            x2: cx,
+            y2: T,
+            mx: cx,
+            my: mid(edge, T),
+          });
+        } else if (edge >= B - OVERLAP_EPS) {
+          consider('bottom', {
+            side: 'bottom',
+            distance: edge - B,
+            x1: cx,
+            y1: B,
+            x2: cx,
+            y2: edge,
+            mx: cx,
+            my: mid(B, edge),
+          });
+        } else {
+          const dT = edge - T;
+          const dB = B - edge;
+          if (dT <= dB) {
+            consider('top', {
+              side: 'top',
+              distance: dT,
+              x1: cx,
+              y1: T,
+              x2: cx,
+              y2: edge,
+              mx: cx,
+              my: mid(T, edge),
+            });
+          } else {
+            consider('bottom', {
+              side: 'bottom',
+              distance: dB,
+              x1: cx,
+              y1: edge,
+              x2: cx,
+              y2: B,
+              mx: cx,
+              my: mid(edge, B),
+            });
+          }
+        }
       }
     }
   }

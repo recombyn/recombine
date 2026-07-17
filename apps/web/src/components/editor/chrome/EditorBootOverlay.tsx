@@ -22,7 +22,7 @@ export default function EditorBootOverlay({ progress, exiting = false }: Props) 
     >
       <div className="flex flex-col items-center gap-5">
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--accent)] text-[15px] font-bold text-[var(--on-brand)] shadow-sm">
-          RC
+          RY
         </div>
         <div className="h-1.5 w-44 overflow-hidden rounded-full bg-[var(--line)]">
           <div

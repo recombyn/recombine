@@ -3,12 +3,11 @@
   "y": 0,
   "width": 390,
   "height": 844,
-  "backgroundColor": "#ffffff",
+  "backgroundColor": "",
   "pages": [
     {
       "id": "page1",
       "children": [
-        "m1",
         "m2",
         "m3",
         "m4",
@@ -29,7 +28,6 @@
       "height": 0,
       "attrs": {},
       "children": [
-        "m1",
         "m2",
         "m3",
         "m4",
@@ -37,32 +35,6 @@
         "m10",
         "m11"
       ]
-    },
-    "m1": {
-      "id": "m1",
-      "key": "shape",
-      "x": 0,
-      "y": 0,
-      "z": 0,
-      "width": 390,
-      "height": 844,
-      "attrs": {
-        "shapeType": "rect",
-        "fill-color": "#FFFFFF",
-        "border-color": "transparent",
-        "border-width": 0,
-        "L": "true",
-        "R": "true",
-        "T": "true",
-        "B": "true",
-        "opacity": 1,
-        "angle": 0,
-        "radiusTL": 0,
-        "radiusTR": 0,
-        "radiusBR": 0,
-        "radiusBL": 0
-      },
-      "children": []
     },
     "m2": {
       "id": "m2",
@@ -184,5 +156,17 @@
       },
       "children": []
     }
-  }
+  },
+  "frames": [
+    {
+      "id": "frame1",
+      "name": "Mobile tasks",
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844,
+      "backgroundColor": "#ffffff"
+    }
+  ],
+  "activeFrameId": "frame1"
 }

@@ -8,6 +8,7 @@ import { toFabricFontFamily } from '@/store/scene/sceneText';
 import {
   buildMarkdownTextAttrs,
   DEFAULT_TEXT_STYLE,
+  measurePlainTextSize,
   measureWrappedTextSize,
   parseNodeMarkdown,
   parseNodeTextStyle,
@@ -77,8 +78,8 @@ export default function TextInlineEditor({ document, nodeId, onCommit, onCancel 
       onCancel();
       return;
     }
-    const boxW = resolveTextBoxWidth(node?.width, true);
-    const measuredBox = measureWrappedTextSize(trimmed, style, boxW);
+    // Hug glyph bounds — wrap editor may use a temporary 240px box while typing.
+    const measuredBox = measurePlainTextSize(trimmed, style);
     const lineH = Math.max(0.8, Number(style.lineHeight) || 1.4);
     onCommit({
       attrs: buildMarkdownTextAttrs(trimmed, style),

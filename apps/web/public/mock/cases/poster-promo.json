@@ -3,12 +3,11 @@
   "y": 0,
   "width": 1242,
   "height": 1660,
-  "backgroundColor": "#FFF7ED",
+  "backgroundColor": "",
   "pages": [
     {
       "id": "page1",
       "children": [
-        "a1",
         "a2",
         "a3",
         "a4",
@@ -27,38 +26,11 @@
       "height": 0,
       "attrs": {},
       "children": [
-        "a1",
         "a2",
         "a3",
         "a4",
         "a5"
       ]
-    },
-    "a1": {
-      "id": "a1",
-      "key": "shape",
-      "x": 0,
-      "y": 0,
-      "z": 0,
-      "width": 1242,
-      "height": 1660,
-      "attrs": {
-        "shapeType": "rect",
-        "fill-color": "#FFF7ED",
-        "border-color": "transparent",
-        "border-width": 0,
-        "L": "true",
-        "R": "true",
-        "T": "true",
-        "B": "true",
-        "opacity": 1,
-        "angle": 0,
-        "radiusTL": 0,
-        "radiusTR": 0,
-        "radiusBR": 0,
-        "radiusBL": 0
-      },
-      "children": []
     },
     "a2": {
       "id": "a2",
@@ -128,5 +100,17 @@
       },
       "children": []
     }
-  }
+  },
+  "frames": [
+    {
+      "id": "frame1",
+      "name": "Promo poster",
+      "x": 0,
+      "y": 0,
+      "width": 1242,
+      "height": 1660,
+      "backgroundColor": "#FFF7ED"
+    }
+  ],
+  "activeFrameId": "frame1"
 }

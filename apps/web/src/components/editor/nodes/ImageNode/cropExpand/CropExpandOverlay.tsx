@@ -22,7 +22,7 @@ import {
 } from './cropExpandMath';
 
 /** System ink — avoid bright brand blues. */
-const ACCENT = '#383838';
+const ACCENT = '#141414';
 const ACCENT_SOFT = 'rgba(56, 56, 56, 0.35)';
 const EXPAND_GRAY = '#e8e8e8';
 /** Dim outside the crop hole (kept region stays clear). */

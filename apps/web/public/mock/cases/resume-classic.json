@@ -3,7 +3,7 @@
   "y": 0,
   "width": 794,
   "height": 1123,
-  "backgroundColor": "#ffffff",
+  "backgroundColor": "",
   "pages": [
     {
       "id": "page1",
@@ -116,5 +116,17 @@
       },
       "children": []
     }
-  }
+  },
+  "frames": [
+    {
+      "id": "frame1",
+      "name": "Classic sidebar resume",
+      "x": 0,
+      "y": 0,
+      "width": 794,
+      "height": 1123,
+      "backgroundColor": "#ffffff"
+    }
+  ],
+  "activeFrameId": "frame1"
 }

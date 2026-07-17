@@ -5,37 +5,43 @@
       "id": "case-resume-fresh",
       "nameKey": "caseResumeFresh",
       "category": "resume",
-      "file": "/mock/cases/resume-fresh.json"
+      "file": "/mock/cases/resume-fresh.json",
+      "thumbRatio": 1.42
     },
     {
       "id": "case-resume-classic",
       "nameKey": "caseResumeClassic",
       "category": "resume",
-      "file": "/mock/cases/resume-classic.json"
+      "file": "/mock/cases/resume-classic.json",
+      "thumbRatio": 1.12
     },
     {
       "id": "case-poster-event",
       "nameKey": "casePosterEvent",
       "category": "poster",
-      "file": "/mock/cases/poster-event.json"
+      "file": "/mock/cases/poster-event.json",
+      "thumbRatio": 1.58
     },
     {
       "id": "case-poster-promo",
       "nameKey": "casePosterPromo",
       "category": "poster",
-      "file": "/mock/cases/poster-promo.json"
+      "file": "/mock/cases/poster-promo.json",
+      "thumbRatio": 0.9
     },
     {
       "id": "case-ui-dashboard",
       "nameKey": "caseUiDashboard",
       "category": "ui",
-      "file": "/mock/cases/ui-dashboard.json"
+      "file": "/mock/cases/ui-dashboard.json",
+      "thumbRatio": 0.7
     },
     {
       "id": "case-ui-mobile",
       "nameKey": "caseUiMobile",
       "category": "ui",
-      "file": "/mock/cases/ui-mobile.json"
+      "file": "/mock/cases/ui-mobile.json",
+      "thumbRatio": 1.78
     }
   ]
 }

@@ -203,6 +203,8 @@ export function filletPathD(d: string, r: CornerRadii): string {
 
 /**
  * Rounded polygon path. `radii[i]` fillets vertex `points[i]`.
+ * Radii are clamped so adjacent corners never consume more than an edge's length
+ * (large R on short edges otherwise self-intersects — common after pen→polyline).
  */
 export function roundedPolygonPath(
   points: Array<[number, number]>,
@@ -210,11 +212,34 @@ export function roundedPolygonPath(
 ): string {
   const n = points.length;
   if (n < 3) return '';
-  const rs = points.map((_, i) =>
+  let rs = points.map((_, i) =>
     Math.max(0, typeof radii === 'number' ? radii : Number(radii[i] ?? 0) || 0)
   );
   if (rs.every((r) => r < 0.5)) {
     return `M ${points.map(([x, y]) => `${x} ${y}`).join(' L ')} Z`;
+  }
+
+  // Per-vertex max from adjacent half-edges.
+  for (let i = 0; i < n; i += 1) {
+    const prev = points[(i - 1 + n) % n];
+    const curr = points[i];
+    const next = points[(i + 1) % n];
+    const len1 = Math.hypot(prev[0] - curr[0], prev[1] - curr[1]) || 1;
+    const len2 = Math.hypot(next[0] - curr[0], next[1] - curr[1]) || 1;
+    rs[i] = Math.min(rs[i], len1 / 2, len2 / 2);
+  }
+  // Shared-edge budget: r[i] + r[i+1] must not exceed edge length.
+  for (let i = 0; i < n; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    const edge = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const ri = rs[i];
+    const rj = rs[(i + 1) % n];
+    if (ri + rj > edge && ri + rj > 1e-6) {
+      const scale = edge / (ri + rj);
+      rs[i] *= scale;
+      rs[(i + 1) % n] *= scale;
+    }
   }
 
   const parts: string[] = [];
@@ -228,8 +253,7 @@ export function roundedPolygonPath(
     const v2y = next[1] - curr[1];
     const len1 = Math.hypot(v1x, v1y) || 1;
     const len2 = Math.hypot(v2x, v2y) || 1;
-    const maxR = Math.min(len1, len2) / 2;
-    const r = Math.min(rs[i], maxR);
+    const r = rs[i];
     const ux1 = v1x / len1;
     const uy1 = v1y / len1;
     const ux2 = v2x / len2;
@@ -243,9 +267,18 @@ export function roundedPolygonPath(
     else parts.push(`L ${p1x} ${p1y}`);
 
     if (r > 0.5) {
+      // Unit inward bisector isn't needed — use signed cross for arc direction.
+      // Prefer the short arc that stays near the vertex (avoid 360° flips on concave tips).
       const cross = v1x * v2y - v1y * v2x;
-      const sweep = cross < 0 ? 1 : 0;
-      parts.push(`A ${r} ${r} 0 0 ${sweep} ${p2x} ${p2y}`);
+      const dot = ux1 * ux2 + uy1 * uy2;
+      // Near-collinear: skip arc, keep sharp.
+      if (dot > 0.999) {
+        parts.push(`L ${curr[0]} ${curr[1]}`);
+        parts.push(`L ${p2x} ${p2y}`);
+      } else {
+        const sweep = cross < 0 ? 1 : 0;
+        parts.push(`A ${r} ${r} 0 0 ${sweep} ${p2x} ${p2y}`);
+      }
     } else {
       parts.push(`L ${curr[0]} ${curr[1]}`);
       parts.push(`L ${p2x} ${p2y}`);

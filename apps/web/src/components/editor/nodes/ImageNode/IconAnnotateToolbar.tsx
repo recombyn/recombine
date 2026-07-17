@@ -76,7 +76,7 @@ export default function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode 
 
   return (
     <div
-      className="inline-flex items-center gap-0.5 rounded-[4px] bg-[#2c2c2c] px-1.5 py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
+      className="inline-flex items-center gap-0.5 rounded-[12px] bg-[#2c2c2c] px-1.5 py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
       onPointerDown={(e) => e.stopPropagation()}
     >
       <Tooltip title={'画笔'} placement="top">

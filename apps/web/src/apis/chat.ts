@@ -9,8 +9,23 @@ export type LlmModel = {
   id: string;
   label: string;
   provider: string;
-  kind?: 'text' | 'image';
+  /** text=对话（含画布 Agent）· image=生图 */
+  kind?: 'text' | 'image' | 'svg';
+  thinking?: boolean;
+  /** Max image attachments for this model (API: max_attachments). */
+  maxAttachments?: number;
+  max_attachments?: number;
 };
+
+/** Resolve per-model attachment cap (Seedream 14, Doubao chat 8, DeepSeek 4…). */
+export function maxAttachmentsFor(model?: Pick<LlmModel, 'kind' | 'maxAttachments' | 'max_attachments'> | null): number {
+  const raw = model?.maxAttachments ?? model?.max_attachments;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  if (model?.kind === 'image') return 14;
+  return 5;
+}
 
 export type ChatModelsResponse = {
   models: LlmModel[];
@@ -27,6 +42,9 @@ export type StreamChatParams = {
   message: string;
   model?: string | null;
   history?: ChatHistoryItem[];
+  /** Force thinking on/off; omit for model default (reasoner = on). */
+  thinking?: boolean | null;
+  onThinking?: (text: string) => void;
   onToken?: (text: string) => void;
   onError?: (message: string) => void;
   onDone?: () => void;
@@ -37,6 +55,10 @@ export type GenerateImageParams = {
   prompt: string;
   model?: string | null;
   aspect_ratio?: string | null;
+  quality?: string | null;
+  resolution?: string | null;
+  /** Reference images (data URLs or https) for Seedream i2i. */
+  images?: string[] | null;
 };
 
 export type GenerateImageResult = {
@@ -52,7 +74,7 @@ export const fetchLlmModels = () =>
     method: 'get',
   });
 
-/** Generate an image via OpenRouter (non-stream). */
+/** Generate an image via Doubao Seedream (non-stream). */
 export const generateImage = (data: GenerateImageParams) =>
   request<GenerateImageResult>({
     url: '/api/v1/chat/image',
@@ -61,17 +83,22 @@ export const generateImage = (data: GenerateImageParams) =>
       prompt: data.prompt,
       model: data.model || undefined,
       aspect_ratio: data.aspect_ratio || undefined,
+      quality: data.quality || undefined,
+      resolution: data.resolution || undefined,
+      images: data.images?.length ? data.images : undefined,
     },
   });
 
 /**
- * POST /message and parse SSE events.
+ * POST /message and parse SSE events (token + thinking).
  * Kept as raw fetch — axios is a poor fit for streaming bodies.
  */
 export async function streamChatMessage({
   message,
   model,
   history = [],
+  thinking,
+  onThinking,
   onToken,
   onError,
   onDone,
@@ -91,6 +118,7 @@ export async function streamChatMessage({
         message,
         model: model || undefined,
         history,
+        ...(thinking == null ? {} : { thinking }),
       }),
       signal,
     });
@@ -137,7 +165,9 @@ export async function streamChatMessage({
     } catch {
       return;
     }
-    if (obj.type === 'token' && obj.text) {
+    if (obj.type === 'thinking' && obj.text) {
+      onThinking?.(obj.text);
+    } else if (obj.type === 'token' && obj.text) {
       onToken?.(obj.text);
     } else if (obj.type === 'error') {
       onError?.(obj.message || 'LLM error');

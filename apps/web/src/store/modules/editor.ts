@@ -34,6 +34,11 @@ export type ArtboardFrame = {
   height: number;
   backgroundColor: string;
   layoutMode?: 'auto' | 'manual';
+  /** When true, frame cannot be moved or resized. */
+  locked?: boolean;
+  /** Size before first ratio preset — restored by 「原始」. */
+  aspectOriginalWidth?: number;
+  aspectOriginalHeight?: number;
 };
 
 function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
@@ -61,6 +66,8 @@ const initialState = {
   dirty: false,
   sceneReloadToken: 0,
   documentPatchToken: 0,
+  /** Node ids last touched by `patchDocumentNode` — SvgCanvas refreshes these even with no selection. */
+  lastPatchedNodeIds: [] as string[],
   historyPast: [] as any[],
   historyFuture: [] as any[],
   activeTool: 'select' as string,
@@ -84,8 +91,8 @@ const initialState = {
   workspaceMode: 'design' as 'design' | 'dev',
   /** Dev-mode node under pointer (inspect panel + spacing overlay). */
   devHoverNodeId: null as string | null,
-  /** Lock W/H ratio when resizing or editing size fields. */
-  aspectLocked: true,
+  /** True while the design agent is mutating the canvas (hides selection chrome). */
+  agentBusy: false,
 };
 
 function cloneDocument(doc: any) {
@@ -140,7 +147,10 @@ const editorSlice = createSlice({
       const item = state.templates.find((t) => t.id === action.payload);
       if (!item) return;
       state.currentId = item.id;
-      state.document = ensureDocumentContentOnCanvas(item.document);
+      const doc = ensureDocumentContentOnCanvas(item.document);
+      // Enter editor with nothing selected (cases often ship activeFrameId).
+      doc.activeFrameId = null;
+      state.document = doc;
       clearSelection(state);
       state.dirty = false;
       state.historyPast = [];
@@ -164,6 +174,7 @@ const editorSlice = createSlice({
       state.document = normalizeDocument(updateNodeInDocument(state.document, nodeId, patch));
       state.dirty = true;
       state.documentPatchToken += 1;
+      state.lastPatchedNodeIds = [String(nodeId)];
     },
     setSelectedNodeId(state, action) {
       state.selectedNodeId = action.payload;
@@ -262,10 +273,11 @@ const editorSlice = createSlice({
       next.frames = frames;
       state.document = next;
       state.dirty = true;
-      // Position-only moves update HTML chrome without SVG reload.
+      // Position / lock-only updates refresh HTML chrome without SVG reload.
       const keys = Object.keys(patch);
-      const onlyPos = keys.length > 0 && keys.every((k) => k === 'x' || k === 'y');
-      if (!onlyPos) state.sceneReloadToken += 1;
+      const onlyChrome =
+        keys.length > 0 && keys.every((k) => k === 'x' || k === 'y' || k === 'locked');
+      if (!onlyChrome) state.sceneReloadToken += 1;
     },
     /** Snapshot history without changing the document (e.g. before a live frame drag). */
     pushEditorHistory(state) {
@@ -292,6 +304,8 @@ const editorSlice = createSlice({
     importDocument(state, action) {
       const id = nanoid();
       const doc = alignImportedDocumentOrigin(action.payload.document);
+      // Inspiration / import → editor: do not pre-select an artboard.
+      doc.activeFrameId = null;
       const item = {
         id,
         name: action.payload.name || '导入作品',
@@ -478,7 +492,7 @@ const editorSlice = createSlice({
     /** Spawn a right-side image processing node (original untouched). */
     startImageProcess(state, action) {
       if (!state.document) return;
-      const { sourceId, kind, label, targetWidth, targetHeight } = action.payload || {};
+      const { sourceId, kind, label, targetWidth, targetHeight, meta } = action.payload || {};
       if (!sourceId || !kind) return;
       pushHistory(state);
       const { document: next, id } = spawnImageProcessNode(state.document, sourceId, {
@@ -486,6 +500,7 @@ const editorSlice = createSlice({
         label: label || '处理中',
         targetWidth,
         targetHeight,
+        meta,
       });
       if (!id) return;
       state.document = next;
@@ -509,6 +524,22 @@ const editorSlice = createSlice({
       state.dirty = true;
       state.sceneReloadToken += 1;
       if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+    },
+    /** Drop a failed process clone and clear pending id. */
+    failImageProcess(state, action) {
+      const nodeId = action.payload?.nodeId || state.pendingImageProcessId;
+      if (!state.document || !nodeId) return;
+      state.document = removeNodesFromDocument(state.document, [nodeId]);
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+      if (state.selectedNodeId === nodeId) {
+        state.selectedNodeId = null;
+        state.selectedNodeIds = [];
+      } else if (state.selectedNodeIds?.includes(nodeId)) {
+        state.selectedNodeIds = state.selectedNodeIds.filter((id: string) => id !== nodeId);
+        state.selectedNodeId = state.selectedNodeIds[0] || null;
+      }
     },
     openImageToolPanel(state, action) {
       const { nodeId, kind } = action.payload || {};
@@ -557,8 +588,9 @@ const editorSlice = createSlice({
     setDevHoverNodeId(state, action) {
       state.devHoverNodeId = action.payload || null;
     },
-    setAspectLocked(state, action) {
-      state.aspectLocked = Boolean(action.payload);
+    setAgentBusy(state, action) {
+      state.agentBusy = Boolean(action.payload);
+      if (state.agentBusy) clearSelection(state);
     },
   },
 });
@@ -596,6 +628,7 @@ export const {
   setCanvasMeta,
   startImageProcess,
   finishImageProcess,
+  failImageProcess,
   openImageToolPanel,
   closeImageToolPanel,
   openShapeStylePanel,
@@ -606,7 +639,7 @@ export const {
   setPencilEraseMode,
   setWorkspaceMode,
   setDevHoverNodeId,
-  setAspectLocked,
+  setAgentBusy,
 } = editorSlice.actions;
 
 export default editorSlice.reducer;
