@@ -478,7 +478,7 @@ export function inferDesignCategory(message: string): DesignCategory {
 export function shouldRunDesignPipeline(message: string): boolean {
   const s = String(message || '').trim();
   if (!s) return false;
-  if (/^(继续|下一步|到此为止|停|不用了|取消)/.test(s)) return false;
+  if (/^(继续|下一步|到此为止|停|不用了|取消|重新执行|重新设计)/.test(s)) return false;
   // Short incremental edits
   if (
     s.length < 100 &&
@@ -514,17 +514,55 @@ export function stopChoiceLabel(): string {
   return '到此为止';
 }
 
-export function parseContinueChoice(
+export function retryPhaseChoiceLabel(): string {
+  return '重新执行当前步骤';
+}
+
+export function redesignChoiceLabel(): string {
+  return '重新设计';
+}
+
+export type PipelineChoiceAction =
+  | { action: 'continue'; phaseIndex: number }
+  | { action: 'retry' }
+  | { action: 'redesign' }
+  | { action: 'stop' }
+  | null;
+
+export function parsePipelineChoice(
   choice: string,
   pipeline: DesignPhase[]
-): number | null {
+): PipelineChoiceAction {
   const s = String(choice || '').trim();
-  if (s === stopChoiceLabel() || /到此为止|停|不用了/.test(s)) return -1;
+  if (s === stopChoiceLabel() || /到此为止|停|不用了/.test(s)) return { action: 'stop' };
+  if (s === retryPhaseChoiceLabel() || /^重新执行/.test(s)) return { action: 'retry' };
+  if (s === redesignChoiceLabel() || /^重新设计/.test(s)) return { action: 'redesign' };
   const m = s.match(/^继续[：:]\s*(.+)$/);
   if (!m) return null;
   const label = m[1].trim();
   const idx = pipeline.findIndex((p) => p.label === label);
-  return idx >= 0 ? idx : null;
+  return idx >= 0 ? { action: 'continue', phaseIndex: idx } : null;
+}
+
+/** @deprecated use parsePipelineChoice */
+export function parseContinueChoice(
+  choice: string,
+  pipeline: DesignPhase[]
+): number | null {
+  const hit = parsePipelineChoice(choice, pipeline);
+  if (!hit) return null;
+  if (hit.action === 'stop') return -1;
+  if (hit.action === 'continue') return hit.phaseIndex;
+  return null;
+}
+
+export function phasePauseChoices(next: DesignPhase): string[] {
+  return [
+    continueChoiceLabel(next),
+    retryPhaseChoiceLabel(),
+    redesignChoiceLabel(),
+    stopChoiceLabel(),
+  ];
 }
 
 export type PipelineProgress = {

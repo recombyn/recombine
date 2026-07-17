@@ -15,12 +15,11 @@ import {
 import { streamAgentTurn, type AgentMessage } from './streamAgentTurn';
 import {
   categoryLabel,
-  continueChoiceLabel,
   getPipeline,
   inferDesignCategory,
+  phasePauseChoices,
   shouldPauseAfterPhase,
   shouldRunDesignPipeline,
-  stopChoiceLabel,
   type AgentCollabMode,
   type DesignCategory,
   type DesignPhase,
@@ -475,7 +474,7 @@ export async function runDesignAgent({
         summary:
           phaseSummary ||
           `「${phase.label}」已完成。当前为协作模式——是否继续「${next.label}」？`,
-        choices: [continueChoiceLabel(next), stopChoiceLabel()],
+        choices: phasePauseChoices(next),
         pipelinePaused: true,
       });
       return;

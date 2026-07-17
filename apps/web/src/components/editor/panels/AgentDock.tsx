@@ -47,7 +47,7 @@ import AgentSettingsDialog from '@/components/editor/panels/agent/AgentSettingsD
 import {
   categoryLabel,
   getPipeline,
-  parseContinueChoice,
+  parsePipelineChoice,
   readCollabMode,
   writeCollabMode,
   type AgentCollabMode,
@@ -392,7 +392,10 @@ export default function AgentDock({
   const pipelineSessionRef = useRef<{
     category: DesignCategory;
     brief: string;
+    /** Next phase to run on 继续 */
     nextIndex: number;
+    /** Phase that just finished (for 重新执行当前步骤) */
+    currentIndex: number;
   } | null>(null);
   const newChatTipTimer = useRef<number | null>(null);
 
@@ -968,16 +971,29 @@ export default function AgentDock({
       const rawText = options.raw ? text : null;
       if (rawText && resume) {
         const pipe = getPipeline(resume.category);
-        const cont = parseContinueChoice(options.displayContent || rawText, pipe);
-        if (cont === -1) {
+        const choiceLabel = String(options.displayContent || rawText);
+        const hit = parsePipelineChoice(choiceLabel, pipe);
+        if (hit?.action === 'stop') {
           pipelineSessionRef.current = null;
-        } else if (cont != null) {
+        } else if (hit?.action === 'continue') {
           pipelineResume = {
             category: resume.category,
-            phaseIndex: cont,
+            phaseIndex: hit.phaseIndex,
             brief: resume.brief,
           };
-        } else if (/^继续/.test(rawText) || /^继续/.test(String(options.displayContent || ''))) {
+        } else if (hit?.action === 'retry') {
+          pipelineResume = {
+            category: resume.category,
+            phaseIndex: Math.max(0, resume.currentIndex),
+            brief: `${resume.brief}\n\n【系统】用户要求重新执行当前步骤「${pipe[resume.currentIndex]?.label || ''}」，在本阶段内重做/修正，不要跳到后续阶段。`,
+          };
+        } else if (hit?.action === 'redesign') {
+          pipelineResume = {
+            category: resume.category,
+            phaseIndex: 0,
+            brief: `${resume.brief}\n\n【系统】用户要求重新设计：从第一步「${pipe[0]?.label || '结构'}」起重做整套流程，可调整或重建画板内容。`,
+          };
+        } else if (/^继续/.test(rawText) || /^继续/.test(choiceLabel)) {
           pipelineResume = {
             category: resume.category,
             phaseIndex: resume.nextIndex,
@@ -1041,8 +1057,14 @@ export default function AgentDock({
             );
             pipelineSessionRef.current = {
               category: p.category,
-              brief: pipelineResume?.brief || (options.raw ? text : buildUserMessage(text)),
+              brief:
+                pipelineSessionRef.current?.brief ||
+                String(pipelineResume?.brief || '')
+                  .split(/\n\n【系统】/)[0]
+                  .trim() ||
+                (options.raw ? text : buildUserMessage(text)),
               nextIndex: p.currentIndex + 1,
+              currentIndex: p.currentIndex,
             };
             return;
           }
@@ -1521,6 +1543,10 @@ export default function AgentDock({
               } else if (/到此为止/.test(choice)) {
                 pipelineSessionRef.current = null;
                 text = '好的，先停在这里，等我下一步指示再继续。';
+              } else if (/重新执行当前步骤/.test(choice)) {
+                text = '请重新执行当前步骤。';
+              } else if (/重新设计/.test(choice)) {
+                text = '请从头重新设计。';
               }
               void send({ text, raw: true, displayContent: choice });
             }}

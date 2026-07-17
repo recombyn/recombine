@@ -114,15 +114,6 @@ export default function ChatTurnList({
                 className="flex min-w-0 flex-col gap-1.5 px-0.5"
               >
                 {worked ? <div className="text-[12px] text-[var(--muted)]">{worked}</div> : null}
-                {assistant.pipeline?.labels?.length ? (
-                  <DesignPipelineBar
-                    categoryLabel={assistant.pipeline.category}
-                    labels={assistant.pipeline.labels}
-                    currentIndex={assistant.pipeline.currentIndex}
-                    stepConfirm={assistant.pipeline.stepConfirm}
-                    collabMode={assistant.pipeline.collabMode}
-                  />
-                ) : null}
                 {assistant.thinking ||
                 (assistant.streaming && !assistant.content && !assistant.steps?.length) ? (
                   <ChatThinkingBlock
@@ -165,6 +156,15 @@ export default function ChatTurnList({
                   </div>
                 ) : assistant.streaming && !(assistant.thinking || assistant.steps?.length) ? (
                   <div className="text-[13px] text-[var(--muted)]">设计中…</div>
+                ) : null}
+                {!assistant.streaming && assistant.pipeline?.labels?.length ? (
+                  <DesignPipelineBar
+                    categoryLabel={assistant.pipeline.category}
+                    labels={assistant.pipeline.labels}
+                    currentIndex={assistant.pipeline.currentIndex}
+                    stepConfirm={assistant.pipeline.stepConfirm}
+                    collabMode={assistant.pipeline.collabMode}
+                  />
                 ) : null}
                 {!assistant.streaming && assistant.content && canApplyText ? (
                   <button
