@@ -2,7 +2,10 @@ import { useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { message } from '@/components/base';
 import { processImageTool } from '@/apis/imageTools';
+import { uploadImageFromSrc } from '@/apis/upload';
+import { fetchWallet } from '@/apis/wallet';
 import { failImageProcess, finishImageProcess } from '@/store/modules/editor';
+import { syncFromServer } from '@/store/modules/wallet';
 
 const AI_KINDS = new Set([
   'upscale',
@@ -11,7 +14,6 @@ const AI_KINDS = new Set([
   'expand',
   'editElements',
   'editText',
-  'vector',
   'adjust',
 ]);
 
@@ -43,9 +45,42 @@ function resolutionFor(kind: string, node: any): string | undefined {
   return undefined;
 }
 
+/** Persist tool output on our file server; fall back to original src if upload fails. */
+async function persistProcessedSrc(src: string, filename: string): Promise<string> {
+  const raw = String(src || '').trim();
+  if (!raw) return raw;
+  try {
+    const uploaded = await uploadImageFromSrc(raw, filename);
+    return uploaded.url || raw;
+  } catch (err) {
+    console.warn('[image-process] upload failed, keeping inline/remote src', err);
+    return raw;
+  }
+}
+
+function refreshWallet(dispatch: (action: unknown) => void) {
+  void fetchWallet()
+    .then((res) => {
+      dispatch(syncFromServer({ tokens: res.tokens }));
+    })
+    .catch(() => {
+      /* ignore wallet refresh errors */
+    });
+}
+
+function processFailMessage(err: any): string {
+  const status = err?.response?.status;
+  const detail = err?.response?.data?.detail || err?.message;
+  if (status === 402 || detail === 'Insufficient credits') return 'Token 不足，请充值后再试';
+  if (status === 401) return '请先登录后再使用 AI 工具';
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  return '图片处理失败';
+}
+
 /**
  * Completes spawned image process jobs via backend AI (`POST /api/v1/image/process`).
- * Import placeholders are finished by the import flow.
+ * Results are uploaded to our file server so the canvas / export use our URLs.
+ * Import / upload placeholders are finished by their own flows.
  */
 export default function ImageProcessWatcher() {
   const dispatch = useDispatch();
@@ -59,7 +94,7 @@ export default function ImageProcessWatcher() {
     const doc = documentRef.current;
     const node = doc?.deltaSetLike?.[pendingId];
     const kind = String(node?.attrs?.processKind || '');
-    if (kind === 'import') return undefined;
+    if (kind === 'import' || kind === 'upload') return undefined;
 
     let cancelled = false;
 
@@ -101,13 +136,54 @@ export default function ImageProcessWatcher() {
           resolution: resolutionFor(kind, liveNode),
         });
         if (cancelled) return;
+
+        const layers = Array.isArray(res?.layers) ? res.layers : [];
+        if (layers.length > 0 && (kind === 'editElements' || kind === 'editText')) {
+          const persisted = await Promise.all(
+            layers.map(async (layer: any, i: number) => {
+              const src = String(layer?.src || '').trim();
+              if (!src || String(layer?.type) === 'text') return layer;
+              const url = await persistProcessedSrc(src, `${kind}-layer-${i + 1}.png`);
+              return { ...layer, src: url };
+            })
+          );
+          if (cancelled) return;
+          dispatch(
+            finishImageProcess({
+              nodeId: pendingId,
+              layers: persisted,
+              sourceWidth: Number(res.width) || undefined,
+              sourceHeight: Number(res.height) || undefined,
+            })
+          );
+          const labels: Record<string, string> = {
+            editElements: '元素拆分完成',
+            editText: '文字识别完成',
+          };
+          const warn = Array.isArray(res.warnings) ? res.warnings.filter(Boolean) : [];
+          if (warn.length) message.warning(warn[0]);
+          else message.success(labels[kind] || '处理完成');
+          refreshWallet(dispatch);
+          return;
+        }
+
         if (!res?.image) {
           fail('图片处理未返回结果');
           return;
         }
-        dispatch(finishImageProcess({ nodeId: pendingId, src: res.image }));
+        const storedUrl = await persistProcessedSrc(res.image, `${kind}.png`);
+        if (cancelled) return;
+        dispatch(
+          finishImageProcess({
+            nodeId: pendingId,
+            src: storedUrl,
+            ...(kind === 'removeBg'
+              ? { attrs: { cutout: 'true', name: '抠图' } }
+              : {}),
+          })
+        );
         const labels: Record<string, string> = {
-          removeBg: '去背景完成',
+          removeBg: '抠图完成（透明 PNG）',
           upscale: '高清放大完成',
           multiAngle: '多角度生成完成',
           expand: '扩展完成',
@@ -117,10 +193,10 @@ export default function ImageProcessWatcher() {
           adjust: '调整完成',
         };
         message.success(labels[kind] || '处理完成');
+        refreshWallet(dispatch);
       } catch (err: any) {
         if (cancelled) return;
-        const detail = err?.response?.data?.detail || err?.message || '图片处理失败';
-        fail(typeof detail === 'string' ? detail : '图片处理失败');
+        fail(processFailMessage(err));
       }
     };
 

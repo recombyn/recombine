@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react';
 import { BiExit } from 'react-icons/bi';
-import { HiOutlineEyeDropper } from 'react-icons/hi2';
 import Tooltip from '@/components/base/tooltip';
-import { pickScreenColor } from '@/components/editor/color/pickScreenColor';
 import { FillVisibilityIcon } from '@/components/editor/nodes/ShapeNode/FillVisibilityIcon';
 import { cn } from '@/utils/classnames';
 
@@ -159,8 +157,6 @@ export function StylePanelShell({
   bodyClassName,
   width,
   dataAttr,
-  /** When set, show eyedropper in the header (same as artboard color / ColorPanel). */
-  onEyedropper,
   /** Layer visibility (eye) — fill / stroke hide toggles live in the panel header. */
   layerVisible,
   onLayerVisibleChange,
@@ -175,7 +171,6 @@ export function StylePanelShell({
   bodyClassName?: string;
   width?: number;
   dataAttr?: string;
-  onEyedropper?: (hex: string) => void;
   layerVisible?: boolean;
   onLayerVisibleChange?: (visible: boolean) => void;
   layerVisibleTipShow?: string;
@@ -209,22 +204,6 @@ export function StylePanelShell({
                 className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
               >
                 <FillVisibilityIcon visible={Boolean(layerVisible)} className="h-[18px] w-[18px]" />
-              </button>
-            </Tooltip>
-          ) : null}
-          {onEyedropper ? (
-            <Tooltip title={'取色'} placement="bottom">
-              <button
-                type="button"
-                aria-label={'取色'}
-                onClick={() => {
-                  void pickScreenColor().then((hex) => {
-                    if (hex) onEyedropper(hex);
-                  });
-                }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-              >
-                <HiOutlineEyeDropper className="h-[18px] w-[18px]" />
               </button>
             </Tooltip>
           ) : null}

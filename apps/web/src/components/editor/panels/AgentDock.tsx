@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useDispatch, useSelector, useStore } from 'react-redux';
+import { useParams, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import {
   FloatingPortal,
   autoUpdate,
@@ -12,54 +12,550 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
-import { BiExit, BiMessageSquareAdd, BiTimeFive } from 'react-icons/bi';
+import { BiMessageSquareAdd, BiTimeFive } from 'react-icons/bi';
+import { LuPanelRight } from 'react-icons/lu';
 import {
-  HiCheck,
   HiOutlineChevronRight,
-  HiOutlineCog6Tooth,
   HiOutlineTrash,
 } from 'react-icons/hi2';
+import { Icon } from '@/components/base/icon';
 import {
   fetchLlmModels,
   generateImage,
+  isVolcanoCatalogModel,
   maxAttachmentsFor,
-  type ChatHistoryItem,
   type LlmModel,
 } from '@/apis/chat';
-import { ModelBrandIcon } from '@/components/editor/panels/agent/modelIcons';
-import { patchDocumentNode, setAgentBusy, setDocument, setPendingImageSrc } from '@/store/modules/editor';
 import {
-  useChatSessions,
-  type ChatUiMessage,
-} from '@/hooks/useChatSessions';
-import type { ChatSession } from '@/components/editor/panels/chatSessions';
-import { buildMarkdownTextAttrs, parseNodeText, parseNodeTextStyle } from '@/store/scene/sceneText';
+  peekHomeAgentBoot,
+  clearHomeAgentBoot,
+  attachmentsFromBoot,
+} from '@/utils/homeAgentBoot';
+import { setAgentBusy, setDocument, patchDocumentNode, pushEditorHistory, setSelectedNodeId } from '@/store/modules/editor';
+import {
+  addNodeToDocument,
+  createImageNode,
+} from '@/components/rcb/scene/sceneDocument';
+import {
+  deleteChatSessionApi,
+  fetchChatSessions,
+  upsertChatSessionApi,
+} from '@/apis/chatSessions';
+import { getToken } from '@/utils/token';
+import { deleteUploadedFile, uploadComposerAttachment } from '@/apis/upload';
+import { parseNodeText } from '@/components/rcb/scene/sceneText';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import {
+  chipBaseKey,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
-import { runDesignAgent } from '@/components/editor/panels/agent/runDesignAgent';
-import ChatTurnList from '@/components/editor/panels/agent/ChatTurnList';
-import AgentComposerShell from '@/components/editor/panels/agent/AgentComposerShell';
-import AgentSettingsDialog from '@/components/editor/panels/agent/AgentSettingsDialog';
 import {
-  categoryLabel,
-  getPipeline,
-  parsePipelineChoice,
-  readCollabMode,
-  writeCollabMode,
-  type AgentCollabMode,
-  type DesignCategory,
-} from '@/components/editor/panels/agent/designPipeline';
+  runDesignAgent,
+  resolveDesignTargetFrame,
+  nodeIdsInsideFrame,
+  frameIdContainingNode,
+  buildEditContextSvg,
+  buildSceneNodesForEdit,
+  buildSceneNodesForIds,
+  buildSceneNodesForCanvas,
+  buildSceneFramesSnapshot,
+} from '@/components/editor/panels/agent/runDesignAgent';
+import {
+  applyClientFrameHints,
+  applyMemoryPatch,
+  buildShortTermFromMessages,
+  buildTaskStateFromDocument,
+  emptyTaskState,
+  type MemoryPatch,
+  type TaskState,
+} from '@/components/editor/panels/agent/agentMemory';
+import ChatTurnList, { type ChatUiMessage } from '@/components/editor/panels/agent/ChatTurnList';
+import AgentComposerShell, {
+  type ComposerRunMode,
+} from '@/components/editor/panels/agent/AgentComposerShell';
+import { normalizeCanvasSizeChip } from '@/components/editor/chrome/SizePresetPanel';
+import {
+  customProvidersAsModels,
+  isCustomModelId,
+} from '@/components/editor/panels/agent/customLlmProviders';
+import { routeOverridesForApi } from '@/components/editor/panels/agent/AgentModelsPanel';
+import {
+  fetchDesignCatalog,
+  type DesignCatalog,
+  type DesignScene,
+} from '@/apis/design';
+import { setAllowedCanvasToolKeys } from '@/components/editor/panels/agent/toolOpsContract';
+import { type CanvasUiBridge } from '@/components/editor/panels/agent/designTools';
 import {
   DEFAULT_IMAGE_ASPECT_RATIO,
+  DEFAULT_IMAGE_COUNT,
   DEFAULT_IMAGE_QUALITY,
   DEFAULT_IMAGE_RESOLUTION,
 } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
-import { AUTO_STYLE_GUIDE } from '@/components/editor/panels/agent/designStyles';
+import ModelPickerPanel, {
+  AUTO_MODEL,
+  isImageKind,
+  modelDescription,
+  type ModelPickerTab,
+} from '@/components/editor/panels/agent/ModelPickerPanel';
 import { cn } from '@/utils/classnames';
+
+
+type ChatSessionMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  thinking?: string;
+  durationMs?: number;
+  intent?: string;
+  steps?: ChatUiMessage['steps'];
+  images?: string[];
+};
+
+type ChatSession = {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: ChatSessionMessage[];
+  taskState?: TaskState | null;
+};
+
+const MAX_CHAT_SESSIONS = 40;
+
+type ActivityStepEvent = {
+  kind: 'thought' | 'added' | 'updated' | 'explored' | 'skipped' | 'deleted' | 'tool';
+  status: 'running' | 'done';
+  durationSec?: number;
+  count?: number;
+  skillName?: string;
+  detail?: string;
+};
+
+function humanizeDesignError(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  raw: string | undefined | null
+): string {
+  const msg = String(raw || '').trim();
+  if (!msg) return t('agent.requestFailed');
+  // Never surface Python NameErrors / internal helper names to the chat face.
+  if (
+    /name\s+['`]_?\w+['`]\s+is not defined/i.test(msg) ||
+    /^NameError:/i.test(msg) ||
+    /_is_(analysis|summary)_skill/i.test(msg)
+  ) {
+    return t('agent.designExecFailed');
+  }
+  const low = msg.toLowerCase();
+  if (low.includes('missing_tool_ops')) return t('agent.designOpsMissing');
+  if (
+    low.startsWith('skill_failed:') ||
+    low.startsWith('tool_ops_invalid') ||
+    low.startsWith('validate_failed') ||
+    low.startsWith('final_validate')
+  ) {
+    return t('agent.designExecFailed');
+  }
+  // Hide other internal code-ish payloads.
+  if (/^[a-z][a-z0-9_]+:/i.test(msg) && !/\s/.test(msg.slice(0, 40))) {
+    return t('agent.designExecFailed');
+  }
+  return msg;
+}
+
+function formatActivityLabel(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  ev: ActivityStepEvent
+): string | null {
+  // Classic Cursor-style verbs — op details go under the label (step.summary).
+  if (ev.kind === 'thought') {
+    if (ev.status === 'running') return t('agent.activityThoughtRunning');
+    if (ev.status === 'done' && ev.durationSec != null) {
+      return t('agent.activityThought', { seconds: ev.durationSec });
+    }
+    return null;
+  }
+  if (ev.kind === 'added') {
+    return ev.count != null && ev.count > 0
+      ? t('agent.activityAddedCount', { count: ev.count })
+      : t('agent.activityAdded');
+  }
+  if (ev.kind === 'updated') {
+    return ev.count != null && ev.count > 0
+      ? t('agent.activityUpdatedCount', { count: ev.count })
+      : t('agent.activityUpdated');
+  }
+  if (ev.kind === 'explored') {
+    return ev.status === 'running'
+      ? t('agent.activityExploredRunning')
+      : t('agent.activityExplored');
+  }
+  if (ev.kind === 'skipped') return t('agent.activitySkipped');
+  if (ev.kind === 'deleted') {
+    return ev.count != null && ev.count > 0
+      ? t('agent.activityDeletedCount', { count: ev.count, defaultValue: `Deleted ${ev.count}` })
+      : t('agent.activityDeleted', { defaultValue: 'Deleted' });
+  }
+  // Tool call label stays short; op details go in step.summary.
+  return ev.status === 'running' ? t('agent.activityToolRunning') : t('agent.activityTool');
+}
+
+function titleFromMessages(messages: ChatSessionMessage[]): string {
+  const first = messages.find((m) => m.role === 'user' && m.content.trim());
+  if (!first) return '新对话';
+  const t = first.content.trim().replace(/\s+/g, ' ');
+  return t.length > 28 ? `${t.slice(0, 28)}…` : t;
+}
+
+function upsertChatSession(sessions: ChatSession[], next: ChatSession): ChatSession[] {
+  const without = sessions.filter((s) => s.id !== next.id);
+  return [next, ...without]
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, MAX_CHAT_SESSIONS);
+}
+
+function formatChatTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) {
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function chatUid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function isChatLoggedIn(): boolean {
+  return Boolean(getToken());
+}
+
+type PendingChatSync = {
+  projectId: string;
+  id: string;
+  title: string;
+  messages: ChatSessionMessage[];
+  taskState?: TaskState | null;
+  payloadJson: string;
+};
+
+function toUiMessages(session: ChatSession): ChatUiMessage[] {
+  return session.messages.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    thinking: m.thinking,
+    ...(typeof m.durationMs === 'number' ? { durationMs: m.durationMs } : {}),
+    ...(m.intent ? { intent: m.intent } : {}),
+    ...(m.steps?.length ? { steps: m.steps } : {}),
+    ...(m.images?.length ? { images: m.images } : {}),
+  }));
+}
+
+function dtoToSession(dto: {
+  id: string;
+  title: string;
+  updatedAt: number;
+  taskState?: TaskState | null;
+  messages?: Array<{
+    id?: string;
+    role: string;
+    content: string;
+    thinking?: string | null;
+    durationMs?: number | null;
+    intent?: string | null;
+    steps?: ChatUiMessage['steps'] | null;
+    images?: string[] | null;
+  }>;
+}): ChatSession {
+  return {
+    id: dto.id,
+    title: dto.title || '新对话',
+    updatedAt: dto.updatedAt || Date.now(),
+    taskState: dto.taskState || null,
+    messages: (dto.messages || []).map((m, i) => ({
+      id: m.id || `msg_${i}`,
+      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: m.content || '',
+      ...(m.thinking ? { thinking: m.thinking } : {}),
+      ...(typeof m.durationMs === 'number' ? { durationMs: m.durationMs } : {}),
+      ...(m.intent ? { intent: m.intent } : {}),
+      ...(m.steps?.length ? { steps: m.steps } : {}),
+      ...(m.images?.length ? { images: m.images } : {}),
+    })),
+  };
+}
+
+function messagesToPersisted(messages: ChatUiMessage[]): ChatSessionMessage[] {
+  return messages
+    .filter(
+      (m) =>
+        m.content ||
+        m.thinking ||
+        m.intent ||
+        (m.steps && m.steps.length) ||
+        (m.images && m.images.length)
+    )
+    .map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      ...(m.thinking ? { thinking: m.thinking } : {}),
+      ...(typeof m.durationMs === 'number' ? { durationMs: m.durationMs } : {}),
+      ...(m.intent ? { intent: m.intent } : {}),
+      ...(m.steps?.length
+        ? {
+            steps: m.steps.map((s) => ({
+              ...s,
+              status: s.status === 'running' ? ('done' as const) : s.status,
+            })),
+          }
+        : {}),
+      ...(m.images?.length ? { images: m.images } : {}),
+    }));
+}
+
+/** Agent chat — in-memory + API when logged in. No localStorage session dumps. */
+function useChatSessions(documentId: string | null | undefined) {
+  const scope = (documentId || '').trim() || '__none__';
+  const [readyScope, setReadyScope] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessionId, setSessionId] = useState(() => chatUid());
+  const [messages, setMessages] = useState<ChatUiMessage[]>([]);
+  const [taskState, setTaskState] = useState<TaskState | null>(null);
+  const [pendingLongSuggestions, setPendingLongSuggestions] = useState<
+    Array<{ kind: string; text: string }>
+  >([]);
+  const sessionsRef = useRef<ChatSession[]>([]);
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSyncRef = useRef<PendingChatSync | null>(null);
+  const lastSyncedJson = useRef<string>('');
+  const apiDisabledRef = useRef(false);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  const flushPendingSync = useCallback(() => {
+    if (syncTimer.current) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = null;
+    }
+    const pending = pendingSyncRef.current;
+    if (!pending || !isChatLoggedIn() || apiDisabledRef.current) return;
+    if (pending.payloadJson === lastSyncedJson.current) return;
+    pendingSyncRef.current = null;
+    void upsertChatSessionApi({
+      projectId: pending.projectId,
+      id: pending.id,
+      title: pending.title,
+      messages: pending.messages,
+      taskState: pending.taskState ?? undefined,
+    })
+      .then(() => {
+        lastSyncedJson.current = pending.payloadJson;
+      })
+      .catch((err: any) => {
+        if (err?.response?.status === 401) apiDisabledRef.current = true;
+        if (!pendingSyncRef.current) pendingSyncRef.current = pending;
+      });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    flushPendingSync();
+    setReadyScope(null);
+    setSessions([]);
+    setSessionId(chatUid());
+    setMessages([]);
+    setTaskState(null);
+    lastSyncedJson.current = '';
+
+    if (!isChatLoggedIn() || apiDisabledRef.current) {
+      setReadyScope(scope);
+      return;
+    }
+
+    (async () => {
+      try {
+        const res = await fetchChatSessions(scope);
+        if (cancelled) return;
+        const remote = (res.sessions || []).map((s) =>
+          dtoToSession({ ...s, taskState: s.taskState as TaskState | undefined })
+        );
+        setSessions(remote);
+        if (remote[0]) {
+          setSessionId(remote[0].id);
+          setMessages(toUiMessages(remote[0]));
+          setTaskState(remote[0].taskState || null);
+          lastSyncedJson.current = JSON.stringify({
+            id: remote[0].id,
+            title: remote[0].title,
+            messages: remote[0].messages,
+            taskState: remote[0].taskState || null,
+          });
+        } else {
+          setSessionId(chatUid());
+          setMessages([]);
+        }
+      } catch (err: any) {
+        if (err?.response?.status === 401) apiDisabledRef.current = true;
+        if (!cancelled) {
+          setSessionId(chatUid());
+          setMessages([]);
+        }
+      } finally {
+        if (!cancelled) setReadyScope(scope);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      flushPendingSync();
+    };
+  }, [scope, flushPendingSync]);
+
+  useEffect(() => {
+    const onUnauthorized = () => {
+      apiDisabledRef.current = true;
+    };
+    window.addEventListener('recombine:auth-unauthorized', onUnauthorized);
+    return () => window.removeEventListener('recombine:auth-unauthorized', onUnauthorized);
+  }, []);
+
+  useEffect(() => {
+    const onHide = () => flushPendingSync();
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flushPendingSync();
+    };
+    window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', onHide);
+      document.removeEventListener('visibilitychange', onVisibility);
+      flushPendingSync();
+    };
+  }, [flushPendingSync]);
+
+  useEffect(() => {
+    if (readyScope !== scope) return;
+    if (messages.some((m) => m.streaming)) return;
+
+    const persistedMsgs = messagesToPersisted(messages);
+    if (persistedMsgs.length === 0 && !taskState) return;
+
+    const persisted: ChatSession = {
+      id: sessionId,
+      title: titleFromMessages(persistedMsgs),
+      updatedAt: Date.now(),
+      messages: persistedMsgs,
+      taskState,
+    };
+    setSessions((prev) => upsertChatSession(prev, persisted));
+
+    if (!isChatLoggedIn() || apiDisabledRef.current) return;
+
+    const payloadJson = JSON.stringify({
+      id: persisted.id,
+      title: persisted.title,
+      messages: persisted.messages,
+      taskState: taskState || null,
+    });
+    if (payloadJson === lastSyncedJson.current) return;
+    pendingSyncRef.current = {
+      projectId: scope,
+      id: persisted.id,
+      title: persisted.title,
+      messages: persisted.messages,
+      taskState,
+      payloadJson,
+    };
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      flushPendingSync();
+    }, 600);
+
+    return () => {
+      if (syncTimer.current) {
+        clearTimeout(syncTimer.current);
+        syncTimer.current = null;
+      }
+    };
+  }, [messages, sessionId, scope, readyScope, flushPendingSync, taskState]);
+
+  const startNewChat = useCallback(() => {
+    flushPendingSync();
+    const id = chatUid();
+    setSessionId(id);
+    setMessages([]);
+    setTaskState(null);
+    lastSyncedJson.current = '';
+  }, [flushPendingSync]);
+
+  const openSession = useCallback(
+    (id: string) => {
+      flushPendingSync();
+      const found = sessionsRef.current.find((sess) => sess.id === id);
+      if (!found) return;
+      setSessionId(found.id);
+      setMessages(toUiMessages(found));
+      setTaskState(found.taskState || null);
+      lastSyncedJson.current = JSON.stringify({
+        id: found.id,
+        title: found.title,
+        messages: found.messages,
+        taskState: found.taskState || null,
+      });
+    },
+    [flushPendingSync]
+  );
+
+  const deleteSession = useCallback(
+    (id: string) => {
+      setSessions((prev) => prev.filter((sess) => sess.id !== id));
+      if (isChatLoggedIn()) {
+        deleteChatSessionApi(id).catch(() => {
+          /* ignore */
+        });
+      }
+      if (id === sessionId) {
+        const nid = chatUid();
+        setSessionId(nid);
+        setMessages([]);
+        setTaskState(null);
+        lastSyncedJson.current = '';
+      }
+    },
+    [sessionId]
+  );
+
+  const chatTitle =
+    messages.length === 0 ? '新对话' : titleFromMessages(messages as ChatSessionMessage[]);
+
+  return {
+    sessions,
+    sessionId,
+    messages,
+    setMessages,
+    chatTitle,
+    startNewChat,
+    openSession,
+    deleteSession,
+    formatChatTime,
+    newMessageId: chatUid,
+    taskState,
+    setTaskState,
+    pendingLongSuggestions,
+    setPendingLongSuggestions,
+  };
+}
 
 type AgentDockProps = {
   open: boolean;
@@ -75,32 +571,18 @@ type AgentDockProps = {
   draftImageAspectRatio?: string | null;
   draftImageQuality?: string | null;
   draftImageResolution?: string | null;
-  /** Right-click 「添加到 Chat」— node id to pin into the composer at caret. */
-  attachNodeId?: string | null;
+  /** Home → editor: product category scene (website / mobile / image / poster). */
+  draftScene?: DesignScene | null;
+  /** Right-click 「添加到 Chat」— node id, `frame:id`, or multiple ids as one 组N chip. */
+  attachToChat?: string | string[] | null;
   onAttachConsumed?: () => void;
   /** Onboarding spotlight target id (`data-tour`). */
   dataTour?: string;
+  /** Editor chrome bridge for zoom / panels / agent mode tools. */
+  canvasUi?: CanvasUiBridge | null;
 };
 
-function modelDescription(m: LlmModel, t: TFunction): string {
-  if (m.kind === 'image') return t('agent.modelDescImage');
-  if (m.thinking || m.id.includes('reasoner')) return t('agent.modelDescReasoner');
-  if (m.id.includes('deepseek')) return t('agent.modelDescDeepseek');
-  return t('agent.modelDescChat');
-}
-
-type ModelTabId = 'text' | 'image';
-
-const MODEL_TAB_IDS: ModelTabId[] = ['text', 'image'];
-
-function modelTabOf(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): ModelTabId {
-  if (m?.kind === 'image') return 'image';
-  // Seedream / image ids even if kind was omitted by an older API payload
-  if (m?.id && /seedream|image|i2i|t2i/i.test(m.id)) return 'image';
-  return 'text';
-}
-
-/** Merge catalog + imageModels; normalize kind so tabs never miss Seedream. */
+/** Merge catalog + imageModels; normalize kind so Seedream is always image. */
 function normalizeModelList(
   models: LlmModel[] | undefined,
   imageModels?: LlmModel[] | null
@@ -114,20 +596,23 @@ function normalizeModelList(
     if (!m?.id) continue;
     byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
   }
-  return [...byId.values()].map((m) => {
+  // Pro custom providers (local list) — selectable in design / Agent tab.
+  for (const m of customProvidersAsModels()) {
+    byId.set(m.id, m);
+  }
+  return [...byId.values()]
+    .filter((m) => m.provider === 'custom' || isVolcanoCatalogModel(m))
+    .map((m) => {
     const maxAttachments = maxAttachmentsFor(m);
     const base = { ...m, maxAttachments };
-    if (m.kind === 'image' || /seedream|image|i2i|t2i/i.test(m.id)) {
+    if (isImageKind(m)) {
       return { ...base, kind: 'image' as const };
     }
-    // Former "画布" svg bucket → show under 对话
+    // Former "画布" svg bucket → show under Agent text models
     if (m.kind === 'svg') return { ...base, kind: 'text' as const };
     return { ...base, kind: (m.kind || 'text') as LlmModel['kind'] };
   });
 }
-
-const POPOVER_PANEL =
-  'max-h-[min(320px,calc(100vh-96px))] w-[min(300px,calc(100vw-24px))] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
 
 function nodeKindLabel(node: any): string {
   const shape = String(node?.attrs?.shapeType || '');
@@ -144,7 +629,7 @@ function nodeKindLabel(node: any): string {
     polygon: '多边形',
     star: '星形',
     pen: '钢笔',
-    pencil: '铅笔',
+    pencil: '画笔',
     path: '路径',
   };
   return map[shape] || map[key] || key || '元素';
@@ -176,38 +661,22 @@ function numberedNodeLabel(document: any, nodeId: string): string {
   return `${base}${idx}`;
 }
 
-function selectionContext(document: any, nodeId: string | null) {
-  if (!document || !nodeId) return null;
-  const node = document.deltaSetLike?.[nodeId];
-  if (!node) return null;
-  if (node.key === 'text') {
-    const text = parseNodeText(node.attrs || {});
-    return {
-      kind: 'text' as const,
-      nodeId,
-      preview: text.slice(0, 200),
-      style: parseNodeTextStyle(node.attrs || {}),
-    };
+function nextGroupChipLabel(chips: ComposerContext[]): string {
+  let max = 0;
+  for (const c of chips) {
+    if (c.kind !== 'group' && c.kind !== 'multi') continue;
+    const m = /^组(\d+)$/.exec(String(c.label || '').trim());
+    if (m) max = Math.max(max, Number(m[1]) || 0);
   }
-  if (node.key === 'image') {
-    return {
-      kind: 'image' as const,
-      nodeId,
-      width: Number(node.width) || 0,
-      height: Number(node.height) || 0,
-    };
-  }
-  return {
-    kind: (node.key || 'shape') as string,
-    nodeId,
-    shapeType: node.attrs?.shapeType,
-  };
+  return `组${max + 1}`;
 }
 
 function buildComposerContext(
   document: any,
   selectedNodeIds: string[],
-  activeFrameId: string | null
+  activeFrameId: string | null,
+  /** Existing chips — used to name multi-select as 组1 / 组2 … */
+  existingChips: ComposerContext[] = []
 ): ComposerContext | null {
   const ids = selectedNodeIds.filter(Boolean);
   if (ids.length === 1) {
@@ -215,47 +684,48 @@ function buildComposerContext(
     const node = document?.deltaSetLike?.[id];
     if (!node) return null;
     const label = numberedNodeLabel(document, id);
-    const kindLabel = nodeKindLabel(node);
-    const w = Math.round(Number(node.width) || 0);
-    const h = Math.round(Number(node.height) || 0);
-    const x = Math.round(Number(node.x) || 0);
-    const y = Math.round(Number(node.y) || 0);
-    const fill = String(node.attrs?.['fill-color'] ?? node.attrs?.fill ?? '');
+    // Full snapshot (same shape as SCENE_NODES); artboard-local when inside a frame.
+    const containingFrameId = frameIdContainingNode(document, id);
+    const inventory = containingFrameId
+      ? buildSceneNodesForEdit(document, containingFrameId, [id]).find((n) => n.id === id) ||
+        buildSceneNodesForIds(document, [id])[0]
+      : buildSceneNodesForIds(document, [id])[0];
     const lines = [
-      '[Target element — EDIT THIS, do not create a duplicate]',
-      `id: ${id}`,
-      `name: ${label}`,
-      `kind: ${kindLabel}`,
-      `box: ${w}×${h} at (${x}, ${y})`,
-      fill ? `fill: ${fill}` : null,
-      'RULE: For color/size/text changes call update_node with this exact id. Never create_shape for an existing @-mentioned element.',
+      '[Target element — full node; update_node may change any field]',
+      containingFrameId ? `artboard_id: ${containingFrameId}` : null,
+      inventory ? JSON.stringify(inventory) : `id: ${id}`,
     ].filter(Boolean) as string[];
-    if (node.key === 'text') {
-      const preview = parseNodeText(node.attrs || {}).slice(0, 200);
-      lines.push(`text: ${preview || '(empty)'}`);
-    }
     return {
       key: `node:${id}`,
       label,
       kind: String(node.key || 'shape'),
       payload: lines.join('\n'),
+      ...(node.key === 'image' && String(node.attrs?.src || '').trim()
+        ? { thumbUrl: String(node.attrs.src).trim() }
+        : {}),
     };
   }
   if (ids.length > 1) {
-    const names = ids
-      .map((id) => numberedNodeLabel(document, id))
-      .slice(0, 4)
-      .join('、');
+    const key = `group:${[...ids].sort().join(',')}`;
+    const reused = existingChips.find((c) => chipBaseKey(c.key) === key);
+    const label = reused?.label || nextGroupChipLabel(existingChips);
+    const frameIds = [
+      ...new Set(ids.map((id) => frameIdContainingNode(document, id)).filter(Boolean)),
+    ] as string[];
+    const inventory =
+      frameIds.length === 1
+        ? buildSceneNodesForEdit(document, frameIds[0], ids).filter((n) => ids.includes(n.id))
+        : buildSceneNodesForIds(document, ids);
     return {
-      key: `nodes:${ids.slice().sort().join(',')}`,
-      label: `${ids.length} 个对象`,
-      kind: 'multi',
+      key,
+      label,
+      kind: 'group',
       payload: [
-        '[Target elements — EDIT THESE]',
+        '[Target group — full node snapshots; update_node may change any field]',
+        `group: ${label}`,
         `count: ${ids.length}`,
         `ids: ${ids.join(', ')}`,
-        `names: ${names}`,
-        'RULE: Call update_node (or delete_nodes) on these ids. Do not create_shape duplicates.',
+        JSON.stringify(inventory.slice(0, 40)),
       ].join('\n'),
     };
   }
@@ -267,22 +737,57 @@ function buildComposerContext(
   const name = String(frame.name || 'Frame');
   const w = Math.round(Number(frame.width) || 0);
   const h = Math.round(Number(frame.height) || 0);
+  const fx = Number(frame.x) || 0;
+  const fy = Number(frame.y) || 0;
+  const fw = Math.max(1, Number(frame.width) || 1);
+  const fh = Math.max(1, Number(frame.height) || 1);
+  const bg = String(frame.backgroundColor || 'transparent');
+
+  const childLines: string[] = [];
+  const rootChildren: string[] = document?.deltaSetLike?.ROOT?.children || [];
+  for (const id of rootChildren) {
+    const node = document?.deltaSetLike?.[id];
+    if (!node || !id) continue;
+    const { left, top } = nodeLeftTop(document, node);
+    const nw = Math.max(1, Number(node.width) || 1);
+    const nh = Math.max(1, Number(node.height) || 1);
+    // Treat as inside if the box mostly overlaps the artboard.
+    const ow = Math.max(0, Math.min(left + nw, fx + fw) - Math.max(left, fx));
+    const oh = Math.max(0, Math.min(top + nh, fy + fh) - Math.max(top, fy));
+    if (ow * oh < nw * nh * 0.4) continue;
+    const kind = nodeKindLabel(node);
+    const label = numberedNodeLabel(document, id);
+    const fill = String(node.attrs?.['fill-color'] ?? node.attrs?.fill ?? '');
+    let line = `- id=${id} name="${label}" kind=${kind} box=${Math.round(nw)}×${Math.round(nh)} at (${Math.round(left)},${Math.round(top)})`;
+    if (fill) line += ` fill=${fill}`;
+    if (node.key === 'text') {
+      const preview = parseNodeText(node.attrs || {}).slice(0, 120);
+      if (preview) line += ` text="${preview.replace(/\n/g, ' ')}"`;
+    }
+    childLines.push(line);
+    if (childLines.length >= 80) break;
+  }
+
   return {
     key: `frame:${activeFrameId}`,
     label: name,
     kind: 'frame',
     payload: [
-      '[Target canvas / artboard]',
+      '[Target artboard]',
       `id: ${activeFrameId}`,
       `name: ${name}`,
-      `size: ${w}×${h}`,
-      'Implement the user request ON this canvas (generate / place content inside this frame).',
+      `size: ${w}×${h} at (${Math.round(fx)}, ${Math.round(fy)})`,
+      `background: ${bg}`,
+      `elements (${childLines.length}):`,
+      ...(childLines.length
+        ? childLines
+        : ['(empty artboard — no scene nodes inside yet)']),
     ].join('\n'),
   };
 }
 
 const AGENT_DOCK_WIDTH_KEY = 'agent-dock-width';
-const AGENT_DOCK_MIN_W = 280;
+const AGENT_DOCK_MIN_W = 340;
 const AGENT_DOCK_MAX_W = 560;
 const AGENT_DOCK_DEFAULT_W = 360;
 
@@ -323,42 +828,50 @@ export default function AgentDock({
   draftImageAspectRatio,
   draftImageQuality,
   draftImageResolution,
-  attachNodeId,
+  draftScene,
+  attachToChat,
   onAttachConsumed,
   dataTour,
+  canvasUi: canvasUiProp,
 }: AgentDockProps): ReactNode {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const dispatch = useDispatch();
   const store = useStore();
   const document = useSelector((s: any) => s.editor.document);
-  const selectedNodeId = useSelector((s: any) => s.editor.selectedNodeId as string | null);
   const activeFrameId = useSelector(
     (s: any) => (s.editor.document?.activeFrameId as string | null) ?? null
-  );
-  const ctx = useMemo(
-    () => selectionContext(document, selectedNodeId),
-    [document, selectedNodeId]
   );
 
   const [models, setModels] = useState<LlmModel[]>([]);
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [available, setAvailable] = useState<boolean | null>(null);
-  const [model, setModel] = useState('');
-  const [imageAspectRatio, setImageAspectRatio] = useState<string>(DEFAULT_IMAGE_ASPECT_RATIO);
+  const [model, setModel] = useState('auto');
+  const [imageAspectRatio, setImageAspectRatio] = useState<string>('auto');
   const [imageQuality, setImageQuality] = useState<string>(DEFAULT_IMAGE_QUALITY);
   const [imageResolution, setImageResolution] = useState<string>(DEFAULT_IMAGE_RESOLUTION);
+  const [imageCount, setImageCount] = useState<number>(DEFAULT_IMAGE_COUNT);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   /** @ / cube → model panel */
   const [modelPanelOpen, setModelPanelOpen] = useState(false);
-  const [modelTab, setModelTab] = useState<ModelTabId>('text');
+  /** Left tab in model panel: design | image */
+  const [modelPanelTab, setModelPanelTab] = useState<ModelPickerTab>('design');
   /** Context chips in the composer (right-click 添加到 Chat + file attachments). */
   const [contextChips, setContextChips] = useState<ComposerContext[]>([]);
+  const contextChipsRef = useRef<ComposerContext[]>([]);
+  contextChipsRef.current = contextChips;
   const pinnedContextKeysRef = useRef<Set<string>>(new Set());
   const contextDismissedKeyRef = useRef<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [collabMode, setCollabMode] = useState<AgentCollabMode>(() => readCollabMode());
+  const [composerMode, setComposerMode] = useState<ComposerRunMode>('agent');
+  const [styleGroupId, setStyleGroupId] = useState<number | null>(null);
+  const [designScene, setDesignScene] = useState<DesignScene | null>(null);
+  const designSceneRef = useRef<DesignScene | null>(null);
+  /** Last design SVG per artboard — sent back on edit-in-place follow-ups. */
+  const lastAgentSvgByFrameRef = useRef<Map<string, string>>(new Map());
+  const lastAgentFrameIdRef = useRef<string | null>(null);
+  const [designCatalog, setDesignCatalog] = useState<DesignCatalog | null>(null);
+  const canvasUi = canvasUiProp || null;
   const [newChatTip, setNewChatTip] = useState(false);
   /** Cursor-like: edit a past user message in-place. */
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -366,6 +879,11 @@ export default function AgentDock({
   const [dockWidth, setDockWidth] = useState(AGENT_DOCK_DEFAULT_W);
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const currentId = useSelector((s: any) => s.editor.currentId as string | null);
+  const { projectId: routeProjectId } = useParams<{ projectId?: string }>();
+  const location = useLocation();
+  // Prefer Redux; fall back to /editor/:projectId so we don't hit projectId=__none__ while hydrating.
+  const chatScopeId =
+    (currentId || '').trim() || decodeURIComponent((routeProjectId || '').trim()) || null;
   const {
     sessions,
     sessionId,
@@ -377,10 +895,16 @@ export default function AgentDock({
     deleteSession: removeChatSession,
     formatChatTime,
     newMessageId,
-  } = useChatSessions(currentId);
+    taskState,
+    setTaskState,
+    pendingLongSuggestions,
+    setPendingLongSuggestions,
+  } = useChatSessions(chatScopeId);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<AgentComposerHandle | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** Home → editor auto-send; flushed when modelsStatus leaves idle/loading. */
+  const pendingAutoSubmitRef = useRef<string | null>(null);
   /** Pre-command document snapshots keyed by user message id. In-memory only. */
   const checkpointsRef = useRef<Map<string, any>>(new Map());
   /** After agent mutates canvas: show Undo / Keep / Review above composer. */
@@ -388,19 +912,30 @@ export default function AgentDock({
     userMessageId: string;
     assistantId: string;
   } | null>(null);
-  /** Paused fixed pipeline — resume when user clicks 继续：… */
-  const pipelineSessionRef = useRef<{
-    category: DesignCategory;
-    brief: string;
-    /** Next phase to run on 继续 */
-    nextIndex: number;
-    /** Phase that just finished (for 重新执行当前步骤) */
-    currentIndex: number;
-  } | null>(null);
   const newChatTipTimer = useRef<number | null>(null);
 
   useEffect(() => {
+    const fid = taskState?.canvas?.last_agent_frame_id;
+    if (fid) lastAgentFrameIdRef.current = String(fid);
+  }, [sessionId, taskState?.canvas?.last_agent_frame_id]);
+
+  useEffect(() => {
     setDockWidth(readStoredAgentDockWidth());
+  }, []);
+
+
+  useEffect(() => {
+    void fetchDesignCatalog()
+      .then((cat) => {
+        setDesignCatalog(cat);
+        const keys = (cat.canvas_tools || []).map((t) => t.op_key).filter(Boolean);
+        if (keys.length) setAllowedCanvasToolKeys(keys);
+        if (styleGroupId == null && cat.style_groups?.[0]) {
+          setStyleGroupId(cat.style_groups[0].id);
+        }
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   }, []);
 
   useEffect(() => {
@@ -476,16 +1011,10 @@ export default function AgentDock({
         setModels(list);
         setModelsStatus('ready');
         setAvailable(Boolean(res?.available));
-        const preferred =
-          list.find((m) => m.id === 'deepseek-chat')?.id ||
-          list.find((m) => m.id === 'deepseek-reasoner')?.id ||
-          list.find((m) => m.provider === 'deepseek' && m.kind !== 'image')?.id ||
-          list.find((m) => m.kind !== 'image')?.id ||
-          list[0]?.id ||
-          '';
         setModel((prev) => {
+          if (prev === 'auto') return prev;
           if (prev && list.some((m) => m.id === prev)) return prev;
-          return preferred;
+          return 'auto';
         });
         if (!res?.available) {
           message.warning(
@@ -524,25 +1053,21 @@ export default function AgentDock({
     }
     if (draftModelId) {
       setModel(draftModelId);
-      setModelTab(modelTabOf({ id: draftModelId }));
+      setComposerMode(isImageKind({ id: draftModelId }) ? 'image' : 'agent');
     }
     if (draftImageAspectRatio) setImageAspectRatio(draftImageAspectRatio);
     if (draftImageQuality) setImageQuality(draftImageQuality);
     if (draftImageResolution) setImageResolution(draftImageResolution);
+    if (draftScene) {
+      setDesignScene(draftScene);
+      designSceneRef.current = draftScene;
+    }
     onDraftConsumed?.();
     if (shouldAuto) {
-      // Wait until model list settles so send() sees available / model id.
-      const trySend = () => {
-        if (modelsStatus === 'loading' || modelsStatus === 'idle') return false;
-        void send(text);
-        return true;
-      };
-      if (!trySend()) {
-        const id = window.setInterval(() => {
-          if (trySend()) window.clearInterval(id);
-        }, 80);
-        window.setTimeout(() => window.clearInterval(id), 8000);
-      }
+      // Queue only — do not close over modelsStatus/send (stale interval never fires).
+      pendingAutoSubmitRef.current = text;
+      // Show in composer immediately so a failed/late send still leaves the prompt visible.
+      setInput(text);
     } else {
       setInput(text);
       queueMicrotask(() => inputRef.current?.focus());
@@ -550,22 +1075,63 @@ export default function AgentDock({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot draft consume
   }, [open, draftPrompt, autoSubmitDraft, onDraftConsumed]);
 
+  /** Fallback: home boot still in sessionStorage but parent never passed draftPrompt (route remount). */
+  useEffect(() => {
+    if (!open) return;
+    // Wait until createNew finished — otherwise chat lands on the previous project scope.
+    if (new URLSearchParams(location.search).get('createNew') === '1') return;
+    if (draftPrompt) return;
+    if (pendingAutoSubmitRef.current) return;
+    const boot = peekHomeAgentBoot();
+    if (!boot?.prompt?.trim() || !boot.autoSubmit) return;
+    const text = boot.prompt.trim();
+    if (boot.attachments?.length) {
+      const extra = attachmentsFromBoot(boot);
+      setContextChips((prev) => {
+        const keys = new Set(prev.map((c) => c.key));
+        return [...prev, ...extra.filter((a) => !keys.has(a.key))];
+      });
+    }
+    if (boot.modelId) {
+      setModel(boot.modelId);
+      setComposerMode(isImageKind({ id: boot.modelId }) ? 'image' : 'agent');
+    }
+    if (boot.imageAspectRatio) setImageAspectRatio(boot.imageAspectRatio);
+    if (boot.imageQuality) setImageQuality(boot.imageQuality);
+    if (boot.imageResolution) setImageResolution(boot.imageResolution);
+    if (boot.scene) {
+      setDesignScene(boot.scene);
+      designSceneRef.current = boot.scene;
+    }
+    pendingAutoSubmitRef.current = text;
+    setInput(text);
+    clearHomeAgentBoot();
+  }, [open, draftPrompt, location.search]);
+
   /** Right-click 「添加到 Chat」— insert at last caret (do not setState first — that rewrites chips to the front). */
   useEffect(() => {
-    if (!open || !attachNodeId || !document) return;
-    const isFrame = attachNodeId.startsWith('frame:');
-    const ctx = isFrame
-      ? buildComposerContext(document, [], attachNodeId.slice('frame:'.length))
-      : buildComposerContext(document, [attachNodeId], null);
+    if (!open || attachToChat == null || !document) return;
+    const chips = contextChipsRef.current;
+    let ctx: ComposerContext | null = null;
+    if (Array.isArray(attachToChat)) {
+      const ids = attachToChat.map(String).filter(Boolean);
+      ctx = ids.length ? buildComposerContext(document, ids, null, chips) : null;
+    } else {
+      const token = String(attachToChat);
+      const isFrame = token.startsWith('frame:');
+      ctx = isFrame
+        ? buildComposerContext(document, [], token.slice('frame:'.length), chips)
+        : buildComposerContext(document, [token], null, chips);
+    }
     onAttachConsumed?.();
     if (!ctx) return;
     pinnedContextKeysRef.current.add(ctx.key);
     contextDismissedKeyRef.current = null;
     // Defer so blur caret snapshot is already stored on the composer.
     queueMicrotask(() => {
-      inputRef.current?.insertContextAtCaret(ctx);
+      inputRef.current?.insertContextAtCaret(ctx!);
     });
-  }, [open, attachNodeId, document, onAttachConsumed]);
+  }, [open, attachToChat, document, onAttachConsumed]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -591,6 +1157,7 @@ export default function AgentDock({
     }
     abortRef.current?.abort();
     setSending(false);
+    dispatch(setAgentBusy(false));
     resetChatSession();
     setInput('');
     setEditDraft('');
@@ -598,7 +1165,6 @@ export default function AgentDock({
     setContextChips([]);
     pinnedContextKeysRef.current.clear();
     setPendingReview(null);
-    pipelineSessionRef.current = null;
     contextDismissedKeyRef.current = null;
     setHistoryOpen(false);
     setModelPanelOpen(false);
@@ -613,6 +1179,7 @@ export default function AgentDock({
 
   const openSession = (s: ChatSession) => {
     abortRef.current?.abort();
+    dispatch(setAgentBusy(false));
     setSending(false);
     loadChatSession(s.id);
     setHistoryOpen(false);
@@ -635,13 +1202,55 @@ export default function AgentDock({
     }
   };
 
-  const [tickNow, setTickNow] = useState(() => Date.now());
+
+  const formatAgentDuration = useCallback(
+    (totalSeconds: number) => {
+      const s = Math.max(1, totalSeconds);
+      const lang = i18n.language || 'en';
+      if (s < 60) {
+        return lang.startsWith('zh') ? `${s} 秒` : lang.startsWith('ja') ? `${s}秒` : `${s}s`;
+      }
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      if (lang.startsWith('zh')) return r ? `${m} 分 ${r} 秒` : `${m} 分`;
+      if (lang.startsWith('ja')) return r ? `${m} 分 ${r} 秒` : `${m} 分`;
+      return r ? `${m}m ${r}s` : `${m}m`;
+    },
+    [i18n.language]
+  );
+
+  const [processTick, setProcessTick] = useState(0);
   useEffect(() => {
-    const live = sending || messages.some((m) => m.streaming);
-    if (!live) return;
-    const id = window.setInterval(() => setTickNow(Date.now()), 1000);
+    if (!messages.some((m) => m.streaming)) return;
+    const id = window.setInterval(() => setProcessTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
-  }, [sending, messages]);
+  }, [messages]);
+
+  const formatWorked = useCallback(
+    (assistant?: ChatUiMessage) => {
+      if (!assistant) return null;
+      if (assistant.streaming) {
+        if (assistant.drawing) return t('agent.liveDrawing');
+        if (assistant.startedAt) {
+          const s = Math.max(1, Math.round((Date.now() - assistant.startedAt) / 1000));
+          return t('agent.workedFor', { duration: formatAgentDuration(s) });
+        }
+        if (assistant.intent?.trim() || (assistant.steps && assistant.steps.length > 0)) {
+          return t('agent.workedFor', { duration: formatAgentDuration(1) });
+        }
+        return t('agent.working');
+      }
+      if (assistant.durationMs != null) {
+        const s = Math.max(1, Math.round(assistant.durationMs / 1000));
+        return t('agent.workedFor', { duration: formatAgentDuration(s) });
+      }
+      if (assistant.intent?.trim() || (assistant.steps && assistant.steps.length > 0)) {
+        return t('agent.workLog');
+      }
+      return null;
+    },
+    [formatAgentDuration, processTick, t]
+  );
 
   const chatTurns = useMemo(() => {
     const turns: Array<{ user: ChatUiMessage | null; assistant?: ChatUiMessage }> = [];
@@ -662,21 +1271,14 @@ export default function AgentDock({
     return turns;
   }, [messages]);
 
-  const formatWorked = (assistant?: ChatUiMessage) => {
-    if (!assistant) return null;
-    if (assistant.streaming) {
-      const ms = Math.max(0, tickNow - (assistant.startedAt || tickNow));
-      const s = Math.max(1, Math.round(ms / 1000));
-      return `Working… ${s}s`;
+  const clearContextChips = (opts?: { purgeUploads?: boolean }) => {
+    if (opts?.purgeUploads) {
+      for (const c of contextChips) {
+        if (c.kind === 'attachment' && c.uploadKey) {
+          void deleteUploadedFile(c.uploadKey).catch(() => {});
+        }
+      }
     }
-    if (assistant.durationMs != null) {
-      const s = Math.max(1, Math.round(assistant.durationMs / 1000));
-      return `Worked for ${s}s`;
-    }
-    return null;
-  };
-
-  const clearContextChips = () => {
     const keys = contextChips.map((c) => c.key);
     if (keys.length) contextDismissedKeyRef.current = keys[keys.length - 1];
     keys.forEach((k) => pinnedContextKeysRef.current.delete(k));
@@ -688,17 +1290,12 @@ export default function AgentDock({
     for (const c of removed) {
       pinnedContextKeysRef.current.delete(c.key);
       contextDismissedKeyRef.current = c.key;
+      if (c.kind === 'attachment' && c.uploadKey) {
+        void deleteUploadedFile(c.uploadKey).catch(() => {});
+      }
     }
     setContextChips(next);
   };
-
-  const readFileAsDataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(reader.error || new Error('read failed'));
-      reader.readAsDataURL(file);
-    });
 
   const handleAttachFiles = async (files: File[]) => {
     const MAX = 10 * 1024 * 1024;
@@ -726,18 +1323,16 @@ export default function AgentDock({
         continue;
       }
       try {
-        const dataUrl = await readFileAsDataUrl(file);
-        if (!dataUrl.startsWith('data:image/')) {
-          message.warning(t('agent.attachReadFailed', { name: file.name }));
-          continue;
-        }
+        const uploaded = await uploadComposerAttachment(file);
         const key = `attachment:${file.name}:${file.size}:${file.lastModified}:${Math.random().toString(36).slice(2, 8)}`;
         const ctx: ComposerContext = {
           key,
           label: file.name,
           kind: 'attachment',
           payload: `[Attached image]\nname: ${file.name}\nmime: ${file.type}`,
-          dataUrl,
+          dataUrl: uploaded.imageRef,
+          thumbUrl: uploaded.previewDataUrl,
+          uploadKey: uploaded.uploadKey || undefined,
         };
         pinnedContextKeysRef.current.add(key);
         // Attachments render above the input (not as inline chips).
@@ -750,22 +1345,45 @@ export default function AgentDock({
   };
 
   const selectedModelLabel =
-    models.find((m) => m.id === model)?.label || (models[0]?.label ?? 'Agent');
-  const selectedModel = models.find((m) => m.id === model);
-  const isImageModelSelected = selectedModel?.kind === 'image';
+    model === 'auto'
+      ? 'Auto'
+      : models.find((m) => m.id === model)?.label || (models[0]?.label ?? 'Agent');
+  const selectedModel =
+    model === 'auto' ? AUTO_MODEL : models.find((m) => m.id === model);
+  const isImageModelSelected = composerMode === 'image' || isImageKind(selectedModel);
   const attachmentLimit = maxAttachmentsFor(selectedModel);
   const attachmentCount = contextChips.filter((c) => c.kind === 'attachment').length;
   const attachFull = attachmentCount >= attachmentLimit;
-  const imageAspectProps = isImageModelSelected
-    ? {
-        imageAspectRatio,
-        onImageAspectRatioChange: setImageAspectRatio,
-        imageQuality,
-        onImageQualityChange: setImageQuality,
-        imageResolution,
-        onImageResolutionChange: setImageResolution,
+  const imageAspectProps = {
+    aspectPickerVariant: (composerMode === 'image' ? 'image' : 'design') as 'design' | 'image',
+    imageAspectRatio,
+    onImageAspectRatioChange: setImageAspectRatio,
+    onDesignSceneChange: (scene: DesignScene | null) => {
+      setDesignScene(scene);
+      designSceneRef.current = scene;
+      if (scene === 'image') {
+        setComposerMode('image');
+        setModelPanelTab('image');
+        const images = models.filter((m) => isImageKind(m));
+        const preferred =
+          images.find((m) => /seedream/i.test(m.id)) || images[0];
+        if (preferred) setModel(preferred.id);
+      } else {
+        // Poster / Mobile / Website / Auto → Design + Auto
+        setComposerMode('agent');
+        setModelPanelTab('design');
+        setModel('auto');
       }
-    : {};
+    },
+    imageQuality,
+    onImageQualityChange: setImageQuality,
+    imageResolution,
+    onImageResolutionChange: setImageResolution,
+    imageCount,
+    onImageCountChange: setImageCount,
+    // Dock sits at the bottom of the panel — open the size menu upward.
+    aspectMenuPlacement: 'top-start' as const,
+  };
   const attachProps = {
     onAttachFiles: attachFull ? undefined : handleAttachFiles,
     attachTooltip: attachFull
@@ -773,39 +1391,17 @@ export default function AgentDock({
       : t('agent.uploadImage'),
   };
 
-  const applyTextToSelection = (content: string) => {
-    if (!ctx || ctx.kind !== 'text') return;
-    const plain = content.trim();
-    if (!plain) return;
-    dispatch(
-      patchDocumentNode({
-        nodeId: ctx.nodeId,
-        patch: { attrs: buildMarkdownTextAttrs(plain, ctx.style) },
-      })
-    );
-  };
-
   const buildUserMessage = (text: string) => {
+    // Pass-through only: explicit composer chips + user text. No FE intent routing.
     const parts: string[] = [];
     if (contextChips.length) {
       parts.push(
         ...contextChips.map((c) =>
           c.kind === 'attachment'
-            ? `[Attached image]\nname: ${c.label}\n(Use this image as reference; binary is provided separately to the image model when applicable.)`
+            ? `[Attached image]\nname: ${c.label}`
             : c.payload
         )
       );
-    } else if (ctx) {
-      // Fallback if chip dismissed but selection still useful for Apply.
-      if (ctx.kind === 'text') {
-        parts.push(`[Target element]\nkind: text\nid: ${ctx.nodeId}\ntext: ${ctx.preview || '(empty)'}`);
-      } else if (ctx.kind === 'image') {
-        parts.push(
-          `[Target element]\nkind: image\nid: ${ctx.nodeId}\nsize: ${Math.round(ctx.width)}×${Math.round(ctx.height)}`
-        );
-      } else {
-        parts.push(`[Target element]\nkind: ${ctx.kind}\nid: ${ctx.nodeId}`);
-      }
     }
     parts.push(`User request:\n${text}`);
     return parts.join('\n\n');
@@ -826,6 +1422,146 @@ export default function AgentDock({
           : m.durationMs,
   });
 
+  /** Fill a shape node with an image (rect / ellipse / …). Returns false if not fillable. */
+  const fillNodeWithImage = useCallback(
+    (nodeId: string, src: string, skipHistory = false): boolean => {
+      const url = String(src || '').trim();
+      const id = String(nodeId || '').trim();
+      if (!url || !id) return false;
+      const doc = (store.getState() as any).editor?.document;
+      const node = doc?.deltaSetLike?.[id];
+      if (!node) return false;
+      const key = String(node.key || '').toLowerCase();
+      if (['text', 'frame', 'artboard', 'group'].includes(key)) return false;
+      if (key === 'image') {
+        if (!skipHistory) dispatch(pushEditorHistory());
+        dispatch(
+          patchDocumentNode({
+            nodeId: id,
+            skipHistory: true,
+            patch: { attrs: { src: url } },
+          })
+        );
+        return true;
+      }
+      const shape = String(node.attrs?.shapeType || key || '').toLowerCase();
+      if (['line', 'arrow', 'pen', 'pencil'].includes(shape)) return false;
+      if (!skipHistory) dispatch(pushEditorHistory());
+      dispatch(
+        patchDocumentNode({
+          nodeId: id,
+          skipHistory: true,
+          patch: {
+            attrs: {
+              'fill-type': 'image',
+              'fill-enabled': 'true',
+              'fill-visible': 'true',
+              'fill-image-src': url,
+              'fill-image-fit': 'fill',
+            },
+          },
+        })
+      );
+      return true;
+    },
+    [dispatch, store]
+  );
+
+  const addGeneratedImageToCanvas = useCallback(
+    (src: string, preferNodeIds?: string[]) => {
+      const url = String(src || '').trim();
+      if (!url) return;
+      const ed = (store.getState() as any).editor;
+      const doc = ed?.document;
+      if (!doc) {
+        message.warning(t('agent.noCanvas', { defaultValue: 'No canvas open' }));
+        return;
+      }
+      const candidates = [
+        ...(preferNodeIds || []),
+        ...((Array.isArray(ed.selectedNodeIds) ? ed.selectedNodeIds : []) as string[]),
+        ed.selectedNodeId,
+      ].filter(Boolean) as string[];
+      for (const id of candidates) {
+        if (fillNodeWithImage(id, url)) {
+          message.success(
+            t('agent.imageFilledOnCanvas', { defaultValue: 'Filled selection with image' })
+          );
+          return;
+        }
+      }
+
+      const place = () => {
+        let x = 80;
+        let y = 80;
+        const frames = Array.isArray(doc.frames) ? doc.frames : [];
+        const active =
+          frames.find((f: { id?: string }) => f.id === doc.activeFrameId) || frames[0];
+        if (active) {
+          x = Number(active.x || 0) + 40;
+          y = Number(active.y || 0) + 40;
+        }
+        const maxEdge = 480;
+        const img = new Image();
+        img.onload = () => {
+          let w = Math.max(8, img.naturalWidth || 320);
+          let h = Math.max(8, img.naturalHeight || 320);
+          const scale = Math.min(1, maxEdge / Math.max(w, h));
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+          const { id, node } = createImageNode({
+            x,
+            y,
+            width: w,
+            height: h,
+            src: url,
+            name: 'Image',
+            assetKind: 'image',
+          });
+          dispatch(setDocument(addNodeToDocument(doc, id, node)));
+          dispatch(setSelectedNodeId(id));
+          message.success(
+            t('agent.imageAddedToCanvas', { defaultValue: 'Added image to canvas' })
+          );
+        };
+        img.onerror = () => {
+          const { id, node } = createImageNode({
+            x,
+            y,
+            width: 320,
+            height: 320,
+            src: url,
+            name: 'Image',
+            assetKind: 'image',
+          });
+          dispatch(setDocument(addNodeToDocument(doc, id, node)));
+          dispatch(setSelectedNodeId(id));
+          message.success(
+            t('agent.imageAddedToCanvas', { defaultValue: 'Added image to canvas' })
+          );
+        };
+        img.src = url;
+      };
+      place();
+    },
+    [dispatch, fillNodeWithImage, store, t]
+  );
+
+  const stopGeneration = () => {
+    abortRef.current?.abort();
+    dispatch(setAgentBusy(false));
+    setSending(false);
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.streaming
+          ? finishAssistantPatch(m, {
+              content: m.content?.trim() ? m.content : t('agent.stopped'),
+            })
+          : m
+      )
+    );
+  };
+
   const send = async (
     opts?:
       | string
@@ -844,6 +1580,8 @@ export default function AgentDock({
       message.warning(
         '未配置 API Key。请在 apps/api/.env 中设置 DEEPSEEK_API_KEY 或 LLM_API_KEY。'
       );
+      setInput(text);
+      queueMicrotask(() => inputRef.current?.focus());
       return;
     }
 
@@ -859,9 +1597,6 @@ export default function AgentDock({
       [!options.raw && contextLabel, text].filter(Boolean).join('\n');
     const userMsg: ChatUiMessage = { id: newMessageId(), role: 'user', content: userFacing };
     const assistantId = newMessageId();
-    const history: ChatHistoryItem[] = baseMessages
-      .filter((m) => !m.streaming && m.content)
-      .map((m) => ({ role: m.role, content: m.content }));
 
     setInput('');
     setModelPanelOpen(false);
@@ -869,84 +1604,297 @@ export default function AgentDock({
     setEditDraft('');
     setPendingReview(null);
     const attachedImages = contextChips
-      .map((c) => c.dataUrl)
-      .filter((u): u is string => Boolean(u));
-    setContextChips((prev) => {
-      for (const c of prev) {
-        if (c.kind === 'attachment') pinnedContextKeysRef.current.delete(c.key);
+      .filter((c) => c.kind === 'attachment' && c.dataUrl)
+      .map((c) => String(c.dataUrl))
+      .filter((u) => u.startsWith('data:image/') || u.startsWith('http'));
+    const frameChip = contextChips.find((c) => c.kind === 'frame');
+    let chipFrameId = frameChip
+      ? chipBaseKey(frameChip.key).replace(/^frame:/, '')
+      : null;
+    const nodeChipIds = [
+      ...new Set(
+        contextChips
+          .map((c) => chipBaseKey(c.key))
+          .filter((k) => k.startsWith('node:'))
+          .map((k) => k.replace(/^node:/, ''))
+          .filter(Boolean)
+      ),
+    ];
+    const groupChip = contextChips.find((c) => c.kind === 'group' || c.kind === 'multi');
+    const groupMemberIds =
+      groupChip
+        ? chipBaseKey(groupChip.key)
+            .replace(/^group:/, '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+    const mentionNodeIds = nodeChipIds.length ? nodeChipIds : groupMemberIds;
+    // Build API prompt while chips still exist — clearing first drops [Target element]
+    // so the backend never sees @ and may create a new artboard instead of edit/delete.
+    const userMessageForApi = options.raw ? text : buildUserMessage(text);
+    const imageGenCount = isImageModelSelected
+      ? Math.min(4, Math.max(1, Number(imageCount) || 1))
+      : 0;
+    // Resolve image aspect before first paint so shimmer cards match the picker (e.g. 9:16).
+    let imageGenAspect = '1:1';
+    let imageFillTargets: string[] = [];
+    if (imageGenCount) {
+      const docForFill = (store.getState() as any).editor?.document;
+      imageFillTargets = mentionNodeIds.filter((id) => {
+        const n = docForFill?.deltaSetLike?.[id];
+        if (!n) return false;
+        const key = String(n.key || '').toLowerCase();
+        if (['text', 'frame', 'artboard', 'group'].includes(key)) return false;
+        const shape = String(n.attrs?.shapeType || key || '').toLowerCase();
+        return !['line', 'arrow', 'pen', 'pencil'].includes(shape);
+      });
+      imageGenAspect =
+        imageAspectRatio && imageAspectRatio !== 'auto' && imageAspectRatio !== 'smart'
+          ? imageAspectRatio
+          : '1:1';
+      if (imageFillTargets[0] && docForFill) {
+        const n = docForFill.deltaSetLike[imageFillTargets[0]];
+        const tw = Math.max(1, Number(n?.width) || 0);
+        const th = Math.max(1, Number(n?.height) || 0);
+        if (tw > 0 && th > 0) {
+          imageGenAspect = `${Math.round(tw)}:${Math.round(th)}`;
+        }
       }
-      return prev.filter((c) => c.kind !== 'attachment');
-    });
+    }
+    clearContextChips();
     setSending(true);
     setMessages([
       ...baseMessages,
       userMsg,
-      { id: assistantId, role: 'assistant', content: '', thinking: '', steps: [], streaming: true, startedAt: Date.now() },
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        // Design agent: Thought row. Image tab: shimmer cards only (no Thinking / Generating text).
+        ...(imageGenCount
+          ? {
+              imagePendingCount: imageGenCount,
+              imageAspectRatio: imageGenAspect,
+              steps: [],
+            }
+          : {
+              steps: [
+                {
+                  id: 'skill-0',
+                  name: t('agent.activityThoughtRunning'),
+                  status: 'running' as const,
+                },
+              ],
+            }),
+        streaming: true,
+        startedAt: Date.now(),
+      },
     ]);
 
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
 
-    const selected = models.find((m) => m.id === model);
-    const isImageModel = selected?.kind === 'image';
-
-    if (isImageModel) {
+    // Image tab → Seedream rasters (gallery), not design SVG/JSON tool_ops.
+    // If user @mentioned a shape, generate to its aspect and auto-fill it.
+    if (isImageModelSelected) {
+      dispatch(setAgentBusy(true));
+      const count = imageGenCount;
+      const fillTargets = imageFillTargets;
+      const aspect = imageGenAspect;
       try {
-        const result = await generateImage({
-          prompt: buildUserMessage(text),
-          model: model || undefined,
-          aspect_ratio: imageAspectRatio || undefined,
-          quality: imageQuality || undefined,
-          resolution: imageResolution || undefined,
-          images: attachedImages.length ? attachedImages : undefined,
-        });
-        const img = result.images?.[0];
-        const note =
-          result.text?.trim() ||
-          (img ? t('agent.imageGenerated') : t('agent.imageFailed'));
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? finishAssistantPatch(m, { content: note }) : m
-          )
+        // Parallel per-slot gens (Seedream `n` is unreliable). Each ready card unlocks
+        // immediately — no more 「第 2 张一直扫光」while waiting on a serial queue.
+        const slotUrls = Array.from({ length: count }, () => '');
+        const publishSlots = () => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    images: [...slotUrls],
+                    imagePendingCount: count,
+                    imageAspectRatio: aspect,
+                  }
+                : m
+            )
+          );
+        };
+        await Promise.all(
+          Array.from({ length: count }, async (_, i) => {
+            if (ac.signal.aborted) return;
+            try {
+              const res = await generateImage({
+                prompt: text,
+                model: model || undefined,
+                aspect_ratio: aspect,
+                quality: imageQuality || undefined,
+                resolution: imageResolution || undefined,
+                images: attachedImages.length ? attachedImages : undefined,
+                signal: ac.signal,
+              });
+              let url = '';
+              for (const u of res.images || []) {
+                if (typeof u === 'string' && u.trim()) {
+                  url = u.trim();
+                  break;
+                }
+              }
+              const assetUrl = (res.assets || [])
+                .map((a) => (typeof a?.url === 'string' ? a.url.trim() : ''))
+                .find(Boolean);
+              if (assetUrl) url = assetUrl;
+              if (url) {
+                slotUrls[i] = url;
+                publishSlots();
+              }
+            } catch {
+              // Leave this slot as shimmer until the batch settles.
+            }
+          })
         );
-        if (img) {
-          dispatch(setPendingImageSrc(img));
+        const urls = slotUrls.filter(Boolean);
+        if (ac.signal.aborted) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId && m.streaming
+                ? finishAssistantPatch(m, {
+                    content: m.content?.trim() ? m.content : t('agent.stopped'),
+                    images: urls.length ? urls : m.images?.filter(Boolean),
+                    imagePendingCount: undefined,
+                    imageAspectRatio: aspect,
+                    steps: [],
+                  })
+                : m
+            )
+          );
+        } else if (!urls.length) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? finishAssistantPatch(m, {
+                    content: t('agent.requestFailed'),
+                    imagePendingCount: undefined,
+                    imageAspectRatio: aspect,
+                    steps: [],
+                  })
+                : m
+            )
+          );
+        } else {
+          let filled = 0;
+          if (fillTargets.length) {
+            dispatch(pushEditorHistory());
+            const n = Math.min(fillTargets.length, urls.length);
+            for (let i = 0; i < n; i += 1) {
+              if (fillNodeWithImage(fillTargets[i], urls[i], true)) filled += 1;
+            }
+          }
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? finishAssistantPatch(m, {
+                    content: filled
+                      ? t('agent.imageFilledOnCanvas', {
+                          defaultValue: 'Filled selection with image',
+                        })
+                      : '',
+                    images: urls,
+                    imagePendingCount: undefined,
+                    imageAspectRatio: aspect,
+                    steps: [],
+                  })
+                : m
+            )
+          );
         }
-      } catch (err: any) {
-        const detail =
-          err?.response?.data?.detail || err?.message || 'Image generation failed';
-        const msg = typeof detail === 'string' ? detail : JSON.stringify(detail);
-        message.error(msg);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? finishAssistantPatch(m, { content: m.content || t('agent.requestFailed') })
-              : m
-          )
-        );
+      } catch (err) {
+        if (!ac.signal.aborted) {
+          const msg =
+            err instanceof Error && err.message
+              ? err.message
+              : t('agent.requestFailed');
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? finishAssistantPatch(m, {
+                    content: humanizeDesignError(t, msg),
+                    imagePendingCount: undefined,
+                    steps: [],
+                  })
+                : m
+            )
+          );
+        }
+      } finally {
+        dispatch(setAgentBusy(false));
+        setSending(false);
       }
-      setSending(false);
       return;
     }
 
-    // Cursor-like agent: DeepSeek tools → SVG canvas mutations.
-    const frameChip = contextChips.find((c) => c.kind === 'frame');
-    const targetFrameId = frameChip
-      ? frameChip.key.replace(/^frame:/, '')
-      : activeFrameId;
+    // Always call design job; backend decides chat vs canvas pipeline.
+    const docNow = (store.getState() as any).editor.document;
+    if (!chipFrameId && mentionNodeIds.length && docNow) {
+      chipFrameId = frameIdContainingNode(docNow, mentionNodeIds[0]);
+    }
+    // Free-canvas @ shape: do not bind last agent artboard (would clamp ops into it).
+    const freeCanvasMention = Boolean(mentionNodeIds.length && !chipFrameId && !frameChip);
+    const editTarget =
+      docNow && !freeCanvasMention
+        ? resolveDesignTargetFrame(
+            docNow,
+            chipFrameId,
+            lastAgentFrameIdRef.current || taskState?.canvas?.last_agent_frame_id || null
+          )
+        : null;
+    const targetFrameId = freeCanvasMention
+      ? null
+      : editTarget?.id || chipFrameId || null;
+    const seedLiveNodeIds =
+      editTarget && docNow
+        ? nodeIdsInsideFrame(docNow, editTarget.id)
+        : freeCanvasMention && docNow
+          ? mentionNodeIds
+          : [];
+    const currentSvg =
+      (targetFrameId && lastAgentSvgByFrameRef.current.get(targetFrameId)) ||
+      (lastAgentFrameIdRef.current &&
+        lastAgentSvgByFrameRef.current.get(lastAgentFrameIdRef.current)) ||
+      (editTarget && docNow ? buildEditContextSvg(docNow, editTarget.id) : null) ||
+      null;
+    const sceneNodes = docNow
+      ? buildSceneNodesForCanvas(docNow, {
+          focusFrameId: targetFrameId,
+          forceIds: mentionNodeIds,
+        })
+      : [];
+    const sceneFrames = docNow ? buildSceneFramesSnapshot(docNow) : [];
+    console.info('[AgentDock] design payload', {
+      canvasId: chatScopeId || null,
+      focusFrameId: targetFrameId,
+      nodeCount: sceneNodes.length,
+      frameCount: sceneFrames.length,
+      frames: sceneFrames.map((f) => ({
+        id: f.id,
+        name: f.name,
+        is_empty: f.is_empty,
+        w: f.w,
+        h: f.h,
+      })),
+      nodeSample: sceneNodes.slice(0, 8).map((n) => ({
+        id: n.id,
+        type: n.type,
+        frameId: n.frameId,
+        w: n.w,
+        h: n.h,
+      })),
+      note: 'canvasId is chat/project scope only; backend does not load doc by this id',
+    });
 
-    const MUTATING = new Set([
-      'create_shape',
-      'create_text',
-      'create_image',
-      'update_node',
-      'delete_nodes',
-      'update_frame',
-      'create_frame',
-    ]);
     let canvasMutated = false;
-    const docBefore = (store.getState() as any).editor.document;
+    const docBefore = docNow;
     if (docBefore) {
       try {
         checkpointsRef.current.set(userMsg.id, JSON.parse(JSON.stringify(docBefore)));
@@ -955,171 +1903,318 @@ export default function AgentDock({
       }
     }
 
-    const userImages = contextChips
-      .filter((c) => c.kind === 'attachment' && c.dataUrl)
-      .map((c) => String(c.dataUrl));
-    const attachmentNote = userImages.length
-      ? `[User attached images: ${userImages.length}]\nUse create_image with attachmentIndex 0..${userImages.length - 1} to place them.\nWithout attachmentIndex, create_image inserts a placeholder SVG.`
-      : `[No user images attached]\nFor photo/illustration slots call create_image (placeholder). Do not generate bitmaps.`;
-
     dispatch(setAgentBusy(true));
+    let designStarted = false;
+    let nodesPainted = false;
+    const memoryMedium = buildTaskStateFromDocument({
+      doc: docNow,
+      sessionId,
+      projectId: chatScopeId || '__none__',
+      focusFrameId: chipFrameId || targetFrameId,
+      lastAgentFrameId: lastAgentFrameIdRef.current,
+      config: {
+        scene: (designSceneRef.current ?? designScene) || undefined,
+        style_group_id: styleGroupId ?? designCatalog?.style_groups?.[0]?.id ?? null,
+        model: model || 'auto',
+      },
+      prior:
+        taskState ||
+        emptyTaskState({ sessionId, projectId: chatScopeId || '__none__' }),
+    });
+    const memoryShort = buildShortTermFromMessages(
+      [...baseMessages, userMsg].map((m) => ({
+        role: m.role,
+        content: m.content || '',
+      }))
+    );
     try {
-      const resume = pipelineSessionRef.current;
-      let pipelineResume:
-        | { category: DesignCategory; phaseIndex: number; brief: string }
-        | null = null;
-      const rawText = options.raw ? text : null;
-      if (rawText && resume) {
-        const pipe = getPipeline(resume.category);
-        const choiceLabel = String(options.displayContent || rawText);
-        const hit = parsePipelineChoice(choiceLabel, pipe);
-        if (hit?.action === 'stop') {
-          pipelineSessionRef.current = null;
-        } else if (hit?.action === 'continue') {
-          pipelineResume = {
-            category: resume.category,
-            phaseIndex: hit.phaseIndex,
-            brief: resume.brief,
-          };
-        } else if (hit?.action === 'retry') {
-          pipelineResume = {
-            category: resume.category,
-            phaseIndex: Math.max(0, resume.currentIndex),
-            brief: `${resume.brief}\n\n【系统】用户要求重新执行当前步骤「${pipe[resume.currentIndex]?.label || ''}」，在本阶段内重做/修正，不要跳到后续阶段。`,
-          };
-        } else if (hit?.action === 'redesign') {
-          pipelineResume = {
-            category: resume.category,
-            phaseIndex: 0,
-            brief: `${resume.brief}\n\n【系统】用户要求重新设计：从第一步「${pipe[0]?.label || '结构'}」起重做整套流程，可调整或重建画板内容。`,
-          };
-        } else if (/^继续/.test(rawText) || /^继续/.test(choiceLabel)) {
-          pipelineResume = {
-            category: resume.category,
-            phaseIndex: resume.nextIndex,
-            brief: resume.brief,
-          };
-        }
-      }
-
+      const chipNorm = normalizeCanvasSizeChip(imageAspectRatio);
+      const sendScene = designSceneRef.current ?? designScene;
+      // Always send the composer size chip; backend owns edit vs create sizing.
+      const sendCanvasSize = (() => {
+        if (/^\d+x\d+$/.test(chipNorm)) return chipNorm;
+        if (chipNorm === 'auto') return 'auto';
+        if (/^(?:\d+xauto|autox\d+)$/.test(chipNorm)) return chipNorm;
+        return undefined;
+      })();
+      console.info('[AgentDock] design send', {
+        scene: sendScene,
+        canvasSize: sendCanvasSize,
+        chip: chipNorm,
+      });
       await runDesignAgent({
-        userMessage: options.raw ? text : buildUserMessage(text),
-        styleGuide: AUTO_STYLE_GUIDE,
-        collabMode,
-        pipelineResume,
-        model: model || undefined,
-        history: history.filter(
-          (h): h is { role: 'user' | 'assistant'; content: string } =>
-            h.role === 'user' || h.role === 'assistant'
-        ),
-        contextPayload: options.raw
-          ? null
-          : [attachmentNote, contextChips.map((c) => c.payload).filter(Boolean).join('\n\n')]
-              .filter(Boolean)
-              .join('\n\n') || null,
+        userMessage: userMessageForApi,
+        runMode: 'agent',
+        scene: sendScene,
+        styleGroupId: styleGroupId ?? designCatalog?.style_groups?.[0]?.id ?? null,
+        model: isCustomModelId(model) ? 'auto' : model || 'auto',
+        routeOverrides:
+          !model || model === 'auto' || isCustomModelId(model)
+            ? routeOverridesForApi()
+            : null,
+        canvasSize: sendCanvasSize,
+        canvasId: chatScopeId || undefined,
+        currentSvg: currentSvg || undefined,
+        seedLiveNodeIds: seedLiveNodeIds.length ? seedLiveNodeIds : undefined,
+        sceneNodes: sceneNodes.length ? sceneNodes : undefined,
+        sceneFrames: sceneFrames.length ? sceneFrames : undefined,
+        focusFrameId: targetFrameId || undefined,
+        images: attachedImages.length ? attachedImages : undefined,
+        sessionId,
+        projectId: chatScopeId || '__none__',
+        canvasUi,
+        memory: {
+          medium: memoryMedium,
+          short: memoryShort,
+          retrieve_long: true,
+        },
+        onMemoryPatch: (patch: MemoryPatch, hints) => {
+          setTaskState((prev) => {
+            const base =
+              prev ||
+              emptyTaskState({ sessionId, projectId: chatScopeId || '__none__' });
+            let next = applyMemoryPatch(base, patch);
+            next = applyClientFrameHints(next, {
+              lastAgentFrameId: hints.lastAgentFrameId || undefined,
+            });
+            return next;
+          });
+          if (hints.lastAgentFrameId) {
+            lastAgentFrameIdRef.current = String(hints.lastAgentFrameId);
+          }
+          if (patch.long_suggestions?.length) {
+            setPendingLongSuggestions((prev) => [
+              ...prev,
+              ...patch.long_suggestions!.filter(
+                (s) => !prev.some((p) => p.text === s.text)
+              ),
+            ]);
+          }
+        },
         dispatch,
         getDocument: () => (store.getState() as any).editor.document,
         targetFrameId,
-        userImages,
         signal: ac.signal,
         onEvent: (ev) => {
-          if (ev.type === 'thinking') {
+          if (ev.type === 'token') {
+            designStarted = false;
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantId ? { ...m, thinking: (m.thinking || '') + ev.text } : m
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content: (m.content || '') + (ev.text || ''),
+                      intent: undefined,
+                      thinking: undefined,
+                    }
+                  : m
               )
             );
             return;
           }
-          if (ev.type === 'token') {
+          if (ev.type === 'thinking' && ev.text) {
+            // AI summary of CoT (replace:true) or rare stream chunks.
+            const piece = String(ev.text);
+            if (!piece) return;
+            const replace = Boolean(ev.replace);
             setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + ev.text } : m))
+              prev.map((m) => {
+                if (m.id !== assistantId) return m;
+                const steps = [...(m.steps || [])];
+                let idx = steps.findIndex(
+                  (s) =>
+                    s.status === 'running' &&
+                    /thinking|thought|思考/i.test(String(s.name || ''))
+                );
+                if (idx < 0) {
+                  idx = steps.findIndex((s) => s.status === 'running');
+                }
+                if (idx < 0 && steps.length) idx = steps.length - 1;
+                if (idx < 0) {
+                  steps.push({
+                    id: 'thought-live',
+                    name: t('agent.activityThoughtRunning'),
+                    summary: piece.slice(-1500),
+                    status: 'running',
+                  });
+                  return { ...m, steps };
+                }
+                const nextSummary = replace
+                  ? piece
+                  : `${steps[idx].summary || ''}${piece}`;
+                steps[idx] = {
+                  ...steps[idx],
+                  summary: replace
+                    ? nextSummary.slice(0, 1500)
+                    : nextSummary.length > 1500
+                      ? nextSummary.slice(-1500)
+                      : nextSummary,
+                };
+                return { ...m, steps };
+              })
+            );
+            return;
+          }
+          if (ev.type === 'analysis_delta' && ev.text) {
+            // Design brief under Thought — drop model-invented section titles.
+            let piece = String(ev.text).replace(
+              /^\s*(?:用户)?意图分析\s*[:：]\s*/i,
+              ''
+            );
+            piece = piece.replace(/^\s*intent\s*analysis\s*[:：]\s*/i, '');
+            if (!piece.trim()) return;
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (m.id !== assistantId) return m;
+                const steps = [...(m.steps || [])];
+                let idx = steps.findIndex(
+                  (s) =>
+                    s.status === 'running' &&
+                    /thinking|thought|思考/i.test(String(s.name || ''))
+                );
+                if (idx < 0) idx = steps.findIndex((s) => s.status === 'running');
+                if (idx < 0 && steps.length) idx = steps.length - 1;
+                if (idx < 0) return m;
+                const merged = `${steps[idx].summary || ''}${piece}`;
+                steps[idx] = {
+                  ...steps[idx],
+                  summary: merged.length > 1500 ? merged.slice(-1500) : merged,
+                };
+                return { ...m, steps };
+              })
+            );
+            return;
+          }
+          if (ev.type === 'canvas' && ev.size) {
+            const next = String(ev.size).trim();
+            const sendLocked = /^\d+x\d+$/.test(chipNorm);
+            // Auto / partial-auto: execute resolved WxH on canvas, but keep picker chip on Auto.
+            const keepAutoChip =
+              chipNorm === 'auto' || /^(?:\d+xauto|autox\d+)$/.test(chipNorm);
+            if (!sendLocked && next && !keepAutoChip) {
+              setImageAspectRatio(next);
+            }
+            // Auto keeps size chip; still stick model/backend scene for next-turn continuity.
+            if (
+              ev.scene === 'website' ||
+              ev.scene === 'mobile' ||
+              ev.scene === 'image' ||
+              ev.scene === 'poster'
+            ) {
+              setDesignScene(ev.scene);
+              designSceneRef.current = ev.scene;
+            }
+            return;
+          }
+          if (ev.type === 'analysis' && ev.text) {
+            // Cursor-style fold = activity steps only (图1). Skip intent essays.
+            return;
+          }
+          if (ev.type === 'drawing') {
+            designStarted = true;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, drawing: Boolean(ev.active) } : m
+              )
+            );
+            return;
+          }
+          if (ev.type === 'activity') {
+            // Thought / explore does not mean canvas paint started (agent loop chat).
+            if (ev.kind === 'tool' || ev.kind === 'added' || ev.kind === 'updated') {
+              designStarted = true;
+            }
+            const label = formatActivityLabel(t, {
+              kind: ev.kind,
+              status: ev.status === 'running' ? 'running' : 'done',
+              durationSec: ev.durationSec,
+              count: ev.count,
+              skillName: ev.skillName,
+              detail: ev.detail,
+            });
+            if (!label) return;
+            // Tool call: "Tool call" + op list under it (Cursor-style, like 图1).
+            const summary =
+              ev.kind === 'tool' ? (ev.detail || '').trim() || undefined : undefined;
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (m.id !== assistantId) return m;
+                const steps = [...(m.steps || [])];
+                const next = {
+                  id: ev.id,
+                  name: label,
+                  summary,
+                  status: (ev.status === 'running' ? 'running' : 'done') as
+                    | 'running'
+                    | 'done',
+                };
+                const idx = steps.findIndex((s) => s.id === ev.id);
+                if (idx >= 0) {
+                  // Keep prior summary if this update has none (e.g. Tool call done after detail).
+                  steps[idx] = {
+                    ...next,
+                    summary: next.summary || steps[idx].summary,
+                  };
+                } else steps.push(next);
+                return { ...m, steps };
+              })
             );
             return;
           }
           if (ev.type === 'phase') {
-            const p = ev.progress;
+            // Agent loop phases are soft; only drawing/tool_ops mark designStarted.
+            const labels = ev.progress.labels || [];
+            const currentIndex = ev.progress.currentIndex;
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
                   ? {
                       ...m,
                       pipeline: {
-                        category: categoryLabel(p.category),
-                        labels: p.labels,
-                        currentIndex: p.currentIndex,
-                        stepConfirm: p.stepConfirm,
-                        collabMode: p.collabMode,
+                        category: ev.progress.category,
+                        labels,
+                        currentIndex,
+                        stepConfirm: Boolean(ev.progress.stepConfirm),
+                        collabMode:
+                          (ev.progress.collabMode as
+                            | 'collaborative'
+                            | 'milestone'
+                            | 'auto'
+                            | undefined) || 'auto',
                       },
                     }
                   : m
               )
             );
-            pipelineSessionRef.current = {
-              category: p.category,
-              brief:
-                pipelineSessionRef.current?.brief ||
-                String(pipelineResume?.brief || '')
-                  .split(/\n\n【系统】/)[0]
-                  .trim() ||
-                (options.raw ? text : buildUserMessage(text)),
-              nextIndex: p.currentIndex + 1,
-              currentIndex: p.currentIndex,
-            };
             return;
           }
-          if (ev.type === 'tool_start') {
-            setMessages((prev) =>
-              prev.map((m) => {
-                if (m.id !== assistantId) return m;
-                const steps = [...(m.steps || [])];
-                steps.push({ id: ev.id, name: ev.name, status: 'running' });
-                return { ...m, steps };
-              })
-            );
-            return;
-          }
-          if (ev.type === 'tool_result') {
-            if (MUTATING.has(ev.name) && ev.result.status !== 'error') {
-              canvasMutated = true;
+          if (ev.type === 'svg_delta') {
+            designStarted = true;
+            if (ev.svg) {
+              const fid =
+                targetFrameId ||
+                lastAgentFrameIdRef.current ||
+                (store.getState() as any).editor.document?.activeFrameId ||
+                null;
+              if (fid) {
+                lastAgentSvgByFrameRef.current.set(String(fid), ev.svg);
+                lastAgentFrameIdRef.current = String(fid);
+              }
             }
-            const askOpts = Array.isArray(ev.result.artifacts?.options)
-              ? (ev.result.artifacts!.options as unknown[]).map((x) => String(x))
-              : undefined;
-            setMessages((prev) =>
-              prev.map((m) => {
-                if (m.id !== assistantId) return m;
-                const steps = (m.steps || []).map((s) =>
-                  s.id === ev.id
-                    ? {
-                        ...s,
-                        status: (ev.result.status === 'error' ? 'error' : 'done') as
-                          | 'done'
-                          | 'error',
-                        summary: ev.result.summary,
-                      }
-                    : s
-                );
-                if (ev.name === 'ask_user' || ev.result.artifacts?.ask) {
-                  return {
-                    ...m,
-                    steps,
-                    content: m.content || ev.result.summary || m.content,
-                    choices: askOpts?.length ? askOpts : m.choices,
-                  };
-                }
-                return { ...m, steps };
-              })
-            );
+            // Actual layer paint count comes from done.painted (empty SVG must not look "updated").
             return;
           }
           if (ev.type === 'error') {
-            message.error(ev.message);
+            const friendly = humanizeDesignError(t, ev.message);
+            message.error(friendly);
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
                   ? finishAssistantPatch(m, {
-                      content: m.content || ev.message || t('agent.requestFailed'),
+                      content: m.content || friendly || t('agent.requestFailed'),
+                      thinking: undefined,
+                      pipeline: undefined,
+                      drawing: undefined,
                     })
                   : m
               )
@@ -1127,25 +2222,52 @@ export default function AgentDock({
             return;
           }
           if (ev.type === 'done') {
-            if (ev.pipelinePaused && pipelineSessionRef.current) {
-              // keep session for 继续
-            } else if (!ev.choices?.length) {
-              pipelineSessionRef.current = null;
+            const painted = Boolean(ev.painted);
+            if (painted) {
+              canvasMutated = true;
+              nodesPainted = true;
             }
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.id === assistantId) {
+                  let result = '';
+                  if (m.content?.trim() && !designStarted) {
+                    // Chat divert reply
+                    result = m.content.trim();
+                  } else if (painted) {
+                    const rawProcess = (m.thinking || m.intent || '').trim();
+                    const hasIntentAnalysis =
+                      Boolean(rawProcess) && !/<svg\b|<\/svg>/i.test(rawProcess);
+                    const fromSummary = ev.summary?.trim();
+                    // Prefer backend/model summary; FE i18n is chrome-only fallback.
+                    if (fromSummary) {
+                      result = fromSummary;
+                    } else if (hasIntentAnalysis) {
+                      result = t('agent.canvasReadyHint');
+                    } else {
+                      result = t('agent.canvasUpdated');
+                    }
+                  } else if (designStarted) {
+                    result = t('agent.designEmptyResult');
+                  } else {
+                    result = m.content?.trim() || t('agent.stopped');
+                  }
                   return finishAssistantPatch(m, {
-                    content:
-                      m.content ||
-                      ev.summary ||
-                      (m.steps?.length ? t('agent.designDone') : m.content),
-                    ...(ev.choices?.length ? { choices: ev.choices } : {}),
+                    content: result,
+                    thinking: undefined,
+                    pipeline: undefined,
+                    drawing: undefined,
+                    intent: undefined,
+                    choices: ev.choices?.length ? ev.choices : undefined,
+                    steps: (m.steps || []).map((s) => ({
+                      ...s,
+                      status: s.status === 'error' ? s.status : ('done' as const),
+                    })),
                   });
                 }
                 if (
                   m.id === userMsg.id &&
-                  canvasMutated &&
+                  painted &&
                   checkpointsRef.current.has(userMsg.id)
                 ) {
                   return { ...m, canRestore: true };
@@ -1166,8 +2288,35 @@ export default function AgentDock({
       }
     }
 
+    if (ac.signal.aborted) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId && m.streaming
+            ? finishAssistantPatch(m, {
+                content: m.content?.trim() ? m.content : t('agent.stopped'),
+              })
+            : m
+        )
+      );
+    }
+
     setSending(false);
   };
+
+  /** Flush home-agent auto-submit once model list has settled (ready or error). */
+  useEffect(() => {
+    if (!open) return;
+    if (new URLSearchParams(location.search).get('createNew') === '1') return;
+    // Prefer scoped project id so the user message is not wiped by createTemplate scope switch.
+    const routeId = decodeURIComponent((routeProjectId || '').trim());
+    if (currentId && routeId && routeId !== currentId) return;
+    const text = pendingAutoSubmitRef.current;
+    if (!text) return;
+    if (modelsStatus === 'loading' || modelsStatus === 'idle') return;
+    pendingAutoSubmitRef.current = null;
+    void send(text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, modelsStatus, draftPrompt, location.search, currentId, routeProjectId]);
 
   const dismissPendingReview = (opts?: { dropCheckpoint?: boolean }) => {
     if (opts?.dropCheckpoint && pendingReview) {
@@ -1184,7 +2333,6 @@ export default function AgentDock({
   const undoPendingReview = () => {
     if (!pendingReview) return;
     restoreCheckpoint(pendingReview.userMessageId);
-    dismissPendingReview({ dropCheckpoint: true });
   };
 
   const keepPendingReview = () => {
@@ -1198,6 +2346,7 @@ export default function AgentDock({
     );
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
+
 
   const beginEditUserMessage = (m: ChatUiMessage) => {
     if (m.role !== 'user' || sending || m.streaming) return;
@@ -1231,6 +2380,14 @@ export default function AgentDock({
       return;
     }
     dispatch(setDocument(JSON.parse(JSON.stringify(snap))));
+    checkpointsRef.current.delete(userMessageId);
+    setMessages((prev) =>
+      prev.map((m) => (m.id === userMessageId ? { ...m, canRestore: false } : m))
+    );
+    // Bubble undo and Canvas updated Undo/Keep/Review share one checkpoint.
+    setPendingReview((prev) =>
+      prev?.userMessageId === userMessageId ? null : prev
+    );
     message.success(t('agent.restored'));
   };
 
@@ -1243,7 +2400,6 @@ export default function AgentDock({
     if (at >= 0) {
       const after = value.slice(at + 1);
       if (!/\s/.test(after)) {
-        setModelTab(modelTabOf(models.find((m) => m.id === model)));
         setModelPanelOpen(true);
         return;
       }
@@ -1269,12 +2425,24 @@ export default function AgentDock({
       if (attachments.length <= limit) return prev;
       const keep = new Set(attachments.slice(0, limit).map((c) => c.key));
       for (const a of attachments) {
-        if (!keep.has(a.key)) pinnedContextKeysRef.current.delete(a.key);
+        if (!keep.has(a.key)) {
+          pinnedContextKeysRef.current.delete(a.key);
+          if (a.uploadKey) void deleteUploadedFile(a.uploadKey).catch(() => {});
+        }
       }
       message.warning(t('agent.attachTrimmed', { count: limit }));
       return prev.filter((c) => c.kind !== 'attachment' || keep.has(c.key));
     });
     setModel(id);
+    if (id === 'auto') {
+      setComposerMode('agent');
+      setModelPanelTab('design');
+    } else {
+      const picked = models.find((m) => m.id === id);
+      const image = isImageKind(picked);
+      setComposerMode(image ? 'image' : 'agent');
+      setModelPanelTab(image ? 'image' : 'design');
+    }
     closePopovers();
     // Only strip a trailing @-query used to open the model panel (ASCII token).
     // Do NOT use /@[^\s]*$/ — Chinese has no spaces, so that wipes the whole draft.
@@ -1283,6 +2451,11 @@ export default function AgentDock({
     if (editingUserId) setEditDraft(stripModelAtQuery);
     else setInput(stripModelAtQuery);
     inputRef.current?.focus();
+  };
+
+  const switchModelPanelTab = (tab: ModelPickerTab) => {
+    // Tab is only a filter for browsing — do not reset the active model / mode.
+    setModelPanelTab(tab);
   };
 
   /** Anchor model menu to its icon (not full-width over the composer). */
@@ -1311,15 +2484,22 @@ export default function AgentDock({
 
   const modelButtonProps = {
     ref: modelFloating.refs.setReference,
-    title: selectedModelLabel,
+    title:
+      model === 'auto'
+        ? modelDescription(AUTO_MODEL, t)
+        : (() => {
+            const m = models.find((x) => x.id === model);
+            if (!m) return selectedModelLabel;
+            return `${m.label || m.id} — ${modelDescription(m, t)}`;
+          })(),
+    label: selectedModel?.label || selectedModelLabel,
     open: modelPanelOpen,
     onClick: () => {
-      const current = models.find((m) => m.id === model);
-      setModelTab(modelTabOf(current));
+      setModelPanelTab(composerMode === 'image' ? 'image' : 'design');
       setModelPanelOpen((v) => !v);
     },
     getReferenceProps: modelIx.getReferenceProps,
-    icon: <ModelBrandIcon model={selectedModel || { id: model }} size={18} />,
+    icon: <Icon name="editor-model-cube" width={16} height={16} />,
   };
 
   const escapeComposer = (opts?: { cancelEdit?: boolean }) => {
@@ -1328,7 +2508,7 @@ export default function AgentDock({
       return;
     }
     if (contextChips.length) {
-      clearContextChips();
+      clearContextChips({ purgeUploads: true });
       return;
     }
     if (opts?.cancelEdit) cancelEditUserMessage();
@@ -1344,7 +2524,9 @@ export default function AgentDock({
       onChange={onEditDraftChange}
       onSubmit={() => void submitEditUserMessage()}
       onEscape={() => escapeComposer({ cancelEdit: true })}
-      disabled={sending}
+      sending={sending}
+      onStop={stopGeneration}
+      disabled={false}
       placeholder={composerPlaceholder}
       canSend={!sending && !!editDraft.trim() && available !== false}
       {...attachProps}
@@ -1385,10 +2567,10 @@ export default function AgentDock({
             <button
               type="button"
               aria-label={t('agent.newChat')}
-              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
               onClick={startNewChat}
             >
-              <BiMessageSquareAdd className="h-[18px] w-[18px]" />
+              <BiMessageSquareAdd className="h-4 w-4" />
             </button>
           </Tooltip>
           {newChatTip ? (
@@ -1418,47 +2600,25 @@ export default function AgentDock({
               <BiTimeFive className="h-[18px] w-[18px]" />
             </button>
           </Tooltip>
-          <Tooltip title={t('agent.settings')} placement="bottom">
+          <Tooltip title={t('agent.closePanel')} placement="bottom">
             <button
               type="button"
-              aria-label={t('agent.settings')}
-              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-              onClick={() => {
-                closePopovers();
-                setSettingsOpen(true);
-              }}
-            >
-              <HiOutlineCog6Tooth className="h-[18px] w-[18px]" />
-            </button>
-          </Tooltip>
-          <Tooltip title={t('agent.exit')} placement="bottom">
-            <button
-              type="button"
-              aria-label={t('agent.exit')}
-              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              aria-label={t('agent.closePanel')}
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
               onClick={() => {
                 abortRef.current?.abort();
+                dispatch(setAgentBusy(false));
                 setSending(false);
                 closePopovers();
                 setHistoryOpen(false);
                 onClose();
               }}
             >
-              <BiExit className="h-[18px] w-[18px]" />
+              <LuPanelRight className="h-4 w-4" strokeWidth={1.75} />
             </button>
           </Tooltip>
         </div>
       </div>
-
-      <AgentSettingsDialog
-        open={settingsOpen}
-        mode={collabMode}
-        onClose={() => setSettingsOpen(false)}
-        onChangeMode={(next) => {
-          setCollabMode(next);
-          writeCollabMode(next);
-        }}
-      />
 
       <div ref={listRef} className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 py-2">
         {historyOpen ? (
@@ -1522,34 +2682,17 @@ export default function AgentDock({
             editingUserId={editingUserId}
             editComposer={editComposerNode}
             sending={sending}
-            canApplyText={ctx?.kind === 'text'}
             formatWorked={formatWorked}
             hasCheckpoint={(id) => checkpointsRef.current.has(id)}
             onBeginEdit={beginEditUserMessage}
             onCancelEdit={cancelEditUserMessage}
             onRestore={restoreCheckpoint}
-            onApplyText={applyTextToSelection}
             onChoice={(choice) => {
               if (sending || choice === '取消') return;
-              let text = choice;
-              if (/390/.test(choice)) {
-                text =
-                  '请先创建手机画布（宽390×高844），然后继续完成我上一条消息里的设计需求，直接在画布上绘制，不要只回复文字。';
-              } else if (/794|画板/.test(choice) && !/指定/.test(choice)) {
-                text =
-                  '请先创建画板（宽794×高1123），然后继续完成我上一条消息里的设计需求，直接在画布上绘制，不要只回复文字。';
-              } else if (/指定|已有/.test(choice)) {
-                text = '请先用 get_scene_summary 列出画板，再问我选哪一块，确认后再绘制。';
-              } else if (/到此为止/.test(choice)) {
-                pipelineSessionRef.current = null;
-                text = '好的，先停在这里，等我下一步指示再继续。';
-              } else if (/重新执行当前步骤/.test(choice)) {
-                text = '请重新执行当前步骤。';
-              } else if (/重新设计/.test(choice)) {
-                text = '请从头重新设计。';
-              }
-              void send({ text, raw: true, displayContent: choice });
+              // Pass chip text through — backend intent skill decides what it means.
+              void send({ text: choice, raw: true, displayContent: choice });
             }}
+            onAddImageToCanvas={addGeneratedImageToCanvas}
           />
         )}
       </div>
@@ -1588,8 +2731,50 @@ export default function AgentDock({
                 </div>
               </div>
             ) : null}
+            {pendingLongSuggestions.length > 0 && !sending ? (
+              <div className="border-t border-[var(--line)] px-3 py-2">
+                <p className="mb-1.5 text-[11px] text-[var(--muted)]">
+                  {t('agent.longMemorySuggestHint', '记住这个偏好？')}
+                </p>
+                {pendingLongSuggestions.map((s, i) => (
+                  <div key={i} className="mb-1.5 flex items-start gap-2">
+                    <span className="mt-0.5 min-w-0 flex-1 text-[11px] leading-4 text-[var(--ink)]">
+                      {s.text}
+                    </span>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        className="rounded px-1.5 py-0.5 text-[11px] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+                        onClick={() =>
+                          setPendingLongSuggestions((prev) => prev.filter((_, j) => j !== i))
+                        }
+                      >
+                        {t('agent.longMemoryIgnore', '忽略')}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded bg-[var(--accent)] px-1.5 py-0.5 text-[11px] font-medium text-white hover:opacity-90"
+                        onClick={() => {
+                          fetch('/api/v1/design/memory/long', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              Authorization: `Bearer ${getToken()}`,
+                            },
+                            body: JSON.stringify({ kind: s.kind, text: s.text }),
+                          }).catch(() => {/* silently ignore */});
+                          setPendingLongSuggestions((prev) => prev.filter((_, j) => j !== i));
+                        }}
+                      >
+                        {t('agent.longMemorySave', '记住')}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <AgentComposerShell
-              className="rounded-none border-0 shadow-none"
+              className="min-h-[120px] rounded-none border-0 shadow-none"
               inputRef={inputRef}
               contexts={contextChips}
               onContextsChange={onContextsChange}
@@ -1597,7 +2782,8 @@ export default function AgentDock({
               onChange={onInputChange}
               onSubmit={() => void send()}
               onEscape={() => escapeComposer()}
-              disabled={sending}
+              sending={sending}
+              onStop={stopGeneration}
               placeholder={composerPlaceholder}
               canSend={
                 !sending && !!input.trim() && available !== false
@@ -1620,100 +2806,14 @@ export default function AgentDock({
               {...modelIx.getFloatingProps()}
               onPointerDown={(e) => e.stopPropagation()}
             >
-              <div className={POPOVER_PANEL}>
-                <div className="px-3 pb-2 pt-3">
-                  <p className="text-[13px] font-semibold text-[var(--ink)]">{t('agent.selectModel')}</p>
-                  <div
-                    role="tablist"
-                    aria-label={t('agent.modelCategory')}
-                    className="mt-2 flex gap-0.5 rounded-lg bg-[var(--canvas)] p-0.5 ring-1 ring-[var(--line)]"
-                  >
-                    {MODEL_TAB_IDS.map((tabId) => {
-                      const active = modelTab === tabId;
-                      return (
-                        <button
-                          key={tabId}
-                          type="button"
-                          role="tab"
-                          aria-selected={active}
-                          className={cn(
-                            'flex-1 rounded-md px-2 py-1.5 text-[12px] font-medium transition-colors',
-                            active
-                              ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                              : 'text-[var(--muted)] hover:text-[var(--ink)]'
-                          )}
-                          onClick={() => setModelTab(tabId)}
-                        >
-                          {tabId === 'text' ? t('agent.tabChat') : t('agent.tabImage')}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="max-h-[min(240px,calc(100vh-180px))] overflow-y-auto px-1.5 pb-1.5">
-                  {modelsStatus === 'error' && models.length === 0 ? (
-                    <div className="px-2 py-4 text-center text-[12px] text-[var(--muted)]">
-                      <p>{t('agent.apiDown')}</p>
-                      <p className="mt-1">{t('agent.apiDownHint')}</p>
-                    </div>
-                  ) : null}
-                  {(() => {
-                    const loading =
-                      !models.length && modelsStatus === 'loading'
-                        ? [{ id: '_loading', label: 'Loading...', provider: '', kind: modelTab as LlmModel['kind'] }]
-                        : [];
-                    const list = (models.length ? models : loading).filter(
-                      (m) => modelTabOf(m) === modelTab
-                    );
-                    if (!list.length && modelsStatus !== 'loading') {
-                      return (
-                        <div className="px-2 py-6 text-center text-[12px] text-[var(--muted)]">
-                          {t('agent.emptyModels')}
-                        </div>
-                      );
-                    }
-                    return list.map((m) => {
-                      const active = m.id === model;
-                      return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          disabled={m.id === '_loading'}
-                          className={cn(
-                            'flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors',
-                            active ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]',
-                            m.id === '_loading' && 'opacity-50'
-                          )}
-                          onClick={() => pickModel(m.id)}
-                        >
-                          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--canvas)] text-[var(--ink)] ring-1 ring-[var(--line)]">
-                            <ModelBrandIcon model={m} size={18} />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-semibold text-[var(--ink)]">
-                              {m.label}
-                            </span>
-                            <span className="mt-0.5 block truncate text-[11px] text-[var(--muted)]">
-                              {m.id === '_loading' ? '...' : modelDescription(m as LlmModel, t)}
-                            </span>
-                          </span>
-                          <span
-                            className={cn(
-                              'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[var(--muted)]',
-                              active
-                                ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--on-brand)]'
-                                : 'border-[var(--line)]'
-                            )}
-                            aria-hidden
-                          >
-                            {active ? <HiCheck className="h-3.5 w-3.5" /> : null}
-                          </span>
-                        </button>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
+              <ModelPickerPanel
+                tab={modelPanelTab}
+                onTabChange={switchModelPanelTab}
+                models={models}
+                selectedId={model}
+                onPick={pickModel}
+                status={modelsStatus}
+              />
             </div>
           ) : null}
         </FloatingPortal>

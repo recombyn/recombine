@@ -4,12 +4,12 @@ import {
   closeShapeStylePanel,
   patchDocumentNode,
 } from '@/store/modules/editor';
-import { nodeLeftTop } from '@/store/scene/sceneToSvg';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import {
-  CameraOverlayPortal,
-  useCamera,
-  worldToStage,
-} from '@/components/editor/Canvas/stage/CameraContext';
+  RcbOverlayPortal,
+  useRcbCamera,
+  rcbSceneToScreen,
+} from '@/components/rcb';
 import { FillPanel, type FillPanelValue } from '@/components/editor/panels/FillPanel';
 import {
   StrokePanel,
@@ -22,7 +22,8 @@ import {
 } from '@/components/editor/nodes/ShapeNode/CornerRadiusPanel';
 import GradientHandlesOverlay from '@/components/editor/nodes/ShapeNode/GradientHandlesOverlay';
 import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesOverlay';
-import { parseStrokeStyle } from '@/store/scene/sceneStrokeStyle';
+import { parseStrokeStyle } from '@/components/rcb/scene/sceneStrokeStyle';
+import { supportsSideStroke } from '@/components/rcb/scene/sceneDocument';
 import {
   DEFAULT_FILL_IMAGE_ADJUST,
   fillImageFieldsFromAttrs,
@@ -31,15 +32,15 @@ import {
   serializeFillGradient,
   serializeFillImageAdjust,
   type FillGradient,
-} from '@/store/scene/sceneFill';
+} from '@/components/rcb/scene/sceneFill';
 import {
   resolveStrokeAlign,
   resolveStrokeLinecap,
   resolveStrokeLinejoin,
   boolEffectAttr,
-} from '@/store/scene/sceneEffects';
-import { supportsFill, supportsCornerRadius } from '@/store/scene/sceneDocument';
-import { parseClosedPathRings, radiiFromAttrs } from '@/store/scene/sceneRadii';
+} from '@/components/rcb/scene/sceneEffects';
+import { supportsFill, supportsCornerRadius } from '@/components/rcb/scene/sceneDocument';
+import { parseClosedPathRings, radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -49,7 +50,7 @@ function panelStyleTopRight(
   box: SceneBox
 ): CSSProperties {
   const gap = 16 / Math.max(0.05, camera.zoom);
-  const { x, y } = worldToStage(camera, box.left + box.width + gap, box.top);
+  const { x, y } = rcbSceneToScreen(camera, box.left + box.width + gap, box.top);
   return {
     position: 'absolute',
     left: x,
@@ -131,7 +132,8 @@ function strokeAttrsFromValue(
     'stroke-opacity': Math.max(0, Math.min(100, Math.round(next.opacity))),
     'border-width': Math.max(0, Math.round(next.width) || 0),
     strokeStyle: next.style,
-    strokeAlign: next.align ?? 'center',
+    strokeAlign: next.align ?? 'outside',
+    'stroke-align': next.align ?? 'outside',
     strokeLinecap: linecap,
     'stroke-linecap': linecap,
     strokeLinejoin: linejoin,
@@ -210,7 +212,7 @@ function readStrokeValue(attrs: Record<string, unknown> | undefined): StrokePane
  */
 export default function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
   const dispatch = useDispatch();
-  const camera = useCamera();
+  const camera = useRcbCamera();
   const panel = useSelector(
     (s: any) =>
       s.editor.shapeStylePanel as null | {
@@ -351,9 +353,15 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
       const visible =
         boolEffectAttr(a['stroke-enabled'], true) && boolEffectAttr(a['stroke-visible'], true);
       const t = String(a.shapeType || node.key || '');
+      const closedAttr = a.closed;
+      const closedExplicit =
+        closedAttr === true || closedAttr === 'true'
+          ? true
+          : closedAttr === false || closedAttr === 'false'
+            ? false
+            : null;
       const closed =
-        a.closed === true ||
-        a.closed === 'true' ||
+        closedExplicit ??
         (typeof a.path === 'string' && /z\s*$/i.test(String(a.path).trim()));
       const openStroke =
         t === 'line' ||
@@ -437,13 +445,19 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
   };
 
   const shapeType = String(firstAttrs?.shapeType || firstNode?.key || 'rect');
+  const closedAttr = firstAttrs?.closed;
+  const pathClosedExplicit =
+    closedAttr === true || closedAttr === 'true'
+      ? true
+      : closedAttr === false || closedAttr === 'false'
+        ? false
+        : null;
   const pathClosed =
-    firstAttrs?.closed === true ||
-    firstAttrs?.closed === 'true' ||
+    pathClosedExplicit ??
     (typeof firstAttrs?.path === 'string' && /z\s*$/i.test(String(firstAttrs.path).trim()));
   /**
-   * Open strokes (line / arrow / open pen / pencil): show linecap, hide side toggles.
-   * Closed shapes (rect / star / closed pen…): same panel as fig.1 — sides + align/join, no cap.
+   * Open strokes (line / arrow / open pen / pencil): show linecap (端点).
+   * Side toggles (All / T / L / B / R) only for rect-like nodes — never for pen/path.
    */
   const isOpenStroke =
     shapeType === 'line' ||
@@ -451,7 +465,8 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
     shapeType === 'pencil' ||
     ((shapeType === 'pen' || shapeType === 'path' || firstNode?.key === 'path') && !pathClosed);
   const showLinecap = isOpenStroke;
-  const showSides = !isOpenStroke;
+  const showAlign = !isOpenStroke;
+  const showSides = supportsSideStroke(firstNode);
   const cornerMax = Math.max(
     8,
     ...panel.nodeIds.map((id) => {
@@ -500,7 +515,7 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
           onActivePointChange={setMeshSelectedIndex}
         />
       ) : null}
-      <CameraOverlayPortal>
+      <RcbOverlayPortal>
         <div
           className="pointer-events-auto"
           style={panelStyleTopRight(camera, box)}
@@ -537,13 +552,14 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
               title={'描边'}
               onClose={close}
               showLinecap={showLinecap}
+              showAlign={showAlign}
               showSides={showSides}
               layerVisible={strokeLayerVisible}
               onLayerVisibleChange={setStrokeLayerVisible}
             />
           )}
         </div>
-      </CameraOverlayPortal>
+      </RcbOverlayPortal>
     </>
   );
 }

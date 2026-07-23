@@ -102,7 +102,12 @@ const Dropdown: FC<DropdownProps> = ({
       offsetMiddleware(offset),
       flip({
         padding: 5,
-        fallbackPlacements: ['top-start'],
+        fallbackPlacements:
+          placement.startsWith('top')
+            ? ['top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end']
+            : placement.startsWith('bottom')
+              ? ['bottom-start', 'bottom-end', 'top', 'top-start', 'top-end']
+              : undefined,
       }),
       shift({ padding: 5, crossAxis: false }),
     ],

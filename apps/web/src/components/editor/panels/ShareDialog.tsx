@@ -2,17 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineClipboardDocument, HiOutlineLink } from 'react-icons/hi2';
+import { createShareApi, updateShareDocumentApi, type ShareDto } from '@/apis/shares';
 import { Dialog, message } from '@/components/base';
+import { copyText, shareCopyText, shareUrl, type SharePermission } from '@/utils/shareStorage';
 import { cn } from '@/utils/classnames';
-import {
-  copyText,
-  createShare,
-  shareCopyText,
-  shareUrl,
-  updateShareDocument,
-  type SharePermission,
-  type ShareRecord,
-} from '@/store/shareStorage';
 
 type Props = {
   open: boolean;
@@ -30,9 +23,10 @@ export default function ShareDialog({ open, onClose }: Props) {
     t('home.untitled', { defaultValue: '未命名作品' });
 
   const [permission, setPermission] = useState<SharePermission>('preview');
-  const [record, setRecord] = useState<ShareRecord | null>(null);
+  const [record, setRecord] = useState<ShareDto | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Auto-generate when dialog opens or permission switches.
+  // Create server share when dialog opens or permission switches.
   useEffect(() => {
     if (!open) {
       setRecord(null);
@@ -43,45 +37,66 @@ export default function ShareDialog({ open, onClose }: Props) {
       message.warning(t('editor.shareNoDocument'));
       return;
     }
-    setRecord(
-      createShare({
-        document,
-        name: projectName,
-        permission,
-        sourceTemplateId: currentId || undefined,
+    let cancelled = false;
+    setBusy(true);
+    void createShareApi({
+      document,
+      name: projectName,
+      permission,
+      sourceProjectId: currentId || undefined,
+    })
+      .then((res) => {
+        if (!cancelled) setRecord(res.share);
       })
-    );
-    // Snapshot only at open / permission change — copy actions refresh content.
+      .catch(() => {
+        if (!cancelled) {
+          setRecord(null);
+          message.error(t('editor.shareCopyFailed'));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Snapshot only at open / permission change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, permission]);
 
   const url = useMemo(() => (record ? shareUrl(record.id) : ''), [record]);
 
-  const ensureShare = () => {
+  const ensureShare = async (): Promise<ShareDto | null> => {
     if (!document) {
       message.warning(t('editor.shareNoDocument'));
       return null;
     }
     if (record && record.permission === permission) {
-      const refreshed = updateShareDocument(record.id, document);
-      if (refreshed) {
-        setRecord(refreshed);
-        return refreshed;
+      try {
+        const res = await updateShareDocumentApi(record.id, document);
+        setRecord(res.share);
+        return res.share;
+      } catch {
+        return record;
       }
-      return record;
     }
-    const next = createShare({
-      document,
-      name: projectName,
-      permission,
-      sourceTemplateId: currentId || undefined,
-    });
-    setRecord(next);
-    return next;
+    try {
+      const res = await createShareApi({
+        document,
+        name: projectName,
+        permission,
+        sourceProjectId: currentId || undefined,
+      });
+      setRecord(res.share);
+      return res.share;
+    } catch {
+      message.error(t('editor.shareCopyFailed'));
+      return null;
+    }
   };
 
   const onCopyLink = async () => {
-    const next = ensureShare();
+    const next = await ensureShare();
     if (!next) return;
     try {
       await copyText(shareUrl(next.id));
@@ -92,10 +107,22 @@ export default function ShareDialog({ open, onClose }: Props) {
   };
 
   const onCopyText = async () => {
-    const next = ensureShare();
+    const next = await ensureShare();
     if (!next) return;
     try {
-      await copyText(shareCopyText(next, shareUrl(next.id)));
+      await copyText(
+        shareCopyText(
+          {
+            id: next.id,
+            name: next.name,
+            permission: next.permission,
+            document: next.document,
+            createdAt: next.createdAt,
+            updatedAt: next.updatedAt,
+          },
+          shareUrl(next.id)
+        )
+      );
       message.success(t('editor.shareTextCopied'));
     } catch {
       message.error(t('editor.shareCopyFailed'));
@@ -145,14 +172,14 @@ export default function ShareDialog({ open, onClose }: Props) {
           <div className="flex items-center gap-2">
             <input
               readOnly
-              value={url || t('editor.shareLinkPlaceholder')}
+              value={busy && !url ? '…' : url || t('editor.shareLinkPlaceholder')}
               className="h-9 min-w-0 flex-1 rounded-lg bg-[var(--accent-soft)] px-3 text-[12px] text-[var(--ink)] outline-none ring-1 ring-[var(--line)]"
               onFocus={(e) => e.currentTarget.select()}
             />
             <button
               type="button"
               aria-label={t('editor.shareCopyLink')}
-              disabled={!url}
+              disabled={!url || busy}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--surface)] px-2.5 text-[12px] font-medium text-[var(--ink)] ring-1 ring-[var(--line)] hover:bg-[var(--accent-soft)] disabled:opacity-50"
               onClick={() => void onCopyLink()}
             >
@@ -164,7 +191,7 @@ export default function ShareDialog({ open, onClose }: Props) {
 
         <button
           type="button"
-          disabled={!url}
+          disabled={!url || busy}
           className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--accent-soft)] text-[13px] font-medium text-[var(--ink)] hover:bg-[var(--line)] disabled:opacity-50"
           onClick={() => void onCopyText()}
         >

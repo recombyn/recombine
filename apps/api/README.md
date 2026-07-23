@@ -36,7 +36,7 @@ docker compose up -d redis
 
 ```bash
 cd apps/api
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### 3. Celery worker（另开终端，cwd = apps/api）
@@ -110,14 +110,13 @@ docker compose up -d redis api worker
 - `POST /api/v1/import/pdf`
 - `POST /api/v1/import/docx`
 - `POST /api/v1/import/image`
-- `POST /api/v1/import/design` — `.psd` / `.xd` / `.rp` / `.fig`（预览图 → 视觉管线；PSD 需 `pip install -e ".[design]"`）
 
 返回 Scene JSON；同时会尽量把页图落到 `storage/results/_sync/pages/`。
 
 ### 异步（推荐）
 
 1. `POST /api/v1/import/jobs`  
-   form-data: `file`, `source_type`=`pdf|docx|image|design`  
+   form-data: `file`, `source_type`=`pdf|docx|image`  
    → `{ "job_id": "...", "status": "queued" }`
 
 2. `GET /api/v1/import/jobs/{job_id}`  

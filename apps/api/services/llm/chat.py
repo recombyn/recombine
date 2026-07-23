@@ -24,22 +24,26 @@ async def stream_chat(
     history: list[dict[str, str]] | None = None,
     model: str | None = None,
     thinking: bool | None = None,
+    images: list[str] | None = None,
 ) -> AsyncIterator[tuple[StreamKind, str]]:
     """
     Stream assistant tokens from `{base}/chat/completions`.
 
     Yields ``("thinking", text)`` for DeepSeek reasoning deltas, then
     ``("token", text)`` for final answer content.
+    Optional ``images`` (data URLs / https) enable multimodal vision input.
     """
+    from services.design.llm_step import build_user_message_content
+
     endpoint = get_llm_endpoint(model)
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, Any]] = []
     for item in history or []:
         role = (item.get("role") or "").strip()
         content = (item.get("content") or "").strip()
         if role in ("user", "assistant", "system") and content:
             # Never replay reasoning_content into history (DeepSeek 400 risk).
             messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": message})
+    messages.append({"role": "user", "content": build_user_message_content(message, images)})
 
     headers = {
         "Authorization": f"Bearer {endpoint.api_key}",

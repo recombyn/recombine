@@ -1,81 +1,145 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type WheelEvent } from 'react';
 import { FloatingPortal } from '@floating-ui/react';
-import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { HiHeart, HiOutlineEye, HiOutlineShare, HiOutlineXMark } from 'react-icons/hi2';
+import type { OfficialCaseMeta } from '@/utils/officialCases';
 import {
-  HiChevronLeft,
-  HiChevronRight,
-  HiHeart,
-  HiOutlineDocumentDuplicate,
-  HiOutlineXMark,
-} from 'react-icons/hi2';
-import type { OfficialCaseMeta } from '@/cases/officialCases';
-import { caseAuthorId, caseAuthorLabel, resolveCaseTitle } from '@/cases/officialCases';
+  caseAuthorId,
+  caseAuthorLabel,
+  normalizeCaseCategory,
+  resolveCasePrompt,
+  resolveCaseTitle,
+} from '@/utils/officialCases';
 import AuthorFollowAvatar from '@/components/home/AuthorFollowAvatar';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
+import { formatStatCount } from '@/utils/likedCases';
 import {
-  isFollowingUser,
-  loadFollowedUsers,
-  toggleFollowUser,
-} from '@/store/followedUsers';
-import { formatStatCount, seedStat } from '@/store/likedCases';
+  extractFrameDocument,
+  listArtboardFrames,
+  type PlazaCoverFrame,
+} from '@/utils/plazaCover';
 import { cn } from '@/utils/classnames';
-import { message } from '@/components/base';
 
 type Props = {
   open: boolean;
   caseMeta: OfficialCaseMeta | null;
-  cases: OfficialCaseMeta[];
-  docs: Record<string, unknown>;
+  /** Full project document — left rail shows its artboards. */
+  projectDocument: unknown | null;
   likedIds: Set<string>;
+  likeBusy?: boolean;
   remixing?: boolean;
   onClose: () => void;
-  onSelect: (meta: OfficialCaseMeta) => void;
   onRemix: (meta: OfficialCaseMeta) => void;
   onToggleLike: (meta: OfficialCaseMeta) => void;
-  onFollowChange?: () => void;
 };
 
 /**
- * Plaza case preview — full-width modal, side arrows + bottom strip to switch,
- * close button outside on the overlay (ref fig.2).
+ * Plaza case preview:
+ * left+center: project title + artboard rail + selected artboard content;
+ * right: author / prompt card.
  */
 export default function InspirationCasePreview({
   open,
   caseMeta,
-  cases,
-  docs,
+  projectDocument,
   likedIds,
+  likeBusy,
   remixing,
   onClose,
-  onSelect,
   onRemix,
   onToggleLike,
-  onFollowChange,
 }: Props): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const viewerId = useSelector((s: any) => s.auth?.user?.id as string | undefined);
-  const [followingIds, setFollowingIds] = useState<Set<string>>(() => new Set());
+  const [entered, setEntered] = useState(false);
+  const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
-    setFollowingIds(new Set(loadFollowedUsers(viewerId).map((x) => x.id)));
-  }, [open, viewerId, caseMeta?.id]);
+    if (!open) {
+      setEntered(false);
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setEntered(true));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open, caseMeta?.id]);
 
-  const rail = useMemo(() => cases, [cases]);
+  const frames = useMemo(() => listArtboardFrames(projectDocument), [projectDocument]);
 
-  const index = useMemo(() => {
-    if (!caseMeta) return -1;
-    return rail.findIndex((c) => c.id === caseMeta.id);
-  }, [rail, caseMeta]);
+  useEffect(() => {
+    if (!open) {
+      setActiveFrameId(null);
+      return;
+    }
+    if (!frames.length) {
+      setActiveFrameId(null);
+      return;
+    }
+    setActiveFrameId((prev) => {
+      if (prev && frames.some((f) => f.id === prev)) return prev;
+      const active = String(
+        (projectDocument as { activeFrameId?: unknown })?.activeFrameId || ''
+      ).trim();
+      if (active && frames.some((f) => f.id === active)) return active;
+      return frames[0]?.id || null;
+    });
+  }, [open, caseMeta?.id, frames, projectDocument]);
 
-  const go = (delta: number) => {
-    if (!rail.length || index < 0) return;
-    const next = rail[(index + delta + rail.length) % rail.length];
-    if (next) onSelect(next);
+  const activeFrame: PlazaCoverFrame | null = useMemo(() => {
+    if (!frames.length) return null;
+    return frames.find((f) => f.id === activeFrameId) || frames[0] || null;
+  }, [frames, activeFrameId]);
+
+  const frameDocs = useMemo(() => {
+    const map: Record<string, unknown> = {};
+    for (const frame of frames) {
+      const id = frame.id || '';
+      if (!id) continue;
+      const extracted = extractFrameDocument(projectDocument, frame);
+      if (extracted) map[id] = extracted;
+    }
+    return map;
+  }, [projectDocument, frames]);
+
+  const previewDoc = useMemo(() => {
+    if (activeFrame?.id && frameDocs[activeFrame.id]) return frameDocs[activeFrame.id];
+    // No artboards: fall back to full document / nodes.
+    return projectDocument;
+  }, [activeFrame, frameDocs, projectDocument]);
+
+  const goFrame = (delta: number) => {
+    if (!frames.length) return;
+    const idx = Math.max(
+      0,
+      frames.findIndex((f) => f.id === (activeFrame?.id || activeFrameId))
+    );
+    const next = frames[(idx + delta + frames.length) % frames.length];
+    if (next?.id) setActiveFrameId(next.id);
   };
+
+  const wheelLockRef = useRef(0);
+  const onPreviewWheel = (e: WheelEvent<HTMLDivElement>) => {
+    if (frames.length < 2) return;
+    // Prefer vertical wheel; fall back to horizontal trackpad.
+    const dy = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+    if (!dy) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const now = Date.now();
+    if (now - wheelLockRef.current < 280) return;
+    wheelLockRef.current = now;
+    goFrame(dy > 0 ? 1 : -1);
+  };
+
+  useEffect(() => {
+    if (!open || !activeFrameId) return;
+    const el = window.document.querySelector(
+      `[data-preview-frame-thumb="${CSS.escape(activeFrameId)}"]`
+    ) as HTMLElement | null;
+    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [open, activeFrameId]);
 
   useEffect(() => {
     if (!open || !caseMeta) return;
@@ -85,25 +149,25 @@ export default function InspirationCasePreview({
         onClose();
         return;
       }
-      if (e.key === 'ArrowLeft') {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        go(-1);
-      } else if (e.key === 'ArrowRight') {
+        goFrame(-1);
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
-        go(1);
+        goFrame(1);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- go uses latest index via closure on key
-  }, [open, caseMeta, index, rail, onClose, onSelect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, caseMeta, activeFrameId, frames, onClose]);
 
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const prev = window.document.body.style.overflow;
+    window.document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = prev;
+      window.document.body.style.overflow = prev;
     };
   }, [open]);
 
@@ -112,13 +176,13 @@ export default function InspirationCasePreview({
   const title = resolveCaseTitle(caseMeta, t);
   const author = caseAuthorLabel(caseMeta, t);
   const authorId = caseAuthorId(caseMeta);
-  const isSelf = Boolean(viewerId && viewerId === authorId);
-  const following = followingIds.has(authorId) || isFollowingUser(authorId, viewerId);
   const liked = likedIds.has(caseMeta.id);
-  const likes = seedStat(caseMeta.id, 40, 900) + (liked ? 1 : 0);
-  const uses = seedStat(caseMeta.id, 80, 1200);
-  const doc = docs[caseMeta.id];
-  const canSwitch = rail.length > 1;
+  const likes = Math.max(0, Number(caseMeta.likeCount) || 0);
+  const uses = Math.max(0, Number(caseMeta.useCount) || 0);
+  const canSwitch = frames.length > 1;
+  const prompt = resolveCasePrompt(caseMeta, t);
+  const categoryLabel = t(`home.cases.cat.${normalizeCaseCategory(caseMeta.category)}`);
+  const hasDoc = Boolean(previewDoc);
 
   const openProfile = () => {
     onClose();
@@ -130,181 +194,264 @@ export default function InspirationCasePreview({
     });
   };
 
-  const onToggleFollow = (e: MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!viewerId) {
-      message.warning(t('home.cases.followUserNeedLogin'));
-      navigate('/login', { state: { from: '/home' } });
-      return;
+  const onShare = async () => {
+    const text = `${title} — ${author}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text });
+        return;
+      }
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* user cancelled / denied */
     }
-    if (isSelf) return;
-    const { following: next, list } = toggleFollowUser(
-      {
-        id: authorId,
-        name: author,
-        avatar: caseMeta.authorAvatar || null,
-      },
-      viewerId
-    );
-    setFollowingIds(new Set(list.map((x) => x.id)));
-    message.success(next ? t('home.cases.followedToast') : t('home.cases.unfollowedToast'));
-    onFollowChange?.();
   };
+
+  const frameLabel = (frame: PlazaCoverFrame, i: number) =>
+    String(frame.name || '').trim() || `${t('editor.pageExportName')}-${i + 1}`;
 
   return (
     <FloatingPortal>
       <div
-        className="fixed inset-0 z-[850] bg-[rgba(12,12,13,0.55)] backdrop-blur-[8px]"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
+        className={cn(
+          'fixed inset-0 z-[850] transition-[background-color] duration-300',
+          entered ? 'bg-[rgba(12,12,13,0.8)]' : 'bg-transparent'
+        )}
+        role="presentation"
+        onClick={onClose}
       >
         <button
           type="button"
           aria-label={t('home.cases.previewClose')}
-          onClick={onClose}
-          className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/35 text-white transition hover:bg-black/50 sm:right-6 sm:top-5"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className="absolute right-4 top-2.5 z-[860] inline-flex h-8 w-8 items-center justify-center text-white transition hover:opacity-80"
         >
           <HiOutlineXMark className="h-5 w-5" strokeWidth={2} />
         </button>
-
-        {canSwitch ? (
-          <button
-            type="button"
-            aria-label={t('home.cases.prev')}
-            onClick={() => go(-1)}
-            className="absolute left-2 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-[var(--ink)] shadow-md transition hover:bg-white sm:left-4 lg:left-6"
-          >
-            <HiChevronLeft className="h-6 w-6" />
-          </button>
-        ) : null}
-
-        {canSwitch ? (
-          <button
-            type="button"
-            aria-label={t('home.cases.next')}
-            onClick={() => go(1)}
-            className="absolute right-2 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-[var(--ink)] shadow-md transition hover:bg-white sm:right-4 lg:right-6"
-          >
-            <HiChevronRight className="h-6 w-6" />
-          </button>
-        ) : null}
-
         <div
-          className="flex h-full w-full items-stretch justify-center px-12 py-14 sm:px-16 sm:py-12 lg:px-20"
-          onClick={onClose}
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          className={cn(
+            'fixed bottom-0 left-0 right-0 z-[855] flex gap-3 overflow-hidden p-[15px]',
+            'top-[50px] rounded-t-[14px] bg-[#F6F6F6]',
+            'transition-transform duration-[420ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform',
+            entered ? 'translate-y-0' : '-translate-y-10'
+          )}
+          onClick={(e) => e.stopPropagation()}
         >
-          <div
-            className="flex w-full max-w-[1280px] flex-col overflow-hidden rounded-[12px] bg-[var(--surface)] shadow-[0_28px_80px_rgba(12,12,13,0.35)]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex shrink-0 items-start justify-between gap-4 px-5 py-4 sm:px-6 sm:py-5">
-              <div className="flex min-w-0 items-start gap-3">
-                <AuthorFollowAvatar
-                  name={author}
-                  avatar={caseMeta.authorAvatar}
-                  size={40}
-                  showFollow={!isSelf}
-                  following={following}
-                  onOpenProfile={openProfile}
-                  onToggleFollow={onToggleFollow}
-                  followLabel={t('home.cases.followUser')}
-                  unfollowLabel={t('home.cases.unfollowUser')}
-                  className="mt-0.5"
-                />
-                <div className="min-w-0">
-                  <h2 className="truncate text-[16px] font-semibold tracking-tight text-[var(--ink)] sm:text-[17px]">
-                    {title}
-                  </h2>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[12px] text-[var(--muted)]">
-                    <button
-                      type="button"
-                      onClick={openProfile}
-                      className="font-medium text-[var(--ink)]/80 transition hover:underline"
-                    >
-                      {author}
-                    </button>
-                    <span>·</span>
-                    <span>{t(`home.cases.cat.${caseMeta.category}`)}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex shrink-0 items-center gap-2">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[#F6F6F6]">
+            <div className="mb-3 flex shrink-0 items-center gap-3">
+              <h2 className="min-w-0 flex-1 truncate text-[16px] font-semibold leading-tight text-[var(--ink)]">
+                {title}
+              </h2>
+              <div className="hidden shrink-0 items-center gap-2 md:flex">
                 <button
                   type="button"
-                  aria-pressed={liked}
-                  onClick={() => onToggleLike(caseMeta)}
-                  className={cn(
-                    'inline-flex h-9 items-center gap-1.5 rounded-[12px] px-3 text-[13px] font-medium ring-1 transition',
-                    liked
-                      ? 'bg-[#fff1f2] text-[#e11d48] ring-[#fecdd3]'
-                      : 'bg-[var(--surface)] text-[var(--ink)] ring-[var(--line)] hover:bg-[var(--accent-soft)]'
-                  )}
-                >
-                  <HiHeart className={cn('h-4 w-4', liked && 'fill-current')} />
-                  <span className="tabular-nums">{formatStatCount(likes)}</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={remixing || !doc}
+                  disabled={remixing || !hasDoc}
                   onClick={() => onRemix(caseMeta)}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-[12px] bg-[var(--accent)] px-3.5 text-[13px] font-semibold text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
+                  className="inline-flex h-8 items-center justify-center rounded-full bg-[var(--ink)] px-3.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
                 >
-                  <HiOutlineDocumentDuplicate className="h-4 w-4" />
-                  {remixing ? t('home.cases.remixing') : t('home.cases.use')}
-                  <span className="tabular-nums opacity-80">{formatStatCount(uses)}</span>
+                  {remixing ? t('home.cases.remixing') : t('home.cases.makeSame')}
                 </button>
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 px-5 sm:px-6">
-              <div className="flex h-[min(520px,calc(100vh-280px))] items-center justify-center overflow-hidden rounded-[12px] bg-[var(--canvas)]">
-                {doc ? (
-                  <div className="relative h-full w-full">
-                    <TemplateThumbnail document={doc} fit="contain" />
+            <div className="flex min-h-0 min-w-0 flex-1" onWheel={onPreviewWheel}>
+              {canSwitch ? (
+                <div className="hidden w-[100px] shrink-0 flex-col gap-2.5 overflow-y-auto py-px md:flex">
+                  {frames.map((frame, i) => {
+                    const id = frame.id || `frame-${i}`;
+                    const active = id === (activeFrame?.id || activeFrameId);
+                    const thumb = frameDocs[id];
+                    const label = frameLabel(frame, i);
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        data-preview-frame-thumb={id}
+                        aria-label={label}
+                        aria-current={active ? 'true' : undefined}
+                        title={label}
+                        onClick={() => setActiveFrameId(id)}
+                        className={cn(
+                          'relative h-[100px] w-[100px] shrink-0 overflow-hidden rounded border bg-[#ececec] transition',
+                          active
+                            ? 'border-[var(--ink)]'
+                            : 'border-transparent opacity-80 hover:opacity-100'
+                        )}
+                      >
+                        {thumb ? (
+                          <TemplateThumbnail document={thumb} fit="cover" />
+                        ) : (
+                          <div className="skeleton-bone h-full w-full" aria-hidden />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center px-3">
+                {previewDoc ? (
+                  <div className="relative h-full w-full max-h-full overflow-hidden rounded-2xl">
+                    <TemplateThumbnail document={previewDoc} fit="contain" />
                   </div>
                 ) : (
-                  <div className="text-[13px] text-[var(--muted)]">—</div>
+                  <div
+                    className="skeleton-bone h-full w-full max-w-5xl rounded-2xl"
+                    aria-busy="true"
+                  />
                 )}
               </div>
             </div>
+          </div>
 
-            {canSwitch ? (
-              <div className="shrink-0 border-t border-[var(--line)] px-4 py-3 sm:px-5">
-                <div className="mb-2 text-[11px] font-medium text-[var(--muted)]">
-                  {t('home.cases.switchHint')}
+          <aside className="hidden w-[min(400px,36vw)] shrink-0 flex-col bg-[#F6F6F6] md:flex">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#E8E8E8] bg-white">
+              <div className="flex items-center gap-2 px-4 pb-3 pt-4">
+                <AuthorFollowAvatar
+                  name={author}
+                  avatar={caseMeta.authorAvatar}
+                  size={36}
+                  onOpenProfile={openProfile}
+                />
+                <button
+                  type="button"
+                  onClick={openProfile}
+                  className="min-w-0 flex-1 truncate text-left text-[14px] font-semibold text-[var(--ink)] hover:underline"
+                >
+                  {author}
+                </button>
+                <div className="flex shrink-0 items-center gap-3.5 text-[12px] tabular-nums text-[#8a8a8a]">
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title={t('home.cases.useCount', { count: uses })}
+                  >
+                    <HiOutlineEye className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                    {formatStatCount(uses)}
+                  </span>
+                  <button
+                    type="button"
+                    aria-pressed={liked}
+                    disabled={likeBusy}
+                    onClick={() => onToggleLike(caseMeta)}
+                    className="inline-flex items-center gap-1 transition hover:text-[#5c5c5c] disabled:opacity-50"
+                    title={liked ? t('home.cases.unlike') : t('home.cases.like')}
+                  >
+                    <HiHeart className="h-4 w-4 fill-current" aria-hidden />
+                    {formatStatCount(likes)}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t('home.cases.share')}
+                    onClick={() => void onShare()}
+                    className="inline-flex items-center transition hover:text-[#5c5c5c]"
+                  >
+                    <HiOutlineShare className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
                 </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+                <div className="rounded-2xl bg-[#F5F5F5] px-4 py-3.5 text-[14px] leading-[1.7] text-[var(--ink)]">
+                  {prompt}
+                </div>
+                <p className="mt-5 text-[12px] font-medium text-[var(--muted)]">{categoryLabel}</p>
+                <p className="mt-1 text-[14px] font-medium text-[var(--ink)]">{title}</p>
+              </div>
+            </div>
+          </aside>
+
+          {/* Mobile: prompt + artboard thumbs + CTA */}
+          <div className="absolute inset-x-0 bottom-0 flex flex-col bg-white md:hidden">
+            <div className="px-4 pt-3">
+              <div className="rounded-2xl bg-[#F5F5F5] px-3 py-2.5 text-[12px] leading-relaxed text-[var(--ink)]">
+                {prompt}
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={openProfile}
+                  className="flex min-w-0 items-center gap-2 text-left"
+                >
+                  <AuthorFollowAvatar name={author} avatar={caseMeta.authorAvatar} size={28} />
+                  <span className="truncate text-[13px] font-medium text-[var(--ink)]">{author}</span>
+                </button>
+                <div className="flex shrink-0 items-center gap-3 text-[12px] tabular-nums text-[#8a8a8a]">
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title={t('home.cases.useCount', { count: uses })}
+                  >
+                    <HiOutlineEye className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                    {formatStatCount(uses)}
+                  </span>
+                  <button
+                    type="button"
+                    aria-pressed={liked}
+                    disabled={likeBusy}
+                    onClick={() => onToggleLike(caseMeta)}
+                    className="inline-flex items-center gap-1 transition disabled:opacity-50"
+                    title={liked ? t('home.cases.unlike') : t('home.cases.like')}
+                  >
+                    <HiHeart className="h-4 w-4 fill-current" aria-hidden />
+                    {formatStatCount(likes)}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t('home.cases.share')}
+                    onClick={() => void onShare()}
+                    className="inline-flex items-center"
+                  >
+                    <HiOutlineShare className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                </div>
+              </div>
+            </div>
+            {canSwitch ? (
+              <div className="px-3 pt-3">
                 <div className="flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {rail.map((c, i) => {
-                    const active = c.id === caseMeta.id;
-                    // Only mount nearby SVG thumbs — full rail would freeze the modal.
-                    const near = Math.abs(i - index) <= 6;
+                  {frames.map((frame, i) => {
+                    const id = frame.id || `frame-${i}`;
+                    const active = id === (activeFrame?.id || activeFrameId);
+                    const thumb = frameDocs[id];
+                    const label = frameLabel(frame, i);
                     return (
                       <button
-                        key={c.id}
+                        key={id}
                         type="button"
-                        title={resolveCaseTitle(c, t)}
-                        onClick={() => onSelect(c)}
+                        aria-label={label}
+                        aria-current={active ? 'true' : undefined}
+                        onClick={() => setActiveFrameId(id)}
                         className={cn(
-                          'relative h-14 w-[72px] shrink-0 overflow-hidden rounded-[10px] bg-[var(--canvas)] transition',
-                          active
-                            ? 'ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--surface)]'
-                            : 'opacity-70 hover:opacity-100'
+                          'relative h-[100px] w-[100px] shrink-0 overflow-hidden rounded border bg-[#ececec]',
+                          active ? 'border-[var(--ink)]' : 'border-transparent opacity-70'
                         )}
                       >
-                        {near && docs[c.id] ? (
-                          <TemplateThumbnail document={docs[c.id]} fit="cover" />
-                        ) : null}
+                        {thumb ? (
+                          <TemplateThumbnail document={thumb} fit="cover" />
+                        ) : (
+                          <div className="skeleton-bone h-full w-full" aria-hidden />
+                        )}
                       </button>
                     );
                   })}
                 </div>
               </div>
-            ) : (
-              <div className="h-4 shrink-0" />
-            )}
+            ) : null}
+            <div className="px-4 py-3">
+              <button
+                type="button"
+                disabled={remixing || !hasDoc}
+                onClick={() => onRemix(caseMeta)}
+                className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-[var(--ink)] px-4 text-[14px] font-semibold text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
+              >
+                {remixing ? t('home.cases.remixing') : t('home.cases.remix')}
+              </button>
+            </div>
           </div>
         </div>
       </div>

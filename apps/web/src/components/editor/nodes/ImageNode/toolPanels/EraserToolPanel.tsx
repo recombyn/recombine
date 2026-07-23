@@ -1,11 +1,12 @@
-import { HiOutlineArrowUturnLeft } from 'react-icons/hi2';
+import { HiOutlineArrowPath } from 'react-icons/hi2';
+import { useTranslation } from 'react-i18next';
 import Slider from '@/components/base/slider';
 import ImageToolPanelShell, {
   PanelFooterActions,
   PanelIconBtn,
 } from './ImageToolPanelShell';
 
-/** Fig.2 — Eraser: brush-size slider + cancel / use-now (paints on-image). */
+/** Eraser: brush-size slider + cancel / use-now (paints on-image). */
 export default function EraserToolPanel({
   brushSize,
   onBrushSizeChange,
@@ -23,14 +24,15 @@ export default function EraserToolPanel({
   onConfirm: () => void;
   confirmBusy?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <ImageToolPanelShell
-      title={'橡皮工具'}
+      title={t('editor.imageToolbar.eraser')}
       width={240}
       onClose={onCancel}
       headerRight={
         <PanelIconBtn title={'重置'} onClick={onReset}>
-          <HiOutlineArrowUturnLeft className="h-4 w-4" />
+          <HiOutlineArrowPath className="h-4 w-4" />
         </PanelIconBtn>
       }
       footer={

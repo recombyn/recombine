@@ -50,8 +50,8 @@ def _session_from_id_token(credential: str) -> tuple[SessionUser, str]:
         avatar=str(payload.get("picture") or "") or None,
         provider="google",
     )
-    token = create_session(user)
-    return user, token
+    # create_session returns DB profile (keeps customized name/avatar on re-login).
+    return create_session(user)
 
 
 def login_with_google_credential(credential: str) -> tuple[SessionUser, str]:

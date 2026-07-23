@@ -14,7 +14,8 @@ export type AngleEditorMode = 'skybox' | 'camera';
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const rotateMin = -90;
 const rotateMax = 90;
-const tiltMin = -30;
+/** Symmetric so 俯视 / 仰视 can reach the same strength. */
+const tiltMin = -60;
 const tiltMax = 60;
 /** Arrow-button increments (sliders use 1°). */
 const rotateStep = 5;
@@ -23,27 +24,22 @@ const tiltStep = 5;
 const snapInt = (value: number, min: number, max: number) =>
   Math.round(clamp(value, min, max));
 
-/** Camera sits outside the sphere; line spans center → camera. */
-const CAMERA_ORBIT_RADIUS = 112;
-const CAMERA_HANDLE_LENGTH = 104;
+/** Longitude / latitude rings for the camera orbit globe (15° steps). */
+const ORBIT_RING_Y_DEG = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165] as const;
+const ORBIT_RING_X_DEG = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165] as const;
 
-const meridianYDeg = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165] as const;
-const parallels: { w: number; y: number }[] = [
-  { w: 144.75, y: 19.5 },
-  { w: 144.75, y: -19.5 },
-  { w: 129.75, y: 37.5 },
-  { w: 129.75, y: -37.5 },
-  { w: 105.75, y: 53.25 },
-  { w: 105.75, y: -53.25 },
-  { w: 75, y: 65.25 },
-  { w: 75, y: -65.25 },
-];
+/** Camera sits on the globe surface (CSS globe = 150px → radius 75). */
+const CAMERA_ORBIT_RADIUS = 75;
+const CAMERA_SIGHT_LINE = 67;
 
 const cubeScaleToVisualScale: Record<AngleCubeScale, number> = {
-  1: 0.88,
-  5: 1,
-  10: 1.12,
+  1: 0.78,
+  5: 0.88,
+  10: 1,
 };
+
+/** Max edge for the face-on subject inside the 150px orbit globe (Mid ≈ this × 0.88). */
+const SUBJECT_MAX_BOX = 64;
 
 type Props = {
   mode: AngleEditorMode;
@@ -56,49 +52,54 @@ type Props = {
   className?: string;
 };
 
-/** Skybox faces (fig.2): L / inset image / B — no camera chrome. */
+/** Skybox faces — image on the front only; other sides use direction letters. */
 function SkyboxCubeFaces({ imageSrc }: { imageSrc?: string }): ReactNode {
+  const face = (faceClass: string, fallback: string, withImage = false) => (
+    <div
+      className={cn(
+        'angle-editor-cube-face',
+        faceClass,
+        withImage && imageSrc && 'has-image'
+      )}
+    >
+      {withImage && imageSrc ? (
+        <img className="angle-editor-face-image-content" alt="" src={imageSrc} draggable={false} />
+      ) : (
+        <span>{fallback}</span>
+      )}
+    </div>
+  );
   return (
     <>
-      <div className={cn('angle-editor-cube-face', 'angle-editor-face-front', imageSrc && 'has-image')}>
-        {imageSrc ? (
-          <img className="angle-editor-face-image-content" alt="" src={imageSrc} draggable={false} />
-        ) : (
-          <span>F</span>
-        )}
-      </div>
-      <div className="angle-editor-cube-face angle-editor-face-back" />
-      <div className="angle-editor-cube-face angle-editor-face-right" />
-      <div className="angle-editor-cube-face angle-editor-face-left">L</div>
-      <div className="angle-editor-cube-face angle-editor-face-top" />
-      <div className="angle-editor-cube-face angle-editor-face-bottom">B</div>
+      {face('angle-editor-face-front', 'F', true)}
+      {face('angle-editor-face-back', 'Bk')}
+      {face('angle-editor-face-right', 'R')}
+      {face('angle-editor-face-left', 'L')}
+      {face('angle-editor-face-top', 'T')}
+      {face('angle-editor-face-bottom', 'B')}
     </>
   );
 }
 
-function CameraCubeFaces({ imageSrc }: { imageSrc?: string }): ReactNode {
-  return (
-    <>
-      <div className={cn('angle-editor-cube-face', 'angle-editor-face-front', imageSrc && 'has-image')}>
-        {imageSrc ? (
-          <img className="angle-editor-face-image-content" alt="" src={imageSrc} draggable={false} />
-        ) : (
-          <span>F</span>
-        )}
-      </div>
-      <div className="angle-editor-cube-face angle-editor-face-back">B</div>
-      <div className="angle-editor-cube-face angle-editor-face-right">R</div>
-      <div className="angle-editor-cube-face angle-editor-face-left">L</div>
-      <div className="angle-editor-cube-face angle-editor-face-top">T</div>
-      <div className="angle-editor-cube-face angle-editor-face-bottom">B</div>
-    </>
-  );
+/** Fit preview inside maxBox while keeping the source aspect ratio. */
+function subjectBoxSize(
+  naturalW: number,
+  naturalH: number,
+  maxBox = SUBJECT_MAX_BOX
+): { width: number; height: number } {
+  const w = Math.max(1, naturalW);
+  const h = Math.max(1, naturalH);
+  const scale = Math.min(maxBox / w, maxBox / h);
+  return {
+    width: Math.max(20, Math.round(w * scale)),
+    height: Math.max(20, Math.round(h * scale)),
+  };
 }
 
 /**
  * Multi-angle preview
- * - skybox: wireframe cube only (fig.2) — no sphere / arrows / camera
- * - camera: orbit camera + sphere grid + compact arrows
+ * - skybox: wireframe cube only — no sphere / arrows / camera
+ * - camera: fixed face-on center image (scale only) + orbiting camera (fig.3)
  */
 export default function AngleEditorScene({
   mode,
@@ -110,15 +111,38 @@ export default function AngleEditorScene({
   onTiltChange,
   className,
 }: Props): ReactNode {
-  const cubeSize = mode === 'skybox' ? 100 : 72;
+  const cubeSize = 100;
   const half = cubeSize / 2;
   const visualScale = cubeScaleToVisualScale[cubeScale];
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    setNaturalSize(null);
+    if (!imageSrc) return undefined;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      if (w > 0 && h > 0) setNaturalSize({ w, h });
+    };
+    img.src = imageSrc;
+    return () => {
+      cancelled = true;
+    };
+  }, [imageSrc]);
+
+  const subjectSize = useMemo(() => {
+    if (!naturalSize) return { width: SUBJECT_MAX_BOX, height: SUBJECT_MAX_BOX };
+    return subjectBoxSize(naturalSize.w, naturalSize.h, SUBJECT_MAX_BOX);
+  }, [naturalSize]);
 
   const screenBgStyle = useMemo<CSSProperties | undefined>(() => {
     if (!imageSrc) return undefined;
     return {
       backgroundImage: `url("${imageSrc}")`,
-      backgroundSize: 'cover',
+      backgroundSize: 'contain',
       backgroundPosition: 'center',
       backgroundRepeat: 'no-repeat',
     };
@@ -133,8 +157,10 @@ export default function AngleEditorScene({
   const dragStartRef = useRef<{ x: number; y: number; rotate: number; tilt: number } | null>(null);
   const onRotateRef = useRef(onRotateChange);
   const onTiltRef = useRef(onTiltChange);
+  const modeRef = useRef(mode);
   onRotateRef.current = onRotateChange;
   onTiltRef.current = onTiltChange;
+  modeRef.current = mode;
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
@@ -147,7 +173,9 @@ export default function AngleEditorScene({
       const dx = e.clientX - start.x;
       const dy = e.clientY - start.y;
       onRotateRef.current(snapInt(start.rotate + dx / 1.8, rotateMin, rotateMax));
-      onTiltRef.current(snapInt(start.tilt + -dy / 2.2, tiltMin, tiltMax));
+      // Skybox rotates the cube (opposite of camera-orbit); match finger direction.
+      const tiltDelta = modeRef.current === 'skybox' ? dy / 2.2 : -dy / 2.2;
+      onTiltRef.current(snapInt(start.tilt + tiltDelta, tiltMin, tiltMax));
     };
 
     const onUp = (e: PointerEvent) => {
@@ -157,7 +185,8 @@ export default function AngleEditorScene({
         const dx = e.clientX - start.x;
         const dy = e.clientY - start.y;
         onRotateRef.current(snapInt(start.rotate + dx / 1.8, rotateMin, rotateMax));
-        onTiltRef.current(snapInt(start.tilt + -dy / 2.2, tiltMin, tiltMax));
+        const tiltDelta = modeRef.current === 'skybox' ? dy / 2.2 : -dy / 2.2;
+        onTiltRef.current(snapInt(start.tilt + tiltDelta, tiltMin, tiltMax));
       }
       dragPointerIdRef.current = null;
       dragStartRef.current = null;
@@ -241,9 +270,7 @@ export default function AngleEditorScene({
   );
 
   if (mode === 'skybox') {
-    // Wireframe cube only (fig.2). Base pose ≈ isometric; user rotate/tilt orbits the cube.
-    const baseYaw = -38;
-    const basePitch = -22;
+    // Wireframe cube only (fig.2). Same orbit as camera mode — Front (0,0) is face-on.
     return (
       <div className={cn('angle-editor-scene', className)}>
         <div
@@ -258,7 +285,8 @@ export default function AngleEditorScene({
                 className="angle-editor-cube-wrapper"
                 style={{
                   transition: isDragging ? 'none' : undefined,
-                  transform: `scale(${visualScale}) rotateX(${basePitch + tilt * 0.35}deg) rotateY(${baseYaw + rotate}deg)`,
+                  // Invert tilt vs camera-orbit: +tilt = look down (俯视) for both modes.
+                  transform: `scale(${visualScale}) rotateX(${-tilt}deg) rotateY(${rotate}deg)`,
                 }}
               >
                 <div className="angle-editor-cube" style={cubeStyle}>
@@ -273,6 +301,10 @@ export default function AngleEditorScene({
   }
 
   const cameraPositionTransform = `translateZ(${CAMERA_ORBIT_RADIUS}px) scale(1) rotateZ(0deg)`;
+  const orbitGlobeStyle: CSSProperties = {
+    transform: `rotateY(${rotate}deg) rotateX(${tilt}deg)`,
+    transition: isDragging ? 'none' : 'transform 120ms ease-out',
+  };
 
   return (
     <div className={cn('angle-editor-scene', className)}>
@@ -282,48 +314,49 @@ export default function AngleEditorScene({
         style={{ perspective: 1200 }}
         onPointerDown={handlePointerDown}
       >
-        <div className="unified-scene-cube-container" style={{ zIndex: 0, opacity: 1 }}>
-          <div className="angle-editor-scene-container" style={{ perspective: 1200 }}>
-            <div
-              className="angle-editor-cube-wrapper"
-              style={{
-                transition: isDragging ? 'none' : undefined,
-                transform: `scale(${visualScale}) rotateX(${tilt}deg) rotateY(${rotate}deg)`,
-              }}
-            >
-              <div className="angle-editor-cube" style={cubeStyle}>
-                <CameraCubeFaces imageSrc={imageSrc} />
-              </div>
-            </div>
+        {/* Fixed face-on subject: scales with zoom, never rotates with camera. */}
+        <div className="unified-scene-cube-container" style={{ zIndex: 0 }}>
+          <div
+            className="angle-editor-fixed-subject"
+            style={{
+              width: subjectSize.width,
+              height: subjectSize.height,
+              transition: isDragging ? 'none' : 'transform 120ms ease-out',
+              transform: `scale(${visualScale})`,
+            }}
+          >
+            {imageSrc ? (
+              <img
+                className="angle-editor-fixed-subject-image"
+                alt=""
+                src={imageSrc}
+                draggable={false}
+              />
+            ) : (
+              <div className="angle-editor-fixed-subject-placeholder" />
+            )}
           </div>
         </div>
 
-        <div className="angle-editor-sphere-grid" role="presentation" aria-hidden>
-          <div
-            className="angle-editor-sphere-grid-inner"
-            style={{ transform: `rotateY(${rotate}deg) rotateX(${tilt}deg)` }}
-          >
-            {meridianYDeg.map((deg) => (
+        {/* Wireframe orbit globe — rotates with camera so rings stay a spatial reference. */}
+        <div className="mae-orbit-globe" role="presentation" aria-hidden>
+          <div className="mae-orbit-globe-core" style={orbitGlobeStyle}>
+            {ORBIT_RING_Y_DEG.map((deg) => (
               <div
-                key={`m-y-${deg}`}
-                className="angle-editor-sphere-grid-meridian"
+                key={`ring-y-${deg}`}
+                className="mae-orbit-globe-ring"
                 style={{ transform: `rotateY(${deg}deg)` }}
               />
             ))}
-            <div className="angle-editor-sphere-grid-meridian" style={{ transform: 'rotateX(90deg)' }} />
-            {parallels.map((p, i) => (
+            {ORBIT_RING_X_DEG.map((deg) => (
               <div
-                key={`p-${i}`}
-                className="angle-editor-sphere-grid-parallel"
-                style={{
-                  width: p.w,
-                  height: p.w,
-                  transform: `translate(-50%, -50%) translateY(${p.y}px) rotateX(90deg)`,
-                }}
+                key={`ring-x-${deg}`}
+                className="mae-orbit-globe-ring"
+                style={{ transform: `rotateX(${deg}deg)` }}
               />
             ))}
           </div>
-          <div className="angle-editor-sphere-grid-helper-vertical" />
+          <div className="mae-orbit-globe-axis" />
         </div>
 
         <div className="angle-editor-scene-camera">
@@ -389,13 +422,15 @@ export default function AngleEditorScene({
               <div
                 className="angle-editor-camera-3d-line"
                 style={{
-                  height: CAMERA_HANDLE_LENGTH,
+                  height: CAMERA_SIGHT_LINE,
                   transform: 'translate(-50%, 0px) translateZ(-8px) rotateX(-90deg)',
                 }}
               />
             </div>
           </div>
-          {dirBtns}
+          <div className="mae-orbit-nav" aria-hidden={false}>
+            {dirBtns}
+          </div>
         </div>
       </div>
     </div>

@@ -34,6 +34,10 @@ class ChatMessageIn(BaseModel):
     role: str = "user"
     content: str = ""
     thinking: str | None = None
+    durationMs: int | None = None
+    intent: str | None = None
+    steps: list[dict[str, Any]] | None = None
+    images: list[str] | None = None
 
 
 class UpsertSessionIn(BaseModel):
@@ -41,6 +45,7 @@ class UpsertSessionIn(BaseModel):
     id: str | None = Field(default=None, max_length=64)
     title: str = Field(default="", max_length=255)
     messages: list[ChatMessageIn] = Field(default_factory=list)
+    taskState: dict[str, Any] | None = Field(default=None, description="Agent task_state snapshot")
 
 
 @router.get("/sessions")
@@ -65,6 +70,7 @@ def put_session(
         session_id=body.id,
         title=body.title,
         messages=[m.model_dump() for m in body.messages],
+        task_state=body.taskState,
     )
     return {"session": session}
 

@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react';
 import { BiExit } from 'react-icons/bi';
+import { HiOutlineBolt } from 'react-icons/hi2';
 import Slider from '@/components/base/slider';
 import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
 import './imageToolPanel.css';
 
-/** Compact panel actions (~28px) — matches cancel / confirm reference. */
+/** Compact panel actions — match preset chip height (常用角度 h-7). */
 const panelBtn =
-  'inline-flex h-7 flex-1 items-center justify-center rounded px-2.5 text-[12px] font-medium transition-colors';
+  'inline-flex h-7 flex-1 items-center justify-center rounded px-2 text-[12px] font-medium leading-none transition-colors';
 
 /** Shared chrome for image tool panels docked beside the source image. */
 export default function ImageToolPanelShell({
@@ -62,7 +63,7 @@ export default function ImageToolPanelShell({
         </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2">{children}</div>
-      {footer ? <div className="flex items-center gap-2 px-4 pb-3 pt-1">{footer}</div> : null}
+      {footer ? <div className="flex items-center gap-1.5 px-4 pb-2.5 pt-0.5">{footer}</div> : null}
     </div>
   );
 }
@@ -90,12 +91,23 @@ export function PanelIconBtn({
   );
 }
 
+/** Credit cost chip on confirm (bolt + amount), for LLM-backed tools. */
+export function PanelConfirmCost({ amount }: { amount: number }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[11px] text-white/55">
+      <HiOutlineBolt className="h-3 w-3" aria-hidden />
+      <span className="tabular-nums">{amount}</span>
+    </span>
+  );
+}
+
 export function PanelFooterActions({
   onCancel,
   onConfirm,
   confirmLabel,
   confirmDisabled,
   confirmBusy,
+  confirmCost,
   confirmExtra,
 }: {
   onCancel: () => void;
@@ -103,6 +115,8 @@ export function PanelFooterActions({
   confirmLabel: string;
   confirmDisabled?: boolean;
   confirmBusy?: boolean;
+  /** When set, shows bolt + credit cost on the confirm button (LLM tools). */
+  confirmCost?: number;
   confirmExtra?: ReactNode;
 }) {
   return (
@@ -119,14 +133,15 @@ export function PanelFooterActions({
         disabled={confirmDisabled || confirmBusy}
         className={cn(
           panelBtn,
-          'gap-1.5 bg-[var(--ink)] text-[var(--on-brand)] hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80'
+          'gap-1 bg-[var(--ink)] text-[var(--on-brand)] hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80'
         )}
         onClick={onConfirm}
       >
         {confirmBusy ? (
-          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
         ) : null}
         <span>{confirmLabel}</span>
+        {typeof confirmCost === 'number' ? <PanelConfirmCost amount={confirmCost} /> : null}
         {confirmExtra}
       </button>
     </>

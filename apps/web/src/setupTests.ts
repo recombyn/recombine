@@ -1,5 +1,50 @@
-// jest-dom adds custom jest matchers for asserting on DOM nodes.
-// allows you to do things like:
-// expect(element).toHaveTextContent(/react/i)
-// learn more: https://github.com/testing-library/jest-dom
-import '@testing-library/jest-dom';
+/**
+ * Global test environment (Vitest + Testing Library).
+ * Keep shared mocks here; prefer local `vi.mock` for file-specific stubs.
+ */
+import '@testing-library/jest-dom/vitest';
+import { afterEach, vi } from 'vitest';
+import { cleanup } from '@testing-library/react';
+
+afterEach(() => {
+  cleanup();
+});
+
+// jsdom gaps used by layout / media queries
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+// Prefer measureText fallback math in sceneText (no canvas native dep in CI).
+HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(null) as any;
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, opts?: { defaultValue?: string; count?: string | number }) => {
+      if (opts?.count != null) return `${opts.defaultValue ?? key} ${opts.count}`;
+      return opts?.defaultValue ?? key;
+    },
+    i18n: { language: 'zh-CN', changeLanguage: vi.fn() },
+  }),
+  Trans: ({ children }: { children?: unknown }) => children ?? null,
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
+}));

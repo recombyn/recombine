@@ -9,13 +9,67 @@ export type LlmModel = {
   id: string;
   label: string;
   provider: string;
+  description?: string | null;
   /** text=对话（含画布 Agent）· image=生图 */
   kind?: 'text' | 'image' | 'svg';
   thinking?: boolean;
+  enabled?: boolean;
+  /** Catalog icon: remote URL preferred by UI. */
+  iconUrl?: string | null;
+  icon_url?: string | null;
+  /** Local asset key fallback (deepseek / doubao / seedream…). */
+  iconKey?: string | null;
+  icon_key?: string | null;
+  /** Display price string from catalog. */
+  price?: string | null;
   /** Max image attachments for this model (API: max_attachments). */
   maxAttachments?: number;
   max_attachments?: number;
 };
+
+/** Volcengine-routed catalog entry (excludes retired direct DeepSeek API models). */
+export function isVolcanoCatalogModel(
+  m?: Pick<LlmModel, 'provider' | 'enabled'> | null
+): boolean {
+  if (!m) return false;
+  if (m.enabled === false) return false;
+  return (m.provider || '').toLowerCase() !== 'deepseek';
+}
+
+/** Text model can accept user image attachments in chat / agent. */
+export function modelSupportsVisionInput(
+  model?: Pick<LlmModel, 'id' | 'kind' | 'maxAttachments' | 'max_attachments'> | null
+): boolean {
+  if (!model || model.kind === 'image') return false;
+  const id = String(model.id || '').toLowerCase();
+  if (!id || id === 'auto' || id.includes('seedream')) return false;
+  if (
+    id.includes('seed-2-1') ||
+    id.includes('seed-2.1') ||
+    id.includes('vision') ||
+    /(^|[-_])vl([-_]|$)/.test(id)
+  ) {
+    return true;
+  }
+  // Catalog uses higher attachment caps for vision chat models (e.g. Seed 2.1 = 16).
+  return maxAttachmentsFor(model) >= 16;
+}
+
+/** Image-tab model or Seedream — dedicated raster generation. */
+export function modelIsImageGenerator(
+  model?: Pick<LlmModel, 'kind' | 'id'> | null
+): boolean {
+  if (!model) return false;
+  if (model.kind === 'image') return true;
+  const id = (model.id || '').toLowerCase();
+  return /seedream|t2i|i2i/.test(id);
+}
+
+/** Design pipeline may call Seedream for 配图 when user keeps Auto. */
+export function designAllowsAiIllustration(userModelId: string | null | undefined): boolean {
+  const id = (userModelId || 'auto').trim().toLowerCase();
+  return !id || id === 'auto';
+}
 
 /** Resolve per-model attachment cap (Seedream 14, Doubao chat 8, DeepSeek 4…). */
 export function maxAttachmentsFor(model?: Pick<LlmModel, 'kind' | 'maxAttachments' | 'max_attachments'> | null): number {
@@ -59,12 +113,15 @@ export type GenerateImageParams = {
   resolution?: string | null;
   /** Reference images (data URLs or https) for Seedream i2i. */
   images?: string[] | null;
+  signal?: AbortSignal;
 };
 
 export type GenerateImageResult = {
   images: string[];
   text?: string | null;
   model: string;
+  /** Durable copies when backend persisted to assets storage. */
+  assets?: Array<{ url?: string | null; id?: string | null }> | null;
 };
 
 /** List text + image models. */
@@ -87,6 +144,7 @@ export const generateImage = (data: GenerateImageParams) =>
       resolution: data.resolution || undefined,
       images: data.images?.length ? data.images : undefined,
     },
+    signal: data.signal,
   });
 
 /**

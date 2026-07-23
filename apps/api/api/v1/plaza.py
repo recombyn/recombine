@@ -8,9 +8,11 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from services.auth import get_session
+from services.auth.admin import require_admin as _require_admin_dep
 from services.plaza import (
     approve_submission,
     get_submission,
+    increment_use_count,
     list_admin,
     list_feed,
     list_mine,
@@ -20,9 +22,6 @@ from services.plaza import (
 from services.plaza.store import PlazaError
 
 router = APIRouter()
-
-_SUPER_ADMIN_EMAIL = "admin@recombyn.com"
-_SUPER_ADMIN_ID = "user_super_admin"
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -42,10 +41,7 @@ def _require_user(authorization: str | None):
 
 
 def _require_super_admin(authorization: str | None):
-    user = _require_user(authorization)
-    if user.id != _SUPER_ADMIN_ID and (user.email or "").strip().lower() != _SUPER_ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return user
+    return _require_admin_dep(authorization)
 
 
 def _plaza_http(err: PlazaError) -> HTTPException:
@@ -56,6 +52,9 @@ def _plaza_http(err: PlazaError) -> HTTPException:
         "document_too_large": 413,
         "invalid_project": 400,
         "invalid_document": 400,
+        "cover_required": 400,
+        "cover_aspect_invalid": 400,
+        "artboard_required": 400,
     }.get(err.code, 400)
     return HTTPException(status_code=status, detail=err.message)
 
@@ -63,7 +62,7 @@ def _plaza_http(err: PlazaError) -> HTTPException:
 class SubmitIn(BaseModel):
     projectId: str = Field(..., min_length=1, max_length=128)
     title: str = Field(default="", max_length=120)
-    category: str = Field(default="resume", max_length=32)
+    category: str = Field(default="website", max_length=32)
     document: dict[str, Any]
 
 
@@ -99,16 +98,52 @@ def plaza_mine(authorization: str | None = Header(default=None)) -> dict[str, An
 
 
 @router.get("/feed")
-def plaza_feed(limit: int = 100) -> dict[str, Any]:
-    return {"items": list_feed(limit=limit)}
+def plaza_feed(
+    page: int = 1,
+    pageSize: int | None = None,
+    limit: int | None = None,
+    tab: str = "recommended",
+    category: str | None = None,
+    authorIds: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Public plaza feed.
+    tab=recommended|latest (following deprecated — use authorIds to filter by creator)
+    category=optional category filter (website|mobile|image|poster)
+    authorIds=comma-separated user ids to filter works by creator.
+    """
+    ids = [p.strip() for p in (authorIds or "").split(",") if p.strip()]
+    return list_feed(
+        limit=limit,
+        page=page,
+        page_size=pageSize,
+        tab=tab,
+        author_ids=ids or None,
+        category=category,
+    )
 
 
 @router.get("/items/{submission_id}")
 def plaza_item(submission_id: str) -> dict[str, Any]:
     item = get_submission(submission_id, include_document=True)
-    if not item or item.get("status") != "approved":
+    if (
+        not item
+        or item.get("status") != "approved"
+        or item.get("isVisible") is False
+    ):
         raise HTTPException(status_code=404, detail="Not found")
     return {"item": item}
+
+
+@router.post("/items/{submission_id}/use")
+def plaza_item_use(submission_id: str) -> dict[str, Any]:
+    """Public (or auth-optional): bump use_count when someone applies a plaza case."""
+    try:
+        use_count = increment_use_count(submission_id)
+    except PlazaError as err:
+        raise _plaza_http(err) from err
+    return {"ok": True, "useCount": use_count}
 
 
 @router.get("/admin/list")

@@ -1,64 +1,26 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import {
+  PLAN_CATALOG,
+  normalizePlanId,
+  type LedgerEntry,
+  type PayMethod,
+  type PlanId,
+} from '@/utils/wallet';
 
 const STORAGE_KEY = 'resume-scene-wallet-v3';
 const LEGACY_V2 = 'resume-scene-wallet-v2';
 
 /**
- * Active product: prepaid Tokens via card-key redeem (no WeChat/Alipay).
- * Legacy membership / mock recharge kept below so PlansDialog & RechargeDialog
- * still compile and can be wired back later.
+ * Redux: prepaid token balance + ledger.
+ * Display helpers / plan catalog → `@/utils/wallet` (not Redux).
+ * Balance field is `tokens`; `credits` mirrors it for older UI.
  */
 
-export type PayMethod = 'wechat' | 'alipay' | 'card';
-
-export type PlanId = 'hobby' | 'pro' | 'pro_plus' | 'ultra' | 'teams';
-
-export type LedgerKind = 'redeem' | 'spend' | 'recharge' | 'plan';
-
-export type LedgerEntry = {
-  id: string;
-  kind: LedgerKind;
-  /** Token / credit units. */
-  amount: number;
-  method?: PayMethod;
-  model?: string;
-  detail?: string;
-  /** Optional LLM usage metadata (not balance). */
-  tokens?: number;
-  usageTokens?: number;
-  planId?: PlanId;
-  balanceAfter: number;
-  createdAt: number;
-};
-
-export type PlanDef = {
-  id: PlanId;
-  priceUsd: number;
-  priceAnnualUsd?: number;
-  creditsIncluded: number;
-  perSeat?: boolean;
-};
-
-/** @deprecated Membership catalog — kept for PlansDialog / future restore. */
-export const PLAN_CATALOG: Record<PlanId, PlanDef> = {
-  hobby: { id: 'hobby', priceUsd: 0, creditsIncluded: 2 },
-  pro: { id: 'pro', priceUsd: 20, priceAnnualUsd: 16, creditsIncluded: 20 },
-  pro_plus: { id: 'pro_plus', priceUsd: 60, creditsIncluded: 70 },
-  ultra: { id: 'ultra', priceUsd: 200, creditsIncluded: 400 },
-  teams: { id: 'teams', priceUsd: 40, creditsIncluded: 40, perSeat: true },
-};
-
-/** @deprecated Kept for PlansDialog. */
-export const PLAN_ORDER: PlanId[] = ['hobby', 'pro', 'pro_plus', 'ultra', 'teams'];
-
 type WalletState = {
-  /** Prepaid Token balance (card-key redeem — active path). */
+  /** Prepaid token balance (card-key redeem + plan allotment). */
   tokens: number;
   ledger: LedgerEntry[];
-  /**
-   * Legacy membership fields (PlansDialog / RechargeDialog).
-   * `credits` mirrors `tokens` so old UI still reads a balance.
-   */
+  /** Membership plan; `credits` mirrors `tokens` for older UI. */
   planId: PlanId;
   credits: number;
   creditsIncluded: number;
@@ -84,9 +46,9 @@ function defaultState(): WalletState {
   return {
     tokens: 0,
     ledger: [],
-    planId: 'hobby',
+    planId: 'free',
     credits: 0,
-    creditsIncluded: PLAN_CATALOG.hobby.creditsIncluded,
+    creditsIncluded: PLAN_CATALOG.free.creditsIncluded,
     demoUsageSeeded: true,
   };
 }
@@ -115,7 +77,7 @@ function loadWallet(): WalletState {
     if (raw) {
       const parsed = JSON.parse(raw);
       const tokens = roundTokens(parsed?.tokens ?? parsed?.credits ?? 0);
-      const planId = (PLAN_CATALOG[parsed?.planId as PlanId] ? parsed.planId : 'hobby') as PlanId;
+      const planId = normalizePlanId(parsed?.planId);
       const ledger = Array.isArray(parsed?.ledger)
         ? (parsed.ledger as LedgerEntry[]).filter(
             (e) => e && typeof e.id === 'string' && typeof e.amount === 'number'
@@ -137,7 +99,7 @@ function loadWallet(): WalletState {
         const old = JSON.parse(legacy);
         const credits = Number(old?.credits ?? old?.balance);
         const tokens = Number.isFinite(credits) && credits > 0 ? roundTokens(credits) : 0;
-        const planId = (PLAN_CATALOG[old?.planId as PlanId] ? old.planId : 'hobby') as PlanId;
+        const planId = normalizePlanId(old?.planId);
         const next: WalletState = {
           tokens,
           ledger: [],
@@ -156,19 +118,6 @@ function loadWallet(): WalletState {
   } catch {
     return defaultState();
   }
-}
-
-export function formatTokens(n: number, opts?: { compact?: boolean }) {
-  const v = Number.isFinite(n) ? n : 0;
-  if (opts?.compact && v >= 1000) return `${Math.round(v / 1000)}k`;
-  return v.toLocaleString('en-US', { maximumFractionDigits: 0 });
-}
-
-/** Alias — legacy PlansDialog / Billing used formatCredits. */
-export const formatCredits = formatTokens;
-
-export function planLabelKey(id: PlanId) {
-  return `wallet.plan.${id}` as const;
 }
 
 const walletSlice = createSlice({
@@ -203,7 +152,7 @@ const walletSlice = createSlice({
       });
       persist(state);
     },
-    /** Deduct Tokens for AI usage. */
+    /** Deduct tokens for AI usage. */
     spend(
       state,
       action: PayloadAction<{
@@ -239,26 +188,8 @@ const walletSlice = createSlice({
       persist(state);
     },
 
-    // ── Legacy (kept for RechargeDialog / PlansDialog; not used by current UI) ──
 
-    /** @deprecated Mock WeChat/Alipay top-up — kept for RechargeDialog. */
-    recharge(state, action: PayloadAction<{ amount: number; method: PayMethod }>) {
-      const amount = roundTokens(Number(action.payload.amount));
-      if (!Number.isFinite(amount) || amount <= 0) return;
-      state.tokens = roundTokens(state.tokens + amount);
-      syncCreditsAlias(state);
-      state.ledger.unshift({
-        id: newId(),
-        kind: 'recharge',
-        amount,
-        method: action.payload.method,
-        detail: '积分充值',
-        balanceAfter: state.tokens,
-        createdAt: Date.now(),
-      });
-      persist(state);
-    },
-    /** @deprecated Membership switch — kept for PlansDialog. */
+    /** Membership switch — refreshes monthly token allotment. */
     setPlan(state, action: PayloadAction<{ planId: PlanId; refreshCredits?: boolean }>) {
       const planId = action.payload.planId;
       const def = PLAN_CATALOG[planId];
@@ -289,7 +220,6 @@ export const {
   applyRedeem,
   spend,
   clearWallet,
-  recharge,
   setPlan,
 } = walletSlice.actions;
 

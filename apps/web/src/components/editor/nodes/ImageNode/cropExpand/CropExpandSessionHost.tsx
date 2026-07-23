@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   HiOutlineArrowsPointingOut,
+  HiOutlineBolt,
   HiOutlineChevronDown,
   HiOutlineScissors,
 } from 'react-icons/hi2';
@@ -10,37 +11,115 @@ import { nanoid } from 'nanoid';
 import { message, DropdownPanel, DropdownPanelItem } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import {
-  CameraOverlayPortal,
-  screenPxToWorld,
-  useCamera,
-  useScreenFixedToolbarStyle,
-} from '@/components/editor/Canvas/stage/CameraContext';
+  RcbOverlayPortal,
+  rcbScreenPxToScene,
+  useRcbCamera,
+  useRcbScreenToolbarStyle,
+} from '@/components/rcb';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import {
   closeImageToolPanel,
   setDocument,
   setSelectedNodeId,
   setSelectedNodeIds,
+  startImageProcess,
   type ImageToolPanelKind,
 } from '@/store/modules/editor';
-import { addNodeToDocument } from '@/store/scene/sceneDocument';
-import { nodeLeftTop } from '@/store/scene/sceneToSvg';
+import { addNodeToDocument } from '@/components/rcb/scene/sceneDocument';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { imageSrcToFile } from '@/apis/upload';
 import { cn } from '@/utils/classnames';
+import { AspectPresetGlyph } from '@/components/rcb/selection/AspectRatioPresetMenu';
 import { imageToolBtn, ImageToolSep } from '../imageToolbarShared';
-import CropExpandOverlay from './CropExpandOverlay';
-import { cropImageToDataUrl, expandImageToDataUrl } from './cropExpandImage';
-import {
+import CropExpandOverlay, {
   cropRectForRatio,
   expandFrameForRatio,
   initialCropRect,
   initialExpandFrame,
   type CropRect,
   type ExpandFrame,
-} from './cropExpandMath';
+} from './CropExpandOverlay';
 import {
   frameGuideBoxes,
   nodeGuideBoxes,
-} from '@/components/editor/Canvas/selection/alignGuides';
+} from '@/components/rcb/selection/alignGuides';
+
+/**
+ * Decode src for canvas crop. Must go through authenticated fetch for local
+ * `/api/v1/uploads/…` and COS public URLs (browser CORS blocks direct COS fetch).
+ */
+async function loadImageForCrop(
+  src: string,
+  uploadKey?: string | null
+): Promise<{ img: HTMLImageElement; revoke: () => void }> {
+  const file = await imageSrcToFile(src, 'crop.png', { uploadKey });
+  const blobUrl = URL.createObjectURL(file);
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => {
+      URL.revokeObjectURL(blobUrl);
+      reject(new Error('image load failed'));
+    };
+    el.src = blobUrl;
+  });
+  return { img, revoke: () => URL.revokeObjectURL(blobUrl) };
+}
+
+/** Crop display-space rect → natural pixels (object-fit: fill / stretch to node). */
+async function cropImageToDataUrl(
+  src: string,
+  nodeW: number,
+  nodeH: number,
+  rect: CropRect,
+  uploadKey?: string | null
+): Promise<string> {
+  const { img, revoke } = await loadImageForCrop(src, uploadKey);
+  try {
+    const nw = Math.max(1, img.naturalWidth || img.width || 1);
+    const nh = Math.max(1, img.naturalHeight || img.height || 1);
+    const sx = (rect.x / Math.max(1, nodeW)) * nw;
+    const sy = (rect.y / Math.max(1, nodeH)) * nh;
+    const sw = Math.max(1, (rect.w / Math.max(1, nodeW)) * nw);
+    const sh = Math.max(1, (rect.h / Math.max(1, nodeH)) * nh);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(sw));
+    canvas.height = Math.max(1, Math.round(sh));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas unsupported');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
+  } finally {
+    revoke();
+  }
+}
+
+/** Build outpaint meta from the on-canvas expand frame (image-local coords). */
+function expandMetaFromFrame(cw: number, ch: number, frame: ExpandFrame) {
+  const padLeft = Math.max(0, Math.round(-frame.ox));
+  const padTop = Math.max(0, Math.round(-frame.oy));
+  const padRight = Math.max(0, Math.round(frame.ox + frame.w - cw));
+  const padBottom = Math.max(0, Math.round(frame.oy + frame.h - ch));
+  const dirs: string[] = [];
+  if (padLeft) dirs.push('left');
+  if (padRight) dirs.push('right');
+  if (padTop) dirs.push('top');
+  if (padBottom) dirs.push('bottom');
+  const scale = Math.max(frame.w / Math.max(1, cw), frame.h / Math.max(1, ch));
+  return {
+    direction: dirs.length ? dirs.join(',') : 'all',
+    scale: `${scale.toFixed(2)}x`,
+    padLeft,
+    padTop,
+    padRight,
+    padBottom,
+    targetWidth: Math.max(1, Math.round(frame.w)),
+    targetHeight: Math.max(1, Math.round(frame.h)),
+  };
+}
 
 function nodeBox(document: any, node: any) {
   if (!node) return null;
@@ -67,7 +146,7 @@ export const CROP_EXPAND_RATIOS: { id: string; label: string; w: number; h: numb
  */
 export default function CropExpandSessionHost({ document }: { document: any }): ReactNode {
   const dispatch = useDispatch();
-  const camera = useCamera();
+  const camera = useRcbCamera();
   const panel = useSelector((s: any) => s.editor.imageToolPanel as null | {
     nodeId: string;
     kind: ImageToolPanelKind;
@@ -130,8 +209,8 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
   }, [mode, box, cropRect, expandFrame]);
 
   const z = Math.max(0.05, camera.zoom || 1);
-  const toolbarGap = screenPxToWorld(10, z);
-  const toolbarStyle = useScreenFixedToolbarStyle({
+  const toolbarGap = rcbScreenPxToScene(10, z);
+  const toolbarStyle = useRcbScreenToolbarStyle({
     left: frameWorld ? frameWorld.left + frameWorld.width / 2 : 0,
     top: frameWorld ? frameWorld.top + frameWorld.height + toolbarGap : 0,
     anchor: 'top',
@@ -192,35 +271,55 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
   };
 
   const onConfirm = () => {
-    if (busy) return;
+    if (busy || !nodeId || !box) return;
     const src = String(node?.attrs?.src || '');
     if (!src) {
       message.error('图片不可用');
       return;
     }
+
+    // Expand: drag frame first, then spawn AI outpaint job (like crop UX).
+    if (mode === 'expand') {
+      if (!expandFrame) return;
+      const outW = Math.max(1, Math.round(expandFrame.w));
+      const outH = Math.max(1, Math.round(expandFrame.h));
+      dispatch(
+        startImageProcess({
+          sourceId: nodeId,
+          kind: 'expand',
+          label: '扩展中',
+          targetWidth: outW,
+          targetHeight: outH,
+          meta: expandMetaFromFrame(box.width, box.height, expandFrame),
+        })
+      );
+      close();
+      return;
+    }
+
+    if (!cropRect) return;
     setBusy(true);
     void (async () => {
       try {
-        if (mode === 'crop') {
-          const nextSrc = await cropImageToDataUrl(src, box.width, box.height, cropRect);
-          const outW = Math.max(1, Math.round(cropRect.w));
-          const outH = Math.max(1, Math.round(cropRect.h));
-          const { id, document: next } = spawnSiblingImage(nextSrc, outW, outH);
-          dispatch(setDocument(next));
-          dispatch(setSelectedNodeIds([id]));
-          dispatch(setSelectedNodeId(id));
-        } else {
-          const nextSrc = await expandImageToDataUrl(src, box.width, box.height, expandFrame);
-          const outW = Math.max(1, Math.round(expandFrame.w));
-          const outH = Math.max(1, Math.round(expandFrame.h));
-          const { id, document: next } = spawnSiblingImage(nextSrc, outW, outH);
-          dispatch(setDocument(next));
-          dispatch(setSelectedNodeIds([id]));
-          dispatch(setSelectedNodeId(id));
-        }
+        const uploadKey = String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null;
+        const nextSrc = await cropImageToDataUrl(
+          src,
+          box.width,
+          box.height,
+          cropRect,
+          uploadKey
+        );
+        const outW = Math.max(1, Math.round(cropRect.w));
+        const outH = Math.max(1, Math.round(cropRect.h));
+        const { id, document: next } = spawnSiblingImage(nextSrc, outW, outH);
+        dispatch(setDocument(next));
+        dispatch(setSelectedNodeIds([id]));
+        dispatch(setSelectedNodeId(id));
         close();
-      } catch {
-        message.error(mode === 'crop' ? '裁剪失败' : '扩展失败');
+      } catch (err) {
+        console.warn('[crop]', err);
+        const detail = err instanceof Error && err.message ? err.message : '';
+        message.error(detail ? `裁剪失败：${detail}` : '裁剪失败');
         setBusy(false);
       }
     })();
@@ -247,7 +346,7 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
       />
 
       {/* Title left · ratio · confirm · exit right (same pattern as FlipRotate). */}
-      <CameraOverlayPortal>
+      <RcbOverlayPortal>
         <div
           data-crop-expand-toolbar
           data-sel-toolbar
@@ -276,10 +375,14 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
               )}
               onClick={() => setRatioMenuOpen((v) => !v)}
             >
-              <span
-                className="inline-block h-3 w-3.5 rounded-[2px] border border-dashed border-[var(--muted)]"
-                aria-hidden
-              />
+              <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--muted)]">
+                <AspectPresetGlyph
+                  preset={
+                    CROP_EXPAND_RATIOS.find((r) => r.id === ratio) || CROP_EXPAND_RATIOS[0]
+                  }
+                  box={12}
+                />
+              </span>
               {ratioLabel}
               <HiOutlineChevronDown className="h-3 w-3 text-[var(--muted)]" />
             </button>
@@ -289,13 +392,21 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
             <button
               type="button"
               disabled={busy}
-              className="mx-[10px] inline-flex h-7 min-w-[52px] items-center justify-center rounded-[4px] px-2.5 text-[12px] font-medium bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80"
+              className="mx-[10px] inline-flex h-7 min-w-[52px] items-center justify-center gap-1 rounded-[4px] px-2.5 text-[12px] font-medium bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80"
               onClick={onConfirm}
             >
               {busy ? (
                 <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
               ) : (
-                '确认'
+                <>
+                  <span>确认</span>
+                  {mode === 'expand' ? (
+                    <span className="inline-flex items-center gap-0.5 text-[11px] text-white/55">
+                      <HiOutlineBolt className="h-3 w-3" aria-hidden />
+                      <span className="tabular-nums">8</span>
+                    </span>
+                  ) : null}
+                </>
               )}
             </button>
 
@@ -313,37 +424,23 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
 
             {ratioMenuOpen ? (
               <DropdownPanel className="absolute bottom-[calc(100%+6px)] left-1/2 z-50 min-w-[168px] -translate-x-1/2">
-                {CROP_EXPAND_RATIOS.map((r) => {
-                  const iconW =
-                    r.id === 'original'
-                      ? 12
-                      : Math.max(6, Math.round((r.w / Math.max(r.w, r.h)) * 12));
-                  const iconH =
-                    r.id === 'original'
-                      ? 12
-                      : Math.max(6, Math.round((r.h / Math.max(r.w, r.h)) * 12));
-                  return (
-                    <DropdownPanelItem
-                      key={r.id}
-                      selected={ratio === r.id}
-                      onClick={() => applyRatio(r.id)}
-                    >
-                      <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[var(--muted)]">
-                        <span
-                          className="inline-block shrink-0 rounded-[2px] border border-current opacity-80"
-                          style={{ width: iconW, height: iconH }}
-                          aria-hidden
-                        />
-                      </span>
-                      {r.label}
-                    </DropdownPanelItem>
-                  );
-                })}
+                {CROP_EXPAND_RATIOS.map((r) => (
+                  <DropdownPanelItem
+                    key={r.id}
+                    selected={ratio === r.id}
+                    onClick={() => applyRatio(r.id)}
+                  >
+                    <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[var(--muted)]">
+                      <AspectPresetGlyph preset={r} box={12} />
+                    </span>
+                    {r.label}
+                  </DropdownPanelItem>
+                ))}
               </DropdownPanel>
             ) : null}
           </FloatingToolbar>
         </div>
-      </CameraOverlayPortal>
+      </RcbOverlayPortal>
     </>
   );
 }

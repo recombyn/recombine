@@ -71,11 +71,21 @@ _RESOLUTION_BASE_AREA: dict[str, int] = {
     "4K": 4096 * 4096,
 }
 
-_DEFAULT_IMAGE_MODEL = "doubao-seedream-4-0-250828"
+_DEFAULT_IMAGE_MODEL = "doubao-seedream-5-0-lite"
+
+
+def _admin_image_default() -> str:
+    """Admin global rule assets.image_default_model (falls back to env)."""
+    try:
+        from services.design.catalog import get_global_rules
+
+        return (get_global_rules().get("assets.image_default_model") or "").strip()
+    except Exception:
+        return ""
 
 
 def resolve_image_model(model: str | None = None) -> str:
-    mid = (model or settings.image_default_model or "").strip()
+    mid = (model or _admin_image_default() or settings.image_default_model or "").strip()
     known = {m["id"]: m for m in list_image_models()}
     if mid in known:
         return mid
@@ -91,7 +101,7 @@ def _api_model_id(catalog_id: str) -> str:
     for m in list_image_models():
         if m["id"] == catalog_id:
             return str(m.get("api_model") or m["id"])
-    return catalog_id or (settings.image_default_model or _DEFAULT_IMAGE_MODEL).strip()
+    return catalog_id or (_admin_image_default() or settings.image_default_model or _DEFAULT_IMAGE_MODEL).strip()
 
 
 def _round_dim(n: float) -> int:
@@ -218,6 +228,8 @@ async def generate_image(
         "size": size,
         "response_format": "url",
         "watermark": False,
+        # Seedream 5.x supports png|jpeg; prefer PNG for canvas assets.
+        "output_format": "png",
     }
     opt = _optimize_prompt_options(quality)
     if opt:
@@ -238,6 +250,23 @@ async def generate_image(
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=30.0)) as client:
         resp = await client.post(url, headers=headers, json=body)
+        # Older Seedream 4.x may reject output_format=png — retry once without it.
+        if resp.status_code >= 400 and "output_format" in body:
+            detail = (resp.text or "")[:800].lower()
+            unknown_fmt = any(
+                k in detail
+                for k in (
+                    "output_format",
+                    "output format",
+                    "unknown parameter",
+                    "unsupported",
+                    "invalid parameter",
+                    "not support",
+                )
+            )
+            if unknown_fmt:
+                body.pop("output_format", None)
+                resp = await client.post(url, headers=headers, json=body)
         if resp.status_code >= 400:
             detail = (resp.text or "")[:800]
             raise RuntimeError(f"Image HTTP {resp.status_code}: {detail}")

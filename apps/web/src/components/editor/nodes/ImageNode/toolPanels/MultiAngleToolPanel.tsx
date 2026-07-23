@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { HiOutlineArrowUturnLeft } from 'react-icons/hi2';
+import { useTranslation } from 'react-i18next';
+import { HiOutlineArrowPath } from 'react-icons/hi2';
 import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
 import AngleEditorScene, {
@@ -15,25 +16,24 @@ import ImageToolPanelShell, {
 const scaleIndexToValue = (i: number): AngleCubeScale => (i === 0 ? 1 : i === 2 ? 10 : 5);
 const scaleValueToIndex = (s: AngleCubeScale): number => (s === 1 ? 0 : s === 10 ? 2 : 1);
 
-/** Common one-click camera angles (within rotate −90…90 / tilt −30…60). */
-const ANGLE_PRESETS: { key: string; label: string; rotate: number; tilt: number }[] = [
-  { key: 'front', label: '正面', rotate: 0, tilt: 0 },
-  { key: 'side', label: '侧面', rotate: 90, tilt: 0 },
-  { key: 'reverse', label: '反打', rotate: -90, tilt: 0 },
-  { key: 'threeQuarter', label: '斜侧', rotate: 45, tilt: 0 },
-  { key: 'top', label: '俯视', rotate: 0, tilt: 60 },
-  { key: 'low', label: '仰视', rotate: 0, tilt: -30 },
-];
+const ANGLE_PRESET_KEYS = [
+  { key: 'front', rotate: 0, tilt: 0 },
+  { key: 'side', rotate: 90, tilt: 0 },
+  { key: 'reverse', rotate: -90, tilt: 0 },
+  { key: 'threeQuarter', rotate: 45, tilt: 0 },
+  { key: 'top', rotate: 0, tilt: 60 },
+  { key: 'low', rotate: 0, tilt: -60 },
+] as const;
 
 const ROTATE_MIN = -90;
 const ROTATE_MAX = 90;
-const TILT_MIN = -30;
+const TILT_MIN = -60;
 const TILT_MAX = 60;
 
 const clampInt = (v: number, min: number, max: number) =>
   Math.round(Math.max(min, Math.min(max, v)));
 
-/** Multi-angle: 天空盒 / 摄像头 — scene ported AngleEditorV3. */
+/** Multi-angle: skybox / camera — scene ported AngleEditorV3. */
 export default function MultiAngleToolPanel({
   imageSrc,
   onCancel,
@@ -43,9 +43,10 @@ export default function MultiAngleToolPanel({
   onCancel: () => void;
   onConfirm: (opts: { rotate: number; tilt: number; zoom: number; mode: AngleEditorMode }) => void;
 }) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<AngleEditorMode>('camera');
   const [rotate, setRotate] = useState(45);
-  const [tilt, setTilt] = useState(-30);
+  const [tilt, setTilt] = useState(0);
   const [scale, setScale] = useState<AngleCubeScale>(5);
   const [busy, setBusy] = useState(false);
 
@@ -58,24 +59,41 @@ export default function MultiAngleToolPanel({
     setScale(5);
   };
 
-  const applyPreset = (preset: (typeof ANGLE_PRESETS)[number]) => {
+  const angleLabel = (key: (typeof ANGLE_PRESET_KEYS)[number]['key']) => {
+    const map = {
+      front: 'editor.imageToolbar.angleFront',
+      side: 'editor.imageToolbar.angleSide',
+      reverse: 'editor.imageToolbar.angleReverse',
+      threeQuarter: 'editor.imageToolbar.angleThreeQuarter',
+      top: 'editor.imageToolbar.angleTop',
+      low: 'editor.imageToolbar.angleLow',
+    } as const;
+    return t(map[key]);
+  };
+
+  const applyPreset = (preset: (typeof ANGLE_PRESET_KEYS)[number]) => {
     setRotateInt(preset.rotate);
     setTiltInt(preset.tilt);
   };
 
   const activePresetKey =
-    ANGLE_PRESETS.find((p) => p.rotate === rotate && p.tilt === tilt)?.key ?? null;
+    ANGLE_PRESET_KEYS.find((p) => p.rotate === rotate && p.tilt === tilt)?.key ?? null;
 
-  const scaleLabel = scale === 1 ? '近' : scale === 10 ? '远' : '中等';
+  const scaleLabel =
+    scale === 1
+      ? t('editor.imageToolbar.distanceNear')
+      : scale === 10
+        ? t('editor.imageToolbar.distanceFar')
+        : t('editor.imageToolbar.distanceMid');
 
   return (
     <ImageToolPanelShell
-      title={'多角度'}
+      title={t('editor.imageToolbar.multiAngle')}
       width={268}
       onClose={onCancel}
       headerRight={
-        <PanelIconBtn title={'重置'} onClick={reset}>
-          <HiOutlineArrowUturnLeft className="h-4 w-4" />
+        <PanelIconBtn title={t('editor.imageToolbar.reset')} onClick={reset}>
+          <HiOutlineArrowPath className="h-4 w-4" />
         </PanelIconBtn>
       }
       footer={
@@ -91,15 +109,16 @@ export default function MultiAngleToolPanel({
               mode: tab,
             });
           }}
-          confirmLabel={'立即使用'}
+          confirmLabel={t('editor.imageToolbar.useNow')}
+          confirmCost={2}
         />
       }
     >
       <div className="mb-3 flex rounded bg-[var(--accent-soft)] p-0.5">
         {(
           [
-            ['skybox', '天空盒'],
-            ['camera', '摄像头'],
+            ['skybox', t('editor.imageToolbar.skybox')],
+            ['camera', t('editor.imageToolbar.camera')],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -120,8 +139,7 @@ export default function MultiAngleToolPanel({
 
       <div
         className={cn(
-          'relative mb-3 aspect-square overflow-hidden rounded',
-          tab === 'skybox' ? 'bg-white ring-1 ring-[var(--line)]' : 'bg-[#f3f3f3]'
+          'relative mb-3 aspect-square overflow-hidden rounded bg-white ring-1 ring-[var(--line)]'
         )}
       >
         <AngleEditorScene
@@ -137,11 +155,14 @@ export default function MultiAngleToolPanel({
       </div>
 
       <div className="mb-3">
-        <div className="mb-1.5 text-[12px] text-[var(--muted)]">{'常用角度'}</div>
+        <div className="mb-1.5 text-[12px] text-[var(--muted)]">
+          {t('editor.imageToolbar.commonAngles')}
+        </div>
         <div className="flex flex-wrap gap-1.5">
-          {ANGLE_PRESETS.map((preset) => {
+          {ANGLE_PRESET_KEYS.map((preset) => {
             const active = activePresetKey === preset.key;
-            const tip = `${preset.label}  ${preset.rotate}° / ${preset.tilt}°`;
+            const label = angleLabel(preset.key);
+            const tip = `${label}  ${preset.rotate}° / ${preset.tilt}°`;
             return (
               <Tooltip key={preset.key} title={tip} placement="top">
                 <button
@@ -155,7 +176,7 @@ export default function MultiAngleToolPanel({
                       : 'bg-[var(--accent-soft)] text-[var(--ink)] hover:bg-[var(--line)]'
                   )}
                 >
-                  {preset.label}
+                  {label}
                 </button>
               </Tooltip>
             );
@@ -164,7 +185,7 @@ export default function MultiAngleToolPanel({
       </div>
 
       <PanelSliderRow
-        label={'旋转'}
+        label={t('editor.imageToolbar.rotate')}
         value={rotate}
         min={ROTATE_MIN}
         max={ROTATE_MAX}
@@ -174,7 +195,7 @@ export default function MultiAngleToolPanel({
         fillFromZero
       />
       <PanelSliderRow
-        label={'倾斜'}
+        label={t('editor.imageToolbar.tilt')}
         value={tilt}
         min={TILT_MIN}
         max={TILT_MAX}
@@ -184,7 +205,7 @@ export default function MultiAngleToolPanel({
         fillFromZero
       />
       <PanelSliderRow
-        label={'缩放'}
+        label={t('editor.imageToolbar.zoom')}
         value={scaleValueToIndex(scale)}
         min={0}
         max={2}

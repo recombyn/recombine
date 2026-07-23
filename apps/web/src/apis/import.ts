@@ -1,12 +1,12 @@
 /**
- * Import API — PDF / DOCX / image / design → Scene JSON.
+ * Import API — PDF / DOCX / image → Scene JSON.
  * Thin HTTP helpers only; job polling orchestration stays in importViaJob.
  */
 
 import { healthCheck } from '@/apis/health';
 import { request } from '@/utils/request';
 
-export type ImportSourceType = 'pdf' | 'docx' | 'image' | 'design';
+export type ImportSourceType = 'pdf' | 'docx' | 'image';
 
 export type ImportJobStatus = 'queued' | 'processing' | 'done' | 'failed';
 
@@ -64,17 +64,6 @@ export const importImage = (file: File) => {
   });
 };
 
-export const importDesign = (file: File) => {
-  const data = new FormData();
-  data.append('file', file);
-  return request({
-    url: '/api/v1/import/design',
-    method: 'post',
-    data,
-    timeout: 180000,
-  });
-};
-
 export const createImportJob = (file: File, sourceType: ImportSourceType) => {
   const data = new FormData();
   data.append('file', file);
@@ -100,9 +89,7 @@ async function importSync(file: File, sourceType: ImportSourceType): Promise<Imp
       ? importPdf(file)
       : sourceType === 'docx'
         ? importDocx(file)
-        : sourceType === 'design'
-          ? importDesign(file)
-          : importImage(file);
+        : importImage(file);
   const res: any = await sync;
   return {
     job_id: res?.job_id ?? null,
@@ -183,11 +170,26 @@ export async function importViaJob(
 export function detectImportSourceType(file: File): ImportSourceType | null {
   const name = file.name.toLowerCase();
   const type = file.type;
-  // Design tools before image/* — PSD often reports image/vnd.adobe.photoshop
-  if (/\.(psd|xd|rp|fig)$/i.test(name)) return 'design';
+  // Design packages are not supported — reject before image/* MIME match (PSD often reports as image).
+  if (/\.(psd|xd|rp|fig)$/i.test(name) || /photoshop|x-psd/i.test(type)) return null;
   if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(name)) return 'image';
-  if (type.startsWith('image/') && !/photoshop|x-psd/i.test(type)) return 'image';
+  if (type.startsWith('image/')) return 'image';
   if (name.endsWith('.pdf') || type === 'application/pdf') return 'pdf';
   if (/\.(docx?|doc)$/i.test(name) || type.includes('word')) return 'docx';
   return null;
+}
+
+/** True when Scene JSON has no drawable ROOT children (empty canvas). */
+export function isImportDocumentEmpty(document: Record<string, unknown> | null | undefined): boolean {
+  if (!document || typeof document !== 'object') return true;
+  const delta = (document as { deltaSetLike?: { ROOT?: { children?: unknown } } }).deltaSetLike;
+  const rootKids = delta?.ROOT?.children;
+  if (Array.isArray(rootKids) && rootKids.length > 0) return false;
+  const pages = (document as { pages?: Array<{ children?: unknown }> }).pages;
+  if (Array.isArray(pages)) {
+    for (const page of pages) {
+      if (Array.isArray(page?.children) && page.children.length > 0) return false;
+    }
+  }
+  return true;
 }

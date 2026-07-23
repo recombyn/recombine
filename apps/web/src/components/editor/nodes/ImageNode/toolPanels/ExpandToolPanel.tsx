@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { HiOutlineBolt, HiOutlineCheck } from 'react-icons/hi2';
+import { HiOutlineCheck } from 'react-icons/hi2';
 import { cn } from '@/utils/classnames';
 import ImageToolPanelShell, {
   PanelClickSelect,
@@ -71,12 +71,7 @@ export default function ExpandToolPanel({
             onConfirm({ scale, preset, ratio });
           }}
           confirmLabel={'生成'}
-          confirmExtra={
-            <span className="inline-flex items-center gap-0.5 text-[12px] opacity-90">
-              <HiOutlineBolt className="h-3.5 w-3.5" />
-              8
-            </span>
-          }
+          confirmCost={8}
         />
       }
     >

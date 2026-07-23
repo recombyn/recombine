@@ -8,9 +8,17 @@
   "scripts": {
     "dev": "npm run dev --workspace=apps/web",
     "dev:web": "npm run dev --workspace=apps/web",
-    "dev:api": "cd apps/api && python -m uvicorn main:app --reload --port 8000",
+    "dev:api": "cd apps/api && python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000",
     "build": "npm run build --workspace=apps/web",
+    "test": "npm run test:web && npm run test:api",
     "test:web": "npm run test --workspace=apps/web",
-    "install:api": "cd apps/api && pip install -e ."
+    "test:web:watch": "npm run test:watch --workspace=apps/web",
+    "test:web:coverage": "npm run test:coverage --workspace=apps/web",
+    "test:api": "cd apps/api && python -m pytest",
+    "test:api:unit": "cd apps/api && python -m pytest tests/unit_tests",
+    "test:api:integration": "cd apps/api && python -m pytest tests/integration_tests",
+    "test:api:coverage": "cd apps/api && python -m pytest --cov=api --cov=services --cov-report=term-missing",
+    "test:e2e": "npm run test --prefix e2e",
+    "install:api": "cd apps/api && pip install -e \".[dev]\""
   }
 }

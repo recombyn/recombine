@@ -7,29 +7,51 @@ import {
   addArtboardFrame,
   patchDocumentNode,
   pushEditorHistory,
+  removeArtboardFrames,
+  setCanvasMeta,
   setDocument,
+  setDocumentFromCanvas,
+  startImageProcess,
   updateArtboardFrame,
   type ArtboardFrame,
 } from '@/store/modules/editor';
+import { exportFabricImage } from '@/components/rcb/scene/exportImage';
 import {
   addNodeToDocument,
   createImageNode,
   createShapeNode,
+  createSvgNode,
   createTextNode,
+  groupNodesInDocument,
   removeNodesFromDocument,
-} from '@/store/scene/sceneDocument';
-import { buildMarkdownTextAttrs, parseNodeTextStyle } from '@/store/scene/sceneText';
-import { serializeFillGradient } from '@/store/scene/sceneFill';
+  reorderNodesInDocument,
+  supportsBooleanOp,
+  ungroupNodesInDocument,
+} from '@/components/rcb/scene/sceneDocument';
 import {
-  AGENT_TEMPLATES,
-  lookupDesignSkill,
-} from '@/components/editor/panels/agent/designStyles';
+  buildMarkdownTextAttrs,
+  measurePlainTextSize,
+  measureWrappedTextSize,
+  parseNodeTextStyle,
+} from '@/components/rcb/scene/sceneText';
+import { serializeFillGradient } from '@/components/rcb/scene/sceneFill';
+import { createMeshGrid, type MeshSize } from '@/components/rcb/scene/sceneDiffuseMesh';
+import { isStrokeStyle } from '@/components/rcb/scene/sceneStrokeStyle';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { computeShapeBoolean, applyBooleanResultPaint, type BoolMode } from '@/components/rcb/selection/shapeBoolean';
+import { nanoid } from '@reduxjs/toolkit';
+import { getAllowedCanvasToolKeys } from '@/components/editor/panels/agent/toolOpsContract';
 
-export type AgentToolCall = {
-  id: string;
-  name: string;
-  arguments: string;
-};
+const IMAGE_PLACEHOLDER =
+  "data:image/svg+xml," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect fill="#eee" width="100%" height="100%"/><text x="50%" y="50%" text-anchor="middle" fill="#999" font-size="14">Image</text></svg>'
+  );
+const AVATAR_PLACEHOLDER =
+  "data:image/svg+xml," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><circle cx="60" cy="60" r="60" fill="#ddd"/><circle cx="60" cy="48" r="22" fill="#bbb"/><ellipse cx="60" cy="100" rx="36" ry="24" fill="#bbb"/></svg>'
+  );
 
 export type AgentToolResult = {
   status: 'success' | 'warning' | 'error';
@@ -43,23 +65,124 @@ export type DesignToolContext = {
   getDocument: () => any;
   /** Prefer placing new nodes inside this frame. */
   targetFrameId?: string | null;
-  /** Latest user utterance — used to gate destructive tools. */
-  userMessage?: string;
+  /**
+   * When true, allow delete_nodes / other destructive tools.
+   * Set by the design-agent executor after backend intent approved the ops — never infer from user text here.
+   */
+  allowDestructive?: boolean;
   /** User-attached image data URLs (fill slots via create_image). */
   userImages?: string[];
+  /** Editor chrome bridge (zoom / panels / agent mode). */
+  canvasUi?: CanvasUiBridge | null;
+  /** Skip per-tool undo snapshots (e.g. batch SVG → nodes import). */
+  skipHistory?: boolean;
 };
+
+/** Optional callbacks from EditorPage / AgentDock for non-document UI. */
+export type CanvasUiBridge = {
+  getZoom?: () => number;
+  zoomIn?: () => void;
+  zoomOut?: () => void;
+  /** Absolute zoom factor (1 = 100%). */
+  setZoom?: (zoom: number) => void;
+  /** Fit / reset view (typically 100% at stage center). */
+  fitView?: () => void;
+  getCollabMode?: () => 'collaborative' | 'milestone' | 'auto';
+  setCollabMode?: (mode: 'collaborative' | 'milestone' | 'auto') => void;
+  setLayersOpen?: (open: boolean) => void;
+  setMinimapOpen?: (open: boolean) => void;
+  getLayersOpen?: () => boolean;
+  getMinimapOpen?: () => boolean;
+  openAccountAgent?: () => void;
+};
+
+/** Capabilities the agent can honestly say are not wired yet. */
+export const UNAVAILABLE_CAPABILITIES: Array<{
+  id: string;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: 'product_preview',
+    label: '产品预览 / 全屏预览',
+    hint: '暂未接入 Agent。请选中图片后点「全屏预览」，或用顶栏分享预览。',
+  },
+  {
+    id: 'share',
+    label: '分享链接',
+    hint: '暂未接入 Agent。请点编辑器顶栏「分享」。',
+  },
+  {
+    id: 'workspace_dev',
+    label: '切换 Design / Dev 工作区',
+    hint: '暂未接入 Agent。请用顶栏 Design / Dev 切换。',
+  },
+  {
+    id: 'hand_tool',
+    label: '切换抓手 / 选择工具',
+    hint: '暂未接入 Agent。请用底部工具条或空格拖移画布。',
+  },
+  {
+    id: 'tour',
+    label: '新手引导回放',
+    hint: '暂未接入 Agent。请点左下角「?」重看引导。',
+  },
+];
+
+/** FE Action executors (op_key must match Admin design_canvas_tool). */
+export const FE_ACTION_EXECUTOR_KEYS = [
+  'update_node',
+  'create_shape',
+  'create_text',
+  'create_image',
+  'create_svg',
+  'create_icon',
+  'create_frame',
+  'delete_nodes',
+  'update_frame',
+  'delete_frame',
+  'align_nodes',
+  'distribute_nodes',
+  'reorder_nodes',
+  'group_nodes',
+  'ungroup_nodes',
+  'duplicate_nodes',
+  'flip_nodes',
+  'boolean_op',
+  'set_canvas_background',
+  'set_viewport',
+  'image_process',
+  'export_canvas',
+] as const;
 
 export const DESIGN_TOOL_NAMES = [
   'get_scene_summary',
-  'lookup_design_skill',
+  'list_capabilities',
   'ask_user',
   'create_frame',
   'update_frame',
   'create_shape',
   'create_text',
   'create_image',
+  'create_svg',
+  'create_icon',
   'update_node',
+  'align_nodes',
+  'distribute_nodes',
+  'boolean_op',
+  'reorder_nodes',
+  'group_nodes',
+  'ungroup_nodes',
+  'duplicate_nodes',
+  'flip_nodes',
+  'set_viewport',
+  'set_canvas_background',
+  'image_process',
+  'export_canvas',
+  'set_agent_mode',
+  'toggle_editor_panel',
   'delete_nodes',
+  'delete_frame',
   'finish',
 ] as const;
 
@@ -79,6 +202,34 @@ function num(v: unknown, fallback = 0) {
 
 function listFrames(doc: any): ArtboardFrame[] {
   return Array.isArray(doc?.frames) ? doc.frames : [];
+}
+
+/** Scene node ids whose boxes mostly overlap any of the given frames. */
+function nodeIdsInsideFrameLocal(doc: any, frameIds: string[]): string[] {
+  if (!doc || !frameIds.length) return [];
+  const idSet = new Set(frameIds.map(String));
+  const frames = listFrames(doc).filter((f) => f?.id && idSet.has(String(f.id)));
+  if (!frames.length) return [];
+  const rootChildren: string[] = doc?.deltaSetLike?.ROOT?.children || [];
+  const out: string[] = [];
+  for (const id of rootChildren) {
+    const node = doc?.deltaSetLike?.[id];
+    if (!node || !id) continue;
+    const { left, top } = nodeLeftTop(doc, node);
+    const nw = Math.max(1, Number(node.width) || 1);
+    const nh = Math.max(1, Number(node.height) || 1);
+    const hits = frames.some((frame) => {
+      const fx = Number(frame.x) || 0;
+      const fy = Number(frame.y) || 0;
+      const fw = Math.max(1, Number(frame.width) || 1);
+      const fh = Math.max(1, Number(frame.height) || 1);
+      const ow = Math.max(0, Math.min(left + nw, fx + fw) - Math.max(left, fx));
+      const oh = Math.max(0, Math.min(top + nh, fy + fh) - Math.max(top, fy));
+      return ow * oh >= nw * nh * 0.35;
+    });
+    if (hits) out.push(id);
+  }
+  return out;
 }
 
 function frameById(doc: any, id?: string | null) {
@@ -107,6 +258,13 @@ function sceneSummary(doc: any, targetFrameId?: string | null) {
       width: Math.round(Number(n.width) || 0),
       height: Math.round(Number(n.height) || 0),
       name: n.attrs?.name,
+      fillType: n.attrs?.['fill-type'] || 'solid',
+      fill: n.attrs?.['fill-color'],
+      strokeStyle: n.attrs?.strokeStyle || 'solid',
+      shadow: n.attrs?.['shadow-enabled'] === 'true' || n.attrs?.['shadow-enabled'] === true,
+      rotation: Number(n.attrs?.angle) || 0,
+      opacity: n.attrs?.opacity != null ? Number(n.attrs.opacity) : undefined,
+      blendMode: n.attrs?.blendMode,
     }));
   const target = frameById(doc, targetFrameId);
   return {
@@ -139,6 +297,19 @@ function applyCornerRadius(node: any, r: number) {
   };
 }
 
+function truthy(v: unknown) {
+  return v === true || v === 'true';
+}
+
+function parseMeshPoints(raw: unknown, size: MeshSize, base: string) {
+  if (!Array.isArray(raw) || !raw.length) return createMeshGrid(size, base);
+  return raw.map((p: any) => ({
+    x: Math.min(100, Math.max(0, Number(p?.x) || 0)),
+    y: Math.min(100, Math.max(0, Number(p?.y) || 0)),
+    color: String(p?.color || base),
+  }));
+}
+
 function applyShapeFill(
   node: any,
   args: Record<string, unknown>,
@@ -147,6 +318,62 @@ function applyShapeFill(
   const fillType = String(args.fillType || 'solid').toLowerCase();
   const c0 = String(args.fill ?? fallbackFill);
   const c1 = String(args.fillEnd ?? args.fillTo ?? c0);
+  const fillOpacity =
+    args.fillOpacity != null ? Math.min(100, Math.max(0, num(args.fillOpacity, 100))) : undefined;
+
+  if (fillType === 'image') {
+    const src = String(args.fillImageSrc ?? args.imageSrc ?? args.src ?? '').trim();
+    if (!src) {
+      node.attrs = {
+        ...node.attrs,
+        'fill-type': 'solid',
+        'fill-color': c0,
+        'fill-enabled': 'true',
+        'fill-visible': 'true',
+        ...(fillOpacity != null ? { 'fill-opacity': fillOpacity } : {}),
+      };
+      return;
+    }
+    const fit = String(args.fillImageFit || 'fill').toLowerCase();
+    node.attrs = {
+      ...node.attrs,
+      'fill-type': 'image',
+      'fill-enabled': 'true',
+      'fill-visible': 'true',
+      'fill-color': c0,
+      'fill-image-src': src,
+      'fill-image-fit':
+        fit === 'fit' || fit === 'crop' || fit === 'tile' ? fit : 'fill',
+      'fill-image-rotate':
+        args.fillImageRotate != null ? num(args.fillImageRotate, 0) : 0,
+      ...(fillOpacity != null ? { 'fill-opacity': fillOpacity } : {}),
+    };
+    return;
+  }
+
+  if (fillType === 'diffuse') {
+    const meshSize = Math.min(8, Math.max(3, Math.round(num(args.meshSize, 4)))) as MeshSize;
+    const meshPoints = parseMeshPoints(args.meshPoints, meshSize, c0);
+    node.attrs = {
+      ...node.attrs,
+      'fill-type': 'diffuse',
+      'fill-enabled': 'true',
+      'fill-visible': 'true',
+      'fill-color': c0,
+      'fill-gradient': serializeFillGradient({
+        type: 'diffuse',
+        meshSize,
+        meshPoints,
+        colorStops: [
+          { offset: 0, color: meshPoints[0]?.color || c0 },
+          { offset: 1, color: meshPoints[meshPoints.length - 1]?.color || c1 },
+        ],
+      }),
+      ...(fillOpacity != null ? { 'fill-opacity': fillOpacity } : {}),
+    };
+    return;
+  }
+
   if (fillType === 'linear' || fillType === 'radial' || fillType === 'angular') {
     const angle = num(args.gradientAngle ?? args.angle, fillType === 'angular' ? 0 : 90);
     node.attrs = {
@@ -166,76 +393,492 @@ function applyShapeFill(
           { offset: 1, color: c1 },
         ],
       }),
+      ...(fillOpacity != null ? { 'fill-opacity': fillOpacity } : {}),
     };
     return;
   }
+
   node.attrs = {
     ...node.attrs,
     'fill-type': 'solid',
     'fill-color': c0,
     'fill-enabled': 'true',
     'fill-visible': 'true',
+    ...(fillOpacity != null ? { 'fill-opacity': fillOpacity } : {}),
   };
 }
 
+/** Stroke dash / align / cap / join / opacity / side strokes. */
+function applyStrokeExtras(node: any, args: Record<string, unknown>) {
+  const attrs: Record<string, unknown> = { ...(node.attrs || {}) };
+  if (args.strokeStyle != null && isStrokeStyle(String(args.strokeStyle))) {
+    attrs.strokeStyle = String(args.strokeStyle);
+  }
+  if (args.strokeAlign != null) {
+    const v = String(args.strokeAlign);
+    if (v === 'center' || v === 'inside' || v === 'outside') {
+      attrs.strokeAlign = v;
+      attrs['stroke-align'] = v;
+    }
+  }
+  if (args.strokeLinecap != null) {
+    const v = String(args.strokeLinecap);
+    if (v === 'butt' || v === 'round' || v === 'square') {
+      attrs.strokeLinecap = v;
+      attrs['stroke-linecap'] = v;
+    }
+  }
+  if (args.strokeLinejoin != null) {
+    const v = String(args.strokeLinejoin);
+    if (v === 'miter' || v === 'round' || v === 'bevel') {
+      attrs.strokeLinejoin = v;
+      attrs['stroke-linejoin'] = v;
+    }
+  }
+  if (args.strokeOpacity != null) {
+    attrs['stroke-opacity'] = Math.min(100, Math.max(0, num(args.strokeOpacity, 100)));
+  }
+  const sides = args.strokeSides;
+  if (sides && typeof sides === 'object' && !Array.isArray(sides)) {
+    const s = sides as Record<string, unknown>;
+    for (const key of ['T', 'R', 'B', 'L'] as const) {
+      if (s[key] != null) attrs[key] = truthy(s[key]) ? 'true' : 'false';
+    }
+  } else {
+    for (const key of ['strokeTop', 'strokeRight', 'strokeBottom', 'strokeLeft'] as const) {
+      if (args[key] == null) continue;
+      const map = {
+        strokeTop: 'T',
+        strokeRight: 'R',
+        strokeBottom: 'B',
+        strokeLeft: 'L',
+      } as const;
+      attrs[map[key]] = truthy(args[key]) ? 'true' : 'false';
+    }
+  }
+  node.attrs = attrs;
+}
+
+function applyShadow(node: any, args: Record<string, unknown>) {
+  const attrs: Record<string, unknown> = { ...(node.attrs || {}) };
+  if (args.shadowEnabled != null) {
+    attrs['shadow-enabled'] = truthy(args.shadowEnabled) ? 'true' : 'false';
+  }
+  if (args.shadowVisible != null) {
+    attrs['shadow-visible'] = truthy(args.shadowVisible) ? 'true' : 'false';
+  }
+  if (args.shadowColor != null) attrs['shadow-color'] = String(args.shadowColor);
+  if (args.shadowBlur != null) attrs['shadow-blur'] = Math.max(0, num(args.shadowBlur, 4));
+  if (args.shadowX != null) attrs['shadow-x'] = num(args.shadowX, 0);
+  if (args.shadowY != null) attrs['shadow-y'] = num(args.shadowY, 2);
+  // Convenience: any shadow-* field implies enable unless explicitly disabled.
+  if (
+    attrs['shadow-enabled'] == null &&
+    (args.shadowColor != null ||
+      args.shadowBlur != null ||
+      args.shadowX != null ||
+      args.shadowY != null)
+  ) {
+    attrs['shadow-enabled'] = 'true';
+    attrs['shadow-visible'] = 'true';
+  }
+  node.attrs = attrs;
+}
+
+function applyCornerRadii(node: any, args: Record<string, unknown>) {
+  if (args.cornerRadius != null) {
+    applyCornerRadius(node, num(args.cornerRadius));
+    return;
+  }
+  const has =
+    args.radiusTL != null ||
+    args.radiusTR != null ||
+    args.radiusBR != null ||
+    args.radiusBL != null;
+  if (!has) return;
+  const attrs: Record<string, unknown> = { ...(node.attrs || {}) };
+  if (args.radiusTL != null) attrs.radiusTL = Math.max(0, Math.round(num(args.radiusTL)));
+  if (args.radiusTR != null) attrs.radiusTR = Math.max(0, Math.round(num(args.radiusTR)));
+  if (args.radiusBR != null) attrs.radiusBR = Math.max(0, Math.round(num(args.radiusBR)));
+  if (args.radiusBL != null) attrs.radiusBL = Math.max(0, Math.round(num(args.radiusBL)));
+  attrs.radiusLinked = 'false';
+  node.attrs = attrs;
+}
+
+type AgentNodeBox = {
+  id: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  shapeType: string;
+  fill: string;
+  stroke: string;
+  borderWidth: number;
+  path?: string;
+  angle?: number;
+  sides?: number;
+};
+
+function readAgentBoxes(doc: any, nodeIds: string[]): AgentNodeBox[] {
+  return nodeIds
+    .map((id) => {
+      const node = doc?.deltaSetLike?.[id];
+      if (!node) return null;
+      const { left, top } = nodeLeftTop(doc, node);
+      const pathRaw = node.attrs?.path != null ? String(node.attrs.path) : '';
+      const angle = Number(node.attrs?.angle ?? 0) || 0;
+      const sidesRaw = Number(node.attrs?.sides);
+      return {
+        id,
+        left,
+        top,
+        width: Math.max(1, Number(node.width) || 1),
+        height: Math.max(1, Number(node.height) || 1),
+        shapeType: String(
+          node.attrs?.shapeType || (node.key === 'shape' ? 'rect' : node.key || '')
+        ),
+        fill: String(node.attrs?.['fill-color'] || '#FFFFFF'),
+        stroke: String(node.attrs?.['border-color'] || '#333333'),
+        borderWidth: Number(node.attrs?.['border-width'] ?? 1) || 1,
+        path: pathRaw || undefined,
+        angle,
+        sides: Number.isFinite(sidesRaw) ? sidesRaw : undefined,
+      };
+    })
+    .filter(Boolean) as AgentNodeBox[];
+}
+
+function parseNodeIds(args: Record<string, unknown>): string[] {
+  if (!Array.isArray(args.nodeIds)) return [];
+  return [...new Set(args.nodeIds.map((x) => String(x)).filter(Boolean))];
+}
+
 /** Keep new nodes inside the target artboard (models often place outside). */
+function normalizeLocalGeom(
+  fw: number,
+  fh: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): { x: number; y: number; width: number; height: number; scale: number } {
+  let nx = x;
+  let ny = y;
+  let nw = Math.max(1, width);
+  let nh = Math.max(1, height);
+  let scale = 1;
+
+  // Normalized 0..1 coords (model forgot × TARGET_CANVAS).
+  const looksFrac =
+    nx >= 0 &&
+    ny >= 0 &&
+    nw > 0 &&
+    nh > 0 &&
+    nx <= 1.01 &&
+    ny <= 1.01 &&
+    nw <= 1.01 &&
+    nh <= 1.01 &&
+    (nw < 0.999 || nh < 0.999 || (nx > 0 && nx < 1) || (ny > 0 && ny < 1));
+  if (looksFrac) {
+    nx = Math.round(nx * fw);
+    ny = Math.round(ny * fh);
+    nw = Math.max(1, Math.round(nw * fw));
+    nh = Math.max(1, Math.round(nh * fh));
+  }
+
+  // Poster-scale layout on a small board (e.g. 1080×1920 ops → 390×844).
+  const layoutW = Math.max(nx + nw, nw);
+  const layoutH = Math.max(ny + nh, nh);
+  if (layoutW > fw * 1.45 && layoutW >= 640) {
+    scale = fw / layoutW;
+    nx = Math.round(nx * scale);
+    ny = Math.round(ny * scale);
+    nw = Math.max(1, Math.round(nw * scale));
+    nh = Math.max(1, Math.round(nh * scale));
+  } else if (layoutH > fh * 1.45 && layoutH >= 1000 && layoutW > fw * 1.1) {
+    scale = Math.min(fw / layoutW, fh / layoutH);
+    if (scale < 0.95) {
+      nx = Math.round(nx * scale);
+      ny = Math.round(ny * scale);
+      nw = Math.max(1, Math.round(nw * scale));
+      nh = Math.max(1, Math.round(nh * scale));
+    } else {
+      scale = 1;
+    }
+  }
+
+  return { x: nx, y: ny, width: nw, height: nh, scale };
+}
+
 function fitIntoFrame(
   frame: ArtboardFrame | null | undefined,
   x: number,
   y: number,
   width: number,
   height: number
-): { x: number; y: number; clamped: boolean; outside: boolean } {
-  if (!frame) return { x, y, clamped: false, outside: false };
+): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  clamped: boolean;
+  outside: boolean;
+  scale: number;
+} {
+  if (!frame) {
+    return {
+      x,
+      y,
+      width: Math.max(1, width),
+      height: Math.max(1, height),
+      clamped: false,
+      outside: false,
+      scale: 1,
+    };
+  }
   const fx = Number(frame.x) || 0;
   const fy = Number(frame.y) || 0;
   const fw = Math.max(1, Number(frame.width) || 1);
   const fh = Math.max(1, Number(frame.height) || 1);
-  const w = Math.max(1, width);
-  const h = Math.max(1, height);
+  const norm = normalizeLocalGeom(fw, fh, x, y, width, height);
+  const w = Math.max(1, Math.min(norm.width, fw));
+  const h = Math.max(1, Math.min(norm.height, fh));
   // If model passed local coords (0..size) while frame is offset, promote to world.
-  let wx = x;
-  let wy = y;
-  if (x >= 0 && x <= fw && y >= 0 && y <= fh && (fx !== 0 || fy !== 0)) {
-    // Ambiguous when frame origin is 0 — treat as world already.
-    if (fx !== 0 || fy !== 0) {
-      wx = fx + x;
-      wy = fy + y;
-    }
-  }
-  // Clearly meant for another board / free canvas — do NOT silently pull into the wrong frame.
-  const pad = 24;
-  const outside =
-    wx + w < fx - pad ||
-    wx > fx + fw + pad ||
-    wy + h < fy - pad ||
-    wy > fy + fh + pad;
-  if (outside) {
-    return { x: wx, y: wy, clamped: false, outside: true };
+  let wx = norm.x;
+  let wy = norm.y;
+  if (norm.x >= 0 && norm.x <= fw && norm.y >= 0 && norm.y <= fh && (fx !== 0 || fy !== 0)) {
+    wx = fx + norm.x;
+    wy = fy + norm.y;
   }
   const maxX = fx + fw - w;
   const maxY = fy + fh - h;
   const nx = Math.min(Math.max(wx, fx), Math.max(fx, maxX));
   const ny = Math.min(Math.max(wy, fy), Math.max(fy, maxY));
-  return { x: nx, y: ny, clamped: nx !== wx || ny !== wy, outside: false };
+  const sizeClamped = w !== Math.max(1, norm.width) || h !== Math.max(1, norm.height);
+  const posClamped = nx !== wx || ny !== wy;
+  return {
+    x: nx,
+    y: ny,
+    width: w,
+    height: h,
+    clamped: sizeClamped || posClamped || norm.scale < 0.999,
+    outside: false,
+    scale: norm.scale,
+  };
 }
 
-/** User must explicitly ask before the agent may delete nodes. */
-export function userExplicitlyAllowsDelete(message: string | undefined | null): boolean {
-  const s = String(message || '');
-  if (!s.trim()) return false;
-  return /删除|删掉|移除|清除|去掉|丢掉|不要了|delete\b|remove\b|clear\b|erase\b|discard\b/i.test(
-    s
+const FRAME_GAP = 80;
+const NODE_GAP = 12;
+
+type WorldRect = { x: number; y: number; width: number; height: number; id?: string };
+
+function frameRectsOverlap(
+  ax: number,
+  ay: number,
+  aw: number,
+  ah: number,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  gap = 1
+): boolean {
+  return (
+    ax < bx + bw + gap &&
+    ax + aw + gap > bx &&
+    ay < by + bh + gap &&
+    ay + ah + gap > by
   );
 }
 
-/** User wants a new artboard beside an existing one (not edit-in-place). */
-export function userWantsSiblingFrame(message: string | undefined | null): boolean {
-  const s = String(message || '');
-  if (!s.trim()) return false;
-  return /右侧|左边|左侧|旁边|再[生成做创画]|另一[张个块]|新的?[张个]?海报|同比例|再来一|旁边再|旁边生成|旁边做/.test(
-    s
+function rectHitsAny(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  obstacles: WorldRect[],
+  gap: number
+): boolean {
+  return obstacles.some((o) =>
+    frameRectsOverlap(x, y, w, h, o.x, o.y, o.width, o.height, gap)
   );
+}
+
+function collectFrameObstacles(doc: any): WorldRect[] {
+  return listFrames(doc).map((f) => ({
+    id: f.id,
+    x: Math.round(Number(f.x) || 0),
+    y: Math.round(Number(f.y) || 0),
+    width: Math.max(1, Math.round(Number(f.width) || 1)),
+    height: Math.max(1, Math.round(Number(f.height) || 1)),
+  }));
+}
+
+function collectNodeObstacles(
+  doc: any,
+  opts?: { frame?: ArtboardFrame | null; excludeIds?: Set<string> }
+): WorldRect[] {
+  const rootChildren: string[] = Array.isArray(doc?.deltaSetLike?.ROOT?.children)
+    ? doc.deltaSetLike.ROOT.children
+    : Object.keys(doc?.deltaSetLike || {}).filter((id) => id && id !== 'ROOT');
+  const frame = opts?.frame;
+  const fx = frame ? Number(frame.x) || 0 : 0;
+  const fy = frame ? Number(frame.y) || 0 : 0;
+  const fw = frame ? Math.max(1, Number(frame.width) || 1) : 0;
+  const fh = frame ? Math.max(1, Number(frame.height) || 1) : 0;
+  const out: WorldRect[] = [];
+  for (const id of rootChildren) {
+    if (!id || opts?.excludeIds?.has(id)) continue;
+    const node = doc?.deltaSetLike?.[id];
+    if (!node) continue;
+    const { left, top } = nodeLeftTop(doc, node);
+    const nw = Math.max(1, Math.round(Number(node.width) || 1));
+    const nh = Math.max(1, Math.round(Number(node.height) || 1));
+    if (frame) {
+      const ow = Math.max(0, Math.min(left + nw, fx + fw) - Math.max(left, fx));
+      const oh = Math.max(0, Math.min(top + nh, fy + fh) - Math.max(top, fy));
+      if (ow * oh < nw * nh * 0.2) continue;
+    }
+    out.push({
+      id: String(id),
+      x: Math.round(left),
+      y: Math.round(top),
+      width: nw,
+      height: nh,
+    });
+  }
+  return out;
+}
+
+/** Scan for free top-left; prefers `prefer` when free. */
+function findFreeOrigin(opts: {
+  width: number;
+  height: number;
+  obstacles: WorldRect[];
+  prefer?: { x: number; y: number };
+  bounds?: { x: number; y: number; width: number; height: number };
+  gap?: number;
+  step?: number;
+}): { x: number; y: number } | null {
+  const w = Math.max(1, Math.round(opts.width));
+  const h = Math.max(1, Math.round(opts.height));
+  const gap = opts.gap ?? NODE_GAP;
+  const step = Math.max(8, opts.step ?? Math.max(24, Math.round(Math.min(w, h) / 2)));
+  const obstacles = opts.obstacles;
+  const prefer = opts.prefer
+    ? { x: Math.round(opts.prefer.x), y: Math.round(opts.prefer.y) }
+    : null;
+
+  const inBounds = (x: number, y: number) => {
+    if (!opts.bounds) return true;
+    const b = opts.bounds;
+    return (
+      x >= b.x - 0.5 &&
+      y >= b.y - 0.5 &&
+      x + w <= b.x + b.width + 0.5 &&
+      y + h <= b.y + b.height + 0.5
+    );
+  };
+
+  if (
+    prefer &&
+    inBounds(prefer.x, prefer.y) &&
+    !rectHitsAny(prefer.x, prefer.y, w, h, obstacles, gap)
+  ) {
+    return prefer;
+  }
+
+  let minX = 0;
+  let minY = 0;
+  let maxX = 0;
+  let maxY = 0;
+  if (opts.bounds) {
+    minX = Math.round(opts.bounds.x);
+    minY = Math.round(opts.bounds.y);
+    maxX = Math.round(opts.bounds.x + opts.bounds.width - w);
+    maxY = Math.round(opts.bounds.y + opts.bounds.height - h);
+  } else {
+    let maxRight = 0;
+    let maxBottom = 0;
+    for (const o of obstacles) {
+      maxRight = Math.max(maxRight, o.x + o.width);
+      maxBottom = Math.max(maxBottom, o.y + o.height);
+    }
+    minX = prefer?.x ?? (obstacles.length ? Math.round(maxRight + gap) : 0);
+    minY = prefer?.y ?? 0;
+    maxX = Math.round(maxRight + gap + w * 6 + 400);
+    maxY = Math.round(maxBottom + gap + h * 4 + 400);
+  }
+  if (maxX < minX || maxY < minY) return null;
+
+  for (let y = minY; y <= maxY; y += step) {
+    for (let x = minX; x <= maxX; x += step) {
+      if (!inBounds(x, y)) continue;
+      if (!rectHitsAny(x, y, w, h, obstacles, gap)) return { x, y };
+    }
+  }
+  if (prefer) {
+    const fine = Math.max(4, Math.round(step / 2));
+    const x0 = Math.max(minX, prefer.x - step * 2);
+    const y0 = Math.max(minY, prefer.y - step * 2);
+    const x1 = Math.min(maxX, prefer.x + step * 4);
+    const y1 = Math.min(maxY, prefer.y + step * 4);
+    for (let y = y0; y <= y1; y += fine) {
+      for (let x = x0; x <= x1; x += fine) {
+        if (!inBounds(x, y)) continue;
+        if (!rectHitsAny(x, y, w, h, obstacles, gap)) return { x, y };
+      }
+    }
+  }
+  return null;
+}
+
+/** Place a new artboard in empty world space (no overlap with frames or free nodes). */
+export function nextArtboardOrigin(
+  doc: any,
+  width = 390,
+  height = 844
+): { x: number; y: number } {
+  const frames = listFrames(doc);
+  const w = Math.max(40, Math.round(Number(width) || 390));
+  const h = Math.max(40, Math.round(Number(height) || 844));
+  const nodeObs = collectNodeObstacles(doc);
+  if (!frames.length && !nodeObs.length) return { x: 0, y: 0 };
+
+  const obstacles = [...collectFrameObstacles(doc), ...nodeObs];
+  let maxRight = 0;
+  let anchorY = 0;
+  for (const f of frames) {
+    const right = Number(f.x || 0) + Number(f.width || 0);
+    if (right >= maxRight) {
+      maxRight = right;
+      anchorY = Math.round(Number(f.y) || 0);
+    }
+  }
+  for (const o of obstacles) {
+    maxRight = Math.max(maxRight, o.x + o.width);
+  }
+
+  const prefer = {
+    x: Math.round((frames.length ? maxRight : 0) + (frames.length ? FRAME_GAP : 0)),
+    y: anchorY,
+  };
+  const slot = findFreeOrigin({
+    width: w,
+    height: h,
+    obstacles,
+    prefer,
+    gap: FRAME_GAP,
+    step: Math.max(40, Math.round(FRAME_GAP / 2)),
+  });
+  if (slot) return slot;
+
+  let maxBottom = 0;
+  for (const o of obstacles) {
+    maxBottom = Math.max(maxBottom, o.y + o.height);
+  }
+  return { x: 0, y: Math.round(maxBottom + FRAME_GAP) };
 }
 
 export function executeDesignTool(
@@ -248,6 +891,9 @@ export function executeDesignTool(
   if (!doc) {
     return { status: 'error', summary: 'No document open', next_actions: ['Open a project first'] };
   }
+  const pushHistory = () => {
+    if (!ctx.skipHistory) ctx.dispatch(pushEditorHistory());
+  };
 
   try {
     if (name === 'get_scene_summary') {
@@ -259,30 +905,245 @@ export function executeDesignTool(
       };
     }
 
-    if (name === 'lookup_design_skill') {
-      const skill = String(args.skill || args.name || '').trim();
-      const focus = args.focus != null ? String(args.focus) : 'all';
-      if (!skill) {
+    if (name === 'list_capabilities') {
+      const ui = ctx.canvasUi;
+      const keys = [...getAllowedCanvasToolKeys()].sort();
+      const available = [
+        keys.length
+          ? `画布 tool_ops（design_canvas_tool）：${keys.join(' / ')}`
+          : '画布 tool_ops：尚未从 catalog 同步（Admin 维护 design_canvas_tool）',
+        '样式：实色/线性/径向/角度/网格渐变(diffuse)/图片填充、描边虚线、阴影、混合模式、圆角、文字排版',
+        ui?.setZoom || ui?.zoomIn
+          ? '视口：set_viewport（缩放/适应画布）'
+          : null,
+        ui?.setCollabMode
+          ? 'Agent 模式：set_agent_mode（collaborative|milestone|auto）'
+          : null,
+        ui?.setLayersOpen || ui?.setMinimapOpen
+          ? '面板：toggle_editor_panel（layers|minimap|agent_settings）'
+          : null,
+      ].filter(Boolean);
+      return {
+        status: 'success',
+        summary: '已列出 Agent 已接入与暂未接入的画布能力',
+        artifacts: {
+          available,
+          tool_ops: keys,
+          unavailable: UNAVAILABLE_CAPABILITIES,
+          zoom: ui?.getZoom?.() ?? null,
+          collabMode: ui?.getCollabMode?.() ?? null,
+        },
+        next_actions: [
+          '对已接入能力直接调用对应工具',
+          '对暂未接入能力用中文告知用户，并给出手动操作路径；不要假装已执行',
+        ],
+      };
+    }
+
+    if (name === 'set_viewport') {
+      const ui = ctx.canvasUi;
+      let action = String(args.action || args.mode || '').toLowerCase();
+      if (!action && truthy(args.fit)) action = 'fit';
+      if (!action && (args.percent != null || args.zoom != null)) action = 'set';
+      if (!ui?.zoomIn && !ui?.setZoom && !ui?.fitView) {
         return {
           status: 'error',
-          summary: 'skill required (e.g. poster, ui, icon, banner, core)',
-          next_actions: ['lookup_design_skill with skill + optional focus'],
+          summary:
+            '缩放暂未接入当前会话。请用左下角缩放条手动调节。',
         };
       }
-      const hit = lookupDesignSkill(skill, focus);
+      if (action === 'zoom_in' || action === 'in') {
+        ui.zoomIn?.();
+        return {
+          status: 'success',
+          summary: `已放大（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
+        };
+      }
+      if (action === 'zoom_out' || action === 'out') {
+        ui.zoomOut?.();
+        return {
+          status: 'success',
+          summary: `已缩小（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
+        };
+      }
+      if (action === 'fit' || action === 'reset' || action === 'fit_view') {
+        if (typeof ui.fitView === 'function') ui.fitView();
+        else ui.setZoom?.(1);
+        return { status: 'success', summary: '已适应/重置画布缩放' };
+      }
+      if (
+        action === 'set' ||
+        action === 'percent' ||
+        args.percent != null ||
+        args.zoom != null
+      ) {
+        let z = 1;
+        if (args.percent != null) z = num(args.percent, 100) / 100;
+        else if (args.zoom != null) {
+          const raw = num(args.zoom, 1);
+          z = raw > 8 ? raw / 100 : raw;
+        }
+        z = Math.min(8, Math.max(0.05, z));
+        if (!ui.setZoom) {
+          return {
+            status: 'error',
+            summary: '当前无法设置精确缩放百分比，请用左下角缩放条。',
+          };
+        }
+        ui.setZoom(z);
+        return { status: 'success', summary: `缩放已设为 ${Math.round(z * 100)}%` };
+      }
       return {
-        status: hit.found ? 'success' : 'warning',
-        summary: hit.found
-          ? `Skill ${hit.skill} · focus=${hit.focus} (${hit.body.length} chars)`
-          : `Skill lookup: ${hit.body.slice(0, 120)}`,
-        artifacts: {
-          skill: hit.skill,
-          focus: hit.focus,
-          guide: hit.body,
-        },
-        next_actions: hit.found
-          ? ['Apply this guide in the current phase, then continue tools']
-          : ['Pick a valid skill id from the catalog'],
+        status: 'error',
+        summary: 'set_viewport 需要 action: zoom_in|zoom_out|fit|set（可配 percent）',
+      };
+    }
+
+    if (name === 'set_canvas_background') {
+      const color = String(args.color ?? args.backgroundColor ?? args.fill ?? '').trim();
+      const fillType = String(args.fillType || 'solid').toLowerCase();
+      if (!color && fillType === 'solid') {
+        return { status: 'error', summary: 'set_canvas_background 需要 color' };
+      }
+      const allowed = new Set(['solid', 'linear', 'radial', 'angular', 'diffuse', 'image']);
+      const meta: Record<string, unknown> = {
+        backgroundFillType: allowed.has(fillType) ? fillType : 'solid',
+        backgroundColor: color || '#f5f5f5',
+        backgroundOpacity: args.opacity != null ? num(args.opacity, 100) : 100,
+      };
+      if (
+        fillType === 'linear' ||
+        fillType === 'radial' ||
+        fillType === 'angular' ||
+        fillType === 'diffuse'
+      ) {
+        const c0 = color || '#3B82F6';
+        const c1 = String(args.fillEnd ?? c0);
+        const angle = num(args.gradientAngle, fillType === 'angular' ? 0 : 90);
+        if (fillType === 'diffuse') {
+          const meshSize = Math.min(8, Math.max(3, Math.round(num(args.meshSize, 4)))) as MeshSize;
+          const meshPoints = parseMeshPoints(args.meshPoints, meshSize, c0);
+          meta.backgroundGradient = serializeFillGradient({
+            type: 'diffuse',
+            meshSize,
+            meshPoints,
+            colorStops: [
+              { offset: 0, color: meshPoints[0]?.color || c0 },
+              { offset: 1, color: meshPoints[meshPoints.length - 1]?.color || c1 },
+            ],
+          });
+        } else {
+          meta.backgroundGradient = serializeFillGradient({
+            type: fillType as 'linear' | 'radial' | 'angular',
+            angle,
+            cx: 50,
+            cy: 50,
+            r: 70,
+            colorStops: [
+              { offset: 0, color: c0 },
+              { offset: 1, color: c1 },
+            ],
+          });
+        }
+      }
+      if (fillType === 'image' && args.fillImageSrc != null) {
+        meta.backgroundImageSrc = String(args.fillImageSrc);
+        meta.backgroundImageFit = String(args.fillImageFit || 'fill');
+      }
+      ctx.dispatch(setCanvasMeta(meta));
+      return {
+        status: 'success',
+        summary: `画布背景已更新（${fillType}${color ? ` ${color}` : ''}）`,
+        artifacts: meta,
+      };
+    }
+
+    if (name === 'set_agent_mode') {
+      const mode = String(args.mode || '').toLowerCase();
+      if (!['collaborative', 'milestone', 'auto'].includes(mode)) {
+        return {
+          status: 'error',
+          summary: 'mode 须为 collaborative | milestone | auto（对应协作/里程碑/全自动）',
+        };
+      }
+      if (!ctx.canvasUi?.setCollabMode) {
+        return {
+          status: 'error',
+          summary: 'Agent 模式切换暂未注入。请在输入框左侧切换 Agent / 图片生成。',
+        };
+      }
+      ctx.canvasUi.setCollabMode(mode as 'collaborative' | 'milestone' | 'auto');
+      const labels: Record<string, string> = {
+        collaborative: '协作（每阶段确认）',
+        milestone: '里程碑（关键节点确认）',
+        auto: '全自动',
+      };
+      return {
+        status: 'success',
+        summary: `Agent 执行模式已设为「${labels[mode]}」`,
+        artifacts: { mode },
+      };
+    }
+
+    if (name === 'toggle_editor_panel') {
+      const panel = String(args.panel || args.name || '').toLowerCase();
+      const open = args.open == null ? true : args.open === true || args.open === 'true';
+      const ui = ctx.canvasUi;
+      if (panel === 'layers' || panel === 'layer') {
+        if (!ui?.setLayersOpen) {
+          return {
+            status: 'error',
+            summary: '图层面板暂未接入。请点左下角「图层」按钮。',
+          };
+        }
+        ui.setLayersOpen(open);
+        return { status: 'success', summary: open ? '已打开图层面板' : '已关闭图层面板' };
+      }
+      if (panel === 'minimap' || panel === 'map') {
+        if (!ui?.setMinimapOpen) {
+          return {
+            status: 'error',
+            summary: '小地图暂未接入。请点左下角「小地图」按钮。',
+          };
+        }
+        ui.setMinimapOpen(open);
+        return { status: 'success', summary: open ? '已打开小地图' : '已关闭小地图' };
+      }
+      if (panel === 'agent_settings' || panel === 'settings' || panel === 'collab') {
+        if (ui?.openAccountAgent) {
+          ui.openAccountAgent();
+          return { status: 'success', summary: '已打开账户页的 Agent 模型设置' };
+        }
+        return {
+          status: 'error',
+          summary: '请到「管理账户 → Agent」添加第三方模型。',
+        };
+      }
+      if (
+        panel.includes('preview') ||
+        panel.includes('预览') ||
+        panel.includes('share') ||
+        panel.includes('分享')
+      ) {
+        const hit =
+          UNAVAILABLE_CAPABILITIES.find((c) =>
+            panel.includes('share') || panel.includes('分享')
+              ? c.id === 'share'
+              : c.id === 'product_preview'
+          ) || UNAVAILABLE_CAPABILITIES[0];
+        return { status: 'error', summary: hit.hint };
+      }
+      if (panel.includes('export') || panel.includes('导出')) {
+        return {
+          status: 'error',
+          summary:
+            '导出请用 export_canvas（format=png|jpeg|svg），不是 toggle_editor_panel。',
+          next_actions: ['export_canvas'],
+        };
+      }
+      return {
+        status: 'error',
+        summary: 'panel 支持：layers | minimap | agent_settings。其他请 list_capabilities。',
       };
     }
 
@@ -312,7 +1173,11 @@ export function executeDesignTool(
     // When a target frame was requested but is gone, still block so the agent can recover.
     if (
       ctx.targetFrameId &&
-      (name === 'create_shape' || name === 'create_text' || name === 'create_image')
+      (name === 'create_shape' ||
+        name === 'create_text' ||
+        name === 'create_image' ||
+        name === 'create_svg' ||
+        name === 'create_icon')
     ) {
       const target = frameById(doc, ctx.targetFrameId);
       if (!target) {
@@ -324,52 +1189,205 @@ export function executeDesignTool(
       }
     }
 
+    if (name === 'create_svg' || name === 'create_icon') {
+      const width = Math.max(1, num(args.width, 48));
+      const height = Math.max(1, num(args.height, 48));
+      const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+      const svgRaw = String(args.svg || args.iconSvg || args.content || '').trim();
+      if (!svgRaw) {
+        return {
+          status: 'error',
+          summary: `${name} requires args.svg (mini SVG markup).`,
+          next_actions: ['Pass args.svg with viewBox 0 0 24 24'],
+        };
+      }
+      const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
+      const fill = args.fill != null ? String(args.fill) : undefined;
+      const { id, node } = createSvgNode({
+        x: placed.x,
+        y: placed.y,
+        width: placed.width,
+        height: placed.height,
+        svg: svgRaw,
+        name: String(args.name || 'SVG'),
+        fill,
+      });
+      console.info('[create_svg]', {
+        id,
+        placed,
+        fill,
+        svgHead: svgRaw.slice(0, 160),
+        svgLen: svgRaw.length,
+      });
+      pushHistory();
+      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
+      return {
+        status: placed.clamped ? 'warning' : 'success',
+        summary: `Created svg ${id}`,
+        artifacts: { nodeId: id, shapeType: 'svg' },
+        next_actions: ['Continue layout'],
+      };
+    }
+
     if (name === 'create_shape') {
-      const shapeType = String(args.shapeType || 'rect');
+      const shapeType = String(args.shapeType || args.type || 'rect');
       const mapped =
         shapeType === 'ellipse' ? 'circle' : shapeType === 'pen' ? 'pen' : shapeType;
       const width = Math.max(1, num(args.width, 120));
       const height = Math.max(1, num(args.height, 80));
       const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-      const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
+      const svgRaw = args.svg != null ? String(args.svg) : args.iconSvg != null ? String(args.iconSvg) : '';
+      // Icon SVG → native svg node (not image, not path conversion).
+      if (svgRaw.trim() || mapped === 'svg') {
+        if (!svgRaw.trim()) {
+          return {
+            status: 'error',
+            summary: 'create_shape type=svg requires args.svg markup.',
+            next_actions: ['Pass args.svg', 'or use create_svg'],
+          };
+        }
+        const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
+        const fill = args.fill != null ? String(args.fill) : undefined;
+        const { id, node } = createSvgNode({
+          x: placed.x,
+          y: placed.y,
+          width: placed.width,
+          height: placed.height,
+          svg: svgRaw,
+          name: String(args.name || 'SVG'),
+          fill,
+        });
+        console.info('[create_shape → svg node]', {
+          id,
+          placed,
+          fill,
+          svgHead: svgRaw.slice(0, 160),
+        });
+        pushHistory();
+        ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
+        return {
+          status: placed.clamped ? 'warning' : 'success',
+          summary: `Created svg ${id}`,
+          artifacts: { nodeId: id, shapeType: 'svg' },
+          next_actions: ['Continue layout or create_text'],
+        };
+      }
       const path = args.path != null ? String(args.path) : '';
-      const closed =
+      // Honor model x/y (incl. inside other shapes). Never nudge away for "overlap".
+      const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
+      if (mapped === 'path' || path) {
+        console.info('[create_shape path diag]', {
+          source: 'model tool_ops path (pass-through)',
+          argsXY: { x: args.x, y: args.y, width: args.width, height: args.height },
+          placed: { x: placed.x, y: placed.y, width: placed.width, height: placed.height },
+          fill: args.fill,
+          pathLen: path.length,
+          pathHead: path.slice(0, 180),
+          fullPath: path,
+        });
+      }
+      const isFreePath = mapped === 'path';
+      const closedExplicit =
         args.closed === true ||
         args.closed === 'true' ||
-        mapped === 'path' ||
-        (mapped === 'pen' && path.length > 0);
+        args.closed === false ||
+        args.closed === 'false';
+      const closed = closedExplicit
+        ? args.closed === true || args.closed === 'true'
+        : isFreePath
+          ? /z\s*$/i.test(path.trim())
+          : mapped === 'pen' && path.length > 0;
+      const isStrokeOnly = mapped === 'line' || mapped === 'arrow' || mapped === 'pencil';
+      const fillDefault = String(
+        args.fill ?? (isStrokeOnly || (isFreePath && !closed) ? 'transparent' : '#FFFFFF')
+      );
+      const fillIsNone =
+        !fillDefault ||
+        fillDefault === 'transparent' ||
+        fillDefault === 'none' ||
+        fillDefault === 'rgba(0,0,0,0)';
+      // Free paths (SVG → path): never invent a border/fill — honor args as-is.
+      // Pen/pencil/line still need a visible stroke when the model omits one.
+      const needsDefaultStroke =
+        !isFreePath &&
+        (isStrokeOnly || mapped === 'pen' || mapped === 'pencil' || fillIsNone);
+      const strokeRaw =
+        args.stroke != null ? String(args.stroke) : needsDefaultStroke ? '#333333' : 'transparent';
+      const stroke =
+        !strokeRaw || strokeRaw === 'none' || strokeRaw === 'rgba(0,0,0,0)'
+          ? 'transparent'
+          : strokeRaw;
+      const strokeIsNone = stroke === 'transparent';
+      const borderWidth = isFreePath
+        ? args.borderWidth != null
+          ? Math.max(0, num(args.borderWidth, 0))
+          : strokeIsNone
+            ? 0
+            : 1
+        : needsDefaultStroke
+          ? args.borderWidth != null
+            ? num(args.borderWidth, isStrokeOnly || mapped === 'pen' || mapped === 'pencil' ? 2 : 1)
+            : isStrokeOnly || mapped === 'pen' || mapped === 'pencil'
+              ? 2
+              : 1
+          : args.borderWidth != null
+            ? num(args.borderWidth, 0)
+            : args.stroke != null && !strokeIsNone
+              ? 1
+              : 0;
+      const opacityRaw = args.opacity != null ? num(args.opacity, 1) : 1;
+      const opacity = opacityRaw > 1 ? Math.min(1, opacityRaw / 100) : Math.min(1, Math.max(0, opacityRaw));
+      const brushStyle =
+        mapped === 'pencil' && args.brushStyle != null
+          ? String(args.brushStyle)
+          : mapped === 'pencil'
+            ? 'solid'
+            : undefined;
       const { id, node } = createShapeNode({
         x: placed.x,
         y: placed.y,
-        width,
-        height,
+        width: placed.width,
+        height: placed.height,
         shapeType: mapped,
-        fill: String(args.fill ?? '#FFFFFF'),
-        stroke: String(args.stroke ?? '#333333'),
-        borderWidth: args.borderWidth != null ? num(args.borderWidth, 1) : undefined,
+        fill: fillDefault,
+        stroke,
+        borderWidth,
         path: path || undefined,
-        closed,
+        closed: mapped === 'pencil' ? false : closed,
         sides: args.sides != null ? num(args.sides, 5) : undefined,
         angle: args.rotation != null ? num(args.rotation) : undefined,
+        brushStyle,
+        opacity,
       });
-      applyShapeFill(node, args, String(args.fill ?? '#FFFFFF'));
-      if (args.name) node.attrs = { ...node.attrs, name: String(args.name) };
-      if (args.cornerRadius != null) applyCornerRadius(node, num(args.cornerRadius));
-      if (closed) node.attrs = { ...node.attrs, closed: 'true' };
-      ctx.dispatch(pushEditorHistory());
-      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
-      if (placed.outside) {
-        return {
-          status: 'warning',
-          summary: `Created ${mapped} ${id} OUTSIDE target frame — if this is a new poster, call create_frame first then redraw inside it`,
-          artifacts: { nodeId: id, shapeType: mapped, outsideTarget: true },
-          next_actions: ['create_frame', 'create_shape', 'create_text'],
+      applyShapeFill(node, args, fillDefault);
+      applyStrokeExtras(node, args);
+      applyShadow(node, args);
+      if (borderWidth <= 0 || strokeIsNone) {
+        node.attrs = {
+          ...node.attrs,
+          'stroke-enabled': 'false',
+          'stroke-visible': 'false',
+          'border-width': 0,
         };
       }
+      if (fillIsNone) {
+        node.attrs = {
+          ...node.attrs,
+          'fill-enabled': 'false',
+          'fill-visible': 'false',
+        };
+      }
+      if (args.name) {
+        (node.attrs as Record<string, unknown>).name = String(args.name);
+      }
+      applyCornerRadii(node, args);
+      if (closed) node.attrs = { ...node.attrs, closed: 'true' };
+      pushHistory();
+      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
       return {
         status: placed.clamped ? 'warning' : 'success',
         summary: placed.clamped
-          ? `Created ${mapped} ${id} (clamped into frame at ${Math.round(placed.x)},${Math.round(placed.y)})`
+          ? `Created ${mapped} ${id} (clamped into frame at ${Math.round(placed.x)},${Math.round(placed.y)} ${Math.round(placed.width)}×${Math.round(placed.height)})`
           : `Created ${mapped} ${id}${path ? ' (path)' : ''}`,
         artifacts: { nodeId: id, shapeType: mapped },
         next_actions: ['Continue layout or create_text'],
@@ -402,26 +1420,26 @@ export function executeDesignTool(
         const kind = String(args.placeholder || 'image').toLowerCase();
         src =
           kind === 'avatar'
-            ? AGENT_TEMPLATES.avatarPlaceholder
-            : AGENT_TEMPLATES.imagePlaceholder;
+            ? AVATAR_PLACEHOLDER
+            : IMAGE_PLACEHOLDER;
         sourceKind = 'placeholder';
       }
       const { id, node } = createImageNode({
         x: placed.x,
         y: placed.y,
-        width,
-        height,
+        width: placed.width,
+        height: placed.height,
         src,
         name: String(args.name || (sourceKind === 'placeholder' ? 'Image Placeholder' : 'Image')),
         assetKind: 'image',
       });
-      ctx.dispatch(pushEditorHistory());
+      pushHistory();
       ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
       return {
-        status: placed.outside || placed.clamped ? 'warning' : 'success',
+        status: placed.clamped ? 'warning' : 'success',
         summary:
           sourceKind === 'placeholder'
-            ? `Created image placeholder ${id} (${Math.round(width)}×${Math.round(height)}) — user can replace later`
+            ? `Created image placeholder ${id} (${Math.round(placed.width)}×${Math.round(placed.height)}) — user can replace later`
             : `Created image ${id} from ${sourceKind}`,
         artifacts: { nodeId: id, sourceKind },
         next_actions: ['Continue layout'],
@@ -430,46 +1448,102 @@ export function executeDesignTool(
 
     if (name === 'create_text') {
       const text = String(args.text ?? '');
-      const width = args.width != null ? num(args.width) : undefined;
-      const height = 40;
       const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-      const placed = fitIntoFrame(
-        target,
-        num(args.x),
-        num(args.y),
-        Math.max(1, width || 120),
-        height
-      );
+      // Fixed width+height = label-in-box (button/chip); do not hug content.
+      const boxMode = args.width != null && args.height != null;
+      const baseStyle = parseNodeTextStyle({});
+      const nextStyle = {
+        ...baseStyle,
+        ...(args.fontSize != null ? { fontSize: num(args.fontSize, 14) } : {}),
+        ...(args.color != null ? { fill: String(args.color) } : {}),
+        ...(args.fontWeight != null ? { fontWeight: String(args.fontWeight) } : {}),
+        ...(args.fontFamily != null ? { fontFamily: String(args.fontFamily) } : {}),
+        ...(args.fontStyle != null ? { fontStyle: String(args.fontStyle) } : {}),
+        ...(args.textAlign != null
+          ? { textAlign: String(args.textAlign) }
+          : boxMode
+            ? { textAlign: 'center' }
+            : {}),
+        // Hug labels use tight leading; fixed boxes keep 1.4 unless caller sets it.
+        ...(args.lineHeight != null
+          ? { lineHeight: num(args.lineHeight, 1.4) }
+          : boxMode
+            ? {}
+            : { lineHeight: 1.15 }),
+        ...(args.letterSpacing != null ? { letterSpacing: num(args.letterSpacing, 0) } : {}),
+        ...(args.textDecoration != null ? { textDecoration: String(args.textDecoration) } : {}),
+      };
+      const measured = measurePlainTextSize(text || ' ', nextStyle);
+      const wantWrap = args.wrap === true || args.wrap === 'true';
+      const singleLine = !String(text).includes('\n');
+      // Agent often copies full-bleed "width:W-48" for short titles — clamp to ink
+      // unless this is an explicit label-in-box or wrap column.
+      let boxW: number;
+      if (boxMode) {
+        boxW = Math.max(1, num(args.width));
+      } else if (args.width != null) {
+        const asked = Math.max(1, num(args.width));
+        if (
+          !wantWrap &&
+          singleLine &&
+          asked > measured.width * 1.35 &&
+          measured.width > 0
+        ) {
+          boxW = measured.width;
+        } else {
+          boxW = asked;
+        }
+      } else {
+        boxW = measured.width;
+      }
+      let boxH: number;
+      if (args.height != null) {
+        boxH = Math.max(1, num(args.height));
+      } else if (args.width != null && (wantWrap || boxW === Math.max(1, num(args.width)))) {
+        boxH = measureWrappedTextSize(text || ' ', nextStyle, boxW).height;
+      } else {
+        boxH = measured.height;
+      }
+      // Labels must sit on top of buttons — never nudge away from overlapping shapes.
+      const placed = fitIntoFrame(target, num(args.x), num(args.y), boxW, boxH);
+      if (placed.scale > 0 && placed.scale < 0.999 && nextStyle.fontSize != null) {
+        nextStyle.fontSize = Math.max(
+          10,
+          Math.round(Number(nextStyle.fontSize) * placed.scale)
+        );
+      }
       const { id, node } = createTextNode({
         x: placed.x,
         y: placed.y,
         text,
-        width,
+        width: placed.width,
+        height: placed.height,
+        autoSize: !boxMode,
       });
-      const style = parseNodeTextStyle(node.attrs || {});
-      const nextStyle = {
-        ...style,
-        ...(args.fontSize != null ? { fontSize: num(args.fontSize, 14) } : {}),
-        ...(args.color != null ? { fill: String(args.color) } : {}),
-        ...(args.fontWeight != null ? { fontWeight: String(args.fontWeight) } : {}),
+      const shell = {
+        attrs: {
+          ...buildMarkdownTextAttrs(text, nextStyle),
+          autoSize: boxMode ? 'false' : 'true',
+          ...(args.name ? { name: String(args.name) } : {}),
+        } as Record<string, unknown>,
       };
-      node.attrs = {
-        ...buildMarkdownTextAttrs(text, nextStyle),
-        ...(args.name ? { name: String(args.name) } : {}),
-      };
-      ctx.dispatch(pushEditorHistory());
-      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
-      if (placed.outside) {
-        return {
-          status: 'warning',
-          summary: `Created text ${id} OUTSIDE target frame — call create_frame for a sibling poster if needed`,
-          artifacts: { nodeId: id, outsideTarget: true },
-          next_actions: ['create_frame', 'create_text'],
-        };
+      applyShadow(shell, args);
+      if (args.opacity != null) {
+        const o = num(args.opacity, 1);
+        shell.attrs.opacity = o > 1 ? Math.min(1, o / 100) : Math.min(1, Math.max(0, o));
       }
+      if (args.blendMode != null) shell.attrs.blendMode = String(args.blendMode);
+      // shell.attrs is widened for applyShadow; text nodes still require markdown/DATA fields.
+      node.attrs = shell.attrs as typeof node.attrs;
+      node.width = placed.width;
+      node.height = placed.height;
+      pushHistory();
+      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
       return {
-        status: 'success',
-        summary: `Created text ${id}`,
+        status: placed.clamped ? 'warning' : 'success',
+        summary: placed.clamped
+          ? `Created text ${id} (clamped ${Math.round(placed.width)}×${Math.round(placed.height)} at ${Math.round(placed.x)},${Math.round(placed.y)})`
+          : `Created text ${id} (${Math.round(placed.width)}×${Math.round(placed.height)})`,
         artifacts: { nodeId: id },
       };
     }
@@ -480,26 +1554,172 @@ export function executeDesignTool(
       const latest = ctx.getDocument()?.deltaSetLike?.[nodeId];
       if (!latest) return { status: 'error', summary: `Node not found: ${nodeId}` };
       const patch: Record<string, unknown> = {};
-      if (args.x != null) patch.x = num(args.x);
-      if (args.y != null) patch.y = num(args.y);
-      if (args.width != null) patch.width = Math.max(1, num(args.width));
-      if (args.height != null) patch.height = Math.max(1, num(args.height));
-      const fillRaw = args.fill ?? args.fillColor ?? args.color ?? args.backgroundColor;
-      const attrs: Record<string, unknown> = {};
-      if (fillRaw != null) {
-        attrs['fill-color'] = String(fillRaw);
-        attrs['fill-type'] = 'solid';
-        attrs['fill-enabled'] = 'true';
-        attrs['fill-visible'] = 'true';
+      // Inventory uses w/h; update_node contract uses width/height.
+      const argWidth = args.width ?? args.w;
+      const argHeight = args.height ?? args.h;
+      // Faithful apply: geometry / style exactly as backend ops say (no FE policy).
+      if (args.x != null && args.y != null) {
+        const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+        const w =
+          argWidth != null
+            ? Math.max(1, num(argWidth))
+            : Math.max(1, Number(latest.width) || 1);
+        const h =
+          argHeight != null
+            ? Math.max(1, num(argHeight))
+            : Math.max(1, Number(latest.height) || 1);
+        const placed = fitIntoFrame(target, num(args.x), num(args.y), w, h);
+        patch.x = placed.x;
+        patch.y = placed.y;
+        if (argWidth != null) patch.width = placed.width;
+        if (argHeight != null) patch.height = placed.height;
+      } else {
+        if (args.x != null) patch.x = num(args.x);
+        if (args.y != null) patch.y = num(args.y);
+        if (argWidth != null) patch.width = Math.max(1, num(argWidth));
+        if (argHeight != null) patch.height = Math.max(1, num(argHeight));
       }
-      if (args.stroke != null) attrs['border-color'] = String(args.stroke);
-      if (args.borderWidth != null) attrs['border-width'] = num(args.borderWidth);
-      if (args.opacity != null) attrs.opacity = Math.min(1, Math.max(0, num(args.opacity, 1)));
-      if (args.text != null && latest.key === 'text') {
-        const style = parseNodeTextStyle(latest.attrs || {});
-        Object.assign(attrs, buildMarkdownTextAttrs(String(args.text), style));
+
+      const shell = { attrs: { ...(latest.attrs || {}) } as Record<string, unknown> };
+      const fillRaw = args.fill ?? args.fillColor ?? args.backgroundColor;
+      const fillTypeArg =
+        args.fillType != null ? String(args.fillType).toLowerCase() : null;
+      const fillTouched =
+        fillTypeArg != null ||
+        fillRaw != null ||
+        args.fillEnd != null ||
+        args.fillTo != null ||
+        args.gradientAngle != null ||
+        args.meshSize != null ||
+        args.meshPoints != null ||
+        args.fillImageSrc != null ||
+        args.fillOpacity != null;
+
+      if (fillTouched) {
+        applyShapeFill(
+          shell,
+          {
+            ...args,
+            fillType: fillTypeArg || args.fillType || 'solid',
+            fill: fillRaw ?? shell.attrs['fill-color'] ?? '#FFFFFF',
+          },
+          String(fillRaw ?? shell.attrs['fill-color'] ?? '#FFFFFF')
+        );
       }
-      if (Object.keys(attrs).length) patch.attrs = attrs;
+
+      if (args.stroke != null) {
+        shell.attrs['border-color'] = String(args.stroke);
+        shell.attrs['stroke-enabled'] = 'true';
+        shell.attrs['stroke-visible'] = 'true';
+      }
+      if (args.borderWidth != null) {
+        const bw = num(args.borderWidth);
+        shell.attrs['border-width'] = bw;
+        if (bw <= 0) {
+          shell.attrs['stroke-enabled'] = 'false';
+          shell.attrs['stroke-visible'] = 'false';
+        } else {
+          shell.attrs['stroke-enabled'] = 'true';
+          shell.attrs['stroke-visible'] = 'true';
+        }
+      }
+      applyStrokeExtras(shell, args);
+      applyShadow(shell, args);
+      applyCornerRadii(shell, args);
+
+      if (args.opacity != null) {
+        const o = num(args.opacity, 1);
+        shell.attrs.opacity = o > 1 ? Math.min(1, o / 100) : Math.min(1, Math.max(0, o));
+      }
+      if (args.rotation != null) shell.attrs.angle = num(args.rotation);
+      if (args.flipX != null) shell.attrs.flipX = truthy(args.flipX) ? 'true' : 'false';
+      if (args.flipY != null) shell.attrs.flipY = truthy(args.flipY) ? 'true' : 'false';
+      if (args.blendMode != null) shell.attrs.blendMode = String(args.blendMode);
+      if (args.path != null) shell.attrs.path = String(args.path);
+      if (args.closed != null) shell.attrs.closed = truthy(args.closed) ? 'true' : 'false';
+      if (args.name != null) shell.attrs.name = String(args.name);
+      if (latest.key === 'image' && args.src != null) {
+        shell.attrs.src = String(args.src);
+      }
+
+      if (latest.key === 'text') {
+        const stylePatch: Record<string, unknown> = {};
+        if (args.fontSize != null) stylePatch.fontSize = num(args.fontSize);
+        if (args.fontWeight != null) stylePatch.fontWeight = String(args.fontWeight);
+        if (args.fontFamily != null) stylePatch.fontFamily = String(args.fontFamily);
+        if (args.fontStyle != null) stylePatch.fontStyle = String(args.fontStyle);
+        if (args.textAlign != null) stylePatch.textAlign = String(args.textAlign);
+        if (args.lineHeight != null) stylePatch.lineHeight = num(args.lineHeight, 1.4);
+        if (args.letterSpacing != null) stylePatch.letterSpacing = num(args.letterSpacing, 0);
+        if (args.textDecoration != null) stylePatch.textDecoration = String(args.textDecoration);
+        if (args.color != null && fillRaw == null) {
+          shell.attrs['fill-color'] = String(args.color);
+          shell.attrs['fill-type'] = 'solid';
+          stylePatch.fill = String(args.color);
+        }
+        if (args.text != null || Object.keys(stylePatch).length) {
+          const style = {
+            ...parseNodeTextStyle({ ...(latest.attrs || {}), ...shell.attrs }),
+            ...stylePatch,
+          };
+          const nextText =
+            args.text != null ? String(args.text) : String(latest.attrs?.text || '');
+          Object.assign(shell.attrs, buildMarkdownTextAttrs(nextText, style as any));
+          if (argWidth == null || argHeight == null) {
+            const measured = measurePlainTextSize(nextText, style as any);
+            if (argWidth == null) patch.width = measured.width;
+            if (argHeight == null) patch.height = measured.height;
+          }
+        }
+      }
+
+      // Only patch attrs if something style-related changed (diff vs original).
+      const styleArgsTouched =
+        fillTouched ||
+        args.stroke != null ||
+        args.borderWidth != null ||
+        args.strokeStyle != null ||
+        args.strokeAlign != null ||
+        args.strokeLinecap != null ||
+        args.strokeLinejoin != null ||
+        args.strokeOpacity != null ||
+        args.strokeSides != null ||
+        args.strokeTop != null ||
+        args.strokeRight != null ||
+        args.strokeBottom != null ||
+        args.strokeLeft != null ||
+        args.shadowEnabled != null ||
+        args.shadowVisible != null ||
+        args.shadowColor != null ||
+        args.shadowBlur != null ||
+        args.shadowX != null ||
+        args.shadowY != null ||
+        args.cornerRadius != null ||
+        args.radiusTL != null ||
+        args.radiusTR != null ||
+        args.radiusBR != null ||
+        args.radiusBL != null ||
+        args.opacity != null ||
+        args.rotation != null ||
+        args.flipX != null ||
+        args.flipY != null ||
+        args.blendMode != null ||
+        args.path != null ||
+        args.closed != null ||
+        args.name != null ||
+        args.text != null ||
+        args.fontSize != null ||
+        args.fontWeight != null ||
+        args.fontFamily != null ||
+        args.fontStyle != null ||
+        args.textAlign != null ||
+        args.lineHeight != null ||
+        args.letterSpacing != null ||
+        args.textDecoration != null ||
+        args.color != null ||
+        (latest.key === 'image' && args.src != null);
+
+      if (styleArgsTouched) patch.attrs = shell.attrs;
       if (!Object.keys(patch).length) {
         return {
           status: 'warning',
@@ -515,12 +1735,287 @@ export function executeDesignTool(
       };
     }
 
+    if (name === 'align_nodes') {
+      const ids = parseNodeIds(args);
+      const rawMode = String(args.mode || args.align || '').trim();
+      const mode =
+        rawMode === 'center' || rawMode === 'centerx'
+          ? 'centerX'
+          : rawMode === 'centerY' || rawMode === 'centery'
+            ? 'middle'
+            : rawMode;
+      const allowedAlign = new Set([
+        'left',
+        'centerX',
+        'right',
+        'top',
+        'middle',
+        'bottom',
+      ]);
+      if (ids.length < 2) return { status: 'error', summary: 'align_nodes needs at least 2 nodeIds' };
+      if (!allowedAlign.has(mode)) {
+        return { status: 'error', summary: `Unknown align mode: ${mode || '(empty)'}` };
+      }
+      const boxes = readAgentBoxes(doc, ids);
+      if (boxes.length < 2) return { status: 'error', summary: 'Could not resolve node boxes' };
+      const minL = Math.min(...boxes.map((b) => b.left));
+      const maxR = Math.max(...boxes.map((b) => b.left + b.width));
+      const minT = Math.min(...boxes.map((b) => b.top));
+      const maxB = Math.max(...boxes.map((b) => b.top + b.height));
+      const midX = (minL + maxR) / 2;
+      const midY = (minT + maxB) / 2;
+      pushHistory();
+      for (const b of boxes) {
+        const patch: { x?: number; y?: number } = {};
+        if (mode === 'left') patch.x = minL;
+        else if (mode === 'centerX') patch.x = midX - b.width / 2;
+        else if (mode === 'right') patch.x = maxR - b.width;
+        else if (mode === 'top') patch.y = minT;
+        else if (mode === 'middle') patch.y = midY - b.height / 2;
+        else patch.y = maxB - b.height;
+        ctx.dispatch(patchDocumentNode({ nodeId: b.id, patch, skipHistory: true }));
+      }
+      return {
+        status: 'success',
+        summary: `Aligned ${boxes.length} nodes (${mode})`,
+        artifacts: { nodeIds: boxes.map((b) => b.id), mode },
+      };
+    }
+
+    if (name === 'distribute_nodes') {
+      const ids = parseNodeIds(args);
+      const axisRaw = String(args.axis || 'h').toLowerCase();
+      const axis =
+        axisRaw === 'v' || axisRaw === 'vertical' || axisRaw === 'y' ? 'v' : 'h';
+      if (ids.length < 3) return { status: 'error', summary: 'distribute_nodes needs at least 3 nodeIds' };
+      const boxes = readAgentBoxes(doc, ids);
+      if (boxes.length < 3) return { status: 'error', summary: 'Could not resolve node boxes' };
+      const sorted = [...boxes].sort((a, b) => (axis === 'h' ? a.left - b.left : a.top - b.top));
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      pushHistory();
+      if (axis === 'h') {
+        const span =
+          last.left + last.width - first.left - sorted.reduce((s, b) => s + b.width, 0);
+        const gap = span / (sorted.length - 1);
+        let x = first.left;
+        sorted.forEach((b, i) => {
+          if (i === 0) {
+            x = b.left + b.width + gap;
+            return;
+          }
+          if (i === sorted.length - 1) return;
+          ctx.dispatch(patchDocumentNode({ nodeId: b.id, patch: { x }, skipHistory: true }));
+          x += b.width + gap;
+        });
+      } else {
+        const span =
+          last.top + last.height - first.top - sorted.reduce((s, b) => s + b.height, 0);
+        const gap = span / (sorted.length - 1);
+        let y = first.top;
+        sorted.forEach((b, i) => {
+          if (i === 0) {
+            y = b.top + b.height + gap;
+            return;
+          }
+          if (i === sorted.length - 1) return;
+          ctx.dispatch(patchDocumentNode({ nodeId: b.id, patch: { y }, skipHistory: true }));
+          y += b.height + gap;
+        });
+      }
+      return {
+        status: 'success',
+        summary: `Distributed ${sorted.length} nodes (${axis})`,
+        artifacts: { nodeIds: sorted.map((b) => b.id), axis },
+      };
+    }
+
+    if (name === 'boolean_op') {
+      const ids = parseNodeIds(args);
+      const mode = String(args.mode || 'union') as BoolMode;
+      if (!['union', 'subtract', 'intersect', 'exclude'].includes(mode)) {
+        return { status: 'error', summary: `Unknown boolean mode: ${mode}` };
+      }
+      if (ids.length < 2) return { status: 'error', summary: 'boolean_op needs at least 2 nodeIds' };
+      const boxes = readAgentBoxes(doc, ids).filter((b) =>
+        supportsBooleanOp(doc?.deltaSetLike?.[b.id])
+      );
+      if (boxes.length < 2) {
+        return {
+          status: 'error',
+          summary: 'Need 2+ closed shapes (not line/arrow/pen/pencil/text/image)',
+        };
+      }
+      const { result, usedFallback } = computeShapeBoolean(boxes, mode);
+      if (!result) {
+        return {
+          status: 'error',
+          summary: mode === 'intersect' ? 'No overlap for intersect' : 'Boolean operation failed',
+        };
+      }
+      const sample = boxes[0];
+      const sampleNode = doc?.deltaSetLike?.[sample.id];
+      const { id, node } = createShapeNode({
+        x: result.x,
+        y: result.y,
+        width: result.width,
+        height: result.height,
+        shapeType: 'path',
+        fill: sample.fill,
+        stroke: sample.stroke,
+        borderWidth: sample.borderWidth,
+        path: result.path,
+        closed: true,
+      });
+      const attrs = node.attrs as Record<string, unknown>;
+      attrs['fill-rule'] = result.fillRule;
+      attrs.closed = 'true';
+      applyBooleanResultPaint(
+        attrs,
+        sampleNode?.attrs as Record<string, unknown> | undefined,
+        { stroke: sample.stroke, borderWidth: sample.borderWidth }
+      );
+      let next = addNodeToDocument(doc, id, node);
+      next = removeNodesFromDocument(next, boxes.map((b) => b.id));
+      pushHistory();
+      ctx.dispatch(setDocument(next));
+      return {
+        status: usedFallback ? 'warning' : 'success',
+        summary: usedFallback
+          ? `Boolean ${mode} → ${id} (bbox fallback)`
+          : `Boolean ${mode} → ${id}`,
+        artifacts: { nodeId: id, mode, removed: boxes.map((b) => b.id) },
+      };
+    }
+
+    if (name === 'reorder_nodes') {
+      const ids = parseNodeIds(args);
+      const raw = String(args.action || args.order || '').toLowerCase();
+      const actionMap: Record<string, 'front' | 'back' | 'forward' | 'backward'> = {
+        front: 'front',
+        back: 'back',
+        forward: 'forward',
+        backward: 'backward',
+        bring_to_front: 'front',
+        send_to_back: 'back',
+        bring_forward: 'forward',
+        send_backward: 'backward',
+      };
+      const action = actionMap[raw];
+      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+      if (!action) {
+        return { status: 'error', summary: `Unknown reorder action: ${raw}` };
+      }
+      pushHistory();
+      ctx.dispatch(setDocumentFromCanvas(reorderNodesInDocument(doc, ids, action)));
+      return {
+        status: 'success',
+        summary: `Reordered ${ids.length} node(s) (${action})`,
+        artifacts: { nodeIds: ids, action },
+      };
+    }
+
+    if (name === 'group_nodes') {
+      const ids = parseNodeIds(args);
+      if (ids.length < 2) return { status: 'error', summary: 'group_nodes needs at least 2 nodeIds' };
+      pushHistory();
+      ctx.dispatch(setDocument(groupNodesInDocument(doc, ids)));
+      return {
+        status: 'success',
+        summary: `Grouped ${ids.length} nodes`,
+        artifacts: { nodeIds: ids },
+      };
+    }
+
+    if (name === 'ungroup_nodes') {
+      const ids = parseNodeIds(args);
+      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+      pushHistory();
+      ctx.dispatch(setDocument(ungroupNodesInDocument(doc, ids)));
+      return {
+        status: 'success',
+        summary: `Ungrouped ${ids.length} node(s)`,
+        artifacts: { nodeIds: ids },
+      };
+    }
+
+    if (name === 'duplicate_nodes') {
+      const ids = parseNodeIds(args);
+      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+      const ox = num(args.offsetX, 24);
+      const oy = num(args.offsetY, 24);
+      let next = doc;
+      const created: string[] = [];
+      pushHistory();
+      for (const oldId of ids) {
+        const raw = next?.deltaSetLike?.[oldId];
+        if (!raw) continue;
+        const node = JSON.parse(JSON.stringify(raw));
+        const newId = nanoid(10);
+        node.id = newId;
+        node.x = (Number(node.x) || 0) + ox;
+        node.y = (Number(node.y) || 0) + oy;
+        if (node.attrs?.groupId) {
+          const { groupId: _g, ...rest } = node.attrs;
+          node.attrs = rest;
+        }
+        next = addNodeToDocument(next, newId, node);
+        created.push(newId);
+      }
+      if (!created.length) return { status: 'error', summary: 'No nodes duplicated' };
+      ctx.dispatch(setDocument(next));
+      return {
+        status: 'success',
+        summary: `Duplicated ${created.length} node(s)`,
+        artifacts: { nodeIds: created },
+      };
+    }
+
+    if (name === 'flip_nodes') {
+      const ids = parseNodeIds(args);
+      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+      const axis = String(args.axis || '').toLowerCase();
+      const doX =
+        args.flipX === true ||
+        args.flipX === 'true' ||
+        axis === 'horizontal' ||
+        axis === 'h' ||
+        axis === 'x';
+      const doY =
+        args.flipY === true ||
+        args.flipY === 'true' ||
+        axis === 'vertical' ||
+        axis === 'v' ||
+        axis === 'y';
+      if (!doX && !doY) return { status: 'error', summary: 'Set flipX and/or flipY true' };
+      pushHistory();
+      for (const id of ids) {
+        const node = ctx.getDocument()?.deltaSetLike?.[id];
+        if (!node) continue;
+        const attrs: Record<string, unknown> = {};
+        if (doX) {
+          const cur = node.attrs?.flipX === true || node.attrs?.flipX === 'true';
+          attrs.flipX = cur ? 'false' : 'true';
+        }
+        if (doY) {
+          const cur = node.attrs?.flipY === true || node.attrs?.flipY === 'true';
+          attrs.flipY = cur ? 'false' : 'true';
+        }
+        ctx.dispatch(patchDocumentNode({ nodeId: id, patch: { attrs }, skipHistory: true }));
+      }
+      return {
+        status: 'success',
+        summary: `Flipped ${ids.length} node(s)`,
+        artifacts: { nodeIds: ids, flipX: doX, flipY: doY },
+      };
+    }
+
     if (name === 'delete_nodes') {
-      if (!userExplicitlyAllowsDelete(ctx.userMessage)) {
+      if (!ctx.allowDestructive) {
         return {
           status: 'error',
           summary:
-            'delete_nodes blocked: user did not explicitly ask to delete. Keep existing elements; create a new frame for new designs.',
+            'delete_nodes blocked: destructive ops require backend-approved allowDestructive.',
           next_actions: ['create_frame', 'create_shape', 'create_text', 'update_node'],
         };
       }
@@ -528,11 +2023,70 @@ export function executeDesignTool(
         ? args.nodeIds.map((x) => String(x)).filter(Boolean)
         : [];
       if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
-      ctx.dispatch(setDocument(removeNodesFromDocument(ctx.getDocument(), ids)));
+      const docNow = ctx.getDocument();
+      const frameIdSet = new Set(listFrames(docNow).map((f) => String(f.id)));
+      const frameIds = ids.filter((id) => frameIdSet.has(id));
+      const nodeIds = ids.filter((id) => !frameIdSet.has(id));
+      // Models often pass artboard id into delete_nodes — remap to frame delete.
+      if (frameIds.length) {
+        const childIds = nodeIdsInsideFrameLocal(docNow, frameIds);
+        const removeIds = [...new Set([...nodeIds, ...childIds])];
+        if (removeIds.length) {
+          ctx.dispatch(setDocument(removeNodesFromDocument(ctx.getDocument(), removeIds)));
+        }
+        ctx.dispatch(removeArtboardFrames(frameIds));
+        return {
+          status: 'success',
+          summary: `Deleted ${frameIds.length} frame(s)` + (removeIds.length ? ` + ${removeIds.length} node(s)` : ''),
+          artifacts: { frameIds, nodeIds: removeIds },
+        };
+      }
+      const before = new Set(
+        ((docNow?.deltaSetLike?.ROOT?.children as string[]) || []).filter(Boolean)
+      );
+      const next = removeNodesFromDocument(docNow, nodeIds);
+      const after = new Set(
+        ((next?.deltaSetLike?.ROOT?.children as string[]) || []).filter(Boolean)
+      );
+      const removed = nodeIds.filter((id) => before.has(id) && !after.has(id));
+      if (!removed.length) {
+        return {
+          status: 'error',
+          summary: 'delete_nodes: no matching scene nodes (use delete_frame for artboards)',
+        };
+      }
+      ctx.dispatch(setDocument(next));
       return {
         status: 'success',
-        summary: `Deleted ${ids.length} node(s)`,
-        artifacts: { nodeIds: ids },
+        summary: `Deleted ${removed.length} node(s)`,
+        artifacts: { nodeIds: removed },
+      };
+    }
+
+    if (name === 'delete_frame') {
+      if (!ctx.allowDestructive) {
+        return {
+          status: 'error',
+          summary:
+            'delete_frame blocked: destructive ops require backend-approved allowDestructive.',
+          next_actions: ['delete_nodes', 'update_frame'],
+        };
+      }
+      const fid = String(args.frameId || args.id || ctx.targetFrameId || '').trim();
+      if (!fid) return { status: 'error', summary: 'frameId required' };
+      const docNow = ctx.getDocument();
+      if (!listFrames(docNow).some((f) => String(f.id) === fid)) {
+        return { status: 'error', summary: `frame not found: ${fid}` };
+      }
+      const childIds = nodeIdsInsideFrameLocal(docNow, [fid]);
+      if (childIds.length) {
+        ctx.dispatch(setDocument(removeNodesFromDocument(ctx.getDocument(), childIds)));
+      }
+      ctx.dispatch(removeArtboardFrames([fid]));
+      return {
+        status: 'success',
+        summary: `Deleted frame ${fid}`,
+        artifacts: { frameId: fid, nodeIds: childIds },
       };
     }
 
@@ -544,6 +2098,9 @@ export function executeDesignTool(
       if (args.width != null) patch.width = Math.max(40, num(args.width));
       if (args.height != null) patch.height = Math.max(40, num(args.height));
       if (args.name != null) patch.name = String(args.name);
+      if (args.backgroundColor != null) {
+        patch.backgroundColor = String(args.backgroundColor || 'transparent');
+      }
       ctx.dispatch(updateArtboardFrame({ id, patch }));
       return { status: 'success', summary: `Updated frame ${id}`, artifacts: { frameId: id } };
     }
@@ -552,8 +2109,36 @@ export function executeDesignTool(
       const beforeIds = new Set(listFrames(doc).map((f) => f.id));
       const width = Math.max(40, num(args.width, 390));
       const height = Math.max(40, num(args.height, 844));
-      const x = num(args.x, 0);
-      const y = num(args.y, 0);
+      const hasExplicitXY = args.x != null || args.y != null;
+      let x = num(args.x, 0);
+      let y = num(args.y, 0);
+      // Default (0,0) on a non-empty doc overlaps the first artboard — shift right.
+      if ((!hasExplicitXY || (x === 0 && y === 0)) && listFrames(doc).length > 0) {
+        const slot = nextArtboardOrigin(doc, width, height);
+        x = slot.x;
+        y = slot.y;
+      } else if (listFrames(doc).length > 0) {
+        const overlaps = listFrames(doc).some((f) =>
+          frameRectsOverlap(
+            x,
+            y,
+            width,
+            height,
+            Number(f.x) || 0,
+            Number(f.y) || 0,
+            Number(f.width) || 0,
+            Number(f.height) || 0
+          )
+        );
+        if (overlaps) {
+          const slot = nextArtboardOrigin(doc, width, height);
+          x = slot.x;
+          y = slot.y;
+        }
+      }
+      // Default white artboard — thematic colors belong in the color phase.
+      const backgroundColor =
+        args.backgroundColor != null ? String(args.backgroundColor) : '#FFFFFF';
       ctx.dispatch(
         addArtboardFrame({
           name: String(args.name || 'Frame'),
@@ -561,7 +2146,9 @@ export function executeDesignTool(
           y,
           width,
           height,
-          backgroundColor: String(args.backgroundColor || '#FFFFFF'),
+          backgroundColor,
+          // Agent tools never auto-select; user must click the artboard.
+          activate: false,
         })
       );
       const frames = listFrames(ctx.getDocument());
@@ -588,10 +2175,122 @@ export function executeDesignTool(
       };
     }
 
+    if (name === 'image_process') {
+      const nodeId = String(args.nodeId || args.id || '').trim();
+      const kind = String(args.kind || args.processKind || '').trim();
+      const allowed = new Set([
+        'upscale',
+        'removeBg',
+        'eraser',
+        'editElements',
+        'editText',
+        'multiAngle',
+        'expand',
+        'adjust',
+        'crop',
+        'flipRotate',
+        'moveObject',
+        'vector',
+      ]);
+      if (!nodeId) {
+        return {
+          status: 'error',
+          summary: 'image_process requires args.nodeId',
+          next_actions: ['Pass image node id'],
+        };
+      }
+      if (!allowed.has(kind)) {
+        return {
+          status: 'error',
+          summary: `image_process unknown kind=${kind || '(empty)'}`,
+          next_actions: [`Use kind one of: ${[...allowed].join('|')}`],
+        };
+      }
+      const node = doc.deltaSetLike?.[nodeId];
+      if (!node) {
+        return {
+          status: 'error',
+          summary: `image_process: node ${nodeId} not found`,
+          next_actions: ['get_scene_summary'],
+        };
+      }
+      const label = String(args.label || kind);
+      ctx.dispatch(
+        startImageProcess({
+          sourceId: nodeId,
+          kind,
+          label,
+          targetWidth:
+            args.targetWidth != null ? Number(args.targetWidth) : undefined,
+          targetHeight:
+            args.targetHeight != null ? Number(args.targetHeight) : undefined,
+          meta:
+            args.meta && typeof args.meta === 'object'
+              ? (args.meta as Record<string, unknown>)
+              : undefined,
+        })
+      );
+      return {
+        status: 'success',
+        summary: `Started image_process ${kind} on ${nodeId}`,
+        artifacts: { sourceId: nodeId, kind },
+        next_actions: ['Wait for process UI / continue other ops'],
+      };
+    }
+
+    if (name === 'export_canvas') {
+      const formatRaw = String(args.format || 'png').toLowerCase();
+      const format =
+        formatRaw === 'jpg' || formatRaw === 'jpeg'
+          ? 'jpeg'
+          : formatRaw === 'svg'
+            ? 'svg'
+            : 'png';
+      const nodeIds = Array.isArray(args.nodeIds)
+        ? args.nodeIds.map((x) => String(x)).filter(Boolean)
+        : args.nodeId
+          ? [String(args.nodeId)]
+          : [];
+      const multiplier = Math.max(0.25, Math.min(4, Number(args.multiplier) || 1));
+      const filename = String(args.filename || 'export').replace(/[^\w\-]+/g, '_');
+      const ok = exportFabricImage({
+        format,
+        multiplier,
+        filename,
+        selectionOnly: nodeIds.length > 0,
+        nodeIds: nodeIds.length ? nodeIds : undefined,
+        document: doc,
+      });
+      if (!ok) {
+        return {
+          status: 'error',
+          summary: 'export_canvas failed to start (empty selection?)',
+          next_actions: ['Pass nodeIds or export full board'],
+        };
+      }
+      return {
+        status: 'success',
+        summary: `Export started (${format}${nodeIds.length ? `, ${nodeIds.length} nodes` : ', full'})`,
+        artifacts: { format, nodeIds, multiplier },
+      };
+    }
+
     return {
       status: 'error',
-      summary: `Unknown tool: ${name}`,
-      next_actions: [`Use one of: ${DESIGN_TOOL_NAMES.join(', ')}`],
+      summary: (() => {
+        const n = String(name || '').toLowerCase();
+        const miss = UNAVAILABLE_CAPABILITIES.find(
+          (c) =>
+            n.includes(c.id) ||
+            n.includes('preview') ||
+            n.includes('share') ||
+            n.includes('zoom') ||
+            n.includes('预览')
+        );
+        if (miss) return miss.hint;
+        return `未知工具: ${name}。请先 list_capabilities；不要假装已执行未接入能力。`;
+      })(),
+      next_actions: ['list_capabilities', ...DESIGN_TOOL_NAMES.slice(0, 8)],
     };
   } catch (err: any) {
     return {
@@ -600,90 +2299,4 @@ export function executeDesignTool(
       next_actions: ['Fix arguments and retry'],
     };
   }
-}
-
-/** Resolve absolute coords if model gave local frame-relative values by mistake. */
-export function resolvePlacementHint(frame: ArtboardFrame | null | undefined) {
-  if (!frame) return '';
-  return [
-    `Target canvas "${frame.name}" id=${frame.id}`,
-    `World origin: (${Math.round(frame.x)}, ${Math.round(frame.y)}) size ${Math.round(frame.width)}×${Math.round(frame.height)}`,
-    `Place UI with absolute x/y inside [${Math.round(frame.x)}..${Math.round(frame.x + frame.width)}] × [${Math.round(frame.y)}..${Math.round(frame.y + frame.height)}].`,
-  ].join('\n');
-}
-
-/** Extra placement policy injected into the agent system prompt. */
-export function buildPlacementPolicy(doc: any, targetFrameId?: string | null, userMessage?: string | null) {
-  const frames = listFrames(doc);
-  const target =
-    (targetFrameId && frames.find((f) => f.id === targetFrameId)) ||
-    frames.find((f) => f.id === doc?.activeFrameId) ||
-    null;
-
-  if (userWantsSiblingFrame(userMessage) && frames.length > 0) {
-    const ref =
-      target ||
-      (frames.length === 1 ? frames[0] : null) ||
-      frames[frames.length - 1];
-    if (ref) {
-      const gap = 48;
-      const nx = Math.round(Number(ref.x) + Number(ref.width) + gap);
-      const ny = Math.round(Number(ref.y) || 0);
-      const w = Math.round(Number(ref.width) || 595);
-      const h = Math.round(Number(ref.height) || 842);
-      return [
-        'PLACEMENT STATUS: User wants a NEW artboard beside the existing one (same size).',
-        `Reference frame "${ref.name}" id=${ref.id} at (${Math.round(ref.x)},${Math.round(ref.y)}) ${w}×${h}.`,
-        `REQUIRED: create_frame name=… width=${w} height=${h} x=${nx} y=${ny} (gap ${gap} to the right).`,
-        'Then draw ONLY inside the NEW frame with create_shape/create_text (absolute world coords).',
-        'Do NOT modify, overwrite, or delete_nodes on the reference poster.',
-        'Do NOT call finish until create_frame + drawing tools have succeeded.',
-      ].join('\n');
-    }
-  }
-
-  if (!frames.length) {
-    const nodeCount = Object.keys(doc?.deltaSetLike || {}).length;
-    if (nodeCount > 0) {
-      return [
-        'PLACEMENT STATUS: No artboards, but free-canvas nodes exist.',
-        'Draw with create_shape/create_text using world x/y near those nodes.',
-        'Do NOT ask for a frame first. Do NOT delete existing nodes unless the user explicitly asked.',
-      ].join('\n');
-    }
-    return [
-      'PLACEMENT STATUS: ZERO artboards and empty canvas.',
-      'Call create_frame (default 794×1123) then draw — do not only ask_user.',
-      'Suggested: create_frame name=画板 width=794 height=1123.',
-    ].join('\n');
-  }
-
-  if (targetFrameId && !frameById(doc, targetFrameId)) {
-    return [
-      `PLACEMENT STATUS: Requested frame ${targetFrameId} is MISSING (likely deleted).`,
-      'Call ask_user: create a new canvas, or pick another existing frame.',
-      `Existing frames: ${frames.map((f) => `${f.name}(${f.id})`).join(', ')}`,
-    ].join('\n');
-  }
-
-  if (!target && frames.length > 1) {
-    return [
-      'PLACEMENT STATUS: Multiple artboards, no clear target.',
-      'Call get_scene_summary then ask_user which frame to use, or offer create_frame.',
-      `Frames: ${frames.map((f) => `${f.name} ${Math.round(f.width)}×${Math.round(f.height)} id=${f.id}`).join('; ')}`,
-    ].join('\n');
-  }
-
-  if (target) {
-    return [
-      resolvePlacementHint(target),
-      'If the user asks for another poster beside this one, create_frame first — do not draw over this frame.',
-    ].join('\n');
-  }
-
-  if (frames.length === 1) {
-    return resolvePlacementHint(frames[0]);
-  }
-
-  return '';
 }

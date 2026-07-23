@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from '@/components/layout/AppShell';
 import AboutPage from '@/pages/AboutPage';
+import AccountSettingsPage from '@/pages/AccountSettingsPage';
 import EditorPage from '@/pages/EditorPage';
 import HomePage from '@/pages/HomePage';
 import GoogleOAuthCallbackPage from '@/pages/GoogleOAuthCallbackPage';
@@ -18,6 +19,7 @@ export default function AppRouter() {
           <Route element={<GuestOnly />}>
             <Route path="login" element={<LoginPage initialMode="login" />} />
             <Route path="register" element={<LoginPage initialMode="register" />} />
+            <Route path="forgot-password" element={<LoginPage initialMode="forgot" />} />
           </Route>
           {/* Must stay outside GuestOnly so the OAuth return can finish signing in. */}
           <Route path="login/google/callback" element={<GoogleOAuthCallbackPage />} />
@@ -32,7 +34,9 @@ export default function AppRouter() {
           <Route path="s/:shareId" element={<SharePage />} />
 
           <Route element={<RequireAuth />}>
-            <Route path="editor" element={<EditorPage />} />
+            <Route path="account" element={<AccountSettingsPage />} />
+            {/* One route so /editor → /editor/:id does not remount and drop home-agent draft. */}
+            <Route path="editor/:projectId?" element={<EditorPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/home" replace />} />

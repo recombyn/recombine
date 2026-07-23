@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { HiCheck, HiOutlineSparkles } from 'react-icons/hi2';
+import { HiCheck, HiOutlineExclamationTriangle, HiOutlineSparkles } from 'react-icons/hi2';
 import { Button, Dialog } from '@/components/base';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
+import { checkPlazaCoverForPublish } from '@/utils/plazaCover';
 import { cn } from '@/utils/classnames';
 
 type PlazaPublishDialogProps = {
@@ -15,7 +16,7 @@ type PlazaPublishDialogProps = {
 };
 
 /**
- * Publish-to-plaza confirm + thank-you success (light motion).
+ * Publish-to-plaza confirm — requires at least one artboard before submit.
  */
 export default function PlazaPublishDialog({
   open,
@@ -28,11 +29,14 @@ export default function PlazaPublishDialog({
   const { t } = useTranslation();
   const [phase, setPhase] = useState<'confirm' | 'success'>('confirm');
 
+  const coverCheck = useMemo(() => checkPlazaCoverForPublish(document), [document]);
+
   useEffect(() => {
     if (open) setPhase('confirm');
   }, [open]);
 
   const handleSubmit = async () => {
+    if (!coverCheck.ok) return;
     try {
       await onSubmit();
       setPhase('success');
@@ -45,6 +49,15 @@ export default function PlazaPublishDialog({
     if (publishing) return;
     onClose();
   };
+
+  const frameHint = (() => {
+    const frame = coverCheck.frame;
+    if (!frame) return null;
+    const w = Math.round(frame.width);
+    const h = Math.round(frame.height);
+    const name = String(frame.name || '').trim() || t('plaza.artboardUntitled');
+    return t('plaza.artboardDetail', { name, w, h });
+  })();
 
   return (
     <Dialog
@@ -65,6 +78,7 @@ export default function PlazaPublishDialog({
               size="small"
               type="primary"
               loading={publishing}
+              disabled={!coverCheck.ok}
               onClick={() => void handleSubmit()}
             >
               {t('plaza.submit')}
@@ -76,28 +90,44 @@ export default function PlazaPublishDialog({
           </Button>
         )
       }
-      footerClassName={cn(
-        '!px-5',
-        phase === 'success' && '!justify-center'
-      )}
+      footerClassName={cn('!px-5', phase === 'success' && '!justify-center')}
     >
       {phase === 'confirm' ? (
         <div className="px-5 pb-1 pt-1">
           <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--canvas)]">
-            <div className="aspect-[16/10] w-full">
-              {document ? (
-                <TemplateThumbnail document={document} fit="cover" />
+            <div className="aspect-[680/385] w-full">
+              {coverCheck.coverDocument ? (
+                <TemplateThumbnail document={coverCheck.coverDocument} fit="cover" />
               ) : (
-                <div className="flex h-full items-center justify-center bg-[var(--accent-soft)] text-[12px] text-[var(--muted)]">
-                  {projectName}
-                </div>
+                <div className="h-full w-full bg-[var(--accent-soft)]" />
               )}
             </div>
           </div>
+
           <p className="mt-3.5 text-[13px] font-medium text-[var(--ink)]">{projectName}</p>
-          <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
-            {t('plaza.publishHint')}
-          </p>
+
+          <ul className="mt-3 space-y-2 rounded-xl border border-[var(--line)] bg-[var(--canvas)]/60 px-3 py-2.5">
+            <li className="flex items-start gap-2 text-[12.5px] leading-snug">
+              <CheckIcon ok={coverCheck.hasCover} />
+              <span className={coverCheck.hasCover ? 'text-[var(--ink)]' : 'text-[var(--muted)]'}>
+                {t('plaza.artboardCheck')}
+                {frameHint ? (
+                  <span className="mt-0.5 block text-[11.5px] text-[var(--muted)]">{frameHint}</span>
+                ) : null}
+              </span>
+            </li>
+          </ul>
+
+          {!coverCheck.ok ? (
+            <p className="mt-2.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-amber-700">
+              <HiOutlineExclamationTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {t('plaza.artboardMissingHint')}
+            </p>
+          ) : (
+            <p className="mt-2.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
+              {t('plaza.publishHint')}
+            </p>
+          )}
         </div>
       ) : (
         <div className="plaza-thanks relative px-6 pb-2 pt-8 text-center">
@@ -129,5 +159,17 @@ export default function PlazaPublishDialog({
         </div>
       )}
     </Dialog>
+  );
+}
+
+function CheckIcon({ ok }: { ok: boolean }) {
+  return ok ? (
+    <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white">
+      <HiCheck className="h-2.5 w-2.5" strokeWidth={3} />
+    </span>
+  ) : (
+    <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--line)] text-[var(--muted)]">
+      <span className="h-1 w-1 rounded-full bg-current" />
+    </span>
   );
 }

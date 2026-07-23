@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import AppLogo from '@/components/base/AppLogo';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowLeft } from 'react-icons/hi2';
 
@@ -36,9 +37,7 @@ export default function LegalPage({ kind }: LegalPageProps) {
 
         <header className="mt-8">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--ink)] text-[13px] font-bold tracking-tight text-[var(--on-brand)]">
-              RY
-            </span>
+            <AppLogo size={44} />
             <div className="min-w-0">
               <h1 className="text-[22px] font-semibold tracking-tight text-[var(--ink)]">
                 {title}

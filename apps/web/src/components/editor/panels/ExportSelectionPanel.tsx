@@ -1,6 +1,7 @@
 import {
   useCallback,
   useId,
+  useMemo,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -17,24 +18,33 @@ import {
   type Placement,
 } from '@floating-ui/react';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineArrowDownTray, HiOutlineChevronDown, HiOutlineInformationCircle } from 'react-icons/hi2';
+import { useSelector } from 'react-redux';
+import {
+  HiOutlineArrowDownTray,
+  HiOutlineArrowUpTray,
+  HiOutlineChevronDown,
+  HiOutlineCodeBracket,
+  HiOutlineDocument,
+  HiOutlineDocumentDuplicate,
+  HiOutlineInformationCircle,
+} from 'react-icons/hi2';
 import { Checkbox } from '@/components/base/checkbox';
 import Select from '@/components/base/select';
 import Tooltip from '@/components/base/tooltip';
 import { message } from '@/components/base/message';
-import { useAppSelector } from '@/hooks/redux';
+import { DropdownPanel, DropdownPanelItem } from '@/components/base/dropdown/DropdownPanel';
 import {
-  downloadSelectionImagesDirect,
   exportSelectionSlots,
   exportCropSlots,
-  selectionIsDirectImageExport,
-  selectionSupportsSvgExport,
+  exportDocumentJson,
   type ExportAffixMode,
   type ExportImageFormat,
   type ExportSlotConfig,
-} from '@/store/scene/exportImage';
+} from '@/components/rcb/scene/exportImage';
+import { normalizeDocument } from '@/components/rcb/scene/sceneDocument';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import { cn } from '@/utils/classnames';
-import { SEL_ICON_BTN } from '@/components/editor/Canvas/selection/ToolbarValueSlider';
+import { SEL_ICON_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
 
 const SCALE_OPTIONS = [
   { value: 0.5, label: '0.5x' },
@@ -75,9 +85,62 @@ function defaultSlot(format: ExportImageFormat = 'png'): ExportSlotConfig {
   };
 }
 
+export type NamedExportCrop = ExportCropRegion & { name?: string };
+
+/** When there are no artboard frames, crop to scene content (or document size). */
+function contentCropFallback(document: any, name: string): NamedExportCrop | null {
+  if (!document) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let hit = false;
+  const children = document?.deltaSetLike?.ROOT?.children;
+  if (Array.isArray(children)) {
+    for (const id of children) {
+      const node = document.deltaSetLike?.[id];
+      if (!node) continue;
+      const { left, top } = nodeLeftTop(document, node);
+      const w = Number(node.width);
+      const h = Number(node.height);
+      if (![left, top, w, h].every(Number.isFinite) || !(w > 0) || !(h > 0)) continue;
+      hit = true;
+      minX = Math.min(minX, left);
+      minY = Math.min(minY, top);
+      maxX = Math.max(maxX, left + w);
+      maxY = Math.max(maxY, top + h);
+    }
+  }
+  if (hit) {
+    const pad = 8;
+    return {
+      x: minX - pad,
+      y: minY - pad,
+      width: Math.max(1, maxX - minX + pad * 2),
+      height: Math.max(1, maxY - minY + pad * 2),
+      backgroundColor: document.backgroundColor,
+      name,
+    };
+  }
+  const w = Math.max(0, Number(document.width) || 0);
+  const h = Math.max(0, Number(document.height) || 0);
+  if (w > 1 && h > 1) {
+    return {
+      x: Number(document.x) || 0,
+      y: Number(document.y) || 0,
+      width: w,
+      height: h,
+      backgroundColor: document.backgroundColor,
+      name,
+    };
+  }
+  return null;
+}
+
 export function ExportSelectionPanel({
   nodeIds,
   crop,
+  crops,
   baseName,
   onClose,
   className,
@@ -87,6 +150,8 @@ export function ExportSelectionPanel({
   nodeIds?: string[];
   /** Artboard / frame region export (scene crop). */
   crop?: ExportCropRegion | null;
+  /** Multiple artboards (e.g. export all pages). */
+  crops?: NamedExportCrop[] | null;
   baseName?: string;
   onClose?: () => void;
   className?: string;
@@ -94,16 +159,20 @@ export function ExportSelectionPanel({
 }) {
   const { t } = useTranslation();
   const tipId = useId();
-  const document = useAppSelector((s) => s.editor.document);
+  const document = useSelector((s: any) => s.editor.document);
   const ids = nodeIds || [];
-  const allowSvg = Boolean(crop) || selectionSupportsSvgExport(document, ids);
-  const formatOptions = allowSvg ? VECTOR_FORMAT_OPTIONS : RASTER_FORMAT_OPTIONS;
+  const cropList = useMemo((): NamedExportCrop[] => {
+    if (crops?.length) return crops;
+    if (crop) return [{ ...crop }];
+    return [];
+  }, [crop, crops]);
   const [slot, setSlot] = useState<ExportSlotConfig>(() => defaultSlot());
   const [compress, setCompress] = useState(false);
   const [busy, setBusy] = useState(false);
   const inline = variant === 'inline';
-  const canExport = Boolean(crop) || ids.length > 0;
+  const canExport = cropList.length > 0 || ids.length > 0;
   const isSvg = slot.format === 'svg';
+  const format = slot.format;
 
   const name = baseName || t('editor.selectionExportName');
   const affixOptions = [
@@ -120,6 +189,7 @@ export function ExportSelectionPanel({
     try {
       const resolved: ExportSlotConfig = {
         ...slot,
+        format,
         scale: isSvg ? 1 : slot.scale,
         affix:
           slot.affix ||
@@ -127,27 +197,40 @@ export function ExportSelectionPanel({
             ? ''
             : `@${Number.isInteger(slot.scale) ? slot.scale : slot.scale}x`),
       };
-      const n = crop
-        ? await exportCropSlots({
-            crop,
-            backgroundColor: crop.backgroundColor,
-            baseName: name,
-            compress: isSvg ? false : compress,
-            slots: [resolved],
-          })
-        : await exportSelectionSlots({
-            nodeIds: ids,
-            baseName: name,
+      let n = 0;
+      if (cropList.length > 0) {
+        for (let i = 0; i < cropList.length; i += 1) {
+          const region = cropList[i];
+          const pageName =
+            region.name ||
+            (cropList.length > 1 ? `${name}-${i + 1}` : name);
+          n += await exportCropSlots({
+            crop: region,
+            backgroundColor: region.backgroundColor,
+            baseName: pageName,
             compress: isSvg ? false : compress,
             slots: [resolved],
             document,
           });
+        }
+      } else {
+        n = await exportSelectionSlots({
+          nodeIds: ids,
+          baseName: name,
+          compress: isSvg ? false : compress,
+          slots: [resolved],
+          document,
+        });
+      }
       if (n > 0) {
         message.success(t(isSvg ? 'editor.exportedSvg' : 'editor.exportedImage'));
         onClose?.();
       } else {
-        message.error(t('editor.canvasMissing'));
+        message.error(t('editor.exportFailed'));
       }
+    } catch (err) {
+      console.warn('[export]', err);
+      message.error(t('editor.exportFailed'));
     } finally {
       setBusy(false);
     }
@@ -199,7 +282,7 @@ export function ExportSelectionPanel({
           size="small"
           type="filled"
           value={slot.format}
-          options={formatOptions}
+          options={VECTOR_FORMAT_OPTIONS}
           onChange={(v) => {
             const next =
               v === 'svg' ? 'svg' : v === 'jpeg' ? 'jpeg' : ('png' as ExportImageFormat);
@@ -247,20 +330,17 @@ export function ExportSelectionPanel({
 
 export type ExportSelectionPopoverProps = {
   nodeIds?: string[];
-  /** Artboard / frame region — opens scale/format panel (not direct image download). */
+  /** Artboard / frame region export (scene crop). */
   crop?: ExportCropRegion | null;
   baseName?: string;
   placement?: Placement;
   disabled?: boolean;
   className?: string;
   triggerClassName?: string;
-  /** Optional trigger chrome (e.g. group toolbar: icon + red badge + chevron). */
-  showChevron?: boolean;
-  showBadge?: boolean;
   children?: ReactNode;
 };
 
-/** Download: images go straight to file; vectors / frames open the scale/format panel. */
+/** Download trigger: scale / format / compress panel. */
 export function ExportSelectionPopover({
   nodeIds,
   crop,
@@ -269,14 +349,10 @@ export function ExportSelectionPopover({
   disabled = false,
   className,
   triggerClassName,
-  showChevron = false,
-  showBadge = false,
   children,
 }: ExportSelectionPopoverProps) {
   const { t } = useTranslation();
-  const document = useAppSelector((s) => s.editor.document);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
   const ids = nodeIds || [];
   const canExport = Boolean(crop) || ids.length > 0;
 
@@ -306,65 +382,30 @@ export function ExportSelectionPopover({
   });
   const { getReferenceProps, getFloatingProps } = useInteractions([dismiss]);
 
-  const onTriggerClick = useCallback(async () => {
-    if (disabled || !canExport || busy) return;
-
-    if (!crop && selectionIsDirectImageExport(document, ids)) {
-      setBusy(true);
-      try {
-        const n = await downloadSelectionImagesDirect({
-          document,
-          nodeIds: ids,
-          baseName: baseName || t('editor.selectionExportName'),
-        });
-        if (n > 0) message.success(t('editor.exportedImage'));
-        else message.error(t('editor.canvasMissing'));
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-
+  const onTriggerClick = useCallback(() => {
+    if (disabled || !canExport) return;
     setOpen((v) => !v);
-  }, [baseName, busy, canExport, crop, disabled, document, ids, t]);
+  }, [canExport, disabled]);
 
   return (
     <>
       <Tooltip
         title={t('editor.exportImage')}
         placement="top"
-        disabled={disabled || !canExport || busy || open}
+        disabled={disabled || !canExport || open}
       >
         <button
           type="button"
           ref={refs.setReference}
-          disabled={disabled || !canExport || busy}
+          disabled={disabled || !canExport}
           aria-label={t('editor.exportImage')}
           aria-expanded={open}
-          className={cn(
-            triggerClassName || SEL_ICON_BTN,
-            showChevron &&
-              'inline-flex h-8 items-center gap-0.5 rounded-lg px-2 text-[var(--ink)] hover:bg-[var(--accent-soft)]',
-            className
-          )}
+          className={cn(triggerClassName || SEL_ICON_BTN, className)}
           {...getReferenceProps({
-            onClick: () => void onTriggerClick(),
+            onClick: onTriggerClick,
           })}
         >
-          {children ?? (
-            <span className="relative inline-flex">
-              <HiOutlineArrowDownTray className="h-3.5 w-3.5" />
-              {showBadge ? (
-                <span
-                  aria-hidden
-                  className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[#ef4444] ring-1 ring-[var(--surface)]"
-                />
-              ) : null}
-            </span>
-          )}
-          {showChevron ? (
-            <HiOutlineChevronDown className="h-3 w-3 text-[var(--muted)]" aria-hidden />
-          ) : null}
+          {children ?? <HiOutlineArrowDownTray className="h-3.5 w-3.5" />}
         </button>
       </Tooltip>
 
@@ -381,6 +422,206 @@ export function ExportSelectionPopover({
               crop={crop}
               baseName={baseName}
               onClose={() => setOpen(false)}
+            />
+          </div>
+        ) : null}
+      </FloatingPortal>
+    </>
+  );
+}
+
+type ExportMode = 'all' | 'selected';
+
+/** Top-bar Export: All Pages / Selected (PNG·JPG·SVG) + JSON. */
+export function EditorTopExportButton({ className }: { className?: string }) {
+  const { t } = useTranslation();
+  const document = useSelector((s: any) => s.editor.document);
+  const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds || []) as string[];
+  const projectName = useSelector((s: any) => {
+    const id = s.editor.currentId;
+    const row = (s.editor.templates || []).find((item: any) => item.id === id);
+    return String(row?.name || '').trim() || t('editor.selectionExportName');
+  });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [mode, setMode] = useState<ExportMode | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const frames = useMemo(
+    () => (Array.isArray(document?.frames) ? document.frames : []) as any[],
+    [document]
+  );
+
+  const pageCrops = useMemo((): NamedExportCrop[] => {
+    const fromFrames = frames
+      .filter((f) => f && Number(f.width) > 0 && Number(f.height) > 0)
+      .map((f, i) => ({
+        x: Number(f.x) || 0,
+        y: Number(f.y) || 0,
+        width: Math.max(1, Number(f.width) || 1),
+        height: Math.max(1, Number(f.height) || 1),
+        backgroundColor: f.backgroundColor,
+        name: String(f.name || '').trim() || `${t('editor.pageExportName')}-${i + 1}`,
+      }));
+    if (fromFrames.length) return fromFrames;
+    // Infinite canvas without frames: export the content bounding box as one page.
+    const fallback = contentCropFallback(document, t('editor.pageExportName'));
+    return fallback ? [fallback] : [];
+  }, [document, frames, t]);
+
+  const floatingOpen = menuOpen || panelOpen;
+  const { refs, floatingStyles, context } = useFloating({
+    open: floatingOpen,
+    onOpenChange: (next) => {
+      if (!next) {
+        setMenuOpen(false);
+        setPanelOpen(false);
+        setMode(null);
+      }
+    },
+    placement: 'bottom-end',
+    strategy: 'fixed',
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(8),
+      flip({
+        padding: 12,
+        fallbackPlacements: ['bottom-start', 'top-end', 'top-start'],
+      }),
+      shift({ padding: 12 }),
+    ],
+  });
+  const dismiss = useDismiss(context, {
+    outsidePress: (event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('[data-export-panel]')) return false;
+      if (target?.closest?.('[data-select-dropdown]')) return false;
+      return true;
+    },
+  });
+  const { getReferenceProps, getFloatingProps } = useInteractions([dismiss]);
+
+  const openMode = useCallback(
+    (next: ExportMode) => {
+      if (next === 'all') {
+        if (!pageCrops.length) {
+          message.warning(t('editor.noPagesExport'));
+          setMenuOpen(false);
+          return;
+        }
+      } else if (!selectedNodeIds.length) {
+        message.warning(t('editor.noSelectionExport'));
+        setMenuOpen(false);
+        return;
+      }
+      setMode(next);
+      setMenuOpen(false);
+      setPanelOpen(true);
+    },
+    [pageCrops.length, selectedNodeIds.length, t]
+  );
+
+  const runExportJson = useCallback(() => {
+    setMenuOpen(false);
+    if (!document) {
+      message.error(t('editor.exportFailed'));
+      return;
+    }
+    try {
+      const ok = exportDocumentJson(normalizeDocument(document), projectName);
+      if (ok) message.success(t('editor.exportedJson'));
+      else message.error(t('editor.exportFailed'));
+    } catch (err) {
+      console.warn('[export-json]', err);
+      message.error(t('editor.exportFailed'));
+    }
+  }, [document, projectName, t]);
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={refs.setReference}
+        aria-label={t('editor.export')}
+        aria-expanded={floatingOpen}
+        aria-haspopup="menu"
+        disabled={busy}
+        className={cn(
+          'inline-flex h-8 items-center gap-1.5 rounded-full bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50',
+          className
+        )}
+        {...getReferenceProps({
+          onClick: () => {
+            if (busy) return;
+            if (panelOpen) {
+              setPanelOpen(false);
+              setMode(null);
+              setMenuOpen(false);
+              return;
+            }
+            setMenuOpen((v) => !v);
+          },
+        })}
+      >
+        <HiOutlineArrowUpTray className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+        {t('editor.export')}
+        <HiOutlineChevronDown className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+      </button>
+
+      <FloatingPortal>
+        {menuOpen ? (
+          <div
+            ref={refs.setFloating}
+            style={floatingStyles as CSSProperties}
+            className="z-[80]"
+            {...getFloatingProps()}
+          >
+            <DropdownPanel role="menu" className="min-w-[200px] p-1">
+              <DropdownPanelItem
+                role="menuitem"
+                onClick={() => openMode('all')}
+                className="gap-2.5 hover:text-[var(--accent)] [&:hover_svg]:text-[var(--accent)]"
+              >
+                <HiOutlineDocumentDuplicate className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+                {t('editor.exportAllPages')}
+              </DropdownPanelItem>
+              <DropdownPanelItem
+                role="menuitem"
+                onClick={() => openMode('selected')}
+                className="gap-2.5 hover:text-[var(--accent)] [&:hover_svg]:text-[var(--accent)]"
+              >
+                <HiOutlineDocument className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+                {t('editor.exportSelected')}
+              </DropdownPanelItem>
+              <DropdownPanelItem
+                role="menuitem"
+                onClick={runExportJson}
+                className="gap-2.5 hover:text-[var(--accent)] [&:hover_svg]:text-[var(--accent)]"
+              >
+                <HiOutlineCodeBracket className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+                {t('editor.exportJson')}
+              </DropdownPanelItem>
+            </DropdownPanel>
+          </div>
+        ) : null}
+
+        {panelOpen && mode ? (
+          <div
+            ref={refs.setFloating}
+            style={floatingStyles as CSSProperties}
+            className="z-[80]"
+            {...getFloatingProps()}
+          >
+            <ExportSelectionPanel
+              nodeIds={mode === 'selected' ? selectedNodeIds : undefined}
+              crops={mode === 'all' ? pageCrops : undefined}
+              baseName={
+                mode === 'all' ? t('editor.pageExportName') : t('editor.selectionExportName')
+              }
+              onClose={() => {
+                setPanelOpen(false);
+                setMode(null);
+              }}
             />
           </div>
         ) : null}

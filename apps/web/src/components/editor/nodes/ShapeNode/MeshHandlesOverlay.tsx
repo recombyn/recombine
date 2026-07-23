@@ -1,12 +1,12 @@
 import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import {
-  CameraOverlayPortal,
-  useCamera,
-  worldToStage,
-} from '@/components/editor/Canvas/stage/CameraContext';
+  RcbOverlayPortal,
+  useRcbCamera,
+  rcbSceneToScreen,
+} from '@/components/rcb';
 import { normalizeHex } from '@/components/base/colorPanel';
-import type { FillGradient } from '@/store/scene/sceneFill';
-import type { MeshPoint } from '@/store/scene/sceneDiffuseMesh';
+import type { FillGradient } from '@/components/rcb/scene/sceneFill';
+import type { MeshPoint } from '@/components/rcb/scene/sceneDiffuseMesh';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -68,7 +68,7 @@ export default function MeshHandlesOverlay({
   onChange,
   onActivePointChange,
 }: Props): ReactNode {
-  const camera = useCamera();
+  const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
   const dragRef = useRef<number | null>(null);
   const gradRef = useRef(gradient);
@@ -78,7 +78,7 @@ export default function MeshHandlesOverlay({
   onChangeRef.current = onChange;
   onActiveRef.current = onActivePointChange;
 
-  const origin = worldToStage(camera, box.left, box.top);
+  const origin = rcbSceneToScreen(camera, box.left, box.top);
   const stageW = box.width * z;
   const stageH = box.height * z;
   const w = box.width;
@@ -186,7 +186,7 @@ export default function MeshHandlesOverlay({
   }
 
   return (
-    <CameraOverlayPortal>
+    <RcbOverlayPortal>
       <div
         data-mesh-handles
         data-gradient-handles
@@ -239,6 +239,6 @@ export default function MeshHandlesOverlay({
           />
         ))}
       </div>
-    </CameraOverlayPortal>
+    </RcbOverlayPortal>
   );
 }

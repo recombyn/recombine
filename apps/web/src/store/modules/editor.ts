@@ -1,4 +1,4 @@
-import { createSlice, nanoid } from '@reduxjs/toolkit';
+import { createSlice, nanoid, type PayloadAction } from '@reduxjs/toolkit';
 import {
   createEmptyDocument,
   normalizeDocument,
@@ -11,10 +11,20 @@ import {
   clearImageProcessAttrs,
   spawnImageProcessNode,
   spawnImportPlaceholderNode,
+  spawnImageUploadPlaceholderNode,
   removeNodesFromDocument,
-} from '@/store/scene/sceneDocument';
-import { loadTemplates, saveTemplates, isSessionTemplate } from '@/store/templatesStorage';
-import type { TemplateSource } from '@/store/templatesStorage';
+  applyImageDecomposeLayers,
+} from '@/components/rcb/scene/sceneDocument';
+import {
+  loadTemplates,
+  saveTemplates,
+  isOwnedTemplate,
+  isSessionTemplate,
+} from '@/utils/templatesStorage';
+import type { TemplateSource } from '@/utils/templatesStorage';
+import type { ArtboardFrame } from '@/components/rcb/frames/types';
+
+export type { ArtboardFrame } from '@/components/rcb/frames/types';
 
 /** Side panel / toolbar kinds for image tools. */
 export type ImageToolPanelKind =
@@ -24,23 +34,6 @@ export type ImageToolPanelKind =
   | 'crop'
   | 'adjust'
   | 'flipRotate';
-
-/** Editor artboard frame (Redux document.frames). */
-export type ArtboardFrame = {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  backgroundColor: string;
-  layoutMode?: 'auto' | 'manual';
-  /** When true, frame cannot be moved or resized. */
-  locked?: boolean;
-  /** Size before first ratio preset — restored by 「原始」. */
-  aspectOriginalWidth?: number;
-  aspectOriginalHeight?: number;
-};
 
 function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
   const width = Math.max(40, Math.round(partial?.width || 794));
@@ -52,11 +45,16 @@ function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
     y: Math.round(partial?.y ?? 0),
     width,
     height,
-    backgroundColor: partial?.backgroundColor || '#FFFFFF',
+    backgroundColor: partial?.backgroundColor ?? '#FFFFFF',
+    // Default: show overflow (not clipped). User can enable clip from the frame toolbar.
+    clipContent: partial?.clipContent ?? false,
   };
 }
 
-/** Claim session (`case`/`scratch`) as owned on first real edit; persist snapshot then. */
+/**
+ * Claim session (`case`/`scratch`) as owned on first real edit.
+ * Full document snapshots (local + cloud) are debounced in `useProjectCloudSync`.
+ */
 function syncLibraryOnEdit(state: any, claim = true) {
   if (!state.currentId || !state.document) return;
   const item = state.templates.find((t: any) => t.id === state.currentId);
@@ -81,6 +79,8 @@ const initialState = {
   document: null as any,
   selectedNodeId: null as string | null,
   selectedNodeIds: [] as string[],
+  /** Multi artboard selection (UI); document.activeFrameId is the primary. */
+  selectedFrameIds: [] as string[],
   dirty: false,
   sceneReloadToken: 0,
   documentPatchToken: 0,
@@ -101,10 +101,20 @@ const initialState = {
   /** Shared stroke settings for pen / pencil tools. */
   penStrokeColor: '#333333' as string,
   penStrokeWidth: 1 as number,
+  /** Brush / stroke opacity while painting (0–100). */
+  penStrokeOpacity: 100 as number,
+  /** Paint-bucket fill (same schema as FillPanel). */
+  bucketFill: {
+    fillType: 'solid' as const,
+    fillColor: '#333333',
+    fillOpacity: 100,
+  },
   /** Decorative stamp brush for pencil (solid = ink path). */
   pencilBrushId: 'solid' as string,
   /** When true, pencil tool erases existing pencil strokes instead of drawing. */
   pencilEraseMode: false,
+  /** When true, pencil uses stylus/touch pressure (+ brush speed sim). */
+  pencilPressureEnabled: true,
   /** Design = edit; Dev = inspect spacing / margins (Figma-like). */
   workspaceMode: 'design' as 'design' | 'dev',
   /** Dev-mode node under pointer (inspect panel + spacing overlay). */
@@ -127,6 +137,7 @@ function pushHistory(state: typeof initialState) {
 function clearSelection(state: typeof initialState) {
   state.selectedNodeId = null;
   state.selectedNodeIds = [];
+  state.selectedFrameIds = [];
   state.imageToolPanel = null;
   state.shapeStylePanel = null;
 }
@@ -212,6 +223,8 @@ const editorSlice = createSlice({
     setSelectedNodeId(state, action) {
       state.selectedNodeId = action.payload;
       state.selectedNodeIds = action.payload ? [action.payload] : [];
+      // Selecting a node clears artboard multi-select (single-target click).
+      if (action.payload) state.selectedFrameIds = [];
       if (!action.payload || state.imageToolPanel?.nodeId !== action.payload) {
         state.imageToolPanel = null;
       }
@@ -228,6 +241,8 @@ const editorSlice = createSlice({
       const ids = Array.isArray(action.payload) ? action.payload.filter(Boolean) : [];
       state.selectedNodeIds = ids;
       state.selectedNodeId = ids[0] || null;
+      // Do not clear selectedFrameIds here — marquee may select frames + nodes together.
+      // Callers that want nodes-only should also dispatch setSelectedFrameIds([]).
       if (!ids[0] || state.imageToolPanel?.nodeId !== ids[0]) {
         state.imageToolPanel = null;
       }
@@ -243,10 +258,17 @@ const editorSlice = createSlice({
       pushHistory(state);
       const next = normalizeDocument(state.document);
       const frames = Array.isArray(next.frames) ? [...next.frames] : [];
-      const frame = createFrame(action.payload || {});
+      const payload = action.payload || {};
+      const { activate, ...framePartial } = payload as {
+        activate?: boolean;
+      } & Partial<ArtboardFrame>;
+      const frame = createFrame(framePartial);
       frames.push(frame);
       next.frames = frames;
-      next.activeFrameId = frame.id;
+      // Agent-created frames must not steal selection — only user clicks select.
+      if (activate !== false) {
+        next.activeFrameId = frame.id;
+      }
       state.document = next;
       state.dirty = true;
       state.sceneReloadToken += 1;
@@ -255,9 +277,63 @@ const editorSlice = createSlice({
     setActiveFrameId(state, action) {
       if (!state.document) return;
       const next = normalizeDocument(state.document);
-      next.activeFrameId = action.payload;
+      const id = action.payload ? String(action.payload) : null;
+      next.activeFrameId = id;
       state.document = next;
+      state.selectedFrameIds = id ? [id] : [];
+      // Soft-click / title click selects one artboard like a rect — clear nodes.
+      if (id) {
+        state.selectedNodeId = null;
+        state.selectedNodeIds = [];
+      }
       state.dirty = true;
+    },
+    setSelectedFrameIds(state, action) {
+      if (!state.document) return;
+      const ids = Array.isArray(action.payload)
+        ? [...new Set(action.payload.filter(Boolean).map(String))]
+        : [];
+      const next = normalizeDocument(state.document);
+      const valid = new Set(
+        (Array.isArray(next.frames) ? next.frames : []).map((f: any) => f?.id).filter(Boolean)
+      );
+      const filtered = ids.filter((id) => valid.has(id));
+      next.activeFrameId = filtered[0] || null;
+      state.document = next;
+      state.selectedFrameIds = filtered;
+      // Do not clear nodes — mixed marquee selection is allowed.
+      // Callers that want frames-only should also dispatch setSelectedNodeIds([]).
+      state.dirty = true;
+    },
+    /** Set node + artboard selection together (marquee / unified control box). */
+    setMixedSelection(
+      state,
+      action: PayloadAction<{ nodeIds?: string[]; frameIds?: string[] }>
+    ) {
+      if (!state.document) return;
+      const nodeIds = (action.payload?.nodeIds || []).filter(Boolean).map(String);
+      const frameIdsRaw = (action.payload?.frameIds || []).filter(Boolean).map(String);
+      const next = normalizeDocument(state.document);
+      const valid = new Set(
+        (Array.isArray(next.frames) ? next.frames : [])
+          .map((f: any) => String(f?.id || ''))
+          .filter(Boolean)
+      );
+      const frameIds = Array.from(new Set(frameIdsRaw.filter((id) => valid.has(id))));
+      next.activeFrameId = frameIds[0] || null;
+      state.document = next;
+      state.selectedNodeIds = nodeIds;
+      state.selectedNodeId = nodeIds[0] || null;
+      state.selectedFrameIds = frameIds;
+      if (!nodeIds[0] || state.imageToolPanel?.nodeId !== nodeIds[0]) {
+        state.imageToolPanel = null;
+      }
+      const panelIds = state.shapeStylePanel?.nodeIds || [];
+      const same =
+        panelIds.length === nodeIds.length &&
+        panelIds.every((id: string) => nodeIds.includes(id)) &&
+        nodeIds.every((id: string) => panelIds.includes(id));
+      if (!same) state.shapeStylePanel = null;
     },
     /** Remove one or more artboard frames (scene nodes are left as-is). */
     removeArtboardFrames(state, action) {
@@ -277,6 +353,10 @@ const editorSlice = createSlice({
       next.frames = frames;
       if (next.activeFrameId && idSet.has(next.activeFrameId)) {
         next.activeFrameId = frames[0]?.id ?? null;
+      }
+      state.selectedFrameIds = (state.selectedFrameIds || []).filter((id) => !idSet.has(id));
+      if (next.activeFrameId && !state.selectedFrameIds.includes(next.activeFrameId)) {
+        state.selectedFrameIds = next.activeFrameId ? [next.activeFrameId] : [];
       }
       state.document = next;
       state.dirty = true;
@@ -309,11 +389,23 @@ const editorSlice = createSlice({
       next.frames = frames;
       state.document = next;
       state.dirty = true;
-      // Position / lock-only updates refresh HTML chrome without SVG reload.
+      // Position / lock / generating-chrome updates refresh HTML without SVG reload.
+      // If clipContent is on, x/y moves must remount so clip rects stay aligned.
+      // skipHistory previews (live drag) also skip SVG remount — commit bumps token.
       const keys = Object.keys(patch);
+      const chromeKeys = new Set([
+        'x',
+        'y',
+        'locked',
+        'processStatus',
+        'processLabel',
+        'processKind',
+      ]);
       const onlyChrome =
-        keys.length > 0 && keys.every((k) => k === 'x' || k === 'y' || k === 'locked');
-      if (!onlyChrome) state.sceneReloadToken += 1;
+        keys.length > 0 &&
+        keys.every((k) => chromeKeys.has(k)) &&
+        !(Boolean(frame?.clipContent) && (keys.includes('x') || keys.includes('y')));
+      if (!onlyChrome && !skipHistory) state.sceneReloadToken += 1;
       syncLibraryOnEdit(state);
     },
     /** Snapshot history without changing the document (e.g. before a live frame drag). */
@@ -331,15 +423,19 @@ const editorSlice = createSlice({
         saveTemplates(state.templates);
       }
     },
-    persistCurrent(state) {
+    persistCurrent(state, action) {
       if (!state.currentId || !state.document) return;
       const item = state.templates.find((t) => t.id === state.currentId);
       if (!item) return;
       item.document = JSON.parse(JSON.stringify(state.document));
       item.updatedAt = Date.now();
       if (isSessionTemplate(item)) item.source = 'user';
-      state.dirty = false;
+      // keepDirty: cloud push not ACKed yet — stay dirty so refresh-before-upload retries.
+      if (!action.payload?.keepDirty) state.dirty = false;
       saveTemplates(state.templates);
+    },
+    clearEditorDirty(state) {
+      state.dirty = false;
     },
     importDocument(state, action) {
       const payload = action.payload || {};
@@ -379,10 +475,26 @@ const editorSlice = createSlice({
         }
       }
 
-      const id = nanoid();
+      const id = payload.id ? String(payload.id) : nanoid();
       const doc = alignImportedDocumentOrigin(payload.document);
       // Inspiration / import → editor: do not pre-select an artboard.
       doc.activeFrameId = null;
+      const existingById = state.templates.find((t: any) => t.id === id);
+      if (existingById) {
+        existingById.document = doc;
+        existingById.name = payload.name || existingById.name || '导入作品';
+        existingById.updatedAt = now;
+        touchOpened(existingById);
+        state.currentId = id;
+        state.document = doc;
+        clearSelection(state);
+        state.dirty = false;
+        state.historyPast = [];
+        state.historyFuture = [];
+        state.sceneReloadToken += 1;
+        saveTemplates(state.templates);
+        return;
+      }
       const item: any = {
         id,
         name: payload.name || '导入作品',
@@ -407,18 +519,23 @@ const editorSlice = createSlice({
       if (!state.document) return;
       pushHistory(state);
       const { document: next, id } = spawnImportPlaceholderNode(state.document, {
-        label: action.payload?.label || '解析 PDF 中',
+        label: action.payload?.label || '解析设计文件中',
         width: action.payload?.width,
         height: action.payload?.height,
+        x: action.payload?.x,
+        y: action.payload?.y,
       });
       if (!id) return;
       state.document = next;
       state.dirty = true;
       state.sceneReloadToken += 1;
       state.pendingImportPlaceholderId = id;
-      state.selectedNodeId = id;
-      state.selectedNodeIds = [id];
-      state.activeTool = 'select';
+      // Agent design placeholder should not steal the user's current selection.
+      if (action.payload?.select !== false) {
+        state.selectedNodeId = id;
+        state.selectedNodeIds = [id];
+        state.activeTool = 'select';
+      }
     },
     /** Drop placeholder and merge parsed document at its position. */
     finishImportPlaceholder(state, action) {
@@ -465,15 +582,29 @@ const editorSlice = createSlice({
     /** Remove failed/cancelled import placeholder. */
     cancelImportPlaceholder(state) {
       const id = state.pendingImportPlaceholderId;
-      if (!state.document || !id) {
-        state.pendingImportPlaceholderId = null;
-        return;
+      if (state.document && id) {
+        state.document = removeNodesFromDocument(state.document, [id]);
+        state.dirty = true;
+        state.sceneReloadToken += 1;
+        if (state.selectedNodeId === id) clearSelection(state);
       }
-      state.document = removeNodesFromDocument(state.document, [id]);
       state.pendingImportPlaceholderId = null;
-      state.dirty = true;
-      state.sceneReloadToken += 1;
-      if (state.selectedNodeId === id) clearSelection(state);
+      // Clear artboard-level generating chrome (design agent uses frames, not nodes).
+      if (state.document) {
+        const frames = Array.isArray(state.document.frames) ? state.document.frames : [];
+        let cleared = false;
+        for (const f of frames) {
+          if (!f || String(f.processStatus || '') !== 'running') continue;
+          delete f.processStatus;
+          delete f.processLabel;
+          delete f.processKind;
+          cleared = true;
+        }
+        if (cleared) {
+          state.document = { ...state.document, frames: [...frames] };
+          state.dirty = true;
+        }
+      }
     },
     /** Merge PDF/image parse result into the open canvas. */
     mergeImportedDocument(state, action) {
@@ -524,6 +655,57 @@ const editorSlice = createSlice({
       if (isSessionTemplate(item)) item.source = 'user';
       saveTemplates(state.templates);
     },
+    /** Store generated/list thumbnail URL or data URL on a project card. */
+    setTemplateThumbnail(state, action) {
+      const { id, thumbnail } = action.payload || {};
+      if (!id) return;
+      const item = state.templates.find((t) => t.id === id);
+      if (!item) return;
+      item.thumbnail = thumbnail || null;
+    },
+    /**
+     * Replace owned Projects from GET /projects (cloud is source of truth).
+     * Keeps in-memory case/scratch sessions; preserves the open owned doc if still editing.
+     */
+    hydrateRemoteProjects(state, action) {
+      const rows = Array.isArray(action.payload) ? action.payload : [];
+      const prevById = new Map(state.templates.map((t: any) => [t.id, t]));
+      const sessions = state.templates.filter((t: any) => isSessionTemplate(t));
+
+      const remoteItems = rows
+        .filter((row: any) => row?.id)
+        .map((row: any) => {
+          const prev = prevById.get(row.id);
+          return {
+            id: row.id,
+            name: row.name || prev?.name || 'Untitled',
+            // Keep in-memory document if we already loaded/edited this project.
+            document: prev?.document ?? null,
+            thumbnail: row.thumbnailUrl || prev?.thumbnail || null,
+            createdAt: row.createdAt || prev?.createdAt || Date.now(),
+            updatedAt: row.updatedAt || prev?.updatedAt || Date.now(),
+            openedAt: prev?.openedAt || row.updatedAt || Date.now(),
+            source: 'user' as const,
+            remoteOnly: !prev?.document && Boolean(row.hasDocument),
+          };
+        });
+
+      // If user is editing an owned project not yet returned by list, keep it.
+      const current = state.currentId ? prevById.get(state.currentId) : null;
+      if (
+        current &&
+        isOwnedTemplate(current) &&
+        !remoteItems.some((r: any) => r.id === current.id)
+      ) {
+        remoteItems.unshift(current);
+      }
+
+      remoteItems.sort(
+        (a: any, b: any) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0)
+      );
+      state.templates = [...remoteItems, ...sessions];
+      saveTemplates();
+    },
     undo(state) {
       if (!state.historyPast.length || !state.document) return;
       state.historyFuture.unshift(cloneDocument(state.document));
@@ -572,6 +754,31 @@ const editorSlice = createSlice({
       state.dirty = true;
       state.sceneReloadToken += 1;
     },
+    /** Spawn image node with local preview while remote upload runs. */
+    startImageUploadPlaceholder(state, action) {
+      if (!state.document) return;
+      const src = String(action.payload?.src || '');
+      if (!src) return;
+      pushHistory(state);
+      const { document: next, id } = spawnImageUploadPlaceholderNode(state.document, {
+        src,
+        width: Number(action.payload?.width) || 200,
+        height: Number(action.payload?.height) || 200,
+        label: action.payload?.label || '上传中',
+        x: action.payload?.x,
+        y: action.payload?.y,
+        name: action.payload?.name,
+      });
+      if (!id) return;
+      state.document = next;
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.pendingImageProcessId = id;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+    },
     /** Spawn a right-side image processing node (original untouched). */
     startImageProcess(state, action) {
       if (!state.document) return;
@@ -598,15 +805,52 @@ const editorSlice = createSlice({
     finishImageProcess(state, action) {
       const nodeId = action.payload?.nodeId || state.pendingImageProcessId;
       const nextSrc = action.payload?.src as string | undefined;
+      const layers = action.payload?.layers as
+        | import('@/components/rcb/scene/sceneDocument').DecomposeLayer[]
+        | undefined;
+      const sourceWidth = action.payload?.sourceWidth as number | undefined;
+      const sourceHeight = action.payload?.sourceHeight as number | undefined;
       if (!state.document || !nodeId) return;
+
+      // editElements / editText: replace placeholder with split layers.
+      if (Array.isArray(layers) && layers.length > 0) {
+        const { document: next, ids } = applyImageDecomposeLayers(state.document, nodeId, layers, {
+          sourceWidth,
+          sourceHeight,
+        });
+        state.document = next;
+        state.dirty = true;
+        state.sceneReloadToken += 1;
+        if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+        if (ids.length) {
+          state.selectedNodeId = ids[0];
+          state.selectedNodeIds = ids;
+        }
+        syncLibraryOnEdit(state);
+        return;
+      }
+
       let next = clearImageProcessAttrs(state.document, nodeId);
       if (nextSrc) {
-        next = updateNodeInDocument(next, nodeId, { attrs: { src: nextSrc } });
+        const extra = (action.payload?.attrs || {}) as Record<string, unknown>;
+        next = updateNodeInDocument(next, nodeId, {
+          attrs: {
+            src: nextSrc,
+            // Cutouts are always transparent PNG assets.
+            ...(String(extra.cutout || '') === 'true' || String(extra.cutout) === '1'
+              ? { cutout: 'true', assetKind: 'image' }
+              : {}),
+            ...(extra.name ? { name: String(extra.name) } : {}),
+            ...(extra.assetKind ? { assetKind: String(extra.assetKind) } : {}),
+            ...(extra.uploadKey ? { uploadKey: String(extra.uploadKey) } : {}),
+          },
+        });
       }
       state.document = next;
       state.dirty = true;
       state.sceneReloadToken += 1;
       if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+      syncLibraryOnEdit(state);
     },
     /** Drop a failed process clone and clear pending id. */
     failImageProcess(state, action) {
@@ -654,12 +898,34 @@ const editorSlice = createSlice({
       if (!Number.isFinite(n)) return;
       state.penStrokeWidth = Math.max(1, Math.min(40, Math.round(n)));
     },
+    setPenStrokeOpacity(state, action) {
+      const n = Number(action.payload);
+      if (!Number.isFinite(n)) return;
+      state.penStrokeOpacity = Math.max(1, Math.min(100, Math.round(n)));
+    },
+    setBucketFill(state, action) {
+      const next = action.payload;
+      if (!next || typeof next !== 'object') return;
+      state.bucketFill = {
+        ...state.bucketFill,
+        ...next,
+        fillType: next.fillType || state.bucketFill.fillType || 'solid',
+        fillColor: String(next.fillColor || state.bucketFill.fillColor || '#333333'),
+        fillOpacity: Math.max(
+          0,
+          Math.min(100, Math.round(Number(next.fillOpacity ?? state.bucketFill.fillOpacity) || 100))
+        ),
+      };
+    },
     setPencilBrushId(state, action) {
       const id = String(action.payload || '').trim();
       if (id) state.pencilBrushId = id;
     },
     setPencilEraseMode(state, action) {
       state.pencilEraseMode = Boolean(action.payload);
+    },
+    setPencilPressureEnabled(state, action) {
+      state.pencilPressureEnabled = Boolean(action.payload);
     },
     setWorkspaceMode(state, action) {
       const mode = action.payload;
@@ -673,7 +939,6 @@ const editorSlice = createSlice({
     },
     setAgentBusy(state, action) {
       state.agentBusy = Boolean(action.payload);
-      if (state.agentBusy) clearSelection(state);
     },
   },
 });
@@ -688,12 +953,15 @@ export const {
   setSelectedNodeIds,
   addArtboardFrame,
   setActiveFrameId,
+  setSelectedFrameIds,
+  setMixedSelection,
   removeArtboardFrames,
   renameArtboardFrame,
   updateArtboardFrame,
   pushEditorHistory,
   renameTemplate,
   persistCurrent,
+  clearEditorDirty,
   importDocument,
   mergeImportedDocument,
   startImportPlaceholder,
@@ -702,6 +970,8 @@ export const {
   deleteTemplate,
   deleteTemplates,
   renameTemplateById,
+  setTemplateThumbnail,
+  hydrateRemoteProjects,
   undo,
   redo,
   setActiveTool,
@@ -709,6 +979,7 @@ export const {
   setPendingImageSrc,
   setCanvasSize,
   setCanvasMeta,
+  startImageUploadPlaceholder,
   startImageProcess,
   finishImageProcess,
   failImageProcess,
@@ -718,8 +989,11 @@ export const {
   closeShapeStylePanel,
   setPenStrokeColor,
   setPenStrokeWidth,
+  setPenStrokeOpacity,
+  setBucketFill,
   setPencilBrushId,
   setPencilEraseMode,
+  setPencilPressureEnabled,
   setWorkspaceMode,
   setDevHoverNodeId,
   setAgentBusy,

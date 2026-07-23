@@ -19,42 +19,96 @@ import {
   type PlazaStatus,
   type PlazaSubmissionDto,
 } from '@/apis/plaza';
-import { formatTemplateTime } from '@/lib/formatTime';
+import { fetchProject } from '@/apis/projects';
+import { removeProjectFromCloud, removeProjectsFromCloud } from '@/components/editor/useProjectCloudSync';
 import { cn } from '@/utils/classnames';
-import { useGoEditor } from '@/hooks/useGoEditor';
+import { useGoEditor } from '@/utils/goEditor';
+import { buildLoginUrl } from '@/utils/authReturnTo';
 import {
   deleteTemplate,
   deleteTemplates,
   openTemplate,
   renameTemplateById,
+  setDocumentFromCanvas,
 } from '@/store/modules/editor';
 import TemplateThumbnail from './TemplateThumbnail';
 import PlazaPublishDialog from './PlazaPublishDialog';
+import EmptyState from '@/components/home/EmptyState';
+import {
+  checkPlazaCoverForPublish,
+  coverDocumentHasContent,
+  extractPlazaCoverDocument,
+} from '@/utils/plazaCover';
+import i18n from '@/i18n';
+
+function formatTemplateTime(timestamp: number | string | Date | null | undefined) {
+  if (timestamp == null || timestamp === '') return '';
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  const ms = date.getTime();
+  if (!Number.isFinite(ms)) return '';
+  const now = Date.now();
+  const diffMs = Math.max(0, now - ms);
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const locale = i18n.resolvedLanguage || i18n.language || 'zh-CN';
+  if (diffMin < 1) return i18n.t('time.justNow');
+  if (diffMin < 60) return i18n.t('time.minutesAgo', { count: diffMin });
+  if (diffHours < 24) return i18n.t('time.hoursAgo', { count: diffHours });
+  if (diffDays <= 3) return i18n.t('time.daysAgo', { count: diffDays });
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  return date.toLocaleDateString(locale, {
+    year: sameYear ? undefined : 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  });
+}
+
+/** Own Projects thumb: content-fitted cover, else stored image, else full doc. */
+function ProjectCardThumb({
+  document,
+  thumbnail,
+}: {
+  document?: unknown;
+  thumbnail?: string | null;
+}) {
+  const cover = document
+    ? extractPlazaCoverDocument(document, { contentFit: true })
+    : null;
+  if (cover && coverDocumentHasContent(cover)) {
+    return <TemplateThumbnail document={cover} fit="contain" />;
+  }
+  if (typeof thumbnail === 'string' && thumbnail.trim()) {
+    return <img src={thumbnail} alt="" className="h-full w-full object-contain" />;
+  }
+  if (document) {
+    return <TemplateThumbnail document={document} fit="contain" />;
+  }
+  return <div className="h-full w-full bg-[var(--accent-soft)]" />;
+}
+
+/** Shared card skeleton — thumb shimmer + title / meta lines. */
+export function ProjectCardSkeleton({ label }: { label?: string }) {
+  return (
+    <article className="group" aria-busy="true" aria-label={label || 'loading'}>
+      <div className="skeleton-bone h-[170px] w-full rounded-xl border border-[var(--line)]" />
+      <div className="mt-2.5 space-y-1.5 px-0.5">
+        <div className="skeleton-bone h-3 w-[72%]" />
+        <div className="skeleton-bone h-2.5 w-[48%]" />
+      </div>
+    </article>
+  );
+}
 
 function ImportSkeletonCard({ name }: { name: string }) {
   const { t } = useTranslation();
   return (
-    <article className="group" aria-busy="true" aria-label={t('home.importing')}>
-      <div className="h-[170px] w-full overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--accent-soft)]">
-        <div className="flex h-full flex-col justify-center gap-2.5 px-4 py-5">
-          <div className="skeleton-bone h-2.5 w-[42%]" />
-          <div className="skeleton-bone h-2 w-full" />
-          <div className="skeleton-bone h-2 w-[94%]" />
-          <div className="skeleton-bone h-2 w-[78%]" />
-          <div className="skeleton-bone mt-2 h-2.5 w-[36%]" />
-          <div className="skeleton-bone h-2 w-full" />
-          <div className="skeleton-bone h-2 w-[88%]" />
-          <div className="skeleton-bone h-2 w-[64%]" />
-        </div>
-      </div>
-      <div className="mt-2.5 space-y-1.5 px-0.5">
-        <div className="skeleton-bone h-3.5 w-[78%]" />
-        <div className="skeleton-bone h-2.5 w-[46%]" />
-      </div>
+    <>
+      <ProjectCardSkeleton label={`${name || t('home.untitled')} — ${t('home.importing')}`} />
       <span className="sr-only">
         {name || t('home.untitled')} — {t('home.importing')}
       </span>
-    </article>
+    </>
   );
 }
 
@@ -87,9 +141,23 @@ function TemplateCard({
   const dispatch = useDispatch();
   const goEditor = useGoEditor();
 
-  const openEditor = () => {
+  const openEditor = async () => {
+    if (!item.document && item.remoteOnly) {
+      try {
+        const res = await fetchProject(item.id);
+        dispatch(openTemplate(item.id));
+        if (res.project?.document) {
+          dispatch(setDocumentFromCanvas(res.project.document));
+        }
+        goEditor({ projectId: item.id });
+        return;
+      } catch {
+        message.error(t('home.casesLoadFailed'));
+        return;
+      }
+    }
     dispatch(openTemplate(item.id));
-    goEditor();
+    goEditor({ projectId: item.id });
   };
 
   const menuItems: MenuItemType[] = [
@@ -148,8 +216,8 @@ function TemplateCard({
             else openEditor();
           }}
         >
-          <div className="h-[170px] w-full overflow-hidden">
-            <TemplateThumbnail document={item.document} />
+          <div className="h-[170px] w-full overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)]">
+            <ProjectCardThumb document={item.document} thumbnail={item.thumbnail} />
           </div>
         </button>
 
@@ -235,12 +303,15 @@ export default function TemplateGrid({
   fileCountLabel,
   importing = false,
   importingName = '',
+  loading = false,
 }: {
   templates: any[];
   title: string;
   fileCountLabel: string;
   importing?: boolean;
   importingName?: string;
+  /** Cloud hydrate / first paint */
+  loading?: boolean;
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -252,15 +323,17 @@ export default function TemplateGrid({
   const [renameDraft, setRenameDraft] = useState('');
   const [publishTarget, setPublishTarget] = useState<any | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [plazaByProject, setPlazaByProject] = useState<Record<string, PlazaSubmissionDto>>({});
 
-  const reloadPlaza = async () => {
+  const reloadPlaza = async (signal?: { cancelled: boolean }) => {
     if (!user?.id) {
-      setPlazaByProject({});
+      if (!signal?.cancelled) setPlazaByProject({});
       return;
     }
     try {
       const res = await fetchMyPlazaSubmissions();
+      if (signal?.cancelled) return;
       const map: Record<string, PlazaSubmissionDto> = {};
       for (const item of res.items || []) {
         if (item.projectId) map[item.projectId] = item;
@@ -272,7 +345,11 @@ export default function TemplateGrid({
   };
 
   useEffect(() => {
-    void reloadPlaza();
+    const signal = { cancelled: false };
+    void reloadPlaza(signal);
+    return () => {
+      signal.cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when user changes
   }, [user?.id]);
 
@@ -308,12 +385,21 @@ export default function TemplateGrid({
     else setSelected(templates.map((item) => item.id));
   };
 
-  const batchDelete = () => {
-    if (!selected.length) return;
+  const batchDelete = async () => {
+    if (!selected.length || deleting) return;
     const count = selected.length;
-    dispatch(deleteTemplates(selected));
-    message.success(t('home.batchDeleted', { count }));
-    exitSelectMode();
+    const ids = [...selected];
+    setDeleting(true);
+    try {
+      await removeProjectsFromCloud(ids);
+      dispatch(deleteTemplates(ids));
+      message.destructive(t('home.batchDeleted', { count }));
+      exitSelectMode();
+    } catch {
+      message.error(t('home.batchDeleteFailed'));
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const closeRename = () => setRenameTarget(null);
@@ -328,7 +414,7 @@ export default function TemplateGrid({
   const requestPublish = (item: any) => {
     if (!user?.id) {
       message.warning(t('plaza.needLogin'));
-      navigate('/login', { state: { from: '/home' } });
+      navigate(buildLoginUrl('/home'));
       return;
     }
     const st = plazaByProject[item.id]?.status;
@@ -347,10 +433,15 @@ export default function TemplateGrid({
     if (!publishTarget) return;
     setPublishing(true);
     try {
+      const gate = checkPlazaCoverForPublish(publishTarget.document);
+      if (!gate.ok) {
+        message.error(t('plaza.artboardMissingHint'));
+        throw new Error('artboard_required');
+      }
       await submitToPlaza({
         projectId: String(publishTarget.id),
         title: publishTarget.name || t('home.untitled'),
-        category: 'resume',
+        category: 'website',
         document: publishTarget.document,
       });
       await reloadPlaza();
@@ -364,22 +455,29 @@ export default function TemplateGrid({
   };
 
   return (
-    <div>
+    <div className="w-full min-w-0">
       <div className="mb-2.5 flex min-h-7 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-1">
           <button
             type="button"
             title={selectMode ? t('home.cancelSelect') : t('home.batchSelect')}
             aria-pressed={selectMode}
+            disabled={!templates.length && !selectMode}
             onClick={() => {
-              if (selectMode) exitSelectMode();
-              else setSelectMode(true);
+              if (selectMode) {
+                exitSelectMode();
+                return;
+              }
+              // Empty list: never enter select mode (avoids toolbar flash).
+              if (!templates.length) return;
+              setSelectMode(true);
             }}
             className={cn(
               '-ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors',
               selectMode
                 ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-                : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
+                : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
+              !templates.length && !selectMode && 'cursor-not-allowed opacity-40 hover:bg-transparent'
             )}
           >
             <HiOutlineListBullet className="h-4 w-4" />
@@ -393,7 +491,7 @@ export default function TemplateGrid({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {selectMode ? (
+          {selectMode && templates.length > 0 ? (
             <>
               <Button size="small" type="default" onClick={selectAll}>
                 <span className="inline-flex items-center gap-1">
@@ -410,9 +508,10 @@ export default function TemplateGrid({
               <Button
                 size="small"
                 type="primary"
-                disabled={!selected.length}
+                loading={deleting}
+                disabled={!selected.length || deleting}
                 className="!border-red-500 !bg-red-500 hover:!bg-red-600 disabled:!opacity-40"
-                onClick={batchDelete}
+                onClick={() => void batchDelete()}
               >
                 <span className="inline-flex items-center gap-1">
                   <RiDeleteBinLine className="h-3.5 w-3.5" />
@@ -428,12 +527,16 @@ export default function TemplateGrid({
         </div>
       </div>
 
-      {!templates?.length && !importing ? (
-        <div className="rounded-2xl border border-dashed border-[var(--line)] px-6 py-16 text-center">
-          <p className="text-[13px] text-[var(--muted)]">{t('home.emptyHint')}</p>
+      {loading ? (
+        <div className="grid w-full grid-cols-5 gap-x-4 gap-y-5">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <ProjectCardSkeleton key={`sk-${i}`} />
+          ))}
         </div>
+      ) : !templates?.length && !importing ? (
+        <EmptyState hint={t('home.emptyHint')} />
       ) : (
-        <div className="grid grid-cols-5 gap-x-4 gap-y-5">
+        <div className="grid w-full grid-cols-5 gap-x-4 gap-y-5">
           {importing ? <ImportSkeletonCard name={importingName} /> : null}
           {templates.map((item) => (
             <TemplateCard
@@ -446,9 +549,17 @@ export default function TemplateGrid({
               onRename={() => setRenameTarget(item)}
               onPublish={() => requestPublish(item)}
               onDelete={() => {
-                dispatch(deleteTemplate(item.id));
-                setSelected((prev) => prev.filter((id) => id !== item.id));
-                message.success(t('common.delete'));
+                const id = item.id;
+                void (async () => {
+                  try {
+                    await removeProjectFromCloud(id);
+                    dispatch(deleteTemplate(id));
+                    setSelected((prev) => prev.filter((x) => x !== id));
+                    message.destructive(t('common.delete'));
+                  } catch {
+                    message.error(t('home.batchDeleteFailed'));
+                  }
+                })();
               }}
             />
           ))}

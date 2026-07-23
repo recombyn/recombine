@@ -1,4 +1,4 @@
-"""Image toolbar AI tools — Seedream i2i via Ark generations API."""
+"""Image toolbar AI tools — Seedream i2i + vision decompose (OCR/SAM)."""
 
 from __future__ import annotations
 
@@ -23,6 +23,10 @@ IMAGE_PROCESS_KINDS = frozenset(
     }
 )
 
+# Vision split / cutout — not Seedream re-render.
+DECOMPOSE_KINDS = frozenset({"editElements", "editText"})
+CUTOUT_KINDS = frozenset({"removeBg"})
+
 
 def _prompt_for(
     kind: str,
@@ -31,11 +35,7 @@ def _prompt_for(
 ) -> str:
     m = meta or {}
     if kind == "removeBg":
-        return (
-            "Remove the background completely. Keep only the main subject with clean edges. "
-            "Output a clean cutout on a transparent or pure white background. "
-            "Do not alter the subject's appearance, clothing, or colors."
-        )
+        return "unused"
     if kind == "upscale":
         return (
             "Upscale this image to high resolution. Enhance sharpness and fine detail, "
@@ -60,27 +60,34 @@ def _prompt_for(
     if kind == "expand":
         direction = str(m.get("direction") or "all")
         scale = str(m.get("scale") or "1.5x")
+        pad_l = int(m.get("padLeft") or 0)
+        pad_r = int(m.get("padRight") or 0)
+        pad_t = int(m.get("padTop") or 0)
+        pad_b = int(m.get("padBottom") or 0)
+        tw = m.get("targetWidth")
+        th = m.get("targetHeight")
+        size_hint = (
+            f" Target canvas about {int(tw)}×{int(th)}px."
+            if tw and th
+            else ""
+        )
+        pad_hint = ""
+        if pad_l or pad_r or pad_t or pad_b:
+            pad_hint = (
+                f" Extend roughly left={pad_l}px, right={pad_r}px, "
+                f"top={pad_t}px, bottom={pad_b}px beyond the original."
+            )
         return (
-            f"Outpaint / extend the image canvas ({scale}, direction: {direction}). "
+            f"Outpaint / extend the image canvas ({scale}, direction: {direction})."
+            f"{size_hint}{pad_hint} "
             f"Continue the scene naturally beyond the edges; match lighting, perspective, and style. "
             f"Do not distort the original subject."
         )
     if kind == "editElements":
-        hint = str(m.get("hint") or "").strip()
-        base = (
-            "Analyze and cleanly re-render the main visual elements in this image "
-            "(subject, props, decorations) so each element is clearer and easier to isolate. "
-            "Keep the overall layout; improve edge clarity; do not invent unrelated objects."
-        )
-        return f"{base} Extra instruction: {hint}" if hint else base
+        # Handled by vision.image_edit.decompose_image — keep a stub for safety.
+        return "unused"
     if kind == "editText":
-        hint = str(m.get("hint") or "").strip()
-        base = (
-            "Enhance and clarify any text visible in this image. "
-            "Make lettering sharp and readable while preserving the original wording and layout. "
-            "Do not change non-text content unnecessarily."
-        )
-        return f"{base} Extra instruction: {hint}" if hint else base
+        return "unused"
     if kind == "vector":
         return (
             "Convert this image into a clean flat vector-illustration style: "
@@ -132,9 +139,14 @@ async def process_image_tool(
     model: str | None = None,
 ) -> dict[str, Any]:
     """
-    Run a toolbar image tool via Seedream image-to-image.
+    Run a toolbar image tool.
 
-    Returns ``{ image, text?, kind, model }``.
+    - ``removeBg`` → rembg / GrabCut cutout (transparent PNG)
+    - ``editElements`` → OCR/SAM / OpenCV subject split + inpainted background
+    - ``editText`` → vision OCR + inpaint
+    - other kinds → Seedream image-to-image
+
+    Returns ``{ image, layers?, text?, kind, model?, width?, height?, warnings? }``.
     """
     k = (kind or "").strip()
     if k not in IMAGE_PROCESS_KINDS:
@@ -142,6 +154,16 @@ async def process_image_tool(
     src = (image or "").strip()
     if not src:
         raise ValueError("image is required")
+
+    if k in CUTOUT_KINDS:
+        from services.vision.remove_bg import remove_background
+
+        return await remove_background(src)
+
+    if k in DECOMPOSE_KINDS:
+        from services.vision.image_edit import decompose_image
+
+        return await decompose_image(kind=k, image=src)  # type: ignore[arg-type]
 
     prompt = _prompt_for(k, meta=meta)
     result = await generate_image(
@@ -162,3 +184,71 @@ async def process_image_tool(
         "kind": k,
         "model": result.get("model"),
     }
+
+
+_LAYOUT_WIREFRAME_PROMPT = (
+    "Convert the reference into a clean professional UX wireframe / layout diagram (ban shi tu). "
+    "Use flat grayscale blocks for image, text, and button regions. "
+    "Show clear hierarchy: header, sections, cards, CTAs as simple rectangles with light labels if needed. "
+    "No photorealism, no colorful UI chrome, no photos, no shadows, no gradients. "
+    "Preserve the approximate composition and proportions of the reference. "
+    "Look like a Figma low-fidelity wireframe used for design planning."
+)
+
+
+async def generate_layout_wireframe(
+    *,
+    image_url: str | None = None,
+    image_urls: list[str] | None = None,
+    brief: str | None = None,
+    model: str | None = None,
+    aspect_ratio: str | None = "3:4",
+    quality: str | None = "hd",
+    resolution: str | None = "2K",
+) -> dict[str, Any]:
+    """One or more refs + brief -> wireframe. Brief may cite image1/image2."""
+    extra = (brief or "").strip()
+    prompt = _LAYOUT_WIREFRAME_PROMPT
+    if extra:
+        prompt = f"{prompt} Extra direction: {extra}"
+    refs: list[str] = []
+    for u in image_urls or []:
+        s = str(u or "").strip()
+        if s and s not in refs:
+            refs.append(s)
+    if image_url and str(image_url).strip():
+        s = str(image_url).strip()
+        if s not in refs:
+            refs.insert(0, s)
+    if refs:
+        labels = ", ".join(f"image{i}(图{i})" for i in range(1, len(refs) + 1))
+        prompt = (
+            f"Reference images in order: {labels}. "
+            "When the brief says 图1/图2 or image1/image2, map to these references by index. "
+            "Use them as composition / content guides for the wireframe. "
+            + prompt
+        )
+    elif not extra:
+        prompt = (
+            "Generate a clean professional UX wireframe layout diagram for a mobile or web product screen. "
+            + prompt
+        )
+    result = await generate_image(
+        prompt=prompt,
+        model=model,
+        aspect_ratio=aspect_ratio or "3:4",
+        quality=quality or "hd",
+        resolution=resolution or "2K",
+        images=refs or None,
+    )
+    images = list(result.get("images") or [])
+    if not images:
+        raise RuntimeError("layout wireframe generation returned no image")
+    # Keep remote CDN URL for library cover storage (data URLs are too large for DB).
+    out_url = str(images[0])
+    return {
+        "url": out_url,
+        "model": result.get("model"),
+        "prompt": prompt,
+    }
+

@@ -12,7 +12,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
     libreoffice_path: str = "soffice"
     upload_dir: str = "storage/uploads"
     result_dir: str = "storage/results"
@@ -43,6 +47,8 @@ class Settings(BaseSettings):
     s3_region: str = "ap-guangzhou"
     s3_public_base_url: str | None = None
     s3_addressing_style: str = "virtual"
+    # PutObject ACL=public-read so returned URLs work in <img src>.
+    s3_acl_public_read: bool = True
 
     # LighthouseDB (MySQL) — when empty, uses local SQLite at SQLITE_DB_PATH
     # Example: mysql://root:PASSWORD@10.0.0.5:3306/recombyn
@@ -95,6 +101,13 @@ class Settings(BaseSettings):
     ses_from_name: str = "recombyn"
     # Template ID from SES console (required for most accounts). Template var: {{code}}
     ses_template_id: int = 0
+
+    # AI font generator — zi2zi / DG-Font inference service (optional)
+    # When empty, worker uses local OpenCV+PIL glyph synthesis fallback.
+    font_inference_url: str = ""
+    font_inference_timeout: int = 300
+    # When Celery/Redis is down, run font jobs in a background thread (dev).
+    font_sync_fallback: bool = True
 
 
 settings = Settings()

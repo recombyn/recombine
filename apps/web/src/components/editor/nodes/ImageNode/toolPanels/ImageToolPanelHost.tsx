@@ -8,13 +8,13 @@ import {
   startImageProcess,
   type ImageToolPanelKind,
 } from '@/store/modules/editor';
-import { buildNodeAdjustFilterCss } from '@/store/scene/sceneFill';
-import { nodeLeftTop } from '@/store/scene/sceneToSvg';
+import { buildNodeAdjustFilterCss } from '@/components/rcb/scene/sceneFill';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import {
-  CameraOverlayPortal,
-  useCamera,
-  worldToStage,
-} from '@/components/editor/Canvas/stage/CameraContext';
+  RcbOverlayPortal,
+  useRcbCamera,
+  rcbSceneToScreen,
+} from '@/components/rcb';
 import EraserMaskOverlay, { type EraserMaskOverlayHandle } from './EraserMaskOverlay';
 import EraserToolPanel from './EraserToolPanel';
 import MultiAngleToolPanel from './MultiAngleToolPanel';
@@ -29,7 +29,7 @@ function panelStyleRight(
 ): CSSProperties {
   const gap = 16 / Math.max(0.05, camera.zoom);
   // Top-aligned with the image (not vertically centered on the box).
-  const { x, y } = worldToStage(camera, box.left + box.width + gap, box.top);
+  const { x, y } = rcbSceneToScreen(camera, box.left + box.width + gap, box.top);
   return {
     position: 'absolute',
     left: x,
@@ -55,7 +55,7 @@ function nodeBox(
 /** Host for image tool panels positioned relative to the source image. */
 export default function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   const dispatch = useDispatch();
-  const camera = useCamera();
+  const camera = useRcbCamera();
   const panel = useSelector((s: any) => s.editor.imageToolPanel as null | {
     nodeId: string;
     kind: ImageToolPanelKind;
@@ -294,7 +294,7 @@ export default function ImageToolPanelHost({ document }: { document: any }): Rea
           onDirtyChange={setHasStrokes}
         />
       ) : null}
-      <CameraOverlayPortal>
+      <RcbOverlayPortal>
         <div
           className="pointer-events-auto"
           style={style}
@@ -307,7 +307,7 @@ export default function ImageToolPanelHost({ document }: { document: any }): Rea
         >
           {body}
         </div>
-      </CameraOverlayPortal>
+      </RcbOverlayPortal>
     </>
   );
 }

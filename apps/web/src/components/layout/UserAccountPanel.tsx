@@ -15,34 +15,24 @@ import {
 } from '@floating-ui/react';
 import {
   HiOutlineArrowRightOnRectangle,
-  HiOutlineChatBubbleBottomCenterText,
-  HiOutlineCheck,
+  HiOutlineBolt,
   HiOutlineChevronRight,
-  HiOutlineComputerDesktop,
-  HiOutlineCreditCard,
-  HiOutlineDocumentText,
+  HiOutlineGlobeAlt,
   HiOutlineInformationCircle,
-  HiOutlineKey,
   HiOutlineMoon,
-  HiOutlineSquares2X2,
-  HiOutlineSun,
-  HiOutlineUser,
+  HiOutlineUserCircle,
 } from 'react-icons/hi2';
-import { MdLanguage } from 'react-icons/md';
-import { FaBolt } from 'react-icons/fa6';
 import { message } from '@/components/base';
-import BillingDialog from '@/components/layout/BillingDialog';
-import RedeemDialog from '@/components/layout/RedeemDialog';
-import AdminCardKeysDialog from '@/components/layout/AdminCardKeysDialog';
-import AdminPlazaReviewDialog from '@/components/layout/AdminPlazaReviewDialog';
-import { logout as logoutRemote } from '@/apis/auth';
+import PlansDialog from '@/components/layout/PlansDialog';
+import { getMe, logout as logoutRemote } from '@/apis/auth';
 import { fetchWallet } from '@/apis/wallet';
-import { logout } from '@/store/modules/auth';
-import { clearWallet, formatTokens, syncFromServer, type LedgerEntry } from '@/store/modules/wallet';
+import { logout, setSession } from '@/store/modules/auth';
+import { formatTokens, planLabelKey, type LedgerEntry, type PlanId } from '@/utils/wallet';
+import { clearWallet, syncFromServer } from '@/store/modules/wallet';
+import { getToken } from '@/utils/token';
 import { SUPPORTED_LANGS } from '@/i18n';
 import { applyTheme, getStoredThemeMode, type ThemeMode } from '@/theme';
 import { cn } from '@/utils/classnames';
-import { isSuperAdmin } from '@/utils/superAdmin';
 
 function userInitial(name?: string, email?: string) {
   const raw = (name || email || 'U').trim();
@@ -65,6 +55,26 @@ function UserAvatar({
 }) {
   const url = typeof avatar === 'string' && avatar.trim() ? avatar.trim() : null;
   const dim = `${size}px`;
+  const isBrandLogo =
+    url != null && /\/logo(-mark|192|512)?\.png(?:\?|$)/i.test(url.split('?')[0] || '');
+  if (url && isBrandLogo) {
+    return (
+      <span
+        className={cn(
+          'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full ring-1 ring-[var(--line)]',
+          className
+        )}
+        style={{ width: dim, height: dim, backgroundColor: '#ffffff' }}
+      >
+        <img
+          src="/logo-mark.png"
+          alt=""
+          className="h-[86%] w-[86%] object-contain"
+          draggable={false}
+        />
+      </span>
+    );
+  }
   if (url) {
     return (
       <img
@@ -116,7 +126,7 @@ function MenuRow({
   trailing,
   active,
 }: {
-  icon: ReactNode;
+  icon?: ReactNode;
   label: string;
   onClick?: () => void;
   trailing?: ReactNode;
@@ -127,18 +137,19 @@ function MenuRow({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
         active && 'bg-[var(--accent-soft)]'
       )}
     >
-      <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--muted)]">
-        {icon}
-      </span>
+      {icon ? <span className="inline-flex shrink-0 text-[var(--ink)]">{icon}</span> : null}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {trailing}
     </button>
   );
 }
+
+const MENU_ICON = 'h-[18px] w-[18px] shrink-0';
+const MENU_STROKE = 1.6;
 
 /** Prefer opening to the right (chevron direction); flip left only when clipped. */
 function SideFlyout({ children }: { children: ReactNode }) {
@@ -167,9 +178,10 @@ function SideFlyout({ children }: { children: ReactNode }) {
     >
       <div
         className={cn(
-          'min-w-[148px] overflow-hidden rounded-xl bg-[var(--surface)] py-1',
+          'min-w-[148px] overflow-hidden rounded-lg bg-white py-1',
           'shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]'
         )}
+        style={{ backgroundColor: 'var(--surface)' }}
       >
         {children}
       </div>
@@ -181,12 +193,10 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
   const { t, i18n } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);
   const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
+  const planId = useSelector((state: any) => state.wallet?.planId ?? 'free') as PlanId;
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const [billingOpen, setBillingOpen] = useState(false);
-  const [redeemOpen, setRedeemOpen] = useState(false);
-  const [adminKeysOpen, setAdminKeysOpen] = useState(false);
-  const [adminPlazaOpen, setAdminPlazaOpen] = useState(false);
+  const [plansOpen, setPlansOpen] = useState(false);
   const [flyout, setFlyout] = useState<FlyoutKind>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
 
@@ -206,9 +216,33 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
   }, [open]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!open || !user || !getToken()) return;
+    let cancelled = false;
+    void getMe()
+      .then((res) => {
+        if (cancelled || !getToken()) return;
+        dispatch(
+          setSession({
+            user: {
+              id: res.user.id,
+              email: res.user.email,
+              name: res.user.name,
+              avatar: res.user.avatar,
+              provider: res.user.provider,
+              bio: res.user.bio,
+              role: res.user.role,
+            },
+            token: getToken() || undefined,
+          })
+        );
+        if (typeof res.tokens === 'number') {
+          dispatch(syncFromServer({ tokens: res.tokens }));
+        }
+      })
+      .catch(() => undefined);
     void fetchWallet()
       .then((res) => {
+        if (cancelled || !getToken()) return;
         dispatch(
           syncFromServer({
             tokens: res.tokens,
@@ -217,34 +251,33 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
         );
       })
       .catch(() => undefined);
-  }, [user, dispatch]);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, user?.id, dispatch]);
 
   const close = () => onOpenChange(false);
 
   const currentLang = i18n.resolvedLanguage || i18n.language || 'zh-CN';
   const currentLangLabel = LANG_LABEL[currentLang] || LANG_LABEL['zh-CN'];
 
-  const themeOptions: { mode: ThemeMode; Icon: typeof HiOutlineSun; label: string }[] = [
-    { mode: 'light', Icon: HiOutlineSun, label: t('theme.light') },
-    { mode: 'dark', Icon: HiOutlineMoon, label: t('theme.dark') },
-    { mode: 'system', Icon: HiOutlineComputerDesktop, label: t('theme.system') },
+  const themeOptions: { mode: ThemeMode; label: string }[] = [
+    { mode: 'light', label: t('theme.light') },
+    { mode: 'dark', label: t('theme.dark') },
+    { mode: 'system', label: t('theme.system') },
   ];
   const themeOption =
     themeOptions.find((o) => o.mode === themeMode) || themeOptions[themeOptions.length - 1];
   const themeLabel = themeOption.label;
-  const ThemeIcon = themeOption.Icon;
+  const planLabel = t(planLabelKey(planId));
 
   const doLogout = () => {
-    void logoutRemote().catch(() => undefined);
     dispatch(logout());
     dispatch(clearWallet());
+    void logoutRemote().catch(() => undefined);
     message.success(t('home.loggedOut'));
     close();
-    navigate('/login');
-  };
-
-  const soon = (key: string) => {
-    message.loading(t(key), 2);
+    navigate('/login', { replace: true });
   };
 
   const changeLang = (code: string) => {
@@ -260,76 +293,10 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
     setFlyout(null);
   };
 
-  const menu = [
-    {
-      key: 'profile',
-      icon: HiOutlineUser,
-      label: t('wallet.menuProfile'),
-      onClick: () => {
-        close();
-        navigate('/home', { state: { homeNav: 'account' } });
-      },
-    },
-    {
-      key: 'billing',
-      icon: HiOutlineCreditCard,
-      label: t('wallet.menuBilling'),
-      onClick: () => {
-        close();
-        setBillingOpen(true);
-      },
-    },
-    ...(isSuperAdmin(user)
-      ? [
-          {
-            key: 'admin-keys',
-            icon: HiOutlineKey,
-            label: t('wallet.menuAdminKeys'),
-            onClick: () => {
-              close();
-              setAdminKeysOpen(true);
-            },
-          },
-          {
-            key: 'admin-plaza',
-            icon: HiOutlineSquares2X2,
-            label: t('wallet.menuAdminPlaza'),
-            onClick: () => {
-              close();
-              setAdminPlazaOpen(true);
-            },
-          },
-        ]
-      : []),
-    {
-      key: 'feedback',
-      icon: HiOutlineChatBubbleBottomCenterText,
-      label: t('wallet.menuFeedback'),
-      onClick: () => {
-        close();
-        window.open(
-          'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink',
-          '_blank',
-          'noopener,noreferrer'
-        );
-      },
-    },
-    {
-      key: 'docs',
-      icon: HiOutlineDocumentText,
-      label: t('wallet.menuDocs'),
-      onClick: () => soon('wallet.comingSoon'),
-    },
-    {
-      key: 'about',
-      icon: HiOutlineInformationCircle,
-      label: t('wallet.menuAbout'),
-      onClick: () => {
-        close();
-        navigate('/about');
-      },
-    },
-  ];
+  const openPlans = () => {
+    close();
+    setPlansOpen(true);
+  };
 
   return (
     <>
@@ -342,86 +309,71 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
             ref={refs.setFloating}
             style={floatingStyles}
             {...getFloatingProps()}
-            className="z-[600] w-[300px]"
+            className="z-[600] w-[250px]"
           >
-            <div className="overflow-visible rounded-xl bg-[var(--surface)] shadow-[0_12px_40px_rgba(12,12,13,0.18)] ring-1 ring-[var(--line)]">
-              <div className="overflow-hidden rounded-t-xl">
-                <div className="flex items-start gap-3 px-4 pb-3 pt-4">
-                  <UserAvatar
-                    name={user?.name}
-                    email={user?.email}
-                    avatar={user?.avatar}
-                    size={40}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[14px] font-semibold text-[var(--ink)]">
-                      {user?.name || user?.email || t('home.account')}
-                    </div>
-                    {user?.email ? (
-                      <div className="mt-0.5 truncate text-[11px] text-[var(--muted)]">{user.email}</div>
-                    ) : null}
+            <div
+              className="overflow-visible rounded-xl shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]"
+              style={{ backgroundColor: 'var(--surface)' }}
+            >
+              {/* Header */}
+              <div className="flex items-center gap-3 px-3.5 pb-3 pt-3.5">
+                <UserAvatar
+                  name={user?.name}
+                  email={user?.email}
+                  avatar={user?.avatar}
+                  size={40}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-semibold text-[var(--ink)]">
+                    {user?.name || user?.email || t('home.account')}
                   </div>
-                </div>
-
-                <div className="px-4 pb-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      close();
-                      setRedeemOpen(true);
-                    }}
-                    className="w-full rounded-lg bg-[var(--accent)] px-2 py-2 text-[12px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
-                  >
-                    {t('wallet.redeem')}
-                  </button>
-                </div>
-
-                <div className="px-4 pb-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      close();
-                      setBillingOpen(true);
-                    }}
-                    className="w-full overflow-hidden rounded-xl bg-[var(--canvas)] px-3 py-3 text-left transition hover:bg-[var(--accent-soft)]"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <FaBolt className="h-4 w-4 shrink-0 text-[var(--muted)]" />
-                      <span
-                        className="min-w-0 flex-1 truncate text-[15px] font-semibold tabular-nums text-[var(--ink)]"
-                        title={t('wallet.tokensLeft', { count: formatTokens(tokens) })}
-                      >
-                        {formatTokens(tokens)}
-                      </span>
-                      <span className="inline-flex shrink-0 items-center gap-0.5 text-[12px] text-[var(--muted)]">
-                        {t('wallet.tokens')}
-                        <HiOutlineChevronRight className="h-3.5 w-3.5" />
-                      </span>
+                  {user?.email ? (
+                    <div className="mt-0.5 truncate text-[12px] text-[var(--muted)]">
+                      {user.email}
                     </div>
-                    <p className="mt-2 break-words text-[11px] leading-snug text-[var(--muted)]">
-                      {t('wallet.tokensTip')}
-                    </p>
-                  </button>
+                  ) : null}
                 </div>
               </div>
 
-              <div className="border-t border-[var(--line)] px-2 py-1.5">
-                {menu.map(({ key, icon: Icon, label, onClick }) => (
-                  <MenuRow
-                    key={key}
-                    icon={<Icon className="h-4 w-4" />}
-                    label={label}
-                    onClick={onClick}
-                  />
-                ))}
+              {/* Plan + upgrade */}
+              <div className="border-t border-[var(--line)] px-3.5 py-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    close();
+                    window.open('/account?tab=usage', '_blank', 'noopener,noreferrer');
+                  }}
+                  className="mb-2.5 flex w-full items-center gap-2 text-left"
+                >
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--ink)]">
+                    {planLabel}
+                  </span>
+                  <span className="inline-flex shrink-0 items-center gap-1 text-[13px] tabular-nums text-[var(--muted)]">
+                    <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={MENU_STROKE} aria-hidden />
+                    {formatTokens(tokens)}
+                    <HiOutlineChevronRight className="h-3.5 w-3.5" aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={openPlans}
+                  className="flex w-full items-center justify-center rounded-lg bg-[var(--ink)] px-3 py-2.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
+                >
+                  {t('wallet.upgrade')}
+                </button>
+              </div>
 
+              {/* Menu */}
+              <div className="border-t border-[var(--line)] px-1.5 py-1.5">
                 <div
                   className="relative"
                   onMouseEnter={() => setFlyout('lang')}
                   onMouseLeave={() => setFlyout((v) => (v === 'lang' ? null : v))}
                 >
                   <MenuRow
-                    icon={<MdLanguage className="h-4 w-4" />}
+                    icon={
+                      <HiOutlineGlobeAlt className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
+                    }
                     label={currentLangLabel}
                     active={flyout === 'lang'}
                     onClick={() => setFlyout((v) => (v === 'lang' ? null : 'lang'))}
@@ -436,14 +388,12 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                           key={code}
                           type="button"
                           onClick={() => changeLang(code)}
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]"
+                          className={cn(
+                            'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+                            currentLang === code && 'font-medium'
+                          )}
                         >
-                          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
-                            {currentLang === code ? (
-                              <HiOutlineCheck className="h-4 w-4 text-[var(--ink)]" strokeWidth={2.5} />
-                            ) : null}
-                          </span>
-                          <span>{LANG_LABEL[code]}</span>
+                          {LANG_LABEL[code]}
                         </button>
                       ))}
                     </SideFlyout>
@@ -456,7 +406,9 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                   onMouseLeave={() => setFlyout((v) => (v === 'theme' ? null : v))}
                 >
                   <MenuRow
-                    icon={<ThemeIcon className="h-4 w-4" />}
+                    icon={
+                      <HiOutlineMoon className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
+                    }
                     label={`${t('theme.label')} · ${themeLabel}`}
                     active={flyout === 'theme'}
                     onClick={() => setFlyout((v) => (v === 'theme' ? null : 'theme'))}
@@ -466,49 +418,70 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                   />
                   {flyout === 'theme' ? (
                     <SideFlyout>
-                      {themeOptions.map(({ mode, Icon, label }) => (
+                      {themeOptions.map(({ mode, label }) => (
                         <button
                           key={mode}
                           type="button"
                           onClick={() => changeTheme(mode)}
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]"
+                          className={cn(
+                            'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+                            themeMode === mode && 'font-medium'
+                          )}
                         >
-                          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
-                            {themeMode === mode ? (
-                              <HiOutlineCheck className="h-4 w-4 text-[var(--ink)]" strokeWidth={2.5} />
-                            ) : null}
-                          </span>
-                          <Icon className="h-4 w-4 shrink-0 text-[var(--muted)]" />
-                          <span>{label}</span>
+                          {label}
                         </button>
                       ))}
                     </SideFlyout>
                   ) : null}
                 </div>
+
+                <MenuRow
+                  icon={
+                    <HiOutlineUserCircle className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
+                  }
+                  label={t('wallet.menuManageAccount')}
+                  onClick={() => {
+                    close();
+                    window.open('/account', '_blank', 'noopener,noreferrer');
+                  }}
+                />
+
+                <MenuRow
+                  icon={
+                    <HiOutlineInformationCircle
+                      className={MENU_ICON}
+                      strokeWidth={MENU_STROKE}
+                      aria-hidden
+                    />
+                  }
+                  label={t('about.title')}
+                  onClick={() => {
+                    close();
+                    window.open('/about', '_blank', 'noopener,noreferrer');
+                  }}
+                />
               </div>
 
-              <div className="border-t border-[var(--line)] px-2 py-1.5">
-                <button
-                  type="button"
+              {/* Logout */}
+              <div className="border-t border-[var(--line)] px-1.5 py-1.5">
+                <MenuRow
+                  icon={
+                    <HiOutlineArrowRightOnRectangle
+                      className={MENU_ICON}
+                      strokeWidth={MENU_STROKE}
+                      aria-hidden
+                    />
+                  }
+                  label={t('home.logout')}
                   onClick={doLogout}
-                  className={cn(
-                    'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition hover:bg-[var(--accent-soft)]',
-                    'text-red-500'
-                  )}
-                >
-                  <HiOutlineArrowRightOnRectangle className="h-4 w-4 shrink-0" />
-                  {t('home.logout')}
-                </button>
+                />
               </div>
             </div>
           </div>
         </FloatingPortal>
       ) : null}
 
-      <RedeemDialog open={redeemOpen} onClose={() => setRedeemOpen(false)} />
-      <BillingDialog open={billingOpen} onClose={() => setBillingOpen(false)} />
-      <AdminCardKeysDialog open={adminKeysOpen} onClose={() => setAdminKeysOpen(false)} />
-      <AdminPlazaReviewDialog open={adminPlazaOpen} onClose={() => setAdminPlazaOpen(false)} />
+      <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} />
     </>
   );
 }

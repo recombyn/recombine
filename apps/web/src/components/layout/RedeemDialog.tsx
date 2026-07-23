@@ -5,13 +5,17 @@ import { useTranslation } from 'react-i18next';
 import { FaWeixin } from 'react-icons/fa';
 import { Button, Dialog, Input, message } from '@/components/base';
 import { fetchPurchaseInfo, redeemCardKey, type PurchaseInfoDto } from '@/apis/wallet';
-import { syncFromServer, type LedgerEntry } from '@/store/modules/wallet';
+import type { LedgerEntry } from '@/utils/wallet';
+import { syncFromServer } from '@/store/modules/wallet';
 import { cn } from '@/utils/classnames';
+import { buildLoginUrl } from '@/utils/authReturnTo';
 import xianyuIcon from '@/assets/channels/xianyu.webp';
 
 type Props = {
   open: boolean;
   onClose: () => void;
+  /** Fired after a successful redeem so the parent can refresh the ledger. */
+  onRedeemed?: () => void;
 };
 
 function QrHoverIcon({
@@ -66,7 +70,7 @@ function QrHoverIcon({
 }
 
 /** Card-key redeem dialog — Xianyu / WeChat QR icons (no WeChat Pay / Alipay). */
-export default function RedeemDialog({ open, onClose }: Props) {
+export default function RedeemDialog({ open, onClose, onRedeemed }: Props) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -91,7 +95,7 @@ export default function RedeemDialog({ open, onClose }: Props) {
     }
     if (!user) {
       onClose();
-      navigate('/login', { state: { from: '/home' } });
+      navigate(buildLoginUrl('/home'));
       return;
     }
     setBusy(true);
@@ -100,6 +104,7 @@ export default function RedeemDialog({ open, onClose }: Props) {
       const ledger = (res.ledger || []) as LedgerEntry[];
       dispatch(syncFromServer({ tokens: res.tokens, ledger }));
       message.success(t('wallet.redeemSuccess', { amount: res.tokensAdded }));
+      onRedeemed?.();
       onClose();
     } catch (err: any) {
       const detail =
@@ -131,7 +136,10 @@ export default function RedeemDialog({ open, onClose }: Props) {
   return (
     <Dialog
       show={open}
-      onClose={onClose}
+      onClose={() => {
+        if (busy) return;
+        onClose();
+      }}
       width={440}
       title={t('wallet.redeemTitle')}
       titleClassName="!text-[16px] !font-semibold"
@@ -139,10 +147,10 @@ export default function RedeemDialog({ open, onClose }: Props) {
       className="!w-full !overflow-visible !bg-[var(--surface)] !p-6"
       footer={
         <>
-          <Button size="small" type="default" onClick={onClose}>
+          <Button size="small" type="default" disabled={busy} onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button size="small" type="primary" loading={busy} onClick={() => void submit()}>
+          <Button size="small" type="primary" loading={busy} disabled={busy} onClick={() => void submit()}>
             {t('wallet.redeemNow')}
           </Button>
         </>

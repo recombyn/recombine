@@ -44,7 +44,7 @@ export function ChatThinkingBlock({
         />
       </button>
       {open ? (
-        <div className="max-h-48 overflow-x-hidden overflow-y-auto border-t border-[var(--line)] px-2.5 py-2 text-[12px] leading-relaxed text-[var(--muted)] whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+        <div className="border-t border-[var(--line)] px-2.5 py-2 text-[12px] leading-relaxed text-[var(--muted)] whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
           {content || (streaming ? '…' : '')}
           {streaming && content ? (
             <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />

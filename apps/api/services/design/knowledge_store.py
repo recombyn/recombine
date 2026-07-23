@@ -1,0 +1,621 @@
+"""Design knowledge base — scene/skill scoped prompt injection (not global rules)."""
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from services.db import connect
+from services.design.catalog import ensure_design_catalog
+
+KIND_LABELS: dict[str, str] = {
+    "palette": "配色",
+    "layout": "构图",
+    "composition": "平面构成",
+    "banner": "Banner尺寸",
+    "ui": "UI/Web组件",
+    "icon": "图标设计",
+    "techniques": "设计手法",
+    "type": "字体层级",
+    "ia": "信息架构",
+    "a11y": "无障碍/对比度",
+    "mobile_safe": "移动安全区",
+    "ill_ui": "插画与UI边界",
+    "ecommerce": "电商落地页",
+    "nav": "导航模式",
+    "form_empty": "表单与空状态",
+    "print_safe": "海报印刷安全",
+    "imagery": "配图处理",
+    "dashboard": "数据看板",
+    "elevation": "阴影层级",
+    "painting": "板绘绘制",
+    "paint_process": "绘画流程",
+    "art_style": "画风风格",
+}
+
+_SEED: list[dict[str, Any]] = [
+    {
+        "kind": "palette",
+        "title": "8种配色公式",
+        "scenes": "all",
+        "skill_categories": "refine,layout,validate",
+        "sort_order": 10,
+        "when_to_use": "选主色/辅色/点缀色，或用户提到配色、品牌色时",
+        "body": (
+            "1.邻近色：色环约30°内相邻色，柔和统一，靠明度深浅分层；适简约/文艺/商务。\n"
+            "2.互补色：色环约180°对立色，冲击强；宜小面积点缀突出主体，大面积易刺眼。\n"
+            "3.对比色：色环约120°，兼顾张力与协调；主色大面积，对比色小范围装饰/标题。\n"
+            "4.单色：单一色相，靠明度/饱和度分层；适 UI/后台/简约海报。\n"
+            "5.三元色：色环三等分三色，丰富均衡；控占比防花哨；适散点/潮流插画海报。\n"
+            "6.分裂互补：主色+其互补色两侧邻近色；有对比但不生硬。\n"
+            "7.中性色：黑白灰米咖打底+少量彩色点缀；包容性强，可平衡高饱和。\n"
+            "8.渐变色：线性/径向/弥散过渡替代纯色分割；S曲线/散点可多用，规整对称宜弱化。\n"
+            "面积参考：主色约60%、辅色约30%、点缀约10%。色数硬门禁见 VISUAL_GATES。"
+        ),
+    },
+    {
+        "kind": "layout",
+        "title": "8种构图",
+        "scenes": "all",
+        "skill_categories": "layout,refine",
+        "sort_order": 10,
+        "when_to_use": "定主次分区、图文关系、视觉焦点时",
+        "body": (
+            "1.上下：图文上下分区，主空间放主体，次空间放文案。\n"
+            "2.居中：核心放大居中，其余环绕，冲击力强。\n"
+            "3.左右：左右分割，一侧主体一侧说明。\n"
+            "4.对角：主次分置两对角，常兼中心焦点。\n"
+            "5.四角：关键信息在四角，中心放主体。\n"
+            "6.对称：左右/上下/斜角/S型对称，稳定呼应。\n"
+            "7.S曲线：主体沿S贯穿，元素多仍灵动。\n"
+            "8.散点：小元素疏密有律，杂而不乱。"
+        ),
+    },
+    {
+        "kind": "composition",
+        "title": "平面八大构成",
+        "scenes": "poster,image",
+        "skill_categories": "layout,refine",
+        "sort_order": 20,
+        "when_to_use": "海报/插画需要秩序感或节奏时",
+        "body": (
+            "1.重复：同类元素规律重复，秩序感；底纹/分割常用。\n"
+            "2.近似：造型相近，大小/细节/色轻微变，整齐不死板。\n"
+            "3.渐变：大小/疏密/色/形态循序变，纵深感。\n"
+            "4.发射：由中心外扩，聚焦点；适居中/包围。\n"
+            "5.特异：整体统一中单独改一元素，制造亮点。\n"
+            "6.对比：大小/疏密/曲直/虚实/色反差，拉开层级。\n"
+            "7.密集：局部密局部疏，适散点。\n"
+            "8.分割：线/色块切分区，划分图文模块。"
+        ),
+    },
+    {
+        "kind": "banner",
+        "title": "Banner尺寸与边距",
+        "scenes": "website,poster,image",
+        "skill_categories": "validate,layout,refine",
+        "sort_order": 10,
+        "when_to_use": "运营 Banner、通栏、广告条尺寸与安全区",
+        "body": (
+            "配色：沿用品牌主/辅；商业 Banner 高饱和宜小面积。\n"
+            "常用尺寸：\n"
+            "- PC通栏：1920×500 / 1920×600（安全内容居中约1200宽内）\n"
+            "- PC内页窄：1920×400 / 1440×500；广告条：728×90\n"
+            "- 移动通栏：750×300 / 750×400；小横幅：320×50 / 320×100\n"
+            "- 电商活动：900×500\n"
+            "字体总数通常≤2；装饰勿挡文案与主体。"
+        ),
+    },
+    {
+        "kind": "ui",
+        "title": "UI/Web/后台组件",
+        "scenes": "website,mobile",
+        "skill_categories": "validate,layout,refine",
+        "sort_order": 20,
+        "when_to_use": "网站、App、后台界面组件与栅格",
+        "body": (
+            "网格：8px/4px 基底；页面/卡片边距尽量统一。\n"
+            "组件：按钮/输入/开关/标签/弹窗全局一套；按钮分主/次/文字/危险；"
+            "卡片圆角/描边统一。\n"
+            "图标：优先 create_svg 自绘；复杂/写实图标可用 create_image；线粗统一；尺寸档 16/20/24；线性或面性勿混。\n"
+            "色板与字号层级硬检见 VISUAL_GATES / FE QA。\n"
+            "图层：背景→容器→组件→文字；配图用 create_image（PNG），勿留空白/纯色矩形占位。"
+        ),
+    },
+    {
+        "kind": "icon",
+        "title": "图标设计基础",
+        "scenes": "website,mobile,image",
+        "skill_categories": "layout,validate,refine",
+        "sort_order": 25,
+        "when_to_use": "画 UI 图标、功能入口、导航符号，或用户要求图标风格统一时",
+        "body": (
+            "【风格统一】同一界面只选一种：线性 / 面性 / 双色；"
+            "勿混 3D、手绘、渐变浮雕、写实插画图标。\n"
+            "【绘制手段·强制】功能图标优先 create_svg："
+            "由你自己写简洁 args.svg（viewBox 0 0 24 24），落成原生 SVG 节点；"
+            "不要抄预设图标库/美学配方；"
+            "SVG 表达不了的复杂/写实图标才用 create_image + genPrompt（PNG）；"
+            "禁止空圆/色块冒充图标；少用 create_shape type=path 临场乱编超长 d。\n"
+            "【尺寸档】常用 16 / 20 / 24 / 32；同一层级尺寸一致；"
+            "触控旁图标可 20～24，列表辅图标宜 16～20。\n"
+            "【线粗与端点】线性图标线粗全局统一（如 1.5 或 2px）；"
+            "圆角端点或直角端点二选一；关键形闭合完整，忌断续碎线。\n"
+            "【网格与对齐】放在正方形安全区，光学居中（视觉中心略上移可接受）；"
+            "外轮廓对齐像素格；复杂图标先几何化再细节。\n"
+            "【识别性】轮廓剪影一眼可读；隐喻通用（搜索=放大镜、设置=齿轮）；"
+            "细节服从整体，小尺寸少内部分割。\n"
+            "【颜色】默认单色（跟随文字色/主色）；状态可用成功/警告/错误色；"
+            "彩色图标强调色通常 ≤2。\n"
+            "【禁区】勿用碎矩形/斜线堆假图标；勿用不准确超长 path 冒充齿轮"
+            "（改用 create_svg 自绘简洁符号）；"
+            "勿在后台堆装饰性插画当功能图标。"
+        ),
+    },
+    {
+        "kind": "techniques",
+        "title": "设计手法",
+        "scenes": "all",
+        "skill_categories": "refine,layout",
+        "sort_order": 20,
+        "when_to_use": "增强质感、氛围、视觉冲击时（先构图再手法）",
+        "body": (
+            "【常规】描边、内外阴影、轻渐变、噪点、叠压错位、破形裁切、点阵底纹。"
+            "海报可组合；Web 宜轻；后台仅微投影/细描边；图标禁模糊浮雕复杂渐变。\n"
+            "【进阶·多用于海报】解构、Glitch(小面积)、双重曝光、流体渐变、拼贴、"
+            "剪纸层叠、蒙版、破框、负空间、空心大标题。\n"
+            "特效服务焦点勿铺满；后台/简约 UI 避免破框与重特效。"
+        ),
+    },
+    {
+        "kind": "type",
+        "title": "字体与字号层级",
+        "scenes": "website,mobile,poster",
+        "skill_categories": "layout",
+        "sort_order": 30,
+        "when_to_use": "字体族选择、对齐方式不清晰时",
+        "body": (
+            "字号跨度硬检见 VISUAL_GATES / FE hierarchy。\n"
+            "字体族：同一设计通常 ≤2；UI 禁用书法/路径美术字作正文。\n"
+            "对齐：正文左对齐为主；居中仅短标题/英雄区。"
+        ),
+    },
+    {
+        "kind": "ia",
+        "title": "页面信息架构模块",
+        "scenes": "website,mobile",
+        "skill_categories": "layout",
+        "sort_order": 40,
+        "when_to_use": "整页官网/落地页/App 页面结构规划",
+        "body": (
+            "常见模块顺序（按需裁剪，勿堆砌）：\n"
+            "1.导航/顶栏 2.英雄区(一句话价值+主CTA) 3.信任背书/数字 "
+            "4.功能/卖点(3～6块) 5.场景/案例 6.对比/定价 7.FAQ 8.页脚。\n"
+            "一屏一事；每模块一个标题+一句支撑；主CTA最多2处；移动端纵向堆叠。"
+        ),
+    },
+    {
+        "kind": "a11y",
+        "title": "对比度与可读性",
+        "scenes": "website,mobile",
+        "skill_categories": "validate",
+        "sort_order": 30,
+        "when_to_use": "校验文字可读、按钮可点、色弱友好时",
+        "body": (
+            "文字对比硬检由 FE contrast 门禁执行。\n"
+            "勿仅靠颜色传达对错（搭配图标/文案）；链接与正文需可区分。"
+        ),
+    },
+    {
+        "kind": "mobile_safe",
+        "title": "移动安全区与触控",
+        "scenes": "mobile",
+        "skill_categories": "validate",
+        "sort_order": 40,
+        "when_to_use": "App/H5 画板、底部导航、刘海屏",
+        "body": (
+            "避开顶部状态栏/刘海与底部手势条；关键 CTA 勿贴底边。\n"
+            "触控目标 ≥44×44（FE touch 硬检）；主操作偏中下。"
+        ),
+    },
+    {
+        "kind": "ill_ui",
+        "title": "插画与 UI 边界",
+        "scenes": "website,mobile,image,poster",
+        "skill_categories": "layout,validate,refine",
+        "sort_order": 50,
+        "when_to_use": "场景易混（官网像海报、插画里塞表单）或用户未点明媒介时",
+        "body": (
+            "【website/mobile】可落地界面：导航、真实文案、可点按钮；"
+            "插画/大图仅配图区用 create_image；禁止整页海报巨字拼贴。\n"
+            "【image】主体图形/图标：少 UI 壳、少表单导航。\n"
+            "【poster】强主视觉+具体标题；CTA 仅用户需要时；禁线框/占位灰块。\n"
+            "冲突时以 USER_PROMPT 点名场景为准。"
+        ),
+    },
+    {
+        "kind": "ecommerce",
+        "title": "电商与落地页模块",
+        "scenes": "website,mobile,poster",
+        "skill_categories": "layout,refine",
+        "sort_order": 55,
+        "when_to_use": "电商详情、活动页、会员转化、带价签/加购的界面",
+        "body": (
+            "常见楼层（按需裁剪）：顶栏搜索/分类 → 主 KV/活动 Banner → "
+            "利益点/券条 → 商品卡网格 → 详情卖点 → 评价/信任 → 底栏加购/立即购买。\n"
+            "商品卡：主图比例统一、标题两行截断、价格（现价>划线价）；"
+            "主 CTA 位置稳定（移动常吸底）。\n"
+            "价签促销色克制；信息优先：规格/库存/配送别被装饰淹没。"
+        ),
+    },
+    {
+        "kind": "nav",
+        "title": "导航模式",
+        "scenes": "website,mobile",
+        "skill_categories": "layout,validate",
+        "sort_order": 45,
+        "when_to_use": "顶栏、侧栏、Tab Bar、面包屑结构规划",
+        "body": (
+            "网站：顶栏 Logo+主导航+主操作；当前项状态明确；"
+            "下拉/mega 勿挡内容焦点；页脚放次要链接。\n"
+            "移动：底部 Tab 通常 3～5 项，选中态清晰；"
+            "或顶栏返回+标题+右上次要操作；避免顶底双导航抢高。\n"
+            "侧栏：适后台/工具类；图标+短标签，折叠态仍可识别。\n"
+            "层级：全局导航 → 栏目 → 页内锚点；勿同屏多套主导航。"
+        ),
+    },
+    {
+        "kind": "form_empty",
+        "title": "表单与空状态",
+        "scenes": "website,mobile",
+        "skill_categories": "layout,validate",
+        "sort_order": 48,
+        "when_to_use": "登录注册、设置表、搜索无结果、列表为空",
+        "body": (
+            "表单：标签与输入对齐；主按钮一处且高对比；"
+            "错误提示贴近字段；必填有标记；间距跟 8px 栅格。\n"
+            "输入态：默认/聚焦/错误/禁用可区分；占位符不是标签替代。\n"
+            "空状态：一句话原因+一个主操作（去添加/刷新/换条件）；"
+            "可配轻插画，勿堆装饰挡 CTA。\n"
+            "加载：骨架或轻进度，避免大片空白无反馈。"
+        ),
+    },
+    {
+        "kind": "print_safe",
+        "title": "海报印刷安全",
+        "scenes": "poster",
+        "skill_categories": "layout,validate",
+        "sort_order": 35,
+        "when_to_use": "竖版/横版海报、需印刷或投放成品时",
+        "body": (
+            "安全边距：关键字与 Logo 距裁切边建议 ≥24px（随画布等比）；"
+            "出血区勿放必须可读的信息。\n"
+            "主标题区集中焦点，副文案与日期/地点层级退后；"
+            "正文块勿贴边、勿与主视觉抢对比。\n"
+            "二维码/小字保证可扫可读；浅底深字或深底浅字。\n"
+            "成稿感：禁止线框、占位灰块、未完成拼贴。"
+        ),
+    },
+    {
+        "kind": "imagery",
+        "title": "配图与蒙版处理",
+        "scenes": "website,mobile,poster,image",
+        "skill_categories": "refine,layout",
+        "sort_order": 52,
+        "when_to_use": "create_image、图上文案、照片/插画混排",
+        "body": (
+            "配图用 create_image（可 genPrompt，生成 PNG），禁止空白/纯色矩形长期占位。\n"
+            "图上文案：保证对比（蒙版/压暗/半透明底条）；"
+            "字勿压在杂乱细节上；边距与对齐跟栅格。\n"
+            "裁切：主体完整，人脸/产品勿贴边裁切；圆角与卡片系统一致。\n"
+            "风格：同一页摄影风或插画风尽量统一，少混材质。"
+        ),
+    },
+    {
+        "kind": "dashboard",
+        "title": "数据看板布局",
+        "scenes": "website,mobile",
+        "skill_categories": "layout,validate",
+        "sort_order": 58,
+        "when_to_use": "后台概览、指标卡、简单图表区",
+        "body": (
+            "结构：筛选/时间范围 → KPI 卡行 → 主图表 → 明细表/列表。\n"
+            "KPI 卡：指标名+大数字+环比；卡片等高对齐。\n"
+            "图表区：标题+图例+单位；色相宜少；网格线轻。\n"
+            "后台偏紧凑；移动端单列堆叠。"
+        ),
+    },
+    {
+        "kind": "elevation",
+        "title": "阴影与层级",
+        "scenes": "website,mobile",
+        "skill_categories": "refine,validate",
+        "sort_order": 28,
+        "when_to_use": "卡片浮层、弹层、需要区分前后景时",
+        "body": (
+            "flat → 卡片轻影 → 弹层中影；同级阴影一致，UI 最多 1～2 档复用。\n"
+            "海报可少用投影，改靠色块分层。"
+        ),
+    },
+    {
+        "kind": "painting",
+        "title": "板绘与数字绘制",
+        "scenes": "image,poster",
+        "skill_categories": "layout,refine,validate",
+        "sort_order": 60,
+        "when_to_use": "插画、角色、贴纸、手绘风图形，或用户要求板绘/厚涂/线稿上色时",
+        "body": (
+            "【媒介】板绘=数字绘画成稿，不是 UI 线框；少表单/导航壳；"
+            "需要界面时分开：画面主体用绘制，控件用 UI 规范。\n"
+            "【流程铁律】任何画风都先大体结构：构图剪影 → 比例结构 → 大色块 → 光影 → 细节风格；"
+            "禁止先画五官/花纹/高光。详见「绘画流程」知识。\n"
+            "【形与透视】主体剪影清晰可读；人物/器物结构准；"
+            "透视统一（一点/两点），地平线稳定。\n"
+            "【光影】明确主光源方向；暗部有环境反光；"
+            "厚涂可柔边过渡，赛璐璐宜分面干净；勿到处均匀高光。\n"
+            "【色彩】定主色调再铺；阴影偏冷或同色相降明度；"
+            "避免脏灰（补色相混过量）；重点色小面积点缀。\n"
+            "【笔触】同一张画笔触语言统一（平滑厚涂 / 可见笔触 / 扁平矢量）；"
+            "线稿线粗有主次；勾线闭合完整，少碎线堆材质。\n"
+            "【图层意识】背景→主体→前景；边缘干净，主体与背景分离度够。\n"
+            "【输出】边缘锐利可裁；透明底贴纸留安全边；"
+            "禁止用杂乱小矩形冒充笔触或未完成草稿当交付。"
+        ),
+    },
+    {
+        "kind": "paint_process",
+        "title": "绘画流程：先结构后细节",
+        "scenes": "image,poster",
+        "skill_categories": "layout,refine,validate",
+        "sort_order": 58,
+        "when_to_use": "任何插画/板绘/角色/场景绘制（含 Q版、厚涂、扁平等一切画风）",
+        "body": (
+            "铁律：无论何种画风，都必须先搭大体结构，再进入风格化与细节；"
+            "禁止一上来画五官、花纹、高光或局部精修。\n"
+            "标准流程（不可跳步）：\n"
+            "1. 构图与剪影：定画幅、主次、动态线；用大体块摆主体与负空间，剪影一眼可读。\n"
+            "2. 结构与比例：角色/器物的骨架、头身比、透视、地平线；Q版也要先定头身与重心。\n"
+            "3. 大色块/固有色：铺主色区域，分前景中景背景；此时仍少细节。\n"
+            "4. 光影体积：统一主光源，分受光/背光/环境反光；再谈材质。\n"
+            "5. 细节与风格：五官、服饰纹样、笔触、赛璐璐分面或厚涂过渡——服从已定结构。\n"
+            "6. 收尾：边缘整理、对比与焦点检查、去掉碎线杂色。\n"
+            "自检：远看仍成立（剪影/明暗可读）才算过关；"
+            "近看花、远看糊=结构失败，应回到第 1～2 步重摆，而不是继续堆细节。"
+        ),
+    },
+    {
+        "kind": "art_style",
+        "title": "常见画风与风格语言",
+        "scenes": "image,poster,website,mobile",
+        "skill_categories": "layout,refine",
+        "sort_order": 62,
+        "when_to_use": "用户点名画风（Q版/厚涂/扁平/国潮等）或需统一风格语言时",
+        "body": (
+            "画风只决定外观语言，不改变绘画流程：必须先结构/剪影/比例，再套画风。"
+            "同一画面只锁定一种主画风；与 USER_PROMPT 点名冲突时以用户为准。\n"
+            "【Q版/萌系】头身约 1～3 头身，五官靠下、眼大简化；"
+            "四肢短圆，线条软；表情符号化；少写实肌肉与复杂褶皱。"
+            "仍先定头身与动态剪影，再画大眼睛。\n"
+            "【赛璐璐/动漫平涂】色面分明、少柔边；影分通常 1～2 级；"
+            "线稿清晰闭合；高光块面干净。\n"
+            "【厚涂/半厚涂】体积感强，边可柔可硬；笔触可保留；"
+            "先大色块再细节；忌到处均匀噪声。\n"
+            "【扁平插画】几何色块、少或无线；色数克制；投影轻或无；"
+            "适贴纸/运营插画/UI 配图。\n"
+            "【线稿/黑白】线粗主次分明；排线统一方向；留白当光。\n"
+            "【像素】严格像素格、有限色板；忌随意抗锯齿糊边。\n"
+            "【国潮/新中式】纹样与书法点缀克制；主色可朱红/墨色/金色小面积；"
+            "勿堆满龙纹糊成一团。\n"
+            "【水彩/清透】边缘有晕染，叠色透气；留白多；勿做成厚涂实底。\n"
+            "【3D/粘土/拟物】体积与材质统一；UI 场景慎用，易与扁平组件冲突。\n"
+            "【UI 界面风】跟组件令牌：扁平或微拟物二选一；插画区可单独一种画风，"
+            "但勿把整页 UI 画成 Q 版角色海报（除非用户要求）。\n"
+            "选用后：角色比例、线粗、上色方式、边缘处理全程一致。"
+        ),
+    },
+]
+
+
+def _csv_has(csv: str, token: str) -> bool:
+    parts = {p.strip().lower() for p in str(csv or "").split(",") if p.strip()}
+    if not parts or "all" in parts:
+        return True
+    return token.strip().lower() in parts
+
+
+def _pub(r: Any) -> dict[str, Any]:
+    return {
+        "id": int(r["id"]),
+        "kind": str(r["kind"] or ""),
+        "title": str(r["title"] or ""),
+        "body": str(r["body"] or ""),
+        "whenToUse": str(r["when_to_use"] or ""),
+        "scenes": str(r["scenes"] or "all"),
+        "skillCategories": str(r["skill_categories"] or "all"),
+        "sortOrder": int(r["sort_order"] or 0),
+        "enabled": bool(int(r["enabled"] or 0)),
+        "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
+    }
+
+
+def ensure_design_knowledge() -> None:
+    # Do not call ensure_design_catalog() here — catalog invokes this while still
+    # holding the ensure lock and before _CATALOG_READY, which would recurse forever.
+    now = time.time()
+    with connect() as conn:
+        existing = {
+            str(r["kind"] or "")
+            for r in conn.execute("SELECT DISTINCT kind FROM design_knowledge").fetchall()
+        }
+        for item in _SEED:
+            kind = str(item["kind"])
+            title = str(item["title"])
+            body = str(item["body"])
+            if kind in existing:
+                # Refresh official seed row body when title matches (pack upgrades).
+                conn.execute(
+                    """
+                    UPDATE design_knowledge
+                    SET body = ?, when_to_use = ?, scenes = ?, skill_categories = ?,
+                        sort_order = ?, updated_at = ?
+                    WHERE kind = ? AND title = ?
+                    """,
+                    (
+                        body,
+                        item.get("when_to_use") or "",
+                        item.get("scenes") or "all",
+                        item.get("skill_categories") or "all",
+                        int(item.get("sort_order") or 0),
+                        now,
+                        kind,
+                        title,
+                    ),
+                )
+                continue
+            conn.execute(
+                """
+                INSERT INTO design_knowledge
+                (kind, title, body, when_to_use, scenes, skill_categories, sort_order, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    kind,
+                    title,
+                    body,
+                    item.get("when_to_use") or "",
+                    item.get("scenes") or "all",
+                    item.get("skill_categories") or "all",
+                    int(item.get("sort_order") or 0),
+                    now,
+                    now,
+                ),
+            )
+            existing.add(kind)
+        conn.commit()
+
+
+def list_knowledge(
+    *,
+    kind: str | None = None,
+    enabled: bool | None = True,
+    ensure: bool = True,
+) -> list[dict[str, Any]]:
+    if ensure:
+        ensure_design_catalog()
+        ensure_design_knowledge()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if enabled is not None:
+        clauses.append("enabled = ?")
+        params.append(1 if enabled else 0)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM design_knowledge{where} ORDER BY sort_order ASC, id ASC",
+            tuple(params),
+        ).fetchall()
+    return [_pub(r) for r in rows]
+
+
+def upsert_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_design_catalog()
+    ensure_design_knowledge()
+    now = time.time()
+    kid = payload.get("id")
+    kind = str(payload.get("kind") or "").strip()[:32]
+    title = str(payload.get("title") or "").strip()[:128]
+    body = str(payload.get("body") or "").strip()
+    if not kind or not title or not body:
+        raise ValueError("kind, title, body required")
+    when = str(payload.get("whenToUse") or payload.get("when_to_use") or "").strip()
+    scenes = str(payload.get("scenes") or "all").strip()[:128] or "all"
+    cats = str(payload.get("skillCategories") or payload.get("skill_categories") or "all").strip()[:128] or "all"
+    sort_order = int(payload.get("sortOrder") or payload.get("sort_order") or 0)
+    enabled = 1 if payload.get("enabled", True) else 0
+    with connect() as conn:
+        if kid:
+            conn.execute(
+                """
+                UPDATE design_knowledge SET kind=?, title=?, body=?, when_to_use=?, scenes=?,
+                skill_categories=?, sort_order=?, enabled=?, updated_at=? WHERE id=?
+                """,
+                (kind, title, body, when, scenes, cats, sort_order, enabled, now, int(kid)),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM design_knowledge WHERE id=?", (int(kid),)).fetchone()
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO design_knowledge
+                (kind, title, body, when_to_use, scenes, skill_categories, sort_order, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (kind, title, body, when, scenes, cats, sort_order, enabled, now, now),
+            )
+            conn.commit()
+            new_id = int(cur.lastrowid)
+            row = conn.execute("SELECT * FROM design_knowledge WHERE id=?", (new_id,)).fetchone()
+    if not row:
+        raise ValueError("upsert failed")
+    return _pub(row)
+
+
+def soft_delete_knowledge(item_id: int) -> bool:
+    ensure_design_catalog()
+    ensure_design_knowledge()
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE design_knowledge SET enabled=0, updated_at=? WHERE id=?",
+            (time.time(), int(item_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def _skill_categories(skill_category: str) -> set[str]:
+    c = str(skill_category or "").strip().lower()
+    out: set[str] = {c} if c else set()
+    if c == "plan":
+        # Design-thinking step needs the full knowledge stack before draw.
+        out |= {"layout", "refine", "validate", "color"}
+    return out
+
+
+def list_for_injection(*, scene: str, skill_category: str) -> list[dict[str, Any]]:
+    """Return enabled knowledge rows matching scene + skill category (admin CSV)."""
+    # Read-only for design-run hot path — seed/bootstrap is process startup.
+    scene_l = str(scene or "website").strip().lower() or "website"
+    cats = _skill_categories(skill_category)
+    if not cats:
+        return []
+    out: list[dict[str, Any]] = []
+    for row in list_knowledge(enabled=True, ensure=False):
+        if not _csv_has(row["scenes"], scene_l):
+            continue
+        sc = str(row.get("skillCategories") or "all")
+        parts = {p.strip().lower() for p in sc.split(",") if p.strip()}
+        if parts and "all" not in parts and not (parts & cats):
+            continue
+        out.append(row)
+    out.sort(key=lambda x: (int(x.get("sortOrder") or 0), int(x.get("id") or 0)))
+    return out
+
+
+def format_knowledge_block(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    parts = [
+        "以下为可选设计知识【规范】：按 USER_PROMPT 自行选用，不必套全；"
+        "与用户明示冲突时以用户为准。"
+    ]
+    for r in rows:
+        label = KIND_LABELS.get(r["kind"], r["kind"])
+        title = r.get("title") or label
+        when = (r.get("whenToUse") or "").strip()
+        head = f"【{label}·{title}】"
+        if when:
+            head += f"\n适用：{when}"
+        parts.append(f"{head}\n{r.get('body') or ''}".strip())
+    return "\n\n".join(parts)

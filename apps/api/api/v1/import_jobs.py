@@ -15,15 +15,12 @@ from worker.tasks import run_import_job
 
 router = APIRouter()
 
-SourceType = Literal["pdf", "docx", "image", "design"]
+SourceType = Literal["pdf", "docx", "image"]
 
 _SUFFIX: dict[str, str] = {
     "pdf": ".pdf",
     "docx": ".docx",
 }
-
-_DESIGN_SUFFIXES = {".psd", ".xd", ".rp", ".fig"}
-_DESIGN_ACCEPT_HINT = "Supported: .psd, .xd, .rp, .fig"
 
 
 @router.post("/jobs", response_model=JobCreateResponse)
@@ -33,13 +30,6 @@ async def create_import_job(
 ):
     if source_type == "image":
         suffix = Path(file.filename or "image.png").suffix or ".png"
-    elif source_type == "design":
-        suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in _DESIGN_SUFFIXES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported design format '{suffix or '(none)'}'. {_DESIGN_ACCEPT_HINT}",
-            )
     else:
         suffix = _SUFFIX[source_type]
 

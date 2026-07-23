@@ -1,5 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
-import { setToken as persistToken } from '@/utils/token';
+import { getToken, setToken as persistToken } from '@/utils/token';
 
 const STORAGE_KEY = 'resume-scene-auth-v1';
 
@@ -10,6 +10,8 @@ export type AuthUser = {
   avatar?: string | null;
   bio?: string | null;
   id?: string;
+  role?: 'user' | 'admin' | string;
+  hasPassword?: boolean;
 };
 
 function loadAuth(): { user: AuthUser | null } {
@@ -39,6 +41,13 @@ const authSlice = createSlice({
     },
     setSession(state, action) {
       const { user, token } = action.payload as { user: AuthUser; token?: string | null };
+      // Never restore a user session without a live token (logout race safety).
+      if (token === null || (token === undefined && !getToken())) {
+        state.user = null;
+        persist(null);
+        if (token === null) persistToken(null);
+        return;
+      }
       state.user = user;
       persist(user);
       if (token !== undefined) persistToken(token);

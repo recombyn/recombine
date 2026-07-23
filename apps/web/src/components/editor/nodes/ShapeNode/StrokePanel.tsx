@@ -34,7 +34,7 @@ import type {
   StrokeAlign,
   StrokeLinecap,
   StrokeLinejoin,
-} from '@/store/scene/sceneEffects';
+} from '@/components/rcb/scene/sceneEffects';
 import {
   PanelSegmentedIcons,
   PanelToggleIcons,
@@ -43,12 +43,10 @@ import {
 import {
   SEL_ICON_BTN,
   SEL_ICON_BTN_ACTIVE,
-} from '@/components/editor/Canvas/selection/ToolbarValueSlider';
+} from '@/components/rcb/selection/ToolbarValueSlider';
 import { cn } from '@/utils/classnames';
 
 export type StrokeSides = { T: boolean; R: boolean; B: boolean; L: boolean };
-/** @deprecated Prefer CornerRadiiValue from CornerRadiusPanel — kept for stroke attrs bridge. */
-export type StrokeCorners = { tl: number; tr: number; br: number; bl: number };
 
 export type StrokePanelValue = {
   color: string;
@@ -74,11 +72,13 @@ function StrokeWeightGlyph({ className }: { className?: string }) {
   );
 }
 
+/** Path = outer square; stroke fills toward center (Figma inside). */
 function IconStrokeAlignInside({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.5" />
-      <rect x="5" y="5" width="6" height="6" rx="0.5" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="3" y="3" width="10" height="10" rx="1" fill="currentColor" opacity="0.2" />
+      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.25" />
+      <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" fill="var(--surface, #fff)" stroke="currentColor" strokeWidth="1.25" />
     </svg>
   );
 }
@@ -86,16 +86,28 @@ function IconStrokeAlignInside({ className }: { className?: string }) {
 function IconStrokeAlignCenter({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3.5" y="3.5" width="9" height="9" rx="1" stroke="currentColor" strokeWidth="2.5" />
+      <rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="var(--surface, #fff)" />
+      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="2.5" />
     </svg>
   );
 }
 
+/** Path = inner square; stroke grows outward (Figma outside). */
 function IconStrokeAlignOutside({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="5" y="5" width="6" height="6" rx="0.5" stroke="currentColor" strokeWidth="1.5" />
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.25" opacity="0.35" />
+      <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" fill="var(--surface, #fff)" stroke="currentColor" strokeWidth="1.25" />
+      <rect
+        x="4"
+        y="4"
+        width="8"
+        height="8"
+        rx="0.75"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        opacity="0.55"
+      />
     </svg>
   );
 }
@@ -281,6 +293,7 @@ export function StrokePanel({
   onClose,
   className,
   showLinecap = true,
+  showAlign = true,
   showSides = false,
   layerVisible = true,
   onLayerVisibleChange,
@@ -292,6 +305,8 @@ export function StrokePanel({
   className?: string;
   /** Open paths only — caps have no effect on closed shapes. */
   showLinecap?: boolean;
+  /** Closed filled shapes only — inside / outside need a fill boundary. */
+  showAlign?: boolean;
   /** Rect-like only — independent T/R/B/L side strokes. */
   showSides?: boolean;
   /** Show/hide stroke on the canvas (eye control in panel header). */
@@ -301,7 +316,8 @@ export function StrokePanel({
   const { t } = useTranslation();
   const patch = (partial: Partial<StrokePanelValue>) => onChange({ ...value, ...partial });
   const width = Math.max(0, Math.round(Number(value.width) || 0));
-  const align: StrokeAlign = value.align === 'inside' || value.align === 'outside' ? value.align : 'center';
+  const align: StrokeAlign =
+    value.align === 'inside' || value.align === 'center' ? value.align : 'outside';
   const linecap: StrokeLinecap =
     value.linecap === 'round' || value.linecap === 'square' ? value.linecap : 'butt';
   const linejoin: StrokeLinejoin =
@@ -319,12 +335,6 @@ export function StrokePanel({
       onLayerVisibleChange={onLayerVisibleChange}
       layerVisibleTipShow="显示描边"
       layerVisibleTipHide="隐藏描边"
-      onEyedropper={(hex) =>
-        patch({
-          color: hex,
-          opacity: value.opacity <= 0 ? 100 : value.opacity,
-        })
-      }
     >
       <div className="flex w-full items-center justify-between gap-1.5">
         <label className="inline-flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-[4px] bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]">
@@ -383,16 +393,19 @@ export function StrokePanel({
         />
       ) : null}
       <div className="flex w-full items-center gap-1">
-        <PanelSegmentedIcons
-          className="min-w-0 flex-1"
-          value={align}
-          onChange={(next) => patch({ align: next })}
-          options={[
-            { id: 'inside', tip: t('editor.strokeAlignInside'), Icon: IconStrokeAlignInside },
-            { id: 'center', tip: t('editor.strokeAlignCenter'), Icon: IconStrokeAlignCenter },
-            { id: 'outside', tip: t('editor.strokeAlignOutside'), Icon: IconStrokeAlignOutside },
-          ]}
-        />
+        {showAlign ? (
+          <PanelSegmentedIcons
+            className="min-w-0 flex-1"
+            value={align}
+            onChange={(next) => patch({ align: next })}
+            options={[
+              // Outside first — matches the common expectation that「外」is the lead option.
+              { id: 'outside', tip: t('editor.strokeAlignOutside'), Icon: IconStrokeAlignOutside },
+              { id: 'center', tip: t('editor.strokeAlignCenter'), Icon: IconStrokeAlignCenter },
+              { id: 'inside', tip: t('editor.strokeAlignInside'), Icon: IconStrokeAlignInside },
+            ]}
+          />
+        ) : null}
         <PanelSegmentedIcons
           className="min-w-0 flex-1"
           value={linejoin}

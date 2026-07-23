@@ -36,10 +36,28 @@ class UpsertProjectIn(BaseModel):
     thumbnailDataUrl: str | None = None
 
 
+class BatchDeleteIn(BaseModel):
+    ids: list[str] = Field(..., min_length=1, max_length=100)
+
+
 @router.get("")
-def list_my_projects(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def list_my_projects(
+    page: int = 1,
+    pageSize: int = 24,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
     user = _require_user(authorization)
-    return {"projects": project_store.list_projects(user.id)}
+    return project_store.list_projects(user.id, page=page, page_size=pageSize)
+
+
+@router.post("/batch-delete")
+def batch_remove(
+    body: BatchDeleteIn,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    deleted = project_store.delete_projects(user.id, body.ids)
+    return {"ok": True, "deleted": deleted}
 
 
 @router.get("/{project_id}")

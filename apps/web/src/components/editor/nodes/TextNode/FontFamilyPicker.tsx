@@ -17,20 +17,10 @@ import {
   getPreviewFontFamily,
   loadFontCatalog,
   type FontFamilyNode,
-} from '@/store/scene/fontCatalog';
+} from '@/components/rcb/scene/fontCatalog';
 import { DropdownPanelItem } from '@/components/base';
 import { cn } from '@/utils/classnames';
-import { SEL_TOOL_BTN } from '@/components/editor/Canvas/selection/ToolbarValueSlider';
-
-const FALLBACK_FONTS: FontFamilyNode[] = [
-  { family: 'Alibaba PuHuiTi', displayName: 'Alibaba PuHuiTi', children: [] },
-  { family: 'Inter', displayName: 'Inter', children: [] },
-  { family: 'Microsoft YaHei', displayName: 'Microsoft YaHei', children: [] },
-  { family: 'PingFang SC', displayName: 'PingFang SC', children: [] },
-  { family: 'Noto Sans SC', displayName: 'Noto Sans SC', children: [] },
-  { family: 'Arial', displayName: 'Arial', children: [] },
-  { family: 'Georgia', displayName: 'Georgia', children: [] },
-];
+import { SEL_TOOL_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
 
 type Props = {
   value: string;
@@ -38,7 +28,7 @@ type Props = {
   className?: string;
 };
 
-/** Font picker: search + preview list. */
+/** Font picker: loads catalog from API only (managed in admin). */
 export default function FontFamilyPicker({ value, onChange, className }: Props): ReactNode {
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState<FontFamilyNode[]>(() => getFontCatalogSync());
@@ -47,14 +37,14 @@ export default function FontFamilyPicker({ value, onChange, className }: Props):
   useEffect(() => {
     let cancelled = false;
     loadFontCatalog().then((list) => {
-      if (!cancelled) setCatalog(list.length ? list : FALLBACK_FONTS);
+      if (!cancelled) setCatalog(list);
     });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const fonts = catalog.length ? catalog : FALLBACK_FONTS;
+  const fonts = catalog;
   const base = getBaseFontFamily(value, fonts);
   const triggerLabel =
     fonts.find((f) => f.family === base)?.displayName || base || '字体';

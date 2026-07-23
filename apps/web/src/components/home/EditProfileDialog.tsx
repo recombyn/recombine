@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlinePencil } from 'react-icons/hi2';
+import { updateProfile } from '@/apis/auth';
 import { Button, Dialog, message } from '@/components/base';
 import { userInitial } from '@/components/layout/UserAccountPanel';
 import { setUser, type AuthUser } from '@/store/modules/auth';
@@ -25,20 +26,25 @@ export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
   const [avatar, setAvatar] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setName(user?.name || '');
     setBio(user?.bio || '');
     setAvatar(user?.avatar || null);
+    setSaving(false);
   }, [open, user]);
 
   const initial = userInitial(name || user?.name, user?.email);
 
-  const onPickAvatar = () => fileRef.current?.click();
+  const onPickAvatar = () => {
+    if (saving) return;
+    fileRef.current?.click();
+  };
 
   const onAvatarFile = (file: File | null) => {
-    if (!file) return;
+    if (!file || saving) return;
     if (!file.type.startsWith('image/')) {
       message.warning(t('me.avatarTypeError'));
       return;
@@ -55,7 +61,7 @@ export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
     reader.readAsDataURL(file);
   };
 
-  const onSave = () => {
+  const onSave = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       message.warning(t('me.nameRequired'));
@@ -69,32 +75,48 @@ export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
       message.warning(t('me.needLogin'));
       return;
     }
-    dispatch(
-      setUser({
-        ...user,
-        name: trimmed,
-        bio: bio.trim().slice(0, MAX_BIO) || null,
-        avatar,
-      })
-    );
-    message.success(t('me.profileSaved'));
-    onClose();
+    if (saving) return;
+    const nextBio = bio.trim().slice(0, MAX_BIO) || null;
+    setSaving(true);
+    try {
+      const res = await updateProfile({ name: trimmed, bio: nextBio, avatar });
+      dispatch(
+        setUser({
+          ...user,
+          id: res.user.id || user.id,
+          name: res.user.name,
+          bio: res.user.bio ?? nextBio,
+          avatar: res.user.avatar ?? avatar,
+          email: res.user.email || user.email,
+          provider: res.user.provider || user.provider,
+        })
+      );
+      message.success(t('me.profileSaved'));
+      onClose();
+    } catch {
+      message.error(t('home.casesLoadFailed'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <Dialog
       show={open}
-      onClose={onClose}
+      onClose={() => {
+        if (saving) return;
+        onClose();
+      }}
       width={420}
       className="!rounded-2xl !px-0 !pb-4 !pt-0"
       bodyClassName="!p-0"
       footerClassName="!px-5 !pt-2"
       footer={
         <div className="flex w-full justify-end gap-2">
-          <Button size="small" type="default" onClick={onClose}>
+          <Button size="small" type="default" disabled={saving} onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button size="small" type="primary" onClick={onSave}>
+          <Button size="small" type="primary" loading={saving} disabled={saving} onClick={() => void onSave()}>
             {t('common.save')}
           </Button>
         </div>

@@ -1,3 +1,4 @@
+import AppLogo from '@/components/base/AppLogo';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/utils/classnames';
 
@@ -21,9 +22,7 @@ export default function EditorBootOverlay({ progress, exiting = false }: Props) 
       aria-label={t('editor.initializing')}
     >
       <div className="flex flex-col items-center gap-5">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--accent)] text-[15px] font-bold text-[var(--on-brand)] shadow-sm">
-          RY
-        </div>
+        <AppLogo size={48} className="shadow-sm" />
         <div className="h-1.5 w-44 overflow-hidden rounded-full bg-[var(--line)]">
           <div
             className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-300 ease-out"

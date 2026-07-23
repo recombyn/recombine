@@ -1,0 +1,62 @@
+"""Unit tests for tool_ops_contract."""
+
+from __future__ import annotations
+
+from services.design.tool_ops_contract import (
+    TOOL_OPS_SCHEMA_VERSION,
+    extract_and_validate_tool_ops,
+    normalize_agent_tool_ops,
+    validation_failure_reason,
+)
+
+
+def test_schema_version():
+    assert TOOL_OPS_SCHEMA_VERSION.startswith("2026-")
+
+
+def test_valid_update_node():
+    raw = '{"ops":[{"name":"update_node","args":{"nodeId":"n1","cornerRadius":8}}]}'
+    ops, errs = extract_and_validate_tool_ops(
+        raw,
+        scene_nodes=[{"id": "n1", "type": "rect", "w": 100, "h": 100}],
+    )
+    assert not errs
+    assert len(ops) == 1
+    assert ops[0]["name"] == "update_node"
+    assert ops[0]["args"]["nodeId"] == "n1"
+    assert ops[0].get("op_id")
+
+
+def test_rejects_unknown_tool():
+    raw = '{"ops":[{"name":"explode_canvas","args":{}}]}'
+    ops, errs = extract_and_validate_tool_ops(raw)
+    assert not ops
+    assert any("tool_not_allowed" in e for e in errs)
+
+
+def test_rejects_unknown_node_id():
+    raw = '{"ops":[{"name":"update_node","args":{"nodeId":"ghost","fill":"#f00"}}]}'
+    ops, errs = extract_and_validate_tool_ops(
+        raw,
+        scene_nodes=[{"id": "n1"}],
+    )
+    assert not ops
+    assert any("unknown_id" in e for e in errs)
+
+
+def test_dedupe_by_op_id():
+    raw_ops = [
+        {"name": "update_node", "args": {"nodeId": "n1", "fill": "#111", "op_id": "same-id"}},
+        {"name": "update_node", "args": {"nodeId": "n1", "fill": "#222", "op_id": "same-id"}},
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "n1"}],
+    )
+    assert not errs
+    assert len(ops) == 1
+
+
+def test_validation_failure_reason_format():
+    reason = validation_failure_reason(["tool_not_allowed:foo", "missing"])
+    assert reason.startswith("tool_ops_invalid:")

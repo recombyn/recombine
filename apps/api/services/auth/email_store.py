@@ -8,6 +8,7 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from config.settings import settings
 from services.db import connect, dialect, init_schema
@@ -45,44 +46,45 @@ class EmailUser:
     avatar: str | None = None
     bio: str | None = None
     provider: str = "email"
+    role: str = "user"
+    status: str = "active"
+
+
+def _user_from_row(row: Any) -> EmailUser:
+    return EmailUser(
+        id=row["id"],
+        email=row["email"],
+        name=row["name"],
+        avatar=row["avatar"],
+        bio=row["bio"],
+        provider=row["provider"] or "email",
+        role=(row["role"] if "role" in row.keys() else None) or "user",
+        status=(row["status"] if "status" in row.keys() else None) or "active",
+    )
 
 
 def get_user_by_email(email: str) -> EmailUser | None:
     init_auth_db()
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, email, name, avatar, bio, provider FROM users WHERE email = ? COLLATE NOCASE",
+            "SELECT id, email, name, avatar, bio, provider, role, status FROM users WHERE email = ? COLLATE NOCASE",
             (email.strip().lower(),),
         ).fetchone()
     if not row:
         return None
-    return EmailUser(
-        id=row["id"],
-        email=row["email"],
-        name=row["name"],
-        avatar=row["avatar"],
-        bio=row["bio"],
-        provider=row["provider"] or "email",
-    )
+    return _user_from_row(row)
 
 
 def get_user_by_id(user_id: str) -> EmailUser | None:
     init_auth_db()
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, email, name, avatar, bio, provider FROM users WHERE id = ?",
+            "SELECT id, email, name, avatar, bio, provider, role, status FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
     if not row:
         return None
-    return EmailUser(
-        id=row["id"],
-        email=row["email"],
-        name=row["name"],
-        avatar=row["avatar"],
-        bio=row["bio"],
-        provider=row["provider"] or "email",
-    )
+    return _user_from_row(row)
 
 
 def verify_password(email: str, password: str) -> EmailUser | None:
@@ -90,7 +92,7 @@ def verify_password(email: str, password: str) -> EmailUser | None:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id, email, name, avatar, bio, provider, password_hash, password_salt
+            SELECT id, email, name, avatar, bio, provider, role, status, password_hash, password_salt
             FROM users WHERE email = ? COLLATE NOCASE
             """,
             (email.strip().lower(),),
@@ -101,14 +103,90 @@ def verify_password(email: str, password: str) -> EmailUser | None:
     actual = _hash_password(password, row["password_salt"])
     if not hmac.compare_digest(expected, actual):
         return None
-    return EmailUser(
-        id=row["id"],
-        email=row["email"],
-        name=row["name"],
-        avatar=row["avatar"],
-        bio=row["bio"],
-        provider=row["provider"] or "email",
-    )
+    return _user_from_row(row)
+
+
+def user_has_password(user_id: str) -> bool:
+    init_auth_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT password_hash, password_salt FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return bool(row and row["password_hash"] and row["password_salt"])
+
+
+def email_has_password(email: str) -> bool:
+    init_auth_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT password_hash, password_salt FROM users
+            WHERE email = ? COLLATE NOCASE
+            """,
+            (email.strip().lower(),),
+        ).fetchone()
+    return bool(row and row["password_hash"] and row["password_salt"])
+
+
+def update_password(user_id: str, password: str) -> EmailUser | None:
+    """Set a new password hash for an existing user. Returns None if missing."""
+    init_auth_db()
+    salt = secrets.token_hex(16)
+    pw_hash = _hash_password(password, salt)
+    now = time.time()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, email, name, avatar, bio, provider, role, status FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_salt = ?, updated_at = ?, provider = 'email'
+            WHERE id = ?
+            """,
+            (pw_hash, salt, now, user_id),
+        )
+    return _user_from_row(row)
+
+
+def change_password(user_id: str, current_password: str, new_password: str) -> EmailUser:
+    """Verify current password then set a new one. Raises ValueError on failure."""
+    init_auth_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, email, name, avatar, bio, provider, role, status, password_hash, password_salt
+            FROM users WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row or not row["password_hash"] or not row["password_salt"]:
+        raise ValueError("no_password")
+    actual = _hash_password(current_password, row["password_salt"])
+    if not hmac.compare_digest(row["password_hash"], actual):
+        raise ValueError("bad_current")
+    updated = update_password(user_id, new_password)
+    if not updated:
+        raise ValueError("not_found")
+    return updated
+
+
+def reset_password_by_email(email: str, password: str) -> EmailUser | None:
+    """Update password for an existing email user (after ticket consume)."""
+    init_auth_db()
+    email_n = email.strip().lower()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM users WHERE email = ? COLLATE NOCASE",
+            (email_n,),
+        ).fetchone()
+    if not row:
+        return None
+    return update_password(row["id"], password)
 
 
 def upsert_user(*, email: str, password: str, name: str) -> EmailUser:
@@ -155,43 +233,65 @@ def upsert_oauth_user(
     provider: str,
     google_sub: str | None = None,
 ) -> EmailUser:
-    """Create or refresh a Google (or other OAuth) user row."""
+    """
+    Create or refresh a Google (or other OAuth) user row.
+
+    Returning users keep their in-app name / avatar — OAuth profile is only used
+    for the first insert (and to refresh email / google_sub linkage).
+    """
     init_auth_db()
     email_n = (email or "").strip().lower() or f"{user_id}@oauth.local"
     name_n = (name or "").strip() or email_n.split("@")[0]
     now = time.time()
     with connect() as conn:
-        by_id = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        by_id = conn.execute(
+            "SELECT id, name, avatar, bio, provider, role, status FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
         by_sub = None
         if google_sub:
             by_sub = conn.execute(
-                "SELECT id FROM users WHERE google_sub = ?", (google_sub,)
+                "SELECT id, name, avatar, bio, provider, role, status FROM users WHERE google_sub = ?",
+                (google_sub,),
             ).fetchone()
         by_email = conn.execute(
-            "SELECT id FROM users WHERE email = ? COLLATE NOCASE", (email_n,)
+            "SELECT id, name, avatar, bio, provider, role, status FROM users WHERE email = ? COLLATE NOCASE",
+            (email_n,),
         ).fetchone()
         row = by_id or by_sub or by_email
         if row:
             uid = row["id"]
+            # Do not overwrite profile fields the user may have customized in-app.
             conn.execute(
                 """
                 UPDATE users
-                SET email = ?, name = ?, avatar = COALESCE(?, avatar),
-                    provider = ?, google_sub = COALESCE(?, google_sub), updated_at = ?
+                SET email = ?,
+                    provider = ?,
+                    google_sub = COALESCE(?, google_sub),
+                    updated_at = ?
                 WHERE id = ?
                 """,
-                (email_n, name_n, avatar, provider, google_sub, now, uid),
+                (email_n, provider, google_sub, now, uid),
             )
-        else:
-            uid = user_id
-            conn.execute(
-                """
-                INSERT INTO users (
-                    id, email, name, avatar, provider, google_sub, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (uid, email_n, name_n, avatar, provider, google_sub, now, now),
+            return EmailUser(
+                id=uid,
+                email=email_n,
+                name=row["name"] or name_n,
+                avatar=row["avatar"],
+                bio=row["bio"],
+                provider=provider or (row["provider"] or "email"),
+                role=(row["role"] if "role" in row.keys() else None) or "user",
+                status=(row["status"] if "status" in row.keys() else None) or "active",
             )
+        uid = user_id
+        conn.execute(
+            """
+            INSERT INTO users (
+                id, email, name, avatar, provider, google_sub, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (uid, email_n, name_n, avatar, provider, google_sub, now, now),
+        )
     return EmailUser(
         id=uid, email=email_n, name=name_n, avatar=avatar, provider=provider
     )
@@ -203,7 +303,7 @@ def update_profile(
     init_auth_db()
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, email, name, avatar, bio, provider FROM users WHERE id = ?",
+            "SELECT id, email, name, avatar, bio, provider, role, status FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
         if not row:
@@ -218,13 +318,13 @@ def update_profile(
             """,
             (next_name, next_bio, next_avatar, time.time(), user_id),
         )
-    return EmailUser(
-        id=user_id,
-        email=row["email"],
-        name=next_name,
-        avatar=next_avatar,
-        bio=next_bio,
-        provider=row["provider"] or "email",
+    return _user_from_row(
+        {
+            **{k: row[k] for k in row.keys()},
+            "name": next_name,
+            "bio": next_bio,
+            "avatar": next_avatar,
+        }
     )
 
 

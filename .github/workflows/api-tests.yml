@@ -1,0 +1,41 @@
+name: API Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/api-tests.yml'
+  pull_request:
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/api-tests.yml'
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API (+ test extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Unit tests
+        run: python -m pytest tests/unit_tests -n auto
+
+      - name: Integration tests
+        run: python -m pytest tests/integration_tests
+
+      - name: Coverage (unit + integration)
+        run: python -m pytest --cov=api --cov=services --cov-report=term-missing

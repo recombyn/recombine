@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   HiOutlineCube,
-  HiOutlinePencilSquare,
   HiOutlineSquare3Stack3D,
 } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
@@ -12,7 +12,6 @@ import { ImageToolSep, imageToolBtn } from './imageToolbarShared';
 
 const TOOL_ICON_SIZE = 16;
 
-/** Icon + Chinese label (Fig.2). */
 function Tool({
   label,
   onClick,
@@ -36,18 +35,13 @@ function Tool({
   );
 }
 
-/**
- * Image tools: 放大 · 去背景 · 橡皮 · 编辑元素 · 编辑文字 · 多角度 · 更多 · lock · | · 全屏 · 下载
- */
+/** Image selection toolbar edit actions (AI tools + optional trailing slots). */
 export default function ImageToolbarEditTools({
   onUpscale,
   onRemoveBg,
   onEraser,
   onEditElements,
-  onEditText,
   onMultiAngle,
-  moreSlot,
-  aspectLockSlot,
   previewSlot,
   downloadSlot,
 }: {
@@ -55,18 +49,16 @@ export default function ImageToolbarEditTools({
   onRemoveBg: () => void;
   onEraser: () => void;
   onEditElements: () => void;
-  onEditText: () => void;
   onMultiAngle: () => void;
-  moreSlot: ReactNode;
-  /** Optional controls before the preview/download group (e.g. corner radius). */
-  aspectLockSlot?: ReactNode;
   previewSlot?: ReactNode;
-  downloadSlot: ReactNode;
+  downloadSlot?: ReactNode;
 }) {
+  const { t } = useTranslation();
+  const hasTrailing = Boolean(previewSlot || downloadSlot);
   return (
     <>
       <ImageUpscaleMenu onPick={onUpscale} />
-      <Tool label={'去背景'} onClick={onRemoveBg}>
+      <Tool label={t('editor.imageToolbar.removeBg')} onClick={onRemoveBg}>
         <Icon
           name="editor-remove_bg"
           width={TOOL_ICON_SIZE}
@@ -74,23 +66,22 @@ export default function ImageToolbarEditTools({
           className="text-current"
         />
       </Tool>
-      <Tool label={'橡皮工具'} onClick={onEraser}>
+      <Tool label={t('editor.imageToolbar.eraser')} onClick={onEraser}>
         <LuEraser className="h-4 w-4" />
       </Tool>
-      <Tool label={'编辑元素'} onClick={onEditElements}>
+      <Tool label={t('editor.imageToolbar.editElements')} onClick={onEditElements}>
         <HiOutlineSquare3Stack3D className="h-4 w-4" />
       </Tool>
-      <Tool label={'编辑文字'} onClick={onEditText}>
-        <HiOutlinePencilSquare className="h-4 w-4" />
-      </Tool>
-      <Tool label={'多角度'} onClick={onMultiAngle}>
+      <Tool label={t('editor.imageToolbar.multiAngle')} onClick={onMultiAngle}>
         <HiOutlineCube className="h-4 w-4" />
       </Tool>
-      {moreSlot}
-      {aspectLockSlot}
-      <ImageToolSep />
-      {previewSlot}
-      {downloadSlot}
+      {hasTrailing ? (
+        <>
+          <ImageToolSep />
+          {previewSlot}
+          {downloadSlot}
+        </>
+      ) : null}
     </>
   );
 }

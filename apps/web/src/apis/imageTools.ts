@@ -1,5 +1,6 @@
 /**
- * Image toolbar AI tools — POST /api/v1/image/process (Seedream i2i on backend).
+ * Image toolbar AI tools — POST /api/v1/image/process
+ * (Seedream i2i, or vision decompose for editElements / editText).
  */
 
 import { request } from '@/utils/request';
@@ -24,14 +25,38 @@ export type ImageProcessParams = {
   model?: string | null;
 };
 
+export type ImageDecomposeLayer = {
+  type: 'image' | 'text' | string;
+  src?: string;
+  text?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+  fontSize?: number;
+  fontFamily?: string;
+  fontWeight?: string | number;
+  fill?: string;
+  lineHeight?: number;
+};
+
 export type ImageProcessResult = {
   image: string;
   text?: string | null;
   kind: string;
   model?: string;
+  /** editElements / editText: split layers in source-pixel coords */
+  layers?: ImageDecomposeLayer[];
+  width?: number;
+  height?: number;
+  warnings?: string[];
+  engines?: string[];
+  /** Credits charged for this tool call (server-side). */
+  credits?: number;
 };
 
-/** Run an image toolbar tool on the API (AI / Seedream). */
+/** Run an image toolbar tool on the API (AI / Seedream / vision). */
 export const processImageTool = (data: ImageProcessParams) =>
   request<ImageProcessResult>({
     url: '/api/v1/image/process',
@@ -45,6 +70,6 @@ export const processImageTool = (data: ImageProcessParams) =>
       resolution: data.resolution || undefined,
       model: data.model || undefined,
     },
-    // Seedream can be slow
+    // Seedream / OCR can be slow
     timeout: 180000,
   });

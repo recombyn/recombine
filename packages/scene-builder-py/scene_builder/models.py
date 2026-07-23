@@ -1,4 +1,5 @@
 from uuid import uuid4
+import json
 
 
 def empty_document(width: int = 794, height: int = 1123) -> dict:
@@ -22,17 +23,39 @@ def create_text_node(
     fill: str = "#333333",
 ) -> tuple[str, dict]:
     node_id = uuid4().hex
+    plain = str(text or "")
+    # Frontend sceneText expects JSON-serialized DATA / markdown-friendly attrs.
+    chars = [
+        {
+            "char": c,
+            "config": {
+                "SIZE": font_size,
+                "COLOR": fill,
+                "WEIGHT": "normal",
+                "FAMILY": "Alibaba PuHuiTi",
+                "STYLE": "normal",
+                "ALIGN": "left",
+                "LINE_HEIGHT": 1.4,
+                "LETTER_SPACING": 0,
+                "DECORATION": "none",
+            },
+        }
+        for c in plain
+    ]
     return node_id, {
+        "id": node_id,
         "key": "text",
         "x": x,
         "y": y,
         "width": width,
         "height": height,
         "attrs": {
-            "ORIGIN_DATA": text,
-            "DATA": {
-                "chars": [{"char": c, "fontSize": font_size, "fill": fill} for c in text],
-            },
+            "markdown": plain,
+            "DATA": json.dumps([{"chars": chars}], ensure_ascii=False),
+            "ORIGIN_DATA": json.dumps(
+                [{"children": [{"text": plain, "font-base": {"fontSize": font_size, "color": fill}}]}],
+                ensure_ascii=False,
+            ),
         },
     }
 
@@ -47,12 +70,14 @@ def create_rect_node(
 ) -> tuple[str, dict]:
     node_id = uuid4().hex
     return node_id, {
-        "key": "rect",
+        "id": node_id,
+        "key": "shape",
         "x": x,
         "y": y,
         "width": width,
         "height": height,
         "attrs": {
+            "shapeType": "rect",
             "L": "true",
             "R": "true",
             "T": "true",
@@ -79,6 +104,7 @@ def create_image_node(
 ) -> tuple[str, dict]:
     node_id = uuid4().hex
     return node_id, {
+        "id": node_id,
         "key": "image",
         "x": x,
         "y": y,

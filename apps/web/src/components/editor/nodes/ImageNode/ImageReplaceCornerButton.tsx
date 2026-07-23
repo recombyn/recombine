@@ -3,87 +3,43 @@ import { useDispatch } from 'react-redux';
 import { HiOutlineArrowUpTray } from 'react-icons/hi2';
 import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
+import { uploadImageFile, readFileAsDataUrl } from '@/apis/upload';
 import {
-  CameraOverlayPortal,
-  useCamera,
-  useCameraOverlayRoot,
-  worldToStage,
-} from '@/components/editor/Canvas/stage/CameraContext';
-import { measureImageNaturalSize } from '@/store/scene/sceneDocument';
-import { patchDocumentNode } from '@/store/modules/editor';
+  RcbOverlayPortal,
+  useRcbCamera,
+  rcbSceneToScreen,
+  rcbAlignInBox,
+  type RcbAlign,
+} from '@/components/rcb';
+import { measureImageNaturalSize } from '@/components/rcb/scene/sceneDocument';
+import { finishImageProcess, patchDocumentNode } from '@/store/modules/editor';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
 type Props = {
   nodeId: string;
   box: SceneBox;
-  /** Degrees — kept for API compat; button uses AABB ∩ viewport center. */
-  angle?: number;
+  /**
+   * Where to park the replace control on the image box (stage/screen space).
+   * Default `top-right` — 10px inset from the image edges.
+   */
+  align?: RcbAlign;
+  /** True while the pointer is over this image (selection hover). */
+  imageHovered?: boolean;
 };
 
-/** Simulated upload latency until a real server endpoint is wired. */
-const UPLOAD_SIM_MS = 900;
 /** Inset from the visible image edge to the button outer edge (screen px). */
 const EDGE_PAD = 10;
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('read failed'));
-    reader.readAsDataURL(file);
-  });
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
 /**
- * Top-right of (image AABB ∩ viewport) in stage space, inset by EDGE_PAD.
- * Falls back to image NE when the image is fully off-screen.
- */
-function visibleTopRightStage(
-  box: SceneBox,
-  camera: { x: number; y: number; zoom: number },
-  viewport: { width: number; height: number }
-) {
-  const tl = worldToStage(camera, box.left, box.top);
-  const br = worldToStage(camera, box.left + box.width, box.top + box.height);
-  const imgLeft = Math.min(tl.x, br.x);
-  const imgRight = Math.max(tl.x, br.x);
-  const imgTop = Math.min(tl.y, br.y);
-  const imgBottom = Math.max(tl.y, br.y);
-
-  const viewLeft = 0;
-  const viewTop = 0;
-  const viewRight = Math.max(1, viewport.width);
-  const viewBottom = Math.max(1, viewport.height);
-
-  const left = Math.max(imgLeft, viewLeft);
-  const top = Math.max(imgTop, viewTop);
-  const right = Math.min(imgRight, viewRight);
-  const bottom = Math.min(imgBottom, viewBottom);
-
-  if (right - left < 4 || bottom - top < 4) {
-    return { x: imgRight - EDGE_PAD, y: imgTop + EDGE_PAD };
-  }
-
-  return {
-    x: Math.min(viewRight - EDGE_PAD, Math.max(viewLeft + EDGE_PAD, right - EDGE_PAD)),
-    y: Math.min(viewBottom - EDGE_PAD, Math.max(viewTop + EDGE_PAD, top + EDGE_PAD)),
-  };
-}
-
-/**
- * Replace control for selected image nodes — top-right of the visible image area.
- * Keeps node width; height follows the new image aspect ratio.
+ * Replace control for selected image nodes — top-right corner, 10px inset.
+ * Uploads via backend COS; keeps node width; height follows new image aspect.
  */
 export default function ImageReplaceCornerButton({
   nodeId,
   box,
+  align = 'top-right',
+  imageHovered = false,
 }: Props): ReactNode {
   const dispatch = useDispatch();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -91,13 +47,21 @@ export default function ImageReplaceCornerButton({
   const boxRef = useRef(box);
   const aliveRef = useRef(true);
   const [loading, setLoading] = useState(false);
-  const camera = useCamera();
-  const overlayRoot = useCameraOverlayRoot();
-  const viewport = {
-    width: overlayRoot?.clientWidth || window.innerWidth,
-    height: overlayRoot?.clientHeight || window.innerHeight,
+  /** Keep visible while the pointer is on the button (image hover clears over toolbar). */
+  const [btnHovered, setBtnHovered] = useState(false);
+  const camera = useRcbCamera();
+  const tl = rcbSceneToScreen(camera, box.left, box.top);
+  const br = rcbSceneToScreen(camera, box.left + box.width, box.top + box.height);
+  const stageBox = {
+    left: Math.min(tl.x, br.x),
+    top: Math.min(tl.y, br.y),
+    width: Math.abs(br.x - tl.x),
+    height: Math.abs(br.y - tl.y),
   };
-  const { x, y } = visibleTopRightStage(box, camera, viewport);
+  // Matches `h-5 w-5` button below so EDGE_PAD is true screen inset.
+  const BTN = 20;
+  const { x, y } = rcbAlignInBox(stageBox, { width: BTN, height: BTN }, align, EDGE_PAD);
+  const visible = loading || imageHovered || btnHovered;
 
   useEffect(() => {
     nodeIdRef.current = nodeId;
@@ -114,12 +78,10 @@ export default function ImageReplaceCornerButton({
     };
   }, []);
 
-  // Anchor top-right of the button at (x, y) so EDGE_PAD is true outer margin.
   const style: CSSProperties = {
     position: 'absolute',
     left: x,
     top: y,
-    transform: 'translate(-100%, 0%)',
   };
 
   const onFile = (file: File | null) => {
@@ -130,37 +92,72 @@ export default function ImageReplaceCornerButton({
 
     void (async () => {
       try {
-        const src = await readFileAsDataUrl(file);
-        if (!src) throw new Error('empty');
-
-        // Placeholder for future server upload.
-        await delay(UPLOAD_SIM_MS);
-
-        if (!aliveRef.current || nodeIdRef.current !== targetId) return;
-
-        const natural = await measureImageNaturalSize(src);
-        const height = Math.max(
+        const preview = await readFileAsDataUrl(file);
+        const naturalPreview = await measureImageNaturalSize(preview);
+        const previewH = Math.max(
           1,
-          Math.round((keepWidth * natural.height) / Math.max(1, natural.width))
+          Math.round((keepWidth * naturalPreview.height) / Math.max(1, naturalPreview.width))
         );
-
-        const assetKind =
-          file.type === 'image/svg+xml' || src.startsWith('data:image/svg+xml')
-            ? 'icon'
-            : 'image';
-
+        if (!aliveRef.current || nodeIdRef.current !== targetId) return;
         dispatch(
           patchDocumentNode({
             nodeId: targetId,
             patch: {
               width: keepWidth,
-              height,
-              attrs: { src, assetKind },
+              height: previewH,
+              attrs: {
+                src: preview,
+                processStatus: 'running',
+                processKind: 'upload',
+                processLabel: '上传中',
+              },
             },
           })
         );
-      } catch {
-        if (aliveRef.current) message.error('替换图片失败');
+
+        const uploaded = await uploadImageFile(file);
+        const src = uploaded.url;
+        if (!aliveRef.current || nodeIdRef.current !== targetId) return;
+
+        let naturalW = Number(uploaded.width) || 0;
+        let naturalH = Number(uploaded.height) || 0;
+        if (!(naturalW > 0 && naturalH > 0)) {
+          const natural = await measureImageNaturalSize(src);
+          naturalW = natural.width;
+          naturalH = natural.height;
+        }
+        const height = Math.max(
+          1,
+          Math.round((keepWidth * naturalH) / Math.max(1, naturalW))
+        );
+        const assetKind =
+          file.type === 'image/svg+xml' || String(uploaded.mime || '').includes('svg')
+            ? 'icon'
+            : 'image';
+
+        dispatch(
+          finishImageProcess({
+            nodeId: targetId,
+            src,
+            attrs: {
+              assetKind,
+              ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
+            },
+          })
+        );
+        dispatch(
+          patchDocumentNode({
+            nodeId: targetId,
+            patch: { width: keepWidth, height },
+            skipHistory: true,
+          })
+        );
+      } catch (err: any) {
+        if (aliveRef.current) {
+          dispatch(finishImageProcess({ nodeId: targetId }));
+          const detail = err?.response?.data?.detail || err?.message || '替换图片失败';
+          message.error(typeof detail === 'string' ? detail : '替换图片失败');
+        }
       } finally {
         if (aliveRef.current && nodeIdRef.current === targetId) setLoading(false);
       }
@@ -168,13 +165,20 @@ export default function ImageReplaceCornerButton({
   };
 
   return (
-    <CameraOverlayPortal>
+    <RcbOverlayPortal>
       <div
         data-sel-toolbar
         data-image-replace
-        className="pointer-events-auto absolute z-[35]"
+        data-image-node-id={nodeId}
+        className={
+          visible
+            ? 'pointer-events-auto absolute z-[35] opacity-100 transition-opacity duration-150'
+            : 'pointer-events-auto absolute z-[35] opacity-0 transition-opacity duration-150'
+        }
         style={style}
         onPointerDown={(e) => e.stopPropagation()}
+        onPointerEnter={() => setBtnHovered(true)}
+        onPointerLeave={() => setBtnHovered(false)}
       >
         <Tooltip title={loading ? '上传中…' : '替换图片'} placement="top">
           <button
@@ -209,6 +213,6 @@ export default function ImageReplaceCornerButton({
           }}
         />
       </div>
-    </CameraOverlayPortal>
+    </RcbOverlayPortal>
   );
 }

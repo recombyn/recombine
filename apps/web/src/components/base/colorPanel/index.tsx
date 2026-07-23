@@ -22,7 +22,7 @@ import { AlphaSlider } from '@/components/base/colorPicker/AlphaSlider';
 import { HueSlider } from '@/components/base/colorPicker/HueSlider';
 import { SaturationValueArea } from '@/components/base/colorPicker/SaturationValueArea';
 import Tooltip from '@/components/base/tooltip';
-import { pickScreenColor } from '@/components/editor/color/pickScreenColor';
+import { pickScreenColor } from '@/utils/pickScreenColor';
 import { cn } from '@/utils/classnames';
 
 export type Rgba = { r: number; g: number; b: number; a: number };
@@ -231,20 +231,6 @@ export function ColorPanel({
         <div className="flex h-11 items-center justify-between px-3">
           <span className="text-[13px] font-medium text-[var(--ink)]">{title}</span>
           <div className="flex items-center gap-0.5">
-            <Tooltip title={'取色'} placement="bottom">
-              <button
-                type="button"
-                aria-label={'取色'}
-                onClick={() => {
-                  void pickScreenColor().then((hex) => {
-                    if (hex) onChange(hex);
-                  });
-                }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-              >
-                <HiOutlineEyeDropper className="h-[18px] w-[18px]" />
-              </button>
-            </Tooltip>
             {onClose ? (
               <Tooltip title={'退出'} placement="bottom">
                 <button
@@ -340,6 +326,25 @@ export function ColorPanel({
         ) : null}
 
         <div className="flex items-center gap-2">
+          <Tooltip title={'取色'} placement="top">
+            <button
+              type="button"
+              aria-label={'取色'}
+              onClick={() => {
+                void pickScreenColor().then((picked) => {
+                  if (!picked) return;
+                  const next = normalizeHex(picked, solidHex);
+                  onChange(next);
+                  setHsv(rgbToHsv(hexToRgba(next)));
+                  setDraft(next.replace(/^#/, ''));
+                  if (showAlpha && opacityPct === 0) setOpacity(100);
+                });
+              }}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-[var(--accent-soft)] text-[var(--muted)] hover:text-[var(--ink)]"
+            >
+              <HiOutlineEyeDropper className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
           <div className="flex h-7 min-w-0 flex-1 items-center rounded bg-[var(--accent-soft)] px-2.5">
             <span className="mr-1 text-[12px] text-[var(--muted)]">#</span>
             <input

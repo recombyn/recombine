@@ -6,14 +6,14 @@ import { HiOutlineSparkles, HiOutlineUser, HiOutlineUserPlus } from 'react-icons
 import { Dropdown } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import UserAccountPanel, { UserAvatar } from '@/components/layout/UserAccountPanel';
-import { formatTokens } from '@/store/modules/wallet';
+import { formatTokens } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
 
 type Props = {
   className?: string;
 };
 
-/** Token balance + avatar pill (card-key prepaid, no membership). */
+/** Credit balance + avatar pill. */
 export default function WalletAccountChip({ className }: Props) {
   const { t } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);

@@ -1,4 +1,10 @@
-import { forwardRef, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
+import {
+  forwardRef,
+  type ButtonHTMLAttributes,
+  type CSSProperties,
+  type HTMLAttributes,
+  type ReactNode,
+} from 'react';
 import { cn } from '@/utils/classnames';
 
 type DropdownPanelProps = HTMLAttributes<HTMLDivElement> & {
@@ -6,11 +12,11 @@ type DropdownPanelProps = HTMLAttributes<HTMLDivElement> & {
 };
 
 /**
- * Shared floating menu shell — 4px radius, surface fill, ring + shadow.
+ * Shared floating menu shell — 4px radius, opaque surface fill, ring + shadow.
  * Use for base Dropdown and any custom editor dropdown panels.
  */
 export const DropdownPanel = forwardRef<HTMLDivElement, DropdownPanelProps>(
-  function DropdownPanel({ className, children, ...rest }, ref) {
+  function DropdownPanel({ className, children, style, ...rest }, ref) {
     return (
       <div
         ref={ref}
@@ -20,6 +26,8 @@ export const DropdownPanel = forwardRef<HTMLDivElement, DropdownPanelProps>(
           'focus:outline-none focus-visible:outline-none',
           className
         )}
+        // Inline surface so canvas chrome under the same z-band cannot show through.
+        style={{ backgroundColor: 'var(--surface)', ...(style as CSSProperties | undefined) }}
         {...rest}
       >
         {children}

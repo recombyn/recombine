@@ -4,18 +4,16 @@ import {
   HiOutlineDocumentText,
   HiOutlinePhoto,
   HiOutlineDocument,
-  HiOutlineSquares2X2,
 } from 'react-icons/hi2';
 import { Button, Dialog } from '@/components/base';
 import { cn } from '@/utils/classnames';
 
-export type ImportFileKind = 'image' | 'pdf' | 'docx' | 'design';
+export type ImportFileKind = 'image' | 'pdf' | 'docx';
 
 export const IMPORT_ACCEPT: Record<ImportFileKind, string> = {
   image: 'image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp',
   pdf: '.pdf,application/pdf',
   docx: '.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  design: '.psd,.xd,.rp,.fig,application/octet-stream',
 };
 
 type Props = {
@@ -55,12 +53,6 @@ export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
         titleKey: 'importFile.word',
         formats: 'DOC · DOCX',
       },
-      {
-        id: 'design',
-        icon: HiOutlineSquares2X2,
-        titleKey: 'importFile.design',
-        formats: 'Figma · Axure · PS · XD',
-      },
     ],
     []
   );
@@ -73,7 +65,7 @@ export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
     <Dialog
       show={open}
       onClose={onClose}
-      width={800}
+      width={640}
       title={t('importFile.title')}
       titleClassName="!text-[16px] !font-semibold !pb-1"
       bodyClassName="pt-1"
@@ -98,7 +90,7 @@ export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
     >
       <p className="mb-6 text-[13px] text-[var(--muted)]">{t('importFile.hint')}</p>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {options.map((opt) => {
           const TypeIcon = opt.icon;
           const selected = kind === opt.id;

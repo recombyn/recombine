@@ -1,10 +1,16 @@
-import { useMemo, useState, type ComponentType } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuPencil } from 'react-icons/lu';
+import { LuPanelLeft, LuPencil } from 'react-icons/lu';
 import { RxText } from 'react-icons/rx';
-import { BiExit } from 'react-icons/bi';
 import {
   HiOutlineChevronDown,
   HiOutlineChevronUp,
@@ -14,9 +20,38 @@ import {
 } from 'react-icons/hi2';
 import { TbArrowUpRight, TbCircle, TbPolygon, TbStar, TbTriangle } from 'react-icons/tb';
 import Tooltip from '@/components/base/tooltip';
-import { listSceneNodes } from '@/store/scene/sceneDocument';
+import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
 import { cn } from '@/utils/classnames';
 import { setSelectedNodeId } from '@/store/modules/editor';
+
+const LAYER_DOCK_WIDTH_KEY = 'layer-dock-width';
+const LAYER_DOCK_MIN_W = 180;
+const LAYER_DOCK_MAX_W = 420;
+const LAYER_DOCK_DEFAULT_W = 220;
+
+function clampLayerDockWidth(width: number): number {
+  const viewportCap =
+    typeof window !== 'undefined'
+      ? Math.max(LAYER_DOCK_MIN_W, window.innerWidth - 360)
+      : LAYER_DOCK_MAX_W;
+  return Math.min(
+    LAYER_DOCK_MAX_W,
+    viewportCap,
+    Math.max(LAYER_DOCK_MIN_W, Math.round(width))
+  );
+}
+
+function readStoredLayerDockWidth(): number {
+  try {
+    const raw = localStorage.getItem(LAYER_DOCK_WIDTH_KEY);
+    if (!raw) return LAYER_DOCK_DEFAULT_W;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return LAYER_DOCK_DEFAULT_W;
+    return clampLayerDockWidth(n);
+  } catch {
+    return LAYER_DOCK_DEFAULT_W;
+  }
+}
 
 type LayerIconComponent = ComponentType<{ className?: string }>;
 
@@ -105,14 +140,22 @@ function layerLabel(node: { key: string; attrs?: { shapeType?: string } }) {
     polygon: '多边形',
     star: '星形',
     pen: '钢笔',
-    pencil: '铅笔',
+    pencil: '画笔',
     path: '路径',
+    svg: 'SVG',
   };
   return map[kind] || kind;
 }
 
 /** Left layers dock — history + scene nodes (fig.2). */
-export default function LayerPanel({ onClose }: { onClose?: () => void } = {}) {
+export default function LayerPanel({
+  onClose,
+  onSelectNode,
+}: {
+  onClose?: () => void;
+  /** Select + pan camera so the node is centered in the current viewport. */
+  onSelectNode?: (nodeId: string) => void;
+} = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const document = useSelector((state: any) => state.editor.document);
@@ -120,6 +163,72 @@ export default function LayerPanel({ onClose }: { onClose?: () => void } = {}) {
   const historyPast = useSelector((state: any) => state.editor.historyPast || []);
   const nodes = listSceneNodes(document);
   const [historyOpen, setHistoryOpen] = useState(true);
+  const [dockWidth, setDockWidth] = useState(LAYER_DOCK_DEFAULT_W);
+  const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  useEffect(() => {
+    setDockWidth(readStoredLayerDockWidth());
+  }, []);
+
+  useEffect(() => {
+    const onWinResize = () => setDockWidth((w) => clampLayerDockWidth(w));
+    window.addEventListener('resize', onWinResize);
+    return () => window.removeEventListener('resize', onWinResize);
+  }, []);
+
+  useEffect(
+    () => () => {
+      window.document.body.style.cursor = '';
+      window.document.body.style.userSelect = '';
+    },
+    []
+  );
+
+  const persistDockWidth = (width: number) => {
+    const next = clampLayerDockWidth(width);
+    setDockWidth(next);
+    try {
+      localStorage.setItem(LAYER_DOCK_WIDTH_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onDockResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizeDragRef.current = { startX: e.clientX, startW: dockWidth };
+    window.document.body.style.cursor = 'col-resize';
+    window.document.body.style.userSelect = 'none';
+  };
+
+  const onDockResizePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag) return;
+    // Right edge: drag right → wider
+    setDockWidth(clampLayerDockWidth(drag.startW + (e.clientX - drag.startX)));
+  };
+
+  const endDockResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current) return;
+    resizeDragRef.current = null;
+    window.document.body.style.cursor = '';
+    window.document.body.style.userSelect = '';
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    setDockWidth((w) => {
+      try {
+        localStorage.setItem(LAYER_DOCK_WIDTH_KEY, String(w));
+      } catch {
+        /* ignore */
+      }
+      return w;
+    });
+  };
 
   const historyItems = useMemo(() => {
     // Newest first — length is enough for a simple step list.
@@ -130,18 +239,35 @@ export default function LayerPanel({ onClose }: { onClose?: () => void } = {}) {
   }, [historyPast, t]);
 
   return (
-    <aside className="flex h-full w-[220px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--surface)]">
+    <aside
+      style={{ width: dockWidth }}
+      className="relative flex h-full shrink-0 flex-col overflow-hidden border-r border-[var(--line)] bg-[var(--surface)]"
+    >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t('editor.resizeLayersDock')}
+        aria-valuemin={LAYER_DOCK_MIN_W}
+        aria-valuemax={LAYER_DOCK_MAX_W}
+        aria-valuenow={dockWidth}
+        className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize touch-none hover:bg-[var(--accent)]/25 active:bg-[var(--accent)]/40"
+        onPointerDown={onDockResizePointerDown}
+        onPointerMove={onDockResizePointerMove}
+        onPointerUp={endDockResize}
+        onPointerCancel={endDockResize}
+        onDoubleClick={() => persistDockWidth(LAYER_DOCK_DEFAULT_W)}
+      />
       <div className="flex h-11 shrink-0 items-center justify-between px-3">
         <span className="text-[14px] font-semibold text-[var(--ink)]">{t('editor.layers')}</span>
         {onClose ? (
-          <Tooltip title={'退出'} placement="bottom">
+          <Tooltip title={t('editor.closePanel')} placement="bottom">
             <button
               type="button"
-              aria-label={'退出'}
+              aria-label={t('editor.closePanel')}
               onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
             >
-              <BiExit className="h-[18px] w-[18px]" />
+              <LuPanelLeft className="h-4 w-4" strokeWidth={1.75} />
             </button>
           </Tooltip>
         ) : null}
@@ -190,7 +316,10 @@ export default function LayerPanel({ onClose }: { onClose?: () => void } = {}) {
               <li key={id}>
                 <button
                   type="button"
-                  onClick={() => dispatch(setSelectedNodeId(id))}
+                  onClick={() => {
+                    if (onSelectNode) onSelectNode(id);
+                    else dispatch(setSelectedNodeId(id));
+                  }}
                   className={cn(
                     'flex min-h-[40px] w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] transition-colors',
                     selectedNodeId === id

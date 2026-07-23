@@ -1,21 +1,21 @@
 import { useMemo, type CSSProperties, type ReactNode } from 'react';
 import {
-  CameraOverlayPortal,
-  useCamera,
-  worldToStage,
-} from '@/components/editor/Canvas/stage/CameraContext';
-import { radiiFromAttrs } from '@/store/scene/sceneRadii';
-import { nodeLeftTop } from '@/store/scene/sceneToSvg';
+  RcbOverlayPortal,
+  useRcbCamera,
+  rcbSceneToScreen,
+} from '@/components/rcb';
+import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 
 const PILL_BOTTOM_PAD_PX = 14;
 
 function useProcessStageBox(document: any, node: any) {
-  const camera = useCamera();
+  const camera = useRcbCamera();
   const { left, top } = nodeLeftTop(document, node);
   const width = Math.max(1, Number(node.width) || 1);
   const height = Math.max(1, Number(node.height) || 1);
   const z = Math.max(0.05, camera.zoom || 1);
-  const origin = worldToStage(camera, left, top);
+  const origin = rcbSceneToScreen(camera, left, top);
   const stageW = width * z;
   const stageH = height * z;
   const radii = radiiFromAttrs(node.attrs || {});
@@ -127,7 +127,7 @@ export default function ImageProcessOverlay({
   if (hidden || !ids.length) return null;
 
   return (
-    <CameraOverlayPortal>
+    <RcbOverlayPortal>
       {ids.map((id) => {
         const node = document.deltaSetLike[id];
         if (!node) return null;
@@ -138,6 +138,6 @@ export default function ImageProcessOverlay({
           </div>
         );
       })}
-    </CameraOverlayPortal>
+    </RcbOverlayPortal>
   );
 }

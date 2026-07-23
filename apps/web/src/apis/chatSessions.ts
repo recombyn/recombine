@@ -9,6 +9,16 @@ export type ChatSessionMessageDto = {
   role: string;
   content: string;
   thinking?: string | null;
+  durationMs?: number | null;
+  intent?: string | null;
+  steps?: Array<{
+    id: string;
+    name: string;
+    status: 'running' | 'done' | 'error' | 'pending';
+    summary?: string;
+  }> | null;
+  /** Seedream / image-mode gallery URLs (prefer durable asset URLs). */
+  images?: string[] | null;
 };
 
 export type ChatSessionDto = {
@@ -17,6 +27,7 @@ export type ChatSessionDto = {
   title: string;
   updatedAt: number;
   createdAt?: number;
+  taskState?: Record<string, unknown> | null;
   messages: ChatSessionMessageDto[];
 };
 
@@ -32,6 +43,7 @@ export const upsertChatSessionApi = (payload: {
   id?: string;
   title: string;
   messages: ChatSessionMessageDto[];
+  taskState?: Record<string, unknown> | null;
 }) =>
   request<{ session: ChatSessionDto }>({
     url: '/api/v1/chat-sessions/sessions',
@@ -41,6 +53,7 @@ export const upsertChatSessionApi = (payload: {
       id: payload.id,
       title: payload.title,
       messages: payload.messages,
+      taskState: payload.taskState ?? undefined,
     },
   });
 

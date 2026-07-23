@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   HiOutlineClipboardDocument,
   HiOutlineCodeBracket,
@@ -9,13 +10,15 @@ import {
 } from 'react-icons/hi2';
 import { message } from '@/components/base';
 import DevPropertiesPanel from '@/components/editor/panels/DevPropertiesPanel';
-import InfiniteCanvasStage, {
-  DEFAULT_CAMERA,
-  type CanvasCamera,
-} from '@/components/editor/Canvas/stage/InfiniteCanvasStage';
-import SvgCanvas from '@/components/editor/Canvas/svg/SvgCanvas';
+import {
+  RcbCanvas,
+  RcbSvgDefs,
+  RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
+  type RcbCamera as CanvasCamera,
+} from '@/components/rcb';
+import SvgCanvas from '@/components/editor/canvas/svg/SvgCanvas';
 import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
-import HtmlArtboardFrame from '@/components/editor/nodes/FrameNode/HtmlArtboardFrame';
+import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
 import FrameSelectionChrome from '@/components/editor/nodes/FrameNode/FrameSelectionChrome';
 import ShapeStylePanelHost from '@/components/editor/nodes/ShapeNode/ShapeStylePanelHost';
 import { cn } from '@/utils/classnames';
@@ -26,15 +29,10 @@ import {
   setWorkspaceMode,
   type ArtboardFrame,
 } from '@/store/modules/editor';
-import { normalizeDocument } from '@/store/scene/sceneDocument';
-import {
-  copyText,
-  getShare,
-  shareCopyText,
-  shareUrl,
-  updateShareDocument,
-  type ShareRecord,
-} from '@/store/shareStorage';
+import { normalizeDocument } from '@/components/rcb/scene/sceneDocument';
+import { fetchShareApi, updateShareDocumentApi, type ShareDto } from '@/apis/shares';
+import { copyText, shareCopyText, shareUrl } from '@/utils/shareStorage';
+import { buildLoginUrl } from '@/utils/authReturnTo';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
 
 function framesBounds(frames: ArtboardFrame[]) {
@@ -57,8 +55,11 @@ function framesBounds(frames: ArtboardFrame[]) {
  */
 export default function SharePage() {
   const { shareId = '' } = useParams();
+  const { t } = useTranslation();
+  const location = useLocation();
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const viewerId = useSelector((s: any) => s.auth?.user?.id as string | undefined);
   const document = useSelector((s: any) => s.editor.document);
   const selectedNodeId = useSelector((s: any) => s.editor.selectedNodeId);
   const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds || []);
@@ -68,43 +69,67 @@ export default function SharePage() {
   );
   const sceneReloadToken = useSelector((s: any) => s.editor.sceneReloadToken);
   const activeFrameId = useSelector((s: any) => s.editor.activeFrameId as string | null);
-  const [record, setRecord] = useState<ShareRecord | null>(null);
+  const [record, setRecord] = useState<ShareDto | null>(null);
   const [missing, setMissing] = useState(false);
   const [camera, setCamera] = useState<CanvasCamera>(DEFAULT_CAMERA);
   const [inspectOpen, setInspectOpen] = useState(true);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const [stageEl, setStageEl] = useState<HTMLElement | null>(null);
+  useEffect(() => { setStageEl(stageRef.current); }, []);
   const saveTimer = useRef<number | null>(null);
   const shareIdRef = useRef(shareId);
   shareIdRef.current = shareId;
 
-  const canEdit = record?.permission === 'edit';
+  const shareEditLink = record?.permission === 'edit';
+  const canEdit = shareEditLink && Boolean(viewerId);
   const readOnly = !canEdit;
+  const loginToEditUrl = buildLoginUrl(location.pathname + location.search);
 
   useEffect(() => {
-    const s = getShare(shareId);
-    if (!s) {
-      setMissing(true);
-      setRecord(null);
-      return;
-    }
+    let cancelled = false;
     setMissing(false);
-    setRecord(s);
-    dispatch(setDocument(normalizeDocument(s.document)));
-    dispatch(setWorkspaceMode(s.permission === 'preview' ? 'dev' : 'design'));
-    dispatch(setActiveTool('select'));
-    dispatch(setSelectedNodeIds([]));
-    setInspectOpen(s.permission === 'preview');
+    setRecord(null);
+    void fetchShareApi(shareId)
+      .then((res) => {
+        if (cancelled) return;
+        const s = res.share;
+        if (!s?.document) {
+          setMissing(true);
+          return;
+        }
+        setRecord(s);
+        dispatch(setDocument(normalizeDocument(s.document)));
+        dispatch(setSelectedNodeIds([]));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMissing(true);
+          setRecord(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [shareId, dispatch]);
 
-  // Persist edit-share canvas back to local share store.
+  useEffect(() => {
+    if (!record) return;
+    const previewLike = record.permission === 'preview' || (shareEditLink && !viewerId);
+    dispatch(setWorkspaceMode(previewLike ? 'dev' : 'design'));
+    dispatch(setActiveTool('select'));
+    setInspectOpen(previewLike);
+  }, [record?.id, record?.permission, shareEditLink, viewerId, dispatch]);
+
+  // Persist edit-share canvas back to API.
   useEffect(() => {
     if (!canEdit || !record?.id || !document) return undefined;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     const id = record.id;
     saveTimer.current = window.setTimeout(() => {
       if (shareIdRef.current !== id) return;
-      const next = updateShareDocument(id, document);
-      if (next) setRecord(next);
+      void updateShareDocumentApi(id, document)
+        .then((res) => setRecord(res.share))
+        .catch(() => undefined);
     }, 600);
     return () => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
@@ -144,7 +169,19 @@ export default function SharePage() {
   const onCopyText = async () => {
     if (!record || !url) return;
     try {
-      await copyText(shareCopyText(record, url));
+      await copyText(
+        shareCopyText(
+          {
+            id: record.id,
+            name: record.name,
+            permission: record.permission,
+            document: record.document,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+          },
+          url
+        )
+      );
       message.success('分享文案已复制');
     } catch {
       message.error('复制失败');
@@ -156,7 +193,7 @@ export default function SharePage() {
       <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-3 bg-[var(--canvas)] px-6">
         <p className="text-[15px] font-medium text-[var(--ink)]">分享不存在或已失效</p>
         <p className="text-[13px] text-[var(--muted)]">
-          链接可能已过期，或尚未在本机生成过该分享（当前为本地存储预览）。
+          链接可能已过期，或分享已被删除。
         </p>
         <Link
           to="/home"
@@ -199,10 +236,24 @@ export default function SharePage() {
                 : 'bg-[var(--surface)] text-[var(--muted)] ring-1 ring-[var(--line)]'
             )}
           >
-            {canEdit ? '可编辑' : '仅预览'}
+            {canEdit ? t('editor.shareEdit') : t('editor.sharePreview')}
           </span>
         </div>
       </div>
+
+      {shareEditLink && !viewerId ? (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2">
+          <div className="pointer-events-auto flex max-w-[min(520px,calc(100vw-2rem))] items-center gap-3 rounded-full bg-[var(--surface)] px-4 py-2 text-[12px] shadow-sm ring-1 ring-[var(--line)]">
+            <span className="text-[var(--muted)]">{t('editor.shareLoginToEdit')}</span>
+            <Link
+              to={loginToEditUrl}
+              className="shrink-0 font-medium text-[var(--ink)] underline-offset-2 hover:underline"
+            >
+              {t('auth.login')}
+            </Link>
+          </div>
+        </div>
+      ) : null}
 
       <div className="pointer-events-none absolute right-4 top-3 z-20">
         <div className="pointer-events-auto flex items-center gap-2">
@@ -241,7 +292,7 @@ export default function SharePage() {
       </div>
 
       <div className="relative min-h-0 flex-1">
-        <InfiniteCanvasStage
+        <RcbCanvas
           artboard={worldBounds}
           camera={camera}
           onCameraChange={setCamera}
@@ -249,6 +300,7 @@ export default function SharePage() {
           emptyDragPans
           background={stageBackground}
           stageRef={stageRef}
+          defs={<RcbSvgDefs />}
         >
           {frames.map((frame) => (
             <HtmlArtboardFrame
@@ -260,29 +312,25 @@ export default function SharePage() {
             />
           ))}
 
-          <div
-            className="absolute left-0 top-0 z-[1]"
-            style={{ width: worldSurface.width, height: worldSurface.height }}
-          >
-            <SvgCanvas
-              document={{
-                ...document,
-                x: 0,
-                y: 0,
-                width: worldSurface.width,
-                height: worldSurface.height,
-                backgroundColor: 'transparent',
-                backgroundFillType: 'solid',
-              }}
-              reloadToken={sceneReloadToken}
-              documentPatchToken={documentPatchToken}
-              lastPatchedNodeIds={lastPatchedNodeIds}
-              selectedNodeId={selectedNodeId}
-              selectedNodeIds={selectedNodeIds}
-              readOnly={readOnly}
-              embedded
-            />
-          </div>
+          <SvgCanvas
+            document={{
+              ...document,
+              x: 0,
+              y: 0,
+              width: worldSurface.width,
+              height: worldSurface.height,
+              backgroundColor: 'transparent',
+              backgroundFillType: 'solid',
+            }}
+            reloadToken={sceneReloadToken}
+            documentPatchToken={documentPatchToken}
+            lastPatchedNodeIds={lastPatchedNodeIds}
+            selectedNodeId={selectedNodeId}
+            selectedNodeIds={selectedNodeIds}
+            readOnly={readOnly}
+            embedded
+            stageEl={stageEl}
+          />
 
           {frames.map((frame) => (
             <HtmlArtboardFrame
@@ -298,7 +346,7 @@ export default function SharePage() {
             <FrameSelectionChrome frame={activeFrame} />
           ) : null}
           {!readOnly ? <ShapeStylePanelHost document={document} /> : null}
-        </InfiniteCanvasStage>
+        </RcbCanvas>
 
         {!readOnly ? (
           <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">

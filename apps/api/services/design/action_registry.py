@@ -1,0 +1,530 @@
+"""Canvas Action registry — schema (Admin/DB) + FE execute by the same op_key.
+
+Each action has type + hint/schema for the model; apply runs on the client.
+This module seeds missing rows into design_canvas_tool (never overwrites non-empty Admin hints).
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from typing import Any
+
+from services.db import connect
+
+# kind values align with Admin canvasTools filters.
+_DEFAULT_ACTIONS: list[dict[str, Any]] = [
+    {
+        "op_key": "update_node",
+        "kind": "mutate",
+        "label": "更新节点",
+        "sort_order": 10,
+        "model_hint": (
+            "Patch an existing node by id. Args: id (required), plus any of "
+            "x,y,width,height,fill,stroke,opacity,text,cornerRadius,…"
+        ),
+        "args_schema": {
+            "id": "string",
+            "x": "number?",
+            "y": "number?",
+            "width": "number?",
+            "height": "number?",
+            "fill": "string?",
+            "stroke": "string?",
+            "opacity": "number?",
+            "text": "string?",
+            "cornerRadius": "number?",
+        },
+    },
+    {
+        "op_key": "create_shape",
+        "kind": "create",
+        "label": "新建形状",
+        "sort_order": 20,
+        "model_hint": (
+            "Add a shape. Args: shapeType|type = rect|ellipse|circle|line|arrow|"
+            "triangle|polygon|star|path|pen|pencil (+ path for pen/pencil/path; "
+            "sides for polygon/star), x,y,width,height, fill, stroke, borderWidth. "
+            "Pen=pen+path; 画笔=pencil+path (stroke-only). Icons: create_svg / create_icon."
+        ),
+        "args_schema": {
+            "shapeType": (
+                "rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil"
+            ),
+            "x": "number",
+            "y": "number",
+            "width": "number",
+            "height": "number",
+            "sides": "number?",
+            "path": "string? SVG d or point list for pen/pencil",
+            "closed": "boolean?",
+            "fill": "string?",
+            "stroke": "string?",
+            "borderWidth": "number?",
+            "name": "string?",
+        },
+    },
+    {
+        "op_key": "create_text",
+        "kind": "create",
+        "label": "新建文字",
+        "sort_order": 30,
+        "model_hint": "Add a text node. Args: text, x, y, width?, fontSize?, fill?, fontWeight?",
+        "args_schema": {
+            "text": "string",
+            "x": "number",
+            "y": "number",
+            "width": "number?",
+            "fontSize": "number?",
+            "fill": "string?",
+        },
+    },
+    {
+        "op_key": "create_image",
+        "kind": "create",
+        "label": "新建图片",
+        "sort_order": 40,
+        "model_hint": (
+            "Add an image node. Args: src|url or attachmentIndex (user attach), "
+            "x,y,width,height. Or genPrompt for AI image hydrate."
+        ),
+        "args_schema": {
+            "src": "string?",
+            "attachmentIndex": "number?",
+            "genPrompt": "string?",
+            "x": "number",
+            "y": "number",
+            "width": "number",
+            "height": "number",
+        },
+    },
+    {
+        "op_key": "create_svg",
+        "kind": "create",
+        "label": "新建SVG",
+        "sort_order": 50,
+        "model_hint": (
+            "Add SVG icon/illustration. Args: svg (required), x,y,width,height, fill?. "
+            "svg = full <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">…</svg> "
+            "OR fragment (<path d=\"…\"/> / <circle…/>). "
+            "path d: use spaced commands Mm Ll Hh Vv Cc Ss Qq Tt Aa Zz + numbers; "
+            "never glue arc params (bad: a22001…). Backend rejects invalid SVG and retries."
+        ),
+        "args_schema": {
+            "svg": "string (SVG markup, viewBox 0 0 24 24 preferred)",
+            "x": "number",
+            "y": "number",
+            "width": "number",
+            "height": "number",
+            "fill": "string?",
+        },
+    },
+    {
+        "op_key": "create_icon",
+        "kind": "create",
+        "label": "新建图标",
+        "sort_order": 55,
+        "model_hint": (
+            "Same as create_svg for icons. Prefer viewBox 0 0 24 24; valid path d only."
+        ),
+        "args_schema": {
+            "svg": "string (SVG markup, viewBox 0 0 24 24 preferred)",
+            "x": "number",
+            "y": "number",
+            "width": "number",
+            "height": "number",
+            "fill": "string?",
+        },
+    },
+    {
+        "op_key": "create_frame",
+        "kind": "frame",
+        "label": "新建画板",
+        "sort_order": 60,
+        "model_hint": "Create a frame/artboard. Args: x,y,width,height, name?",
+        "args_schema": {
+            "x": "number",
+            "y": "number",
+            "width": "number",
+            "height": "number",
+            "name": "string?",
+        },
+    },
+    {
+        "op_key": "delete_nodes",
+        "kind": "delete",
+        "label": "删除节点",
+        "sort_order": 70,
+        "model_hint": "Remove nodes by id. Args: nodeIds (string[]). Only when user asked to delete.",
+        "args_schema": {"nodeIds": "string[]"},
+    },
+    {
+        "op_key": "update_frame",
+        "kind": "frame",
+        "label": "更新画板",
+        "sort_order": 80,
+        "model_hint": "Update frame size/name. Args: frameId|id, width?, height?, name?",
+        "args_schema": {
+            "frameId": "string",
+            "width": "number?",
+            "height": "number?",
+            "name": "string?",
+        },
+    },
+    {
+        "op_key": "delete_frame",
+        "kind": "frame",
+        "label": "删除画板",
+        "sort_order": 90,
+        "model_hint": (
+            "Delete a frame. Args: frameId|id from SCENE_FRAMES. "
+            "Destructive — first turn must ask confirmation (reply+choices), "
+            "emit this op only after user confirms. Never put ids in reply."
+        ),
+        "args_schema": {"frameId": "string"},
+    },
+    {
+        "op_key": "align_nodes",
+        "kind": "arrange",
+        "label": "对齐节点",
+        "sort_order": 100,
+        "model_hint": (
+            "Align 2+ nodes. Args: nodeIds, mode=left|centerX|right|top|middle|bottom "
+            "(FE reads mode; centerX not center)."
+        ),
+        "args_schema": {
+            "nodeIds": "string[]",
+            "mode": "left|centerX|right|top|middle|bottom",
+        },
+    },
+    {
+        "op_key": "distribute_nodes",
+        "kind": "arrange",
+        "label": "分布节点",
+        "sort_order": 110,
+        "model_hint": "Distribute 3+ nodes. Args: nodeIds, axis=h|v (h=horizontal, v=vertical)",
+        "args_schema": {"nodeIds": "string[]", "axis": "h|v"},
+    },
+    {
+        "op_key": "reorder_nodes",
+        "kind": "arrange",
+        "label": "调整层级",
+        "sort_order": 120,
+        "model_hint": "Z-order. Args: nodeIds, action=front|back|forward|backward",
+        "args_schema": {
+            "nodeIds": "string[]",
+            "action": "front|back|forward|backward",
+        },
+    },
+    {
+        "op_key": "group_nodes",
+        "kind": "arrange",
+        "label": "编组",
+        "sort_order": 130,
+        "model_hint": "Group nodes. Args: nodeIds",
+        "args_schema": {"nodeIds": "string[]"},
+    },
+    {
+        "op_key": "ungroup_nodes",
+        "kind": "arrange",
+        "label": "取消编组",
+        "sort_order": 140,
+        "model_hint": "Ungroup. Args: nodeIds (group ids)",
+        "args_schema": {"nodeIds": "string[]"},
+    },
+    {
+        "op_key": "duplicate_nodes",
+        "kind": "arrange",
+        "label": "复制节点",
+        "sort_order": 150,
+        "model_hint": "Duplicate nodes. Args: nodeIds, offsetX?, offsetY?",
+        "args_schema": {
+            "nodeIds": "string[]",
+            "offsetX": "number?",
+            "offsetY": "number?",
+        },
+    },
+    {
+        "op_key": "flip_nodes",
+        "kind": "arrange",
+        "label": "翻转节点",
+        "sort_order": 160,
+        "model_hint": "Flip nodes. Args: nodeIds, flipX?=true and/or flipY?=true",
+        "args_schema": {
+            "nodeIds": "string[]",
+            "flipX": "boolean?",
+            "flipY": "boolean?",
+        },
+    },
+    {
+        "op_key": "boolean_op",
+        "kind": "arrange",
+        "label": "布尔运算",
+        "sort_order": 170,
+        "model_hint": "Boolean on shapes. Args: nodeIds (2+), mode=union|subtract|intersect|exclude",
+        "args_schema": {
+            "nodeIds": "string[]",
+            "mode": "union|subtract|intersect|exclude",
+        },
+    },
+    {
+        "op_key": "set_canvas_background",
+        "kind": "canvas",
+        "label": "画布背景",
+        "sort_order": 180,
+        "model_hint": (
+            "Set infinite-canvas stage background (not artboard fill). "
+            "Args: color|fill|backgroundColor, fillType?=solid|linear|radial|"
+            "angular|diffuse|image, fillEnd?, gradientAngle?, opacity?"
+        ),
+        "args_schema": {
+            "color": "string?",
+            "fill": "string?",
+            "backgroundColor": "string?",
+            "fillType": "solid|linear|radial|angular|diffuse|image?",
+            "fillEnd": "string?",
+            "gradientAngle": "number?",
+            "opacity": "number?",
+        },
+    },
+    {
+        "op_key": "set_viewport",
+        "kind": "canvas",
+        "label": "视口",
+        "sort_order": 190,
+        "model_hint": (
+            "Zoom/fit. Args: action=zoom_in|zoom_out|fit|set; "
+            "for set pass percent (e.g. 100) or zoom (1.0)."
+        ),
+        "args_schema": {
+            "action": "zoom_in|zoom_out|fit|set",
+            "percent": "number?",
+            "zoom": "number?",
+        },
+    },
+    {
+        "op_key": "image_process",
+        "kind": "image",
+        "label": "图片处理",
+        "sort_order": 200,
+        "model_hint": (
+            "Run image toolbar pipeline on a node (spawns processing clone). "
+            "Args: nodeId (image id), kind=upscale|removeBg|eraser|editElements|"
+            "editText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. "
+            "Optional: targetWidth, targetHeight, meta (object)."
+        ),
+        "args_schema": {
+            "nodeId": "string",
+            "kind": (
+                "upscale|removeBg|eraser|editElements|editText|"
+                "multiAngle|expand|adjust|crop|flipRotate|moveObject|vector"
+            ),
+            "targetWidth": "number?",
+            "targetHeight": "number?",
+            "meta": "object?",
+        },
+    },
+    {
+        "op_key": "export_canvas",
+        "kind": "export",
+        "label": "导出",
+        "sort_order": 210,
+        "model_hint": (
+            "Export canvas/selection download. Args: format=png|jpeg|svg, "
+            "nodeIds? (selection), multiplier? (scale, default 1), filename?"
+        ),
+        "args_schema": {
+            "format": "png|jpeg|svg",
+            "nodeIds": "string[]?",
+            "multiplier": "number?",
+            "filename": "string?",
+        },
+    },
+]
+
+
+# Seed rows whose older args_schema keys diverge from FE executeDesignTool.
+# On boot we refresh hint+schema when stored schema still uses these markers
+# or is missing the FE-canonical field.
+_STALE_SCHEMA_CHECKS: dict[str, dict[str, Any]] = {
+    "align_nodes": {"must_contain": ("mode",), "stale_if_contains": ('"align"',)},
+    "distribute_nodes": {"must_contain": ('"h|v"',), "stale_if_contains": ()},
+    "reorder_nodes": {
+        "must_contain": ('"action"',),
+        "stale_if_contains": ('"order"', "bring_to_front"),
+    },
+    "flip_nodes": {
+        "must_contain": ("flipX",),
+        "stale_if_contains": ('"axis"',),
+    },
+    "set_viewport": {
+        "must_contain": ('"action"',),
+        "stale_if_contains": (),
+    },
+    "set_canvas_background": {
+        "must_contain": ("color", "fillType"),
+        "stale_if_contains": (),
+    },
+    "image_process": {
+        "must_contain": ("moveObject", "vector"),
+        "stale_if_contains": (),
+    },
+    "create_shape": {
+        "must_contain": ("triangle", "pen"),
+        "stale_if_contains": (),
+    },
+    "create_svg": {
+        "must_contain": ("viewBox",),
+        "stale_if_contains": (),
+    },
+    "create_icon": {
+        "must_contain": ("viewBox",),
+        "stale_if_contains": (),
+    },
+}
+
+
+def _schema_is_stale(op_key: str, existing_schema: str, seed_schema: str) -> bool:
+    existing = (existing_schema or "").strip()
+    if not existing:
+        return True
+    if existing == seed_schema:
+        return False
+    check = _STALE_SCHEMA_CHECKS.get(op_key)
+    if not check:
+        return False
+    for needle in check.get("stale_if_contains") or ():
+        if needle in existing:
+            return True
+    for needle in check.get("must_contain") or ():
+        if needle not in existing:
+            return True
+    return False
+
+
+def ensure_action_registry(*, force_hints: bool = False) -> int:
+    """Insert missing design_canvas_tool rows. Returns number of inserts/updates.
+
+    Never overwrites a non-empty model_hint unless force_hints=True or schema is stale.
+    """
+    now = time.time()
+    changed = 0
+    with connect() as conn:
+        for item in _DEFAULT_ACTIONS:
+            key = item["op_key"]
+            schema_s = json.dumps(item.get("args_schema") or {}, ensure_ascii=False)
+            row = conn.execute(
+                "SELECT id, model_hint, args_schema FROM design_canvas_tool WHERE op_key = ?",
+                (key,),
+            ).fetchone()
+            if not row:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO design_canvas_tool
+                        (op_key, kind, label, model_hint, args_schema, enabled,
+                         sort_order, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+                        """,
+                        (
+                            key,
+                            item["kind"],
+                            item["label"],
+                            item["model_hint"],
+                            schema_s,
+                            int(item["sort_order"]),
+                            now,
+                            now,
+                        ),
+                    )
+                except Exception:
+                    # Older schema without args_schema — insert without it.
+                    conn.execute(
+                        """
+                        INSERT INTO design_canvas_tool
+                        (op_key, kind, label, model_hint, enabled, sort_order,
+                         created_at, updated_at)
+                        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                        """,
+                        (
+                            key,
+                            item["kind"],
+                            item["label"],
+                            item["model_hint"],
+                            int(item["sort_order"]),
+                            now,
+                            now,
+                        ),
+                    )
+                changed += 1
+                continue
+            hint = ""
+            try:
+                hint = str(row["model_hint"] or "").strip()
+            except Exception:
+                hint = ""
+            try:
+                existing_schema = str(row["args_schema"] or "").strip()
+            except Exception:
+                existing_schema = ""
+            # Refresh create_shape hint when pen/pencil not documented yet.
+            needs_pen_hint = key == "create_shape" and "pen" not in hint.lower()
+            stale = _schema_is_stale(key, existing_schema, schema_s)
+            if force_hints or not hint or needs_pen_hint or stale:
+                try:
+                    conn.execute(
+                        """
+                        UPDATE design_canvas_tool
+                        SET kind=?, label=?, model_hint=?, args_schema=?,
+                            sort_order=?, updated_at=?
+                        WHERE op_key=?
+                        """,
+                        (
+                            item["kind"],
+                            item["label"],
+                            item["model_hint"],
+                            schema_s,
+                            int(item["sort_order"]),
+                            now,
+                            key,
+                        ),
+                    )
+                    changed += 1
+                except Exception:
+                    conn.execute(
+                        """
+                        UPDATE design_canvas_tool
+                        SET kind=?, label=?, model_hint=?, sort_order=?, updated_at=?
+                        WHERE op_key=?
+                        """,
+                        (
+                            item["kind"],
+                            item["label"],
+                            item["model_hint"],
+                            int(item["sort_order"]),
+                            now,
+                            key,
+                        ),
+                    )
+                    changed += 1
+            else:
+                # Fill args_schema only when empty.
+                if not existing_schema:
+                    try:
+                        conn.execute(
+                            """
+                            UPDATE design_canvas_tool
+                            SET args_schema=?, updated_at=?
+                            WHERE op_key=?
+                            """,
+                            (schema_s, now, key),
+                        )
+                        changed += 1
+                    except Exception:
+                        pass
+        conn.commit()
+    return changed
+
+
+def default_action_keys() -> list[str]:
+    return [a["op_key"] for a in _DEFAULT_ACTIONS]

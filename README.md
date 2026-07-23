@@ -40,7 +40,7 @@ pip install -e ../../packages/scene-builder-py
 pip install -e .
 # 复制 .env.example → .env，按需改 POPPLER_PATH / LIBREOFFICE_PATH
 
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 # 另开终端：
 celery -A worker.celery_app.celery worker -l info --pool=solo
 ```
@@ -59,6 +59,33 @@ celery -A worker.celery_app.celery worker -l info --pool=solo
 异步任务：`POST /api/v1/import/jobs` → `GET /api/v1/import/jobs/{id}`（页图在 `storage/results/{job_id}/pages/`）
 
 
+
+## 自动化测试
+
+分层与 Dify 同类工程一致：前端单元 / API 单元+集成 / Playwright E2E，CI 见 `.github/workflows/`。
+
+| 层级 | 工具 | 目录 | CI |
+|------|------|------|-----|
+| React 单元 | Vitest + RTL | `apps/web/src/**/*.{test,spec}.tsx` | `web-tests.yml` |
+| API 单元/集成 | pytest (+ xdist / cov) | `apps/api/tests/{unit,integration}_tests/` | `api-tests.yml` |
+| 浏览器 E2E | Playwright | `e2e/tests/` | `e2e-tests.yml` |
+
+```bash
+# 前端
+npm run test:web
+npm run test:web:watch
+npm run test:web:coverage
+
+# 后端
+npm run test:api
+npm run test:api:unit
+npm run test:api:coverage
+
+# E2E（首次需在 e2e/ 执行 npm install && npx playwright install chromium）
+npm run test:e2e
+```
+
+> 前端使用 **Vitest**（Vite 原生，API 与 Jest+RTL 相同；Dify 当前 web 栈亦已迁到 Vitest）。
 
 ## 文档
 

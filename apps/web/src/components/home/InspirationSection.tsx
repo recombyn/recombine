@@ -1,43 +1,47 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { HiHeart, HiOutlineChatBubbleOvalLeft } from 'react-icons/hi2';
-import { fetchPlazaFeed, fetchPlazaItem } from '@/apis/plaza';
+import { HiHeart } from 'react-icons/hi2';
 import {
-  caseAuthorId,
+  fetchMyLikedIds,
+  likePlazaItem,
+  unlikePlazaItem,
+} from '@/apis/me';
+import {
+  fetchPlazaFeed,
+  fetchPlazaItem,
+  recordPlazaUse,
+  type PlazaCategoryFilter,
+} from '@/apis/plaza';
+import {
   caseAuthorLabel,
-  loadOfficialCaseDocument,
-  loadOfficialCasesIndex,
   resolveCaseTitle,
+  resolveCasePrompt,
   type OfficialCaseCategory,
   type OfficialCaseMeta,
-} from '@/cases/officialCases';
+  normalizeCaseCategory,
+} from '@/utils/officialCases';
 import InspirationCasePreview from '@/components/home/InspirationCasePreview';
-import LazyTemplateThumb from '@/components/home/LazyTemplateThumb';
-import { projectThumbFrameClass } from '@/components/home/projectThumb';
+import EmptyState from '@/components/home/EmptyState';
+import PlazaCoverThumb from '@/components/home/PlazaCoverThumb';
+import { projectThumbFrameClass } from '@/utils/projectThumb';
 import SegmentTabs from '@/components/home/SegmentTabs';
-import {
-  formatStatCount,
-  isCaseLiked,
-  loadLikedCases,
-  seedStat,
-  toggleLikedCase,
-} from '@/store/likedCases';
-import { loadFollowedUsers } from '@/store/followedUsers';
-import { useInfiniteList } from '@/hooks/useInfiniteList';
+import { formatStatCount } from '@/utils/likedCases';
+import { nearestScrollRoot } from '@/utils/useInfiniteList';
 import { cn } from '@/utils/classnames';
+import { buildLoginUrl } from '@/utils/authReturnTo';
 import { message } from '@/components/base';
 
 type Props = {
-  onOpenCase: (meta: OfficialCaseMeta, document: unknown) => void;
+  onOpenCase: (meta: OfficialCaseMeta, document: unknown, opts?: { prompt?: string }) => void;
   disabled?: boolean;
 };
 
-type PlazaTab = 'recommended' | 'latest' | 'following';
+type PlazaTab = PlazaCategoryFilter;
 
-const TABS: PlazaTab[] = ['recommended', 'latest', 'following'];
-const PAGE_SIZE = 20;
+const TABS: PlazaTab[] = ['all', 'website', 'mobile', 'image', 'poster'];
+const PAGE_SIZE = 12;
 
 function feedToMeta(item: {
   id: string;
@@ -46,18 +50,23 @@ function feedToMeta(item: {
   category: string;
   authorName: string;
   authorAvatar?: string | null;
+  coverDocument?: unknown | null;
   createdAt: number;
+  likeCount?: number;
+  useCount?: number;
 }): OfficialCaseMeta {
-  const cat = item.category as OfficialCaseCategory;
   return {
     id: item.id,
     name: item.title,
-    category: cat === 'poster' || cat === 'ui' ? cat : 'resume',
+    category: normalizeCaseCategory(item.category) as OfficialCaseCategory,
     source: 'plaza',
     authorName: item.authorName,
     authorAvatar: item.authorAvatar,
+    coverDocument: item.coverDocument ?? null,
     authorUserId: item.userId,
     createdAt: item.createdAt,
+    likeCount: Number(item.likeCount) || 0,
+    useCount: Number(item.useCount) || 0,
   };
 }
 
@@ -66,11 +75,8 @@ async function loadCaseDocument(
   cache: Record<string, unknown>
 ): Promise<unknown> {
   if (cache[meta.id]) return cache[meta.id];
-  if (meta.source === 'plaza' || !meta.file) {
-    const res = await fetchPlazaItem(meta.id);
-    return res.item.document;
-  }
-  return loadOfficialCaseDocument(meta.file);
+  const res = await fetchPlazaItem(meta.id);
+  return res.item.document;
 }
 
 export default function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
@@ -78,136 +84,111 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
   const navigate = useNavigate();
   const user = useSelector((s: any) => s.auth?.user);
   const userId = user?.id as string | undefined;
-  const [tab, setTab] = useState<PlazaTab>('recommended');
+  const [tab, setTab] = useState<PlazaTab>('all');
   const [cases, setCases] = useState<OfficialCaseMeta[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [docs, setDocs] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [likedIds, setLikedIds] = useState<Set<string>>(() => new Set());
-  const [followedAuthorIds, setFollowedAuthorIds] = useState<Set<string>>(() => new Set());
+  const [likeBusyId, setLikeBusyId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const [previewRail, setPreviewRail] = useState<OfficialCaseMeta[]>([]);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const fetchGen = useRef(0);
 
   useEffect(() => {
-    setLikedIds(new Set(loadLikedCases(userId).map((x) => x.id)));
-    setFollowedAuthorIds(new Set(loadFollowedUsers(userId).map((x) => x.id)));
-  }, [userId]);
-
-  // Metadata only — do not hydrate every document up front (that freezes the UI).
-  useEffect(() => {
+    if (!userId) {
+      setLikedIds(new Set());
+      return;
+    }
     let cancelled = false;
-    setLoading(true);
-    Promise.all([
-      loadOfficialCasesIndex().catch(() => ({ cases: [] as OfficialCaseMeta[] })),
-      fetchPlazaFeed(100).catch(() => ({ items: [] })),
-    ])
-      .then(([index, feed]) => {
+    void fetchMyLikedIds()
+      .then((likedRes) => {
         if (cancelled) return;
-        const official = (index.cases || []).map((c) => ({
-          ...c,
-          source: (c.source || 'official') as 'official',
-          authorUserId: 'official:recombyn',
-          authorName: c.authorName || undefined,
-        }));
-        const community = (feed.items || []).map(feedToMeta);
-        setCases([...official, ...community]);
-        setDocs({});
+        setLikedIds(new Set(likedRes.ids || []));
       })
       .catch(() => {
-        if (!cancelled) message.error(t('home.casesLoadFailed'));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setLikedIds(new Set());
       });
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, [userId]);
 
-  const visibleAll = useMemo(() => {
-    if (tab === 'following') {
-      return cases.filter((c) => followedAuthorIds.has(caseAuthorId(c)));
-    }
-    if (tab === 'latest') {
-      return [...cases].sort((a, b) => {
-        const ta = a.createdAt || 0;
-        const tb = b.createdAt || 0;
-        if (ta || tb) return tb - ta;
-        return 0;
-      });
-    }
-    return cases;
-  }, [cases, tab, followedAuthorIds]);
+  const loadPage = useCallback(
+    async (nextTab: PlazaTab, nextPage: number, append: boolean) => {
+      const gen = ++fetchGen.current;
+      if (append) setLoadingMore(true);
+      else setLoading(true);
+      try {
+        const feed = await fetchPlazaFeed({
+          page: nextPage,
+          pageSize: PAGE_SIZE,
+          tab: 'latest',
+          category: nextTab,
+        });
+        if (gen !== fetchGen.current) return;
+        const mapped = (feed.items || []).map(feedToMeta);
+        setCases((prev) => (append ? [...prev, ...mapped] : mapped));
+        setPage(nextPage);
+        setHasMore(Boolean(feed.hasMore));
+        if (!append) setDocs({});
+      } catch {
+        if (gen === fetchGen.current) message.error(t('home.casesLoadFailed'));
+      } finally {
+        if (gen === fetchGen.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    [t]
+  );
 
-  const { visible, hasMore, sentinelRef } = useInfiniteList(visibleAll, {
-    pageSize: PAGE_SIZE,
-    resetKey: tab,
-  });
-
-  // Fetch documents only for currently revealed cards.
+  // Tab change / first mount → single feed page (no per-item document calls).
   useEffect(() => {
-    let cancelled = false;
-    const missing = visible.filter((c) => docs[c.id] === undefined);
-    if (!missing.length) return undefined;
+    void loadPage(tab, 1, false);
+  }, [tab, loadPage]);
 
-    void Promise.all(
-      missing.map(async (c) => {
-        try {
-          const doc = await loadCaseDocument(c, docs);
-          return [c.id, doc] as const;
-        } catch {
-          return [c.id, null] as const;
-        }
-      })
-    ).then((entries) => {
-      if (cancelled) return;
-      setDocs((prev) => {
-        const next = { ...prev };
-        for (const [id, doc] of entries) {
-          if (next[id] === undefined) next[id] = doc;
-        }
-        return next;
-      });
-    });
+  // Server-side infinite scroll → next feed page only.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore || loading || loadingMore) return undefined;
+    const root = nearestScrollRoot(el);
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        void loadPage(tab, page + 1, true);
+      },
+      { root, rootMargin: '320px 0px', threshold: 0 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loading, loadingMore, loadPage, page, tab]);
 
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: hydrate by visible ids
-  }, [visible.map((c) => c.id).join(',')]);
-
-  // Ensure the open preview (and neighbors) have documents.
+  // Document JSON only when preview opens (not for list thumbnails).
   useEffect(() => {
     if (!previewId) return;
-    const idx = (previewRail.length ? previewRail : cases).findIndex((c) => c.id === previewId);
-    const rail = previewRail.length ? previewRail : cases;
-    const near = [rail[idx - 1], rail[idx], rail[idx + 1]].filter(Boolean) as OfficialCaseMeta[];
-    const missing = near.filter((c) => docs[c.id] === undefined);
-    if (!missing.length) return;
+    if (docs[previewId] !== undefined) return;
     let cancelled = false;
-    void Promise.all(
-      missing.map(async (c) => {
-        try {
-          return [c.id, await loadCaseDocument(c, docs)] as const;
-        } catch {
-          return [c.id, null] as const;
-        }
+    const meta = cases.find((c) => c.id === previewId);
+    if (!meta) return;
+    void loadCaseDocument(meta, docs)
+      .then((doc) => {
+        if (cancelled) return;
+        setDocs((prev) => (prev[previewId] !== undefined ? prev : { ...prev, [previewId]: doc }));
       })
-    ).then((entries) => {
-      if (cancelled) return;
-      setDocs((prev) => {
-        const next = { ...prev };
-        for (const [id, doc] of entries) {
-          if (next[id] === undefined) next[id] = doc;
-        }
-        return next;
+      .catch(() => {
+        if (cancelled) return;
+        setDocs((prev) => (prev[previewId] !== undefined ? prev : { ...prev, [previewId]: null }));
       });
-    });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewId, previewRail, cases]);
+  }, [previewId]);
 
   const previewMeta = useMemo(
     () => (previewId ? cases.find((c) => c.id === previewId) || null : null),
@@ -216,7 +197,6 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
 
   const openPreview = (meta: OfficialCaseMeta) => {
     if (disabled) return;
-    setPreviewRail(visibleAll.length ? visibleAll : cases);
     setPreviewId(meta.id);
   };
 
@@ -225,7 +205,17 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     setOpeningId(meta.id);
     try {
       const document = docs[meta.id] || (await loadCaseDocument(meta, docs));
-      onOpenCase(meta, document);
+      void recordPlazaUse(meta.id)
+        .then((res) => {
+          const n = Number(res.useCount);
+          if (!Number.isFinite(n)) return;
+          setCases((prev) =>
+            prev.map((c) => (c.id === meta.id ? { ...c, useCount: n } : c))
+          );
+        })
+        .catch(() => undefined);
+      setPreviewId(null);
+      onOpenCase(meta, document, { prompt: resolveCasePrompt(meta, t) });
     } catch {
       message.error(t('home.casesOpenFailed'));
     } finally {
@@ -233,28 +223,53 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     }
   };
 
-  const onToggleLike = (meta: OfficialCaseMeta, e?: MouseEvent) => {
+  const onToggleLike = async (meta: OfficialCaseMeta, e?: MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
     if (!userId) {
       message.warning(t('home.cases.likeNeedLogin'));
-      navigate('/login', { state: { from: '/home' } });
+      navigate(buildLoginUrl('/home'));
       return;
     }
-    const { liked, list } = toggleLikedCase(meta, userId);
-    setLikedIds(new Set(list.map((x) => x.id)));
-    message.success(liked ? t('home.cases.likedToast') : t('home.cases.unlikedToast'));
+    if (likeBusyId === meta.id) return;
+    const wasLiked = likedIds.has(meta.id);
+    setLikeBusyId(meta.id);
+    try {
+      const res = await (wasLiked ? unlikePlazaItem(meta.id) : likePlazaItem(meta.id));
+      const nowLiked = Boolean(res?.liked);
+      const serverCount = Number(res?.likeCount);
+      setLikedIds((prev) => {
+        const next = new Set(prev);
+        if (nowLiked) next.add(meta.id);
+        else next.delete(meta.id);
+        return next;
+      });
+      setCases((prev) =>
+        prev.map((c) => {
+          if (c.id !== meta.id) return c;
+          const nextCount = Number.isFinite(serverCount)
+            ? Math.max(0, serverCount)
+            : (() => {
+                const base = Number(c.likeCount) || 0;
+                if (nowLiked) return wasLiked ? base : base + 1;
+                return wasLiked ? Math.max(0, base - 1) : base;
+              })();
+          return { ...c, likeCount: nextCount };
+        })
+      );
+      message.success(nowLiked ? t('home.cases.likedToast') : t('home.cases.unlikedToast'));
+    } catch {
+      message.error(t('home.casesLoadFailed'));
+    } finally {
+      setLikeBusyId(null);
+    }
   };
 
   const onTabClick = (next: PlazaTab) => {
-    if (next === 'following' && !userId) {
-      message.warning(t('home.cases.followNeedLogin'));
-      navigate('/login', { state: { from: '/home' } });
-      return;
-    }
-    if (next === 'following') {
-      setFollowedAuthorIds(new Set(loadFollowedUsers(userId).map((x) => x.id)));
-    }
+    if (next === tab) return;
+    setCases([]);
+    setHasMore(false);
+    setPage(1);
     setTab(next);
   };
 
@@ -262,45 +277,41 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     'grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5';
 
   return (
-    <section>
+    <section className="w-full min-w-0">
       <h2 className="mb-3 text-[16px] font-semibold tracking-tight text-[var(--ink)]">
         {t('home.cases.title')}
       </h2>
-
       <SegmentTabs
         className="mb-5"
         aria-label={t('home.cases.title')}
-        tabs={TABS.map((id) => ({ id, label: t(`home.cases.tab.${id}`) }))}
+        tabs={TABS.map((id) => ({ id, label: t(`home.cases.cat.${id}`) }))}
         value={tab}
         onChange={onTabClick}
       />
 
       {loading ? (
-        <div className={gridClass}>
+        <div className={cn(gridClass, 'w-full')}>
           {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i}>
-              <div className={projectThumbFrameClass('animate-pulse bg-[var(--accent-soft)] shadow-none')} />
+            <div key={i} aria-busy="true">
+              <div className={projectThumbFrameClass('skeleton-bone shadow-none')} />
               <div className="mt-2.5 flex items-center gap-2">
-                <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-[var(--accent-soft)]" />
+                <div className="skeleton-bone !rounded-full h-8 w-8 shrink-0" />
                 <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="h-3 w-3/4 animate-pulse rounded bg-[var(--accent-soft)]" />
-                  <div className="h-2.5 w-1/2 animate-pulse rounded bg-[var(--accent-soft)]" />
+                  <div className="skeleton-bone h-3 w-3/4" />
+                  <div className="skeleton-bone h-2.5 w-1/2" />
                 </div>
               </div>
             </div>
           ))}
         </div>
-      ) : visibleAll.length === 0 ? (
-        <div className="rounded-[12px] bg-[var(--canvas)] px-4 py-16 text-center text-[13px] text-[var(--muted)]">
-          {tab === 'following' ? t('home.cases.emptyFollowing') : t('home.cases.empty')}
-        </div>
+      ) : cases.length === 0 ? (
+        <EmptyState hint={t('home.cases.empty')} />
       ) : (
         <>
-          <div className={gridClass}>
-            {visible.map((c) => {
-              const liked = likedIds.has(c.id) || isCaseLiked(c.id, userId);
-              const likes = seedStat(c.id, 40, 900) + (liked ? 1 : 0);
-              const comments = seedStat(c.id + ':c', 20, 800);
+          <div className={cn(gridClass, 'w-full')}>
+            {cases.map((c) => {
+              const liked = likedIds.has(c.id);
+              const likes = Math.max(0, Number(c.likeCount) || 0);
               const title = resolveCaseTitle(c, t);
               const author = caseAuthorLabel(c, t);
               const initial = (author[0] || 'R').toUpperCase();
@@ -312,7 +323,8 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
                     onClick={() => openPreview(c)}
                     className="block w-full text-left disabled:opacity-60"
                   >
-                    <LazyTemplateThumb document={docs[c.id]} fit="cover" />
+                    {/* Plaza feed coverDocument only — no full canvas fetch */}
+                    <PlazaCoverThumb coverDocument={c.coverDocument} />
                   </button>
 
                   <div className="mt-2.5 flex items-start gap-2">
@@ -327,7 +339,7 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
                         className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[9px] font-bold text-[var(--on-brand)]"
                         aria-hidden
                       >
-                        {c.source === 'plaza' ? initial : 'RY'}
+                        {initial}
                       </span>
                     )}
                     <div className="min-w-0 flex-1">
@@ -347,9 +359,10 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
                         type="button"
                         aria-pressed={liked}
                         aria-label={liked ? t('home.cases.unlike') : t('home.cases.like')}
-                        onClick={(e) => onToggleLike(c, e)}
+                        disabled={likeBusyId === c.id}
+                        onClick={(e) => void onToggleLike(c, e)}
                         className={cn(
-                          'inline-flex items-center gap-0.5 transition hover:text-[var(--ink)]',
+                          'inline-flex items-center gap-0.5 transition hover:text-[var(--ink)] disabled:opacity-50',
                           liked && 'text-[#e11d48]'
                         )}
                       >
@@ -359,37 +372,34 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
                         />
                         {formatStatCount(likes)}
                       </button>
-                      <span className="inline-flex items-center gap-0.5" aria-hidden>
-                        <HiOutlineChatBubbleOvalLeft className="h-3.5 w-3.5" />
-                        {formatStatCount(comments)}
-                      </span>
                     </div>
                   </div>
                 </article>
               );
             })}
           </div>
-          {hasMore ? <div ref={sentinelRef} className="h-8 w-full" aria-hidden /> : null}
+          {hasMore || loadingMore ? (
+            <div ref={sentinelRef} className="flex h-10 w-full items-center justify-center" aria-hidden>
+              {loadingMore ? (
+                <span className="text-[12px] text-[var(--muted)]">…</span>
+              ) : null}
+            </div>
+          ) : null}
         </>
       )}
 
       <InspirationCasePreview
         open={!!previewMeta}
         caseMeta={previewMeta}
-        cases={previewRail.length ? previewRail : cases}
-        docs={docs}
+        projectDocument={previewMeta ? docs[previewMeta.id] ?? null : null}
         likedIds={likedIds}
+        likeBusy={!!previewMeta && likeBusyId === previewMeta.id}
         remixing={!!openingId}
         onClose={() => {
           setPreviewId(null);
-          setPreviewRail([]);
         }}
-        onSelect={(meta) => setPreviewId(meta.id)}
         onRemix={(meta) => void remix(meta)}
         onToggleLike={(meta) => onToggleLike(meta)}
-        onFollowChange={() =>
-          setFollowedAuthorIds(new Set(loadFollowedUsers(userId).map((x) => x.id)))
-        }
       />
     </section>
   );

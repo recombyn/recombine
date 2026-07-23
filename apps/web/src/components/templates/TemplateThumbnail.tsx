@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createSvgBoard, loadSceneOntoSvg } from '@/store/scene/sceneToSvg';
+import { createSvgBoard, loadSceneOntoSvg } from '@/components/rcb/scene/sceneToSvg';
 
 function isEmptyDocument(document: any) {
   const children = document?.deltaSetLike?.ROOT?.children;

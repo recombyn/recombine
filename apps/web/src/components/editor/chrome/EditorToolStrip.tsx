@@ -1,29 +1,66 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { HiOutlineDocument, HiOutlinePhoto } from 'react-icons/hi2';
-import { LuFrame, LuHand, LuMousePointer2 } from 'react-icons/lu';
+import { useTranslation } from 'react-i18next';
+import { HiOutlinePhoto } from 'react-icons/hi2';
+import {
+  LuArrowUpRight,
+  LuCircle,
+  LuFrame,
+  LuHand,
+  LuHexagon,
+  LuImage,
+  LuMinus,
+  LuMousePointer2,
+  LuPaintBucket,
+  LuPenTool,
+  LuPencil,
+  LuSquare,
+  LuStar,
+  LuTriangle,
+  LuType,
+} from 'react-icons/lu';
 import { Dropdown, Tooltip, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
-import { layerIconByKind } from '@/components/editor/chrome/layerIcons';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
-import { detectImportSourceType, importViaJob } from '@/apis/import';
-import { cn } from '@/utils/classnames';
+import FontGeneratorPanel from '@/components/editor/chrome/FontGeneratorPanel';
+import { uploadImageFile, readFileAsDataUrl } from '@/apis/upload';
 import {
   setActiveTool,
-  setPendingImageSrc,
   setShapeKind,
-  startImportPlaceholder,
-  finishImportPlaceholder,
-  cancelImportPlaceholder,
+  startImageUploadPlaceholder,
+  finishImageProcess,
+  failImageProcess,
 } from '@/store/modules/editor';
-
-const FILE_ACCEPT =
-  '.pdf,.doc,.docx,.psd,.xd,.rp,.fig,application/pdf,image/vnd.adobe.photoshop,application/octet-stream';
+import {
+  fitImageSize,
+  measureImageNaturalSize,
+} from '@/components/rcb/scene/sceneDocument';
+import { sceneToDocumentCoords } from '@/components/rcb/scene/svgToScene';
+import { rcbCenterOnPoint, rcbScreenToScene, type RcbCamera } from '@/components/rcb';
+import { cn } from '@/utils/classnames';
 
 const MENU_ICON_CLASS = 'h-4 w-4';
 const TOOL_ICON_CLASS = 'h-4 w-4 shrink-0';
 const STROKE = 1.5;
 const MENU_POPUP = 'min-w-[168px]';
+
+type LayerIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
+
+/** One family (Lucide) so layer glyphs share stroke weight and optical size. */
+const layerIconByKind: Record<string, LayerIconComponent> = {
+  text: LuType,
+  image: LuImage,
+  rect: LuSquare,
+  line: LuMinus,
+  arrow: LuArrowUpRight,
+  circle: LuCircle,
+  triangle: LuTriangle,
+  star: LuStar,
+  polygon: LuHexagon,
+  pen: LuPenTool,
+  pencil: LuPencil,
+  path: LuPenTool,
+};
 
 function MenuLabel({
   iconKey,
@@ -48,58 +85,6 @@ function MenuLabel({
   );
 }
 
-const L = {
-  select: '选择',
-  pan: '移动',
-  frame: '智能画板',
-  shape: '形状',
-  pen: '钢笔',
-  pencil: '铅笔',
-  text: '文字',
-  rect: '矩形',
-  line: '线条',
-  arrow: '箭头',
-  circle: '椭圆',
-  polygon: '多边形',
-  star: '星形',
-  uploadImage: '图片',
-  file: '文件',
-  importing: '正在解析…',
-  importOk: '导入成功',
-  importFail: '导入失败',
-  importUnsupported: '暂不支持该格式（PDF / Word / Figma / Axure / PS / XD）',
-};
-
-const SELECT_ITEMS: MenuItemType[] = [
-  {
-    key: 'select',
-    label: (
-      <MenuLabel
-        label={L.select}
-        icon={<LuMousePointer2 className={MENU_ICON_CLASS} strokeWidth={STROKE} />}
-      />
-    ),
-  },
-  {
-    key: 'pan',
-    label: (
-      <MenuLabel
-        label={L.pan}
-        icon={<LuHand className={MENU_ICON_CLASS} strokeWidth={STROKE} />}
-      />
-    ),
-  },
-];
-
-const SHAPE_ITEMS: MenuItemType[] = [
-  { key: 'rect', label: <MenuLabel iconKey="rect" label={L.rect} /> },
-  { key: 'line', label: <MenuLabel iconKey="line" label={L.line} /> },
-  { key: 'arrow', label: <MenuLabel iconKey="arrow" label={L.arrow} /> },
-  { key: 'circle', label: <MenuLabel iconKey="circle" label={L.circle} /> },
-  { key: 'polygon', label: <MenuLabel iconKey="triangle" label={L.polygon} /> },
-  { key: 'star', label: <MenuLabel iconKey="star" label={L.star} /> },
-];
-
 function ToolIcon({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span
@@ -119,6 +104,7 @@ function ToolBtn({
   tip,
   ariaLabel,
   active,
+  disabled,
   onClick,
   children,
 }: {
@@ -126,6 +112,7 @@ function ToolBtn({
   tip?: string;
   ariaLabel?: string;
   active?: boolean;
+  disabled?: boolean;
   onClick?: () => void;
   children: ReactNode;
 }) {
@@ -134,9 +121,11 @@ function ToolBtn({
     <button
       type="button"
       aria-label={label}
+      disabled={disabled}
       onClick={onClick}
       className={cn(
         'inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+        disabled && 'pointer-events-none opacity-40',
         active
           ? 'bg-[var(--ink)] text-[var(--on-brand)]'
           : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
@@ -157,6 +146,7 @@ function ToolBtn({
 function SplitToolButton({
   tip,
   active,
+  disabled,
   menuOpen,
   onMenuOpenChange,
   items,
@@ -169,6 +159,7 @@ function SplitToolButton({
   /** Accessible name only; no hover tip (dropdown is the secondary panel). */
   tip: string;
   active?: boolean;
+  disabled?: boolean;
   menuOpen: boolean;
   onMenuOpenChange: (open: boolean) => void;
   items: MenuItemType[];
@@ -183,8 +174,11 @@ function SplitToolButton({
   return (
     <Dropdown
       trigger="hover"
-      open={menuOpen}
-      onOpenChange={onMenuOpenChange}
+      open={disabled ? false : menuOpen}
+      onOpenChange={(open) => {
+        if (disabled) return;
+        onMenuOpenChange(open);
+      }}
       placement="top-start"
       offset={menuOffset}
       items={items}
@@ -197,12 +191,15 @@ function SplitToolButton({
       <button
         type="button"
         aria-label={tip}
+        disabled={disabled}
         onClick={(e) => {
           e.preventDefault();
+          if (disabled) return;
           onPrimaryClick();
         }}
         className={cn(
           'inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+          disabled && 'pointer-events-none opacity-40',
           active
             ? 'bg-[var(--ink)] text-[var(--on-brand)]'
             : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
@@ -216,23 +213,99 @@ function SplitToolButton({
 
 /**
  * Bottom-center tool dock:
- * Select · 形状 · 钢笔 · 铅笔 · 文字 · 智能画板 · 图片 · 文件
+ * Select · 形状 · 钢笔 · 画笔 · 文字 · 智能画板 · 图片
  */
-export default function EditorToolStrip({ className }: { className?: string }) {
+export default function EditorToolStrip({
+  className,
+  camera,
+  stageEl = null,
+}: {
+  className?: string;
+  /** Used to place toolbar image uploads at the visible viewport center. */
+  camera?: RcbCamera;
+  stageEl?: HTMLElement | null;
+}) {
+  const { t } = useTranslation();
   const dispatch = useDispatch();
   const activeTool = useSelector((state: any) => state.editor.activeTool);
   const shapeKind = useSelector((state: any) => state.editor.shapeKind);
+  const document = useSelector((state: any) => state.editor.document);
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [fontGenOpen, setFontGenOpen] = useState(false);
+
+  const L = useMemo(
+    () => ({
+      select: t('editor.tools.select'),
+      pan: t('editor.tools.pan'),
+      frame: t('editor.tools.frame'),
+      shape: t('editor.tools.shape'),
+      pen: t('editor.tools.pen'),
+      pencil: t('editor.tools.pencil'),
+      bucket: t('editor.tools.bucket'),
+      text: t('editor.tools.text'),
+      rect: t('editor.tools.rect'),
+      line: t('editor.tools.line'),
+      arrow: t('editor.tools.arrow'),
+      circle: t('editor.tools.circle'),
+      polygon: t('editor.tools.polygon'),
+      star: t('editor.tools.star'),
+      uploadImage: t('editor.tools.uploadImage'),
+      fontGen: t('editor.tools.fontGen'),
+      uploading: t('editor.tools.uploading'),
+      uploadFail: t('editor.tools.uploadFail'),
+    }),
+    [t]
+  );
+
+  const selectItems: MenuItemType[] = useMemo(
+    () => [
+      {
+        key: 'select',
+        label: (
+          <MenuLabel
+            label={L.select}
+            icon={<LuMousePointer2 className={MENU_ICON_CLASS} strokeWidth={STROKE} />}
+          />
+        ),
+      },
+      {
+        key: 'pan',
+        label: (
+          <MenuLabel
+            label={L.pan}
+            icon={<LuHand className={MENU_ICON_CLASS} strokeWidth={STROKE} />}
+          />
+        ),
+      },
+    ],
+    [L.pan, L.select]
+  );
+
+  const shapeItems: MenuItemType[] = useMemo(
+    () => [
+      { key: 'rect', label: <MenuLabel iconKey="rect" label={L.rect} /> },
+      { key: 'line', label: <MenuLabel iconKey="line" label={L.line} /> },
+      { key: 'arrow', label: <MenuLabel iconKey="arrow" label={L.arrow} /> },
+      { key: 'circle', label: <MenuLabel iconKey="circle" label={L.circle} /> },
+      { key: 'polygon', label: <MenuLabel iconKey="triangle" label={L.polygon} /> },
+      { key: 'star', label: <MenuLabel iconKey="star" label={L.star} /> },
+    ],
+    [L.arrow, L.circle, L.line, L.polygon, L.rect, L.star]
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const key = e.key.toLowerCase();
-      if (key === 'v' && !e.shiftKey) dispatch(setActiveTool('select'));
-      if (key === 'h' && !e.shiftKey) dispatch(setActiveTool('pan'));
+      if (key === 'v' && !e.shiftKey) {
+        window.dispatchEvent(new Event('resume:exit-path-edit'));
+        dispatch(setActiveTool('select'));
+      }
+      if (key === 'h' && !e.shiftKey) {
+        window.dispatchEvent(new Event('resume:exit-path-edit'));
+        dispatch(setActiveTool('pan'));
+      }
       if (key === 'f' && !e.shiftKey) dispatch(setActiveTool('frame'));
       if (key === 't' && !e.shiftKey) dispatch(setActiveTool('text'));
       if (key === 'r' && !e.shiftKey) dispatch(setShapeKind('rect'));
@@ -245,7 +318,11 @@ export default function EditorToolStrip({ className }: { className?: string }) {
       }
       if (key === 'p' && !e.shiftKey) dispatch(setActiveTool('pen'));
       if (key === 'p' && e.shiftKey) dispatch(setActiveTool('pencil'));
-      if (key === 'escape') dispatch(setActiveTool('select'));
+      if (key === 'b' && !e.shiftKey) dispatch(setActiveTool('bucket'));
+      if (key === 'escape') {
+        window.dispatchEvent(new Event('resume:exit-path-edit'));
+        dispatch(setActiveTool('select'));
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -253,49 +330,53 @@ export default function EditorToolStrip({ className }: { className?: string }) {
 
   const onPickImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    dispatch(setPendingImageSrc(dataUrl));
     event.target.value = '';
-  };
-
-  const onPickFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
     if (!file) return;
-    const sourceType = detectImportSourceType(file);
-    if (!sourceType || sourceType === 'image') {
-      message.error(L.importUnsupported);
-      event.target.value = '';
-      return;
-    }
-    setImporting(true);
-    const label =
-      sourceType === 'design'
-        ? '解析设计文件中'
-        : sourceType === 'docx'
-          ? '解析 Word 中'
-          : '解析 PDF 中';
-    dispatch(startImportPlaceholder({ label }));
     try {
-      const res = await importViaJob(file, sourceType);
-      if (res.status === 'failed' || !res.document) {
-        dispatch(cancelImportPlaceholder());
-        message.error(res.error || L.importFail);
-        return;
+      const preview = await readFileAsDataUrl(file);
+      const natural = await measureImageNaturalSize(preview);
+      // Keep natural aspect; soft-cap long edge so huge photos stay editable on canvas.
+      const { width, height } = fitImageSize(natural.width, natural.height, 2400);
+      let x: number | undefined;
+      let y: number | undefined;
+      // Place at the current visible viewport center (not artboard / world origin).
+      if (camera && stageEl && document) {
+        const view = stageEl.getBoundingClientRect();
+        if (view.width > 0 && view.height > 0) {
+          const center = rcbScreenToScene(
+            camera,
+            stageEl,
+            view.left + view.width / 2,
+            view.top + view.height / 2
+          );
+          const placed = rcbCenterOnPoint(center, { width, height });
+          const origin = sceneToDocumentCoords(document, placed.left, placed.top);
+          x = origin.x;
+          y = origin.y;
+        }
       }
-      dispatch(finishImportPlaceholder({ document: res.document }));
-      message.success(L.importOk);
+      dispatch(
+        startImageUploadPlaceholder({
+          src: preview,
+          width,
+          height,
+          x,
+          y,
+          label: L.uploading,
+          name: file.name?.replace(/\.[^.]+$/, '') || 'Image',
+        })
+      );
+      const uploaded = await uploadImageFile(file);
+      dispatch(
+        finishImageProcess({
+          src: uploaded.url,
+          attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
+        })
+      );
     } catch (err: any) {
-      dispatch(cancelImportPlaceholder());
-      message.error(err?.response?.data?.detail || err?.message || L.importFail);
-    } finally {
-      setImporting(false);
-      event.target.value = '';
+      dispatch(failImageProcess({}));
+      const detail = err?.response?.data?.detail || err?.message || L.uploadFail;
+      message.error(typeof detail === 'string' ? detail : L.uploadFail);
     }
   };
 
@@ -303,11 +384,11 @@ export default function EditorToolStrip({ className }: { className?: string }) {
     imageInputRef.current?.click();
   };
 
-  const openFileUpload = () => {
-    fileInputRef.current?.click();
+  const pickSelect = (key: string) => {
+    // Bottom Select / Pan: leave path-edit if open (✓ / Esc also exit).
+    window.dispatchEvent(new Event('resume:exit-path-edit'));
+    dispatch(setActiveTool(key === 'pan' ? 'pan' : 'select'));
   };
-
-  const pickSelect = (key: string) => dispatch(setActiveTool(key === 'pan' ? 'pan' : 'select'));
   const pickShape = (id: string) => {
     if (id === 'image') return;
     dispatch(setShapeKind(id));
@@ -327,12 +408,15 @@ export default function EditorToolStrip({ className }: { className?: string }) {
   const imageActive = activeTool === 'image';
   const penActive = activeTool === 'pen';
   const pencilActive = activeTool === 'pencil';
+  const bucketActive = activeTool === 'bucket';
   const textActive = activeTool === 'text';
 
   return (
-    <FloatingToolbar
-      className={cn('gap-2.5 px-3.5 py-2', className)}
-    >
+    <div className="relative">
+      <FontGeneratorPanel open={fontGenOpen} onClose={() => setFontGenOpen(false)} />
+      <FloatingToolbar
+        className={cn('gap-2.5 px-3.5 py-2', className)}
+      >
       {/* Select / Move — click selects, hover for 选择/移动 */}
       <SplitToolButton
         tip={`${L.select} / ${L.pan} (V / H)`}
@@ -341,7 +425,7 @@ export default function EditorToolStrip({ className }: { className?: string }) {
         onMenuOpenChange={(open) => {
           setOpenMenu(open ? 'select' : null);
         }}
-        items={SELECT_ITEMS}
+        items={selectItems}
         selectedKeys={[activeTool === 'pan' ? 'pan' : 'select']}
         onMenuPick={pickSelect}
         onPrimaryClick={() =>
@@ -365,7 +449,7 @@ export default function EditorToolStrip({ className }: { className?: string }) {
         onMenuOpenChange={(open) => {
           setOpenMenu(open ? 'shape' : null);
         }}
-        items={SHAPE_ITEMS}
+        items={shapeItems}
         selectedKeys={[shapeKind]}
         onMenuPick={pickShape}
         onPrimaryClick={() =>
@@ -379,6 +463,7 @@ export default function EditorToolStrip({ className }: { className?: string }) {
 
       {/* 钢笔 — options dock at page top-center while active */}
       <ToolBtn
+        tip={`${L.pen} P`}
         ariaLabel={`${L.pen} P`}
         active={penActive}
         onClick={() => dispatch(setActiveTool('pen'))}
@@ -388,9 +473,10 @@ export default function EditorToolStrip({ className }: { className?: string }) {
         </ToolIcon>
       </ToolBtn>
 
-      {/* 铅笔 — options dock at page top-center while active */}
+      {/* 画笔 — options dock at page top-center while active */}
       <ToolBtn
-        ariaLabel={`${L.pencil} ⇧P`}
+        tip={L.pencil}
+        ariaLabel={`${L.pencil} Shift+P`}
         active={pencilActive}
         onClick={() => dispatch(setActiveTool('pencil'))}
       >
@@ -399,8 +485,24 @@ export default function EditorToolStrip({ className }: { className?: string }) {
         </ToolIcon>
       </ToolBtn>
 
+      {/* 油漆桶 — uses pen stroke color as fill */}
+      <ToolBtn
+        tip={`${L.bucket} B`}
+        ariaLabel={`${L.bucket} B`}
+        active={bucketActive}
+        onClick={() => dispatch(setActiveTool('bucket'))}
+      >
+        <ToolIcon>
+          <LuPaintBucket className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
+        </ToolIcon>
+      </ToolBtn>
+
       {/* 文字 */}
-      <ToolBtn tip={`${L.text} T`} active={textActive} onClick={() => dispatch(setActiveTool('text'))}>
+      <ToolBtn
+        tip={`${L.text} T`}
+        active={textActive}
+        onClick={() => dispatch(setActiveTool('text'))}
+      >
         <ToolIcon>
           <TextIcon className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
         </ToolIcon>
@@ -412,22 +514,35 @@ export default function EditorToolStrip({ className }: { className?: string }) {
         active={frameActive}
         onClick={() => dispatch(setActiveTool('frame'))}
       >
-        <ToolIcon>
-          <LuFrame className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
+        <ToolIcon className="h-3.5 w-3.5">
+          <LuFrame className="h-full w-full" strokeWidth={STROKE} />
         </ToolIcon>
       </ToolBtn>
 
       {/* 图片 */}
-      <ToolBtn tip={`${L.uploadImage} (I)`} active={imageActive} onClick={openImageUpload}>
+      <ToolBtn
+        tip={`${L.uploadImage} (I)`}
+        active={imageActive}
+        onClick={openImageUpload}
+      >
         <ToolIcon>
           <HiOutlinePhoto className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
         </ToolIcon>
       </ToolBtn>
 
-      {/* 文件 — PDF / Word / Figma / Axure / PS / XD */}
-      <ToolBtn tip={importing ? L.importing : L.file} active={importing} onClick={openFileUpload}>
+      {/* 字体生成器 */}
+      <ToolBtn
+        tip={L.fontGen}
+        active={fontGenOpen}
+        onClick={() => setFontGenOpen((v) => !v)}
+      >
         <ToolIcon>
-          <HiOutlineDocument className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
+          <span className="relative inline-flex h-3.5 w-3.5 items-center justify-center rounded-[2px] border border-current text-[8px] font-semibold leading-none">
+            T
+            <span className="absolute -bottom-0.5 -right-0.5 flex h-1.5 w-1.5 items-center justify-center rounded-full bg-current text-[4px] font-bold leading-none text-[var(--surface)]">
+              +
+            </span>
+          </span>
         </ToolIcon>
       </ToolBtn>
 
@@ -438,13 +553,7 @@ export default function EditorToolStrip({ className }: { className?: string }) {
         className="hidden"
         onChange={onPickImage}
       />
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept={FILE_ACCEPT}
-        className="hidden"
-        onChange={onPickFile}
-      />
-    </FloatingToolbar>
+      </FloatingToolbar>
+    </div>
   );
 }

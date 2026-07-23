@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Literal
 
 from config.settings import settings
-from scene_builder.models import empty_document
-from services.design_extract import design_file_to_images
 from services.docx_converter import docx_to_pdf, docx_to_text_blocks
 from services.pdf_parser import parse_pdf
 from services.preprocess import pdf_to_images
@@ -18,7 +16,7 @@ from services.storage import upload_page_images
 from services.vision import analyze_page_images
 from services.vision.merge_blocks import merge_text_blocks
 
-SourceType = Literal["pdf", "docx", "image", "design"]
+SourceType = Literal["pdf", "docx", "image"]
 
 
 def _job_pages_dir(job_id: str | None) -> Path:
@@ -39,6 +37,45 @@ def _rel_page_paths(paths: list[Path]) -> list[str]:
     return rel
 
 
+def _is_drawable_block(block: dict) -> bool:
+    """Match blocks_to_scene acceptance rules (non-drawable → empty canvas)."""
+    if not isinstance(block, dict):
+        return False
+    btype = block.get("type")
+    if btype == "text" and block.get("text"):
+        return True
+    if btype == "image" and block.get("src"):
+        return True
+    if btype in {"rect", "table"}:
+        return True
+    return False
+
+
+def _scene_child_count(document: dict | None) -> int:
+    if not isinstance(document, dict):
+        return 0
+    root = (document.get("deltaSetLike") or {}).get("ROOT") or {}
+    kids = root.get("children")
+    return len(kids) if isinstance(kids, list) else 0
+
+
+def _apply_raster_fallback(
+    page_images: list[Path],
+    warnings: list[str],
+    engines: list[str],
+) -> tuple[list[dict], int, int]:
+    blocks, width, height = page_images_as_blocks(
+        page_images, target_w=settings.scene_target_width
+    )
+    if blocks:
+        engines.append("raster-fallback")
+        warnings.append(
+            "OCR produced no text layers; imported page image(s) as canvas images. "
+            "Install OCR extras for editable text: pip install -e '.[ocr]'"
+        )
+    return blocks, width, height
+
+
 def _prepare_page_images(source_type: SourceType, file_path: Path, job_id: str | None) -> tuple[list[Path], Path | None]:
     """Return (page_image_paths, pdf_path_for_text_parse)."""
     pages_dir = _job_pages_dir(job_id)
@@ -57,10 +94,6 @@ def _prepare_page_images(source_type: SourceType, file_path: Path, job_id: str |
         pdf_path = docx_to_pdf(file_path)
         images = pdf_to_images(pdf_path, pages_dir, dpi=dpi, poppler_path=poppler)
         return images, pdf_path
-
-    if source_type == "design":
-        images = design_file_to_images(file_path, pages_dir)
-        return images, None
 
     suffix = file_path.suffix.lower() or ".png"
     dest = pages_dir / f"0001{suffix}"
@@ -91,7 +124,6 @@ def run_import(source_type: SourceType, file_path: Path, job_id: str | None = No
 
     blocks: list[dict] = []
 
-    # Phase 2: prefer vision on page rasters
     if settings.use_vision and page_images:
         vision = analyze_page_images(page_images)
         warnings.extend(vision.get("warnings") or [])
@@ -101,7 +133,6 @@ def run_import(source_type: SourceType, file_path: Path, job_id: str | None = No
         height = int(vision.get("height") or height)
         blocks = vision.get("blocks") or []
 
-    # Fallback: digital PDF text layer
     if not blocks and source_type in ("pdf", "docx"):
         target = pdf_for_parse or (file_path if source_type == "pdf" else None)
         if target is not None:
@@ -114,7 +145,6 @@ def run_import(source_type: SourceType, file_path: Path, job_id: str | None = No
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"pdf parse failed: {exc}")
 
-    # DOCX last resort: paragraph text without layout fidelity
     if not blocks and source_type == "docx":
         try:
             blocks = docx_to_text_blocks(file_path)
@@ -124,23 +154,14 @@ def run_import(source_type: SourceType, file_path: Path, job_id: str | None = No
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"docx text fallback failed: {exc}")
 
-    # Always keep something editable when we have page rasters (image / PDF without OCR)
-    if not blocks and page_images:
-        blocks, width, height = page_images_as_blocks(page_images, target_w=settings.scene_target_width)
-        if blocks:
-            engines.append("raster-fallback")
-            warnings.append(
-                "OCR produced no text layers; imported page image(s) as canvas images. "
-                "Install OCR extras for editable text: pip install -e '.[ocr]'"
-            )
-
-    if not blocks:
-        warnings.append("No blocks extracted; returned empty document")
-
-    document = (
-        build_scene_response(blocks, width=width, height=height) if blocks else empty_document(width, height)
-    )
-    page_count = max(len(page_images), 1)
+    drawable = [b for b in blocks if _is_drawable_block(b)]
+    if blocks and not drawable and page_images:
+        warnings.append("vision blocks had no drawable layers; using page raster fallback")
+        blocks, width, height = _apply_raster_fallback(page_images, warnings, engines)
+    elif not drawable and page_images:
+        blocks, width, height = _apply_raster_fallback(page_images, warnings, engines)
+    else:
+        blocks = drawable
 
     page_rels, object_keys, object_urls = ([], [], [])
     if page_images:
@@ -150,18 +171,51 @@ def run_import(source_type: SourceType, file_path: Path, job_id: str | None = No
             warnings.append(f"storage upload failed: {exc}")
             page_rels = _rel_page_paths(page_images)
 
+    meta = {
+        "source_type": source_type,
+        "page_count": max(len(page_images), 1) if page_images else 0,
+        "page_images": page_rels or _rel_page_paths(page_images),
+        "object_keys": object_keys,
+        "object_urls": object_urls,
+        "palette": palette,
+        "engines": engines,
+        "warnings": warnings,
+    }
+
+    if not blocks:
+        err = (
+            (warnings[-1] if warnings else None)
+            or "No content extracted from file."
+        )
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "document": None,
+            "error": err,
+            "meta": meta,
+        }
+
+    document = build_scene_response(blocks, width=width, height=height)
+
+    if _scene_child_count(document) == 0 and page_images:
+        blocks, width, height = _apply_raster_fallback(page_images, warnings, engines)
+        if blocks:
+            document = build_scene_response(blocks, width=width, height=height)
+            meta["engines"] = engines
+            meta["warnings"] = warnings
+
+    if _scene_child_count(document) == 0:
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "document": None,
+            "error": "Import produced an empty canvas.",
+            "meta": meta,
+        }
+
     return {
         "job_id": job_id,
         "status": "done",
         "document": document,
-        "meta": {
-            "source_type": source_type,
-            "page_count": page_count,
-            "page_images": page_rels or _rel_page_paths(page_images),
-            "object_keys": object_keys,
-            "object_urls": object_urls,
-            "palette": palette,
-            "engines": engines,
-            "warnings": warnings,
-        },
+        "meta": meta,
     }

@@ -1,34 +1,55 @@
 /**
  * Full-page Google OAuth (authorization code + redirect).
  * Navigates the current tab to accounts.google.com — not popup / iframe.
+ * Return intent is encoded in the OAuth `state` query (URL), not Redux.
  */
+
+import { sanitizeReturnTo } from '@/utils/authReturnTo';
 
 declare const __GOOGLE_CLIENT_ID__: string;
 
 export const GOOGLE_CLIENT_ID =
   typeof __GOOGLE_CLIENT_ID__ !== 'undefined' ? __GOOGLE_CLIENT_ID__ : '';
 
-const STATE_KEY = 'recombyn-google-oauth-state-v1';
+/** CSRF nonce only — intent path rides in the OAuth `state` URL param. */
+const NONCE_KEY = 'recombyn-google-oauth-nonce-v1';
 
 export function getGoogleRedirectUri(): string {
   return `${window.location.origin}/login/google/callback`;
 }
 
-type OAuthState = { state: string; returnTo: string };
+function encodeReturnTo(returnTo: string): string {
+  try {
+    return btoa(unescape(encodeURIComponent(sanitizeReturnTo(returnTo))));
+  } catch {
+    return btoa('/home');
+  }
+}
+
+function decodeReturnTo(encoded: string): string {
+  try {
+    return sanitizeReturnTo(decodeURIComponent(escape(atob(encoded))));
+  } catch {
+    return '/home';
+  }
+}
 
 export function startGoogleOAuthRedirect(returnTo = '/home') {
   if (!GOOGLE_CLIENT_ID) {
     throw new Error('GOOGLE_CLIENT_ID is not configured');
   }
-  const state =
+  const nonce =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const payload: OAuthState = {
-    state,
-    returnTo: returnTo && returnTo !== '/login' && returnTo !== '/register' ? returnTo : '/home',
-  };
-  sessionStorage.setItem(STATE_KEY, JSON.stringify(payload));
+  const safe = sanitizeReturnTo(returnTo);
+  // state = nonce.returnTo — Google echoes this back via URL.
+  const state = `${nonce}.${encodeReturnTo(safe)}`;
+  try {
+    sessionStorage.setItem(NONCE_KEY, nonce);
+  } catch {
+    /* ignore */
+  }
 
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
@@ -41,14 +62,19 @@ export function startGoogleOAuthRedirect(returnTo = '/home') {
   window.location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
 }
 
-export function consumeGoogleOAuthState(stateFromQuery: string | null): OAuthState | null {
+export function consumeGoogleOAuthState(
+  stateFromQuery: string | null
+): { returnTo: string } | null {
   try {
-    const raw = sessionStorage.getItem(STATE_KEY);
-    sessionStorage.removeItem(STATE_KEY);
-    if (!raw || !stateFromQuery) return null;
-    const parsed = JSON.parse(raw) as OAuthState;
-    if (!parsed?.state || parsed.state !== stateFromQuery) return null;
-    return parsed;
+    const expected = sessionStorage.getItem(NONCE_KEY);
+    sessionStorage.removeItem(NONCE_KEY);
+    if (!stateFromQuery || !expected) return null;
+    const dot = stateFromQuery.indexOf('.');
+    if (dot <= 0) return null;
+    const nonce = stateFromQuery.slice(0, dot);
+    const encoded = stateFromQuery.slice(dot + 1);
+    if (nonce !== expected) return null;
+    return { returnTo: decodeReturnTo(encoded) };
   } catch {
     return null;
   }

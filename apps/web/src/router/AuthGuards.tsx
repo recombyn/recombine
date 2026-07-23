@@ -1,17 +1,21 @@
-import { useSelector } from 'react-redux';
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { Navigate, Outlet, useLocation, useSearchParams } from 'react-router-dom';
+import { logout } from '@/store/modules/auth';
+import { buildLoginUrl, readReturnToParam } from '@/utils/authReturnTo';
+import { getToken } from '@/utils/token';
 
-/** Protects editor (and any other auth-only routes). Guests → login, then return. */
+/** Protects editor (and any other auth-only routes). Guests → login?from=… */
 export function RequireAuth() {
   const user = useSelector((state: any) => state.auth.user);
   const location = useLocation();
+  const hasToken = Boolean(getToken());
 
-  if (!user) {
+  if (!user || !hasToken) {
     return (
       <Navigate
-        to="/login"
+        to={buildLoginUrl(location.pathname + location.search)}
         replace
-        state={{ from: location.pathname + location.search }}
       />
     );
   }
@@ -19,18 +23,22 @@ export function RequireAuth() {
   return <Outlet />;
 }
 
-/** Login / register only. Already signed-in users go back to `from` or home. */
+/** Login / register only. Signed-in users follow ?from= or /home. */
 export function GuestOnly() {
   const user = useSelector((state: any) => state.auth.user);
-  const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from;
+  const dispatch = useDispatch();
+  const [params] = useSearchParams();
+  const hasToken = Boolean(getToken());
 
-  if (user) {
-    const dest =
-      from && from !== '/login' && from !== '/register' && !from.startsWith('/login/')
-        ? from
-        : '/home';
-    return <Navigate to={dest} replace />;
+  // Stale user blob without a session token (e.g. raced getMe after logout).
+  useEffect(() => {
+    if (user && !hasToken) {
+      dispatch(logout());
+    }
+  }, [user, hasToken, dispatch]);
+
+  if (user && hasToken) {
+    return <Navigate to={readReturnToParam(params)} replace />;
   }
 
   return <Outlet />;

@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { BiExit } from 'react-icons/bi';
+import { LuPanelRight } from 'react-icons/lu';
 import { HiOutlineClipboardDocument } from 'react-icons/hi2';
 import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import { ExportSelectionPanel } from '@/components/editor/panels/ExportSelectionPanel';
 import { cn } from '@/utils/classnames';
-import { radiiFromAttrs } from '@/store/scene/sceneRadii';
+import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
 import {
   resolveFillColor,
   resolveShadow,
   resolveStroke,
-} from '@/store/scene/sceneEffects';
-import { nodeLeftTop } from '@/store/scene/sceneToSvg';
+} from '@/components/rcb/scene/sceneEffects';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 
 function formatPx(n: number) {
   const r = Math.round(n * 100) / 100;
@@ -289,14 +289,14 @@ export default function DevPropertiesPanel({
           {t('editor.devInspect')}
         </h2>
         {onClose ? (
-          <Tooltip title={'退出'} placement="bottom">
+          <Tooltip title={t('editor.closePanel')} placement="bottom">
             <button
               type="button"
-              aria-label={'退出'}
+              aria-label={t('editor.closePanel')}
               onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
             >
-              <BiExit className="h-[18px] w-[18px]" />
+              <LuPanelRight className="h-4 w-4" strokeWidth={1.75} />
             </button>
           </Tooltip>
         ) : null}

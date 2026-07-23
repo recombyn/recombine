@@ -1,5 +1,5 @@
 /**
- * Token wallet API — card-key redeem (no WeChat/Alipay).
+ * Wallet API — card-key redeem for tokens.
  */
 
 import { request } from '@/utils/request';
@@ -32,27 +32,6 @@ export type RedeemResultDto = {
   ledger: WalletLedgerDto[];
 };
 
-export type AdminCardKeyDto = {
-  id: string;
-  code?: string | null;
-  tokens: number;
-  status: 'unused' | 'used' | 'revoked' | string;
-  createdAt: number;
-  expiresAt?: number | null;
-  redeemedAt?: number | null;
-};
-
-export type GenerateCardKeysResultDto = {
-  count: number;
-  tokens: number;
-  expiresDays: number;
-  keys: AdminCardKeyDto[];
-};
-
-export type AdminCardKeysListDto = {
-  keys: AdminCardKeyDto[];
-};
-
 export const fetchPurchaseInfo = () =>
   request<PurchaseInfoDto>({
     url: '/api/v1/wallet/purchase-info',
@@ -65,27 +44,37 @@ export const fetchWallet = () =>
     method: 'get',
   });
 
+export type WalletLedgerKindFilter = 'all' | 'redeem' | 'spend';
+
+export type PaginatedWalletLedger = {
+  tokens: number;
+  items: WalletLedgerDto[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  kind: WalletLedgerKindFilter | string;
+};
+
+/** Usage & billing tabs → kind=all|redeem|spend */
+export const fetchWalletLedger = (opts: {
+  page?: number;
+  pageSize?: number;
+  kind?: WalletLedgerKindFilter;
+} = {}) =>
+  request<PaginatedWalletLedger>({
+    url: '/api/v1/wallet/ledger',
+    method: 'get',
+    params: {
+      page: opts.page ?? 1,
+      pageSize: opts.pageSize ?? 15,
+      kind: opts.kind ?? 'all',
+    },
+  });
+
 export const redeemCardKey = (code: string) =>
   request<RedeemResultDto>({
     url: '/api/v1/wallet/redeem',
     method: 'post',
     data: { code },
-  });
-
-export const generateCardKeys = (payload: {
-  count: number;
-  tokens: number;
-  expiresDays?: number;
-}) =>
-  request<GenerateCardKeysResultDto>({
-    url: '/api/v1/wallet/admin/generate-keys',
-    method: 'post',
-    data: payload,
-  });
-
-export const fetchAdminCardKeys = (status?: 'unused' | 'used' | 'revoked' | 'all') =>
-  request<AdminCardKeysListDto>({
-    url: '/api/v1/wallet/admin/keys',
-    method: 'get',
-    params: status && status !== 'all' ? { status } : undefined,
   });

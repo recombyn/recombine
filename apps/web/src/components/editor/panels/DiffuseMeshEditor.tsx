@@ -20,8 +20,8 @@ import {
   remeshPoints,
   type MeshPoint,
   type MeshSize,
-} from '@/store/scene/sceneDiffuseMesh';
-import { defaultGradient, type FillGradient } from '@/store/scene/sceneFill';
+} from '@/components/rcb/scene/sceneDiffuseMesh';
+import { defaultGradient, type FillGradient } from '@/components/rcb/scene/sceneFill';
 
 type Props = {
   value?: FillGradient | null;

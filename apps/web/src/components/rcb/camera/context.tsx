@@ -1,0 +1,86 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
+import { nearestDprMultiple } from '../core/dpr';
+import { rcbSceneToScreen } from '../core/math';
+import { RCB_DEFAULT_CAMERA, type RcbCamera, type RcbVec } from '../core/types';
+
+export const RcbCameraContext = createContext<RcbCamera>(RCB_DEFAULT_CAMERA);
+export const RcbOverlayRootContext = createContext<HTMLElement | null>(null);
+export const RcbViewportElContext = createContext<HTMLElement | null>(null);
+/** Tracks `window.devicePixelRatio` (updates on browser zoom). */
+export const RcbDevicePixelRatioContext = createContext(1);
+
+export function useRcbCamera(): RcbCamera {
+  return useContext(RcbCameraContext);
+}
+
+export function useRcbOverlayRoot(): HTMLElement | null {
+  return useContext(RcbOverlayRootContext);
+}
+
+export function useRcbViewportEl(): HTMLElement | null {
+  return useContext(RcbViewportElContext);
+}
+
+/** Live devicePixelRatio (browser zoom / HiDPI). */
+export function useRcbDevicePixelRatio(): number {
+  return useContext(RcbDevicePixelRatioContext);
+}
+
+/** multiple for aligning lengths under the current DPR. */
+export function useRcbDprMultiple(): number {
+  return nearestDprMultiple(useRcbDevicePixelRatio());
+}
+
+/** Pointer helper: `toScene(clientX, clientY)` using camera + viewport. */
+export function useRcbScreenToScene(): (clientX: number, clientY: number) => RcbVec {
+  const camera = useRcbCamera();
+  const viewportEl = useRcbViewportEl();
+  return useCallback(
+    (clientX: number, clientY: number) => {
+      if (!viewportEl) return { x: 0, y: 0 };
+      const rect = viewportEl.getBoundingClientRect();
+      const z = Math.max(0.05, camera.zoom || 1);
+      return {
+        x: (clientX - rect.left - camera.x) / z,
+        y: (clientY - rect.top - camera.y) / z,
+      };
+    },
+    [camera.x, camera.y, camera.zoom, viewportEl]
+  );
+}
+
+/** Scene-anchored toolbar style in unscaled screen space. */
+export function useRcbScreenToolbarStyle(opts: {
+  left: number;
+  top: number;
+  anchor?: 'bottom' | 'top';
+}): CSSProperties {
+  const camera = useRcbCamera();
+  const { x, y } = rcbSceneToScreen(camera, opts.left, opts.top);
+  const anchor = opts.anchor ?? 'bottom';
+  return useMemo(
+    () => ({
+      position: 'absolute' as const,
+      left: x,
+      top: y,
+      transform: anchor === 'bottom' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+      transformOrigin: anchor === 'bottom' ? 'center bottom' : 'center top',
+    }),
+    [x, y, anchor]
+  );
+}
+
+/** Portal children into the unscaled overlay layer. */
+export function RcbOverlayPortal({ children }: { children: ReactNode }) {
+  const root = useRcbOverlayRoot();
+  if (!root) return null;
+  return createPortal(children, root);
+}

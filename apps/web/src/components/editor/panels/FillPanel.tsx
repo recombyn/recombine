@@ -41,7 +41,7 @@ import { DropdownPanel, DropdownPanelItem } from '@/components/base';
 import DiffuseMeshEditor from '@/components/editor/panels/DiffuseMeshEditor';
 import { StylePanelShell } from '@/components/editor/panels/StylePanelChrome';
 import { cn } from '@/utils/classnames';
-import { meshPreviewDataUrl } from '@/store/scene/sceneDiffuseMesh';
+import { meshPreviewDataUrl } from '@/components/rcb/scene/sceneDiffuseMesh';
 import {
   buildImageAdjustFilterCss,
   cssPreviewForGradient,
@@ -58,7 +58,7 @@ import {
   type FillImageRotate,
   type FillStop,
   type FillType,
-} from '@/store/scene/sceneFill';
+} from '@/components/rcb/scene/sceneFill';
 export type FillPanelValue = {
   fillType: FillType;
   fillColor: string;
@@ -709,33 +709,6 @@ export function FillPanel({
       onLayerVisibleChange={onLayerVisibleChange}
       layerVisibleTipShow="显示填充"
       layerVisibleTipHide="隐藏填充"
-      onEyedropper={(hex) => {
-        if (isGradient) {
-          updateStop(activeStop, { color: hex });
-          return;
-        }
-        if (isDiffuse) {
-          const g =
-            gradient.type === 'diffuse' ? gradient : defaultGradient('diffuse', solid);
-          const points = [...(g.meshPoints || [])];
-          if (!points.length) {
-            emit({ fillType: 'solid', fillColor: hex });
-            return;
-          }
-          const idx = Math.max(
-            0,
-            Math.min(meshSelectedIndex ?? 0, points.length - 1)
-          );
-          points[idx] = { ...points[idx], color: hex };
-          updateGradient({ ...g, meshPoints: points, type: 'diffuse' });
-          return;
-        }
-        emit({
-          fillType: panelType === 'image' ? 'image' : 'solid',
-          fillColor: hex,
-          fillOpacity: (value.fillOpacity ?? 100) <= 0 ? 100 : value.fillOpacity,
-        });
-      }}
     >
         <div className="flex items-center gap-1 rounded bg-[var(--accent-soft)] p-0.5">
           {FILL_PANEL_TYPES.map((t) => {

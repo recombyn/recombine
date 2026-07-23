@@ -13,20 +13,33 @@ from services.storage import get_storage, put_bytes, get_bytes, delete_object
 _MAX_INLINE_BYTES = 512 * 1024  # store in DB if small; else COS
 
 
-def list_projects(user_id: str) -> list[dict[str, Any]]:
+def list_projects(
+    user_id: str,
+    *,
+    page: int = 1,
+    page_size: int = 24,
+) -> dict[str, Any]:
     init_schema()
+    page_n = max(1, int(page or 1))
+    page_size_n = max(1, min(int(page_size or 24), 100))
+    offset = (page_n - 1) * page_size_n
     with connect() as conn:
+        total_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM projects WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        total = int(total_row["c"] if total_row else 0)
         rows = conn.execute(
             """
             SELECT id, name, thumbnail_key, document_key, document_json, updated_at, created_at
             FROM projects
             WHERE user_id = ?
             ORDER BY updated_at DESC
-            LIMIT 200
+            LIMIT ? OFFSET ?
             """,
-            (user_id,),
+            (user_id, page_size_n, offset),
         ).fetchall()
-    return [
+    projects = [
         {
             "id": r["id"],
             "name": r["name"],
@@ -37,6 +50,13 @@ def list_projects(user_id: str) -> list[dict[str, Any]]:
         }
         for r in rows
     ]
+    return {
+        "projects": projects,
+        "page": page_n,
+        "pageSize": page_size_n,
+        "total": total,
+        "hasMore": offset + len(projects) < total,
+    }
 
 
 def get_project(user_id: str, project_id: str) -> dict[str, Any] | None:
@@ -184,20 +204,58 @@ def upsert_project(
 
 
 def delete_project(user_id: str, project_id: str) -> bool:
+    return delete_projects(user_id, [project_id]) > 0
+
+
+def delete_projects(user_id: str, project_ids: list[str]) -> int:
+    """Delete many projects owned by user. Returns number deleted."""
     init_schema()
+    ids = [str(x).strip() for x in (project_ids or []) if str(x).strip()]
+    # Dedupe while preserving order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for pid in ids:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        uniq.append(pid)
+    if not uniq:
+        return 0
+
+    keys_to_delete: list[str] = []
+    deleted = 0
     with connect() as conn:
-        row = conn.execute(
-            "SELECT document_key, thumbnail_key FROM projects WHERE id = ? AND user_id = ?",
-            (project_id, user_id),
-        ).fetchone()
-        if not row:
-            return False
-        conn.execute("DELETE FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id))
-    if row["document_key"]:
-        delete_object(row["document_key"])
-    if row["thumbnail_key"]:
-        delete_object(row["thumbnail_key"])
-    return True
+        # Chunk IN clauses for safety
+        chunk = 100
+        for i in range(0, len(uniq), chunk):
+            part = uniq[i : i + chunk]
+            placeholders = ", ".join("?" for _ in part)
+            rows = conn.execute(
+                f"""
+                SELECT id, document_key, thumbnail_key
+                FROM projects
+                WHERE user_id = ? AND id IN ({placeholders})
+                """,
+                (user_id, *part),
+            ).fetchall()
+            if not rows:
+                continue
+            row_ids = [str(r["id"]) for r in rows]
+            ph2 = ", ".join("?" for _ in row_ids)
+            conn.execute(
+                f"DELETE FROM projects WHERE user_id = ? AND id IN ({ph2})",
+                (user_id, *row_ids),
+            )
+            deleted += len(row_ids)
+            for r in rows:
+                if r["document_key"]:
+                    keys_to_delete.append(str(r["document_key"]))
+                if r["thumbnail_key"]:
+                    keys_to_delete.append(str(r["thumbnail_key"]))
+
+    for key in keys_to_delete:
+        delete_object(key)
+    return deleted
 
 
 def _url(key: str | None) -> str | None:

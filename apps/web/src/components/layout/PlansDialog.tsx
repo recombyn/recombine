@@ -1,14 +1,9 @@
-import { useMemo, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useEffect, useMemo, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineCheck } from 'react-icons/hi2';
-import { Button, Dialog, message } from '@/components/base';
-import {
-  PLAN_CATALOG,
-  PLAN_ORDER,
-  setPlan,
-  type PlanId,
-} from '@/store/modules/wallet';
+import { Button, Dialog } from '@/components/base';
+import { PLAN_CATALOG, PLAN_ORDER, type PlanId } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
 
 type Props = {
@@ -16,14 +11,15 @@ type Props = {
   onClose: () => void;
 };
 
-/** Cursor-like plan picker (Hobby / Pro / Pro+ / Ultra / Teams).
- * Kept for future restore — current product uses card-key Token redeem instead.
- */
+/** Membership picker — free / plus / pro / ultra (monthly CNY only). */
 export default function PlansDialog({ open, onClose }: Props) {
   const { t } = useTranslation();
-  const dispatch = useDispatch();
-  const current = useSelector((state: any) => (state.wallet?.planId as PlanId) || 'hobby');
+  const current = useSelector((state: any) => (state.wallet?.planId as PlanId) || 'free');
   const [picked, setPicked] = useState<PlanId>(current);
+
+  useEffect(() => {
+    if (open) setPicked(current);
+  }, [open, current]);
 
   const rows = useMemo(
     () =>
@@ -39,10 +35,10 @@ export default function PlansDialog({ open, onClose }: Props) {
     [t]
   );
 
+  /** Paid checkout isn't live — open Usage in a new tab and auto-open redeem. */
   const submit = () => {
-    dispatch(setPlan({ planId: picked, refreshCredits: true }));
-    message.success(t('wallet.planChanged', { plan: t(`wallet.plan.${picked}`) }));
     onClose();
+    window.open('/account?tab=usage&redeem=1', '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -66,10 +62,15 @@ export default function PlansDialog({ open, onClose }: Props) {
       }
     >
       <p className="mb-4 text-[12px] leading-relaxed text-[var(--muted)]">{t('wallet.plansHint')}</p>
+
       <div className="flex flex-col gap-2">
         {rows.map(({ id, def, title, blurb }) => {
           const active = picked === id;
           const isCurrent = current === id;
+          const priceLabel =
+            def.priceCny === 0
+              ? t('wallet.priceFree')
+              : t('wallet.priceMonthly', { price: def.priceCny });
           return (
             <button
               key={id}
@@ -95,16 +96,12 @@ export default function PlansDialog({ open, onClose }: Props) {
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                   <span className="text-[14px] font-semibold text-[var(--ink)]">{title}</span>
-                  <span className="text-[12px] tabular-nums text-[var(--muted)]">
-                    {def.priceUsd === 0
-                      ? t('wallet.priceFree')
-                      : def.perSeat
-                        ? t('wallet.pricePerSeat', { price: def.priceUsd })
-                        : t('wallet.priceMonthly', { price: def.priceUsd })}
-                    {def.priceAnnualUsd != null
-                      ? ` · ${t('wallet.priceAnnual', { price: def.priceAnnualUsd })}`
-                      : ''}
-                  </span>
+                  <span className="text-[12px] tabular-nums text-[var(--muted)]">{priceLabel}</span>
+                  {def.recommended ? (
+                    <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--ink)] ring-1 ring-[var(--ink)]/25">
+                      {t('wallet.planRecommended')}
+                    </span>
+                  ) : null}
                   {isCurrent ? (
                     <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)] ring-1 ring-[var(--line)]">
                       {t('wallet.currentPlan')}

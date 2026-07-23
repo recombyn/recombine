@@ -1,29 +1,32 @@
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import AppLogo from '@/components/base/AppLogo';
 import { useTranslation } from 'react-i18next';
 import { FaGithub } from 'react-icons/fa';
 import { HiOutlineArrowLeft } from 'react-icons/hi2';
+import { readReturnToParam } from '@/utils/authReturnTo';
 
 const GITHUB_REPO = 'https://github.com/tianmeng1603/Recombine';
 
 /** Public about page — personal project, open source, payment notes. */
 export default function AboutPage() {
   const { t } = useTranslation();
+  const [searchParams] = useSearchParams();
+  const returnTo = readReturnToParam(searchParams);
+  const backLabel = returnTo === '/home' ? t('about.backHome') : t('about.back');
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--canvas)]">
       <div className="mx-auto w-full max-w-[640px] px-5 pb-16 pt-8 sm:px-6 sm:pt-12">
         <Link
-          to="/home"
+          to={returnTo}
           className="inline-flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-[13px] text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
         >
           <HiOutlineArrowLeft className="h-4 w-4" />
-          {t('about.backHome')}
+          {backLabel}
         </Link>
 
         <header className="mt-8 flex items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--ink)] text-[13px] font-bold tracking-tight text-[var(--on-brand)]">
-            RY
-          </span>
+          <AppLogo size={44} />
           <div className="min-w-0">
             <h1 className="text-[22px] font-semibold tracking-tight text-[var(--ink)]">
               {t('about.title')}

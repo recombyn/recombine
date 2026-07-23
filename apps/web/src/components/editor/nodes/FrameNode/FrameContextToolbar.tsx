@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { useDispatch } from 'react-redux';
+import { useTranslation } from 'react-i18next';
 import {
   HiOutlineArrowsRightLeft,
+  HiOutlineEye,
+  HiOutlineEyeSlash,
   HiOutlineLockClosed,
   HiOutlineLockOpen,
 } from 'react-icons/hi2';
@@ -15,14 +18,14 @@ import {
   findFramePreset,
   matchFramePreset,
   swapFrameOrientation,
-} from '@/components/editor/nodes/FrameNode/frameSizePresets';
+} from '@/components/editor/chrome/SizePresetPanel';
 import {
   updateArtboardFrame,
   type ArtboardFrame,
 } from '@/store/modules/editor';
 import Tooltip from '@/components/base/tooltip';
-import { SEL_ICON_BTN, SEL_TOOL_BTN } from '@/components/editor/Canvas/selection/ToolbarValueSlider';
-import { SelectionToolbarShell } from '@/components/editor/Canvas/selection/SelectionToolbarShell';
+import { SEL_ICON_BTN, SEL_TOOL_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
+import { SelectionToolbarShell } from '@/components/rcb/selection/SelectionToolbarShell';
 import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelectionPanel';
 import { cn } from '@/utils/classnames';
 
@@ -36,16 +39,24 @@ const field =
 
 /** Floating toolbar for the active artboard / frame (shown after draw / select). */
 export default function FrameContextToolbar({ frame }: Props) {
+  const { t } = useTranslation();
   const dispatch = useDispatch();
   const [presetOpen, setPresetOpen] = useState(false);
   const [ratioOpen, setRatioOpen] = useState(false);
   const canvasLocked = Boolean(frame.locked);
+  const clipContent = Boolean(frame.clipContent);
   const presetKey = matchFramePreset(frame.width, frame.height);
   const presetMeta = findFramePreset(presetKey);
   const isRatio = presetMeta?.category === 'ratio';
-  const deviceTitle = isRatio ? 'Custom' : presetMeta?.label || 'Custom';
-  // Default / free size → 「原始」; matched ratio preset → e.g. 4:3
-  const ratioTitle = isRatio ? presetMeta?.label || '原始' : '原始';
+  const deviceTitle = isRatio
+    ? t('editor.frameToolbar.custom')
+    : presetMeta?.label || t('editor.frameToolbar.custom');
+  // Default / free size → original; matched ratio preset → e.g. 4:3
+  const ratioTitle = isRatio
+    ? presetMeta?.key === 'original'
+      ? t('editor.frameToolbar.original')
+      : presetMeta?.label || t('editor.frameToolbar.original')
+    : t('editor.frameToolbar.original');
   const ratioActiveKey = isRatio ? presetKey : 'original';
   const isLandscape = frame.width > frame.height;
 
@@ -87,7 +98,7 @@ export default function FrameContextToolbar({ frame }: Props) {
             patch({ backgroundColor: '#FFFFFF' });
           }
         }}
-        title={'画板颜色'}
+        title={t('editor.frameToolbar.canvasColor')}
         placement="bottom-start"
         className={SEL_ICON_BTN}
       >
@@ -135,10 +146,21 @@ export default function FrameContextToolbar({ frame }: Props) {
         <span className="max-w-[7rem] truncate">{deviceTitle}</span>
       </FrameSizePresetMenu>
 
-      <Tooltip title={isLandscape ? '切换为竖向' : '切换为横向'} placement="top">
+      <Tooltip
+        title={
+          isLandscape
+            ? t('editor.frameToolbar.toPortrait')
+            : t('editor.frameToolbar.toLandscape')
+        }
+        placement="top"
+      >
         <button
           type="button"
-          aria-label={isLandscape ? '切换为竖向' : '切换为横向'}
+          aria-label={
+            isLandscape
+              ? t('editor.frameToolbar.toPortrait')
+              : t('editor.frameToolbar.toLandscape')
+          }
           aria-pressed={isLandscape}
           disabled={canvasLocked}
           className={cn(
@@ -218,10 +240,21 @@ export default function FrameContextToolbar({ frame }: Props) {
         />
       </label>
 
-      <Tooltip title={canvasLocked ? '解锁画布' : '锁定画布'} placement="top">
+      <Tooltip
+        title={
+          canvasLocked
+            ? t('editor.frameToolbar.unlockCanvas')
+            : t('editor.frameToolbar.lockCanvas')
+        }
+        placement="top"
+      >
         <button
           type="button"
-          aria-label={canvasLocked ? '解锁画布' : '锁定画布'}
+          aria-label={
+            canvasLocked
+              ? t('editor.frameToolbar.unlockCanvas')
+              : t('editor.frameToolbar.lockCanvas')
+          }
           aria-pressed={canvasLocked}
           className={cn(SEL_ICON_BTN, canvasLocked && 'bg-[var(--accent-soft)]')}
           onClick={() => patch({ locked: !canvasLocked })}
@@ -230,6 +263,25 @@ export default function FrameContextToolbar({ frame }: Props) {
             <HiOutlineLockClosed className="h-3.5 w-3.5" />
           ) : (
             <HiOutlineLockOpen className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </Tooltip>
+
+      <Tooltip
+        title={clipContent ? t('editor.showOverflow') : t('editor.clipOverflow')}
+        placement="top"
+      >
+        <button
+          type="button"
+          aria-label={clipContent ? t('editor.showOverflow') : t('editor.clipOverflow')}
+          aria-pressed={clipContent}
+          className={cn(SEL_ICON_BTN, clipContent && 'bg-[var(--accent-soft)]')}
+          onClick={() => patch({ clipContent: !clipContent })}
+        >
+          {clipContent ? (
+            <HiOutlineEyeSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+          ) : (
+            <HiOutlineEye className="h-3.5 w-3.5" strokeWidth={1.75} />
           )}
         </button>
       </Tooltip>

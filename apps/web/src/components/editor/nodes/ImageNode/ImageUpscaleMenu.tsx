@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   autoUpdate,
   flip,
@@ -28,12 +29,13 @@ export const UPSCALE_PRESETS: UpscalePreset[] = [
   { key: '8k', title: '8K', width: 5792, height: 8192 },
 ];
 
-/** Fig.3-style — left-aligned panel under 放大. */
+/** Upscale preset menu under the image toolbar. */
 export default function ImageUpscaleMenu({
   onPick,
 }: {
   onPick: (preset: UpscalePreset) => void;
 }): ReactNode {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const { refs, floatingStyles, context } = useFloating({
     open,
@@ -56,7 +58,7 @@ export default function ImageUpscaleMenu({
         {...getReferenceProps()}
       >
         <Icon name="editor-upscale" width={TOOL_ICON_SIZE} height={TOOL_ICON_SIZE} className="text-current" />
-        <span>{'放大'}</span>
+        <span>{t('editor.imageToolbar.upscale')}</span>
       </button>
       <FloatingPortal>
         {open ? (

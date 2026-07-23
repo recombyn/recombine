@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
-import { projectThumbFrameClass } from '@/components/home/projectThumb';
-import { nearestScrollRoot } from '@/hooks/useInfiniteList';
+import { projectThumbFrameClass } from '@/utils/projectThumb';
+import { nearestScrollRoot } from '@/utils/useInfiniteList';
 import { cn } from '@/utils/classnames';
 
 type Props = {

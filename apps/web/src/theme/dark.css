@@ -3,6 +3,9 @@ html[data-theme='dark'] {
   --surface: #1e1e1e;
   --canvas: #0c0c0d;
   --rail: #1a1a1a;
+  --account-rail: #1a1a1a;
+  --account-main: #141416;
+  --account-card: #1e1e1e;
   --ink: #e3e3e3;
   --muted: #949494;
   --line: #383838;
@@ -10,7 +13,11 @@ html[data-theme='dark'] {
   --accent-soft: #2c2c2c;
   --on-brand: #0c0c0d;
 
-  /* Slider: light fill on dark panels (avoid near-black active track) */
+  /* Home hero — cool wash + visible dot grid on deep black. */
+  --home-hero-glow-strong: rgba(72, 78, 120, 0.42);
+  --home-hero-glow-soft: rgba(48, 64, 110, 0.28);
+  --home-hero-dot: rgba(255, 255, 255, 0.1);
+
   --slider-active: #e3e3e3;
   --slider-inactive: #3a3a3a;
   --slider-thumb-ring: #0c0c0d;

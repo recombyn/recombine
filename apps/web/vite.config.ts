@@ -29,13 +29,12 @@ export default defineConfig(({ mode }) => {
               params: {
                 overrides: {
                   removeViewBox: false,
+                  // Keep multi-color brand marks (logo_mark) intact.
+                  convertColors: false,
                 },
               },
             },
-            {
-              name: 'convertColors',
-              params: { currentColor: true },
-            },
+            // Monochrome UI icons already use currentColor in source.
           ],
         },
       }),
@@ -46,19 +45,30 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'),
-        '@agent-skills': path.resolve(__dirname, 'agent-skills'),
       },
+      // Prefer TS sources — leftover/cached `.js` URLs must not 404 after sibling emits were removed.
+      extensions: ['.mjs', '.mts', '.ts', '.tsx', '.jsx', '.js', '.json'],
+      extensionAlias: {
+        '.js': ['.ts', '.tsx', '.js', '.jsx'],
+        '.jsx': ['.tsx', '.jsx'],
+      },
+    },
+    optimizeDeps: {
+      include: ['fontkit'],
     },
     server: {
       port: 3000,
       open: true,
       fs: {
-        allow: [path.resolve(__dirname), path.resolve(__dirname, 'agent-skills')],
+        allow: [path.resolve(__dirname)],
       },
       proxy: {
         '/api': {
-          target: 'http://localhost:8000',
+          target: 'http://127.0.0.1:8000',
           changeOrigin: true,
+          // 0 = no limit (http-proxy skips setTimeout when falsy). Design SSE can run many minutes.
+          timeout: 0,
+          proxyTimeout: 0,
         },
       },
     },

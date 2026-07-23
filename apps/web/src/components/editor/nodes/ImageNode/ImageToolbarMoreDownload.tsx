@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   HiOutlineAdjustmentsHorizontal,
   HiOutlineArrowsPointingOut,
@@ -6,7 +7,6 @@ import {
   HiOutlineScissors,
 } from 'react-icons/hi2';
 import { MdOutlineFlip } from 'react-icons/md';
-import { TbVectorBezier } from 'react-icons/tb';
 import { Dropdown } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import type { MenuItemType } from '@/components/base/dropdown';
@@ -17,43 +17,45 @@ export type ImageMoreAction =
   | 'expand'
   | 'adjust'
   | 'crop'
-  | 'vector'
   | 'flipRotate';
 
-/** Fig.3 — More menu (left-aligned): 扩展 · 调整 · 裁剪 · 矢量 · 翻转与旋转 */
+/** Image toolbar “More” menu: expand · adjust · crop · flip & rotate. */
 export default function ImageToolbarMoreDownload({
   onAction,
 }: {
   onAction: (key: ImageMoreAction) => void;
 }): ReactNode {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const items: MenuItemType[] = useMemo(
     () => [
       {
         key: 'expand',
-        label: imageMoreRow(<HiOutlineArrowsPointingOut className="h-4 w-4" />, '扩展'),
+        label: imageMoreRow(
+          <HiOutlineArrowsPointingOut className="h-4 w-4" />,
+          t('editor.imageToolbar.expand')
+        ),
       },
       {
         key: 'adjust',
         label: imageMoreRow(
           <HiOutlineAdjustmentsHorizontal className="h-4 w-4" />,
-          '调整'
+          t('editor.imageToolbar.adjust')
         ),
       },
       {
         key: 'crop',
-        label: imageMoreRow(<HiOutlineScissors className="h-4 w-4" />, '裁剪'),
-      },
-      {
-        key: 'vector',
-        label: imageMoreRow(<TbVectorBezier className="h-4 w-4" />, '矢量'),
+        label: imageMoreRow(<HiOutlineScissors className="h-4 w-4" />, t('editor.imageToolbar.crop')),
       },
       {
         key: 'flipRotate',
-        label: imageMoreRow(<MdOutlineFlip className="h-4 w-4" />, '翻转与旋转'),
+        label: imageMoreRow(
+          <MdOutlineFlip className="h-4 w-4" />,
+          t('editor.imageToolbar.flipRotate')
+        ),
       },
     ],
-    []
+    [t]
   );
 
   return (
@@ -73,10 +75,10 @@ export default function ImageToolbarMoreDownload({
       floatingClassName="z-[80]"
       referenceClassName="inline-flex"
     >
-      <Tooltip title={'更多'} placement="top">
+      <Tooltip title={t('editor.imageToolbar.more')} placement="top">
         <button
           type="button"
-          aria-label={'更多'}
+          aria-label={t('editor.imageToolbar.more')}
           className={cn(imageToolBtn, open && 'bg-[var(--accent-soft)]')}
         >
           <HiOutlineEllipsisHorizontal className="h-4 w-4" />

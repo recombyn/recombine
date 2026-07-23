@@ -17,6 +17,10 @@
   touch-action: none;
 }
 
+.angle-editor-scene .unified-scene.mode-camera {
+  transform-style: preserve-3d;
+}
+
 .angle-editor-scene .unified-scene.is-dragging {
   cursor: grabbing;
 }
@@ -64,23 +68,32 @@
   letter-spacing: 0.02em;
 }
 
-/* Skybox: wireframe cube — thin edges, inset preview, letter faces (fig.2). */
+/* Skybox: wireframe cube — inset shadows keep all 4 edges visible under 3D rotate. */
 .angle-editor-scene .mode-skybox .angle-editor-cube-face {
-  border-color: #cfcfcf;
+  border: none;
+  /* Vertical edges especially get lost with border + rotateX; inset shadows stay painted. */
+  box-shadow:
+    inset 0 0 0 1px #c4c4c4,
+    0 0 0 0.5px rgba(160, 160, 160, 0.35);
   background: #fff;
   font-size: 28px;
   font-weight: 500;
   color: #c8c8c8;
+  /* Keep side faces (L / R) visible when nearly edge-on. */
+  backface-visibility: visible;
 }
 
-.angle-editor-scene .mode-skybox .angle-editor-face-front.has-image {
-  border: 1px solid #cfcfcf;
+.angle-editor-scene .mode-skybox .angle-editor-cube-face.has-image {
+  border: none;
   background: #fff;
+  box-shadow:
+    inset 0 0 0 1px #c4c4c4,
+    0 0 0 0.5px rgba(160, 160, 160, 0.35);
 }
 
 .angle-editor-scene .mode-skybox .angle-editor-face-image-content {
-  width: 64%;
-  height: 64%;
+  width: 72%;
+  height: 72%;
   object-fit: contain;
   border-radius: 2px;
   pointer-events: none;
@@ -95,16 +108,38 @@
   user-select: none;
 }
 
-.angle-editor-scene .mode-camera .angle-editor-face-front.has-image {
-  border: 1px solid #d4d4d4;
-  background: #fff;
+/* Camera mode: fixed face-on subject (does not orbit; only scales). */
+.angle-editor-scene .angle-editor-fixed-subject {
+  position: relative;
+  /* Fallback before natural size loads — leave padding inside the orbit globe. */
+  width: 64px;
+  height: 64px;
+  max-width: 64px;
+  max-height: 64px;
+  transform-style: flat;
+  pointer-events: none;
 }
 
-.angle-editor-scene .mode-camera .angle-editor-face-front.has-image .angle-editor-face-image-content {
-  width: 40px;
-  height: 40px;
-  object-fit: cover;
-  border-radius: 3px;
+.angle-editor-scene .angle-editor-fixed-subject-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  border-radius: 2px;
+  border: 1px solid #d4d4d4;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+  user-select: none;
+  pointer-events: none;
+}
+
+.angle-editor-scene .angle-editor-fixed-subject-placeholder {
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+  border: 1px solid #d4d4d4;
+  background: #f7f7f7;
 }
 
 .angle-editor-scene .angle-editor-face-front {
@@ -126,7 +161,9 @@
   transform: rotateX(-90deg) translateZ(var(--angle-cube-half, 46px));
 }
 
-.angle-editor-scene .angle-editor-sphere-grid {
+/* Camera-mode orbit wireframe (CSS 3D rings, not copied from third-party class names). */
+.angle-editor-scene .mae-orbit-globe {
+  --mae-globe-size: 150px;
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -136,41 +173,55 @@
   pointer-events: none;
 }
 
-.angle-editor-scene .angle-editor-sphere-grid-inner {
+.angle-editor-scene .mae-orbit-globe-core {
   position: relative;
-  width: 150px;
-  height: 150px;
+  width: var(--mae-globe-size);
+  height: var(--mae-globe-size);
   transform-style: preserve-3d;
 }
 
-.angle-editor-scene .angle-editor-sphere-grid-meridian,
-.angle-editor-scene .angle-editor-sphere-grid-parallel {
+.angle-editor-scene .mae-orbit-globe-ring {
   position: absolute;
   left: 50%;
   top: 50%;
-  border: 1px solid #bdbdbd;
+  width: var(--mae-globe-size);
+  height: var(--mae-globe-size);
+  margin-left: calc(var(--mae-globe-size) / -2);
+  margin-top: calc(var(--mae-globe-size) / -2);
+  border: 1px solid rgba(120, 120, 120, 0.45);
   border-radius: 50%;
-  opacity: 0.28;
-  transform-style: preserve-3d;
   box-sizing: border-box;
+  opacity: 0.32;
+  transform-style: preserve-3d;
+  backface-visibility: visible;
 }
 
-.angle-editor-scene .angle-editor-sphere-grid-meridian {
-  width: 150px;
-  height: 150px;
-  margin-left: -75px;
-  margin-top: -75px;
-}
-
-.angle-editor-scene .angle-editor-sphere-grid-helper-vertical {
+.angle-editor-scene .mae-orbit-globe-axis {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 0.2px;
-  height: 150px;
+  width: 1px;
+  height: var(--mae-globe-size);
   transform: translate(-50%, -50%);
-  background: #bdbdbd;
-  opacity: 0.22;
+  background: rgba(120, 120, 120, 0.35);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.angle-editor-scene .mae-orbit-nav {
+  --mae-orbit-arrow-size: 18px;
+  --mae-orbit-arrow-gap: 10px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(
+    var(--mae-globe-size, 150px) + 2 * (var(--mae-orbit-arrow-gap) + var(--mae-orbit-arrow-size))
+  );
+  height: calc(
+    var(--mae-globe-size, 150px) + 2 * (var(--mae-orbit-arrow-gap) + var(--mae-orbit-arrow-size))
+  );
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .angle-editor-scene .angle-editor-scene-camera {
@@ -248,7 +299,7 @@
   inset: 2px;
   border-radius: 2px;
   background-color: #111;
-  background-size: cover;
+  background-size: contain;
   background-position: center;
   background-repeat: no-repeat;
 }
@@ -329,23 +380,23 @@
   background: rgba(255, 255, 255, 0.7);
 }
 
-.angle-editor-scene .angle-editor-direction-btn-up {
-  top: 6px;
+.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-up {
+  top: 0;
   left: 50%;
   transform: translateX(-50%);
 }
-.angle-editor-scene .angle-editor-direction-btn-down {
-  bottom: 6px;
+.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-down {
+  bottom: 0;
   left: 50%;
   transform: translateX(-50%);
 }
-.angle-editor-scene .angle-editor-direction-btn-left {
-  left: 6px;
+.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-left {
+  left: 0;
   top: 50%;
   transform: translateY(-50%);
 }
-.angle-editor-scene .angle-editor-direction-btn-right {
-  right: 6px;
+.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-right {
+  right: 0;
   top: 50%;
   transform: translateY(-50%);
 }

@@ -1,15 +1,15 @@
 import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import {
-  CameraOverlayPortal,
-  useCamera,
-  worldToStage,
-} from '@/components/editor/Canvas/stage/CameraContext';
+  RcbOverlayPortal,
+  useRcbCamera,
+  rcbSceneToScreen,
+} from '@/components/rcb';
 import {
   linearAngleFromEndpoints,
   resolveLinearCoords,
   type FillGradient,
   type FillStop,
-} from '@/store/scene/sceneFill';
+} from '@/components/rcb/scene/sceneFill';
 import { normalizeHex } from '@/components/base/colorPanel';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
@@ -98,7 +98,7 @@ export default function GradientHandlesOverlay({
   onChange,
   onActiveStopChange,
 }: Props): ReactNode {
-  const camera = useCamera();
+  const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
   const dragRef = useRef<DragKind | null>(null);
   const gradRef = useRef(gradient);
@@ -108,7 +108,7 @@ export default function GradientHandlesOverlay({
   onChangeRef.current = onChange;
   onActiveRef.current = onActiveStopChange;
 
-  const origin = worldToStage(camera, box.left, box.top);
+  const origin = rcbSceneToScreen(camera, box.left, box.top);
   const stageW = box.width * z;
   const stageH = box.height * z;
   const w = box.width;
@@ -446,7 +446,7 @@ export default function GradientHandlesOverlay({
   if (!body) return null;
 
   return (
-    <CameraOverlayPortal>
+    <RcbOverlayPortal>
       <div
         data-gradient-handles
         className="pointer-events-none absolute z-[35]"
@@ -460,6 +460,6 @@ export default function GradientHandlesOverlay({
       >
         {body}
       </div>
-    </CameraOverlayPortal>
+    </RcbOverlayPortal>
   );
 }

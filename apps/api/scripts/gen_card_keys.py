@@ -34,9 +34,9 @@ from services.wallet.db import init_wallet_db  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate card keys for Token top-up")
+    parser = argparse.ArgumentParser(description="Generate card keys for credit top-up")
     parser.add_argument("--count", type=int, default=10, help="How many keys to generate")
-    parser.add_argument("--tokens", type=int, required=True, help="Token amount per key")
+    parser.add_argument("--tokens", type=int, required=True, help="Credits (积分) amount per key")
     parser.add_argument(
         "--expires-days",
         type=int,
@@ -84,7 +84,7 @@ def main() -> int:
         out_path = Path.cwd() / out_path
 
     header = (
-        f"# recombyn card keys — Token={args.tokens} each — count={inserted}\n"
+        f"# recombyn card keys — credits={args.tokens} each — count={inserted}\n"
         f"# Upload to your card platform, then DELETE this file.\n"
         f"# Generated at unix={int(time.time())}\n"
     )

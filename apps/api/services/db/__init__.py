@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Literal
@@ -14,8 +15,10 @@ from config.settings import settings
 
 Dialect = Literal["mysql", "sqlite"]
 
-_LOCK = threading.Lock()
-_MYSQL_POOL: Any = None
+# RLock: init_schema holds this while calling connect() → pool checkout.
+_LOCK = threading.RLock()
+_MYSQL_POOL: Any = None  # queue.Queue of live pymysql connections
+_MYSQL_POOL_SIZE = 8
 _SCHEMA_READY = False
 
 _SQLITE_FALLBACK = Path(__file__).resolve().parents[2] / "storage" / "recombyn.db"
@@ -51,15 +54,111 @@ def _parse_mysql_url(url: str) -> dict[str, Any]:
     }
 
 
-def _mysql_connect():
+def _mysql_connect_new():
     import pymysql
     from pymysql.cursors import DictCursor
 
-    global _MYSQL_POOL
     cfg = _parse_mysql_url(settings.database_url.strip())
     cfg["cursorclass"] = DictCursor
-    # One connection per call is fine for FastAPI sync handlers; pool later if needed.
+    cfg["connect_timeout"] = 10
+    cfg["read_timeout"] = 60
+    cfg["write_timeout"] = 60
     return pymysql.connect(**{k: v for k, v in cfg.items() if k != "cursorclass"}, cursorclass=DictCursor)
+
+
+def _mysql_pool_get():
+    """Borrow a pooled connection; create up to _MYSQL_POOL_SIZE."""
+    import queue
+
+    global _MYSQL_POOL
+    with _LOCK:
+        if _MYSQL_POOL is None:
+            _MYSQL_POOL = queue.Queue(maxsize=_MYSQL_POOL_SIZE)
+            _MYSQL_POOL._opened = 0  # type: ignore[attr-defined]
+
+    pool = _MYSQL_POOL
+
+    def _mark_pooled(conn: Any) -> Any:
+        setattr(conn, "_rcb_pooled", True)
+        return conn
+
+    try:
+        raw = pool.get_nowait()
+    except queue.Empty:
+        raw = None
+
+    if raw is not None:
+        try:
+            raw.ping(reconnect=True)
+            return _mark_pooled(raw)
+        except Exception:
+            try:
+                raw.close()
+            except Exception:
+                pass
+            with _LOCK:
+                pool._opened = max(0, int(getattr(pool, "_opened", 1)) - 1)  # type: ignore[attr-defined]
+
+    create = False
+    with _LOCK:
+        opened = int(getattr(pool, "_opened", 0))
+        if opened < _MYSQL_POOL_SIZE:
+            pool._opened = opened + 1  # type: ignore[attr-defined]
+            create = True
+
+    if create:
+        try:
+            return _mark_pooled(_mysql_connect_new())
+        except Exception:
+            with _LOCK:
+                pool._opened = max(0, int(getattr(pool, "_opened", 1)) - 1)  # type: ignore[attr-defined]
+            raise
+
+    # Pool exhausted — wait for a recycled connection (do not open uncapped).
+    deadline = time.monotonic() + 15.0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("MySQL connection pool exhausted")
+        try:
+            raw = pool.get(timeout=remaining)
+        except queue.Empty:
+            raise TimeoutError("MySQL connection pool exhausted") from None
+        try:
+            raw.ping(reconnect=True)
+            return _mark_pooled(raw)
+        except Exception:
+            try:
+                raw.close()
+            except Exception:
+                pass
+            with _LOCK:
+                pool._opened = max(0, int(getattr(pool, "_opened", 1)) - 1)  # type: ignore[attr-defined]
+
+
+def _mysql_pool_put(raw: Any) -> None:
+    pool = _MYSQL_POOL
+    if pool is None or not getattr(raw, "_rcb_pooled", False):
+        try:
+            raw.close()
+        except Exception:
+            pass
+        return
+    try:
+        # Drop dirty transactions before reuse.
+        try:
+            raw.rollback()
+        except Exception:
+            pass
+        pool.put_nowait(raw)
+    except Exception:
+        try:
+            raw.close()
+        except Exception:
+            pass
+        with _LOCK:
+            if hasattr(pool, "_opened"):
+                pool._opened = max(0, int(pool._opened) - 1)  # type: ignore[attr-defined]
 
 
 def _sqlite_path() -> Path:
@@ -81,6 +180,13 @@ def _adapt_sql(sql: str) -> str:
     out = sql
     out = out.replace("COLLATE NOCASE", "")
     out = out.replace("AUTOINCREMENT", "AUTO_INCREMENT")
+    # SQLite last_insert_rowid() → MySQL LAST_INSERT_ID()
+    out = re.sub(
+        r"\blast_insert_rowid\s*\(\s*\)",
+        "LAST_INSERT_ID()",
+        out,
+        flags=re.IGNORECASE,
+    )
     # SQLite UPSERT → MySQL
     out = re.sub(
         r"ON CONFLICT\((\w+)\)\s+DO UPDATE SET",
@@ -90,6 +196,8 @@ def _adapt_sql(sql: str) -> str:
     )
     # excluded.col → VALUES(col) for MySQL upsert
     out = re.sub(r"excluded\.(\w+)", r"VALUES(\1)", out, flags=re.IGNORECASE)
+    # pymysql uses %s placeholders; escape literal % (e.g. LIKE '%x%') first.
+    out = out.replace("%", "%%")
     out = out.replace("?", "%s")
     return out
 
@@ -217,9 +325,11 @@ def _split_sql(script: str) -> list[str]:
 @contextmanager
 def connect() -> Iterator[ConnectionWrapper]:
     """Yield a connection; commits on success, rolls back on error."""
+    pooled = False
     if dialect() == "mysql":
-        raw = _mysql_connect()
+        raw = _mysql_pool_get()
         conn = ConnectionWrapper(raw, "mysql")
+        pooled = True
     else:
         raw = sqlite3.connect(str(_sqlite_path()), check_same_thread=False)
         raw.row_factory = sqlite3.Row
@@ -232,7 +342,10 @@ def connect() -> Iterator[ConnectionWrapper]:
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if pooled:
+            _mysql_pool_put(raw)
+        else:
+            conn.close()
 
 
 def init_schema() -> None:
@@ -336,8 +449,12 @@ def init_schema() -> None:
             category VARCHAR(32) NOT NULL DEFAULT 'resume',
             document_json {text} NOT NULL,
             document_key VARCHAR(512),
+            cover_json {text},
             status VARCHAR(16) NOT NULL DEFAULT 'pending',
             reject_reason {text},
+            like_count INTEGER NOT NULL DEFAULT 0,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            is_visible INTEGER NOT NULL DEFAULT 1,
             created_at DOUBLE NOT NULL,
             updated_at DOUBLE NOT NULL,
             reviewed_at DOUBLE,
@@ -376,11 +493,68 @@ def init_schema() -> None:
             role VARCHAR(16) NOT NULL,
             content {text} NOT NULL,
             thinking {text},
+            meta_json {text},
             created_at DOUBLE NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_chat_messages_session
             ON chat_messages(session_id, sort_order);
+
+        CREATE TABLE IF NOT EXISTS fonts (
+            id VARCHAR(64) PRIMARY KEY,
+            family VARCHAR(255) NOT NULL,
+            display_name VARCHAR(255) NOT NULL,
+            faces_json {text} NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at DOUBLE NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_fonts_sort ON fonts(sort_order);
+
+        CREATE TABLE IF NOT EXISTS assets (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL,
+            kind VARCHAR(16) NOT NULL,
+            object_key VARCHAR(512),
+            url {text} NOT NULL,
+            mime VARCHAR(128),
+            width INTEGER,
+            height INTEGER,
+            source VARCHAR(32) NOT NULL DEFAULT 'ai_image',
+            prompt {text},
+            meta_json {text},
+            created_at DOUBLE NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assets_user ON assets(user_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS plaza_likes (
+            user_id VARCHAR(64) NOT NULL,
+            submission_id VARCHAR(64) NOT NULL,
+            created_at DOUBLE NOT NULL,
+            PRIMARY KEY (user_id, submission_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_plaza_likes_user ON plaza_likes(user_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS user_follows (
+            user_id VARCHAR(64) NOT NULL,
+            followee_id VARCHAR(64) NOT NULL,
+            followee_name VARCHAR(255) NOT NULL DEFAULT '',
+            followee_avatar {text},
+            created_at DOUBLE NOT NULL,
+            PRIMARY KEY (user_id, followee_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_follows_user ON user_follows(user_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS document_shares (
+            id VARCHAR(64) PRIMARY KEY,
+            owner_id VARCHAR(64) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            permission VARCHAR(16) NOT NULL,
+            document_json {text} NOT NULL,
+            source_project_id VARCHAR(64),
+            created_at DOUBLE NOT NULL,
+            updated_at DOUBLE NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_document_shares_owner ON document_shares(owner_id, updated_at);
         """
 
         # MySQL does not support "CREATE UNIQUE INDEX IF NOT EXISTS" on all versions the same way;
@@ -390,7 +564,360 @@ def init_schema() -> None:
                 _init_mysql_schema(conn)
             else:
                 conn.executescript(ddl)
+            _ensure_plaza_cover_json(conn, mysql=mysql)
+            _ensure_plaza_likes(conn, mysql=mysql)
+            _ensure_user_follows(conn, mysql=mysql)
+            _ensure_plaza_engagement_counts(conn, mysql=mysql)
+            _ensure_plaza_is_visible(conn, mysql=mysql)
+            _ensure_document_shares(conn, mysql=mysql)
+            _ensure_font_tasks(conn, mysql=mysql)
+            _ensure_users_admin_columns(conn, mysql=mysql)
+            _ensure_chat_messages_meta_json(conn, mysql=mysql)
+            _ensure_chat_sessions_meta_json(conn, mysql=mysql)
+            _ensure_agent_memory_tables(conn, mysql=mysql)
+            from services.design.schema import ensure_design_tables
+            from services.llm.catalog_store import ensure_llm_models_table
+
+            ensure_design_tables(conn, mysql=mysql)
+            ensure_llm_models_table(conn, mysql=mysql)
         _SCHEMA_READY = True
+        try:
+            from services.design.seed import seed_design_catalog_if_empty
+
+            seed_design_catalog_if_empty()
+        except Exception:
+            pass
+
+
+def _ensure_users_admin_columns(conn: Any, *, mysql: bool) -> None:
+    """users.role / users.status for admin console (idempotent)."""
+    columns = (
+        ("role", "VARCHAR(16) NOT NULL DEFAULT 'user'"),
+        ("status", "VARCHAR(16) NOT NULL DEFAULT 'active'"),
+    )
+    try:
+        if mysql:
+            for name, col_def in columns:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'users'
+                      AND COLUMN_NAME = ?
+                    """,
+                    (name,),
+                ).fetchone()
+                if int((row or {}).get("c") or 0) > 0:
+                    continue
+                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {col_def}")
+            conn.execute(
+                """
+                UPDATE users
+                SET role = 'admin', status = 'active'
+                WHERE id = 'user_super_admin'
+                   OR email = 'admin@recombyn.com'
+                """
+            )
+        else:
+            cols = {
+                str(r["name"]) for r in conn.execute("PRAGMA table_info(users)").fetchall()
+            }
+            for name, col_def in columns:
+                if name in cols:
+                    continue
+                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {col_def}")
+            conn.execute(
+                """
+                UPDATE users
+                SET role = 'admin', status = 'active'
+                WHERE id = 'user_super_admin'
+                   OR email = 'admin@recombyn.com'
+                """
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_chat_sessions_meta_json(conn: Any, *, mysql: bool) -> None:
+    """chat_sessions.meta_json for agent task_state (idempotent)."""
+    col_type = "LONGTEXT" if mysql else "TEXT"
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'chat_sessions'
+                  AND COLUMN_NAME = 'meta_json'
+                """,
+            ).fetchone()
+            if int((row or {}).get("c") or 0) == 0:
+                conn.execute(f"ALTER TABLE chat_sessions ADD COLUMN meta_json {col_type} NULL")
+        else:
+            cols = {
+                str(r["name"]) for r in conn.execute("PRAGMA table_info(chat_sessions)").fetchall()
+            }
+            if "meta_json" not in cols:
+                conn.execute(f"ALTER TABLE chat_sessions ADD COLUMN meta_json {col_type}")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_agent_memory_tables(conn: Any, *, mysql: bool) -> None:
+    """agent_session_snapshot + agent_long_memory (idempotent)."""
+    text = "LONGTEXT" if mysql else "TEXT"
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'agent_session_snapshot'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) == 0:
+                conn.execute(
+                    f"""
+                    CREATE TABLE agent_session_snapshot (
+                        session_id VARCHAR(64) PRIMARY KEY,
+                        user_id VARCHAR(64) NOT NULL,
+                        project_id VARCHAR(64) NOT NULL,
+                        task_state_json {text} NOT NULL,
+                        updated_at DOUBLE NOT NULL,
+                        created_at DOUBLE NOT NULL,
+                        KEY idx_agent_snapshot_user (user_id, updated_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+            row2 = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'agent_long_memory'
+                """
+            ).fetchone()
+            if int((row2 or {}).get("c") or 0) == 0:
+                conn.execute(
+                    f"""
+                    CREATE TABLE agent_long_memory (
+                        id VARCHAR(64) PRIMARY KEY,
+                        user_id VARCHAR(64) NOT NULL,
+                        kind VARCHAR(32) NOT NULL,
+                        text {text} NOT NULL,
+                        status VARCHAR(16) NOT NULL DEFAULT 'active',
+                        pinned INTEGER NOT NULL DEFAULT 0,
+                        score DOUBLE NOT NULL DEFAULT 1.0,
+                        created_at DOUBLE NOT NULL,
+                        updated_at DOUBLE NOT NULL,
+                        KEY idx_agent_long_user (user_id, status, updated_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """
+                )
+        else:
+            conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS agent_session_snapshot (
+                    session_id VARCHAR(64) PRIMARY KEY,
+                    user_id VARCHAR(64) NOT NULL,
+                    project_id VARCHAR(64) NOT NULL,
+                    task_state_json {text} NOT NULL,
+                    updated_at DOUBLE NOT NULL,
+                    created_at DOUBLE NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agent_snapshot_user ON agent_session_snapshot(user_id, updated_at)"
+            )
+            conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS agent_long_memory (
+                    id VARCHAR(64) PRIMARY KEY,
+                    user_id VARCHAR(64) NOT NULL,
+                    kind VARCHAR(32) NOT NULL,
+                    text {text} NOT NULL,
+                    status VARCHAR(16) NOT NULL DEFAULT 'active',
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    score REAL NOT NULL DEFAULT 1.0,
+                    created_at DOUBLE NOT NULL,
+                    updated_at DOUBLE NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agent_long_user ON agent_long_memory(user_id, status, updated_at)"
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_chat_messages_meta_json(conn: Any, *, mysql: bool) -> None:
+    """chat_messages.meta_json for duration/intent/steps (idempotent)."""
+    col_type = "LONGTEXT" if mysql else "TEXT"
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'chat_messages'
+                  AND COLUMN_NAME = 'meta_json'
+                """,
+            ).fetchone()
+            if int((row or {}).get("c") or 0) == 0:
+                conn.execute(f"ALTER TABLE chat_messages ADD COLUMN meta_json {col_type} NULL")
+        else:
+            cols = {
+                str(r["name"]) for r in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+            }
+            if "meta_json" not in cols:
+                conn.execute(f"ALTER TABLE chat_messages ADD COLUMN meta_json {col_type}")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_plaza_cover_json(conn: Any, *, mysql: bool) -> None:
+    """Plaza list cover snapshot column (idempotent)."""
+    col_type = "LONGTEXT" if mysql else "TEXT"
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'plaza_submissions'
+                  AND COLUMN_NAME = 'cover_json'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) > 0:
+                return
+            conn.execute(f"ALTER TABLE plaza_submissions ADD COLUMN cover_json {col_type} NULL")
+        else:
+            cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(plaza_submissions)").fetchall()
+            }
+            if "cover_json" in cols:
+                return
+            conn.execute(f"ALTER TABLE plaza_submissions ADD COLUMN cover_json {col_type}")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_plaza_likes(conn: Any, *, mysql: bool) -> None:
+    """Me liked plaza items table (idempotent)."""
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'plaza_likes'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) > 0:
+                return
+            conn.execute(
+                """
+                CREATE TABLE plaza_likes (
+                    user_id VARCHAR(64) NOT NULL,
+                    submission_id VARCHAR(64) NOT NULL,
+                    created_at DOUBLE NOT NULL,
+                    PRIMARY KEY (user_id, submission_id),
+                    KEY idx_plaza_likes_user (user_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS plaza_likes (
+                    user_id VARCHAR(64) NOT NULL,
+                    submission_id VARCHAR(64) NOT NULL,
+                    created_at DOUBLE NOT NULL,
+                    PRIMARY KEY (user_id, submission_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_plaza_likes_user ON plaza_likes(user_id, created_at)"
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_user_follows(conn: Any, *, mysql: bool) -> None:
+    """Me followed creators table (idempotent)."""
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'user_follows'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) > 0:
+                return
+            conn.execute(
+                """
+                CREATE TABLE user_follows (
+                    user_id VARCHAR(64) NOT NULL,
+                    followee_id VARCHAR(64) NOT NULL,
+                    followee_name VARCHAR(255) NOT NULL DEFAULT '',
+                    followee_avatar LONGTEXT NULL,
+                    created_at DOUBLE NOT NULL,
+                    PRIMARY KEY (user_id, followee_id),
+                    KEY idx_user_follows_user (user_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_follows (
+                    user_id VARCHAR(64) NOT NULL,
+                    followee_id VARCHAR(64) NOT NULL,
+                    followee_name VARCHAR(255) NOT NULL DEFAULT '',
+                    followee_avatar TEXT,
+                    created_at DOUBLE NOT NULL,
+                    PRIMARY KEY (user_id, followee_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_follows_user ON user_follows(user_id, created_at)"
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 def _init_mysql_schema(conn: ConnectionWrapper) -> None:
@@ -483,8 +1010,12 @@ def _init_mysql_schema(conn: ConnectionWrapper) -> None:
             category VARCHAR(32) NOT NULL DEFAULT 'resume',
             document_json LONGTEXT NOT NULL,
             document_key VARCHAR(512) NULL,
+            cover_json LONGTEXT NULL,
             status VARCHAR(16) NOT NULL DEFAULT 'pending',
             reject_reason LONGTEXT,
+            like_count INTEGER NOT NULL DEFAULT 0,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            is_visible INTEGER NOT NULL DEFAULT 1,
             created_at DOUBLE NOT NULL,
             updated_at DOUBLE NOT NULL,
             reviewed_at DOUBLE NULL,
@@ -525,11 +1056,263 @@ def _init_mysql_schema(conn: ConnectionWrapper) -> None:
             role VARCHAR(16) NOT NULL,
             content LONGTEXT NOT NULL,
             thinking LONGTEXT NULL,
+            meta_json LONGTEXT NULL,
             created_at DOUBLE NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
             KEY idx_chat_messages_session (session_id, sort_order)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """,
+        """
+        CREATE TABLE IF NOT EXISTS fonts (
+            id VARCHAR(64) PRIMARY KEY,
+            family VARCHAR(255) NOT NULL,
+            display_name VARCHAR(255) NOT NULL,
+            faces_json LONGTEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at DOUBLE NOT NULL,
+            KEY idx_fonts_sort (sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS assets (
+            id VARCHAR(64) PRIMARY KEY,
+            user_id VARCHAR(64) NOT NULL,
+            kind VARCHAR(16) NOT NULL,
+            object_key VARCHAR(512) NULL,
+            url LONGTEXT NOT NULL,
+            mime VARCHAR(128) NULL,
+            width INTEGER NULL,
+            height INTEGER NULL,
+            source VARCHAR(32) NOT NULL DEFAULT 'ai_image',
+            prompt LONGTEXT NULL,
+            meta_json LONGTEXT NULL,
+            created_at DOUBLE NOT NULL,
+            KEY idx_assets_user (user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS plaza_likes (
+            user_id VARCHAR(64) NOT NULL,
+            submission_id VARCHAR(64) NOT NULL,
+            created_at DOUBLE NOT NULL,
+            PRIMARY KEY (user_id, submission_id),
+            KEY idx_plaza_likes_user (user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS user_follows (
+            user_id VARCHAR(64) NOT NULL,
+            followee_id VARCHAR(64) NOT NULL,
+            followee_name VARCHAR(255) NOT NULL DEFAULT '',
+            followee_avatar LONGTEXT NULL,
+            created_at DOUBLE NOT NULL,
+            PRIMARY KEY (user_id, followee_id),
+            KEY idx_user_follows_user (user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS document_shares (
+            id VARCHAR(64) PRIMARY KEY,
+            owner_id VARCHAR(64) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            permission VARCHAR(16) NOT NULL,
+            document_json LONGTEXT NOT NULL,
+            source_project_id VARCHAR(64) NULL,
+            created_at DOUBLE NOT NULL,
+            updated_at DOUBLE NOT NULL,
+            KEY idx_document_shares_owner (owner_id, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
     ]
     for stmt in statements:
         conn.execute(stmt)
+
+
+
+def _ensure_plaza_is_visible(conn: Any, *, mysql: bool) -> None:
+    """is_visible on plaza_submissions (idempotent). Default 1 = show on C-end."""
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'plaza_submissions'
+                  AND COLUMN_NAME = 'is_visible'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) > 0:
+                return
+            conn.execute(
+                "ALTER TABLE plaza_submissions ADD COLUMN is_visible INTEGER NOT NULL DEFAULT 1"
+            )
+        else:
+            cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(plaza_submissions)").fetchall()
+            }
+            if "is_visible" in cols:
+                return
+            conn.execute(
+                "ALTER TABLE plaza_submissions ADD COLUMN is_visible INTEGER NOT NULL DEFAULT 1"
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_plaza_engagement_counts(conn: Any, *, mysql: bool) -> None:
+    """like_count / use_count on plaza_submissions (idempotent)."""
+    for col in ("like_count", "use_count"):
+        try:
+            if mysql:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'plaza_submissions'
+                      AND COLUMN_NAME = ?
+                    """,
+                    (col,),
+                ).fetchone()
+                if int((row or {}).get("c") or 0) > 0:
+                    continue
+                conn.execute(
+                    f"ALTER TABLE plaza_submissions ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"
+                )
+            else:
+                cols = {
+                    str(r["name"])
+                    for r in conn.execute("PRAGMA table_info(plaza_submissions)").fetchall()
+                }
+                if col in cols:
+                    continue
+                conn.execute(
+                    f"ALTER TABLE plaza_submissions ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"
+                )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+
+def _ensure_document_shares(conn: Any, *, mysql: bool) -> None:
+    """Shared documents table (idempotent)."""
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'document_shares'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) > 0:
+                return
+            conn.execute(
+                """
+                CREATE TABLE document_shares (
+                    id VARCHAR(64) PRIMARY KEY,
+                    owner_id VARCHAR(64) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    permission VARCHAR(16) NOT NULL,
+                    document_json LONGTEXT NOT NULL,
+                    source_project_id VARCHAR(64) NULL,
+                    created_at DOUBLE NOT NULL,
+                    updated_at DOUBLE NOT NULL,
+                    KEY idx_document_shares_owner (owner_id, updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_shares (
+                    id VARCHAR(64) PRIMARY KEY,
+                    owner_id VARCHAR(64) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    permission VARCHAR(16) NOT NULL,
+                    document_json TEXT NOT NULL,
+                    source_project_id VARCHAR(64),
+                    created_at DOUBLE NOT NULL,
+                    updated_at DOUBLE NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_document_shares_owner ON document_shares(owner_id, updated_at)"
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_font_tasks(conn: Any, *, mysql: bool) -> None:
+    """Async AI font-generation jobs (idempotent)."""
+    try:
+        if mysql:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS font_tasks (
+                    id VARCHAR(64) PRIMARY KEY,
+                    user_id VARCHAR(64) NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'queued',
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    description LONGTEXT NULL,
+                    reference_url LONGTEXT NULL,
+                    charset_text LONGTEXT NULL,
+                    style_object_key VARCHAR(512) NULL,
+                    ttf_object_key VARCHAR(512) NULL,
+                    ttf_url LONGTEXT NULL,
+                    preview_url LONGTEXT NULL,
+                    asset_id VARCHAR(64) NULL,
+                    family_name VARCHAR(255) NULL,
+                    error LONGTEXT NULL,
+                    meta_json LONGTEXT NULL,
+                    created_at DOUBLE NOT NULL,
+                    updated_at DOUBLE NOT NULL,
+                    KEY idx_font_tasks_user (user_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS font_tasks (
+                    id VARCHAR(64) PRIMARY KEY,
+                    user_id VARCHAR(64) NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    description TEXT,
+                    reference_url TEXT,
+                    charset_text TEXT,
+                    style_object_key TEXT,
+                    ttf_object_key TEXT,
+                    ttf_url TEXT,
+                    preview_url TEXT,
+                    asset_id TEXT,
+                    family_name TEXT,
+                    error TEXT,
+                    meta_json TEXT,
+                    created_at DOUBLE NOT NULL,
+                    updated_at DOUBLE NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_font_tasks_user ON font_tasks(user_id, created_at)"
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass

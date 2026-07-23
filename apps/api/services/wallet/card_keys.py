@@ -178,6 +178,33 @@ def list_card_keys(*, status: str | None = None, limit: int = 200) -> list[dict[
         return out
 
 
+def revoke_card_keys(ids: list[str] | list[int]) -> dict[str, Any]:
+    """Mark unused keys as revoked (作废). Returns { revoked, skipped }."""
+    init_wallet_db()
+    clean: list[int] = []
+    for raw in ids or []:
+        try:
+            clean.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not clean:
+        return {"revoked": 0, "skipped": 0}
+    revoked = 0
+    with connect() as conn:
+        for kid in clean:
+            cur = conn.execute(
+                """
+                UPDATE card_keys
+                SET status = 'revoked'
+                WHERE id = ? AND status = 'unused'
+                """,
+                (kid,),
+            )
+            revoked += int(getattr(cur, "rowcount", 0) or 0)
+        conn.commit()
+    return {"revoked": revoked, "skipped": max(0, len(clean) - revoked)}
+
+
 class RedeemError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)

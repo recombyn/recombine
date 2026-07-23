@@ -8,25 +8,25 @@ import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelecti
 import {
   fillImageFieldsFromAttrs,
   parseFillType,
-} from '@/store/scene/sceneFill';
-import { boolEffectAttr } from '@/store/scene/sceneEffects';
+} from '@/components/rcb/scene/sceneFill';
+import { boolEffectAttr } from '@/components/rcb/scene/sceneEffects';
 import { openShapeStylePanel, patchDocumentNode } from '@/store/modules/editor';
 import ToolbarValueSlider, {
   SEL_ICON_BTN,
   SEL_TOOL_BTN,
-} from '@/components/editor/Canvas/selection/ToolbarValueSlider';
+} from '@/components/rcb/selection/ToolbarValueSlider';
 import {
   FillColorSwatch,
   IconCornerRadius,
   StrokeColorSwatch,
-} from '@/components/editor/Canvas/selection/StyleToolbarIcons';
+} from '@/components/rcb/selection/StyleToolbarIcons';
 import AspectRatioPresetMenu, {
   ELEMENT_ASPECT_PRESETS,
-} from '@/components/editor/Canvas/selection/AspectRatioPresetMenu';
+} from '@/components/rcb/selection/AspectRatioPresetMenu';
 import {
   matchAspectPresetKey,
   sizeFromAspectPreset,
-} from '@/components/editor/Canvas/selection/resizeGeometry';
+} from '@/components/rcb/selection/resizeGeometry';
 import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
 import {
@@ -35,15 +35,23 @@ import {
   supportsFill,
   supportsShapeSides,
   supportsStroke,
-} from '@/store/scene/sceneDocument';
-import { radiiFromAttrs } from '@/store/scene/sceneRadii';
+} from '@/components/rcb/scene/sceneDocument';
+import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
 import {
   clampShapeSides,
   DEFAULT_SHAPE_SIDES,
   MAX_SHAPE_SIDES,
   MIN_SHAPE_SIDES,
   sidesFromAttrs,
-} from '@/store/scene/sceneShapes';
+} from '@/components/rcb/scene/sceneShapes';
+import {
+  buildOutlinePathAsync,
+  canOutlineNode,
+  outlineNodePatch,
+  requestEnterPathEdit,
+} from '@/components/rcb/scene/outlineToPath';
+import { TbVectorBezier } from 'react-icons/tb';
+import { message } from '@/components/base';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -56,10 +64,13 @@ export default function ShapeSelectionToolbar({
   nodeId,
   node,
   box,
+  hideExport = false,
 }: {
   nodeId: string;
   node: any;
   box: SceneBox;
+  /** When true, parent renders Export after blend (unified toolbar order). */
+  hideExport?: boolean;
 }) {
   const dispatch = useDispatch();
   const [ratioOpen, setRatioOpen] = useState(false);
@@ -134,9 +145,42 @@ export default function ShapeSelectionToolbar({
     patchAttrs({ sides: clampShapeSides(n, DEFAULT_SHAPE_SIDES) });
   };
 
+  const applyOutline = () => {
+    void (async () => {
+      const hide = message.loading('轮廓化中…', 0);
+      try {
+        const outline = await buildOutlinePathAsync(node);
+        if (!outline?.pathD) {
+          message.error('轮廓化失败');
+          return;
+        }
+        const patch = outlineNodePatch(node, outline);
+        dispatch(
+          patchDocumentNode({
+            nodeId,
+            patch: {
+              key: 'shape',
+              x: patch.x,
+              y: patch.y,
+              width: patch.width,
+              height: patch.height,
+              attrs: patch.attrs,
+            },
+          })
+        );
+        requestEnterPathEdit(nodeId);
+        message.success('已轮廓化');
+      } finally {
+        hide();
+      }
+    })();
+  };
+
   const openStyle = (kind: 'fill' | 'stroke' | 'radius') => {
     dispatch(openShapeStylePanel({ kind, nodeIds: [nodeId] }));
   };
+
+  const showOutline = canOutlineNode(node);
 
   return (
     <>
@@ -256,7 +300,15 @@ export default function ShapeSelectionToolbar({
         />
       </label>
 
-      <ExportSelectionPopover nodeIds={[nodeId]} />
+      {showOutline ? (
+        <Tooltip title="Outline" placement="top">
+          <button type="button" aria-label="Outline" className={SEL_ICON_BTN} onClick={applyOutline}>
+            <TbVectorBezier className="h-4 w-4" />
+          </button>
+        </Tooltip>
+      ) : null}
+
+      {hideExport ? null : <ExportSelectionPopover nodeIds={[nodeId]} />}
     </>
   );
 }

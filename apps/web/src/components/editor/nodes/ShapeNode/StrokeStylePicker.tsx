@@ -16,13 +16,13 @@ import { cn } from '@/utils/classnames';
 import {
   SEL_ICON_BTN,
   SEL_ICON_BTN_ACTIVE,
-} from '@/components/editor/Canvas/selection/ToolbarValueSlider';
+} from '@/components/rcb/selection/ToolbarValueSlider';
 import {
   STROKE_STYLES,
   parseStrokeStyle,
   strokeDashPreview,
   type StrokeStyle,
-} from '@/store/scene/sceneStrokeStyle';
+} from '@/components/rcb/scene/sceneStrokeStyle';
 
 export type { StrokeStyle };
 export { STROKE_STYLES };

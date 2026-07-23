@@ -78,20 +78,26 @@ class S3Storage:
         self._client = boto3.client(**kwargs)
         self._bucket = settings.s3_bucket
 
-    def put_file(self, key: str, path: Path, content_type: str | None = None) -> str:
-        if content_type:
-            self._client.upload_file(
-                str(path), self._bucket, key, ExtraArgs={"ContentType": content_type}
-            )
-        else:
-            self._client.upload_file(str(path), self._bucket, key)
-        return key
-
     def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:
         extra: dict = {}
         if content_type:
             extra["ContentType"] = content_type
+        # Public-read so returned COS URLs work in <img> without signed cookies.
+        if getattr(settings, "s3_acl_public_read", True):
+            extra["ACL"] = "public-read"
         self._client.put_object(Bucket=self._bucket, Key=key, Body=data, **extra)
+        return key
+
+    def put_file(self, key: str, path: Path, content_type: str | None = None) -> str:
+        extra: dict = {}
+        if content_type:
+            extra["ContentType"] = content_type
+        if getattr(settings, "s3_acl_public_read", True):
+            extra["ACL"] = "public-read"
+        if extra:
+            self._client.upload_file(str(path), self._bucket, key, ExtraArgs=extra)
+        else:
+            self._client.upload_file(str(path), self._bucket, key)
         return key
 
     def get_bytes(self, key: str) -> bytes | None:

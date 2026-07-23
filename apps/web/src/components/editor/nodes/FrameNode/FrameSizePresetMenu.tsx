@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   autoUpdate,
   flip,
@@ -10,14 +11,11 @@ import {
   useInteractions,
   type Placement,
 } from '@floating-ui/react';
-import {
-  FRAME_PRESET_TABS,
+import SizePresetPanel, {
   FRAME_RATIO_PRESETS,
-  findFramePreset,
-  presetsByCategory,
-  type FramePresetCategory,
+  framePresetDisplayLabel,
   type FrameSizePreset,
-} from '@/components/editor/nodes/FrameNode/frameSizePresets';
+} from '@/components/editor/chrome/SizePresetPanel';
 import { DropdownPanel, DropdownPanelItem } from '@/components/base';
 import { cn } from '@/utils/classnames';
 
@@ -31,8 +29,6 @@ export function FramePresetIcon({ kind, className }: { kind: string; className?:
   if (kind === 'tablet') return <span className={cn(base, 'h-3 w-3.5')} />;
   return <span className={cn(base, 'h-3.5 w-3')} />;
 }
-
-type DeviceCategory = Exclude<FramePresetCategory, 'ratio'>;
 
 type MenuShellProps = {
   open: boolean;
@@ -98,48 +94,6 @@ function FramePresetMenuShell({
   );
 }
 
-function PresetList({
-  list,
-  activeKey,
-  onPick,
-  onClose,
-}: {
-  list: FrameSizePreset[];
-  activeKey: string;
-  onPick: (preset: FrameSizePreset) => void;
-  onClose: () => void;
-}) {
-  return (
-    <div role="listbox" className="max-h-[min(280px,45vh)] overflow-y-auto px-1 pb-1 pt-0.5">
-      {list.map((p) => {
-        const selected = activeKey === p.key;
-        const sizeHint = p.width && p.height ? `${p.width} × ${p.height}` : '';
-        return (
-          <DropdownPanelItem
-            key={p.key}
-            role="option"
-            selected={selected}
-            onClick={() => {
-              onPick(p);
-              onClose();
-            }}
-          >
-            <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[var(--muted)]">
-              <FramePresetIcon kind={p.icon} />
-            </span>
-            <span className="min-w-0 flex-1 truncate">{p.label}</span>
-            {sizeHint ? (
-              <span className="shrink-0 text-[11px] tabular-nums text-[var(--muted)]">
-                {sizeHint}
-              </span>
-            ) : null}
-          </DropdownPanelItem>
-        );
-      })}
-    </div>
-  );
-}
-
 type DeviceMenuProps = {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -152,7 +106,7 @@ type DeviceMenuProps = {
 };
 
 /**
- * Device / paper / web size presets — tabs (fig.2 style) without 比例.
+ * Device / paper / web size presets — shared SizePresetPanel (same as chat).
  */
 export default function FrameSizePresetMenu({
   open,
@@ -164,19 +118,7 @@ export default function FrameSizePresetMenu({
   placement = 'bottom-start',
   panelDataAttrs,
 }: DeviceMenuProps) {
-  const matched = findFramePreset(activeKey);
-  const initialTab: DeviceCategory =
-    matched?.category && matched.category !== 'ratio' ? matched.category : 'mobile';
-  const [tab, setTab] = useState<DeviceCategory>(initialTab);
-
-  useEffect(() => {
-    if (!open) return;
-    const cat = findFramePreset(activeKey)?.category;
-    if (cat && cat !== 'ratio') setTab(cat);
-  }, [open, activeKey]);
-
-  const list = useMemo(() => presetsByCategory(tab), [tab]);
-
+  const { t } = useTranslation();
   return (
     <FramePresetMenuShell
       open={open}
@@ -184,34 +126,15 @@ export default function FrameSizePresetMenu({
       triggerClassName={triggerClassName}
       placement={placement}
       panelDataAttrs={panelDataAttrs}
-      ariaLabel={'尺寸预设'}
+      ariaLabel={t('editor.frameToolbar.sizePresets')}
       panel={
-        <DropdownPanel className="w-[min(340px,calc(100vw-24px))] p-0 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
-          <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto px-3 pt-2.5 pb-1">
-            {FRAME_PRESET_TABS.map((t) => {
-              const active = tab === t.id;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setTab(t.id)}
-                  className={cn(
-                    'shrink-0 whitespace-nowrap rounded-[4px] px-2.5 py-1.5 text-[11px] font-medium transition-colors',
-                    active
-                      ? 'bg-[var(--ink)] text-[var(--on-brand)]'
-                      : 'bg-[var(--accent-soft)] text-[var(--muted)] hover:text-[var(--ink)]'
-                  )}
-                >
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-          <PresetList
-            list={list}
+        <DropdownPanel className="w-[min(400px,calc(100vw-24px))] overflow-hidden p-0 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
+          <SizePresetPanel
             activeKey={activeKey}
-            onPick={onPick}
-            onClose={() => onOpenChange(false)}
+            onPick={(preset) => {
+              onPick(preset);
+              onOpenChange(false);
+            }}
           />
         </DropdownPanel>
       }
@@ -243,6 +166,7 @@ export function FrameRatioPresetMenu({
   placement = 'bottom-start',
   panelDataAttrs,
 }: RatioMenuProps) {
+  const { t } = useTranslation();
   return (
     <FramePresetMenuShell
       open={open}
@@ -250,15 +174,32 @@ export function FrameRatioPresetMenu({
       triggerClassName={triggerClassName}
       placement={placement}
       panelDataAttrs={panelDataAttrs}
-      ariaLabel={'原始'}
+      ariaLabel={t('editor.frameToolbar.ratioPresets')}
       panel={
         <DropdownPanel className="w-[168px] p-1 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
-          <PresetList
-            list={FRAME_RATIO_PRESETS}
-            activeKey={activeKey}
-            onPick={onPick}
-            onClose={() => onOpenChange(false)}
-          />
+          <div role="listbox" className="max-h-[min(280px,45vh)] overflow-y-auto">
+            {FRAME_RATIO_PRESETS.map((p) => {
+              const selected = activeKey === p.key;
+              return (
+                <DropdownPanelItem
+                  key={p.key}
+                  role="option"
+                  selected={selected}
+                  onClick={() => {
+                    onPick(p);
+                    onOpenChange(false);
+                  }}
+                >
+                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[var(--muted)]">
+                    <FramePresetIcon kind={p.icon} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {framePresetDisplayLabel(p, t)}
+                  </span>
+                </DropdownPanelItem>
+              );
+            })}
+          </div>
         </DropdownPanel>
       }
     >

@@ -10,7 +10,7 @@ import '@/styles/index.css';
 import App from '@/App';
 import { store } from '@/store';
 import { MessageContainer } from '@/components/base';
-import { loadFontCatalog } from '@/store/scene/fontCatalog';
+import { loadFontCatalog } from '@/components/rcb/scene/fontCatalog';
 
 applyTheme(getStoredThemeMode());
 void loadFontCatalog();

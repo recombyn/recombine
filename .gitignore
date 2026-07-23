@@ -27,6 +27,11 @@ apps/api/storage/*.db
 
 # testing
 coverage/
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+apps/api/.coverage
+apps/api/htmlcov/
 
 # misc
 .DS_Store
@@ -43,9 +48,16 @@ apps/web/agent-skills/
 # typescript incremental cache (looks like garbled JSON — not source)
 *.tsbuildinfo
 
-# vite.config.ts is the source of truth; ignore accidental tsc emit
+# Config .ts is source of truth; ignore accidental emit beside them
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
+apps/web/vitest.config.js
+apps/web/vitest.config.d.ts
+
+# Never commit compiled siblings next to .ts/.tsx — Vite resolves .js before .ts
+# (keep real source as TypeScript only under apps/web/src)
+apps/web/src/**/*.js
+apps/web/src/**/*.jsx
 
 npm-debug.log*
 yarn-debug.log*

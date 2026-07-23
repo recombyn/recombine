@@ -4,7 +4,7 @@ import { cn } from '@/utils/classnames';
 
 /** Toast API and portal container — style aligned message. */
 
-export type ToastType = 'success' | 'error' | 'warning' | 'loading';
+export type ToastType = 'success' | 'error' | 'warning' | 'loading' | 'destructive';
 
 interface ToastItem {
   key: string;
@@ -58,6 +58,9 @@ export const message = {
     toastManager.add({ key: genKey(), content, type: 'error', duration }),
   warning: (content: React.ReactNode, duration = 3) =>
     toastManager.add({ key: genKey(), content, type: 'warning', duration }),
+  /** Completed delete / irreversible action — red like warning is orange. */
+  destructive: (content: React.ReactNode, duration = 3) =>
+    toastManager.add({ key: genKey(), content, type: 'destructive', duration }),
   loading: (content: React.ReactNode, duration = 3) => {
     const key = genKey();
     toastManager.add({ key, content, type: 'loading', duration });
@@ -65,21 +68,34 @@ export const message = {
   },
 };
 
+const SUCCESS_MARK = '#16a34a';
+
 const TOAST_BG: Record<ToastType, string> = {
-  success: 'bg-[var(--color-brand-base)] text-[var(--color-text-on-button-base)]',
-  loading: 'bg-[var(--color-brand-base)] text-[var(--color-text-on-button-base)]',
-  error: 'bg-[var(--color-background-error-base-hover)] text-white',
-  warning: 'bg-[var(--color-background-warning-base-hover)] text-white',
+  success:
+    'bg-[var(--surface)] text-[var(--ink)] ring-1 ring-[var(--line)]',
+  loading:
+    'bg-[var(--surface)] text-[var(--ink)] ring-1 ring-[var(--line)]',
+  error: 'bg-[#c00f0c] text-white',
+  // Toast pill background (not menu/button) — red, parallel to warning orange.
+  destructive: 'bg-[#c00f0c] text-white',
+  warning: 'bg-[#e5a000] text-white',
 };
 
 const TOAST_MARK: Record<Exclude<ToastType, 'loading'>, string> = {
-  success: 'var(--color-brand-base)',
-  error: 'var(--color-background-error-base-hover)',
-  warning: 'var(--color-background-warning-base-hover)',
+  success: '#ffffff',
+  error: '#c00f0c',
+  destructive: '#c00f0c',
+  warning: '#e5a000',
 };
 
-function ToastMark({ type, color }: { type: Exclude<ToastType, 'loading'>; color: string }) {
-  if (type === 'success') {
+function ToastMark({
+  type,
+  color,
+}: {
+  type: Exclude<ToastType, 'loading'>;
+  color: string;
+}) {
+  if (type === 'success' || type === 'destructive') {
     return (
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden className="block">
         <path
@@ -127,7 +143,7 @@ function ToastLoadingMark() {
         cx="6"
         cy="6"
         r="4.25"
-        stroke="var(--color-brand-base)"
+        stroke={SUCCESS_MARK}
         strokeWidth="2.2"
         strokeLinecap="round"
         strokeDasharray="18 40"
@@ -157,9 +173,11 @@ const ToastItemRow: React.FC<{ item: ToastItem }> = ({ item }) => {
   }, [item.duration, handleClose]);
 
   const diskColor =
-    item.type === 'error' || item.type === 'warning'
-      ? '#ffffff'
-      : 'var(--color-text-on-button-base)';
+    item.type === 'success' || item.type === 'loading'
+      ? SUCCESS_MARK
+      : item.type === 'error' || item.type === 'warning' || item.type === 'destructive'
+        ? '#ffffff'
+        : 'var(--color-text-on-button-base)';
 
   return (
     <div

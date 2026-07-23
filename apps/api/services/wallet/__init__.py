@@ -8,6 +8,7 @@ from services.wallet.card_keys import (
     list_card_keys,
     normalize_card_key,
     redeem_card_key,
+    revoke_card_keys,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "list_card_keys",
     "normalize_card_key",
     "redeem_card_key",
+    "revoke_card_keys",
 ]

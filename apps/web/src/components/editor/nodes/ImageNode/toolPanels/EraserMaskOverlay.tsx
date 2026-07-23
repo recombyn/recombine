@@ -7,10 +7,10 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  CameraOverlayPortal,
-  useCamera,
-  worldToStage,
-} from '@/components/editor/Canvas/stage/CameraContext';
+  RcbOverlayPortal,
+  useRcbCamera,
+  rcbSceneToScreen,
+} from '@/components/rcb';
 
 /**
  * Opaque mask fill — preview opacity is applied via CSS on the canvas so
@@ -51,7 +51,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  */
 const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
   function EraserMaskOverlay({ imageBox, brushSize, onDirtyChange }, ref): ReactNode {
-    const camera = useCamera();
+    const camera = useRcbCamera();
     const z = Math.max(0.05, camera.zoom || 1);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const paintingRef = useRef(false);
@@ -62,7 +62,7 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
     const brushRef = useRef(brushSize);
     brushRef.current = brushSize;
 
-    const origin = worldToStage(camera, imageBox.left, imageBox.top);
+    const origin = rcbSceneToScreen(camera, imageBox.left, imageBox.top);
     const stageW = Math.max(1, imageBox.width * z);
     const stageH = Math.max(1, imageBox.height * z);
 
@@ -225,7 +225,7 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
     };
 
     return (
-      <CameraOverlayPortal>
+      <RcbOverlayPortal>
         <canvas
           ref={canvasRef}
           data-eraser-mask
@@ -245,7 +245,7 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
             (e.target as HTMLCanvasElement).setPointerCapture?.(e.pointerId);
           }}
         />
-      </CameraOverlayPortal>
+      </RcbOverlayPortal>
     );
   }
 );

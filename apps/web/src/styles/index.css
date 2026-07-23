@@ -16,12 +16,17 @@
     --accent: #141414;
     --accent-soft: #e6e6e6;
     --on-brand: #ffffff;
+    --home-hero-glow-strong: rgba(232, 226, 255, 0.7);
+    --home-hero-glow-soft: rgba(242, 238, 255, 0.45);
+    --home-hero-dot: #d8d8de;
     --font-sans: 'Alibaba PuHuiTi', '阿里巴巴普惠体', 'PingFang SC', 'Microsoft YaHei',
       'Noto Sans SC', system-ui, sans-serif;
   }
 
   html {
     font-family: var(--font-sans);
+    /* Discourage browser / trackpad page zoom; canvas has its own camera zoom. */
+    touch-action: manipulation;
   }
 
   body {
@@ -33,6 +38,7 @@
     color: var(--ink);
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
+    touch-action: manipulation;
   }
 
   /* Force chrome controls to inherit PuHuiTi (Tailwind/preflight + portaled UI). */
@@ -112,6 +118,53 @@ html.theme-switching *::after {
   background: var(--surface);
 }
 
+/* Home hero — light: lavender wash + dot grid; dark: cool wash + softer dots. */
+.home-hero-canvas {
+  background-color: var(--surface);
+  background-image: radial-gradient(var(--home-hero-dot) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-position: 0 0;
+}
+
+html[data-theme='light'] .home-hero-canvas,
+html:not([data-theme='dark']) .home-hero-canvas {
+  background-color: #ffffff;
+  background-image:
+    radial-gradient(
+      ellipse 70% 55% at 18% 92%,
+      rgba(232, 226, 255, 0.72) 0%,
+      rgba(255, 255, 255, 0) 70%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 88% 8%,
+      rgba(242, 238, 255, 0.48) 0%,
+      rgba(255, 255, 255, 0) 65%
+    ),
+    radial-gradient(#d8d8de 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px;
+  background-position: 0 0, 0 0, 0 0;
+  background-attachment: fixed, fixed, fixed;
+}
+
+html[data-theme='dark'] .home-hero-canvas {
+  background-color: var(--canvas);
+  background-image:
+    radial-gradient(
+      ellipse 70% 55% at 18% 92%,
+      var(--home-hero-glow-strong) 0%,
+      rgba(12, 12, 13, 0) 70%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 88% 8%,
+      var(--home-hero-glow-soft) 0%,
+      rgba(12, 12, 13, 0) 65%
+    ),
+    radial-gradient(var(--home-hero-dot) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px;
+  background-position: 0 0, 0 0, 0 0;
+  background-attachment: fixed, fixed, fixed;
+}
+
 .panel-tip {
   color: var(--muted);
   font-size: 12px;
@@ -184,6 +237,57 @@ html.theme-switching *::after {
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+/** Image process loading plate — bright sweep over whatever sits underneath. */
+.image-process-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    rgba(255, 255, 255, 0.7) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.55s ease-in-out infinite;
+}
+
+/**
+ * Artboard generating plate — soft steel→pale base (like design loading) + sweep.
+ * Used in screen-space overlay so zoom does not enlarge the animation.
+ */
+.artboard-process-shimmer {
+  background-color: #e4ecf4;
+  background-image: linear-gradient(
+    90deg,
+    rgba(228, 236, 244, 0) 0%,
+    rgba(228, 236, 244, 0) 32%,
+    rgba(255, 255, 255, 0.92) 50%,
+    rgba(228, 236, 244, 0) 68%,
+    rgba(228, 236, 244, 0) 100%
+  ),
+    linear-gradient(105deg, #d5e0eb 0%, #eef3f8 42%, #f7f9fb 100%);
+  background-size: 220% 100%, 100% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer 1.55s ease-in-out infinite;
+}
+
+/** Chat image-gen placeholders — sweep only, no center icon. */
+.chat-image-gen-shimmer {
+  background-color: #e4ecf4;
+  background-image: linear-gradient(
+    90deg,
+    rgba(228, 236, 244, 0) 0%,
+    rgba(228, 236, 244, 0) 32%,
+    rgba(255, 255, 255, 0.92) 50%,
+    rgba(228, 236, 244, 0) 68%,
+    rgba(228, 236, 244, 0) 100%
+  ),
+    linear-gradient(105deg, #d5e0eb 0%, #eef3f8 42%, #f7f9fb 100%);
+  background-size: 220% 100%, 100% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer 1.55s ease-in-out infinite;
 }
 
 /* Plaza publish thank-you */
@@ -283,19 +387,7 @@ html.theme-switching *::after {
   animation-delay: 0.8s;
 }
 
-/** Image process loading plate — vertical sweep (band moves left ↔ right). */
-.image-process-shimmer {
-  background-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    transparent 40%,
-    rgba(255, 255, 255, 0.7) 50%,
-    transparent 60%,
-    transparent 100%
-  );
-  background-size: 220% 100%;
-  animation: skeleton-shimmer 1.55s ease-in-out infinite;
-}
+/** Image process loading plate — soft wash only; spinner is HTML overlay. */
 
 html[data-theme='dark'] .skeleton-bone {
   background-image: linear-gradient(
