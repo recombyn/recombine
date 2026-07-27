@@ -1,7 +1,6 @@
-"""Design job orchestrator — Cursor-style tool-first agent loop (no skill pipeline).
+"""Design job orchestrator — permission gate then LangGraph agent (or partial).
 
-SSE contract kept compatible with the web client:
-  status | decision | skill_start | skill_progress | skill_done | analysis |
+SSE: status | decision | skill_start | skill_progress | skill_done | analysis |
   thinking | tool_ops | activity | scene_feedback_request | result |
   memory_patch | token | chat_done | error
 """
@@ -17,42 +16,31 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from services.agent_memory.service import memory_service
-from services.design.agent_loop import run_agent_turns
 from services.design.canvas_scene import (
-    align_canvas_size_to_scene as _align_canvas_size_to_scene,
-    early_status_canvas_fields as _early_status_canvas_fields,
-    explicit_canvas_size as _explicit_canvas_size,
     parse_size as _parse_size,
-    resolve_agent_scene as _resolve_agent_scene,
     scene_key as _scene_key,
 )
-from services.design.catalog import get_flow, get_global_rules
+from services.design.catalog import get_global_rules
 from services.design.decision_log import (
     DesignRunDecision,
     focus_frame_from_medium,
     probe_has_target_chip,
 )
-from services.design.library_store import get_library_item
 from services.design.llm_step import stream_skill_step
 from services.design.models_route import (
     apply_user_route_overrides,
+    pin_user_locked_model_routes,
     resolve_model_for_skill,
 )
 from services.design.pipeline_support import (
-    _illustration_policy,
-    _illustration_system_note,
     _normalize_ref_images,
-    _precheck_block,
+    _user_facing_run_error,
 )
 from services.design.prompt_build import (
-    _apply_prompt_pattern,
     _edit_context_block,
     _finalize_memory_patch,
-    _format_style_contract,
-    _format_template_brief,
-    merge_design_rules,
 )
-from services.design.rules_text import _as_text, _rule_text, _stage
+from services.design.rules_text import _as_text, _rule_text, _stage, exec_trace
 from services.design.task_store import _insert_task, _lock_layers, _update_task
 from services.design.tool_ops_contract import (
     TOOL_OPS_SCHEMA_VERSION,
@@ -63,14 +51,78 @@ from services.design.tool_ops_contract import (
     validation_failure_reason,
 )
 from services.wallet.billing import settle_token_hold
-from services.wallet.db import credit_tokens, get_user_tokens, spend_tokens
+from services.wallet.db import (
+    consume_free_daily_quota,
+    credit_tokens,
+    free_daily_remaining,
+    get_user_tokens,
+    spend_tokens,
+)
 
 _log = logging.getLogger(__name__)
 
-AGENT_HOLD = 20
-CHAT_HOLD = 1
-PARTIAL_HOLD = 5
-SINGLE_HOLD = 8
+# Upfront 积分 reservation (settled to LLM usage + image 按张 after the run).
+# Unified 积分 holds (10× display scale vs prior 3/1/2).
+AGENT_HOLD = 30
+PARTIAL_HOLD = 10
+SINGLE_HOLD = 20
+
+
+def _reserve_design_hold(user_id: str, hold: int, *, mode: str) -> tuple[int, bool]:
+    """
+    Spend ``hold`` credits, or reserve the free daily run when balance is short.
+    Returns (hold_to_settle, free_daily). free_daily ⇒ hold 0 and force Auto.
+    """
+    need = max(0, int(hold or 0))
+    if need <= 0:
+        return 0, False
+    bal = get_user_tokens(user_id)
+    if bal >= need:
+        spend_tokens(user_id, need, detail=f"design_hold:{mode}")
+        return need, False
+    if consume_free_daily_quota(user_id):
+        return 0, True
+    raise ValueError("insufficient_credits")
+
+
+def _refund_hold(user_id: str, hold: int, *, task_id: str) -> None:
+    if hold > 0:
+        credit_tokens(user_id, hold, detail=f"design_refund:{task_id}")
+
+
+def _image_extra_credits(rules: dict[str, str] | None, images_hydrated: int) -> int:
+    """Seedream hydrate → wallet credits (元/张 × count)."""
+    n = max(0, int(images_hydrated or 0))
+    if n <= 0:
+        return 0
+    from services.wallet.billing import image_model_credit_cost
+
+    mid = ""
+    if isinstance(rules, dict):
+        mid = str(rules.get("assets.image_default_model") or "").strip()
+    return image_model_credit_cost(mid or None, count=n, rules=rules)
+
+
+def _settle_hold(
+    user_id: str,
+    *,
+    hold: int,
+    actual_tokens: int,
+    detail: str,
+    rules: dict[str, str] | None,
+    free_daily: bool = False,
+    images_hydrated: int = 0,
+) -> int:
+    if free_daily or hold <= 0:
+        return 0
+    return settle_token_hold(
+        user_id,
+        hold=hold,
+        actual_tokens=actual_tokens,
+        detail=detail,
+        rules=rules,
+        extra_credits=_image_extra_credits(rules, images_hydrated),
+    )
 
 
 def _resolve_scene_frames(
@@ -91,6 +143,8 @@ def _resolve_scene_frames(
     ][:32]
 
 
+
+
 async def run_design_job(
     *,
     user_id: str,
@@ -109,40 +163,170 @@ async def run_design_job(
     current_svg: str | None = None,
     scene_nodes: list[dict[str, Any]] | None = None,
     scene_frames: list[dict[str, Any]] | None = None,
+    spatial_summary: dict[str, Any] | None = None,
     focus_frame_id: str | None = None,
     images: list[str] | None = None,
+    ref_image_sizes: list[str] | None = None,
     is_premium: bool = False,
     session_id: str | None = None,
     project_id: str | None = None,
     memory: dict[str, Any] | None = None,
     route_overrides: dict[str, Any] | None = None,
+    apply_ops: list[dict[str, Any]] | None = None,
+    interaction_mode: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Tool-first agent loop. No classifier + fixed skill_ids pipeline."""
+    """LangGraph agent loop. Chat vs design from model intent / ops."""
     del is_premium  # reserved
     mode = _as_text(run_mode or "agent").strip().lower()
     if mode not in ("agent", "single_model", "partial"):
         yield {"type": "error", "message": "invalid_run_mode"}
         return
 
+    ui_mode = _as_text(interaction_mode or "agent").strip().lower()
+    if ui_mode not in ("agent", "ask"):
+        ui_mode = "agent"
+
     prompt = _as_text(prompt).strip()
-    if not prompt:
+    if not prompt and not apply_ops:
         yield {"type": "error", "message": "prompt_required"}
         return
+    if not prompt and apply_ops:
+        prompt = "确认执行"
 
     t0 = time.time()
-    _stage(t0, "BEGIN", prompt=prompt[:80], model=user_selected_model, canvas=canvas_size)
+    exec_trace(
+        t0,
+        "BEGIN",
+        mode="orchestrator",
+        prompt=prompt[:80],
+        model=user_selected_model,
+        canvas=canvas_size,
+        run_mode=mode,
+        refs=len(images or []),
+    )
     await asyncio.sleep(0)
 
-    rules = apply_user_route_overrides(get_global_rules(), route_overrides)
-    ref_images = _normalize_ref_images(images)
+    # —— Agent / single_model: permission → ReAct controller ——
+    if mode in ("agent", "single_model"):
+        hold_need = AGENT_HOLD if mode == "agent" else SINGLE_HOLD
+        bal = int(get_user_tokens(user_id) or 0)
+        free_left = int(free_daily_remaining(user_id) or 0)
+        can = bal >= hold_need or free_left > 0
+        yield {
+            "type": "permission",
+            "can_call_llm": bool(can),
+            "balance": bal,
+            "need": hold_need,
+            "free_daily": free_left > 0,
+        }
+        if not can:
+            yield {
+                "type": "error",
+                "message": (
+                    "free_daily_exhausted"
+                    if bal < hold_need
+                    else "insufficient_credits"
+                ),
+                "balance": bal,
+                "need": hold_need,
+            }
+            exec_trace(t0, "DONE", mode="permission", can_call_llm=False, balance=bal)
+            return
+
+        rules = pin_user_locked_model_routes(
+            apply_user_route_overrides(get_global_rules(), route_overrides),
+            user_selected_model,
+        )
+        free_daily = False
+        try:
+            hold, free_daily = _reserve_design_hold(user_id, hold_need, mode=mode)
+        except ValueError:
+            yield {
+                "type": "error",
+                "message": (
+                    "free_daily_exhausted"
+                    if bal < hold_need
+                    else "insufficient_credits"
+                ),
+                "balance": bal,
+                "need": hold_need,
+            }
+            return
+        if free_daily:
+            user_selected_model = "auto"
+
+        scene_nodes_gate = [
+            n for n in (scene_nodes or []) if isinstance(n, dict) and n.get("id")
+        ][:120]
+        # Light memory load for frame resolve only
+        sid = _as_text(session_id).strip()
+        pid = _as_text(project_id or canvas_id).strip() or "__none__"
+        mem_preview = memory or {}
+        medium = mem_preview.get("medium") if isinstance(mem_preview, dict) else None
+        scene_frames_gate = _resolve_scene_frames(
+            scene_frames,
+            medium if isinstance(medium, dict) else None,
+        )
+
+        from services.design.agent_controller import run_agent_graph
+
+        async for ev in run_agent_graph(
+            user_id=user_id,
+            mode=mode,
+            prompt=prompt,
+            rules=rules,
+            user_selected_model=user_selected_model,
+            canvas_id=canvas_id,
+            canvas_size=canvas_size,
+            scene=scene,
+            scene_nodes=scene_nodes_gate,
+            scene_frames=scene_frames_gate,
+            spatial_summary=spatial_summary if isinstance(spatial_summary, dict) else None,
+            focus_frame_id=focus_frame_id,
+            images=images,
+            memory_in=memory,
+            session_id=sid,
+            project_id=pid,
+            hold=hold,
+            free_daily=free_daily,
+            t0=t0,
+            reserve_hold_fn=_reserve_design_hold,
+            settle_hold_fn=_settle_hold,
+            refund_hold_fn=_refund_hold,
+            apply_ops=apply_ops,
+            interaction_mode=ui_mode,
+        ):
+            yield ev
+        return
+
+    rules = pin_user_locked_model_routes(
+        apply_user_route_overrides(get_global_rules(), route_overrides),
+        user_selected_model,
+    )
+
+    # Partial path below (unchanged lean tool_ops).
+    ref_images = _normalize_ref_images(images, rules=rules)
     sid = _as_text(session_id).strip()
     pid = _as_text(project_id or canvas_id).strip() or "__none__"
+    exec_trace(t0, "memory_load_start", mode="orchestrator")
     mem_bundle = memory_service.load(
         user_id=user_id,
         session_id=sid,
         project_id=pid,
         memory_in=memory,
         rules=rules,
+        query=prompt,
+        scene=_scene_key(scene) or "",
+    )
+    exec_trace(
+        t0,
+        "memory_load_done",
+        mode="orchestrator",
+        blocks_chars=len(mem_bundle.blocks or ""),
+        short=len(mem_bundle.short),
+        long=len(mem_bundle.long_hits),
+        episodes=len(mem_bundle.episodes),
+        kg=len(mem_bundle.kg_triples),
     )
     trace_id = str(uuid.uuid4())
     has_target = probe_has_target_chip(prompt)
@@ -154,32 +338,10 @@ async def run_design_job(
         _as_text(focus_frame_id).strip()
         or focus_frame_from_medium(mem_bundle.medium)
     )
-    _log.info(
-        "[design.run] inventory canvas_id=%r focus=%r svg_chars=%s "
-        "nodes=%s frames=%s frame_detail=%s "
-        "(canvas_id is project scope only — backend cannot load document by id; "
-        "elements only from scene_nodes/scene_frames body)",
-        _as_text(canvas_id).strip() or None,
-        focus_id or None,
-        len((current_svg or "").strip()),
-        len(scene_nodes_gate),
-        len(scene_frames_gate),
-        [
-            {
-                "id": str(f.get("id") or ""),
-                "name": f.get("name"),
-                "is_empty": f.get("is_empty"),
-                "w": f.get("w") or f.get("width"),
-                "h": f.get("h") or f.get("height"),
-            }
-            for f in scene_frames_gate[:8]
-        ],
-    )
     has_focus = bool(focus_id)
     has_canvas_gate = bool(
         (current_svg or "").strip() or scene_nodes_gate or has_focus
     )
-
     decision = DesignRunDecision(
         trace_id=trace_id,
         session_id=sid or None,
@@ -197,8 +359,6 @@ async def run_design_job(
         intent=None,
         is_chitchat=False,
     )
-
-    # Partial: single lean tool_ops turn (layer lock).
     if mode == "partial":
         async for ev in _run_partial(
             user_id=user_id,
@@ -221,375 +381,7 @@ async def run_design_job(
         ):
             yield ev
         return
-
-    hold = AGENT_HOLD if mode == "agent" else SINGLE_HOLD
-    bal = get_user_tokens(user_id)
-    if bal < hold:
-        yield decision.apply(route="error").to_event()
-        yield {
-            "type": "error",
-            "message": "insufficient_credits",
-            "balance": bal,
-            "need": hold,
-        }
-        return
-    try:
-        spend_tokens(user_id, hold, detail=f"design_hold:{mode}")
-    except ValueError:
-        yield decision.apply(route="error").to_event()
-        yield {"type": "error", "message": "insufficient_credits"}
-        return
-
-    task_id = str(uuid.uuid4())
-    try:
-        scene_key, scene_overridden = _resolve_agent_scene(
-            scene,
-            prompt,
-            canvas_size,
-            medium=mem_bundle.medium if isinstance(mem_bundle.medium, dict) else None,
-        )
-        canvas_size = _align_canvas_size_to_scene(
-            canvas_size, scene_key=scene_key, overridden=scene_overridden
-        )
-        if scene_key not in ("website", "mobile", "image", "poster"):
-            credit_tokens(user_id, hold, detail=f"design_refund:{task_id}")
-            yield {"type": "error", "message": "invalid_scene"}
-            return
-
-        rules = apply_user_route_overrides(
-            merge_design_rules(get_global_rules(), scene_key),
-            route_overrides,
-        )
-        style_contract = ""
-        template_brief = ""
-        style_pack = get_library_item(int(style_pack_id)) if style_pack_id else None
-        if style_pack and style_pack.get("kind") == "style" and style_pack.get("enabled"):
-            style_contract = _format_style_contract(
-                style_pack.get("meta"), style_pack.get("name")
-            )
-        template_item = get_library_item(int(template_id)) if template_id else None
-        if (
-            template_item
-            and template_item.get("kind") == "template"
-            and template_item.get("enabled")
-        ):
-            template_brief = _format_template_brief(
-                template_item.get("meta"), template_item.get("name")
-            )
-            meta_c = (
-                (template_item.get("meta") or {}).get("canvas")
-                if isinstance(template_item.get("meta"), dict)
-                else None
-            )
-            if meta_c and not _as_text(canvas_size).strip():
-                canvas_size = str(meta_c)
-        prompt_item = (
-            get_library_item(int(prompt_pattern_id)) if prompt_pattern_id else None
-        )
-        if (
-            prompt_item
-            and prompt_item.get("kind") == "prompt"
-            and prompt_item.get("enabled")
-        ):
-            prompt = _apply_prompt_pattern(prompt, prompt_item.get("meta"))
-
-        w, h = _parse_size(canvas_size, scene_key, rules)
-        if w <= 0 or h <= 0:
-            w, h = 1280, 720
-
-        _insert_task(
-            {
-                "id": task_id,
-                "user_id": user_id,
-                "canvas_id": canvas_id,
-                "scene": scene_key,
-                "skill_group_id": style_group_id,
-                "task_type": mode,
-                "user_selected_model": user_selected_model,
-                "actual_models": "[]",
-                "target_layer_id": target_layer_id,
-                "current_skill_index": 0,
-                "status": "running",
-                "hold_credits": hold,
-                "charged_credits": 0,
-                "total_tokens": 0,
-                "prompt": prompt,
-                "canvas_size": canvas_size or f"{w}x{h}",
-                "result_svg": None,
-                "error_message": None,
-                "meta_json": json.dumps(
-                    {"trace_id": trace_id, "control": "agent_loop"},
-                    ensure_ascii=False,
-                ),
-                "created_at": time.time(),
-                "updated_at": time.time(),
-            }
-        )
-
-        yield decision.apply(
-            route="agent_loop",
-            fast_path=False,
-            intent=None,
-            edit_in_place=has_canvas_gate,
-            tool_ops_applied=False,
-            task_id=task_id,
-            scene=scene_key,
-        ).to_event()
-
-        client_size_locked = _explicit_canvas_size(canvas_size)
-        client_canvas_raw = _as_text(canvas_size).strip() or None
-        early = _early_status_canvas_fields(
-            w=w,
-            h=h,
-            client_size_locked=client_size_locked,
-            client_canvas_raw=client_canvas_raw,
-        )
-        yield {
-            "type": "status",
-            "task_id": task_id,
-            "status": "running",
-            "hold_credits": hold,
-            "trace_id": trace_id,
-            "edit_in_place": has_canvas_gate,
-            "scene": scene_key,
-            **early,
-        }
-
-        prefer_skill_ids: list[int] = []
-        flow = get_flow(scene_key)
-        if flow and flow.get("enabled") and flow.get("skill_ids"):
-            for x in flow["skill_ids"]:
-                try:
-                    prefer_skill_ids.append(int(x))
-                except (TypeError, ValueError):
-                    continue
-
-        meta: dict[str, Any] | None = None
-        async for ev in run_agent_turns(
-            prompt=prompt,
-            rules=rules,
-            scene_key=scene_key,
-            w=w,
-            h=h,
-            scene_nodes=scene_nodes_gate,
-            scene_frames=scene_frames_gate,
-            canvas_id=_as_text(canvas_id).strip(),
-            focus_frame_id=focus_id,
-            current_svg=current_svg or "",
-            user_selected_model=user_selected_model,
-            ref_images=ref_images,
-            mem_blocks=mem_bundle.blocks or "",
-            style_contract=style_contract,
-            template_brief=template_brief,
-            illus_note=_illustration_system_note(
-                _illustration_policy(user_selected_model, mode)
-            )
-            or "",
-            task_id=task_id,
-            enable_scene_feedback=True,
-            prefer_skill_ids=prefer_skill_ids or None,
-        ):
-            if ev.get("type") == "_agent_loop_meta":
-                meta = ev
-                continue
-            yield ev
-
-        if not meta:
-            meta = {
-                "total_tokens": 1,
-                "actual_models": [],
-                "applied_ops": [],
-                "tool_ops_applied": False,
-                "summary": "",
-                "chat_only": True,
-            }
-
-        total_tokens = int(meta.get("total_tokens") or 1)
-        actual_models = list(meta.get("actual_models") or [])
-        tool_ops_applied = bool(meta.get("tool_ops_applied"))
-        summary = str(meta.get("summary") or "").strip()
-        choices = [
-            str(c).strip()
-            for c in (meta.get("choices") or [])
-            if str(c or "").strip()
-        ][:6]
-        chat_only = bool(meta.get("chat_only")) and not tool_ops_applied
-
-        # No canvas ops → chat path (settle on real tokens; empty reply still chat_done).
-        if chat_only:
-            spend_confirm = settle_token_hold(
-                user_id,
-                hold=hold,
-                actual_tokens=max(1, total_tokens),
-                detail=f"design_settle:agent_chat:{task_id}",
-                rules=rules,
-            )
-            # Prefer reply as chat tokens; empty → short fallback so FE clears process chrome.
-            face = summary or _rule_text(rules, "summary.fallback_chat").strip() or "OK"
-            for i in range(0, len(face), 24):
-                yield {"type": "token", "text": face[i : i + 24]}
-            yield {"type": "chat_done"}
-            decision_log = decision.apply(
-                route="agent_loop_chat",
-                fast_path=True,
-                intent="chat",
-                is_chitchat=True,
-                wants_pipeline=False,
-                tool_ops_applied=False,
-                task_id=task_id,
-                scene=scene_key,
-            ).to_log()
-            _update_task(
-                task_id,
-                status="success",
-                charged_credits=spend_confirm,
-                total_tokens=total_tokens,
-                actual_models=json.dumps(actual_models, ensure_ascii=False),
-                result_svg="",
-                meta_json=json.dumps(
-                    {
-                        "trace_id": trace_id,
-                        "intent": "chat",
-                        "control": "agent_loop",
-                        "decision_log": decision_log,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-            yield {
-                "type": "result",
-                "task_id": task_id,
-                "status": "success",
-                "svg": "",
-                "charged_credits": spend_confirm,
-                "total_tokens": total_tokens,
-                "actual_models": actual_models,
-                "summary": summary or None,
-                "choices": choices or None,
-                "scene": scene_key,
-                "canvas_width": w,
-                "canvas_height": h,
-                "canvas_size": f"{w}x{h}",
-                "tool_ops_applied": False,
-                "intent": "chat",
-                "edit_in_place": False,
-                "decision_log": decision_log,
-            }
-            if sid:
-                yield {
-                    "type": "memory_patch",
-                    **_finalize_memory_patch(
-                        user_id=user_id,
-                        session_id=sid,
-                        project_id=pid,
-                        medium=mem_bundle.medium,
-                        task_id=task_id,
-                        intent="chat",
-                        edit_in_place=False,
-                        blank_artboard=False,
-                        summary=summary or "",
-                        tool_ops_applied=False,
-                        critique_notes=None,
-                        scene_key=scene_key,
-                        canvas_size=f"{w}x{h}",
-                    ),
-                }
-            _stage(t0, "agent_loop chat done", tokens=total_tokens)
-            return
-
-        spend_confirm = settle_token_hold(
-            user_id,
-            hold=hold,
-            actual_tokens=total_tokens,
-            detail=f"design_settle:agent_loop:{task_id}",
-            rules=rules,
-        )
-        decision_log = decision.apply(
-            route="agent_loop",
-            fast_path=False,
-            intent="edit" if has_canvas_gate else "create",
-            edit_in_place=has_canvas_gate,
-            tool_ops_applied=tool_ops_applied,
-            task_id=task_id,
-            scene=scene_key,
-        ).to_log()
-        _update_task(
-            task_id,
-            status="success",
-            charged_credits=spend_confirm,
-            total_tokens=total_tokens,
-            actual_models=json.dumps(actual_models, ensure_ascii=False),
-            result_svg="",
-            meta_json=json.dumps(
-                {
-                    "trace_id": trace_id,
-                    "control": "agent_loop",
-                    "tool_ops_applied": tool_ops_applied,
-                    "decision_log": decision_log,
-                },
-                ensure_ascii=False,
-            ),
-        )
-        yield {
-            "type": "result",
-            "task_id": task_id,
-            "status": "success",
-            "svg": "",
-            "charged_credits": spend_confirm,
-            "total_tokens": total_tokens,
-            "actual_models": actual_models,
-            "summary": summary or None,
-            "choices": choices or None,
-            "scene": scene_key,
-            "canvas_width": w,
-            "canvas_height": h,
-            "canvas_size": f"{w}x{h}",
-            "tool_ops_applied": tool_ops_applied,
-            "intent": "edit" if has_canvas_gate else "create",
-            "edit_in_place": has_canvas_gate,
-            "decision_log": decision_log,
-        }
-        if sid:
-            yield {
-                "type": "memory_patch",
-                **_finalize_memory_patch(
-                    user_id=user_id,
-                    session_id=sid,
-                    project_id=pid,
-                    medium=mem_bundle.medium,
-                    task_id=task_id,
-                    intent="edit" if has_canvas_gate else "create",
-                    edit_in_place=has_canvas_gate,
-                    blank_artboard=False,
-                    summary=summary or "",
-                    tool_ops_applied=tool_ops_applied,
-                    critique_notes=None,
-                    scene_key=scene_key,
-                    canvas_size=f"{w}x{h}",
-                ),
-            }
-        _stage(t0, "agent_loop done", ops=tool_ops_applied, tokens=total_tokens)
-    except Exception as err:  # noqa: BLE001
-        _log.exception("agent_loop failed task=%s", task_id)
-        try:
-            credit_tokens(user_id, hold, detail=f"design_refund:{task_id}")
-        except Exception:
-            pass
-        try:
-            _update_task(
-                task_id,
-                status="error",
-                error_message=str(err)[:800],
-                charged_credits=0,
-            )
-        except Exception:
-            pass
-        yield {
-            "type": "error",
-            "message": str(err)[:800],
-            "task_id": task_id,
-            "refunded_credits": hold,
-        }
+    yield {"type": "error", "message": "invalid_run_mode"}
 
 
 async def _run_partial(
@@ -612,22 +404,32 @@ async def _run_partial(
     decision: DesignRunDecision,
     t0: float,
 ) -> AsyncIterator[dict[str, Any]]:
-    hold = PARTIAL_HOLD
+    hold_need = PARTIAL_HOLD
     bal = get_user_tokens(user_id)
-    if bal < hold:
-        yield {"type": "error", "message": "insufficient_credits", "balance": bal, "need": hold}
-        return
+    free_daily = False
     try:
-        spend_tokens(user_id, hold, detail="design_hold:partial")
+        hold, free_daily = _reserve_design_hold(user_id, hold_need, mode="partial")
     except ValueError:
-        yield {"type": "error", "message": "insufficient_credits"}
+        yield {
+            "type": "error",
+            "message": "free_daily_exhausted" if bal < hold_need else "insufficient_credits",
+            "balance": bal,
+            "need": hold_need,
+        }
         return
+    if free_daily:
+        user_selected_model = "auto"
 
     task_id = str(uuid.uuid4())
-    scene_key = _scene_key(scene) or "website"
+    scene_key = _scene_key(scene) or str(rules.get("canvas.default_scene") or "").strip()
     w, h = _parse_size(canvas_size, scene_key, rules)
     if w <= 0 or h <= 0:
-        w, h = 1280, 720
+        yield {
+            "type": "error",
+            "message": "invalid_canvas_size",
+            "detail": "Admin default_size_* / canvas chip missing — no Host size inventing",
+        }
+        return
     if canvas_id and layer_ids and target_layer_id:
         _lock_layers(canvas_id, target_layer_id, layer_ids)
 
@@ -674,12 +476,16 @@ async def _run_partial(
             has_images=bool(ref_images),
         )
         tools_block = format_canvas_tools_for_model()
+        from services.design.admin_store import STAGE_RULE_DEFAULTS
+
+        partial_system = _rule_text(rules, "agent.prompt.partial_system").strip() or str(
+            STAGE_RULE_DEFAULTS.get("agent.prompt.partial_system") or ""
+        ).strip()
         system = "\n".join(
             p
             for p in [
-                "You operate the canvas with tool_ops for a targeted layer edit.",
+                partial_system,
                 tools_block,
-                "OUTPUT: JSON with an ops array.",
                 _rule_text(rules, "edit.tool_ops"),
                 f"Canvas {w}x{h}.",
             ]
@@ -713,7 +519,12 @@ async def _run_partial(
             max_tokens=2048,
             images=ref_images or None,
             enable_thinking=False,
+            rules=rules,
+            allow_vision_switch=True,
         ):
+            if kind == "model" and isinstance(piece, str) and piece.strip():
+                family = piece.strip()
+                continue
             if kind == "usage":
                 used = int(piece) if isinstance(piece, int) else used
                 continue
@@ -751,12 +562,13 @@ async def _run_partial(
             "skill_name": "partial",
             "tokens": used,
         }
-        spend_confirm = settle_token_hold(
+        spend_confirm = _settle_hold(
             user_id,
             hold=hold,
             actual_tokens=used,
             detail=f"design_settle:partial:{task_id}",
             rules=rules,
+            free_daily=free_daily,
         )
         _update_task(
             task_id,
@@ -776,6 +588,26 @@ async def _run_partial(
             "intent": "edit",
             "edit_in_place": True,
         }
+        try:
+            from services.agent_memory.episodes import maybe_write_episode
+
+            maybe_write_episode(
+                user_id=user_id,
+                session_id=sid,
+                project_id=pid,
+                task_id=task_id,
+                scene="",
+                goal=prompt,
+                summary="",
+                applied_ops=list(step_ops or []),
+                observe={"ops_applied": True, "route": "partial"},
+                outcome="success",
+                chat_only=False,
+                tool_ops_applied=True,
+                rules=rules,
+            )
+        except Exception:
+            _log.exception("episode write failed partial task=%s", task_id)
         if sid:
             yield {
                 "type": "memory_patch",
@@ -798,13 +630,13 @@ async def _run_partial(
         _stage(t0, "partial done", ops=len(step_ops))
     except Exception as err:  # noqa: BLE001
         try:
-            credit_tokens(user_id, hold, detail=f"design_refund:{task_id}")
+            _refund_hold(user_id, hold, task_id=task_id)
         except Exception:
             pass
         _update_task(task_id, status="error", error_message=str(err)[:800])
         yield {
             "type": "error",
-            "message": str(err)[:800],
+            "message": _user_facing_run_error(err, rules=rules),
             "task_id": task_id,
             "refunded_credits": hold,
         }

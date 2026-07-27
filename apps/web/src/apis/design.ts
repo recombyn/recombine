@@ -1,13 +1,12 @@
 /**
  * Backend table-driven design job client (agent / single_model / partial).
- * Non-stream calls use shared axios `request`; SSE run stays on fetch (see chat.ts).
  */
 
-import { getToken } from '@/utils/token';
 import { request } from '@/utils/request';
+import { sse } from '@/utils/sse';
 
 export type DesignRunMode = 'agent' | 'single_model' | 'partial';
-export type DesignScene = 'website' | 'mobile' | 'image' | 'poster';
+export type DesignScene = 'website' | 'mobile' | 'image' | 'poster' | 'drawing';
 
 export type DesignLibraryPack = {
   id: number;
@@ -44,6 +43,8 @@ export type DesignCatalog = {
     enabled?: boolean;
     sort_order?: number;
   }>;
+  /** Platform Admin global rules (includes precheck.user_preset.*). */
+  global_rules?: Record<string, string>;
 };
 
 export type DesignSvgPatch = {
@@ -69,7 +70,16 @@ export type DesignJobEvent =
       canvas_size?: string;
       edit_in_place?: boolean;
       blank_artboard?: boolean;
+      /** Host should open a new artboard (WxH) then paint content into it. */
+      open_artboard?: boolean;
       intent?: string;
+    }
+  | {
+      type: 'permission';
+      can_call_llm: boolean;
+      balance?: number;
+      need?: number;
+      free_daily?: boolean;
     }
   | { type: 'thinking'; text: string; replace?: boolean }
   | { type: 'token'; text: string }
@@ -131,6 +141,11 @@ export type DesignJobEvent =
       skill_name?: string;
       durationSec?: number;
       index?: number;
+      stage?: string;
+      /** Nested Explored line (Cursor-style). */
+      item?: { id?: string; name?: string; summary?: string };
+      /** Markdown body for expandable Explored (diagrams / notes). */
+      body?: string;
     }
   | {
       /** Dedicated incremental SVG push (optional; skill_done.preview_svg also works). */
@@ -166,6 +181,12 @@ export type DesignJobEvent =
       actual_models?: unknown[];
       summary?: string;
       choices?: string[];
+      proposed_ops?: Array<{
+        name?: string;
+        args?: Record<string, unknown>;
+        op_id?: string;
+      }>;
+      apply_choice?: string;
       scene?: string;
       canvas_width?: number;
       canvas_height?: number;
@@ -205,153 +226,47 @@ export type DesignJobEvent =
   | { type: 'subgoals'; goals: string[] }
   | { type: 'error'; message: string; task_id?: string; refunded_credits?: number };
 
-export type RunDesignJobParams = {
-  runMode: DesignRunMode;
+export type RunDesignJobBody = {
+  run_mode: DesignRunMode;
   prompt: string;
+  /** agent = auto paint; ask = propose / clarify first (same LangGraph). */
+  interaction_mode?: 'agent' | 'ask';
   scene?: DesignScene | null;
-  styleGroupId?: number | null;
-  stylePackId?: number | null;
-  templateId?: number | null;
-  promptPatternId?: number | null;
-  userSelectedModel?: string | null;
-  /** Auto 路由偏好（简单/中等/复杂/看图/生图）；不传则跟平台预检。 */
-  routeOverrides?: Record<string, string> | null;
-  canvasId?: string | null;
-  canvasSize?: string | null;
-  targetLayerId?: string | null;
-  layerIds?: string[] | null;
-  currentSvg?: string | null;
-  /** Scene node inventory for edit-in-place tool ops. */
-  sceneNodes?: Array<Record<string, unknown>> | null;
-  /** Artboard list for SCENE_FRAMES / delete_frame validation. */
-  sceneFrames?: Array<Record<string, unknown>> | null;
-  focusFrameId?: string | null;
-  /** User-attached reference images (data URLs / https). */
-  images?: string[] | null;
-  sessionId?: string | null;
-  projectId?: string | null;
+  style_group_id?: number;
+  style_pack_id?: number;
+  template_id?: number;
+  prompt_pattern_id?: number;
+  user_selected_model?: string;
+  route_overrides?: Record<string, string>;
+  canvas_id?: string;
+  canvas_size?: string;
+  ref_image_sizes?: string[];
+  target_layer_id?: string;
+  layer_ids?: string[];
+  current_svg?: string;
+  scene_nodes?: Array<Record<string, unknown>>;
+  scene_frames?: Array<Record<string, unknown>>;
+  spatial_summary?: Record<string, unknown>;
+  focus_frame_id?: string;
+  images?: string[];
+  session_id?: string;
+  project_id?: string;
   memory?: {
     medium: Record<string, unknown>;
     short?: Array<{ role: string; text: string }>;
     retrieve_long?: boolean;
-  } | null;
-  signal?: AbortSignal;
-  onEvent: (ev: DesignJobEvent) => void;
+  };
+  /** Ask confirm: apply previously proposed tool_ops without a new LLM plan. */
+  apply_ops?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
 };
 
-let catalogCache: DesignCatalog | null = null;
-
-export async function fetchDesignCatalog(force = false): Promise<DesignCatalog> {
-  if (catalogCache && !force) return catalogCache;
-  catalogCache = await request<DesignCatalog>({
-    url: '/api/v1/design/catalog',
-    method: 'get',
-  });
-  return catalogCache;
-}
-
-export async function runDesignJob(params: RunDesignJobParams): Promise<void> {
-  const token = getToken();
-  if (!token) {
-    params.onEvent({ type: 'error', message: 'Unauthorized' });
-    return;
-  }
-
-  const body = {
-    run_mode: params.runMode,
-    prompt: params.prompt,
-    scene: params.scene || undefined,
-    style_group_id: params.styleGroupId ?? undefined,
-    style_pack_id: params.stylePackId ?? undefined,
-    template_id: params.templateId ?? undefined,
-    prompt_pattern_id: params.promptPatternId ?? undefined,
-    user_selected_model: params.userSelectedModel || 'auto',
-    route_overrides: params.routeOverrides || undefined,
-    canvas_id: params.canvasId || undefined,
-    canvas_size: params.canvasSize || undefined,
-    target_layer_id: params.targetLayerId || undefined,
-    layer_ids: params.layerIds || undefined,
-    current_svg: params.currentSvg || undefined,
-    scene_nodes: params.sceneNodes?.length ? params.sceneNodes : undefined,
-    scene_frames: params.sceneFrames?.length ? params.sceneFrames : undefined,
-    focus_frame_id: params.focusFrameId || undefined,
-    images: params.images?.length ? params.images : undefined,
-    session_id: params.sessionId || undefined,
-    project_id: params.projectId || undefined,
-    memory: params.memory || undefined,
-  };
-
-  let res: Response;
-  try {
-    res = await fetch('/api/v1/design/run', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify(body),
-      signal: params.signal,
-    });
-  } catch (err: unknown) {
-    if (params.signal?.aborted) return;
-    const msg = err instanceof Error ? err.message : String(err);
-    params.onEvent({
-      type: 'error',
-      message: /Failed to fetch|NetworkError|ERR_/i.test(msg)
-        ? '连接中断（代理超时或 API 热重载）。请重试；生成过程中勿保存 API 代码。'
-        : msg || 'Failed to fetch',
-    });
-    return;
-  }
-
-  if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => '');
-    params.onEvent({
-      type: 'error',
-      message: detail || `design run HTTP ${res.status}`,
-    });
-    return;
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      while (true) {
-        const idx = buffer.indexOf('\n');
-        if (idx === -1) break;
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (!line || line.startsWith(':')) continue;
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') return;
-        try {
-          const ev = JSON.parse(data) as DesignJobEvent;
-          params.onEvent(ev);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  } catch (err: unknown) {
-    if (params.signal?.aborted) return;
-    const msg = err instanceof Error ? err.message : String(err);
-    params.onEvent({
-      type: 'error',
-      message: /Failed to fetch|NetworkError|ERR_/i.test(msg)
-        ? '连接中断（代理超时或 API 热重载）。请重试；生成过程中勿保存 API 代码。'
-        : msg || 'stream interrupted',
-    });
-  }
-}
-
+export type SseHandlers = {
+  onmessage?: (ev: { event: string; data: string }) => void;
+  onerror?: (err: Error) => void;
+  onopen?: (response: Response) => Promise<void>;
+  onclose?: () => void;
+  signal?: AbortSignal;
+};
 
 export type DesignBrush = {
   id: string;
@@ -365,41 +280,48 @@ export type DesignBrush = {
   libraryId?: number;
 };
 
+export const fetchDesignCatalog = () =>
+  request<DesignCatalog>({
+    url: '/api/v1/design/catalog',
+    method: 'get',
+  });
+
+/** POST /design/run SSE — callers parse `ev.data` as DesignJobEvent. */
+export const runDesignJob = (body: RunDesignJobBody, config: SseHandlers = {}) =>
+  sse({
+    url: '/api/v1/design/run',
+    method: 'POST',
+    body,
+    signal: config.signal,
+    onopen: config.onopen,
+    onmessage: config.onmessage,
+    onerror: config.onerror,
+    onclose: config.onclose,
+  });
+
 /** After tool_ops paint: push real canvas inventory for the next agent round. */
-export async function postDesignSceneFeedback(params: {
-  taskId: string;
-  sceneNodes: Array<Record<string, unknown>>;
-  sceneFrames?: Array<Record<string, unknown>>;
-  round?: number;
-  signal?: AbortSignal;
-}): Promise<void> {
-  if (!params.taskId) return;
-  try {
-    await request<{ ok?: boolean; count?: number; frames?: number }>({
-      url: `/api/v1/design/run/${encodeURIComponent(params.taskId)}/scene`,
-      method: 'post',
-      data: {
-        scene_nodes: params.sceneNodes,
-        scene_frames: params.sceneFrames?.length ? params.sceneFrames : undefined,
-        round: params.round ?? undefined,
-      },
-      signal: params.signal,
-      timeout: 15000,
-    });
-  } catch {
-    /* best-effort — backend falls back to simulated inventory */
-  }
-}
+export const postDesignSceneFeedback = (
+  taskId: string,
+  data: {
+    scene_nodes: Array<Record<string, unknown>>;
+    scene_frames?: Array<Record<string, unknown>>;
+    spatial_summary?: Record<string, unknown>;
+    op_results?: Array<{ op_id: string; name: string; ok: boolean; error?: string }>;
+    round?: number;
+  },
+  signal?: AbortSignal
+) =>
+  request<{ ok?: boolean; count?: number; frames?: number }>({
+    url: `/api/v1/design/run/${encodeURIComponent(taskId)}/scene`,
+    method: 'post',
+    data,
+    signal,
+    timeout: 15000,
+  });
 
 /** Official brush wheel from admin material library. */
-export async function fetchDesignBrushes(): Promise<DesignBrush[]> {
-  try {
-    const data = await request<{ items?: DesignBrush[] }>({
-      url: '/api/v1/design/brushes',
-      method: 'get',
-    });
-    return Array.isArray(data?.items) ? data.items : [];
-  } catch {
-    return [];
-  }
-}
+export const fetchDesignBrushes = () =>
+  request<{ items?: DesignBrush[] }>({
+    url: '/api/v1/design/brushes',
+    method: 'get',
+  });

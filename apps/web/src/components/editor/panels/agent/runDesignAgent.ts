@@ -8,9 +8,11 @@ import type { Dispatch } from '@reduxjs/toolkit';
 import {
   runDesignJob,
   postDesignSceneFeedback,
+  type DesignJobEvent,
   type DesignRunMode,
   type DesignScene,
   type DesignSvgPatch,
+  type RunDesignJobBody,
 } from '@/apis/design';
 import { removeNodesFromDocument, groupNodesInDocument } from '@/components/rcb/scene/sceneDocument';
 import { scalePathData } from '@/components/rcb/scene/pathScale';
@@ -304,6 +306,42 @@ function nodeFillForInventory(node: any): string {
   return '';
 }
 
+/** Inventory opacity is 0–100; attrs may store 0–1 or already percent. */
+function sceneNodeOpacityPercent(opacityRaw: number): number {
+  if (!Number.isFinite(opacityRaw)) return 100;
+  if (opacityRaw > 1) return Math.min(100, opacityRaw);
+  return Math.round(opacityRaw * 100);
+}
+
+/**
+ * Parent artboard for tool_ops.
+ * Prefer Host-opened / @-pinned board; free-canvas when none.
+ */
+function resolveToolOpsFrameId(opts: {
+  editInPlace: boolean;
+  liveFrameId: string | null;
+  targetFrameId: string | null | undefined;
+  pinnedFrameId?: string | null;
+}): string | null {
+  const pinned = String(opts.pinnedFrameId || '').trim() || null;
+  const target = String(opts.targetFrameId || '').trim() || null;
+  return opts.liveFrameId || pinned || target || null;
+}
+
+/** Pull WxH from a create_frame op when Host size is still unknown. */
+function sizeFromCreateFrameOp(
+  ops: Array<{ name?: string; args?: Record<string, unknown> }>
+): { width: number; height: number } | null {
+  for (const o of ops) {
+    if (String(o?.name || '').trim() !== 'create_frame') continue;
+    const args = o?.args && typeof o.args === 'object' ? o.args : {};
+    const width = Math.round(Number(args.width ?? args.w) || 0);
+    const height = Math.round(Number(args.height ?? args.h) || 0);
+    if (width > 0 && height > 0) return { width, height };
+  }
+  return null;
+}
+
 /** Full node snapshot for SCENE_NODES (@ targets + edit inventory). No field filtering. */
 function nodeToInventoryItem(
   doc: any,
@@ -340,11 +378,7 @@ function nodeToInventoryItem(
     fillType,
     stroke: stroke && stroke !== 'transparent' && stroke !== 'none' ? stroke : undefined,
     borderWidth: Number.isFinite(borderRaw) && borderRaw >= 0 ? borderRaw : 0,
-    opacity: Number.isFinite(opacityRaw)
-      ? opacityRaw > 1
-        ? Math.min(100, opacityRaw)
-        : Math.round(opacityRaw * 100)
-      : 100,
+    opacity: sceneNodeOpacityPercent(opacityRaw),
     rotation: Number.isFinite(angleRaw) ? Math.round(angleRaw * 100) / 100 : 0,
   };
   const name = attrs.name != null ? String(attrs.name).trim() : '';
@@ -504,8 +538,289 @@ export function buildSceneFramesSnapshot(doc: any): SceneFrameSnapshot[] {
   });
 }
 
+export type SpatialBox = { x: number; y: number; w: number; h: number };
+
+export type SpatialSummary = {
+  focus_frame_id: string | null;
+  gap_px: number;
+  /** Frame-local boxes for create_* inside the focus artboard. */
+  focused: Array<{
+    id: string;
+    type: string;
+    name?: string;
+    text?: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  }>;
+  /** World-space other artboards. */
+  peripheral: Array<{
+    id: string;
+    name?: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    child_count: number;
+    is_empty: boolean;
+  }>;
+  overlaps: Array<{ a: string; b: string; iou: number }>;
+  /** Frame-local empty slots (create_shape/text/… inside focus). */
+  empty_rects: SpatialBox[];
+  /** World-space slots for create_frame. */
+  new_frame_slots: SpatialBox[];
+  /** Frame-local default place for new children. */
+  suggested_place: SpatialBox;
+};
+
+const SPATIAL_GAP = 40;
+const SPATIAL_FOCUSED_MAX = 36;
+
+function _boxIou(a: SpatialBox, b: SpatialBox): number {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w);
+  const y2 = Math.min(a.y + a.h, b.y + b.h);
+  const iw = Math.max(0, x2 - x1);
+  const ih = Math.max(0, y2 - y1);
+  const inter = iw * ih;
+  if (inter <= 0) return 0;
+  const union = a.w * a.h + b.w * b.h - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+function _boxesOverlap(a: SpatialBox, b: SpatialBox, gap = 0): boolean {
+  return !(
+    a.x + a.w + gap <= b.x ||
+    b.x + b.w + gap <= a.x ||
+    a.y + a.h + gap <= b.y ||
+    b.y + b.h + gap <= a.y
+  );
+}
+
+/** Map-like summary for the agent (focused / peripheral / empty slots). */
+export function buildSpatialSummary(
+  doc: any,
+  opts?: { focusFrameId?: string | null; maxFocused?: number }
+): SpatialSummary {
+  const gap = SPATIAL_GAP;
+  const frames = buildSceneFramesSnapshot(doc);
+  const focus =
+    String(opts?.focusFrameId || '').trim() ||
+    (frames.find((f) => !f.is_empty)?.id ?? frames[0]?.id ?? '') ||
+    null;
+  const maxFocused = Math.max(8, opts?.maxFocused ?? SPATIAL_FOCUSED_MAX);
+
+  const focusFrame = focus ? frames.find((f) => f.id === focus) : undefined;
+  const fw = Math.max(1, focusFrame?.w || 1280);
+  const fh = Math.max(1, focusFrame?.h || 720);
+
+  const inventory = buildSceneNodesForCanvas(doc, {
+    focusFrameId: focus,
+    maxNodes: 120,
+  });
+  const inFocus = inventory
+    .filter((n) => (focus ? n.frameId === focus : !n.frameId))
+    .sort((a, b) => b.w * b.h - a.w * a.h)
+    .slice(0, maxFocused)
+    .map((n) => ({
+      id: n.id,
+      type: n.type,
+      ...(n.name ? { name: n.name } : {}),
+      ...(n.text ? { text: String(n.text).slice(0, 80) } : {}),
+      x: n.x,
+      y: n.y,
+      w: n.w,
+      h: n.h,
+    }));
+
+  const peripheral = frames
+    .filter((f) => f.id !== focus)
+    .slice(0, 16)
+    .map((f) => ({
+      id: f.id,
+      ...(f.name ? { name: f.name } : {}),
+      x: f.x,
+      y: f.y,
+      w: f.w,
+      h: f.h,
+      child_count: inventory.filter((n) => n.frameId === f.id).length,
+      is_empty: f.is_empty,
+    }));
+
+  const overlaps: SpatialSummary['overlaps'] = [];
+  for (let i = 0; i < inFocus.length; i++) {
+    for (let j = i + 1; j < inFocus.length; j++) {
+      const a = inFocus[i];
+      const b = inFocus[j];
+      const iou = _boxIou(a, b);
+      if (iou >= 0.08) overlaps.push({ a: a.id, b: b.id, iou: Math.round(iou * 100) / 100 });
+    }
+  }
+  overlaps.sort((a, b) => b.iou - a.iou);
+
+  const occupied: SpatialBox[] = inFocus.map((n) => ({
+    x: n.x,
+    y: n.y,
+    w: n.w,
+    h: n.h,
+  }));
+  const candidates: SpatialBox[] = [];
+  // Right of content / below content / top-left empty.
+  let maxR = 0;
+  let maxB = 0;
+  for (const b of occupied) {
+    maxR = Math.max(maxR, b.x + b.w);
+    maxB = Math.max(maxB, b.y + b.h);
+  }
+  if (!occupied.length) {
+    // Empty frame: suggest the visible center, not top-left.
+    const cw = Math.min(320, Math.max(80, fw - gap * 2));
+    const ch = Math.min(200, Math.max(80, fh - gap * 2));
+    candidates.push({
+      x: Math.round(Math.max(gap, (fw - cw) / 2)),
+      y: Math.round(Math.max(gap, (fh - ch) / 2)),
+      w: cw,
+      h: ch,
+    });
+  } else {
+    candidates.push(
+      { x: Math.min(maxR + gap, Math.max(gap, fw - 360)), y: gap, w: 320, h: 200 },
+      { x: gap, y: Math.min(maxB + gap, Math.max(gap, fh - 240)), w: 320, h: 200 },
+      { x: gap, y: gap, w: 280, h: 160 }
+    );
+  }
+
+  const empty_rects: SpatialBox[] = [];
+  for (const c of candidates.slice(0, 3)) {
+    const box = {
+      x: Math.round(Math.max(0, c.x)),
+      y: Math.round(Math.max(0, c.y)),
+      w: Math.max(80, Math.round(c.w)),
+      h: Math.max(80, Math.round(c.h)),
+    };
+    if (occupied.some((o) => _boxesOverlap(box, o, gap))) continue;
+    empty_rects.push(box);
+    if (empty_rects.length >= 3) break;
+  }
+  if (!empty_rects.length) {
+    empty_rects.push({
+      x: Math.round(maxR + gap),
+      y: gap,
+      w: 320,
+      h: 200,
+    });
+  }
+
+  const new_frame_slots: SpatialBox[] = [];
+  if (frames.length) {
+    let worldR = 0;
+    let worldB = 0;
+    for (const f of frames) {
+      worldR = Math.max(worldR, f.x + f.w);
+      worldB = Math.max(worldB, f.y + f.h);
+    }
+    new_frame_slots.push({
+      x: Math.round(worldR + gap),
+      y: Math.round(frames[0]?.y || 0),
+      w: Math.round(fw),
+      h: Math.round(fh),
+    });
+    new_frame_slots.push({
+      x: Math.round(frames[0]?.x || 0),
+      y: Math.round(worldB + gap),
+      w: Math.round(fw),
+      h: Math.round(fh),
+    });
+  }
+
+  return {
+    focus_frame_id: focus,
+    gap_px: gap,
+    focused: inFocus,
+    peripheral,
+    overlaps: overlaps.slice(0, 12),
+    empty_rects,
+    new_frame_slots,
+    suggested_place: empty_rects[0],
+  };
+}
+
+/**
+ * Cheap layout schematic of the focus artboard → JPEG data URL for vision.
+ * Not a photoreal export — colored boxes so the model sees denseness / stacking.
+ */
+export async function captureFocusFramePreview(
+  doc: any,
+  focusFrameId?: string | null
+): Promise<string | null> {
+  if (typeof window === 'undefined' || !doc) return null;
+  const summary = buildSpatialSummary(doc, { focusFrameId });
+  const focus = summary.focus_frame_id;
+  if (!focus) return null;
+  const frame = (Array.isArray(doc.frames) ? doc.frames : []).find(
+    (f: any) => String(f?.id) === focus
+  );
+  const fw = Math.max(64, Math.round(Number(frame?.width) || 1280));
+  const fh = Math.max(64, Math.round(Number(frame?.height) || 720));
+  const maxEdge = 768;
+  const scale = Math.min(1, maxEdge / Math.max(fw, fh));
+  const outW = Math.max(64, Math.round(fw * scale));
+  const outH = Math.max(64, Math.round(fh * scale));
+
+  const bg = String(frame?.fill || frame?.background || '#ffffff');
+  const parts: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${fw} ${fh}">`,
+    `<rect width="${fw}" height="${fh}" fill="${bg.replace(/"/g, '') || '#fff'}"/>`,
+  ];
+  for (const n of summary.focused) {
+    const fill = n.type === 'text' ? '#94a3b8' : '#cbd5e1';
+    parts.push(
+      `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" fill="${fill}" fill-opacity="0.55" stroke="#64748b" stroke-width="2"/>`
+    );
+    const label = (n.name || n.text || n.type || '').slice(0, 24);
+    if (label) {
+      const esc = label.replace(/[<>&"]/g, '');
+      parts.push(
+        `<text x="${n.x + 6}" y="${n.y + 18}" font-size="14" fill="#0f172a">${esc}</text>`
+      );
+    }
+  }
+  parts.push('</svg>');
+  const svg = parts.join('');
+  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('preview_img_fail'));
+      el.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(img, 0, 0, outW, outH);
+    return canvas.toDataURL('image/jpeg', 0.72);
+  } catch {
+    return null;
+  }
+}
+
+export type ToolOpResult = {
+  op_id: string;
+  name: string;
+  ok: boolean;
+  error?: string;
+};
+
 function applyAgentToolOps(opts: {
-  ops: Array<{ name?: string; args?: Record<string, unknown> }>;
+  ops: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
   dispatch: Dispatch;
   getDocument: () => any;
   frameId: string | null;
@@ -516,14 +831,22 @@ function applyAgentToolOps(opts: {
   /** Cross-chunk dedupe when SSE replays the same op_id. */
   appliedOpIds?: Set<string>;
   canvasUi?: CanvasUiBridge | null;
-}): { created: number; updated: number; deleted: number; nodeIds: string[] } {
+}): {
+  created: number;
+  updated: number;
+  deleted: number;
+  nodeIds: string[];
+  frameId: string | null;
+  /** Per-op truth for scene_feedback — backend must not assume success. */
+  opResults: ToolOpResult[];
+} {
   const { ops, dispatch, getDocument, frameId, signal, userImages, appliedOpIds } =
     opts;
   const toolCtx = {
     dispatch,
     getDocument,
     skipHistory: true as const,
-    targetFrameId: frameId,
+    targetFrameId: frameId as string | null,
     // Backend already emitted these ops after intent — allow delete_nodes if present.
     allowDestructive: true as const,
     userImages: (userImages || []).filter(Boolean),
@@ -532,6 +855,7 @@ function applyAgentToolOps(opts: {
   let created = 0;
   let updated = 0;
   let deleted = 0;
+  let outFrameId: string | null = frameId;
   const nodeIds: string[] = [];
   // Backend already normalized / hygiened ops — FE only allowlists + op_id dedupe, then executes.
   const allowed = dedupeToolOpsById(filterAllowedToolOps(ops), appliedOpIds || new Set());
@@ -549,7 +873,10 @@ function applyAgentToolOps(opts: {
       rawOps: rawDeletes,
     });
   }
-  if (!allowed.length) return { created, updated, deleted, nodeIds };
+  const opResults: ToolOpResult[] = [];
+  if (!allowed.length) {
+    return { created, updated, deleted, nodeIds, frameId: outFrameId, opResults };
+  }
 
   dispatch(pushEditorHistory());
   for (let i = 0; i < allowed.length; i++) {
@@ -559,6 +886,7 @@ function applyAgentToolOps(opts: {
     if (!name) continue;
     // Host auto-groups once at the end of the run — ignore mid-stream group ops.
     if (name === 'group_nodes' || name === 'ungroup_nodes') continue;
+    const opId = String((op as { op_id?: string })?.op_id || '');
     const args = op?.args && typeof op.args === 'object' ? op.args : {};
     if (name === 'create_shape' && (args.path != null || String(args.type || args.shapeType || '') === 'path')) {
       console.info('[tool_ops raw create_shape]', {
@@ -575,6 +903,13 @@ function applyAgentToolOps(opts: {
       });
     }
     const res = executeDesignTool(name, JSON.stringify(args), toolCtx);
+    if (name === 'create_frame' && res.status !== 'error') {
+      const fid = String(res.artifacts?.frameId || '').trim();
+      if (fid) {
+        outFrameId = fid;
+        toolCtx.targetFrameId = fid;
+      }
+    }
     if (name === 'delete_frame' || name === 'delete_nodes') {
       const docAfter = getDocument();
       const framesAfter = Array.isArray(docAfter?.frames)
@@ -595,8 +930,15 @@ function applyAgentToolOps(opts: {
     }
     if (res.status === 'error') {
       console.warn('[tool_ops error]', { i, name, args, summary: res.summary });
+      opResults.push({
+        op_id: opId,
+        name,
+        ok: false,
+        error: String(res.summary || 'failed').slice(0, 200),
+      });
       continue;
     }
+    opResults.push({ op_id: opId, name, ok: true });
     if (name === 'update_node') {
       updated += 1;
       const nid = String(args.nodeId || args.id || '');
@@ -616,14 +958,14 @@ function applyAgentToolOps(opts: {
   if (deleted > 0) {
     console.info('[tool_ops delete done]', { deleted, created, updated });
   }
-  return { created, updated, deleted, nodeIds };
+  return { created, updated, deleted, nodeIds, frameId: outFrameId, opResults };
 }
 
 /** Show artboard scan/shimmer while the design agent is generating. */
 function markArtboardGenerating(
   dispatch: Dispatch,
   frameId: string | null | undefined,
-  label = '生成中…'
+  label = 'Preparing…'
 ) {
   if (!frameId) return;
   dispatch(
@@ -1497,8 +1839,16 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export type AgentStepEvent =
+  | {
+      type: 'permission';
+      can_call_llm: boolean;
+      balance?: number;
+      need?: number;
+      free_daily?: boolean;
+    }
   | { type: 'thinking'; text: string; replace?: boolean }
   | { type: 'token'; text: string }
+  | { type: 'chat' }
   | { type: 'phase'; progress: PipelineProgress }
   | { type: 'analysis'; text: string }
   | { type: 'analysis_delta'; text: string }
@@ -1513,10 +1863,20 @@ export type AgentStepEvent =
       skillName?: string;
       /** Human-readable what happened (e.g. 添加文字「中秋」). */
       detail?: string;
+      stage?: string;
+      item?: { id?: string; name?: string; summary?: string };
+      body?: string;
     }
   | { type: 'svg_delta'; svg: string }
   | { type: 'canvas'; size: string; scene?: string }
-  | { type: 'done'; summary?: string; painted?: boolean; choices?: string[] }
+  | {
+      type: 'done';
+      summary?: string;
+      painted?: boolean;
+      choices?: string[];
+      proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+      applyChoice?: string;
+    }
   | { type: 'error'; message: string };
 
 export type PipelineProgress = {
@@ -1531,6 +1891,8 @@ export type PipelineProgress = {
 export type RunDesignAgentParams = {
   userMessage: string;
   runMode?: DesignRunMode;
+  /** Composer Agent / Ask — Ask proposes before paint. */
+  interactionMode?: 'agent' | 'ask' | null;
   scene?: DesignScene | null;
   styleGroupId?: number | null;
   model?: string | null;
@@ -1545,9 +1907,13 @@ export type RunDesignAgentParams = {
   sceneNodes?: SceneNodeInventoryItem[] | null;
   /** Artboard list (ids / sizes) for delete_frame + SCENE_FRAMES. */
   sceneFrames?: SceneFrameSnapshot[] | null;
+  /** Dual-context map: focused / peripheral / empty_rects / suggested_place. */
+  spatialSummary?: SpatialSummary | null;
   focusFrameId?: string | null;
   /** User-attached reference images (data URLs) for vision + create_image. */
   images?: string[] | null;
+  /** Natural WxH of attachments (e.g. ["750x1624"]) — auto canvas soft hint only. */
+  refImageSizes?: string[] | null;
   sessionId?: string | null;
   projectId?: string | null;
   memory?: DesignMemoryPayload | null;
@@ -1555,13 +1921,69 @@ export type RunDesignAgentParams = {
   dispatch: Dispatch;
   getDocument: () => any;
   targetFrameId?: string | null;
+  /**
+   * Explicit user @ artboard (or @ node → containing frame).
+   * Prefer this board for shimmer / tool_ops parent; Host never invents an empty plate.
+   */
+  pinnedFrameId?: string | null;
   onEvent: (ev: AgentStepEvent) => void;
   signal?: AbortSignal;
   /** Editor chrome bridge for zoom / panels / account Agent settings. */
   canvasUi?: CanvasUiBridge | null;
+  /** Artboard shimmer pill copy (i18n from AgentDock). */
+  processLabels?: {
+    preparing?: string;
+    thinking?: string;
+    exploring?: string;
+    editing?: string;
+  } | null;
   /** Auto routing overrides from account prefs (null = platform). */
   routeOverrides?: Record<string, string> | null;
+  /** Ask confirm: skip LLM and apply these ops (agent mode). */
+  applyOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }> | null;
 };
+
+/** Map agent params → POST /design/run body (omit empty optional fields). */
+function buildRunDesignJobBody(
+  params: RunDesignAgentParams,
+  runMode: DesignRunMode
+): RunDesignJobBody {
+  const body: RunDesignJobBody = {
+    run_mode: runMode,
+    prompt: params.userMessage,
+    user_selected_model: params.model || 'auto',
+  };
+  if (params.interactionMode === 'ask' || params.interactionMode === 'agent') {
+    body.interaction_mode = params.interactionMode;
+  }
+  if (runMode === 'agent' && params.scene) body.scene = params.scene;
+  if (params.styleGroupId != null) body.style_group_id = params.styleGroupId;
+  if (params.routeOverrides) body.route_overrides = params.routeOverrides;
+  if (params.canvasId) body.canvas_id = params.canvasId;
+  if (params.canvasSize) body.canvas_size = params.canvasSize;
+  if (params.refImageSizes?.length) body.ref_image_sizes = params.refImageSizes;
+  if (params.targetLayerId) body.target_layer_id = params.targetLayerId;
+  if (params.layerIds) body.layer_ids = params.layerIds;
+  if (params.currentSvg) body.current_svg = params.currentSvg;
+  if (params.sceneNodes?.length) {
+    body.scene_nodes = params.sceneNodes as Array<Record<string, unknown>>;
+  }
+  if (params.sceneFrames?.length) {
+    body.scene_frames = params.sceneFrames as Array<Record<string, unknown>>;
+  }
+  if (params.spatialSummary) {
+    body.spatial_summary = params.spatialSummary as unknown as Record<string, unknown>;
+  }
+  if (params.focusFrameId) body.focus_frame_id = params.focusFrameId;
+  if (params.images?.length) body.images = params.images;
+  if (params.sessionId) body.session_id = params.sessionId;
+  if (params.projectId) body.project_id = params.projectId;
+  if (params.memory) body.memory = params.memory;
+  if (params.applyOps?.length) {
+    body.apply_ops = params.applyOps as Array<Record<string, unknown>>;
+  }
+  return body;
+}
 
 type LiveDrawState = {
   nodeIds: string[];
@@ -1585,11 +2007,19 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
 
   let paintChain: Promise<void> = Promise.resolve();
   let painted = false;
-  let pendingDone: { summary?: string; painted?: boolean; choices?: string[] } | null = null;
+  let pendingDone: {
+    summary?: string;
+    painted?: boolean;
+    choices?: string[];
+    proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+    applyChoice?: string;
+  } | null = null;
   let resultSummary = '';
   let resultChoices: string[] = [];
   let lastPaintedSvg = '';
   let activitySeq = 0;
+  /** Early greeting divert — ignore Explored stage SSE after clear. */
+  let chatDiverted = false;
   /** Client chip WxH — never let backend status rewrite it. */
   const lockedClientSize = (() => {
     const s = String(params.canvasSize || '')
@@ -1606,6 +2036,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
   let toolOpsApplied = false;
   let blankArtboard = false;
   const appliedOpIdsRef = { current: new Set<string>() };
+  /** Per-op execution truth for this round — flushed into scene_feedback. */
+  let pendingOpResults: ToolOpResult[] = [];
   let latestMemory: TaskState | null = params.memory?.medium || null;
   let liveTaskId: string | null = null;
 
@@ -1617,8 +2049,38 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     });
   }
 
-  // Do not mark 「生成中」until backend status; create-only shimmer (edit_in_place=false).
-  // Never invent create plates from local heuristics before status.
+  // Do not mark process shimmer until backend status.
+  // Shimmer for create OR empty edit target (focused blank artboard).
+  const processLabels = params.processLabels || {};
+  let shimmerFrameId: string | null = null;
+
+  const setProcessPill = (frameId: string | null | undefined, label: string) => {
+    if (!frameId) return;
+    shimmerFrameId = frameId;
+    markArtboardGenerating(params.dispatch, frameId, label);
+  };
+
+  const clearProcessPill = () => {
+    shimmerFrameId = null;
+    params.dispatch(cancelImportPlaceholder());
+  };
+
+  const shouldShimmerFrame = (frameId: string | null, edit: boolean): boolean => {
+    if (!frameId) return false;
+    if (!edit) return true;
+    if (blankArtboard) return false;
+    try {
+      if (frameIsEmpty(params.getDocument(), frameId)) return true;
+    } catch {
+      /* ignore */
+    }
+    const nodes = params.sceneNodes || [];
+    if (!nodes.length) return true;
+    return !nodes.some((n) => {
+      const fid = String((n as { frameId?: string }).frameId || '');
+      return !fid || fid === frameId;
+    });
+  };
 
   const emitMemory = (patch: MemoryPatch | undefined, frameId: string | null) => {
     if (!params.onMemoryPatch) return;
@@ -1642,7 +2104,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
 
   const paintCanvasSize = () => liveCanvasSize || params.canvasSize || null;
 
-  /** Create artboard as soon as size is known (shimmer is marked by callers). */
+  /** SVG live-draw only: open a WxH plate when painting full SVG (not tool_ops). */
   const ensureCreateFrameReady = (): string | null => {
     if (editInPlace) {
       return live.frameId || params.targetFrameId || null;
@@ -1667,10 +2129,9 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
   ): 'thought' | 'explored' | 'tool' | 'hidden' => {
     const cat = String(category || '').toLowerCase();
     const name = String(skillName || '').toLowerCase();
-    // Tool-first agent loop turns — show as running agent step.
+    // Tool-first agent loop turns — stage Explored covers wait progress; hide bare Thought.
     if (cat === 'agent' || name === 'agent' || name === 'agent_loop') {
-      // Thought until real tool_ops arrive — avoid marking chat turns as design paint.
-      return 'thought';
+      return 'hidden';
     }
     if (
       cat === 'summary' ||
@@ -1828,140 +2289,578 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     });
   };
 
+  const handleStreamStatus = (ev: any) => {
+
+    if (ev.task_id) liveTaskId = String(ev.task_id);
+    if (ev.status === 'routing') {
+      // Legacy status — ignore (no longer emitted).
+      return;
+    }
+    if (ev.status === 'aesthetic_refs') {
+      // Internal retrieval only — do not surface as an Explored activity row.
+      const aesEv = ev as {
+        refs?: Array<{ name?: string; score?: number; imageUrl?: string }>;
+        aesRefsAttached?: number;
+      };
+      const refs = Array.isArray(aesEv.refs) ? aesEv.refs : [];
+      const attached = Number(aesEv.aesRefsAttached);
+      aesRefsAttached = Number.isFinite(attached)
+        ? Math.max(0, attached)
+        : refs.filter((r) => String(r.imageUrl || '').trim()).length ||
+          (refs.length ? refs.length : 0);
+      return;
+    }
+
+    // Design: size resolved + needs a plate → open artboard + shimmer before content.
+    // User @ board → bind + shimmer only (no second plate).
+    if (ev.open_artboard === true) {
+      const sizeRaw =
+        (ev.canvas_size && String(ev.canvas_size)) ||
+        (ev.canvas_width != null && ev.canvas_height != null
+          ? `${ev.canvas_width}x${ev.canvas_height}`
+          : '');
+      const size = /^\d+x\d+$/i.test(String(sizeRaw).trim())
+        ? String(sizeRaw).trim().toLowerCase()
+        : '';
+      if (lockedClientSize) liveCanvasSize = lockedClientSize;
+      else if (size) liveCanvasSize = size;
+      const pinned = String(params.pinnedFrameId || '').trim() || null;
+      if (pinned) {
+        live.frameId = pinned;
+        setProcessPill(pinned, processLabels.preparing || 'Preparing…');
+        return;
+      }
+      const resolved = parseResolvedSize(liveCanvasSize);
+      if (!resolved) return;
+      live.nodeIds = [];
+      live.fingerprintById = {};
+      const frameId = ensureFrameSize({
+        dispatch: params.dispatch,
+        getDocument: params.getDocument,
+        frameId: null,
+        width: resolved.width,
+        height: resolved.height,
+      });
+      if (frameId) {
+        live.frameId = frameId;
+        setProcessPill(frameId, processLabels.preparing || 'Preparing…');
+      }
+      return;
+    }
+
+    const sizeRaw =
+      (ev.canvas_size && String(ev.canvas_size)) ||
+      (ev.canvas_width != null && ev.canvas_height != null
+        ? `${ev.canvas_width}x${ev.canvas_height}`
+        : '');
+    const size = /^\d+x\d+$/i.test(String(sizeRaw).trim())
+      ? String(sizeRaw).trim().toLowerCase()
+      : '';
+    if (size || lockedClientSize) {
+      // User chip wins — backend must not resize the live artboard.
+      liveCanvasSize = lockedClientSize || size.toLowerCase();
+      if (typeof console !== 'undefined') {
+        console.info('[designAgent] status size', {
+          fromBackend: size || null,
+          lockedClientSize,
+          using: liveCanvasSize,
+          scene: ev.scene,
+          edit_in_place: ev.edit_in_place,
+        });
+      }
+      if (typeof ev.edit_in_place === 'boolean') {
+        editInPlace = ev.edit_in_place;
+      }
+      if (ev.blank_artboard === true || ev.intent === 'blank') {
+        blankArtboard = true;
+      }
+      if (editInPlace) {
+        // Force rebind to the user's target — don't keep a sibling spawned
+        // by an earlier provisional create status.
+        live.frameId = params.targetFrameId || live.frameId || null;
+        if (!live.nodeIds.length && params.seedLiveNodeIds?.length) {
+          live.nodeIds = [...params.seedLiveNodeIds].filter(Boolean);
+        }
+      } else {
+        // New artboard / blank — never mutate prior poster nodes.
+        // Keep live.frameId only if this run already opened one (repeat status events).
+        live.nodeIds = [];
+        live.fingerprintById = {};
+        // Provisional edit status may have bound the user's @ target; create/sibling must spawn new.
+        if (
+          live.frameId &&
+          params.targetFrameId &&
+          live.frameId === params.targetFrameId
+        ) {
+          live.frameId = null;
+        }
+      }
+      const resolved = parseResolvedSize(liveCanvasSize);
+      // Auto / partial-auto: wait for 设计思考 before opening a stock WxH plate.
+      // edit_in_place without resolved size: bind only — never resize to 1440×900.
+      let frameId: string | null = null;
+      if (editInPlace) {
+        frameId = live.frameId || params.targetFrameId || null;
+        if (frameId && resolved) {
+          frameId = ensureFrameSize({
+            dispatch: params.dispatch,
+            getDocument: params.getDocument,
+            frameId,
+            width: resolved.width,
+            height: resolved.height,
+          });
+        }
+      } else if (resolved) {
+        // Only resize an artboard this run already opened.
+        // Do NOT spawn a stock WxH plate from early status — chat
+        // ("你好") shares the same status event and must not create canvas.
+        if (live.frameId) {
+          frameId = ensureFrameSize({
+            dispatch: params.dispatch,
+            getDocument: params.getDocument,
+            frameId: live.frameId,
+            width: resolved.width,
+            height: resolved.height,
+          });
+        }
+      }
+      if (frameId) {
+        live.frameId = frameId;
+        // Clear stale chrome, then show shimmer for create / empty artboard.
+        params.dispatch(cancelImportPlaceholder());
+        if (blankArtboard) {
+          painted = true;
+        } else if (shouldShimmerFrame(frameId, editInPlace)) {
+          setProcessPill(
+            frameId,
+            processLabels.preparing || 'Preparing…'
+          );
+        }
+      }
+      params.onEvent({
+        type: 'canvas',
+        size: liveCanvasSize,
+        scene: ev.scene ? String(ev.scene) : undefined,
+      });
+    }
+    emitPhase(0, ev.scene || params.scene || 'design');
+    return;
+    
+  };
+
+  const handleStreamSkillStart = (ev: any) => {
+
+    const name = ev.skill_name || `Step ${ev.index + 1}`;
+    while (labels.length <= ev.index) labels.push(`Step ${labels.length + 1}`);
+    labels[ev.index] = name;
+    if (!skillStartedAt.has(ev.index)) {
+      skillStartedAt.set(ev.index, Date.now());
+    }
+    skillMeta.set(ev.index, {
+      category: String(ev.category || ''),
+      name,
+    });
+    const kind = activityKindForSkill(ev.category, name);
+    if (kind !== 'hidden') {
+      params.onEvent({
+        type: 'activity',
+        id: `skill-${ev.index}`,
+        kind,
+        status: 'running',
+        skillName: name,
+      });
+    }
+    if (kind === 'thought' && (shimmerFrameId || live.frameId)) {
+      setProcessPill(
+        shimmerFrameId || live.frameId,
+        processLabels.thinking || 'Thinking…'
+      );
+    }
+    emitPhase(ev.index, ev.category || params.scene || 'design');
+    return;
+    
+  };
+
+  const handleStreamSkillProgress = (ev: any) => {
+
+    const meta = skillMeta.get(ev.index);
+    const kind = activityKindForSkill(
+      meta?.category || '',
+      ev.skill_name || meta?.name || ''
+    );
+    if (kind === 'hidden') return;
+    // Status only — do not invent progress copy; backend text streams elsewhere.
+    params.onEvent({
+      type: 'activity',
+      id: `skill-${ev.index}`,
+      kind,
+      status: 'running',
+      skillName: ev.skill_name || meta?.name,
+    });
+    return;
+    
+  };
+
+  const handleStreamActivity = (ev: any) => {
+
+    // Backend-authored progress (counts / detail) — do not invent on the client.
+    if (chatDiverted && (ev.kind === 'explored' || ev.kind === 'thought')) {
+      return;
+    }
+    const stage = ev.stage ? String(ev.stage) : '';
+    const detail = ev.detail ? String(ev.detail) : '';
+    // Bind an existing @ / focus board for shimmer — never spawn an empty artboard.
+    // Free-canvas create/edit does not need a frame; only model create_frame opens one.
+    if (
+      !chatDiverted &&
+      ev.kind === 'explored' &&
+      (stage === 'scene' || detail.startsWith('canvas_size:'))
+    ) {
+      if (detail.startsWith('canvas_size:')) {
+        const raw = detail.replace(/^canvas_size:/i, '').trim().toLowerCase();
+        if (/^\d+x\d+$/.test(raw)) liveCanvasSize = raw;
+      }
+      const pinned = String(params.pinnedFrameId || '').trim() || null;
+      const focus =
+        pinned ||
+        String(params.targetFrameId || '').trim() ||
+        live.frameId ||
+        null;
+      let frameId: string | null = null;
+      if (focus) {
+        const boardSize = frameSizeFromDoc(params.getDocument, focus);
+        if (boardSize) {
+          liveCanvasSize = `${boardSize.width}x${boardSize.height}`;
+        }
+        live.frameId = focus;
+        frameId = focus;
+      }
+      if (frameId) {
+        setProcessPill(frameId, processLabels.exploring || 'Exploring…');
+      }
+    }
+    const kind =
+      (ev.kind as
+        | 'thought'
+        | 'added'
+        | 'updated'
+        | 'explored'
+        | 'skipped'
+        | 'deleted'
+        | 'tool') || 'tool';
+    params.onEvent({
+      type: 'activity',
+      id: String(ev.id || `activity-${activitySeq++}`),
+      kind,
+      status: ev.status === 'running' ? 'running' : 'done',
+      count: typeof ev.count === 'number' ? ev.count : undefined,
+      detail: detail || undefined,
+      skillName: ev.skillName || ev.skill_name || undefined,
+      durationSec: typeof ev.durationSec === 'number' ? ev.durationSec : undefined,
+      stage: stage || undefined,
+      item: ev.item
+        ? {
+            id: ev.item.id ? String(ev.item.id) : undefined,
+            name: ev.item.name ? String(ev.item.name) : undefined,
+            summary: ev.item.summary ? String(ev.item.summary) : undefined,
+          }
+        : undefined,
+      body: ev.body ? String(ev.body) : undefined,
+    });
+    const pillFrame = shimmerFrameId || live.frameId;
+    if (pillFrame && ev.status !== 'done') {
+      if (kind === 'explored') {
+        setProcessPill(pillFrame, processLabels.exploring || 'Exploring…');
+      } else if (kind === 'thought') {
+        setProcessPill(pillFrame, processLabels.thinking || 'Thinking…');
+      } else if (
+        kind === 'tool' ||
+        kind === 'added' ||
+        kind === 'updated' ||
+        kind === 'deleted'
+      ) {
+        setProcessPill(pillFrame, processLabels.editing || 'Editing elements…');
+      }
+    }
+    return;
+    
+  };
+
+  const handleStreamToolOps = (ev: any) => {
+
+    const ops = Array.isArray(ev.ops) ? ev.ops : [];
+    if (!ops.length) return;
+    const deleteish = ops.filter((o: { name?: string }) =>
+      ['delete_frame', 'delete_nodes'].includes(String(o?.name || '').trim())
+    );
+    if (deleteish.length) {
+      console.info('[sse tool_ops delete]', deleteish);
+    }
+    paintChain = paintChain.then(async () => {
+      if (params.signal?.aborted) return;
+      params.onEvent({ type: 'drawing', active: true, done: 0, total: ops.length });
+      const pinned = String(params.pinnedFrameId || '').trim() || null;
+      const aiCreatesFrame = ops.some(
+        (o: { name?: string }) => String(o?.name || '').trim() === 'create_frame'
+      );
+
+      // Fallback if backend did not emit open_artboard: Host opens plate first.
+      if (!pinned && !live.frameId && aiCreatesFrame && !editInPlace) {
+        const fromOp = sizeFromCreateFrameOp(ops);
+        const resolved =
+          parseResolvedSize(paintCanvasSize()) ||
+          fromOp ||
+          null;
+        if (resolved) {
+          if (!parseResolvedSize(paintCanvasSize())) {
+            liveCanvasSize = `${resolved.width}x${resolved.height}`;
+          }
+          const opened = ensureFrameSize({
+            dispatch: params.dispatch,
+            getDocument: params.getDocument,
+            frameId: null,
+            width: resolved.width,
+            height: resolved.height,
+          });
+          if (opened) live.frameId = opened;
+        }
+      }
+
+      // Host already opened → drop model create_frame so we don't get a second plate.
+      const paintOps =
+        live.frameId || pinned
+          ? ops.filter((o) => String(o?.name || '').trim() !== 'create_frame')
+          : ops;
+
+      const frameId = resolveToolOpsFrameId({
+        editInPlace,
+        liveFrameId: live.frameId,
+        targetFrameId: params.targetFrameId,
+        pinnedFrameId: params.pinnedFrameId,
+      });
+      if (frameId) {
+        live.frameId = frameId;
+        if (shouldShimmerFrame(frameId, editInPlace) || Boolean(live.frameId)) {
+          setProcessPill(
+            frameId,
+            processLabels.editing || 'Editing elements…'
+          );
+        }
+      }
+      try {
+        const applied = applyAgentToolOps({
+          ops: paintOps,
+          dispatch: params.dispatch,
+          getDocument: params.getDocument,
+          frameId,
+          signal: params.signal,
+          // Create has no prior nodes — don't rewrite create_shape against old bg.
+          sceneNodes: editInPlace ? params.sceneNodes : null,
+          userImages: params.images,
+          appliedOpIds: appliedOpIdsRef.current,
+          canvasUi: params.canvasUi,
+        });
+        pendingOpResults.push(...applied.opResults);
+        const failures = applied.opResults.filter((r) => !r.ok);
+        if (failures.length) {
+          // Correct the backend's pre-emitted counts — user must see the truth.
+          activitySeq += 1;
+          params.onEvent({
+            type: 'activity',
+            id: `opfail-${activitySeq}`,
+            kind: 'skipped',
+            status: 'done',
+            count: failures.length,
+            detail: `${failures.length} 个操作未生效：${failures[0].error || '目标元素不存在'}`,
+          });
+        }
+        const anyOk = applied.opResults.some((r) => r.ok);
+        toolOpsApplied = true;
+        painted = painted || anyOk;
+        if (applied.frameId) {
+          live.frameId = applied.frameId;
+        }
+        if (applied.nodeIds.length) {
+          live.nodeIds = [...new Set([...live.nodeIds, ...applied.nodeIds])];
+        }
+        // Keep shimmer until the whole run finishes (cleared after paintChain).
+        if (live.frameId) {
+          setProcessPill(
+            live.frameId,
+            processLabels.editing || 'Editing elements…'
+          );
+        }
+      } finally {
+        params.onEvent({
+          type: 'drawing',
+          active: false,
+          done: ops.length,
+          total: ops.length,
+        });
+      }
+    });
+    return;
+    
+  };
+
+  const handleStreamSceneFeedback = (ev: any) => {
+
+    const taskId = String(ev.task_id || liveTaskId || '').trim();
+    const round = typeof ev.round === 'number' ? ev.round : undefined;
+    if (!taskId) return;
+    // Wait until pending paints land, then POST real inventory via axios.
+    paintChain = paintChain.then(async () => {
+      if (params.signal?.aborted) return;
+      const docNow = params.getDocument();
+      const nodes = buildSceneNodesForCanvas(docNow, {
+        focusFrameId: live.frameId || params.targetFrameId || null,
+        forceIds: live.nodeIds,
+      });
+      const frames = buildSceneFramesSnapshot(docNow);
+      const focusId = live.frameId || params.targetFrameId || null;
+      const spatial = buildSpatialSummary(docNow, { focusFrameId: focusId });
+      const opResults = pendingOpResults;
+      pendingOpResults = [];
+      console.info('[scene_feedback] post', {
+        taskId,
+        round,
+        nodeCount: nodes.length,
+        frameCount: frames.length,
+        frames: frames.map((f) => ({ id: f.id, is_empty: f.is_empty })),
+        emptyRects: spatial.empty_rects.length,
+        opFailed: opResults.filter((r) => !r.ok).length,
+      });
+      await postDesignSceneFeedback(
+        taskId,
+        {
+          scene_nodes: nodes as Array<Record<string, unknown>>,
+          ...(frames.length
+            ? { scene_frames: frames as Array<Record<string, unknown>> }
+            : {}),
+          spatial_summary: spatial as unknown as Record<string, unknown>,
+          ...(opResults.length ? { op_results: opResults } : {}),
+          round,
+        },
+        params.signal
+      ).catch(() => undefined);
+    });
+    return;
+    
+  };
+
+  const handleStreamSkillDone = (ev: any) => {
+
+    if (ev.analysis) params.onEvent({ type: 'analysis', text: ev.analysis });
+    const meta = skillMeta.get(ev.index);
+    const kind = activityKindForSkill(
+      meta?.category || '',
+      ev.skill_name || meta?.name || ''
+    );
+    if (kind !== 'hidden') {
+      const started = skillStartedAt.get(ev.index);
+      const durationSec = started
+        ? Math.max(1, Math.round((Date.now() - started) / 1000))
+        : undefined;
+      params.onEvent({
+        type: 'activity',
+        id: `skill-${ev.index}`,
+        kind,
+        status: 'done',
+        skillName: ev.skill_name || meta?.name,
+        ...(kind === 'thought' && durationSec != null ? { durationSec } : {}),
+      });
+    }
+    if (ev.preview_svg && !toolOpsApplied) {
+      paintSvgProgressive(ev.preview_svg, ev.svg_patch);
+    }
+    emitPhase(ev.index + 1, params.scene || 'design');
+    return;
+    
+  };
+
+  const handleStreamResult = (ev: any) => {
+
+    const size =
+      (ev.canvas_size && String(ev.canvas_size)) ||
+      (ev.canvas_width != null && ev.canvas_height != null
+        ? `${ev.canvas_width}x${ev.canvas_height}`
+        : '');
+    if (lockedClientSize) {
+      liveCanvasSize = lockedClientSize;
+    } else if (size) {
+      liveCanvasSize = size.toLowerCase();
+    }
+    if (ev.blank_artboard === true) {
+      blankArtboard = true;
+      painted = true;
+      params.dispatch(cancelImportPlaceholder());
+    }
+    // Blank / edit tool-ops: no SVG paint. Create/sibling: paint onto new frame only.
+    if (ev.svg && !(toolOpsApplied || Boolean(ev.tool_ops_applied) || blankArtboard)) {
+      if (!editInPlace) {
+        live.nodeIds = [];
+        live.fingerprintById = {};
+      }
+      paintSvgProgressive(ev.svg, ev.svg_patch);
+    }
+    if (ev.summary) resultSummary = ev.summary;
+    if (Array.isArray(ev.choices) && ev.choices.length) {
+      resultChoices = ev.choices.map((c) => String(c).trim()).filter(Boolean).slice(0, 6);
+    }
+    let resultProposed:
+      | Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>
+      | undefined;
+    if (Array.isArray(ev.proposed_ops) && ev.proposed_ops.length) {
+      resultProposed = ev.proposed_ops
+        .filter((o: unknown) => o && typeof o === 'object')
+        .map((o: { name?: string; args?: Record<string, unknown>; op_id?: string }) => ({
+          name: o.name,
+          args: o.args && typeof o.args === 'object' ? o.args : {},
+          ...(o.op_id ? { op_id: String(o.op_id) } : {}),
+        }))
+        .slice(0, 80);
+    }
+    const applyChoice = String(ev.apply_choice || '').trim() || undefined;
+    emitPhase(Math.max(labels.length, 1), ev.scene || params.scene || 'design');
+    pendingDone = {
+      summary: resultSummary,
+      painted:
+        painted ||
+        toolOpsApplied ||
+        Boolean(ev.tool_ops_applied) ||
+        blankArtboard,
+      choices: resultChoices.length ? resultChoices : undefined,
+      proposedOps: resultProposed?.length ? resultProposed : undefined,
+      applyChoice,
+    };
+    emitMemory(
+      undefined,
+      live.frameId || params.targetFrameId || null
+    );
+    return;
+    
+  };
+
   try {
-    await runDesignJob({
-      runMode,
-      prompt: params.userMessage,
-      scene: runMode === 'agent' ? params.scene || null : null,
-      styleGroupId: params.styleGroupId,
-      userSelectedModel: params.model || 'auto',
-      routeOverrides: params.routeOverrides || undefined,
-      canvasId: params.canvasId,
-      canvasSize: params.canvasSize,
-      targetLayerId: params.targetLayerId,
-      layerIds: params.layerIds,
-      currentSvg: params.currentSvg,
-      sceneNodes: params.sceneNodes?.length
-        ? (params.sceneNodes as Array<Record<string, unknown>>)
-        : undefined,
-      sceneFrames: params.sceneFrames?.length
-        ? (params.sceneFrames as Array<Record<string, unknown>>)
-        : undefined,
-      focusFrameId: params.focusFrameId || undefined,
-      images: params.images?.length ? params.images : undefined,
-      sessionId: params.sessionId || undefined,
-      projectId: params.projectId || undefined,
-      memory: params.memory || undefined,
-      signal: params.signal,
-      onEvent: (ev) => {
+    const onStreamEvent = (ev: DesignJobEvent) => {
         if (ev.type === 'status') {
-          if (ev.task_id) liveTaskId = String(ev.task_id);
-          if (ev.status === 'chat') return;
-          if (ev.status === 'routing') {
-            // Classifier in progress — AgentDock already seeds a provisional Thought row.
-            // Do NOT emit activity here: that marks designStarted and later overwrites
-            // chat replies with designEmptyResult when painted=false.
-            return;
+          handleStreamStatus(ev);
+          return;
+        }
+        if (ev.type === 'permission') {
+          // End empty Thinking pill; do NOT divert to chat-only when LLM may run.
+          clearProcessPill();
+          if (!ev.can_call_llm) {
+            chatDiverted = true;
+            pendingDone = { summary: '', painted: false };
           }
-          if (ev.status === 'aesthetic_refs') {
-            // Internal retrieval only — do not surface as an Explored activity row.
-            const aesEv = ev as {
-              refs?: Array<{ name?: string; score?: number; imageUrl?: string }>;
-              aesRefsAttached?: number;
-            };
-            const refs = Array.isArray(aesEv.refs) ? aesEv.refs : [];
-            const attached = Number(aesEv.aesRefsAttached);
-            aesRefsAttached = Number.isFinite(attached)
-              ? Math.max(0, attached)
-              : refs.filter((r) => String(r.imageUrl || '').trim()).length ||
-                (refs.length ? refs.length : 0);
-            return;
-          }
-          const size =
-            (ev.canvas_size && String(ev.canvas_size)) ||
-            (ev.canvas_width != null && ev.canvas_height != null
-              ? `${ev.canvas_width}x${ev.canvas_height}`
-              : '');
-          if (size || lockedClientSize) {
-            // User chip wins — backend must not resize the live artboard.
-            liveCanvasSize = lockedClientSize || size.toLowerCase();
-            if (typeof console !== 'undefined') {
-              console.info('[designAgent] status size', {
-                fromBackend: size || null,
-                lockedClientSize,
-                using: liveCanvasSize,
-                scene: ev.scene,
-                edit_in_place: ev.edit_in_place,
-              });
-            }
-            if (typeof ev.edit_in_place === 'boolean') {
-              editInPlace = ev.edit_in_place;
-            }
-            if (ev.blank_artboard === true || ev.intent === 'blank') {
-              blankArtboard = true;
-            }
-            if (editInPlace) {
-              // Force rebind to the user's target — don't keep a sibling spawned
-              // by an earlier provisional create status.
-              live.frameId = params.targetFrameId || live.frameId || null;
-              if (!live.nodeIds.length && params.seedLiveNodeIds?.length) {
-                live.nodeIds = [...params.seedLiveNodeIds].filter(Boolean);
-              }
-            } else {
-              // New artboard / blank — never mutate prior poster nodes.
-              // Keep live.frameId only if this run already opened one (repeat status events).
-              live.nodeIds = [];
-              live.fingerprintById = {};
-              // Provisional edit status may have bound the user's @ target; create/sibling must spawn new.
-              if (
-                live.frameId &&
-                params.targetFrameId &&
-                live.frameId === params.targetFrameId
-              ) {
-                live.frameId = null;
-              }
-            }
-            const resolved = parseResolvedSize(liveCanvasSize);
-            // Auto / partial-auto: wait for 设计思考 before opening a stock WxH plate.
-            // edit_in_place without resolved size: bind only — never resize to 1440×900.
-            let frameId: string | null = null;
-            if (editInPlace) {
-              frameId = live.frameId || params.targetFrameId || null;
-              if (frameId && resolved) {
-                frameId = ensureFrameSize({
-                  dispatch: params.dispatch,
-                  getDocument: params.getDocument,
-                  frameId,
-                  width: resolved.width,
-                  height: resolved.height,
-                });
-              }
-            } else if (resolved) {
-              frameId = ensureFrameSize({
-                dispatch: params.dispatch,
-                getDocument: params.getDocument,
-                frameId: live.frameId || null,
-                width: resolved.width,
-                height: resolved.height,
-              });
-            }
-            if (frameId) {
-              live.frameId = frameId;
-              // Clear any leftover create chrome. Shimmer only for create — not edit_in_place.
-              params.dispatch(cancelImportPlaceholder());
-              if (blankArtboard) {
-                painted = true;
-              } else if (!editInPlace) {
-                markArtboardGenerating(params.dispatch, frameId);
-              }
-            }
-            params.onEvent({
-              type: 'canvas',
-              size: liveCanvasSize,
-              scene: ev.scene ? String(ev.scene) : undefined,
-            });
-          }
-          emitPhase(0, ev.scene || params.scene || 'design');
+          params.onEvent({
+            type: 'permission',
+            can_call_llm: Boolean(ev.can_call_llm),
+            balance: ev.balance,
+            need: ev.need,
+            free_daily: ev.free_daily,
+          });
           return;
         }
         if (ev.type === 'thinking' && ev.text) {
@@ -1977,7 +2876,18 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           return;
         }
         if (ev.type === 'chat_done') {
-          pendingDone = { summary: '', painted: false };
+          // Ask proposals also finish without paint — do NOT wipe proposedOps / choices.
+          if (pendingDone?.proposedOps?.length) {
+            return;
+          }
+          // Model returned reply-only — clear Thought / Explored chrome.
+          chatDiverted = true;
+          pendingDone = {
+            summary: pendingDone?.summary || resultSummary || '',
+            painted: false,
+            choices: pendingDone?.choices,
+          };
+          params.onEvent({ type: 'chat' });
           return;
         }
         if (ev.type === 'analysis_delta' && ev.text) {
@@ -1989,161 +2899,27 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           return;
         }
         if (ev.type === 'skill_start') {
-          const name = ev.skill_name || `Step ${ev.index + 1}`;
-          while (labels.length <= ev.index) labels.push(`Step ${labels.length + 1}`);
-          labels[ev.index] = name;
-          if (!skillStartedAt.has(ev.index)) {
-            skillStartedAt.set(ev.index, Date.now());
-          }
-          skillMeta.set(ev.index, {
-            category: String(ev.category || ''),
-            name,
-          });
-          const kind = activityKindForSkill(ev.category, name);
-          if (kind !== 'hidden') {
-            params.onEvent({
-              type: 'activity',
-              id: `skill-${ev.index}`,
-              kind,
-              status: 'running',
-              skillName: name,
-            });
-          }
-          emitPhase(ev.index, ev.category || params.scene || 'design');
+          handleStreamSkillStart(ev);
           return;
         }
         if (ev.type === 'skill_progress') {
-          const meta = skillMeta.get(ev.index);
-          const kind = activityKindForSkill(
-            meta?.category || '',
-            ev.skill_name || meta?.name || ''
-          );
-          if (kind === 'hidden') return;
-          // Status only — do not invent progress copy; backend text streams elsewhere.
-          params.onEvent({
-            type: 'activity',
-            id: `skill-${ev.index}`,
-            kind,
-            status: 'running',
-            skillName: ev.skill_name || meta?.name,
-          });
+          handleStreamSkillProgress(ev);
           return;
         }
         if (ev.type === 'activity') {
-          // Backend-authored progress (counts / detail) — do not invent on the client.
-          params.onEvent({
-            type: 'activity',
-            id: String(ev.id || `activity-${activitySeq++}`),
-            kind: (ev.kind as 'thought' | 'added' | 'updated' | 'explored' | 'skipped' | 'deleted' | 'tool') || 'tool',
-            status: ev.status === 'running' ? 'running' : 'done',
-            count: typeof ev.count === 'number' ? ev.count : undefined,
-            detail: ev.detail ? String(ev.detail) : undefined,
-            skillName: ev.skillName || ev.skill_name || undefined,
-            durationSec: typeof ev.durationSec === 'number' ? ev.durationSec : undefined,
-          });
+          handleStreamActivity(ev);
           return;
         }
         if (ev.type === 'tool_ops') {
-          const ops = Array.isArray(ev.ops) ? ev.ops : [];
-          if (!ops.length) return;
-          const deleteish = ops.filter((o: { name?: string }) =>
-            ['delete_frame', 'delete_nodes'].includes(String(o?.name || '').trim())
-          );
-          if (deleteish.length) {
-            console.info('[sse tool_ops delete]', deleteish);
-          }
-          paintChain = paintChain.then(async () => {
-            if (params.signal?.aborted) return;
-            params.onEvent({ type: 'drawing', active: true, done: 0, total: ops.length });
-            try {
-              params.dispatch(cancelImportPlaceholder());
-              const frameId = editInPlace
-                ? live.frameId || params.targetFrameId || null
-                : ensureCreateFrameReady();
-              const applied = applyAgentToolOps({
-                ops,
-                dispatch: params.dispatch,
-                getDocument: params.getDocument,
-                frameId,
-                signal: params.signal,
-                // Create has no prior nodes — don't rewrite create_shape against old bg.
-                sceneNodes: editInPlace ? params.sceneNodes : null,
-                userImages: params.images,
-                appliedOpIds: appliedOpIdsRef.current,
-                canvasUi: params.canvasUi,
-              });
-              toolOpsApplied = true;
-              painted = true;
-              if (applied.nodeIds.length) {
-                live.nodeIds = [...new Set([...live.nodeIds, ...applied.nodeIds])];
-              }
-              // Element counts come from backend `activity` SSE — not client aggregation.
-            } finally {
-              params.onEvent({
-                type: 'drawing',
-                active: false,
-                done: ops.length,
-                total: ops.length,
-              });
-            }
-          });
+          handleStreamToolOps(ev);
           return;
         }
         if (ev.type === 'scene_feedback_request') {
-          const taskId = String(ev.task_id || liveTaskId || '').trim();
-          const round = typeof ev.round === 'number' ? ev.round : undefined;
-          if (!taskId) return;
-          // Wait until pending paints land, then POST real inventory via axios.
-          paintChain = paintChain.then(async () => {
-            if (params.signal?.aborted) return;
-            const docNow = params.getDocument();
-            const nodes = buildSceneNodesForCanvas(docNow, {
-              focusFrameId: live.frameId || params.targetFrameId || null,
-              forceIds: live.nodeIds,
-            });
-            const frames = buildSceneFramesSnapshot(docNow);
-            console.info('[scene_feedback] post', {
-              taskId,
-              round,
-              nodeCount: nodes.length,
-              frameCount: frames.length,
-              frames: frames.map((f) => ({ id: f.id, is_empty: f.is_empty })),
-            });
-            await postDesignSceneFeedback({
-              taskId,
-              sceneNodes: nodes as Array<Record<string, unknown>>,
-              sceneFrames: frames as Array<Record<string, unknown>>,
-              round,
-              signal: params.signal,
-            });
-          });
+          handleStreamSceneFeedback(ev);
           return;
         }
         if (ev.type === 'skill_done') {
-          if (ev.analysis) params.onEvent({ type: 'analysis', text: ev.analysis });
-          const meta = skillMeta.get(ev.index);
-          const kind = activityKindForSkill(
-            meta?.category || '',
-            ev.skill_name || meta?.name || ''
-          );
-          if (kind !== 'hidden') {
-            const started = skillStartedAt.get(ev.index);
-            const durationSec = started
-              ? Math.max(1, Math.round((Date.now() - started) / 1000))
-              : undefined;
-            params.onEvent({
-              type: 'activity',
-              id: `skill-${ev.index}`,
-              kind,
-              status: 'done',
-              skillName: ev.skill_name || meta?.name,
-              ...(kind === 'thought' && durationSec != null ? { durationSec } : {}),
-            });
-          }
-          if (ev.preview_svg && !toolOpsApplied) {
-            paintSvgProgressive(ev.preview_svg, ev.svg_patch);
-          }
-          emitPhase(ev.index + 1, params.scene || 'design');
+          handleStreamSkillDone(ev);
           return;
         }
         if (ev.type === 'svg_delta') {
@@ -2198,52 +2974,34 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           return;
         }
         if (ev.type === 'result') {
-          const size =
-            (ev.canvas_size && String(ev.canvas_size)) ||
-            (ev.canvas_width != null && ev.canvas_height != null
-              ? `${ev.canvas_width}x${ev.canvas_height}`
-              : '');
-          if (lockedClientSize) {
-            liveCanvasSize = lockedClientSize;
-          } else if (size) {
-            liveCanvasSize = size.toLowerCase();
-          }
-          if (ev.blank_artboard === true) {
-            blankArtboard = true;
-            painted = true;
-            params.dispatch(cancelImportPlaceholder());
-          }
-          // Blank / edit tool-ops: no SVG paint. Create/sibling: paint onto new frame only.
-          if (ev.svg && !(toolOpsApplied || Boolean(ev.tool_ops_applied) || blankArtboard)) {
-            if (!editInPlace) {
-              live.nodeIds = [];
-              live.fingerprintById = {};
-            }
-            paintSvgProgressive(ev.svg, ev.svg_patch);
-          }
-          if (ev.summary) resultSummary = ev.summary;
-          if (Array.isArray(ev.choices) && ev.choices.length) {
-            resultChoices = ev.choices.map((c) => String(c).trim()).filter(Boolean).slice(0, 6);
-          }
-          emitPhase(Math.max(labels.length, 1), ev.scene || params.scene || 'design');
-          pendingDone = {
-            summary: resultSummary,
-            painted:
-              painted ||
-              toolOpsApplied ||
-              Boolean(ev.tool_ops_applied) ||
-              blankArtboard,
-            choices: resultChoices.length ? resultChoices : undefined,
-          };
-          emitMemory(
-            undefined,
-            live.frameId || params.targetFrameId || null
-          );
+          handleStreamResult(ev);
           return;
         }
         if (ev.type === 'error') {
           params.onEvent({ type: 'error', message: ev.message || 'design_failed' });
         }
+    };
+
+    await runDesignJob(buildRunDesignJobBody(params, runMode), {
+      signal: params.signal,
+      onmessage: (frame) => {
+        const raw = String(frame.data || '').trim();
+        if (!raw || raw === '[DONE]') return;
+        try {
+          onStreamEvent(JSON.parse(raw) as DesignJobEvent);
+        } catch {
+          /* ignore malformed SSE frame */
+        }
+      },
+      onerror: (err) => {
+        if (params.signal?.aborted) return;
+        const msg = err.message || String(err);
+        params.onEvent({
+          type: 'error',
+          message: /Failed to fetch|NetworkError|ERR_/i.test(msg)
+            ? '连接中断（代理超时或 API 热重载）。请重试；生成过程中勿保存 API 代码。'
+            : msg || 'Failed to fetch',
+        });
       },
     });
     await paintChain.catch(() => undefined);
@@ -2256,21 +3014,26 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         summary,
         painted: Boolean(pendingDone.painted),
         choices: pendingDone.choices?.length ? pendingDone.choices : undefined,
+        proposedOps: pendingDone.proposedOps?.length
+          ? pendingDone.proposedOps
+          : undefined,
+        applyChoice: pendingDone.applyChoice || undefined,
       });
     }
 
     // Only after the run is fully done (never mid tool_ops / mid-draw).
-    if (
-      !params.signal?.aborted &&
-      pendingDone?.painted &&
-      live.nodeIds.length >= 2
-    ) {
+    // Prefer every node on the artboard — live.nodeIds can miss creates when
+    // artifacts omit nodeId or create_frame retargets mid-batch.
+    if (!params.signal?.aborted && pendingDone?.painted) {
       const doc = params.getDocument();
-      const ids = [
+      const frameId = live.frameId || params.targetFrameId || null;
+      const fromFrame = nodeIdsInsideFrame(doc, frameId);
+      const fromLive = [
         ...new Set(
           live.nodeIds.filter((id) => Boolean(doc?.deltaSetLike?.[id]))
         ),
       ];
+      const ids = fromFrame.length >= 2 ? fromFrame : fromLive;
       if (ids.length >= 2) {
         params.dispatch(pushEditorHistory());
         params.dispatch(setDocument(groupNodesInDocument(doc, ids)));

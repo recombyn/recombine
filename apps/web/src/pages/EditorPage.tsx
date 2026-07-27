@@ -3,37 +3,45 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  HiOutlineArrowUturnLeft,
-  HiOutlineArrowUturnRight,
+  HiOutlineChevronDown,
+  HiOutlineChevronUp,
   HiOutlineHome,
   HiOutlineMap,
-  HiOutlineMinus,
-  HiOutlinePlus,
-  HiOutlineQuestionMarkCircle,
   HiOutlineShare,
   HiOutlineSquare3Stack3D,
 } from 'react-icons/hi2';
+import { LuKeyboard } from 'react-icons/lu';
 import { TbMessage2Filled } from 'react-icons/tb';
-import { Tooltip } from '@/components/base';
+import { Dropdown, Tooltip, message } from '@/components/base';
+import type { MenuItemType } from '@/components/base';
 import {
   peekHomeAgentBoot,
   clearHomeAgentBoot,
   attachmentsFromBoot,
+  contextsFromBoot,
 } from '@/utils/homeAgentBoot';
 import { withReturnTo } from '@/utils/authReturnTo';
 import { store } from '@/store';
-import { useProjectCloudSync } from '@/components/editor/useProjectCloudSync';
+import { useProjectCloudSync, flushCurrentProjectNow } from '@/components/editor/useProjectCloudSync';
 import type { ComposerContext } from '@/components/editor/panels/AgentComposerInput';
 import AgentDock from '@/components/editor/panels/AgentDock';
-import DevPropertiesPanel from '@/components/editor/panels/DevPropertiesPanel';
+import DevPropertiesPanel, {
+  getInspectDockWidth,
+} from '@/components/editor/panels/DevPropertiesPanel';
 import ShareDialog from '@/components/editor/panels/ShareDialog';
 import { EditorTopExportButton } from '@/components/editor/panels/ExportSelectionPanel';
+import { fetchShareApi, updateShareDocumentApi } from '@/apis/shares';
 import EditorBootOverlay from '@/components/editor/chrome/EditorBootOverlay';
 import {
   RcbCanvas,
   RcbSvgDefs,
   RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
+  rcbFitCamera,
   zoomAtPoint,
+  PENCIL_CURSOR,
+  ERASER_CURSOR,
+  PEN_CURSOR,
+  BUCKET_CURSOR,
   type RcbCamera as CanvasCamera,
 } from '@/components/rcb';
 import LayerPanel from '@/components/editor/panels/LayerPanel';
@@ -45,21 +53,31 @@ import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesO
 import SvgCanvas from '@/components/editor/canvas/svg/SvgCanvas';
 import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
 import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
+import EditorShortcutsPanel from '@/components/editor/chrome/EditorShortcutsPanel';
 import PenStrokeToolbar from '@/components/editor/chrome/PenStrokeToolbar';
 import BucketFillToolbar from '@/components/editor/chrome/BucketFillToolbar';
-import { PathEditToolbar, type PathEditSubtool } from '@/components/editor/chrome/FloatingToolbar';
+import { FloatingToolbar, PathEditToolbar, type PathEditSubtool } from '@/components/editor/chrome/FloatingToolbar';
 import AlignGuidesOverlay, {
   type AlignGuide,
 } from '@/components/rcb/selection/AlignGuidesOverlay';
 import {
+  getDocumentGridSize,
   nodeGuideBoxes,
+  snapBoxToGrid,
   snapBoxToGuides,
+  snapResizeToGrid,
   snapResizeToGuides,
   getSnapThreshold,
 } from '@/components/rcb/selection/alignGuides';
 import type { ResizeHandle } from '@/components/rcb/selection/resizeGeometry';
 import { cn } from '@/utils/classnames';
 import { fetchProject } from '@/apis/projects';
+import {
+  getProjectDraft,
+  getProjectSession,
+  putProjectDraft,
+  putProjectSession,
+} from '@/components/editor/projectDraftStore';
 import {
   createTemplate,
   importDocument,
@@ -71,14 +89,14 @@ import {
   renameArtboardFrame,
   setCanvasMeta,
   setActiveTool,
+  setGridMode,
   setSelectedNodeId,
   setSelectedNodeIds,
   setWorkspaceMode,
   updateArtboardFrame,
   pushEditorHistory,
-  undo,
-  redo,
 } from '@/store/modules/editor';
+import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
 import {
   HtmlArtboardFrame,
   FrameDrawFeature,
@@ -140,26 +158,6 @@ function canvasFillToDocumentMeta(next: FillPanelValue, followTheme: boolean) {
     backgroundImageFit: next.fillImageFit,
     backgroundImageRotate: next.fillImageRotate,
     backgroundImageAdjust: next.fillImageAdjust,
-  };
-}
-
-function framesBounds(frames: ArtboardFrame[]) {
-  if (!frames.length) return { x: 0, y: 0, width: 0, height: 0 };
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const f of frames) {
-    minX = Math.min(minX, f.x);
-    minY = Math.min(minY, f.y);
-    maxX = Math.max(maxX, f.x + f.width);
-    maxY = Math.max(maxY, f.y + f.height);
-  }
-  return {
-    x: minX,
-    y: minY,
-    width: Math.max(1, maxX - minX),
-    height: Math.max(1, maxY - minY),
   };
 }
 
@@ -237,6 +235,23 @@ function useThemeCanvasColor() {
   return color;
 }
 
+function useViewportMatch(query: string) {
+  const read = () =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : false;
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const media = window.matchMedia(query);
+    const onChange = () => setMatches(media.matches);
+    onChange();
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [query]);
+  return matches;
+}
+
 function HudBtn({
   tip,
   active,
@@ -279,6 +294,309 @@ function HudBtn({
 /** Shared optical size for bottom-left HUD glyphs. */
 const HUD_ICON = 'h-[15px] w-[15px] shrink-0';
 const HUD_ICON_STROKE = 1.75;
+/** Min gap between left HUD (at left-4) and centered toolstrip before stacking. */
+const BOTTOM_HUD_TOOLS_GAP_PX = 12;
+
+/** True when left HUD at bottom-left would horizontally collide with centered tools. */
+function bottomHudCollidesWithTools(opts: {
+  stage: DOMRect;
+  hudWidth: number;
+  toolsWidth: number;
+}): boolean {
+  const { stage, hudWidth, toolsWidth } = opts;
+  if (!(hudWidth > 0) || !(toolsWidth > 0) || !(stage.width > 0)) return false;
+  const hudRight = stage.left + 16 + hudWidth;
+  const toolsLeft = stage.left + stage.width / 2 - toolsWidth / 2;
+  return hudRight + BOTTOM_HUD_TOOLS_GAP_PX > toolsLeft;
+}
+
+type SceneBox = { x: number; y: number; width: number; height: number };
+
+function unionSceneBox(a: SceneBox | null, b: SceneBox): SceneBox {
+  if (!a) return { ...b };
+  const minX = Math.min(a.x, b.x);
+  const minY = Math.min(a.y, b.y);
+  const maxX = Math.max(a.x + a.width, b.x + b.width);
+  const maxY = Math.max(a.y + a.height, b.y + b.height);
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
+/** Union of artboards + scene nodes for zoom-to-fit. */
+function editorContentBounds(doc: any, frames: ArtboardFrame[]): SceneBox {
+  let box: SceneBox | null = null;
+  for (const f of frames) {
+    box = unionSceneBox(box, {
+      x: f.x,
+      y: f.y,
+      width: Math.max(1, f.width),
+      height: Math.max(1, f.height),
+    });
+  }
+  for (const { node } of listSceneNodes(doc)) {
+    if (!node) continue;
+    const { left, top } = nodeLeftTop(doc, node);
+    const w = Math.max(1, Number(node.width) || 0);
+    const h = Math.max(1, Number(node.height) || 0);
+    if (w < 2 && h < 2) continue;
+    box = unionSceneBox(box, { x: left, y: top, width: w, height: h });
+  }
+  if (!box) return { x: 0, y: 0, width: 1200, height: 800 };
+  return box;
+}
+
+function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }) {
+  return (
+    <span className="flex w-full min-w-[11rem] items-center justify-between gap-6">
+      <span>{label}</span>
+      {shortcut ? (
+        <span className="shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
+          {shortcut}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+const ZOOM_MENU_PRESETS = [
+  { key: '50', zoom: 0.5 },
+  { key: '100', zoom: 1 },
+  { key: '200', zoom: 2 },
+] as const;
+
+function zoomMenuSelectedKeys(zoom: number): string[] {
+  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(zoom - p.zoom) < 0.001);
+  return hit ? [hit.key] : [];
+}
+
+function zoomModShortcutLabel() {
+  if (typeof navigator === 'undefined') return 'Ctrl';
+  return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
+}
+
+function resolveHomeAgentInteractionMode(
+  mode: unknown
+): 'agent' | 'ask' | 'image' | null {
+  if (mode === 'image') return 'image';
+  if (mode === 'ask') return 'ask';
+  if (mode === 'agent') return 'agent';
+  return null;
+}
+
+function shouldApplyHomeAgentBoot(opts: {
+  boot: ReturnType<typeof peekHomeAgentBoot>;
+  fromFlag: boolean;
+  alreadyApplied: boolean;
+}): boolean {
+  const { boot, fromFlag, alreadyApplied } = opts;
+  if (!boot || alreadyApplied) return false;
+  const hasPrompt = Boolean(boot.prompt?.trim());
+  const hasChips =
+    Boolean(boot.contexts?.length) || Boolean(boot.attachments?.length);
+  if (!hasPrompt && !hasChips) return false;
+  if (!fromFlag && !boot.autoSubmit && !hasChips) return false;
+  return true;
+}
+
+const ZOOM_TRIGGER_BASE =
+  'inline-flex h-7 min-w-[2.75rem] items-center justify-center gap-1.5 rounded px-2.5 transition-colors';
+const ZOOM_TRIGGER_OPEN = 'bg-[var(--accent-soft)] text-[var(--ink)]';
+const ZOOM_TRIGGER_IDLE =
+  'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]';
+
+function computeStageBackground(
+  document: any,
+  followThemeCanvas: boolean,
+  themeCanvas: string
+): string | undefined {
+  const type = parseFillType(document?.backgroundFillType);
+  const opacity = Number(document?.backgroundOpacity ?? 100);
+  const baseColor = followThemeCanvas
+    ? themeCanvas
+    : String(document?.backgroundColor || '').trim() || themeCanvas;
+
+  if (followThemeCanvas && type === 'solid' && opacity >= 100) return undefined;
+
+  if (type === 'solid' || !document?.backgroundFillType) {
+    return cssSolidWithOpacity(baseColor, opacity);
+  }
+  if (type === 'image') {
+    const src = String(document?.backgroundImageSrc || '');
+    if (!src) return cssSolidWithOpacity(baseColor, opacity);
+    return `url(${src}) center / cover no-repeat`;
+  }
+  const gradient = parseFillGradient(document?.backgroundGradient, type, baseColor);
+  return cssPreviewForGradient({ ...gradient, type }, opacity);
+}
+
+function resolveEditorCanvasCursor(
+  frameMode: boolean,
+  activeTool: string,
+  pencilEraseMode: boolean,
+  pickMode: { active: boolean; blocked: boolean }
+): string | undefined {
+  if (pickMode.active) return pickMode.blocked ? 'not-allowed' : 'copy';
+  if (frameMode) return 'crosshair';
+  if (activeTool === 'pencil') return pencilEraseMode ? ERASER_CURSOR : PENCIL_CURSOR;
+  if (activeTool === 'pen') return PEN_CURSOR;
+  if (activeTool === 'bucket') return BUCKET_CURSOR;
+  return undefined;
+}
+
+type EditorProjectDraft = Awaited<ReturnType<typeof getProjectDraft>>;
+
+function shouldPreferLocalDraft(
+  draft: EditorProjectDraft,
+  proj: { document?: unknown; updatedAt?: number } | null | undefined
+): boolean {
+  if (!draft?.document) return false;
+  const cloudUpdated = Number(proj?.updatedAt) || 0;
+  const draftUpdated = Number(draft.updatedAt) || 0;
+  return (
+    !proj?.document ||
+    draftUpdated > cloudUpdated ||
+    (draftUpdated === cloudUpdated && !draft.syncedAt)
+  );
+}
+
+function persistUnsyncedDraft(
+  targetId: string,
+  draft: NonNullable<EditorProjectDraft>,
+  name: string
+) {
+  void putProjectDraft({
+    projectId: targetId,
+    name,
+    document: draft.document,
+    updatedAt: draft.updatedAt || Date.now(),
+    syncedAt: null,
+    cloudRevision: null,
+    baseDocument: null,
+  });
+}
+
+async function hydrateShareTarget(
+  targetId: string,
+  dispatch: ReturnType<typeof useDispatch>,
+  navigate: ReturnType<typeof useNavigate>,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  isCancelled: () => boolean
+) {
+  try {
+    const res = await fetchShareApi(targetId);
+    if (isCancelled()) return;
+    const s = res.share;
+    if (!s?.document || !s.viewerCanEdit) {
+      message.warning(t('editor.shareNoEditAccess'));
+      navigate(`/s/${encodeURIComponent(targetId)}`, { replace: true });
+      return;
+    }
+    dispatch(
+      importDocument({
+        id: s.id,
+        name: s.name || t('home.untitled'),
+        document: s.document,
+        source: 'scratch',
+      })
+    );
+    dispatch(setWorkspaceMode('design'));
+  } catch {
+    if (isCancelled()) return;
+    message.error(t('editor.shareCopyFailed'));
+    navigate(`/s/${encodeURIComponent(targetId)}`, { replace: true });
+  }
+}
+
+async function hydrateCloudProject(
+  targetId: string,
+  dispatch: ReturnType<typeof useDispatch>,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  isCancelled: () => boolean
+) {
+  const draft = await getProjectDraft(targetId).catch(() => null);
+  try {
+    const res = await fetchProject(targetId);
+    if (isCancelled()) return;
+    const proj = res.project;
+    const cloudUpdated = Number(proj?.updatedAt) || 0;
+    const cloudRev = Number(proj?.revision);
+    const revision = Number.isFinite(cloudRev) && cloudRev >= 1 ? cloudRev : null;
+
+    if (shouldPreferLocalDraft(draft, proj) && draft?.document) {
+      const needsUpload = !draft.syncedAt;
+      const name = draft.name || proj?.name || t('home.untitled');
+      dispatch(
+        importDocument({
+          id: targetId,
+          name,
+          document: draft.document,
+          source: 'user',
+          dirty: needsUpload,
+        })
+      );
+      if (needsUpload) persistUnsyncedDraft(targetId, draft, name);
+      return;
+    }
+
+    if (!proj?.document) {
+      if (draft?.document) {
+        const name = draft.name || t('home.untitled');
+        dispatch(
+          importDocument({
+            id: targetId,
+            name,
+            document: draft.document,
+            source: 'user',
+            dirty: !draft.syncedAt,
+          })
+        );
+        if (!draft.syncedAt) persistUnsyncedDraft(targetId, draft, name);
+        return;
+      }
+      dispatch(createTemplate({ emptyWorld: true }));
+      return;
+    }
+
+    dispatch(
+      importDocument({
+        id: proj.id,
+        name: proj.name || t('home.untitled'),
+        document: proj.document,
+        source: 'user',
+      })
+    );
+    void putProjectDraft({
+      projectId: proj.id,
+      name: proj.name || t('home.untitled'),
+      document: proj.document,
+      updatedAt: cloudUpdated || Date.now(),
+      syncedAt: Date.now(),
+      cloudRevision: revision,
+      baseDocument: proj.document,
+    });
+  } catch {
+    if (isCancelled()) return;
+    if (draft?.document) {
+      const name = draft.name || t('home.untitled');
+      dispatch(
+        importDocument({
+          id: targetId,
+          name,
+          document: draft.document,
+          source: 'user',
+          dirty: true,
+        })
+      );
+      persistUnsyncedDraft(targetId, draft, name);
+      return;
+    }
+    dispatch(createTemplate({ emptyWorld: true }));
+  }
+}
 
 export default function EditorPage() {
   const { t } = useTranslation();
@@ -293,26 +611,33 @@ export default function EditorPage() {
   const [agentDraft, setAgentDraft] = useState<string | null>(null);
   const [agentAutoSubmit, setAgentAutoSubmit] = useState(false);
   const [agentDraftAttachments, setAgentDraftAttachments] = useState<ComposerContext[]>([]);
+  const [agentDraftContexts, setAgentDraftContexts] = useState<ComposerContext[]>([]);
   const [agentDraftModelId, setAgentDraftModelId] = useState<string | null>(null);
+  const [agentDraftInteractionMode, setAgentDraftInteractionMode] = useState<
+    'agent' | 'ask' | 'image' | null
+  >(null);
   const [agentDraftImageAspect, setAgentDraftImageAspect] = useState<string | null>(null);
-  const [agentDraftImageQuality, setAgentDraftImageQuality] = useState<string | null>(null);
-  const [agentDraftImageResolution, setAgentDraftImageResolution] = useState<string | null>(null);
   const [agentDraftScene, setAgentDraftScene] = useState<
-    'website' | 'mobile' | 'image' | 'poster' | null
+    'website' | 'mobile' | 'image' | 'poster' | 'drawing' | null
   >(null);
   const [attachToChat, setAttachToChat] = useState<string | string[] | null>(null);
   const [layersOpen, setLayersOpen] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [canvasBgOpen, setCanvasBgOpen] = useState(false);
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [toolsExpanded, setToolsExpanded] = useState(false);
   const [pathEditOpen, setPathEditOpen] = useState(false);
   const [pathEditSubtool, setPathEditSubtool] = useState<PathEditSubtool>('select');
   const [canvasMeshSelectedIndex, setCanvasMeshSelectedIndex] = useState(0);
   const [canvasMeshShowGuides, setCanvasMeshShowGuides] = useState(true);
   const themeCanvas = useThemeCanvasColor();
+  const isMobileViewport = useViewportMatch('(max-width: 767px)');
+  const isTabletViewport = useViewportMatch('(max-width: 1279px)');
+  const useCompactTooling = isTabletViewport;
   const [bootOpen, setBootOpen] = useState(true);
   const [bootExiting, setBootExiting] = useState(false);
   const [bootProgress, setBootProgress] = useState(8);
-  const [forceTour, setForceTour] = useState(false);
   const bootStartedAt = useRef(Date.now());
   const bootOpenRef = useRef(true);
   const bootFinishingRef = useRef(false);
@@ -340,12 +665,34 @@ export default function EditorPage() {
   const currentTemplate = useSelector((state: any) =>
     state.editor.templates.find((item: any) => item.id === state.editor.currentId)
   );
+
+  // Persist share-edit sessions back to the shares API (not projects).
+  const shareSaveTimer = useRef<number | null>(null);
+  useEffect(() => {
+    if (!currentId?.startsWith('share_') || !document) return undefined;
+    if (shareSaveTimer.current) window.clearTimeout(shareSaveTimer.current);
+    const id = currentId;
+    shareSaveTimer.current = window.setTimeout(() => {
+      void updateShareDocumentApi(id, document).catch(() => undefined);
+    }, 700);
+    return () => {
+      if (shareSaveTimer.current) window.clearTimeout(shareSaveTimer.current);
+    };
+  }, [currentId, document]);
+
   const activeTool = useSelector((state: any) => state.editor.activeTool);
+  const pencilEraseMode = useSelector((state: any) => Boolean(state.editor.pencilEraseMode));
+  const canvasAttachPick = useSelector(
+    (state: any) => state.editor.canvasAttachPick as null | { target: string }
+  );
+  const canvasAttachPickBlocked = useSelector((state: any) =>
+    Boolean(state.editor.canvasAttachPickBlocked)
+  );
+  const isGridMode = useSelector((state: any) => Boolean(state.editor.isGridMode));
+  const gridSize = getDocumentGridSize(document);
   const workspaceMode = useSelector(
     (state: any) => state.editor.workspaceMode || 'design'
   ) as 'design' | 'dev';
-  const canUndo = useSelector((state: any) => (state.editor.historyPast?.length || 0) > 0);
-  const canRedo = useSelector((state: any) => (state.editor.historyFuture?.length || 0) > 0);
 
   useEffect(() => {
     const onPathEdit = (e: Event) => {
@@ -371,34 +718,18 @@ export default function EditorPage() {
     () => documentToCanvasFill(document, themeCanvas),
     [document, themeCanvas]
   );
-  const stageBackground = useMemo(() => {
-    const type = parseFillType(document?.backgroundFillType);
-    const opacity = Number(document?.backgroundOpacity ?? 100);
-    const baseColor = followThemeCanvas
-      ? themeCanvas
-      : String(document?.backgroundColor || '').trim() || themeCanvas;
-
-    if (followThemeCanvas && type === 'solid' && opacity >= 100) return undefined;
-
-    if (type === 'solid' || !document?.backgroundFillType) {
-      return cssSolidWithOpacity(baseColor, opacity);
-    }
-    if (type === 'image') {
-      const src = String(document?.backgroundImageSrc || '');
-      if (!src) return cssSolidWithOpacity(baseColor, opacity);
-      return `url(${src}) center / cover no-repeat`;
-    }
-    const gradient = parseFillGradient(document?.backgroundGradient, type, baseColor);
-    return cssPreviewForGradient({ ...gradient, type }, opacity);
-  }, [
-    document?.backgroundFillType,
-    document?.backgroundColor,
-    document?.backgroundOpacity,
-    document?.backgroundGradient,
-    document?.backgroundImageSrc,
-    followThemeCanvas,
-    themeCanvas,
-  ]);
+  const stageBackground = useMemo(
+    () => computeStageBackground(document, followThemeCanvas, themeCanvas),
+    [
+      document?.backgroundFillType,
+      document?.backgroundColor,
+      document?.backgroundOpacity,
+      document?.backgroundGradient,
+      document?.backgroundImageSrc,
+      followThemeCanvas,
+      themeCanvas,
+    ]
+  );
 
   /** Editor UI is design-only; hide legacy Design/Dev toggle. */
   useEffect(() => {
@@ -408,6 +739,10 @@ export default function EditorPage() {
   const isDevMode = workspaceMode === 'dev';
   const panMode = activeTool === 'pan';
   const frameMode = !isDevMode && activeTool === 'frame';
+  const canvasCursor = resolveEditorCanvasCursor(frameMode, activeTool, pencilEraseMode, {
+    active: Boolean(canvasAttachPick),
+    blocked: canvasAttachPickBlocked,
+  });
 
   const frames: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
   const activeFrameId = document?.activeFrameId ?? null;
@@ -418,6 +753,8 @@ export default function EditorPage() {
       : Boolean(activeFrameId && f.id === activeFrameId)
   );
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  const bottomHudRef = useRef<HTMLDivElement | null>(null);
+  const [stackBottomHud, setStackBottomHud] = useState(false);
   useEffect(() => {
     const el = stageEl;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
@@ -430,6 +767,45 @@ export default function EditorPage() {
     ro.observe(el);
     return () => ro.disconnect();
   }, [stageEl]);
+
+  useEffect(() => {
+    if (isDevMode) {
+      setStackBottomHud(false);
+      return undefined;
+    }
+    const stage = stageEl;
+    const hud = bottomHudRef.current;
+    const tools = stage?.ownerDocument?.querySelector(
+      '[data-tour="editor-tools"]'
+    ) as HTMLElement | null;
+    if (!stage || !hud || !tools) {
+      setStackBottomHud(false);
+      return undefined;
+    }
+    const measure = () => {
+      const stageBox = stage.getBoundingClientRect();
+      const hudBox = hud.getBoundingClientRect();
+      const toolsBox = tools.getBoundingClientRect();
+      setStackBottomHud(
+        bottomHudCollidesWithTools({
+          stage: stageBox,
+          hudWidth: hudBox.width,
+          toolsWidth: toolsBox.width,
+        })
+      );
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(stage);
+    ro.observe(hud);
+    ro.observe(tools);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [isDevMode, stageEl, toolsExpanded, useCompactTooling, stageSize.width]);
+
   // Scene paper follows content bounds only. Camera pan/zoom is CSS on RcbCanvas —
   // never resize/slide SVG viewBox to chase the frustum.
   const worldSurface = document
@@ -439,12 +815,12 @@ export default function EditorPage() {
     () => ({ x: 0, y: 0, width: worldSurface.width, height: worldSurface.height }),
     [worldSurface.width, worldSurface.height]
   );
-  // Camera autofit only around real content / frames; empty world keeps default zoom.
-  const worldBounds = frames.length
-    ? framesBounds(frames)
-    : { x: 0, y: 0, width: 0, height: 0 };
+  // RcbCanvas autofit disabled here — we only center once on first load (below).
+  const worldBounds = { x: 0, y: 0, width: 0, height: 0 };
 
-  /** Stable embedded scene doc — avoid `document={{...}}` identity churn each render. */
+  /** Stable embedded scene doc — avoid `document={{...}}` identity churn each render.
+   * Paper fill is transparent here so SVG hosts don't paint over the stage CSS fill.
+   * Reducers preserve real stage `backgroundColor` when this view doc is committed. */
   const canvasDocument = useMemo(() => {
     if (!document) return null;
     return {
@@ -481,37 +857,37 @@ export default function EditorPage() {
       } else {
         navigate(fromHomeAgent ? '/editor?fromHomeAgent=1' : '/editor', { replace: true });
       }
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (targetId) {
-      if (currentId === targetId && document) return;
+      if (currentId === targetId && document) {
+        return () => {
+          cancelled = true;
+        };
+      }
       const local = templates.find((x) => x.id === targetId);
       if (local?.document) {
         dispatch(openTemplate(targetId));
-        return;
+        return () => {
+          cancelled = true;
+        };
       }
-      void fetchProject(targetId)
-        .then((res) => {
-          if (cancelled) return;
-          const proj = res.project;
-          if (!proj?.document) {
-            dispatch(createTemplate({ emptyWorld: true }));
-            return;
-          }
-          dispatch(
-            importDocument({
-              id: proj.id,
-              name: proj.name || t('home.untitled'),
-              document: proj.document,
-              source: 'user',
-            })
-          );
-        })
-        .catch(() => {
-          if (!cancelled) dispatch(createTemplate({ emptyWorld: true }));
-        });
-      return;
+
+      // Shared document edit — same EditorPage chrome; persist via shares API.
+      if (targetId.startsWith('share_')) {
+        void hydrateShareTarget(targetId, dispatch, navigate, t, () => cancelled);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      void hydrateCloudProject(targetId, dispatch, t, () => cancelled);
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (!document) dispatch(createTemplate({ emptyWorld: true }));
@@ -522,7 +898,67 @@ export default function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch, routeProjectId, location.search, navigate, t]);
 
-  /** Home agent / plaza 「做同款」— prefill composer (peek until AgentDock consumes). */
+  /** Local session: selection + grid. Camera fits once on first canvas ready. */
+  const sessionReadyForIdRef = useRef<string | null>(null);
+  const didInitialFitRef = useRef(false);
+  const gridUserTouchedRef = useRef(false);
+  useEffect(() => {
+    sessionReadyForIdRef.current = null;
+    didInitialFitRef.current = false;
+    gridUserTouchedRef.current = false;
+    setCamera(DEFAULT_CAMERA);
+    dispatch(setGridMode(false));
+  }, [currentId, dispatch]);
+
+  useEffect(() => {
+    if (!currentId || !document) return;
+    if (sessionReadyForIdRef.current === currentId) return;
+    let cancelled = false;
+    void (async () => {
+      const session = await getProjectSession(currentId).catch(() => null);
+      if (cancelled) return;
+      // Do not restore session.camera — enter page always fits content once after load.
+      if (!gridUserTouchedRef.current) {
+        dispatch(setGridMode(Boolean(session?.isGridMode)));
+      }
+      const delta = document?.deltaSetLike || {};
+      const nodeIds = (session?.selectedNodeIds || []).filter(
+        (id) => id && id !== 'ROOT' && delta[id]
+      );
+      const frameValid = new Set(
+        (Array.isArray(document?.frames) ? document.frames : [])
+          .map((f: any) => String(f?.id || ''))
+          .filter(Boolean)
+      );
+      const frameIds = (session?.selectedFrameIds || []).filter((id) =>
+        frameValid.has(id)
+      );
+      if (nodeIds.length || frameIds.length) {
+        dispatch(setMixedSelection({ nodeIds, frameIds }));
+      }
+      sessionReadyForIdRef.current = currentId;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentId, document, dispatch]);
+
+  useEffect(() => {
+    if (!currentId) return;
+    if (sessionReadyForIdRef.current !== currentId) return;
+    const timer = window.setTimeout(() => {
+      void putProjectSession({
+        projectId: currentId,
+        camera,
+        selectedNodeIds,
+        selectedFrameIds,
+        isGridMode,
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [currentId, camera, selectedNodeIds, selectedFrameIds, isGridMode]);
+
+  /** Home agent / plaza 「做同款」— prefill composer chips / prompt (peek until AgentDock consumes). */
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     if (params.get('createNew') === '1') return;
@@ -534,20 +970,27 @@ export default function EditorPage() {
       navigate({ pathname: location.pathname, search: '' }, { replace: true });
     }
 
-    if (!boot?.prompt || homeAgentBootAppliedRef.current) return;
-    // URL flag, or orphaned auto-submit after a failed handoff.
-    if (!fromFlag && !boot.autoSubmit) return;
+    if (
+      !shouldApplyHomeAgentBoot({
+        boot,
+        fromFlag,
+        alreadyApplied: homeAgentBootAppliedRef.current,
+      })
+    ) {
+      return;
+    }
 
+    const hasPrompt = Boolean(boot!.prompt?.trim());
     homeAgentBootAppliedRef.current = true;
     setAgentOpen(true);
-    setAgentDraft(boot.prompt);
-    setAgentAutoSubmit(Boolean(boot.autoSubmit));
-    setAgentDraftAttachments(attachmentsFromBoot(boot));
-    setAgentDraftModelId(boot.modelId ?? null);
-    setAgentDraftImageAspect(boot.imageAspectRatio ?? null);
-    setAgentDraftImageQuality(boot.imageQuality ?? null);
-    setAgentDraftImageResolution(boot.imageResolution ?? null);
-    setAgentDraftScene(boot.scene ?? null);
+    setAgentDraft(hasPrompt ? boot!.prompt : '');
+    setAgentAutoSubmit(Boolean(boot!.autoSubmit && hasPrompt));
+    setAgentDraftAttachments(attachmentsFromBoot(boot!));
+    setAgentDraftContexts(contextsFromBoot(boot!));
+    setAgentDraftModelId(boot!.modelId ?? null);
+    setAgentDraftInteractionMode(resolveHomeAgentInteractionMode(boot!.interactionMode));
+    setAgentDraftImageAspect(boot!.imageAspectRatio ?? null);
+    setAgentDraftScene(boot!.scene ?? null);
   }, [location.search, location.pathname, navigate]);
 
   // Keep /editor/:projectId in sync so refresh can reload the same project.
@@ -590,6 +1033,16 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [workspaceMode]);
 
+  useEffect(() => {
+    if (!isMobileViewport) return;
+    if (agentOpen) setLayersOpen(false);
+  }, [agentOpen, isMobileViewport]);
+
+  useEffect(() => {
+    if (!isMobileViewport) return;
+    if (layersOpen) setLayersOpen(false);
+  }, [isMobileViewport, layersOpen]);
+
   const finishBoot = () => {
     if (!bootOpenRef.current || bootFinishingRef.current) return;
     bootFinishingRef.current = true;
@@ -606,7 +1059,7 @@ export default function EditorPage() {
     }, wait);
   };
 
-  // Empty world has no SvgCanvas onReady ? finish boot immediately.
+  // Empty world has no SvgCanvas onReady — finish boot immediately.
   useEffect(() => {
     if (document && frames.length === 0) finishBoot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -623,15 +1076,16 @@ export default function EditorPage() {
   );
 
   const onMoveFrame = useCallback(
-    (id: string, x: number, y: number) => {
+    (id: string, x: number, y: number, opts?: { skipGrid?: boolean }) => {
       const frame = frames.find((f) => f.id === id);
       if (!frame) return;
-      const moving = {
+      let moving = {
         left: x,
         top: y,
         width: Math.max(1, Number(frame.width) || 1),
         height: Math.max(1, Number(frame.height) || 1),
       };
+      if (isGridMode && !opts?.skipGrid) moving = snapBoxToGrid(moving, gridSize);
       const nodes = nodeGuideBoxes(document);
       const otherFrames = frames
         .filter((f) => f.id !== id)
@@ -656,15 +1110,23 @@ export default function EditorPage() {
         })
       );
     },
-    [camera.zoom, dispatch, document, frames]
+    [camera.zoom, dispatch, document, frames, gridSize, isGridMode]
   );
 
   const onResizeFrame = useCallback(
     (
       id: string,
       box: { left: number; top: number; width: number; height: number },
-      handle: ResizeHandle
+      handle: ResizeHandle,
+      opts?: { skipGrid?: boolean; lockAspect?: boolean }
     ) => {
+      let next = box;
+      if (isGridMode && !opts?.skipGrid) {
+        next = snapResizeToGrid(next, handle, gridSize, 40, {
+          lockAspect: Boolean(opts?.lockAspect),
+          aspectRatio: box.width / Math.max(1, box.height),
+        });
+      }
       const nodes = nodeGuideBoxes(document);
       const otherFrames = frames
         .filter((f) => f.id !== id)
@@ -676,7 +1138,7 @@ export default function EditorPage() {
         }));
       const threshold = getSnapThreshold(camera.zoom);
       const snapped = snapResizeToGuides(
-        box,
+        next,
         handle,
         [...nodes, ...otherFrames],
         [],
@@ -697,7 +1159,7 @@ export default function EditorPage() {
         })
       );
     },
-    [camera.zoom, dispatch, document, frames]
+    [camera.zoom, dispatch, document, frames, gridSize, isGridMode]
   );
 
   const frameContentBoxes = useMemo(() => nodeGuideBoxes(document), [document]);
@@ -782,6 +1244,125 @@ export default function EditorPage() {
     });
   }, []);
 
+  const onFitView = useCallback(() => {
+    const el = stageRef.current;
+    const vw = el?.clientWidth || el?.getBoundingClientRect().width || 0;
+    const vh = el?.clientHeight || el?.getBoundingClientRect().height || 0;
+    if (vw < 1 || vh < 1) {
+      zoomAtStageCenter(1);
+      return;
+    }
+    const doc = (store.getState() as any).editor?.document;
+    const fr: ArtboardFrame[] = Array.isArray(doc?.frames) ? doc.frames : [];
+    setCamera(rcbFitCamera({ width: vw, height: vh }, editorContentBounds(doc, fr), 48));
+  }, [zoomAtStageCenter]);
+
+  /** Under boot overlay: center once, then reveal — no top-left flash. */
+  const onCanvasReady = useCallback(() => {
+    if (!didInitialFitRef.current) {
+      didInitialFitRef.current = true;
+      onFitView();
+    }
+    finishBoot();
+  }, [onFitView]);
+
+  const zoomModLabel = zoomModShortcutLabel();
+
+  const zoomMenuItems = useMemo<MenuItemType[]>(
+    () => [
+      {
+        key: 'in',
+        label: <ZoomMenuLabel label={t('editor.zoomIn')} shortcut={`${zoomModLabel} +`} />,
+      },
+      {
+        key: 'out',
+        label: <ZoomMenuLabel label={t('editor.zoomOut')} shortcut={`${zoomModLabel} -`} />,
+      },
+      {
+        key: 'fit',
+        label: <ZoomMenuLabel label={t('editor.fitCanvas')} shortcut="Shift 1" />,
+      },
+      {
+        key: '50',
+        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 50 })} />,
+      },
+      {
+        key: '100',
+        label: (
+          <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 100 })} shortcut={`${zoomModLabel} 0`} />
+        ),
+      },
+      {
+        key: '200',
+        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 200 })} />,
+      },
+    ],
+    [t, zoomModLabel]
+  );
+
+  const zoomSelectedKeys = useMemo(() => zoomMenuSelectedKeys(camera.zoom), [camera.zoom]);
+
+  const onZoomMenuClick = useCallback(
+    (key: string) => {
+      const actions: Record<string, () => void> = {
+        in: onZoomIn,
+        out: onZoomOut,
+        fit: onFitView,
+        '50': () => zoomAtStageCenter(0.5),
+        '100': () => zoomAtStageCenter(1),
+        '200': () => zoomAtStageCenter(2),
+      };
+      actions[key]?.();
+      setZoomMenuOpen(false);
+    },
+    [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]
+  );
+
+  const toggleMinimap = useCallback(() => {
+    setMinimapOpen((v) => !v);
+    setShortcutsOpen(false);
+  }, []);
+
+  const toggleShortcuts = useCallback(() => {
+    setShortcutsOpen((v) => !v);
+    setMinimapOpen(false);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        t?.isContentEditable
+      ) {
+        return;
+      }
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        onZoomIn();
+        return;
+      }
+      if (mod && e.key === '-') {
+        e.preventDefault();
+        onZoomOut();
+        return;
+      }
+      if (mod && e.key === '0') {
+        e.preventDefault();
+        zoomAtStageCenter(1);
+        return;
+      }
+      if (e.shiftKey && !mod && !e.altKey && (e.key === '1' || e.code === 'Digit1')) {
+        e.preventDefault();
+        onFitView();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]);
+
   /** Select a layer and pan so its center sits in the current viewport (keep zoom). */
   const focusLayerNode = useCallback(
     (nodeId: string) => {
@@ -821,7 +1402,7 @@ export default function EditorPage() {
       style={stageBackground ? { background: stageBackground } : undefined}
     >
       <div className="relative flex min-h-0 flex-1">
-        {layersOpen ? (
+        {layersOpen && !isMobileViewport ? (
           <div className="relative z-30 h-full shrink-0">
             <LayerPanel onClose={() => setLayersOpen(false)} onSelectNode={focusLayerNode} />
           </div>
@@ -835,21 +1416,31 @@ export default function EditorPage() {
           style={stageBackground ? { background: stageBackground } : undefined}
         >
           {/* Top-left: home + title (no dropdown) */}
-          <div className="pointer-events-none absolute left-4 top-3 z-20">
+          <div className="pointer-events-none absolute left-4 top-3 z-20 hidden md:block">
             <div className="pointer-events-auto flex items-center gap-2">
               <Tooltip title={t('editor.home', { defaultValue: '首页' })} placement="bottom">
                 <button
                   type="button"
                   aria-label={t('editor.home', { defaultValue: '首页' })}
-                  onClick={() => navigate('/home')}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--line)]"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        // Always push doc + auto cover on leave (dirty may already be clear).
+                        await flushCurrentProjectNow({ force: true });
+                      } catch {
+                        /* still navigate — local draft already holds bytes */
+                      }
+                      navigate('/home');
+                    })();
+                  }}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--line)]"
                 >
                   <HiOutlineHome className="h-4 w-4" strokeWidth={1.75} />
                 </button>
               </Tooltip>
-              <span className="inline-grid max-w-[min(16rem,40vw)] items-center">
+              <span className="inline-grid min-w-0 max-w-[min(16rem,calc(100vw-18rem))] items-center overflow-hidden">
                 <span
-                  className="invisible col-start-1 row-start-1 whitespace-pre px-1 text-[14px] font-medium"
+                  className="invisible col-start-1 row-start-1 max-w-full truncate whitespace-pre px-1 text-[14px] font-medium"
                   aria-hidden
                 >
                   {projectName || ' '}
@@ -858,14 +1449,23 @@ export default function EditorPage() {
                   value={projectName}
                   onChange={(e) => dispatch(renameTemplate(e.target.value))}
                   aria-label={t('home.untitled')}
-                  className="col-start-1 row-start-1 h-8 min-w-[2ch] border-0 bg-transparent px-1 text-[14px] font-medium text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
+                  title={projectName}
+                  className="col-start-1 row-start-1 h-8 w-full min-w-0 truncate border-0 bg-transparent px-1 text-[14px] font-medium text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
                 />
               </span>
             </div>
           </div>
 
-          {/* Top-right: export + share + chat + account */}
-          <div className="pointer-events-none absolute right-4 top-3 z-20">
+          {/* Top-right: export + share + account + chat */}
+          <div
+            className="pointer-events-none absolute top-3 z-40 hidden md:block"
+            style={{
+              right:
+                workspaceMode === 'dev' && inspectOpen
+                  ? getInspectDockWidth() + 16
+                  : 16,
+            }}
+          >
             <div className="pointer-events-auto flex items-center gap-2">
               <EditorTopExportButton />
               <Tooltip title={t('editor.share')} placement="bottom">
@@ -873,28 +1473,28 @@ export default function EditorPage() {
                   type="button"
                   aria-label={t('editor.share')}
                   onClick={() => setShareOpen(true)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)]"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)]"
                 >
                   <HiOutlineShare className="h-4 w-4 shrink-0" strokeWidth={1.75} />
                   {t('editor.share')}
                 </button>
               </Tooltip>
+              <WalletAccountChip />
               {!agentOpen ? (
                 <button
                   type="button"
                   onClick={() => setAgentOpen(true)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)]"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)]"
                 >
                   <TbMessage2Filled className="h-4 w-4 shrink-0 text-[var(--ink)]" />
                   {t('editor.chat')}
                 </button>
               ) : null}
-              <WalletAccountChip />
             </div>
           </div>
 
           {!isDevMode && pathEditOpen ? (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2">
+            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2 hidden md:block">
               <PathEditToolbar
                 subtool={pathEditSubtool}
                 onSubtoolChange={(s) => {
@@ -914,7 +1514,7 @@ export default function EditorPage() {
           ) : null}
 
           {!isDevMode && !pathEditOpen && (activeTool === 'pen' || activeTool === 'pencil') ? (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2">
+            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2 hidden md:block">
               <PenStrokeToolbar
                 mode={activeTool === 'pencil' ? 'pencil' : 'pen'}
                 placement="dock"
@@ -923,13 +1523,13 @@ export default function EditorPage() {
           ) : null}
 
           {!isDevMode && activeTool === 'bucket' ? (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2">
+            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2 hidden md:block">
               <BucketFillToolbar />
             </div>
           ) : null}
 
           <div className="relative min-h-0 flex-1">
-            {document ? (
+            {!isMobileViewport && document ? (
               <RcbCanvas
                 artboard={worldBounds}
                 camera={camera}
@@ -939,8 +1539,10 @@ export default function EditorPage() {
                 panBlockSelector={EDITOR_PAN_BLOCK_SELECTOR}
                 background={stageBackground}
                 stageRef={stageRef}
-                cursor={frameMode ? 'crosshair' : undefined}
+                cursor={canvasCursor}
                 defs={<RcbSvgDefs />}
+                showGrid={isGridMode}
+                gridSize={gridSize}
               >
                 {frames.map((frame) => (
                   <HtmlArtboardFrame
@@ -966,7 +1568,7 @@ export default function EditorPage() {
                   selectedNodeIds={selectedNodeIds}
                   onZoomIn={onZoomIn}
                   onZoomOut={onZoomOut}
-                  onReady={finishBoot}
+                  onReady={onCanvasReady}
                   embedded
                   stageEl={stageEl}
                   onOpenAgent={(opts) => {
@@ -1040,7 +1642,11 @@ export default function EditorPage() {
                         ? undefined
                         : (name) => dispatch(renameArtboardFrame({ id: frame.id, name }))
                     }
-                    onMove={isDevMode ? undefined : (x, y) => onMoveFrame(frame.id, x, y)}
+                    onMove={
+                      isDevMode
+                        ? undefined
+                        : (x, y, opts) => onMoveFrame(frame.id, x, y, opts)
+                    }
                     onMoveStart={isDevMode ? undefined : onFrameMoveStart}
                     onMoveEnd={isDevMode ? undefined : onFrameMoveEnd}
                     layer="label"
@@ -1056,8 +1662,10 @@ export default function EditorPage() {
                   </div>
                 ) : null}
 
+                {/* Artboard toolbar: single-frame selection, or multi-frame with no nodes.
+                    Mixed frame+nodes uses MultiSelectionToolbar in SelectionFeature. */}
                 {!isDevMode &&
-                selectedFrames.length === 1 &&
+                selectedFrames.length >= 1 &&
                 selectedNodeIds.length === 0 &&
                 activeFrame &&
                 movingFrameId !== activeFrame.id ? (
@@ -1089,20 +1697,29 @@ export default function EditorPage() {
             ) : null}
           </div>
 
-          {/* Fig.2 bottom-center tools — Design only */}
+          {/* Fig.2 bottom-center tools — desktop-style on all viewports */}
           {!isDevMode ? (
             <div
               data-tour="editor-tools"
-              className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
+              className={cn(
+                'pointer-events-none absolute left-1/2 z-20 -translate-x-1/2',
+                'bottom-4'
+              )}
             >
               <div className="pointer-events-auto">
-                <EditorToolStrip camera={camera} stageEl={stageEl} />
+                <EditorToolStrip camera={camera} stageEl={stageEl} compact={false} />
               </div>
             </div>
           ) : null}
 
-          {/* Bottom-left HUD */}
-          <div className="pointer-events-none absolute bottom-4 left-4 z-20">
+          {/* Bottom-left HUD — lift only when it would collide with the center toolstrip */}
+          <div
+            ref={bottomHudRef}
+            className={cn(
+              'pointer-events-none absolute left-4 z-20 flex flex-col items-start',
+              stackBottomHud ? 'bottom-[4.75rem]' : 'bottom-4'
+            )}
+          >
             {minimapOpen ? (
               <EditorMinimap
                 document={document}
@@ -1116,74 +1733,111 @@ export default function EditorPage() {
                 canvasBg={stageBackground}
               />
             ) : null}
-            <div className="pointer-events-auto flex items-center gap-0.5 rounded-full bg-[var(--surface)] px-1.5 py-1 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)] ring-1 ring-[var(--line)]">
+            {shortcutsOpen ? (
+              <EditorShortcutsPanel onClose={() => setShortcutsOpen(false)} />
+            ) : null}
+            <FloatingToolbar className="pointer-events-auto w-fit px-2 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)]">
               {!isDevMode ? (
                 <>
-                  <CanvasBgPicker
-                    value={canvasFillValue}
-                    open={canvasBgOpen}
-                    onOpenChange={(next) => {
-                      setCanvasBgOpen(next);
-                      if (next) setCanvasMeshSelectedIndex(0);
-                    }}
-                    meshSelectedIndex={canvasMeshSelectedIndex}
-                    onMeshSelectedIndexChange={setCanvasMeshSelectedIndex}
-                    meshShowGuides={canvasMeshShowGuides}
-                    onMeshShowGuidesChange={setCanvasMeshShowGuides}
-                    onChange={(next) => {
-                      const follow =
-                        next.fillType === 'solid' && isThemeFollowCanvasBg(next.fillColor);
-                      dispatch(setCanvasMeta(canvasFillToDocumentMeta(next, follow)));
-                    }}
-                  />
-                  <HudBtn tip={t('editor.layers')} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
-                    <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                  </HudBtn>
-                  <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={() => setMinimapOpen((v) => !v)}>
-                    <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                  </HudBtn>
-                  <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
+                  {useCompactTooling ? (
+                    <>
+                      <HudBtn
+                        tip={toolsExpanded ? t('editor.tools.hideTools', { defaultValue: '收起' }) : t('editor.tools.showTools', { defaultValue: '展开' })}
+                        active={toolsExpanded}
+                        onClick={() => setToolsExpanded((v) => !v)}
+                      >
+                        {toolsExpanded
+                          ? <HiOutlineChevronDown className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                          : <HiOutlineChevronUp className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                        }
+                      </HudBtn>
+                      {toolsExpanded ? (
+                        <>
+                          <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
+                          <HudBtn tip={t('editor.layers')} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
+                            <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                          </HudBtn>
+                          <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
+                            <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                          </HudBtn>
+                          <span data-shortcuts-toggle>
+                            <HudBtn
+                              tip={t('editor.shortcuts.title')}
+                              active={shortcutsOpen}
+                              onClick={toggleShortcuts}
+                            >
+                              <LuKeyboard className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                            </HudBtn>
+                          </span>
+                          <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <CanvasBgPicker
+                        value={canvasFillValue}
+                        open={canvasBgOpen}
+                        onOpenChange={(next) => {
+                          setCanvasBgOpen(next);
+                          if (next) setCanvasMeshSelectedIndex(0);
+                        }}
+                        meshSelectedIndex={canvasMeshSelectedIndex}
+                        onMeshSelectedIndexChange={setCanvasMeshSelectedIndex}
+                        meshShowGuides={canvasMeshShowGuides}
+                        onMeshShowGuidesChange={setCanvasMeshShowGuides}
+                        onChange={(next) => {
+                          const follow =
+                            next.fillType === 'solid' && isThemeFollowCanvasBg(next.fillColor);
+                          dispatch(setCanvasMeta(canvasFillToDocumentMeta(next, follow)));
+                        }}
+                      />
+                      <HudBtn tip={t('editor.layers')} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
+                        <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                      </HudBtn>
+                      <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
+                        <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                      </HudBtn>
+                      <span data-shortcuts-toggle>
+                        <HudBtn
+                          tip={t('editor.shortcuts.title')}
+                          active={shortcutsOpen}
+                          onClick={toggleShortcuts}
+                        >
+                          <LuKeyboard className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                        </HudBtn>
+                      </span>
+                      <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
+                    </>
+                  )}
                 </>
               ) : null}
-              <HudBtn
-                tip={`${t('editor.undo')} (Ctrl+Z)`}
-                disabled={!canUndo}
-                onClick={() => dispatch(undo())}
+              <Dropdown
+                trigger="click"
+                open={zoomMenuOpen}
+                onOpenChange={setZoomMenuOpen}
+                placement="top-start"
+                strategy="fixed"
+                items={zoomMenuItems}
+                onClick={onZoomMenuClick}
+                popupClassName="min-w-[12.5rem]"
+                selectedKeys={zoomSelectedKeys}
               >
-                <HiOutlineArrowUturnLeft className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-              </HudBtn>
-              <HudBtn
-                tip={`${t('editor.redo')} (Ctrl+Shift+Z)`}
-                disabled={!canRedo}
-                onClick={() => dispatch(redo())}
-              >
-                <HiOutlineArrowUturnRight className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-              </HudBtn>
-              <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
-              <HudBtn tip={t('editor.zoomOut')} onClick={onZoomOut}>
-                <HiOutlineMinus className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-              </HudBtn>
-              <HudBtn tip={t('editor.zoomReset')} onClick={() => zoomAtStageCenter(1)} className="w-auto min-w-[2.5rem] px-1">
-                <span className="text-[12px] font-medium tabular-nums text-[var(--ink)]">
-                  {zoomPercent}%
-                </span>
-              </HudBtn>
-              <HudBtn tip={t('editor.zoomIn')} onClick={onZoomIn}>
-                <HiOutlinePlus className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-              </HudBtn>
-              {!isDevMode ? (
-                <>
-                  <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
-                  <HudBtn
-                    tip={t('editor.tour.replay')}
-                    onClick={() => setForceTour(true)}
-                    data-tour="editor-help"
-                  >
-                    <HiOutlineQuestionMarkCircle className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                  </HudBtn>
-                </>
-              ) : null}
-            </div>
+                <button
+                  type="button"
+                  aria-label={t('editor.zoomMenu')}
+                  className={cn(
+                    ZOOM_TRIGGER_BASE,
+                    zoomMenuOpen ? ZOOM_TRIGGER_OPEN : ZOOM_TRIGGER_IDLE
+                  )}
+                >
+                  <span className="text-[12px] font-medium tabular-nums text-[var(--ink)]">
+                    {zoomPercent}%
+                  </span>
+                  <HiOutlineChevronDown className="h-3 w-3 shrink-0 text-[var(--muted)]" />
+                </button>
+              </Dropdown>
+            </FloatingToolbar>
           </div>
         </main>
 
@@ -1193,36 +1847,47 @@ export default function EditorPage() {
           ) : null
         ) : (
           <AgentDock
-            open={agentOpen}
-            onClose={() => setAgentOpen(false)}
+            open={isMobileViewport ? true : agentOpen}
+            onClose={() => {
+              if (!isMobileViewport) setAgentOpen(false);
+            }}
+            floating={isMobileViewport}
+            allowedInteractionModes={isMobileViewport ? ['image'] : undefined}
             draftPrompt={agentDraft}
             autoSubmitDraft={agentAutoSubmit}
             draftAttachments={agentDraftAttachments}
+            draftContexts={agentDraftContexts}
             draftModelId={agentDraftModelId}
+            draftInteractionMode={agentDraftInteractionMode}
             draftImageAspectRatio={agentDraftImageAspect}
-            draftImageQuality={agentDraftImageQuality}
-            draftImageResolution={agentDraftImageResolution}
             draftScene={agentDraftScene}
             onDraftConsumed={() => {
               clearHomeAgentBoot();
               setAgentDraft(null);
               setAgentAutoSubmit(false);
               setAgentDraftAttachments([]);
+              setAgentDraftContexts([]);
               setAgentDraftModelId(null);
+              setAgentDraftInteractionMode(null);
               setAgentDraftImageAspect(null);
-              setAgentDraftImageQuality(null);
-              setAgentDraftImageResolution(null);
               setAgentDraftScene(null);
             }}
             attachToChat={attachToChat}
             onAttachConsumed={() => setAttachToChat(null)}
             dataTour={agentOpen ? 'editor-agent' : undefined}
+            projectName={isMobileViewport ? projectName : undefined}
+            onGoHome={isMobileViewport ? () => {
+              void (async () => {
+                try { await flushCurrentProjectNow({ force: true }); } catch { /* ignore */ }
+                navigate('/home');
+              })();
+            } : undefined}
             canvasUi={{
               getZoom: () => camera.zoom,
               zoomIn: onZoomIn,
               zoomOut: onZoomOut,
               setZoom: (z) => zoomAtStageCenter(z),
-              fitView: () => zoomAtStageCenter(1),
+              fitView: onFitView,
               setLayersOpen,
               setMinimapOpen,
               getLayersOpen: () => layersOpen,
@@ -1236,12 +1901,40 @@ export default function EditorPage() {
         )}
       </div>
 
+      {isMobileViewport && layersOpen ? (
+        <>
+          <button
+            type="button"
+            aria-label={t('editor.closePanel')}
+            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
+            onClick={() => setLayersOpen(false)}
+          />
+          <div className="fixed inset-y-0 left-0 z-50">
+            <LayerPanel
+              mobile
+              onClose={() => setLayersOpen(false)}
+              onSelectNode={(nodeId) => {
+                focusLayerNode(nodeId);
+                setLayersOpen(false);
+              }}
+            />
+          </div>
+        </>
+      ) : null}
+
+      {isMobileViewport && agentOpen ? (
+        <button
+          type="button"
+          aria-label={t('agent.closePanel')}
+          className="fixed inset-0 z-40 bg-black/20"
+          onClick={() => setAgentOpen(false)}
+        />
+      ) : null}
+
       {bootOpen ? <EditorBootOverlay progress={bootProgress} exiting={bootExiting} /> : null}
       <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
       <EditorOnboardingTour
         ready={!bootOpen}
-        forceOpen={forceTour}
-        onForceOpenConsumed={() => setForceTour(false)}
         onOpenAgent={() => {
           dispatch(setWorkspaceMode('design'));
           setAgentOpen(true);

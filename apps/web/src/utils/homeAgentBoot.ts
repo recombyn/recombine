@@ -3,16 +3,19 @@ import type { ComposerContext } from '@/components/editor/panels/AgentComposerIn
 const KEY = 'recombyn-home-agent-boot';
 
 export type HomeAgentBoot = {
+  /** May be empty when only skill / context chips are handed off. */
   prompt: string;
   autoSubmit: boolean;
   modelId?: string | null;
+  /** Home Agent / Ask / Image switch. */
+  interactionMode?: 'agent' | 'ask' | 'image' | null;
   imageAspectRatio?: string | null;
-  imageQuality?: string | null;
-  imageResolution?: string | null;
-  scene?: 'website' | 'mobile' | 'image' | 'poster' | null;
+  scene?: 'website' | 'mobile' | 'image' | 'poster' | 'drawing' | null;
   stylePackId?: number | null;
   templateId?: number | null;
   promptPatternId?: number | null;
+  /** Inline composer chips (e.g. plaza 「做同款」 skill pill). */
+  contexts?: ComposerContext[];
   attachments?: Array<{
     key: string;
     label: string;
@@ -26,12 +29,54 @@ export type HomeAgentBoot = {
   }>;
 };
 
+function bootHasPayload(boot: HomeAgentBoot | null | undefined): boolean {
+  if (!boot) return false;
+  if (typeof boot.prompt === 'string' && boot.prompt.trim()) return true;
+  if (Array.isArray(boot.contexts) && boot.contexts.length > 0) return true;
+  if (Array.isArray(boot.attachments) && boot.attachments.length > 0) return true;
+  return false;
+}
+
+function writeBoot(storage: Storage, boot: HomeAgentBoot) {
+  storage.setItem(KEY, JSON.stringify(boot));
+}
+
+/** Same-tab handoff (sessionStorage — not shared across tabs). */
 export function saveHomeAgentBoot(boot: HomeAgentBoot) {
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(boot));
+    writeBoot(sessionStorage, boot);
   } catch {
     /* quota / private mode */
   }
+}
+
+/**
+ * Seed boot into another same-origin tab's sessionStorage.
+ * Used when opening editor in a new window — URL only carries flags (createNew / fromHomeAgent),
+ * never the prompt text. Caller should open about:blank, seed, then navigate.
+ */
+export function seedHomeAgentBootOnWindow(win: Window, boot: HomeAgentBoot) {
+  try {
+    writeBoot(win.sessionStorage, boot);
+  } catch {
+    /* blocked / private mode */
+  }
+}
+
+/**
+ * Open editor in a new tab and hand off boot via that tab's sessionStorage.
+ * URL keeps only markers (`createNew`, `fromHomeAgent`); payload is not in the URL / localStorage.
+ * Returns null if the popup was blocked (caller should same-tab navigate).
+ */
+export function openEditorWindowWithBoot(dest: string, boot: HomeAgentBoot): Window | null {
+  // Same-tab fallback if popup blocked.
+  saveHomeAgentBoot(boot);
+  const abs = new URL(dest, window.location.href).href;
+  const win = window.open('about:blank', '_blank');
+  if (!win) return null;
+  seedHomeAgentBootOnWindow(win, boot);
+  win.location.replace(abs);
+  return win;
 }
 
 /** Read without removing — survives /editor → /editor/:id remount races. */
@@ -40,7 +85,8 @@ export function peekHomeAgentBoot(): HomeAgentBoot | null {
     const raw = sessionStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as HomeAgentBoot;
-    if (!parsed?.prompt || typeof parsed.prompt !== 'string') return null;
+    if (!bootHasPayload(parsed)) return null;
+    if (typeof parsed.prompt !== 'string') parsed.prompt = '';
     return parsed;
   } catch {
     return null;
@@ -55,12 +101,6 @@ export function clearHomeAgentBoot() {
   }
 }
 
-export function takeHomeAgentBoot(): HomeAgentBoot | null {
-  const boot = peekHomeAgentBoot();
-  if (boot) clearHomeAgentBoot();
-  return boot;
-}
-
 export function attachmentsFromBoot(boot: HomeAgentBoot | null): ComposerContext[] {
   if (!boot?.attachments?.length) return [];
   return boot.attachments
@@ -73,5 +113,20 @@ export function attachmentsFromBoot(boot: HomeAgentBoot | null): ComposerContext
       dataUrl: a.dataUrl || a.thumbUrl,
       thumbUrl: a.thumbUrl,
       uploadKey: a.uploadKey,
+    }));
+}
+
+export function contextsFromBoot(boot: HomeAgentBoot | null): ComposerContext[] {
+  if (!boot?.contexts?.length) return [];
+  return boot.contexts
+    .filter((c) => c && typeof c.key === 'string' && c.key.trim())
+    .map((c) => ({
+      key: String(c.key),
+      label: String(c.label || '').trim() || 'Skill',
+      kind: String(c.kind || 'plaza'),
+      payload: String(c.payload || ''),
+      ...(c.dataUrl ? { dataUrl: String(c.dataUrl) } : {}),
+      ...(c.thumbUrl ? { thumbUrl: String(c.thumbUrl) } : {}),
+      ...(c.uploadKey ? { uploadKey: String(c.uploadKey) } : {}),
     }));
 }

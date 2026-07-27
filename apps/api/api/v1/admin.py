@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
+from config.settings import settings
 from services.admin.users import (
     adjust_tokens,
     ensure_super_admin_role,
@@ -26,15 +28,38 @@ from services.admin.content import (
 )
 from services.auth import SessionUser
 from services.auth.admin import is_admin_user, require_admin
-from services.plaza import approve_submission, list_admin, reject_submission, set_submission_visible
+from services.plaza import (
+    approve_submission,
+    delete_submission,
+    get_submission,
+    list_admin,
+    reject_submission,
+    set_cover_image,
+    set_submission_visible,
+    update_submission_title,
+)
 from services.plaza.store import PlazaError
 from services.wallet.card_keys import generate_card_keys, list_card_keys, revoke_card_keys
+from services.notices import (
+    delete_notice,
+    get_notice,
+    list_notices_admin,
+    upsert_notice,
+)
 from services.llm.catalog_store import (
     delete_model,
     list_admin_models,
     upsert_model,
 )
-from services.design.dict_store import list_dicts, soft_delete_dict, upsert_dict
+from services.design.dict_store import (
+    delete_dict_type,
+    hard_delete_dict,
+    list_dict_types,
+    list_dicts,
+    soft_delete_dict,
+    upsert_dict,
+    upsert_dict_type,
+)
 from services.design.knowledge_store import (
     list_knowledge,
     soft_delete_knowledge,
@@ -58,22 +83,24 @@ from services.design.library_store import (
 from services.design.content_pack import resync_design_content
 from services.design.admin_store import (
     apply_optimize_patch,
+    clear_decision_logs,
+    create_agent_flow,
+    delete_agent_flow,
     dismiss_optimize_patch,
     generate_usage_optimize_patches,
+    get_agent_flow,
+    list_agent_flows,
     list_decision_logs,
-    list_admin_skills,
     list_canvas_tools_admin,
-    list_flows,
-    list_global_rules,
     list_optimize_patches,
+    publish_agent_flow,
     skill_metrics_summary,
-    soft_delete_skill,
-    suggest_skill_optimize,
+    update_agent_flow,
     upsert_canvas_tool,
-    upsert_flow,
     upsert_global_rule,
-    upsert_skill,
+    test_run_agent_flow,
 )
+from services.design.catalog import get_global_rules
 from services.design.stage_review_store import list_stage_reviews
 
 router = APIRouter()
@@ -107,8 +134,27 @@ class AdjustTokensIn(BaseModel):
 
 class GenerateCardKeysIn(BaseModel):
     count: int = Field(default=10, ge=1, le=100)
-    tokens: int = Field(..., ge=1, le=10_000_000)
+    """credit = unified 积分 top-up; plan = membership + monthly 积分; token = legacy alias of credit."""
+    kind: str = Field(default="credit", max_length=16)
+    # Face value in 积分 (legacy million-Token faces are converted server-side).
+    tokens: int = Field(default=0, ge=0, le=50_000_000)
+    planId: str | None = Field(default=None, max_length=16)
     expiresDays: int = Field(default=365, ge=0, le=3650)
+    # Dedicated generate password (CARD_KEY_OPS_PASSWORD), not the login password.
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+def _require_card_key_ops_password(password: str) -> None:
+    """Verify the dedicated card-key generate password from env."""
+    ops = (settings.card_key_ops_password or "").strip()
+    if not ops:
+        raise HTTPException(
+            status_code=503,
+            detail="CARD_KEY_OPS_PASSWORD is not configured",
+        )
+    pw = (password or "").strip()
+    if not pw or not hmac.compare_digest(pw, ops):
+        raise HTTPException(status_code=403, detail="Generate password incorrect")
 
 
 class RevokeCardKeysIn(BaseModel):
@@ -121,6 +167,15 @@ class RejectIn(BaseModel):
 
 class PlazaVisibilityIn(BaseModel):
     visible: bool
+
+
+class PlazaCoverIn(BaseModel):
+    """Custom list-cover image URL (from /uploads). Empty string clears."""
+    url: str | None = Field(default=None, max_length=2000)
+
+
+class PlazaTitleIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
 
 
 @router.get("/me")
@@ -221,19 +276,25 @@ def admin_generate_card_keys(
     body: GenerateCardKeysIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
+    _require_card_key_ops_password(body.password)
     try:
         keys = generate_card_keys(
             count=body.count,
             tokens=body.tokens,
             expires_days=body.expiresDays,
+            kind=body.kind,
+            plan_id=body.planId,
         )
     except ValueError as err:
         detail = str(err)
         status = 503 if "CARD_KEY_SALT" in detail else 400
         raise HTTPException(status_code=status, detail=detail) from err
+    first = keys[0] if keys else {}
     return {
         "count": len(keys),
-        "tokens": body.tokens,
+        "kind": first.get("kind") or body.kind,
+        "planId": first.get("planId") or body.planId,
+        "tokens": first.get("tokens") if keys else body.tokens,
         "expiresDays": body.expiresDays,
         "keys": keys,
     }
@@ -245,6 +306,64 @@ def admin_revoke_card_keys(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     return revoke_card_keys(body.ids)
+
+
+class NoticeIn(BaseModel):
+    id: str | None = None
+    kind: Literal["announcement", "notification"] = "announcement"
+    title: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1, max_length=8000)
+    status: Literal["draft", "published"] = "draft"
+    publishedAt: float | None = None
+
+
+@router.get("/notices")
+def admin_list_notices(
+    kind: str | None = None,
+    status: str | None = None,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    return {"items": list_notices_admin(kind=kind, status=status)}
+
+
+@router.post("/notices")
+def admin_upsert_notice(
+    body: NoticeIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        item = upsert_notice(
+            notice_id=body.id,
+            kind=body.kind,
+            title=body.title,
+            body=body.body,
+            status=body.status,
+            published_at=body.publishedAt,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return {"item": item}
+
+
+@router.get("/notices/{notice_id}")
+def admin_get_notice(
+    notice_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    item = get_notice(notice_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"item": item}
+
+
+@router.delete("/notices/{notice_id}")
+def admin_delete_notice(
+    notice_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    if not delete_notice(notice_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
 
 
 @router.get("/plaza")
@@ -299,6 +418,47 @@ def admin_plaza_visibility(
     return {"item": item}
 
 
+@router.post("/plaza/{submission_id}/cover")
+def admin_plaza_cover(
+    submission_id: str,
+    body: PlazaCoverIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Upload / replace / clear custom plaza list cover (raster URL)."""
+    try:
+        item = set_cover_image(submission_id, body.url)
+    except PlazaError as err:
+        raise _plaza_http(err) from err
+    return {"item": item}
+
+
+@router.post("/plaza/{submission_id}/title")
+def admin_plaza_title(
+    submission_id: str,
+    body: PlazaTitleIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Rename plaza listing title (snapshot only; does not touch live project)."""
+    try:
+        item = update_submission_title(submission_id, body.title)
+    except PlazaError as err:
+        raise _plaza_http(err) from err
+    return {"item": item}
+
+
+@router.delete("/plaza/{submission_id}")
+def admin_plaza_delete(
+    submission_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Permanently remove a plaza submission (and its likes)."""
+    try:
+        delete_submission(submission_id)
+    except PlazaError as err:
+        raise _plaza_http(err) from err
+    return {"ok": True}
+
+
 @router.get("/plaza/feed")
 def admin_plaza_feed(
     tab: str = Query("recommended"),
@@ -324,6 +484,18 @@ def admin_plaza_published(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     return list_plaza_published(page=page, page_size=pageSize, q=q)
+
+
+@router.get("/plaza/{submission_id}")
+def admin_plaza_detail(
+    submission_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Full submission including document — for admin canvas preview."""
+    item = get_submission(submission_id, include_document=True)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"item": item}
 
 
 @router.get("/likes")
@@ -385,6 +557,10 @@ class ModelUpsertIn(BaseModel):
     id: str = Field(..., min_length=1, max_length=128)
     label: str = Field(..., min_length=1, max_length=255)
     kind: Literal["text", "image"] = "text"
+    referenceTypes: list[Literal["text", "vision", "image"]] = Field(
+        default_factory=lambda: ["text"],
+        description="Route slots this model may fill: text / vision(multimodal) / image.",
+    )
     provider: str = Field(default="doubao", max_length=64)
     apiModel: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
@@ -395,6 +571,48 @@ class ModelUpsertIn(BaseModel):
     thinking: bool = False
     enabled: bool = True
     sortOrder: int = Field(default=100, ge=0, le=100000)
+    # Doubao Seedream size contract (resolutions / pixel bounds / size tables).
+    imageLimits: dict[str, Any] | None = None
+    imageLimitPreset: str | None = Field(default=None, max_length=64)
+    priceMeta: dict[str, Any] | None = None
+
+
+@router.get("/models/image-limit-presets")
+def admin_list_image_limit_presets(
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from services.llm.catalog_store import list_image_limit_presets
+
+    return {"items": list_image_limit_presets()}
+
+
+class SyncPricesIn(BaseModel):
+    provider: Literal["openrouter", "ark"] = "openrouter"
+    onlyEmpty: bool = False
+
+
+@router.post("/models/sync-prices")
+def admin_sync_model_prices(
+    body: SyncPricesIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Pull list prices: OpenRouter live API, or curated Ark docs snapshot."""
+    try:
+        if body.provider == "openrouter":
+            from services.llm.price_sync import sync_openrouter_catalog_prices
+
+            return sync_openrouter_catalog_prices(only_empty=bool(body.onlyEmpty))
+        if body.provider == "ark":
+            from services.llm.price_sync import sync_ark_catalog_prices
+
+            return sync_ark_catalog_prices()
+        raise HTTPException(status_code=400, detail="Unsupported price sync provider")
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Price sync failed: {e}") from e
 
 
 @router.get("/models")
@@ -428,59 +646,272 @@ def admin_delete_model(
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
 
-class DesignSkillIn(BaseModel):
-    id: int | None = None
-    skillKey: str | None = Field(default=None, max_length=64)
-    name: str = Field(..., min_length=1, max_length=128)
-    category: str = Field(default="layout", max_length=32)
-    promptPositive: str = Field(default="")
-    promptNegative: str | None = None
-    sortWeight: int = Field(default=0)
-    scenes: str = Field(default="all", max_length=128)
-    defaultModel: str = Field(default="doubao", max_length=32)
-    maxRetries: int = Field(default=2, ge=0, le=10)
-    enabled: bool = True
-    outputFormat: str = Field(default="json", max_length=64)
-    allowUserModelOverride: bool = False
+class RuntimeSettingIn(BaseModel):
+    """Whitelist settings still edited from 推理集群 (not the old rules table UI)."""
+
+    key: str = Field(..., min_length=1, max_length=96)
+    value: str = Field(default="")
 
 
-class GlobalRuleIn(BaseModel):
-    ruleKey: str = Field(..., min_length=1, max_length=96)
-    ruleValue: str = Field(default="")
+class AgentFlowNodeIn(BaseModel):
+    id: str = Field(..., min_length=1, max_length=128)
+    label: str = Field(default="", max_length=128)
+    kind: str = Field(default="node", max_length=32)
+    x: float = 0
+    y: float = 0
+    capability: str = Field(default="", max_length=64)
+    phaseKey: str = Field(default="", max_length=128)
+    promptKey: str = Field(default="", max_length=128)
+    configRef: str = Field(default="", max_length=128)
+    promptText: str = Field(default="")
+    routeConfig: str = Field(default="")
+    description: str = Field(default="")
+    modelId: str = Field(default="", max_length=128)
 
 
-@router.get("/design/skills")
-def admin_design_skills(
-    q: str | None = None,
-    enabled: bool | None = None,
+class AgentFlowEdgeIn(BaseModel):
+    id: str = Field(..., min_length=1, max_length=128)
+    source: str = Field(..., min_length=1, max_length=128)
+    target: str = Field(..., min_length=1, max_length=128)
+    label: str = Field(default="", max_length=128)
+
+
+class AgentFlowGraphIn(BaseModel):
+    version: int = 1
+    nodes: list[AgentFlowNodeIn] = Field(default_factory=list)
+    edges: list[AgentFlowEdgeIn] = Field(default_factory=list)
+
+
+class AgentFlowCreateIn(BaseModel):
+    name: str = Field(default="未命名流程", max_length=128)
+    description: str = Field(default="", max_length=500)
+    copyFromId: str | None = Field(default=None, max_length=64)
+
+
+class AgentFlowUpdateIn(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    description: str | None = Field(default=None, max_length=500)
+    graph: AgentFlowGraphIn | None = None
+    phaseMap: dict[str, str] | None = None
+
+
+class AgentFlowTestRunIn(BaseModel):
+    prompt: str = Field(default="", max_length=4000)
+
+
+_RUNTIME_SETTING_KEYS = frozenset(
+    {
+        "billing.token_markup",
+        "agent.react.max_rounds",
+        "agent.react.max_reflect",
+        "precheck.model_threshold",
+        "precheck.vision_model",
+        "precheck.fallback_chain",
+        "assets.image_default_model",
+        # 前端用户档位（经济/均衡/质量）— 覆盖 AgentModelsPanel 写死 fallback
+        "precheck.user_preset.economy",
+        "precheck.user_preset.balanced",
+        "precheck.user_preset.quality",
+        # P2 Agent 增强
+        "agent.react.short_plan",
+        "agent.react.dual_sample",
+        "agent.react.defer_tools",
+        # 对外人设（Auto / 用户锁定模型）
+        "agent.persona.auto",
+        "agent.persona.locked",
+        # Agent 提示词（流程设计节点属性 → runtime settings）
+        "agent.prompt.react_system",
+        "agent.prompt.ask_system",
+        "agent.prompt.ask_blocked_edit",
+        "agent.prompt.plan_system",
+        "agent.prompt.size_auto",
+        "agent.prompt.ask_canvas_size",
+        "agent.prompt.chat_fallback",
+        "agent.prompt.unsafe_ops_ask",
+        "agent.prompt.partial_system",
+        "agent.prompt.chat_agent_system",
+        # 看图契约（流程设计 / 美学相关节点）
+        "aesthetics.prompt.vision_structure",
+        "aesthetics.vision.structure_schema",
+    }
+)
+
+
+def _is_prompt_page_key(key: str) -> bool:
+    """Keys editable as node prompt attrs in flow designer (agent prose + aesthetics)."""
+    return (
+        key.startswith("agent.prompt.")
+        or key.startswith("agent.persona.")
+        or key.startswith("aesthetics.prompt.")
+        or key == "aesthetics.vision.structure_schema"
+    )
+
+
+@router.get("/design/runtime-settings")
+def admin_design_runtime_settings(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    return {"items": list_admin_skills(q=q, enabled=enabled)}
+    from services.design.admin_store import (
+        STAGE_RULE_DEFAULTS,
+        STAGE_RULE_DESCRIPTIONS,
+        ensure_stage_rules,
+    )
+
+    ensure_stage_rules()
+    rules = get_global_rules()
+    keys = sorted(
+        _RUNTIME_SETTING_KEYS
+        | {k for k in STAGE_RULE_DEFAULTS if _is_prompt_page_key(k)}
+    )
+    items: list[dict[str, Any]] = []
+    for k in keys:
+        db_val = str(rules.get(k) or "").strip()
+        default_val = str(STAGE_RULE_DEFAULTS.get(k) or "")
+        items.append(
+            {
+                "key": k,
+                "value": db_val or default_val,
+                "description": str(STAGE_RULE_DESCRIPTIONS.get(k) or ""),
+                "using_default": bool(default_val) and not bool(db_val),
+            }
+        )
+    return {"items": items}
 
 
-@router.put("/design/skills")
-def admin_upsert_design_skill(
-    body: DesignSkillIn,
+def _is_agent_prompt_key(key: str) -> bool:
+    return _is_prompt_page_key(key)
+
+
+@router.put("/design/runtime-settings")
+def admin_upsert_design_runtime_setting(
+    body: RuntimeSettingIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
+    from services.design.admin_store import STAGE_RULE_DEFAULTS
+
+    key = (body.key or "").strip()
+    allowed = key in _RUNTIME_SETTING_KEYS or (
+        _is_prompt_page_key(key) and key in STAGE_RULE_DEFAULTS
+    )
+    if not allowed:
+        raise HTTPException(status_code=400, detail=f"unsupported setting: {key}")
     try:
-        item = upsert_skill(body.model_dump())
+        item = upsert_global_rule(rule_key=key, rule_value=body.value or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"item": {"key": item.get("ruleKey") or key, "value": item.get("ruleValue") or ""}}
+
+
+@router.get("/design/agent-flows")
+def admin_list_agent_flows(
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    return {"items": list_agent_flows()}
+
+
+@router.post("/design/agent-flows")
+def admin_create_agent_flow(
+    body: AgentFlowCreateIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    graph = None
+    phase_map = None
+    copy_id = (body.copyFromId or "").strip()
+    if copy_id:
+        src = get_agent_flow(copy_id)
+        if not src:
+            raise HTTPException(status_code=404, detail="copy source not found")
+        graph = src.get("graph")
+        phase_map = src.get("phaseMap")
+    try:
+        item = create_agent_flow(
+            name=body.name,
+            description=body.description,
+            graph=graph if isinstance(graph, dict) else None,
+            phase_map=phase_map if isinstance(phase_map, dict) else None,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"item": item}
 
 
-@router.delete("/design/skills/{skill_id}")
-def admin_delete_design_skill(
-    skill_id: int,
+@router.get("/design/agent-flows/{flow_id}")
+def admin_get_agent_flow(
+    flow_id: str,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    ok = soft_delete_skill(skill_id)
+    item = get_agent_flow(flow_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"item": item}
+
+
+@router.put("/design/agent-flows/{flow_id}")
+def admin_update_agent_flow(
+    flow_id: str,
+    body: AgentFlowUpdateIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        item = update_agent_flow(
+            flow_id,
+            name=body.name,
+            description=body.description,
+            graph=body.graph.model_dump() if body.graph is not None else None,
+            phase_map=body.phaseMap,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if msg == "flow not found":
+            raise HTTPException(status_code=404, detail=msg) from e
+        raise HTTPException(status_code=400, detail=msg) from e
+    return {"item": item}
+
+
+@router.delete("/design/agent-flows/{flow_id}")
+def admin_delete_agent_flow(
+    flow_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        ok = delete_agent_flow(flow_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
 
 
+@router.post("/design/agent-flows/{flow_id}/publish")
+def admin_publish_agent_flow(
+    flow_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Publish draft → runtime version. Live Agent executes this snapshot only."""
+    try:
+        item = publish_agent_flow(flow_id)
+    except ValueError as e:
+        msg = str(e)
+        if msg == "flow not found":
+            raise HTTPException(status_code=404, detail=msg) from e
+        raise HTTPException(status_code=400, detail=msg) from e
+    return {"item": item}
+
+
+@router.post("/design/agent-flows/{flow_id}/test-run")
+def admin_test_run_agent_flow(
+    flow_id: str,
+    body: AgentFlowTestRunIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Validate + dry-walk the agent flow graph (no LLM / no canvas side effects)."""
+    try:
+        return test_run_agent_flow(flow_id=flow_id, prompt=body.prompt)
+    except ValueError as e:
+        msg = str(e)
+        if msg == "flow not found":
+            raise HTTPException(status_code=404, detail=msg) from e
+        raise HTTPException(status_code=400, detail=msg) from e
 
 
 @router.post("/design/content/resync")
@@ -488,24 +919,8 @@ def admin_design_content_resync(
     force: bool = True,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Cleanup obsolete keys + rewire flows from DB skill_key. Does not overwrite prompts."""
+    """Cleanup obsolete keys. Does not restore Skill/Flow/Rules UI."""
     return resync_design_content(force=force)
-
-@router.get("/design/rules")
-def admin_design_rules(_admin: SessionUser = Depends(require_admin)) -> dict[str, Any]:
-    return {"items": list_global_rules()}
-
-
-@router.put("/design/rules")
-def admin_upsert_design_rule(
-    body: GlobalRuleIn,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    try:
-        item = upsert_global_rule(rule_key=body.ruleKey, rule_value=body.ruleValue)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"item": item}
 
 
 class CanvasToolIn(BaseModel):
@@ -557,42 +972,48 @@ def admin_upsert_design_canvas_tool(
     return {"item": item}
 
 
-@router.get("/design/flows")
-def admin_design_flows(_admin: SessionUser = Depends(require_admin)) -> dict[str, Any]:
-    return {"items": list_flows()}
-
-
-class DesignFlowBody(BaseModel):
-    scene: str
-    skillIds: list[int] = Field(default_factory=list)
-    failStrategy: str | None = None
-    enabled: bool | None = True
-    forceValidateFlags: list[Any] | None = None
-    stepTokenCaps: list[Any] | None = None
-
-
-@router.put("/design/flows")
-def admin_design_flows_upsert(
-    body: DesignFlowBody,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    try:
-        item = upsert_flow(
-            scene=body.scene,
-            skill_ids=list(body.skillIds or []),
-            fail_strategy=body.failStrategy,
-            enabled=body.enabled,
-            force_validate_flags=body.forceValidateFlags,
-            step_token_caps=body.stepTokenCaps,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"item": item}
-
-
 @router.get("/design/metrics")
 def admin_design_metrics(_admin: SessionUser = Depends(require_admin)) -> dict[str, Any]:
     return skill_metrics_summary()
+
+
+@router.get("/model-usage/summary")
+def admin_model_usage_summary(
+    fromTs: float | None = Query(default=None),
+    toTs: float | None = Query(default=None),
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from services.llm.usage_log import summarize_model_usage
+
+    return summarize_model_usage(ts_from=fromTs, ts_to=toTs)
+
+
+@router.get("/model-usage")
+def admin_model_usage_list(
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=50, ge=1, le=200),
+    source: str | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    userId: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    fromTs: float | None = Query(default=None),
+    toTs: float | None = Query(default=None),
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from services.llm.usage_log import list_model_usage
+
+    return list_model_usage(
+        page=page,
+        page_size=pageSize,
+        source=source,
+        provider=provider,
+        model=model,
+        user_id=userId,
+        status=status,
+        ts_from=fromTs,
+        ts_to=toTs,
+    )
 
 
 @router.get("/design/decision-logs")
@@ -615,6 +1036,14 @@ def admin_design_decision_logs(
     )
 
 
+@router.post("/design/decision-logs/clear")
+def admin_design_decision_logs_clear(
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Wipe persisted decision_log / execution_log (fresh LangGraph 运行复盘)."""
+    return clear_decision_logs()
+
+
 @router.get("/design/stage-reviews")
 def admin_design_stage_reviews(
     page: int = Query(default=1, ge=1),
@@ -632,23 +1061,6 @@ def admin_design_stage_reviews(
         min_rating=minRating,
         max_rating=maxRating,
     )
-
-
-class DesignOptimizeIn(BaseModel):
-    skillId: int = Field(..., ge=1)
-
-
-@router.post("/design/optimize/suggest")
-def admin_design_optimize_suggest(
-    body: DesignOptimizeIn,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    """Return a suggestion only — never mutates Skill config."""
-    try:
-        return suggest_skill_optimize(int(body.skillId))
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-
 
 
 @router.get("/design/optimize/patches")
@@ -699,6 +1111,45 @@ class DesignDictIn(BaseModel):
     enabled: bool = True
 
 
+class DesignDictTypeIn(BaseModel):
+    id: int | None = None
+    code: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=128)
+    sortOrder: int = 0
+    enabled: bool = True
+
+
+@router.get("/design/dict-types")
+def admin_design_dict_types(
+    enabled: bool | None = Query(default=None),
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    return {"items": list_dict_types(enabled=enabled)}
+
+
+@router.put("/design/dict-types")
+def admin_upsert_design_dict_type(
+    body: DesignDictTypeIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        item = upsert_dict_type(body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"item": item}
+
+
+@router.delete("/design/dict-types/{type_id}")
+def admin_delete_design_dict_type(
+    type_id: int,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    ok = delete_dict_type(type_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
 @router.get("/design/dicts")
 def admin_design_dicts(
     dictType: str | None = None,
@@ -723,9 +1174,10 @@ def admin_upsert_design_dict(
 @router.delete("/design/dicts/{item_id}")
 def admin_delete_design_dict(
     item_id: int,
+    hard: bool = Query(default=False),
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    ok = soft_delete_dict(item_id)
+    ok = hard_delete_dict(item_id) if hard else soft_delete_dict(item_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
@@ -775,6 +1227,32 @@ def admin_delete_design_knowledge(
     return {"ok": True}
 
 
+@router.get("/design/kg-triples")
+def admin_list_kg_triples(
+    userId: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Inspect agent_kg_triple SPO rows (P3 knowledge graph)."""
+    from services.agent_memory.kg import list_triples_admin
+
+    return list_triples_admin(user_id=userId, limit=limit, offset=offset)
+
+
+@router.delete("/design/kg-triples/{triple_id}")
+def admin_delete_kg_triple(
+    triple_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from services.agent_memory.kg import soft_delete_triple
+
+    ok = soft_delete_triple(triple_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
 class QualitySampleIn(BaseModel):
     id: int | None = None
     name: str = Field(default="", max_length=128)
@@ -786,6 +1264,8 @@ class QualitySampleIn(BaseModel):
     originPath: str | None = Field(default=None, max_length=512)
     enabled: bool = True
     meta: dict[str, Any] | None = None
+    # Default true: Host extracts DESIGN_TOKENS into meta on save; Admin meta wins.
+    extractTokens: bool = True
 
 
 class SuggestSampleMetaIn(BaseModel):
@@ -793,6 +1273,16 @@ class SuggestSampleMetaIn(BaseModel):
     model: str | None = Field(default=None, max_length=128)
     scene: str | None = Field(default=None, max_length=32)
     grade: str | None = Field(default=None, max_length=16)
+
+
+class ExtractSampleTokensIn(BaseModel):
+    imageUrl: str = Field(..., min_length=1, max_length=5_000_000)
+    name: str = Field(default="", max_length=128)
+    grade: str = Field(default="good", max_length=16)
+    tags: str = Field(default="", max_length=512)
+    comment: str = Field(default="")
+    canvasW: int = Field(default=0, ge=0, le=8192)
+    canvasH: int = Field(default=0, ge=0, le=8192)
 
 
 @router.post("/design/quality-samples/suggest-meta")
@@ -814,6 +1304,31 @@ async def admin_suggest_sample_meta(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)[:800]) from e
+
+
+@router.post("/design/quality-samples/extract-tokens")
+def admin_extract_sample_tokens(
+    body: ExtractSampleTokensIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Host PIL extract → DESIGN_TOKENS meta (preview / fill Admin form; no DB write)."""
+    from services.design.aesthetics.token_extract import extract_design_tokens_meta
+
+    try:
+        meta = extract_design_tokens_meta(
+            image_url=body.imageUrl,
+            name=body.name,
+            grade=body.grade,
+            tags=body.tags,
+            comment=body.comment,
+            canvas_w=body.canvasW,
+            canvas_h=body.canvasH,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)[:800]) from e
+    return {"meta": meta}
 
 
 @router.get("/design/quality-samples")
