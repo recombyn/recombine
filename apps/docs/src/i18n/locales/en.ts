@@ -1,0 +1,38 @@
+const en = {
+  brandDocs: 'Docs',
+  navHome: 'Home',
+  navDocs: 'Docs',
+  navAria: 'Site navigation',
+  openMenu: 'Open menu',
+  startCreating: 'Start creating',
+  sidebarAria: 'Documentation',
+  langLabel: 'Language',
+  docTitleSuffix: 'recombyn Docs',
+  legalNavAria: 'Legal',
+  legalTagline: 'Editable design through conversation',
+  groups: {
+    guide: 'Guides',
+    features: 'Features',
+    faq: 'FAQ',
+  },
+  pages: {
+    'getting-started': 'Getting started',
+    canvas: 'Canvas & tools',
+    shortcuts: 'Keyboard shortcuts',
+    agent: 'Using Agent',
+    'image-generation': 'Image generation',
+    'image-tools': 'Image editing tools',
+    account: 'Account & credits',
+    overview: 'Feature overview',
+    plaza: 'Plaza & inspiration',
+    import: 'Import files',
+    'export-share': 'Export & share',
+    faq: 'FAQ',
+    terms: 'Terms of Service',
+    privacy: 'Privacy Policy',
+    'ai-terms': 'AI terms',
+    about: 'About',
+  },
+}
+
+export default en

@@ -1,0 +1,29 @@
+# Features overview
+
+## Canvas workspace
+
+Infinite canvas, multi artboards, vector / bitmap mix; select, shapes, pen, brush (eraser), bucket, text, upload, image generator. Layers manage frames and nodes (visibility, lock, order); multi-select align / distribute. See [Canvas & tools](/guide/canvas).
+
+## Three chat modes
+
+**Agent** / **Ask** / **Image**, with checkpoints and history restore. Auto: Standard / Pro / Max / Custom lanes; members can add third-party models. See [Using Agent](/guide/agent).
+
+## Image generation & edit
+
+Generator (**A**) or Agent Image mode; 1K–4K, ratios, 1–4 images. Edit: Chat, remove bg, upscale, eraser, expand, crop, adjust, multi-angle, variants. See [Image generation](/guide/image-generation) and [Image tools](/guide/image-tools).
+
+## Import
+
+Images / PDF / Word → editable canvas. See [Import](/features/import).
+
+## Plaza
+
+Official / community cases; submit for review. See [Plaza](/features/plaza).
+
+## Sync & account
+
+Cloud sync when signed in; Ctrl + S to save. Plans, credits, billing, card keys, notices, Agent prefs: [Account & credits](/guide/account).
+
+## Export & share
+
+Common image formats (scale, all pages); view or edit links; invite collaborators. See [Export & share](/features/export-share).

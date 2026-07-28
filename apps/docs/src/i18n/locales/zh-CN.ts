@@ -1,0 +1,38 @@
+const zhCN = {
+  brandDocs: 'Docs',
+  navHome: '首页',
+  navDocs: '文档',
+  navAria: '站点导航',
+  openMenu: '打开菜单',
+  startCreating: '开始创作',
+  sidebarAria: '文档目录',
+  langLabel: '语言',
+  docTitleSuffix: 'recombyn 文档',
+  legalNavAria: '法律文档',
+  legalTagline: '用对话做出可编辑的设计',
+  groups: {
+    guide: '使用指南',
+    features: '产品功能',
+    faq: '常见问题',
+  },
+  pages: {
+    'getting-started': '快速入门',
+    canvas: '画布与工具',
+    shortcuts: '快捷键',
+    agent: 'Agent 用法',
+    'image-generation': '图片生成',
+    'image-tools': '图片编辑工具',
+    account: '账户与积分',
+    overview: '功能概览',
+    plaza: '广场与灵感',
+    import: '导入文件',
+    'export-share': '导出与分享',
+    faq: 'FAQ',
+    terms: '服务条款',
+    privacy: '隐私政策',
+    'ai-terms': 'AI 说明',
+    about: '关于',
+  },
+}
+
+export default zhCN

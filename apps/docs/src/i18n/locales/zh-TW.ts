@@ -1,0 +1,38 @@
+const zhTW = {
+  brandDocs: 'Docs',
+  navHome: '首頁',
+  navDocs: '文件',
+  navAria: '站點導覽',
+  openMenu: '開啟選單',
+  startCreating: '開始創作',
+  sidebarAria: '文件目錄',
+  langLabel: '語言',
+  docTitleSuffix: 'recombyn 文件',
+  legalNavAria: '法律文件',
+  legalTagline: '用對話做出可編輯的設計',
+  groups: {
+    guide: '使用指南',
+    features: '產品功能',
+    faq: '常見問題',
+  },
+  pages: {
+    'getting-started': '快速入門',
+    canvas: '畫布與工具',
+    shortcuts: '快捷鍵',
+    agent: 'Agent 用法',
+    'image-generation': '圖片生成',
+    'image-tools': '圖片編輯工具',
+    account: '帳戶與積分',
+    overview: '功能概覽',
+    plaza: '廣場與靈感',
+    import: '匯入檔案',
+    'export-share': '匯出與分享',
+    faq: 'FAQ',
+    terms: '服務條款',
+    privacy: '隱私權政策',
+    'ai-terms': 'AI 說明',
+    about: '關於',
+  },
+}
+
+export default zhTW
