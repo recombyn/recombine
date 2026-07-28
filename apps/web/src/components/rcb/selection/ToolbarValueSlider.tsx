@@ -12,6 +12,10 @@ export const SEL_ICON_BTN_ACTIVE = 'bg-[var(--accent-soft)]';
 export const SEL_TOOL_BTN =
   'inline-flex h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-[4px] px-2 text-[12px] text-[var(--ink)] transition-colors hover:bg-[var(--accent-soft)] disabled:opacity-40';
 
+/** W/H number fields — centered digits; focus = bottom underline only (no layout shift / side borders). */
+export const SEL_SIZE_INPUT =
+  'w-11 border-0 bg-transparent text-center text-[12px] tabular-nums outline-none ring-0 shadow-[inset_0_-1px_0_0_transparent] focus:border-0 focus:outline-none focus:ring-0 focus:shadow-[inset_0_-1px_0_0_var(--ink)]';
+
 type Props = {
   /** Shown before the number, e.g. "R" */
   prefix?: string;

@@ -1336,9 +1336,9 @@ const zhCN = {
     providerNamePh: '例如 DMXAPI',
     providerWebsite: '官网链接',
     providerModelKind: '模型类型',
-    providerModelKindText: '文本',
+    providerModelKindText: '对话',
     providerModelKindVision: '多模态',
-    providerModelKindHint: '文本用于对话改稿；多模态可看图。生图请用平台模型（消耗平台积分）。',
+    providerModelKindHint: '对话用于聊天改稿；多模态可看图。生图请用平台模型（消耗平台积分）。',
     providerModelKindRequired: '请选择模型类型',
     providerApiKeyPh: '只需要填这里，下方配置会自动填充',
     providerApiKeyHint:

@@ -18,11 +18,14 @@ type HtmlArtboardFrameProps = {
   hideTitle?: boolean;
   /** body under world canvas; label above so it stays clickable */
   layer?: 'body' | 'label';
+  /** Unified stack z-index (interleaves with shapes). */
+  zIndex?: number;
 };
 
 /**
  * Frame chrome only. Draw/select content lives on the world SvgCanvas.
- * Render `body` under the canvas and `label` above it (label uses screen overlay).
+ * Body z-index comes from document.stackOrder (interleaves with shapes).
+ * Label stays above via screen overlay.
  * Double-click the name to rename.
  */
 export default function HtmlArtboardFrame({
@@ -34,6 +37,7 @@ export default function HtmlArtboardFrame({
   onMoveEnd,
   hideTitle = false,
   layer = 'body',
+  zIndex = 0,
 }: HtmlArtboardFrameProps): ReactNode {
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
@@ -125,12 +129,13 @@ export default function HtmlArtboardFrame({
   return (
     <>
       <div
-        className="pointer-events-none absolute z-[0] overflow-hidden"
+        className="pointer-events-none absolute overflow-hidden"
         style={{
           left: frame.x,
           top: frame.y,
           width: frame.width,
           height: frame.height,
+          zIndex,
           // While generating, screen-space shimmer covers the plate; keep a neutral fill underneath.
           backgroundColor: generating ? '#e4ecf4' : bg,
         }}

@@ -1,0 +1,29 @@
+{
+  "stageItems": {
+    "prepare": "准备任务与上下文",
+    "scene": "确定场景与画布",
+    "prompt": "组装设计提示",
+    "model_wait": "等待模型规划",
+    "model_stream": "模型输出方案",
+    "lookup": "检索 skill / 规则 / 知识 / 美学",
+    "validate": "校验工具操作",
+    "ops": "画到画布上",
+    "scene_check": "回读画布状态",
+    "critic": "目标检查",
+    "refine": "根据检查结果调整",
+    "done": "完成"
+  },
+  "eventStage": {
+    "decision": "prepare",
+    "skill_start": "model_wait",
+    "skill_progress": "model_stream",
+    "thinking": "model_stream",
+    "token": "model_stream",
+    "tool_ops": "ops",
+    "svg_delta": "ops",
+    "drawing": "ops",
+    "scene_feedback_request": "scene_check",
+    "result": "done",
+    "chat_done": "done"
+  }
+}

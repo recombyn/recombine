@@ -26,15 +26,9 @@ def test_user_refs_skip_good_ok_corpus():
         assert limit <= 96
         return list(fake_bad)
 
-    with (
-        patch(
-            "services.design.aesthetics.scorer.list_ready_embeddings",
-            side_effect=_list,
-        ),
-        patch(
-            "services.design.aesthetics.token_extract.build_aesthetic_token_guidance",
-            return_value=("TOKENS", []),
-        ),
+    with patch(
+        "services.design.aesthetics.scorer.list_ready_embeddings",
+        side_effect=_list,
     ):
         out = retrieve_aesthetic_refs(
             prompt="做登录页",
@@ -49,7 +43,10 @@ def test_user_refs_skip_good_ok_corpus():
     assert out["imageUrls"] == []  # no corpus images when user attach
     assert out["userRefCount"] == 1
     assert out["badRefs"]
-    assert "TOKENS" in (out.get("guidance") or "")
+    guidance = out.get("guidance") or ""
+    assert "AESTHETIC_DESIGN_TOKENS" not in guidance
+    assert "看图" in guidance or "用户附件" in guidance
+    assert "crowded" not in guidance  # 短评不再注入
 
 
 def test_user_refs_false_uses_corpus_even_with_urls():

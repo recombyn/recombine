@@ -60,6 +60,8 @@ export interface SelectProps {
   optionRender?: (option: SelectOption, selected: boolean) => React.ReactNode;
   getPopupContainer?: () => HTMLElement;
   placement?: Placement;
+  /** Portal popup z-index; default above Headless dialogs (z-[8900]/[9000]). */
+  floatingClassName?: string;
 }
 
 const Select = forwardRef<HTMLDivElement, SelectProps>(
@@ -78,6 +80,7 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
       optionRender,
       getPopupContainer,
       placement = 'bottom-start',
+      floatingClassName,
     },
     ref
   ) => {
@@ -118,9 +121,9 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
       return option.label;
     };
 
-    const defaultOptionRender = (option: SelectOption, selected: boolean) => {
+    const defaultOptionRender = (option: SelectOption, _selected: boolean) => {
       return (
-        <div className={cn('flex items-center', selected && 'font-medium')}>
+        <div className="flex items-center text-[var(--ink)]">
           {option.label}
         </div>
       );
@@ -159,7 +162,7 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
             }
           }}
           className={cn(
-            'w-full appearance-none outline-none relative cursor-pointer flex items-center',
+            'w-full appearance-none outline-none relative cursor-pointer flex items-center select-none',
             'bg-[var(--color-background-default-secondary)] text-[var(--color-text-default-base)]',
             selectVariants({ size, type }),
             selectTypeValue === 'outlined' && 'border-[0.5px] border-[var(--color-border-default-base)] rounded',
@@ -200,7 +203,7 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
               visibility: open ? 'visible' : 'hidden',
               pointerEvents: open ? 'auto' : 'none',
             }}
-            className='z-[560]'
+            className={cn('z-[9500]', floatingClassName)}
             {...getFloatingProps()}
           >
             <div
@@ -229,10 +232,10 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
                     key={option.value}
                     onClick={() => handleOptionClick(option)}
                     className={cn(
-                      'relative cursor-pointer select-none py-2 px-4 rounded',
-                      'hover:bg-background-default-secondary',
-                      selected && 'bg-background-default-secondary',
-                      option.disabled && 'opacity-50 cursor-not-allowed'
+                      'relative cursor-pointer select-none rounded px-4 py-2 transition-colors',
+                      'hover:bg-[var(--accent-soft)]',
+                      selected && 'bg-[var(--accent-soft)] font-medium',
+                      option.disabled && 'cursor-not-allowed opacity-50'
                     )}
                   >
                     {optionRender

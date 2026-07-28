@@ -135,18 +135,34 @@ export type PaginatedPlazaFeed = {
   tab?: PlazaFeedTab;
 };
 
+const PLAZA_FEED_TTL_MS = 90_000;
+const _plazaFeedCache = new Map<string, { at: number; data: PaginatedPlazaFeed }>();
+
 export const fetchPlazaFeed = (params: {
   page: number;
   pageSize: number;
   tab: PlazaFeedTab;
   category?: string;
   authorIds?: string;
-}) =>
-  request<PaginatedPlazaFeed>({
+}) => {
+  const key = JSON.stringify(params);
+  const hit = _plazaFeedCache.get(key);
+  if (hit && Date.now() - hit.at < PLAZA_FEED_TTL_MS) {
+    return Promise.resolve(hit.data);
+  }
+  return request<PaginatedPlazaFeed>({
     url: '/api/v1/plaza/feed',
     method: 'get',
     params,
+  }).then((data) => {
+    _plazaFeedCache.set(key, { at: Date.now(), data });
+    return data;
   });
+};
+
+export function invalidatePlazaFeedCache() {
+  _plazaFeedCache.clear();
+}
 
 export const fetchPlazaItem = (id: string) =>
   request<{ item: PlazaSubmissionDto }>({

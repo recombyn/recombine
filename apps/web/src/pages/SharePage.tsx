@@ -22,6 +22,7 @@ import {
 } from '@/components/rcb';
 import SvgCanvas from '@/components/editor/canvas/svg/SvgCanvas';
 import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
+import { stackZIndex } from '@/components/rcb/scene/sceneDocument';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
 import { Dropdown, Tooltip } from '@/components/base';
@@ -314,15 +315,18 @@ export default function SharePage() {
             stageRef={stageRef}
             defs={<RcbSvgDefs />}
           >
-            {frames.map((frame) => (
+            {frames.map((frame) =>
+              frame.hidden ? null : (
               <HtmlArtboardFrame
                 key={`body-${frame.id}`}
                 frame={frame}
+                zIndex={stackZIndex(document, 'frame', frame.id)}
                 selected={false}
                 layer="body"
                 hideTitle
               />
-            ))}
+              )
+            )}
 
             <SvgCanvas
               document={{
@@ -344,7 +348,8 @@ export default function SharePage() {
               stageEl={stageEl}
             />
 
-            {frames.map((frame) => (
+            {frames.map((frame) =>
+              frame.hidden ? null : (
               <HtmlArtboardFrame
                 key={`label-${frame.id}`}
                 frame={frame}
@@ -352,7 +357,8 @@ export default function SharePage() {
                 layer="label"
                 hideTitle
               />
-            ))}
+              )
+            )}
           </RcbCanvas>
 
           {/* Preview HUD — zoom / minimap (edit tools live on EditorPage) */}

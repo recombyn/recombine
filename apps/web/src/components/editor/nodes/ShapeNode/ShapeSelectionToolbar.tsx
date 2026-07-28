@@ -15,6 +15,7 @@ import { boolEffectAttr } from '@/components/rcb/scene/sceneEffects';
 import { openShapeStylePanel, patchDocumentNode } from '@/store/modules/editor';
 import ToolbarValueSlider, {
   SEL_ICON_BTN,
+  SEL_SIZE_INPUT,
   SEL_TOOL_BTN,
 } from '@/components/rcb/selection/ToolbarValueSlider';
 import {
@@ -146,8 +147,12 @@ export default function ShapeSelectionToolbar({
   };
 
   const setSize = (axis: 'w' | 'h', raw: string) => {
-    const n = Math.max(1, Math.round(Number(raw) || 0));
-    if (!Number.isFinite(n)) return;
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return;
+    const n = Math.round(Number(trimmed));
+    if (!Number.isFinite(n) || n < 1) return;
+    if (axis === 'w' && n === Math.round(box.width)) return;
+    if (axis === 'h' && n === Math.round(box.height)) return;
     if (aspectLocked) {
       const ratio = box.width / Math.max(1, box.height);
       if (axis === 'w') patchSize(n, Math.max(1, Math.round(n / ratio)));
@@ -295,9 +300,10 @@ export default function ShapeSelectionToolbar({
       <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
         <span className="text-[var(--muted)]">W</span>
         <input
-          className="w-10 bg-transparent text-[12px] outline-none tabular-nums"
+          className={SEL_SIZE_INPUT}
           defaultValue={Math.round(box.width)}
           key={`w-${Math.round(box.width)}`}
+          onPointerDown={(e) => e.stopPropagation()}
           onBlur={(e) => setSize('w', e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') setSize('w', (e.target as HTMLInputElement).value);
@@ -338,9 +344,10 @@ export default function ShapeSelectionToolbar({
       <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
         <span className="text-[var(--muted)]">H</span>
         <input
-          className="w-10 bg-transparent text-[12px] outline-none tabular-nums"
+          className={SEL_SIZE_INPUT}
           defaultValue={Math.round(box.height)}
           key={`h-${Math.round(box.height)}`}
+          onPointerDown={(e) => e.stopPropagation()}
           onBlur={(e) => setSize('h', e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') setSize('h', (e.target as HTMLInputElement).value);

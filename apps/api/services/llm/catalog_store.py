@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import time
 from typing import Any
 
@@ -13,469 +14,44 @@ from services.db import connect, init_schema
 # - image: image-gen slot only
 REFERENCE_TYPES = ('text', 'vision', 'image')
 
-# Official Ark Image Gen API size contracts (docs/82379/1541523).
-# IMAGE_LIMIT_PRESETS = seed / admin fill templates only.
-# Runtime reads each model's own catalog image_limits (full JSON).
-_SEEDREAM_2K_LITE = {
-    '1:1': '2048x2048',
-    '4:3': '2304x1728',
-    '3:4': '1728x2304',
-    '16:9': '2848x1600',
-    '9:16': '1600x2848',
-    '3:2': '2496x1664',
-    '2:3': '1664x2496',
-    '21:9': '3136x1344',
-}
-_SEEDREAM_4K = {
-    '1:1': '4096x4096',
-    '4:3': '4704x3520',
-    '3:4': '3520x4704',
-    '16:9': '5504x3040',
-    '9:16': '3040x5504',
-    '3:2': '4992x3328',
-    '2:3': '3328x4992',
-    '21:9': '6240x2656',
-}
+_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_SEED_PATH = _DATA_DIR / "llm_models_seed.json"
 
-IMAGE_LIMIT_PRESETS: dict[str, dict[str, Any]] = {
-    # Seedream 5.0 pro — 1K/2K; WxH max ≈ 2048²×1.1025
-    'seedream_5_pro': {
-        'transport': 'doubao',
-        'min_pixels': 1280 * 720,
-        'max_pixels': int(2048 * 2048 * 1.1025),
-        'resolutions': ['1K', '2K'],
-        'default_resolution': '2K',
-        'supports_output_format': True,
-        'size_tables': {
-            '1K': {
-                '1:1': '1024x1024',
-                '4:3': '1152x864',
-                '3:4': '864x1152',
-                '16:9': '1424x800',
-                '9:16': '800x1424',
-                '3:2': '1248x832',
-                '2:3': '832x1248',
-                '21:9': '1568x672',
-            },
-            '2K': {
-                '1:1': '2048x2048',
-                '4:3': '2368x1776',
-                '3:4': '1776x2368',
-                '16:9': '2816x1584',
-                '9:16': '1584x2816',
-                '3:2': '2496x1664',
-                '2:3': '1664x2496',
-                '21:9': '3136x1344',
-            },
-        },
-    },
-    # Seedream 5.0 lite — 2K/3K/4K; min 2560×1440
-    'seedream_5_lite': {
-        'transport': 'doubao',
-        'min_pixels': 2560 * 1440,
-        'max_pixels': 4096 * 4096,
-        'resolutions': ['2K', '3K', '4K'],
-        'default_resolution': '2K',
-        'supports_output_format': True,
-        'size_tables': {
-            '2K': dict(_SEEDREAM_2K_LITE),
-            '3K': {
-                '1:1': '3072x3072',
-                '4:3': '3456x2592',
-                '3:4': '2592x3456',
-                '16:9': '4096x2304',
-                '9:16': '2304x4096',
-                '3:2': '3744x2496',
-                '2:3': '2496x3744',
-                '21:9': '4704x2016',
-            },
-            '4K': dict(_SEEDREAM_4K),
-        },
-    },
-    # Seedream 4.5 — 2K/4K; same pixel floor as lite
-    'seedream_4_5': {
-        'transport': 'doubao',
-        'min_pixels': 2560 * 1440,
-        'max_pixels': 4096 * 4096,
-        'resolutions': ['2K', '4K'],
-        'default_resolution': '2K',
-        'supports_output_format': False,
-        'size_tables': {
-            '2K': dict(_SEEDREAM_2K_LITE),
-            '4K': dict(_SEEDREAM_4K),
-        },
-    },
-    # Seedream 4.0 — 1K/2K/4K; min 1280×720
-    'seedream_4_0': {
-        'transport': 'doubao',
-        'min_pixels': 1280 * 720,
-        'max_pixels': 4096 * 4096,
-        'resolutions': ['1K', '2K', '4K'],
-        'default_resolution': '2K',
-        'supports_output_format': False,
-        'size_tables': {
-            '1K': {
-                '1:1': '1024x1024',
-                '4:3': '1152x864',
-                '3:4': '864x1152',
-                '16:9': '1280x720',
-                '9:16': '720x1280',
-                '3:2': '1248x832',
-                '2:3': '832x1248',
-                '21:9': '1512x648',
-            },
-            '2K': dict(_SEEDREAM_2K_LITE),
-            '4K': dict(_SEEDREAM_4K),
-        },
-    },
-    # OpenRouter Images API — resolution + aspect_ratio (no WxH pixel floor).
-    # Docs: https://openrouter.ai/docs (Image Generation / supported_parameters).
-    'openrouter_image': {
-        'transport': 'openrouter',
-        'resolutions': ['512', '1K', '2K', '4K'],
-        'default_resolution': '2K',
-        'aspect_ratios': [
-            '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3',
-            '4:5', '5:4', '1:2', '2:1', '21:9', '9:21', 'auto',
-        ],
-        'supports_quality': True,
-        'supports_output_format': True,
-    },
-    # Gemini Nano Banana via OpenRouter chat/completions + modalities.
-    'openrouter_gemini_image': {
-        'transport': 'openrouter_chat',
-        'resolutions': ['1K', '2K', '4K'],
-        'default_resolution': '2K',
-        'aspect_ratios': [
-            '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', 'auto',
-        ],
-        'supports_quality': False,
-        'supports_output_format': False,
-    },
-    # OpenAI GPT Image family via OpenRouter /images.
-    'openrouter_gpt_image': {
-        'transport': 'openrouter',
-        'resolutions': ['1K', '2K', '4K'],
-        'default_resolution': '2K',
-        'aspect_ratios': [
-            '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', 'auto',
-        ],
-        'supports_quality': True,
-        'supports_output_format': True,
-    },
-}
 
-_SEED = [
-    {
-        'id': 'deepseek-v4-flash',
-        'label': 'DeepSeek V4 Flash',
-        'description': '对话与画布 Agent，可用工具直接改画布',
-        'provider': 'doubao',
-        'kind': 'text',
-        'reference_types': ['text'],
-        'api_model': 'deepseek-v4-flash-260425',
-        'icon_key': 'deepseek',
-        # Ark docs 1544106：输入 1 / 输出 2 元/百万token
-        'price': '1',
-        'max_attachments': 8,
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 10,
-    },
-    {
-        'id': 'deepseek-v4-pro',
-        'label': 'DeepSeek V4 Pro',
-        'description': '更强推理与复杂 Agent 任务（方舟 DeepSeek V4 Pro）',
-        'provider': 'doubao',
-        'kind': 'text',
-        'reference_types': ['text'],
-        'api_model': 'deepseek-v4-pro-260425',
-        'icon_key': 'deepseek',
-        # Ark：输入 12 / 输出 24
-        'price': '12',
-        'max_attachments': 8,
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 11,
-    },
-    {
-        'id': 'doubao-seed-2-0-mini',
-        'label': 'Seed 2.0 Mini',
-        'description': '对话模型，适合文案、排版与创意协作（不支持看图）',
-        'provider': 'doubao',
-        'kind': 'text',
-        'reference_types': ['text'],
-        'api_model': 'doubao-seed-2-0-mini-260428',
-        'icon_key': 'doubao',
-        # Ark：输入 [0,32] 档 0.2 / 输出 2.0
-        'price': '0.2',
-        'max_attachments': 8,
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 20,
-    },
-    {
-        'id': 'doubao-seed-2-1-pro',
-        'label': 'Seed 2.1 Pro',
-        'description': '多模态对话（支持看图）；美学参考 / 用户附图时优先',
-        'provider': 'doubao',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'doubao-seed-2-1-pro-260628',
-        'icon_key': 'doubao',
-        # Ark：输入 6 / 输出 30
-        'price': '6',
-        'max_attachments': 16,
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 15,
-    },
-    {
-        'id': 'doubao-seed-2-1-turbo',
-        'label': 'Seed 2.1 Turbo',
-        'description': '多模态对话（支持看图）；更快更省，适合附图轻量步骤',
-        'provider': 'doubao',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'doubao-seed-2-1-turbo-260628',
-        'icon_key': 'doubao',
-        # Ark：输入 3 / 输出 15
-        'price': '3',
-        'max_attachments': 16,
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 16,
-    },
-    {
-        'id': 'doubao-seedream-5-0-pro',
-        'label': 'Seedream 5.0 Pro',
-        'description': (
-            '旗舰画质与细节：成片级配图、精细编辑；'
-            '≤236万像素 ¥0.30/张，更高像素 ¥0.60/张'
-        ),
-        'provider': 'doubao',
-        'kind': 'image',
-        'reference_types': ['image'],
-        'api_model': 'doubao-seedream-5-0-pro-260628',
-        'icon_key': 'doubao',
-        # Ark：输出 ≤236万像素 0.30；>236万 0.60（目录取常用档）
-        'price': '0.30',
-        # Docs: Seedream 5.0 pro ≤ 10 refs
-        'max_attachments': 10,
-        'image_limit_preset': 'seedream_5_pro',
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 110,
-    },
-    {
-        'id': 'doubao-seedream-5-0-lite',
-        'label': 'Seedream 5.0 Lite',
-        'description': '更快更省的 5.0 轻量版：草稿、快速试错与日常配图（¥0.22/张）',
-        'provider': 'doubao',
-        'kind': 'image',
-        'reference_types': ['image'],
-        'api_model': 'doubao-seedream-5-0-260128',
-        'icon_key': 'doubao',
-        'price': '0.22',
-        'max_attachments': 14,
-        'image_limit_preset': 'seedream_5_lite',
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 120,
-    },
-    {
-        'id': 'doubao-seedream-4-5',
-        'label': 'Seedream 4.5',
-        'description': '画质与速度均衡：通用文生图 / 图生图，适合多数创作场景（¥0.25/张）',
-        'provider': 'doubao',
-        'kind': 'image',
-        'reference_types': ['image'],
-        'api_model': 'doubao-seedream-4-5-251128',
-        'icon_key': 'doubao',
-        'price': '0.25',
-        'max_attachments': 14,
-        'image_limit_preset': 'seedream_4_5',
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 130,
-    },
-    {
-        'id': 'doubao-seedream-4-0',
-        'label': 'Seedream 4.0',
-        'description': '低成本稳定出图：批量生成与日常配图首选（¥0.20/张）',
-        'provider': 'doubao',
-        'kind': 'image',
-        'reference_types': ['image'],
-        'api_model': 'doubao-seedream-4-0-250828',
-        'icon_key': 'doubao',
-        'price': '0.20',
-        'max_attachments': 14,
-        'image_limit_preset': 'seedream_4_0',
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 140,
-    },
-    # —— OpenRouter (chat / vision / image) ——
-    {
-        'id': 'or-nano-banana-pro',
-        'label': 'Nano Banana Pro',
-        'description': (
-            'Google Gemini 3 Pro Image：专业级生图与编辑，强文字渲染、多图融合、'
-            '身份一致与 2K/4K 输出（OpenRouter）'
-        ),
-        'provider': 'openrouter',
-        'kind': 'image',
-        'reference_types': ['image'],
-        'api_model': 'google/gemini-3-pro-image',
-        'icon_key': 'gemini',
-        'price': '0.50',
-        'max_attachments': 14,
-        'image_limit_preset': 'openrouter_gemini_image',
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 200,
-    },
-    {
-        'id': 'or-nano-banana-2',
-        'label': 'Nano Banana 2',
-        'description': (
-            'Google Gemini 3.1 Flash Image：Pro 级画质、Flash 速度，'
-            '适合快速迭代生图与编辑（OpenRouter）'
-        ),
-        'provider': 'openrouter',
-        'kind': 'image',
-        'reference_types': ['image'],
-        'api_model': 'google/gemini-3.1-flash-image',
-        'icon_key': 'gemini',
-        'price': '0.30',
-        'max_attachments': 14,
-        'image_limit_preset': 'openrouter_gemini_image',
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 205,
-    },
-    {
-        'id': 'or-gpt-image-2',
-        'label': 'GPT Image 2',
-        'description': 'OpenAI 最新生图模型，高保真生成与编辑（OpenRouter Images API）',
-        'provider': 'openrouter',
-        'kind': 'image',
-        'reference_types': ['image'],
-        'api_model': 'openai/gpt-image-2',
-        'icon_key': 'openai',
-        'price': '0.50',
-        'max_attachments': 16,
-        'image_limit_preset': 'openrouter_gpt_image',
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 210,
-    },
-    {
-        'id': 'or-gemini-3-flash-preview',
-        'label': 'Gemini 3 Flash Preview',
-        'description': '高速多模态 Agent / 多轮对话；近 Pro 推理，更低延迟（OpenRouter）',
-        'provider': 'openrouter',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'google/gemini-3-flash-preview',
-        'icon_key': 'gemini',
-        'price': '3.6',
-        'max_attachments': 16,
-        'thinking': 1,
-        'enabled': 1,
-        'sort_order': 240,
-    },
-    {
-        'id': 'or-gemini-3-5-flash',
-        'label': 'Gemini 3.5 Flash',
-        'description': '高效多模态：编程与并行 Agent，Flash 级成本（OpenRouter）',
-        'provider': 'openrouter',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'google/gemini-3.5-flash',
-        'icon_key': 'gemini',
-        'price': '10.8',
-        'max_attachments': 16,
-        'thinking': 1,
-        'enabled': 1,
-        'sort_order': 250,
-    },
-    {
-        'id': 'or-claude-sonnet-5',
-        'label': 'Claude Sonnet 5',
-        'description': 'Anthropic Sonnet 旗舰：编码、Agent、专业工作流（OpenRouter）',
-        'provider': 'openrouter',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'anthropic/claude-sonnet-5',
-        'icon_key': 'claude',
-        'price': '14.4',
-        'max_attachments': 16,
-        'thinking': 1,
-        'enabled': 1,
-        'sort_order': 260,
-    },
-    {
-        'id': 'or-claude-opus-4-7',
-        'label': 'Claude Opus 4.7',
-        'description': '长程异步 Agent / 复杂多步任务与知识工作（OpenRouter）',
-        'provider': 'openrouter',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'anthropic/claude-opus-4.7',
-        'icon_key': 'claude',
-        'price': '36',
-        'max_attachments': 16,
-        'thinking': 1,
-        'enabled': 1,
-        'sort_order': 270,
-    },
-    {
-        'id': 'or-claude-sonnet-4-6',
-        'label': 'Claude Sonnet 4.6',
-        'description': '强力 Sonnet：迭代开发、代码库导航与文档创作（OpenRouter）',
-        'provider': 'openrouter',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'anthropic/claude-sonnet-4.6',
-        'icon_key': 'claude',
-        'price': '21.6',
-        'max_attachments': 16,
-        'thinking': 1,
-        'enabled': 1,
-        'sort_order': 280,
-    },
-    {
-        'id': 'or-gpt-5-6-sol',
-        'label': 'GPT-5.6 Sol',
-        'description': 'OpenAI GPT-5.6 旗舰：复杂推理、编码与长程 Agent（OpenRouter）',
-        'provider': 'openrouter',
-        'kind': 'text',
-        'reference_types': ['text', 'vision'],
-        'api_model': 'openai/gpt-5.6-sol',
-        'icon_key': 'openai',
-        'price': '36',
-        'max_attachments': 16,
-        'thinking': 1,
-        'enabled': 1,
-        'sort_order': 290,
-    },
-    {
-        'id': 'or-gpt-5-6-luna',
-        'label': 'GPT-5.6 Luna',
-        'description': 'GPT-5.6 高速高性价比：聊天、分类与轻量 Agent（OpenRouter）',
-        'provider': 'openrouter',
-        'kind': 'text',
-        'reference_types': ['text'],
-        'api_model': 'openai/gpt-5.6-luna',
-        'icon_key': 'openai',
-        'price': '7.2',
-        'max_attachments': 8,
-        'thinking': 0,
-        'enabled': 1,
-        'sort_order': 300,
-    },
-]
+def _load_catalog_seed() -> dict[str, Any]:
+    """Load apps/api/data/llm_models_seed.json (models + image presets + tombstones)."""
+    try:
+        parsed = json.loads(_SEED_PATH.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+_SEED_DOC = _load_catalog_seed()
+
+
+def _load_image_limit_presets() -> dict[str, dict[str, Any]]:
+    raw = _SEED_DOC.get("imageLimitPresets") or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            out[str(k)] = v
+    return out
+
+
+def _load_model_seed() -> list[dict[str, Any]]:
+    raw = _SEED_DOC.get("models") or []
+    if not isinstance(raw, list):
+        return []
+    return [x for x in raw if isinstance(x, dict) and str(x.get("id") or "").strip()]
+
+
+# Official Ark / OpenRouter image size contracts + model rows:
+# apps/api/data/llm_models_seed.json
+IMAGE_LIMIT_PRESETS: dict[str, dict[str, Any]] = _load_image_limit_presets()
+_SEED: list[dict[str, Any]] = _load_model_seed()
 
 
 def _normalize_reference_types(raw: Any, *, kind: str = 'text') -> list[str]:
@@ -970,21 +546,31 @@ def _ensure_reference_types_column(conn: Any, *, mysql: bool) -> None:
         )
 
 
-_RETIRED_DIRECT_DEEPSEEK_IDS = ('deepseek-chat', 'deepseek-reasoner')
+def _load_id_tuple(key: str) -> tuple[str, ...]:
+    raw = _SEED_DOC.get(key) or []
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(x) for x in raw if str(x).strip())
 
+
+def _load_stale_descriptions() -> frozenset[str]:
+    raw = _SEED_DOC.get("staleSeedDescriptions") or []
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(str(x) for x in raw if str(x).strip())
+
+
+_RETIRED_DIRECT_DEEPSEEK_IDS = _load_id_tuple("retiredDirectDeepseekIds")
 # Dropped from catalog permanently (admin delete kept getting re-seeded).
-_DROPPED_SEED_MODEL_IDS = (
-    'or-gpt-image-1',
-    'or-gpt-image-1-mini',
-    'kimi-k2-thinking',
-    'glm-5-2',
-)
+_DROPPED_SEED_MODEL_IDS = _load_id_tuple("droppedSeedModelIds")
+# Legacy seed blurbs that were kind-generic; refresh from current _SEED when still present.
+_STALE_SEED_DESCRIPTIONS = _load_stale_descriptions()
 
 
 def _retire_direct_deepseek_models(conn: Any) -> None:
     """Disable models that call DeepSeek API directly; routing uses Volcengine Ark only."""
     now = time.time()
-    placeholders = ','.join('?' for _ in _RETIRED_DIRECT_DEEPSEEK_IDS)
+    placeholders = ",".join("?" for _ in _RETIRED_DIRECT_DEEPSEEK_IDS)
     conn.execute(
         f"""
         UPDATE llm_models SET enabled = 0, updated_at = ?
@@ -997,7 +583,7 @@ def _retire_direct_deepseek_models(conn: Any) -> None:
 
 def _tombstone_removed_model(conn: Any, model_id: str, removed_at: float) -> None:
     """Record id in llm_models_removed (SQLite / MySQL / fallback)."""
-    mid = (model_id or '').strip()
+    mid = (model_id or "").strip()
     if not mid:
         return
     try:
@@ -1018,9 +604,9 @@ def _tombstone_removed_model(conn: Any, model_id: str, removed_at: float) -> Non
                 (mid, removed_at),
             )
         except Exception:
-            conn.execute('DELETE FROM llm_models_removed WHERE id = ?', (mid,))
+            conn.execute("DELETE FROM llm_models_removed WHERE id = ?", (mid,))
             conn.execute(
-                'INSERT INTO llm_models_removed (id, removed_at) VALUES (?, ?)',
+                "INSERT INTO llm_models_removed (id, removed_at) VALUES (?, ?)",
                 (mid, removed_at),
             )
 
@@ -1030,29 +616,14 @@ def _drop_retired_seed_models(conn: Any) -> None:
     if not _DROPPED_SEED_MODEL_IDS:
         return
     now = time.time()
-    placeholders = ','.join('?' for _ in _DROPPED_SEED_MODEL_IDS)
+    placeholders = ",".join("?" for _ in _DROPPED_SEED_MODEL_IDS)
     conn.execute(
-        f'DELETE FROM llm_models WHERE id IN ({placeholders})',
+        f"DELETE FROM llm_models WHERE id IN ({placeholders})",
         _DROPPED_SEED_MODEL_IDS,
     )
     for mid in _DROPPED_SEED_MODEL_IDS:
         _tombstone_removed_model(conn, mid, now)
     conn.commit()
-
-
-# Legacy seed blurbs that were kind-generic; refresh from current _SEED when still present.
-_STALE_SEED_DESCRIPTIONS = frozenset({
-    '高质量文生图 / 图生图（厂商按张计费）',
-    '轻量文生图 / 图生图（厂商按张计费）',
-    '文生图 / 图生图（厂商按张计费）',
-    '高质量文生图 / 图生图',
-    '轻量文生图 / 图生图',
-    '文生图 / 图生图',
-    'Seedream 旗舰：更高画质与细节，适合成片级配图与精细编辑',
-    'Seedream 5.0 轻量版：更快更省，适合草稿与快速试错',
-    'Seedream 4.5：画质与速度均衡，通用文生图 / 图生图',
-    'Seedream 4.0：低成本稳定出图，适合批量与日常配图',
-})
 
 
 def _removed_seed_ids(conn: Any) -> set[str]:

@@ -965,7 +965,7 @@ export default function SvgCanvas({
       : [];
     for (let i = frames.length - 1; i >= 0; i -= 1) {
       const frame = frames[i];
-      if (!frame || frame.locked) continue;
+      if (!frame || frame.locked || frame.hidden) continue;
       const fx = Number(frame.x) || 0;
       const fy = Number(frame.y) || 0;
       const fw = Math.max(1, Number(frame.width) || 1);
@@ -2251,7 +2251,7 @@ export default function SvgCanvas({
           : [];
         for (let i = frames.length - 1; i >= 0; i -= 1) {
           const f = frames[i];
-          if (!f) continue;
+          if (!f || f.hidden) continue;
           const fx = Number(f.x) || 0;
           const fy = Number(f.y) || 0;
           const fw = Math.max(1, Number(f.width) || 1);

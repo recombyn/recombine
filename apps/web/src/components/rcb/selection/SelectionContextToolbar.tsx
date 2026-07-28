@@ -558,12 +558,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
           {kind === 'shape' || kind === 'rect' || kind === 'ellipse' || kind === 'path' ? (
             <>
               <ShapeSelectionToolbar nodeId={nodeId} node={node} box={box} hideExport />
-              {blendControl ? (
-                <>
-                  <Sep />
-                  {blendControl}
-                </>
-              ) : null}
+              {blendControl}
               <Sep />
               <ExportSelectionPopover nodeIds={[nodeId]} />
             </>

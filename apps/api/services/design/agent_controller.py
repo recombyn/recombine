@@ -50,9 +50,13 @@ from services.design.tool_ops_contract import (
     validation_failure_reason,
 )
 from services.design.knowledge_store import (
-    format_knowledge_catalog,
     format_knowledge_details,
     normalize_need_knowledge,
+)
+from services.design.prompt_pack_store import (
+    format_prompt_packs_catalog,
+    format_prompt_packs_details,
+    normalize_need_prompts,
 )
 from services.design.aesthetics.scorer import (
     format_aesthetics_catalog,
@@ -83,6 +87,7 @@ class AgentTurnSchema(BaseModel):
     ops: list[Any] = Field(default_factory=list)
     need_tools: list[Any] = Field(default_factory=list)
     need_knowledge: list[Any] = Field(default_factory=list)
+    need_prompts: list[Any] = Field(default_factory=list)
     need_aesthetics: bool = False
     use_user_refs: bool = False
     choices: list[Any] = Field(default_factory=list)
@@ -91,6 +96,7 @@ class AgentTurnSchema(BaseModel):
     done: bool | None = None
     needTools: list[Any] = Field(default_factory=list)
     needKnowledge: list[Any] = Field(default_factory=list)
+    needPrompts: list[Any] = Field(default_factory=list)
     needAesthetics: bool | None = None
     useUserRefs: bool | None = None
     tools_needed: list[Any] = Field(default_factory=list)
@@ -139,35 +145,10 @@ def _thought_chat_prompt():
     )
 
 
-# Appended when agent.react.defer_tools is on (catalog-first; details on need_*).
-_NEED_TOOLS_OVERLAY = (
-    "DEFER_RESOURCES 模式：先按目录申请资源，不要臆造 schema 细节，也不要绕过系统约束。\n"
-    "必须返回严格 JSON（不要 markdown、不要额外解释）。\n"
-    "输出结构：\n"
-    "{\n"
-    '  "thought": "...",\n'
-    '  "intent": "chat|ask|done|edit|create",\n'
-    '  "reply": "...",\n'
-    '  "need_tools": ["create_text"],\n'
-    '  "need_knowledge": ["palette","layout"],\n'
-    '  "need_aesthetics": false,\n'
-    '  "use_user_refs": false,\n'
-    '  "tool_ops": [],\n'
-    '  "done": true\n'
-    "}\n"
-    "规则：\n"
-    "- chat / ask / done：必须给出非空 reply；need_* 置空/false；tool_ops=[]；done=true。\n"
-    "- edit / create 且缺细节：仅声明 need_tools / need_knowledge / need_aesthetics；"
-    "tool_ops=[]、done=false，等待 Host 注入详情。\n"
-    "- 输出必须是可解析 JSON，字段名与类型必须匹配契约。\n"
-    "- 根据 USER_PROMPT 判断 use_user_refs：\n"
-    "  用户提供参考图/截图/样例时 use_user_refs=true；\n"
-    "  仅文本需求（如 logo、文案、布局建议）通常 use_user_refs=false。\n"
-    "  need_aesthetics=true + use_user_refs=false：走样本库；\n"
-    "  need_aesthetics=true + use_user_refs=true：由 Host 解析用户参考图。\n"
-    "- 已有 TOOL_DETAILS / KNOWLEDGE_DETAILS / AESTHETIC_REFS 时优先输出 tool_ops，"
-    "并清空对应 need_*。\n"
-    "- op 必须使用已知 kind / op_key，不要发明未知操作。"
+# Fallback only if Admin + seed both empty (normal path: agent.prompt.need_tools_overlay).
+_NEED_TOOLS_OVERLAY_FALLBACK = (
+    "DEFER_RESOURCES：完整工具 schema、提示词包、美学参考不在 system 中。"
+    "短目录只列出你可以申请的内容。按需设置 need_tools / need_prompts / need_aesthetics。"
 )
 
 
@@ -200,7 +181,7 @@ def _resolve_agent_persona(
     rules: dict[str, str] | None,
     user_selected_model: str | None,
 ) -> str:
-    """IDENTITY from design_global_rule (Admin 可配); empty if unset."""
+    """IDENTITY from design_global_rule (Admin 模型路由); empty if unset."""
     mid = _as_text(user_selected_model or "auto").strip() or "auto"
     low = mid.lower()
     rules = rules or {}
@@ -248,6 +229,8 @@ class AgentRunState:
     tools_loaded: list[str] = field(default_factory=list)
     # Deferred knowledge kinds injected this run.
     knowledge_loaded: list[str] = field(default_factory=list)
+    # Deferred prompt-pack kinds injected this run.
+    prompts_loaded: list[str] = field(default_factory=list)
     # Deferred aesthetics refs injected this run.
     aesthetics_loaded: bool = False
     # Published Admin flow identity (for 运行复盘).
@@ -333,6 +316,7 @@ class AgentRunState:
             "dual_picked": self.dual_picked,
             "tools_loaded": list(self.tools_loaded),
             "knowledge_loaded": list(self.knowledge_loaded),
+            "prompts_loaded": list(self.prompts_loaded),
             "aesthetics_loaded": bool(self.aesthetics_loaded),
             "flow_id": self.flow_id or None,
             "flow_version": self.flow_version or None,
@@ -356,15 +340,15 @@ def _wants_short_plan(prompt: str, *, rules: dict[str, str]) -> bool:
         return True
     keys = (
         "海报",
-        "详情页",
+        "整页",
+        "官网",
         "落地页",
-        "营销页",
         "landing",
-        "首页",
-        "活动",
-        "专题页",
-        "改版",
-        "重做",
+        "一套",
+        "完整",
+        "做一张",
+        "设计一张",
+        "创建海报",
         "banner",
         "主视觉",
     )
@@ -372,7 +356,7 @@ def _wants_short_plan(prompt: str, *, rules: dict[str, str]) -> bool:
 
 
 def _parse_plan(content: str) -> list[str]:
-    """LangChain PydanticOutputParser — plan steps (legacy extract as fallback)."""
+    """LangChain PydanticOutputParser ? plan steps (legacy extract as fallback)."""
     raw_obj: dict[str, Any] = {}
     try:
         parsed = _plan_parser().parse(content or "")
@@ -468,7 +452,7 @@ def _structure_verify_issues(
     painted: bool,
     intent: str,
 ) -> list[str]:
-    """Deterministic canvas sanity checks — fact flags only, no routing."""
+    """Deterministic canvas sanity checks ? fact flags only, no routing."""
     if not painted:
         return []
     issues: list[str] = []
@@ -638,7 +622,7 @@ async def _stream_llm_text(
                     "switch_kind": "vision_failed",
                     "images_skipped": True,
                     "error": str(piece),
-                    "summary": "视觉模型不可用，跳过图片输入",
+                    "summary": '看图不可用，降级为纯文本',
                 }
             )
             continue
@@ -698,7 +682,7 @@ def _hydrate_log_kwargs(
         "phase": "hydrate",
         "image_model": img_mid,
         "images_hydrated": int(n_img),
-        "summary": f"Host 已水合 {int(n_img)} 张图（{img_mid}）",
+        "summary": f"Host 生图 hydrate ×{int(n_img)} · {img_mid}",
         "hydrate_prompts": prompts,
         "llm_image_urls": _clip_urls(srcs),
         "llm_user": _clip_llm_raw(
@@ -773,9 +757,9 @@ def _resolve_and_log_model(
             limit=2000,
         ),
         summary=(
-            f"{prev} ? {family}"
+            f"{prev} → {family}"
             if changed
-            else f"使用 {family}"
+            else f"选用 {family}"
         ),
     )
     return family, reason
@@ -791,19 +775,19 @@ def _short_ui_thought(raw: str, *, intent: str) -> str:
         "json",
         "react",
         "schema",
-        "意图",
-        "工具调用",
-        "执行计划",
+        "输出",
+        "契约",
+        "字段",
     )
     low = t.lower()
     if any(b in low for b in banned) or len(t) > 40:
         return {
-            "chat": "回复用户",
-            "ask": "继续追问",
-            "done": "结束任务",
-            "edit": "准备编辑",
-            "create": "准备创作",
-        }.get(intent, "继续处理中")
+            "chat": '打招呼',
+            "ask": '确认需求',
+            "done": '完成',
+            "edit": '编辑画布',
+            "create": '创建内容',
+        }.get(intent, '处理中')
     return t[:24]
 
 
@@ -816,7 +800,7 @@ def _full_thought_for_log(raw: str, *, limit: int = 4000) -> str | None:
 
 
 def _clip_llm_raw(raw: str | None, *, limit: int = 12000) -> str | None:
-    """Full model return text for Admin 回放（vision / ReAct / plan / 其他）"""
+    """Full model return text for Admin 运行复盘 (vision / ReAct / plan / …)."""
     t = (raw or "").strip()
     if not t:
         return None
@@ -846,7 +830,7 @@ def _llm_io_fields(
     system_limit: int = 10000,
     user_limit: int = 20000,
 ) -> dict[str, Any]:
-    """Fields for Admin 回放：everything sent to the LLM this call."""
+    """Fields for Admin 复盘: everything sent to the LLM this call."""
     out: dict[str, Any] = {}
     sys_t = _clip_llm_raw(system, limit=system_limit)
     if sys_t:
@@ -947,8 +931,24 @@ def _fresh_knowledge_kinds(
     return fresh or list(need_knowledge)
 
 
+def _fresh_prompt_kinds(
+    need_prompts: list[str], *, prompts_loaded: list[str]
+) -> list[str]:
+    if not need_prompts:
+        return []
+    if "*" in need_prompts:
+        return list(need_prompts)
+    fresh = [k for k in need_prompts if k not in prompts_loaded]
+    return fresh or list(need_prompts)
+
+
 def _fetch_deferred_knowledge(*, kinds: list[str], scene: str) -> dict[str, Any]:
     details = format_knowledge_details(kinds=kinds, scene=scene)
+    return {"kinds": list(kinds), "details": details or ""}
+
+
+def _fetch_deferred_prompts(*, kinds: list[str], scene: str) -> dict[str, Any]:
+    details = format_prompt_packs_details(kinds=kinds, scene=scene)
     return {"kinds": list(kinds), "details": details or ""}
 
 
@@ -1011,6 +1011,7 @@ def _fetch_deferred_aesthetics(
 async def _gather_deferred_resource_details(
     *,
     fresh_k: list[str],
+    fresh_prompts: list[str],
     fresh_tools: list[str],
     load_aesthetics: bool,
     prompt: str,
@@ -1021,7 +1022,7 @@ async def _gather_deferred_resource_details(
     use_user_refs: bool,
     rules: dict[str, str],
 ) -> dict[str, Any]:
-    """Fetch knowledge / tools / aesthetics in parallel (same need_* turn)."""
+    """Fetch knowledge / prompts / tools / aesthetics in parallel (same need_* turn)."""
     jobs: list[tuple[str, Any]] = []
     if fresh_k:
         jobs.append(
@@ -1030,6 +1031,17 @@ async def _gather_deferred_resource_details(
                 asyncio.to_thread(
                     _fetch_deferred_knowledge,
                     kinds=fresh_k,
+                    scene=scene,
+                ),
+            )
+        )
+    if fresh_prompts:
+        jobs.append(
+            (
+                "prompts",
+                asyncio.to_thread(
+                    _fetch_deferred_prompts,
+                    kinds=fresh_prompts,
                     scene=scene,
                 ),
             )
@@ -1077,7 +1089,7 @@ async def _gather_deferred_resource_details(
 
 
 def _parse_agent_turn(content: str) -> dict[str, Any]:
-    """LangChain structured parse — normalized turn dict for graph flags."""
+    """LangChain structured parse ? normalized turn dict for graph flags."""
     obj: dict[str, Any] = {}
     try:
         parsed = _agent_turn_parser().parse(content or "")
@@ -1111,6 +1123,9 @@ def _parse_agent_turn(content: str) -> dict[str, Any]:
     need_knowledge = normalize_need_knowledge(
         obj.get("need_knowledge") or obj.get("needKnowledge")
     )
+    need_prompts = normalize_need_prompts(
+        obj.get("need_prompts") or obj.get("needPrompts")
+    )
     need_aesthetics = normalize_need_aesthetics(
         obj.get("need_aesthetics")
         if "need_aesthetics" in obj
@@ -1128,6 +1143,7 @@ def _parse_agent_turn(content: str) -> dict[str, Any]:
         "tool_ops_raw": ops_raw,
         "need_tools": need_tools,
         "need_knowledge": need_knowledge,
+        "need_prompts": need_prompts,
         "need_aesthetics": need_aesthetics,
         "use_user_refs": use_user_refs,
         "choices": choices,
@@ -1144,7 +1160,7 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
         canvas_size = f"{rt.w}x{rt.h}"
     elif _as_text(rt.canvas_size).strip().lower() in ("", "auto"):
         canvas_size = (
-            "auto\n" + (rt.size_auto_hint or "SIZE_MODE: auto — 自行决定合适尺寸。")
+            "auto\n" + (rt.size_auto_hint or "SIZE_MODE: auto — 自行选择宽高。")
         )
     else:
         canvas_size = _as_text(rt.canvas_size).strip() or "unknown"
@@ -1152,16 +1168,22 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
     pending_parts: list[str] = []
     if rt.pending_tool_details:
         pending_parts.append(rt.pending_tool_details)
-        pending_parts.append("以上 TOOL_DETAILS 为准：输出 tool_ops，并将 need_tools 设为 []。")
+        pending_parts.append("以上 TOOL_DETAILS 为准。现在输出 tool_ops；将 need_tools 设为 []。")
     if rt.pending_knowledge_details:
         pending_parts.append(rt.pending_knowledge_details)
         pending_parts.append(
-            "以上 KNOWLEDGE_DETAILS 为准：输出 tool_ops，并将 need_knowledge 设为 []。"
+            "以上 KNOWLEDGE_DETAILS 为准。写 tool_ops 时使用它们；将 need_knowledge 设为 []。"
+        )
+    if rt.pending_prompt_details:
+        pending_parts.append(rt.pending_prompt_details)
+        pending_parts.append(
+            "以上 PROMPT_DETAILS 为准。按场景/看图规则决策或追问；将 need_prompts 设为 []。"
         )
     if rt.pending_aesthetics_details:
         pending_parts.append(rt.pending_aesthetics_details)
         pending_parts.append(
-            "以上 AESTHETIC_REFS 为准：输出 tool_ops，并将 need_aesthetics 设为 false。"
+            "以上 AESTHETIC_REFS + 附图为准：请看图模仿优秀、超越可用、避开反例。"
+            "将 need_aesthetics 设为 false。"
         )
     pending_blocks = ("\n\n".join(pending_parts) + "\n\n") if pending_parts else ""
 
@@ -1364,6 +1386,8 @@ class AgentRuntime:
     pending_tool_keys: list[str] = field(default_factory=list)
     pending_knowledge_details: str = ""
     pending_knowledge_kinds: list[str] = field(default_factory=list)
+    pending_prompt_details: str = ""
+    pending_prompt_kinds: list[str] = field(default_factory=list)
     pending_aesthetics_details: str = ""
     pending_aesthetic_images: list[str] = field(default_factory=list)
     turn: dict[str, Any] = field(default_factory=dict)
@@ -1438,6 +1462,7 @@ def _route_flags_snapshot(flags: dict[str, Any]) -> dict[str, Any]:
         "short_plan_on",
         "need_tools",
         "need_knowledge",
+        "need_prompts",
         "need_aesthetics",
         "has_ops",
         "ops_valid",
@@ -1499,7 +1524,8 @@ def _route_next_id(rt: AgentRuntime, node_id: str) -> str:
             kind = str(meta.get("kind") or "").lower()
             phase = str(meta.get("phaseKey") or "").lower()
             if kind == "end" or phase == "end":
-                next_id = "__settle__"
+                # Visit flowchart 终点 node (handler=_node_settle); do not skip to __settle__.
+                next_id = tgt if tgt in rt.node_by_id else "__settle__"
                 via = str(edge_detail.get("via") or "match")
                 to_phase = "end"
             elif kind == "error" or phase == "error":
@@ -1594,9 +1620,45 @@ def _load_published_flow_bundle(flow_id: str = "default") -> dict[str, Any]:
     }
 
 
+def _canvas_is_empty(rt: Any) -> bool:
+    nodes = [n for n in (rt.scene_nodes or []) if isinstance(n, dict) and n.get("id")]
+    if nodes:
+        return False
+    frames = [f for f in (rt.scene_frames or []) if isinstance(f, dict) and f.get("id")]
+    if not frames:
+        return True
+    return all(bool(f.get("is_empty")) for f in frames)
+
+
+def _preload_create_methodology(rt: Any) -> None:
+    """Empty-canvas create: inject design_spec before first thought (any scene)."""
+    if not rt.defer_tools or not _canvas_is_empty(rt):
+        return
+    st = rt.run
+    if "design_spec" in (st.prompts_loaded or []) or rt.pending_prompt_details:
+        return
+    try:
+        details = format_prompt_packs_details(
+            kinds=["design_spec"], scene=rt.scene_key or "website"
+        )
+    except Exception:
+        details = ""
+    if not details.strip():
+        return
+    rt.pending_prompt_details = "PROMPT_DETAILS:\n" + details
+    if "design_spec" not in st.prompts_loaded:
+        st.prompts_loaded.append("design_spec")
+    st.push_log(
+        phase="prompt_preload",
+        need_prompts=["design_spec"],
+        summary="空画布预载设计方法论",
+    )
+
+
 async def _node_bootstrap(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
+    _preload_create_methodology(rt)
     _insert_task(
         {
             "id": st.task_id,
@@ -1679,7 +1741,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
     if not step_ops:
         err = validation_failure_reason(op_errors) if op_errors else "missing_tool_ops"
         st.note_error(err)
-        msg = "确认执行失败：未生成可用的画布操作，请重新描述需求。"
+        msg = '方案无法安全执行，请换个说法或再试一次。'
         st.reply = msg
         _emit({"type": "token", "text": msg})
         rt.terminal = True
@@ -1736,7 +1798,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
     st.applied_ops.extend(step_ops)
     st.painted = True
     st.intent = "edit"
-    st.reply = "已根据确认方案执行修改。"
+    st.reply = "已按方案更新画布。"
     st.push_log(
         phase="action",
         ops=[str(o.get("name") or "") for o in step_ops[:20]],
@@ -1774,7 +1836,7 @@ async def _node_route(state: GraphState) -> Command:
     )
     if rt.images:
         st.vision_used = True
-    tier_label = {"simple": "轻量", "medium": "标准", "complex": "推理"}.get(
+    tier_label = {"simple": '简单', "medium": '中等', "complex": '复杂'}.get(
         st.task_tier, st.task_tier or "-"
     )
     st.push_log(
@@ -1786,7 +1848,7 @@ async def _node_route(state: GraphState) -> Command:
         run_mode=rt.mode,
         llm_image_urls=_clip_urls(rt.images),
         llm_user=_clip_llm_raw(rt.prompt, limit=4000),
-        summary=f"路由到 {tier_label}" + (" · 含图片" if rt.images else "") + f" · 模式 {rt.mode}",
+        summary=f"任务类型 {tier_label}" + (" · 看图" if rt.images else "") + f" · 模式 {rt.mode}",
     )
     # Preserve FE Ask mode (interaction_mode=ask); default agent otherwise.
     if _as_text(rt.flags.get("mode")).strip().lower() not in ("agent", "ask"):
@@ -1819,7 +1881,7 @@ async def _node_memory(state: GraphState) -> Command:
             short_turns=len(rt.mem_short or []),
             summary=(
                 f"注入记忆 {len(rt.mem_blocks or '')} 字"
-                f" / 短记 {len(rt.mem_short or [])} 条"
+                f" / 短记 {len(rt.mem_short or [])}"
             ),
             llm_user=_clip_llm_raw(rt.mem_blocks or "", limit=6000),
             llm_raw=_clip_llm_raw(
@@ -1911,7 +1973,7 @@ async def _node_plan(state: GraphState) -> Command:
                 "id": "plan-0",
                 "kind": "explored",
                 "status": "done",
-                "summary": "计划：" + " · ".join(st.plan),
+                "summary": '计划：' + " · ".join(st.plan),
             }
         )
     _emit(
@@ -2040,6 +2102,7 @@ async def _node_thought(
 
     need_tools = list(turn.get("need_tools") or [])
     need_knowledge = list(turn.get("need_knowledge") or [])
+    need_prompts = list(turn.get("need_prompts") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
     has_ops_payload = _ops_payload_nonempty(turn.get("tool_ops_raw"))
     use_user_refs = turn.get("use_user_refs") is True
@@ -2049,10 +2112,21 @@ async def _node_thought(
     rt.flags["no_ops"] = not has_ops_payload
     defer = bool(rt.defer_tools)
     editable = intent in ("edit", "create")
+    can_prompt = intent in ("ask", "edit", "create")
     rt.flags["need_tools"] = bool(defer and editable and need_tools)
     rt.flags["need_knowledge"] = bool(defer and editable and need_knowledge)
+    rt.flags["need_prompts"] = bool(defer and can_prompt and need_prompts)
     rt.flags["need_aesthetics"] = bool(defer and editable and need_aesthetics)
     rt.flags["slot_missing"] = False
+
+    wants_fetch = bool(
+        rt.flags["need_tools"]
+        or rt.flags["need_knowledge"]
+        or rt.flags["need_prompts"]
+        or rt.flags["need_aesthetics"]
+    )
+    if wants_fetch and not has_ops_payload:
+        return _route_cmd(rt)
 
     if intent in ("chat", "ask", "done") and not has_ops_payload:
         text = reply or (
@@ -2076,9 +2150,6 @@ async def _node_thought(
             rt.flags["await_user"] = True
         return _route_cmd(rt)
 
-    wants_fetch = bool(
-        rt.flags["need_tools"] or rt.flags["need_knowledge"] or rt.flags["need_aesthetics"]
-    )
     if intent in ("edit", "create") and not has_ops_payload and not wants_fetch:
         if reply:
             st.reply = reply
@@ -2094,9 +2165,6 @@ async def _node_thought(
         )
         return _route_cmd(rt)
 
-    if wants_fetch and not has_ops_payload:
-        return _route_cmd(rt)
-
     # Validate ops when payload present ? set edge flags for published graph.
     step_ops, op_errors = _validate_ops_payload(
         turn.get("tool_ops_raw"),
@@ -2109,7 +2177,7 @@ async def _node_thought(
     if has_ops_payload and not step_ops:
         err = validation_failure_reason(op_errors) if op_errors else "missing_tool_ops"
         st.note_error(err)
-        st.push_log(phase="validate_fail", error=err[:200], summary=f"校验失败：{err[:120]}")
+        st.push_log(phase="validate_fail", error=err[:200], summary=f'校验失败：{err[:120]}')
         rt.flags["ops_invalid"] = True
         rt.flags["ops_valid"] = False
         rt.flags["reflect_left"] = st.reflect_left > 0 and not turn.get("done")
@@ -2162,6 +2230,7 @@ async def _node_resource(state: GraphState) -> Command:
     round_i = st.round
     need_tools = list(turn.get("need_tools") or [])
     need_knowledge = list(turn.get("need_knowledge") or [])
+    need_prompts = list(turn.get("need_prompts") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
     use_user_refs = turn.get("use_user_refs") is True
     fresh_k = _fresh_knowledge_kinds(need_knowledge, knowledge_loaded=st.knowledge_loaded)
@@ -2170,6 +2239,12 @@ async def _node_resource(state: GraphState) -> Command:
     )
     if not load_knowledge:
         fresh_k = []
+    fresh_p = _fresh_prompt_kinds(need_prompts, prompts_loaded=st.prompts_loaded)
+    load_prompts = bool(need_prompts) and not (
+        set(need_prompts) <= set(st.prompts_loaded) and "*" not in need_prompts
+    )
+    if not load_prompts:
+        fresh_p = []
     fresh_tools = (
         [k for k in need_tools if k not in st.tools_loaded] or list(need_tools)
         if need_tools
@@ -2183,7 +2258,7 @@ async def _node_resource(state: GraphState) -> Command:
             phase="need_knowledge",
             need_knowledge=list(fresh_k),
             intent=st.intent,
-            summary="申请知识：" + "、".join(fresh_k),
+            summary="申请设计知识：" + "、".join(fresh_k),
         )
         _emit(
             {
@@ -2191,12 +2266,29 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"need-knowledge-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("知识请求：" + "、".join(fresh_k))[:200],
+                "summary": ("申请知识：" + "、".join(fresh_k))[:200],
+                "index": round_i,
+            }
+        )
+    if load_prompts:
+        st.push_log(
+            phase="need_prompts",
+            need_prompts=list(fresh_p),
+            intent=st.intent,
+            summary="申请提示词包：" + "、".join(fresh_p),
+        )
+        _emit(
+            {
+                "type": "activity",
+                "id": f"need-prompts-{round_i}",
+                "kind": "explored",
+                "status": "done",
+                "summary": ("申请提示词：" + "、".join(fresh_p))[:200],
                 "index": round_i,
             }
         )
     if load_aesthetics:
-        st.push_log(phase="need_aesthetics", need_aesthetics=True, summary="申请美学样本")
+        st.push_log(phase="need_aesthetics", need_aesthetics=True, summary='申请美学样本')
         _emit(
             {
                 "type": "activity",
@@ -2211,7 +2303,7 @@ async def _node_resource(state: GraphState) -> Command:
         st.push_log(
             phase="need_tools",
             need_tools=list(need_tools),
-            summary="申请工具：" + "、".join(need_tools),
+            summary="申请工具详情：" + "、".join(need_tools),
         )
         _emit(
             {
@@ -2219,13 +2311,14 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"need-tools-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("工具请求：" + "、".join(need_tools))[:200],
+                "summary": ("申请工具：" + "、".join(need_tools))[:200],
                 "index": round_i,
             }
         )
 
     bundles = await _gather_deferred_resource_details(
         fresh_k=fresh_k if load_knowledge else [],
+        fresh_prompts=fresh_p if load_prompts else [],
         fresh_tools=fresh_tools if need_tools else [],
         load_aesthetics=load_aesthetics,
         prompt=rt.prompt,
@@ -2247,7 +2340,7 @@ async def _node_resource(state: GraphState) -> Command:
             phase="knowledge_details",
             need_knowledge=list(fresh_k),
             detail_chars=len(details_k),
-            summary="注入知识详情：" + "、".join(fresh_k),
+            summary="注入设计知识：" + "、".join(fresh_k),
         )
         _emit(
             {
@@ -2255,7 +2348,30 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"knowledge-details-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("知识详情：" + "、".join(fresh_k))[:200],
+                "summary": ("注入知识：" + "、".join(fresh_k))[:200],
+                "index": round_i,
+            }
+        )
+    pb = bundles.get("prompts") if load_prompts else None
+    if isinstance(pb, dict) and pb.get("details"):
+        details_p = str(pb["details"])
+        rt.pending_prompt_details = "PROMPT_DETAILS:\n" + details_p
+        for k in fresh_p:
+            if k not in st.prompts_loaded:
+                st.prompts_loaded.append(k)
+        st.push_log(
+            phase="prompt_details",
+            need_prompts=list(fresh_p),
+            detail_chars=len(details_p),
+            summary="注入提示词包：" + "、".join(fresh_p),
+        )
+        _emit(
+            {
+                "type": "activity",
+                "id": f"prompt-details-{round_i}",
+                "kind": "explored",
+                "status": "done",
+                "summary": ("注入提示词：" + "、".join(fresh_p))[:200],
                 "index": round_i,
             }
         )
@@ -2278,7 +2394,7 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"tool-details-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("工具详情：" + "、".join(fresh_tools))[:200],
+                "summary": ("注入工具：" + "、".join(fresh_tools))[:200],
                 "index": round_i,
             }
         )
@@ -2293,7 +2409,7 @@ async def _node_resource(state: GraphState) -> Command:
             st.push_log(
                 phase="aesthetics_details",
                 detail_chars=len(guidance),
-                summary="注入美学参考",
+                summary='注入美学参考',
             )
             _emit(
                 {
@@ -2317,6 +2433,12 @@ async def _node_resource(state: GraphState) -> Command:
     rt.flags["fetched"] = True
     rt.flags["ready"] = True
     rt.flags["next_round"] = True
+    # Details are pending on rt; clear need_* so fork outs match mode=agent/ask
+    # (not the same need_tools edge that sent us here).
+    rt.flags["need_tools"] = False
+    rt.flags["need_knowledge"] = False
+    rt.flags["need_prompts"] = False
+    rt.flags["need_aesthetics"] = False
     return _route_cmd(rt)
 
 
@@ -2353,7 +2475,7 @@ async def _node_propose(state: GraphState) -> Command:
         proposed=True,
         intent=st.intent,
         reply=(text or "")[:2000] or None,
-        summary=("提议确认：" + (apply_label or f"{len(step_ops)} ops"))[:120],
+        summary=('提议确认：' + (apply_label or f"{len(step_ops)} ops"))[:120],
         **({"choices": list(st.choices)[:6]} if st.choices else {}),
         **({"apply_choice": st.apply_choice} if st.apply_choice else {}),
     )
@@ -2498,7 +2620,7 @@ async def _node_observe(
             phase="observe",
             ok=False,
             error="timeout",
-            summary="观察超时：前端未回传 scene",
+            summary='观察超时：前端未回传 scene',
         )
 
     if rt.skip_loop:
@@ -2553,7 +2675,7 @@ async def _node_observe(
             rt.flags["ok"] = False
             return _route_cmd(rt)
         corrected = (
-            f"有 {len(op_failures)} 个操作未生效（目标元素可能已被删除）。"
+            f'有 {len(op_failures)} 个操作未生效（目标元素可能已被删除）。'
             "画布已按当前状态处理，可以再说一次要改哪个元素。"
         )
         st.reply = corrected
@@ -2859,16 +2981,27 @@ async def _node_passthrough(state: GraphState) -> Command:
 
 
 async def _node_resource_fork(state: GraphState) -> Command:
-    """Run deferred resource fetch once, then jump via resource_join outs."""
+    """Fetch deferred resources, then return to thought/ask via graph edges."""
     rt = state["rt"]
-    # Reuse consolidated resource loader
     cmd = await _node_resource(state)
-    # Prefer routing from resource_join if present
+    # Legacy graphs may still expose resource_join; prefer routing from there.
     join_id = rt.phase_to_id.get("resource_join")
-    if join_id:
+    if join_id and join_id in rt.node_by_id:
         rt.flags["next_round"] = True
         rt.flags["ready"] = True
         return _route_cmd(rt, join_id)
+
+    # Guard: after a successful fetch never settle — return to the next LLM turn.
+    goto = getattr(cmd, "goto", None)
+    settle_like = goto is None or str(goto) in ("", END, "__settle__")
+    if settle_like:
+        mode = str(rt.flags.get("mode") or "agent").strip().lower()
+        if mode == "ask":
+            nid = rt.phase_to_id.get("ask_thought") or "ask_thought"
+        else:
+            nid = rt.phase_to_id.get("thought") or "thought"
+        if nid in rt.node_by_id:
+            return Command(update=_bump(rt), goto=nid)
     return cmd
 
 
@@ -2900,11 +3033,11 @@ async def _node_validate_fail(state: GraphState) -> Command:
     # Flags already set by thought; optional clarify messaging when no reflect
     if rt.flags.get("no_reflect") and not rt.flags.get("reflect_left"):
         err = validation_failure_reason(rt.op_errors) if rt.op_errors else "missing_tool_ops"
-        err_frag = f"（{err[:80]}）" if err else ""
+        err_frag = f"?{err[:80]}?" if err else ""
         if rt.unsafe_ops_tmpl:
             ask = render_prompt_template(rt.unsafe_ops_tmpl, error=err_frag)
         else:
-            ask = "这次改动我没法安全执行" + err_frag + "。可以换个说法吗？"
+            ask = '这次改动我没法安全执行' + err_frag + '。可以换个说法吗？'
         rt.run.reply = ask
         rt.run.intent = "ask"
         _emit({"type": "token", "text": ask})
@@ -2918,7 +3051,7 @@ async def _node_dual_sample(state: GraphState) -> Command:
 
 
 async def _node_ask_thought(state: GraphState) -> Command:
-    """Ask branch LLM — same contract as thought; edges decide clarify/propose/agent."""
+    """Ask branch LLM ? same contract as thought; edges decide clarify/propose/agent."""
     return await _node_thought(state)
 
 
@@ -2931,23 +3064,16 @@ _PHASE_HANDLERS: dict[str, Any] = {
     "thought": "_node_thought",
     "ask_thought": "_node_ask_thought",
     "resource_fork": "_node_resource_fork",
-    "need_knowledge": "_node_passthrough",
-    "need_aesthetics": "_node_passthrough",
-    "need_tools": "_node_passthrough",
-    "knowledge_details": "_node_passthrough",
+    "resource_join": "_node_passthrough",
     "aesthetics_details": "_node_passthrough",
     "tool_details": "_node_passthrough",
-    "resource_join": "_node_passthrough",
-    "dual_sample": "_node_dual_sample",
     "validate_fail": "_node_validate_fail",
     "reflect": "_node_reflect",
     "clarify": "_node_clarify",
     "propose": "_node_propose",
-    "hydrate": "_node_hydrate",
     "action": "_node_action",
     "observe": "_node_observe",
     "verify": "_node_verify",
-    "score_case": "_node_verify",
     "error": "_node_error",
     "end": "_node_settle",
 }
@@ -3088,7 +3214,7 @@ async def run_agent_graph(
 
     tools_block = format_canvas_tools_for_model(rules)
     tools_catalog = format_canvas_tools_catalog(rules)
-    knowledge_catalog = format_knowledge_catalog(scene=scene_key or "website")
+    prompts_catalog = format_prompt_packs_catalog(scene=scene_key or "website")
     aesthetics_catalog = format_aesthetics_catalog(scene=scene_key or "website")
     defer_tools = _flag_on(rules, "agent.react.defer_tools", "1")
     persona = _resolve_agent_persona(rules, user_selected_model)
@@ -3099,14 +3225,18 @@ async def run_agent_graph(
     chat_fallback_tmpl = _prompt_text(rules, "agent.prompt.chat_fallback")
     unsafe_ops_tmpl = _prompt_text(rules, "agent.prompt.unsafe_ops_ask")
     if defer_tools:
+        need_overlay = (
+            _prompt_text(rules, "agent.prompt.need_tools_overlay")
+            or _NEED_TOOLS_OVERLAY_FALLBACK
+        )
         system = "\n\n".join(
             p
             for p in [
                 react_system,
-                _NEED_TOOLS_OVERLAY,
+                need_overlay,
                 persona_block,
                 tools_catalog,
-                knowledge_catalog,
+                prompts_catalog,
                 aesthetics_catalog,
             ]
             if p

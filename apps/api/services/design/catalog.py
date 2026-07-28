@@ -37,9 +37,11 @@ def ensure_design_catalog(*, force: bool = False) -> None:
         # Library brush cover refresh is slow on remote MySQL — only run from
         # brush/library endpoints via ensure_library_seed(), not on every catalog boot.
         from services.design.knowledge_store import ensure_design_knowledge
+        from services.design.prompt_pack_store import ensure_design_prompt_packs
         from services.design.action_registry import ensure_action_registry
 
         ensure_design_knowledge()
+        ensure_design_prompt_packs()
         ensure_action_registry()
         _CATALOG_READY = True
 

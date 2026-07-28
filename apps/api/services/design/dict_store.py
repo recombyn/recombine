@@ -1,5 +1,6 @@
 """Design dictionary CRUD."""
 from __future__ import annotations
+import json
 import threading
 import time
 from typing import Any
@@ -11,119 +12,133 @@ TYPE_CATALOG = "__types__"
 
 _DICTS_READY = False
 _DICTS_LOCK = threading.RLock()
-# Bump when DICT_TYPE_DEFAULTS / DICT_DEFAULTS gain new rows so warm processes re-seed.
-_DICT_SEED_REV = 6
+# Bump when data/design_dicts_seed.json gains rows (also stored as seed.rev).
+_DICT_SEED_REV = 15
 _seeded_rev = 0
 
-DICT_TYPE_DEFAULTS = [
-    ("scene", "场景", 10),
-    ("skill_category", "技能分类", 20),
-    ("output_format", "输出格式", 30),
-    ("task_tier", "模型车道", 40),
-    ("precheck_block", "预检拦截", 50),
-    ("library_kind", "素材类型", 60),
-    ("flow_edge_condition", "流程边条件", 90),
-    ("flow_phase", "流程运行角色", 100),
-]
 
-DICT_DEFAULTS = [
-    ("scene", "all", '全部场景', 0),
-    ("scene", "website", "网站 Website", 10),
-    ("scene", "mobile", "移动应用 Mobile", 20),
-    ("scene", "image", "图像 Image", 30),
-    ("scene", "poster", "海报 Poster", 40),
-    ("skill_category", "plan", '需求规划', 10),
-    ("skill_category", "layout", '版式', 20),
-    ("skill_category", "validate", '校验', 30),
-    ("skill_category", "refine", '精修', 40),
-    ("skill_category", "summary", '总结', 50),
-    ("skill_category", "other", '其他', 100),
-    ("precheck_block", "empty_prompt", '空提示词', 10),
-    ("precheck_block", "oversized_canvas", '画布过大', 20),
-    ("precheck_block", "banned_words", '违禁词', 30),
-    ("task_tier", "fast", '轻量', 10),
-    ("task_tier", "standard", '标准', 20),
-    ("task_tier", "reasoning", '推理', 30),
-    ("task_tier", "vision", '看图', 40),
-    ("library_kind", "style", '风格系统 (System)', 10),
-    ("library_kind", "template", '构图模板 (Template)', 20),
-    ("library_kind", "icon", '图标', 30),
-    ("library_kind", "font", '字体', 40),
-    ("library_kind", "other", '其他', 50),
-    ("library_kind", "brush", '\u7b14\u5237\u8f6e', 55),
-    ("library_kind", "prompt", '\u63d0\u793a\u8bcd\u6a21\u5f0f (Prompt)', 60),
-    ("output_format", "json", "JSON", 10),
-    ("output_format", "text", '文本', 20),
-    # —— 主线边条件（intent / flags；无 FE mode 分叉）——
-    ("flow_edge_condition", "mode=ask", "Ask 模式", 5),
-    ("flow_edge_condition", "mode=agent", "Agent 主线", 10),
-    ("flow_edge_condition", "short_plan_on", "开启短计划", 50),
-    ("flow_edge_condition", "plan_done", "计划完成", 60),
-    ("flow_edge_condition", "llm_call", "调用主模型", 70),
-    ("flow_edge_condition", "need_knowledge", "需要知识", 90),
-    ("flow_edge_condition", "need_aesthetics", "需要美学", 100),
-    ("flow_edge_condition", "need_tools", "需要工具", 110),
-    ("flow_edge_condition", "fetched", "已拉取", 120),
-    ("flow_edge_condition", "ready", "资源就绪", 130),
-    ("flow_edge_condition", "next_round", "下一轮思考", 140),
-    ("flow_edge_condition", "ops_invalid", "操作非法", 160),
-    ("flow_edge_condition", "ops_valid", "操作合法", 170),
-    ("flow_edge_condition", "reflect_left", "仍可反思", 180),
-    ("flow_edge_condition", "no_reflect", "不可再反思", 190),
-    ("flow_edge_condition", "intent=ask&no_ops", "意图=追问", 200),
-    ("flow_edge_condition", "intent=ask&has_ops", "追问且带方案", 205),
-    ("flow_edge_condition", "intent=chat", "意图=闲聊", 201),
-    ("flow_edge_condition", "intent=done", "意图=完成", 202),
-    ("flow_edge_condition", "slot_missing", "缺槽追问", 210),
-    ("flow_edge_condition", "mode=ask&has_ops", "Ask 有方案", 230),
-    ("flow_edge_condition", "mode=ask&op_failed", "Ask 确认重试", 240),
-    ("flow_edge_condition", "wait_scene", "等待场景", 260),
-    ("flow_edge_condition", "scene_ready", "场景已回写", 265),
-    ("flow_edge_condition", "verify_ok", "校验通过", 266),
-    ("flow_edge_condition", "verify_fail", "校验失败", 267),
-    ("flow_edge_condition", "mode=ask&verify_fail", "Ask 校验失败", 268),
-    ("flow_edge_condition", "verify_fail&reflect_left", "校验失败可反思", 269),
-    ("flow_edge_condition", "verify_fail&no_reflect", "校验失败不可反思", 270),
-    ("flow_edge_condition", "patch_too_broad", "改动过宽", 271),
-    ("flow_edge_condition", "patch_scoped", "改动局部", 272),
-    ("flow_edge_condition", "ok", "成功结束", 275),
-    ("flow_edge_condition", "op_failed", "操作失败", 280),
-    ("flow_edge_condition", "retry", "重试思考", 290),
-    ("flow_edge_condition", "await_user", "等待用户回答", 300),
-    ("flow_edge_condition", "await_confirm", "等待用户确认", 310),
-    ("flow_edge_condition", "reflect_exhausted", "反思耗尽", 320),
-    ("flow_edge_condition", "fatal", "致命错误", 330),
-    ("flow_edge_condition", "fail_end", "失败结束", 340),
-    # —— 运行角色（phaseKey）——
-    ("flow_phase", "start", "流程入口", 10),
-    ("flow_phase", "route", "任务分流", 20),
-    ("flow_phase", "mode_fork", "Ask / Agent 分线", 30),
-    ("flow_phase", "memory", "注入会话记忆", 40),
-    ("flow_phase", "plan", "短计划", 50),
-    ("flow_phase", "model_route", "模型路由", 60),
-    ("flow_phase", "thought", "Agent 主思考", 70),
-    ("flow_phase", "ask_thought", "Ask 主思考", 80),
-    ("flow_phase", "resource_fork", "资源并行网关", 90),
-    ("flow_phase", "need_knowledge", "申请知识", 100),
-    ("flow_phase", "need_aesthetics", "申请美学", 110),
-    ("flow_phase", "need_tools", "申请工具", 120),
-    ("flow_phase", "knowledge_details", "注入知识详情", 130),
-    ("flow_phase", "aesthetics_details", "注入美学详情", 140),
-    ("flow_phase", "tool_details", "注入工具详情", 150),
-    ("flow_phase", "resource_join", "资源汇聚", 160),
-    ("flow_phase", "dual_sample", "双采样", 170),
-    ("flow_phase", "validate_fail", "校验失败分支", 180),
-    ("flow_phase", "reflect", "反思重试", 190),
-    ("flow_phase", "clarify", "追问用户", 200),
-    ("flow_phase", "propose", "提议确认", 210),
-    ("flow_phase", "hydrate", "生图水合", 220),
-    ("flow_phase", "action", "执行画布操作", 230),
-    ("flow_phase", "observe", "观察结果", 240),
-    ("flow_phase", "verify", "结果校验", 245),
-    ("flow_phase", "score_case", "评测打分", 246),
-    ("flow_phase", "error", "错误出口", 250),
-    ("flow_phase", "end", "流程结束", 260),
-]
+def _dicts_data_path():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2] / "data" / "design_dicts_seed.json"
+
+
+def _load_dicts_seed() -> dict:
+    path = _dicts_data_path()
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _dict_type_defaults() -> list[tuple[str, str, int]]:
+    seed = _load_dicts_seed()
+    out: list[tuple[str, str, int]] = []
+    for row in seed.get("types") or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or "").strip()
+        label = str(row.get("label") or "").strip()
+        if not code or not label:
+            continue
+        try:
+            sort_order = int(row.get("sortOrder") or 0)
+        except Exception:
+            sort_order = 0
+        out.append((code, label, sort_order))
+    return out
+
+
+def _dict_item_defaults() -> list[tuple[str, str, str, int]]:
+    seed = _load_dicts_seed()
+    out: list[tuple[str, str, str, int]] = []
+    for row in seed.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        dict_type = str(row.get("dictType") or "").strip()
+        code = str(row.get("code") or "").strip()
+        label = str(row.get("label") or "").strip()
+        if not dict_type or not code or not label:
+            continue
+        try:
+            sort_order = int(row.get("sortOrder") or 0)
+        except Exception:
+            sort_order = 0
+        out.append((dict_type, code, label, sort_order))
+    return out
+
+
+def _dict_description_defaults() -> dict[tuple[str, str], str]:
+    seed = _load_dicts_seed()
+    raw = seed.get("descriptions") or {}
+    out: dict[tuple[str, str], str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        key = str(k or "")
+        if "|" not in key:
+            continue
+        typ, code = key.split("|", 1)
+        typ, code = typ.strip(), code.strip()
+        if typ and code:
+            out[(typ, code)] = str(v or "")
+    return out
+
+
+# Compatibility aliases (loaded from JSON; prefer _dict_*_defaults() at runtime).
+DICT_TYPE_DEFAULTS = _dict_type_defaults()
+DICT_DEFAULTS = _dict_item_defaults()
+DICT_DESCRIPTION_DEFAULTS = _dict_description_defaults()
+
+
+def resolve_edge_condition(raw: str) -> str:
+    """Normalize edge condition to dict ``code`` / predicate string.
+
+    Only recognizes known ``code`` values (and passes unknown predicates through).
+    Never reverse-maps mutable display ``label`` → code.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    codes: set[str] = set()
+    try:
+        items = list_dicts(dict_type="flow_edge_condition", enabled=True)
+        codes = {
+            str(i.get("code") or "").strip()
+            for i in items
+            if str(i.get("code") or "").strip()
+        }
+    except Exception:
+        codes = set()
+    if not codes:
+        codes = {
+            str(code).strip()
+            for typ, code, _label, _ord in _dict_item_defaults()
+            if typ == "flow_edge_condition" and str(code).strip()
+        }
+    if s in codes:
+        return s
+    # Custom / compound predicates (e.g. mode=ask&op_failed) keep as-is.
+    return s
+
+
+def edge_condition_label(code: str) -> str:
+    """Display name for a flow_edge_condition code (empty if unknown)."""
+    key = str(code or "").strip()
+    if not key:
+        return ""
+    try:
+        items = list_dicts(dict_type="flow_edge_condition", enabled=True)
+        for i in items:
+            if str(i.get("code") or "").strip() == key:
+                return str(i.get("label") or "").strip()
+    except Exception:
+        pass
+    for typ, c, label, _ord in _dict_item_defaults():
+        if typ == "flow_edge_condition" and str(c).strip() == key:
+            return str(label).strip()
+    return ""
 
 
 def _norm_type_code(raw: str) -> str:
@@ -131,11 +146,16 @@ def _norm_type_code(raw: str) -> str:
 
 
 def _pub_dict(r: Any) -> dict[str, Any]:
+    keys = r.keys() if hasattr(r, "keys") else ()
+    desc = ""
+    if "description" in keys:
+        desc = str(r["description"] or "").strip()
     return {
         "id": int(r["id"]),
         "dictType": r["dict_type"],
         "code": r["code"],
         "label": r["label"],
+        "description": desc,
         "sortOrder": int(r["sort_order"] or 0),
         "enabled": bool(int(r["enabled"] or 0)),
         "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
@@ -163,27 +183,67 @@ def _seed_dict_rows(conn: Any, *, now: float) -> None:
             "DELETE FROM design_dict WHERE dict_type = ? AND code = ?",
             (TYPE_CATALOG, retired),
         )
-    for dict_type, code, label, sort_order in DICT_DEFAULTS:
+    # Drop retired flow_phase codes (old model-lane / chat duplicates).
+    _retired_flow_phases = (
+        "dual_sample",
+        "hydrate",
+        "score_case",
+        "model_simple",
+        "model_medium",
+        "model_complex",
+        "model_vision",
+        "model_multimodal",
+        "model_switch",
+        "chat",
+        "prompt_bank",
+        "need_knowledge",
+        "need_aesthetics",
+        "need_tools",
+    )
+    for code in _retired_flow_phases:
+        conn.execute(
+            "DELETE FROM design_dict WHERE dict_type = ? AND code = ?",
+            ("flow_phase", code),
+        )
+    for dict_type, code, label, sort_order in _dict_item_defaults():
+        desc = _dict_description_defaults().get((dict_type, code), "")
         row = conn.execute(
-            "SELECT id FROM design_dict WHERE dict_type = ? AND code = ?",
+            "SELECT id, description FROM design_dict WHERE dict_type = ? AND code = ?",
             (dict_type, code),
         ).fetchone()
         if row:
+            # Fill empty description from seed once; never overwrite Admin edits.
+            if desc and not str(row["description"] or "").strip():
+                conn.execute(
+                    "UPDATE design_dict SET description = ?, updated_at = ? WHERE id = ?",
+                    (desc, now, int(row["id"])),
+                )
             continue
         conn.execute(
-            "INSERT INTO design_dict (dict_type, code, label, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
-            (dict_type, code, label, sort_order, now, now),
+            "INSERT INTO design_dict (dict_type, code, label, description, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+            (dict_type, code, label, desc or None, sort_order, now, now),
         )
-    for code, label, sort_order in DICT_TYPE_DEFAULTS:
+    for code, label, sort_order in _dict_type_defaults():
         row = conn.execute(
-            "SELECT id FROM design_dict WHERE dict_type = ? AND code = ?",
+            "SELECT id, label, sort_order FROM design_dict WHERE dict_type = ? AND code = ?",
             (TYPE_CATALOG, code),
         ).fetchone()
         if row:
+            # Keep type catalog names aligned with product UI (seed is source for type labels).
+            old_label = str(row["label"] or "")
+            try:
+                old_sort = int(row["sort_order"] or 0)
+            except Exception:
+                old_sort = 0
+            if old_label != label or old_sort != sort_order:
+                conn.execute(
+                    "UPDATE design_dict SET label = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+                    (label, sort_order, now, int(row["id"])),
+                )
             continue
         conn.execute(
-            "INSERT INTO design_dict (dict_type, code, label, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
-            (TYPE_CATALOG, code, label, sort_order, now, now),
+            "INSERT INTO design_dict (dict_type, code, label, description, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+            (TYPE_CATALOG, code, label, None, sort_order, now, now),
         )
 
 
@@ -201,7 +261,11 @@ def ensure_design_dicts() -> None:
             ensure_design_tables(conn, mysql=mysql)
             _seed_dict_rows(conn, now=now)
             conn.commit()
-        _seeded_rev = _DICT_SEED_REV
+        try:
+            rev = int((_load_dicts_seed().get("rev") or _DICT_SEED_REV))
+        except Exception:
+            rev = _DICT_SEED_REV
+        _seeded_rev = max(_DICT_SEED_REV, rev)
         _DICTS_READY = True
 
 
@@ -324,8 +388,10 @@ def delete_dict_type(type_id: int) -> bool:
 def upsert_dict(payload: dict[str, Any]) -> dict[str, Any]:
     ensure_design_dicts()
     dict_type = _norm_type_code(str(payload.get("dictType") or ""))
-    code = str(payload.get("code") or "").strip().lower().replace(" ", "_")
+    # Keep condition keys like intent=chat / mode=ask&has_ops intact.
+    code = str(payload.get("code") or "").strip()
     label = str(payload.get("label") or "").strip()
+    description = str(payload.get("description") or "").strip()
     if not dict_type or not code or not label:
         raise ValueError("dictType, code, label required")
     if dict_type == TYPE_CATALOG or dict_type.startswith("__"):
@@ -337,8 +403,8 @@ def upsert_dict(payload: dict[str, Any]) -> dict[str, Any]:
     with connect() as conn:
         if item_id:
             conn.execute(
-                "UPDATE design_dict SET dict_type=?, code=?, label=?, sort_order=?, enabled=?, updated_at=? WHERE id=?",
-                (dict_type, code, label, sort_order, enabled, now, int(item_id)),
+                "UPDATE design_dict SET dict_type=?, code=?, label=?, description=?, sort_order=?, enabled=?, updated_at=? WHERE id=?",
+                (dict_type, code, label, description or None, sort_order, enabled, now, int(item_id)),
             )
             row = conn.execute("SELECT * FROM design_dict WHERE id = ?", (int(item_id),)).fetchone()
         else:
@@ -348,8 +414,8 @@ def upsert_dict(payload: dict[str, Any]) -> dict[str, Any]:
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE design_dict SET label=?, sort_order=?, enabled=?, updated_at=? WHERE dict_type=? AND code=?",
-                    (label, sort_order, enabled, now, dict_type, code),
+                    "UPDATE design_dict SET label=?, description=?, sort_order=?, enabled=?, updated_at=? WHERE dict_type=? AND code=?",
+                    (label, description or None, sort_order, enabled, now, dict_type, code),
                 )
                 row = conn.execute(
                     "SELECT * FROM design_dict WHERE dict_type = ? AND code = ?",
@@ -357,8 +423,8 @@ def upsert_dict(payload: dict[str, Any]) -> dict[str, Any]:
                 ).fetchone()
             else:
                 cur = conn.execute(
-                    "INSERT INTO design_dict (dict_type, code, label, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (dict_type, code, label, sort_order, enabled, now, now),
+                    "INSERT INTO design_dict (dict_type, code, label, description, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (dict_type, code, label, description or None, sort_order, enabled, now, now),
                 )
                 row = conn.execute("SELECT * FROM design_dict WHERE id = ?", (int(cur.lastrowid),)).fetchone()
         conn.commit()

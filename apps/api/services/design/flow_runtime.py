@@ -10,10 +10,12 @@ from typing import Any
 
 
 def _edge_condition(edge: dict[str, Any]) -> str:
-    raw = edge.get("condition")
-    if raw is None or str(raw).strip() == "":
-        raw = edge.get("label")
-    return str(raw or "").strip()
+    """Semantic when-predicate only. Never fall back to display label.
+
+    Labels like 「其他未命中」「Agent 主线」 are UI copy; using them as conditions
+    makes every branch fail and runtime falls through to settle.
+    """
+    return str(edge.get("condition") or "").strip()
 
 
 def _edge_priority(edge: dict[str, Any]) -> int:
@@ -79,8 +81,9 @@ def choose_outgoing_edges(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Pick next edges and explain why (match / default / unconditional / none).
 
-    Returns (edges, detail). detail keys: via, edge_id, condition, label, priority,
-    is_default, candidate_count.
+    Returns (edges, detail). detail keys: via, edge_id, condition, priority,
+    is_default, candidate_count. ``label`` kept as alias of condition code for
+    older hop logs — never the Chinese display name.
     """
     outs = sorted(edges, key=lambda e: (_edge_priority(e), str(e.get("id") or "")))
     empty: dict[str, Any] = {
@@ -98,11 +101,12 @@ def choose_outgoing_edges(
     # so parallel gateways still honor condition/priority/isDefault.
     if explore_all:
         first = outs[0]
+        cond = _edge_condition(first) or None
         return list(outs), {
             "via": "parallel",
             "edge_id": str(first.get("id") or "") or None,
-            "condition": _edge_condition(first) or None,
-            "label": str(first.get("label") or "").strip() or None,
+            "condition": cond,
+            "label": cond,
             "priority": _edge_priority(first),
             "is_default": _edge_is_default(first),
             "candidate_count": len(outs),
@@ -114,15 +118,20 @@ def choose_outgoing_edges(
         if _edge_is_default(e):
             defaults.append(e)
             continue
-        if eval_edge_condition(_edge_condition(e), ctx):
+        cond = _edge_condition(e)
+        # Empty condition is unconditional fallback, not an always-match branch.
+        if not cond:
+            continue
+        if eval_edge_condition(cond, ctx):
             matched.append(e)
 
     def _detail(edge: dict[str, Any], via: str) -> dict[str, Any]:
+        cond = _edge_condition(edge) or None
         return {
             "via": via,
             "edge_id": str(edge.get("id") or "") or None,
-            "condition": _edge_condition(edge) or None,
-            "label": str(edge.get("label") or "").strip() or None,
+            "condition": cond,
+            "label": cond,
             "priority": _edge_priority(edge),
             "is_default": _edge_is_default(edge),
             "candidate_count": len(outs),
@@ -257,7 +266,7 @@ def walk_agent_flow(
                 "branches": [
                     {
                         "edgeId": str(e.get("id") or ""),
-                        "label": _edge_condition(e) or str(e.get("label") or ""),
+                        "label": _edge_condition(e),
                         "condition": _edge_condition(e),
                         "priority": _edge_priority(e),
                         "isDefault": _edge_is_default(e),
@@ -319,7 +328,9 @@ def next_nodes_after(
     return [str(e.get("target") or "") for e in chosen if e.get("target")]
 
 
-_INJECT_SOURCES = frozenset({"canvas_tools", "knowledge", "aesthetics", "memory"})
+_INJECT_SOURCES = frozenset(
+    {"canvas_tools", "knowledge", "aesthetics", "memory", "prompt"}
+)
 _INJECT_MODES = frozenset({"none", "catalog", "details"})
 
 
@@ -360,20 +371,22 @@ def default_inject_for_node(node: dict[str, Any]) -> dict[str, Any] | None:
     table: dict[str, dict[str, Any]] = {
         "thought": {
             "mode": "catalog",
-            "catalogs": ["canvas_tools", "knowledge", "aesthetics"],
+            "catalogs": ["canvas_tools", "knowledge", "prompt", "aesthetics"],
             "deferDetails": True,
             "specs": ["agent.prompt.react_system"],
             "validate": ["json_contract"],
         },
         "dual_sample": {
             "mode": "catalog",
-            "catalogs": ["canvas_tools", "knowledge", "aesthetics"],
+            "catalogs": ["canvas_tools", "knowledge", "prompt", "aesthetics"],
             "deferDetails": True,
         },
         "plan": {"mode": "none", "specs": ["agent.prompt.plan_system"]},
         "memory": {"mode": "details", "source": "memory"},
         "need_knowledge": {"mode": "catalog", "source": "knowledge"},
         "knowledge_details": {"mode": "details", "source": "knowledge"},
+        "need_prompts": {"mode": "catalog", "source": "prompt"},
+        "prompt_details": {"mode": "details", "source": "prompt"},
         "need_aesthetics": {"mode": "catalog", "source": "aesthetics"},
         "aesthetics_details": {
             "mode": "details",
@@ -407,6 +420,8 @@ def default_inject_for_node(node: dict[str, Any]) -> dict[str, Any] | None:
         return {"mode": "none", "validate": ["validate.checklist", "svg_markup"]}
     if cap == "knowledge" and kind == "resource":
         return {"mode": "details", "source": "knowledge"}
+    if kind == "prompt" or (cap == "prompt" and kind in ("resource", "knowledge", "prompt")):
+        return {"mode": "details", "source": "prompt"}
     if cap == "aesthetics":
         return {"mode": "details", "source": "aesthetics"}
     if cap == "canvas_tools":
@@ -466,6 +481,7 @@ def build_catalog_blocks(
     """Format short catalog blocks for thought system prompt."""
     from services.design.aesthetics.scorer import format_aesthetics_catalog
     from services.design.knowledge_store import format_knowledge_catalog
+    from services.design.prompt_pack_store import format_prompt_packs_catalog
     from services.design.tool_ops_contract import format_canvas_tools_catalog
 
     blocks: list[str] = []
@@ -474,6 +490,8 @@ def build_catalog_blocks(
             blocks.append(format_canvas_tools_catalog(rules))
         elif src == "knowledge":
             blocks.append(format_knowledge_catalog(scene=scene))
+        elif src == "prompt":
+            blocks.append(format_prompt_packs_catalog(scene=scene))
         elif src == "aesthetics":
             blocks.append(format_aesthetics_catalog(scene=scene))
     return [b for b in blocks if b]

@@ -39,6 +39,7 @@ import { cn } from '@/utils/classnames';
 import {
   SEL_ICON_BTN,
   SEL_ICON_BTN_ACTIVE,
+  SEL_SIZE_INPUT,
   SEL_TOOL_BTN,
 } from './ToolbarValueSlider';
 import {
@@ -464,8 +465,11 @@ export default function MultiSelectionToolbar({
   };
 
   const setSize = (axis: 'w' | 'h', raw: string) => {
-    const n = Math.max(1, Math.round(Number(raw) || 0));
-    if (!Number.isFinite(n) || !box) return;
+    if (!box) return;
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return;
+    const n = Math.round(Number(trimmed));
+    if (!Number.isFinite(n) || n < 1) return;
     // Toolbar shows Math.round(chrome); blur with the same digits must be a no-op
     // (otherwise sx = round(w)/w quietly shrinks/grows the path).
     if (axis === 'w' && n === Math.round(box.width)) return;
@@ -779,9 +783,10 @@ export default function MultiSelectionToolbar({
       <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
         <span className="text-[var(--muted)]">W</span>
         <input
-          className="w-10 bg-transparent text-[12px] outline-none"
+          className={SEL_SIZE_INPUT}
           defaultValue={Math.round(box.width)}
           key={`w-${Math.round(box.width)}`}
+          onPointerDown={(e) => e.stopPropagation()}
           onBlur={(e) => setSize('w', e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') setSize('w', (e.target as HTMLInputElement).value);
@@ -791,9 +796,10 @@ export default function MultiSelectionToolbar({
       <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
         <span className="text-[var(--muted)]">H</span>
         <input
-          className="w-10 bg-transparent text-[12px] outline-none"
+          className={SEL_SIZE_INPUT}
           defaultValue={Math.round(box.height)}
           key={`h-${Math.round(box.height)}`}
+          onPointerDown={(e) => e.stopPropagation()}
           onBlur={(e) => setSize('h', e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') setSize('h', (e.target as HTMLInputElement).value);
@@ -835,13 +841,21 @@ export default function MultiSelectionToolbar({
     />
   );
 
-  // Unified order: Style → Layout → Boolean → Geometry → Blend/Opacity → Actions
+  // Size + blend share one cluster (no divider after W/H).
+  const geometryAppearance =
+    transformCluster || appearanceCluster ? (
+      <>
+        {transformCluster}
+        {appearanceCluster}
+      </>
+    ) : null;
+
+  // Unified order: Style → Layout → Boolean → Geometry/Blend → Actions
   const sections = [
     styleCluster,
     layoutCluster,
     booleanCluster,
-    transformCluster,
-    appearanceCluster,
+    geometryAppearance,
     actionCluster,
   ].filter(Boolean);
 

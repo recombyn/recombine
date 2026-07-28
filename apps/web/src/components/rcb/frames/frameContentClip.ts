@@ -37,7 +37,7 @@ export function findClippingFrameForNode(
 
   for (let i = frames.length - 1; i >= 0; i -= 1) {
     const f = frames[i];
-    if (!f || !f.clipContent) continue;
+    if (!f || !f.clipContent || f.hidden) continue;
     const fw = Math.max(1, num(f.width, 1));
     const fh = Math.max(1, num(f.height, 1));
     const fx = num(f.x);

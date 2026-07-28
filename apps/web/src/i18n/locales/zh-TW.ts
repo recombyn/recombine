@@ -1317,9 +1317,9 @@ const zhTW = {
     providerNamePh: '例如 DMXAPI',
     providerWebsite: '官網連結',
     providerModelKind: '模型類型',
-    providerModelKindText: '文本',
+    providerModelKindText: '對話',
     providerModelKindVision: '多模態',
-    providerModelKindHint: '文本用於對話改稿；多模態可看圖。生圖請用平台模型（消耗平台積分）。',
+    providerModelKindHint: '對話用於聊天改稿；多模態可看圖。生圖請用平台模型（消耗平台積分）。',
     providerModelKindRequired: '請選擇模型類型',
     providerApiKeyPh: '只需填這裡，下方設定可接著補',
     providerApiKeyHint:

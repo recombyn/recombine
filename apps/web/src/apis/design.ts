@@ -280,11 +280,31 @@ export type DesignBrush = {
   libraryId?: number;
 };
 
-export const fetchDesignCatalog = () =>
-  request<DesignCatalog>({
+let _designCatalog: DesignCatalog | null = null;
+let _designCatalogInflight: Promise<DesignCatalog> | null = null;
+
+export const fetchDesignCatalog = (opts?: { force?: boolean }) => {
+  if (!opts?.force && _designCatalog) return Promise.resolve(_designCatalog);
+  if (!opts?.force && _designCatalogInflight) return _designCatalogInflight;
+  const run = request<DesignCatalog>({
     url: '/api/v1/design/catalog',
     method: 'get',
-  });
+  })
+    .then((data) => {
+      _designCatalog = data;
+      return data;
+    })
+    .finally(() => {
+      if (_designCatalogInflight === run) _designCatalogInflight = null;
+    });
+  _designCatalogInflight = run;
+  return run;
+};
+
+export function invalidateDesignCatalogCache() {
+  _designCatalog = null;
+  _designCatalogInflight = null;
+}
 
 /** POST /design/run SSE — callers parse `ev.data` as DesignJobEvent. */
 export const runDesignJob = (body: RunDesignJobBody, config: SseHandlers = {}) =>

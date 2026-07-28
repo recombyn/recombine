@@ -124,6 +124,7 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             dict_type VARCHAR(32) NOT NULL,
             code VARCHAR(64) NOT NULL,
             label VARCHAR(128) NOT NULL,
+            description {text},
             sort_order INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at DOUBLE NOT NULL,
@@ -192,6 +193,20 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             when_to_use {text},
             scenes VARCHAR(128) NOT NULL DEFAULT 'all',
             skill_categories VARCHAR(128) NOT NULL DEFAULT 'all',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at DOUBLE NOT NULL,
+            updated_at DOUBLE NOT NULL
+        ){engine}
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS design_prompt_pack (
+            id {pk},
+            kind VARCHAR(32) NOT NULL,
+            title VARCHAR(128) NOT NULL,
+            body {text} NOT NULL,
+            when_to_use {text},
+            scenes VARCHAR(128) NOT NULL DEFAULT 'all',
             sort_order INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at DOUBLE NOT NULL,
@@ -303,7 +318,36 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
     _ensure_canvas_tool_kind_column(conn, mysql=mysql)
     _ensure_canvas_tool_args_schema_column(conn, mysql=mysql)
     _ensure_global_rule_meta_columns(conn, mysql=mysql)
+    _ensure_design_dict_description_column(conn, mysql=mysql)
     conn.commit()
+
+
+def _ensure_design_dict_description_column(conn: Any, *, mysql: bool) -> None:
+    """Add description on design_dict (idempotent)."""
+    text = "LONGTEXT" if mysql else "TEXT"
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'design_dict'
+                  AND COLUMN_NAME = 'description'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) > 0:
+                return
+            conn.execute(f"ALTER TABLE design_dict ADD COLUMN description {text} NULL")
+        else:
+            cols = {
+                str(r["name"] if "name" in r.keys() else r[1])
+                for r in conn.execute("PRAGMA table_info(design_dict)").fetchall()
+            }
+            if "description" in cols:
+                return
+            conn.execute(f"ALTER TABLE design_dict ADD COLUMN description {text}")
+    except Exception:
+        pass
 
 
 def _ensure_global_rule_meta_columns(conn: Any, *, mysql: bool) -> None:

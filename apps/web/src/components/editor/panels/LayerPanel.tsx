@@ -9,7 +9,7 @@ import {
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuPanelLeft, LuPencil } from 'react-icons/lu';
+import { LuFrame, LuPanelLeft, LuPencil } from 'react-icons/lu';
 import { RxText } from 'react-icons/rx';
 import {
   HiOutlineChevronDown,
@@ -20,17 +20,25 @@ import {
   HiOutlineLockOpen,
   HiOutlineMinus,
   HiOutlinePhoto,
+  HiOutlineSparkles,
   HiOutlineStop,
 } from 'react-icons/hi2';
 import { TbArrowUpRight, TbCircle, TbPolygon, TbStar, TbTriangle } from 'react-icons/tb';
 import Tooltip from '@/components/base/tooltip';
 import {
+  isImageGeneratorNode,
   isNodeHidden,
   isNodeLocked,
   listSceneNodes,
+  parseStackKey,
 } from '@/components/rcb/scene/sceneDocument';
 import { cn } from '@/utils/classnames';
-import { patchDocumentNode, setSelectedNodeId } from '@/store/modules/editor';
+import {
+  patchDocumentNode,
+  setActiveFrameId,
+  setSelectedNodeId,
+  updateArtboardFrame,
+} from '@/store/modules/editor';
 
 const LAYER_DOCK_WIDTH_KEY = 'layer-dock-width';
 const LAYER_DOCK_MIN_W = 180;
@@ -105,9 +113,16 @@ function LayerIcon({
   node,
   filled,
 }: {
-  node: { key: string; attrs?: { shapeType?: string; ['fill-color']?: string } };
+  node: { key: string; attrs?: { shapeType?: string; ['fill-color']?: string; imageGenerator?: unknown } };
   filled?: boolean;
 }) {
+  if (isImageGeneratorNode(node)) {
+    return (
+      <span className={LAYER_ICON_SLOT}>
+        <HiOutlineSparkles className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+      </span>
+    );
+  }
   const kind = resolveLayerIconKind(node);
   const Icon = layerIconByKind[kind] || HiOutlineStop;
   const sizeClass = layerIconSizeByKind[kind] || layerIconSizeByKind.rect;
@@ -135,7 +150,11 @@ function LayerIcon({
   );
 }
 
-function layerLabel(node: { key: string; attrs?: { shapeType?: string } }) {
+function layerLabel(
+  node: { key: string; attrs?: { shapeType?: string; imageGenerator?: unknown } },
+  imageGeneratorLabel: string
+) {
+  if (isImageGeneratorNode(node)) return imageGeneratorLabel;
   const kind = resolveLayerIconKind(node);
   const map: Record<string, string> = {
     text: '文字',
@@ -163,23 +182,65 @@ function lockedAttrPatch(nextLocked: boolean) {
   return { attrs: { locked: nextLocked ? 'true' : 'false' } };
 }
 
-/** Left layers dock — history + scene nodes (fig.2). */
+/** Left layers dock — history + frames/nodes from unified stackOrder. */
 export default function LayerPanel({
   onClose,
   onSelectNode,
+  onSelectFrame,
   mobile = false,
 }: {
   onClose?: () => void;
   /** Select + pan camera so the node is centered in the current viewport. */
   onSelectNode?: (nodeId: string) => void;
+  /** Select + pan camera so the artboard is centered. */
+  onSelectFrame?: (frameId: string) => void;
   mobile?: boolean;
 } = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const document = useSelector((state: any) => state.editor.document);
   const selectedNodeId = useSelector((state: any) => state.editor.selectedNodeId);
+  const activeFrameId = useSelector((state: any) => state.editor.document?.activeFrameId);
+  const selectedFrameIds = useSelector(
+    (state: any) => (state.editor.selectedFrameIds as string[] | undefined) || []
+  );
   const historyPast = useSelector((state: any) => state.editor.historyPast || []);
   const nodes = listSceneNodes(document);
+  const frames = Array.isArray(document?.frames) ? document.frames : [];
+  const frameById = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const f of frames) {
+      if (f?.id) map.set(String(f.id), f);
+    }
+    return map;
+  }, [frames]);
+  const nodeById = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const { id, node } of nodes) map.set(id, node);
+    return map;
+  }, [nodes]);
+  const layerRows = useMemo(() => {
+    const order = Array.isArray(document?.stackOrder) ? document.stackOrder.map(String) : [];
+    const rows: Array<{ kind: 'frame' | 'node'; id: string }> = [];
+    if (order.length) {
+      for (const key of [...order].reverse()) {
+        const parsed = parseStackKey(key);
+        if (!parsed) continue;
+        if (parsed.kind === 'frame' && frameById.has(parsed.id)) {
+          rows.push(parsed);
+        } else if (parsed.kind === 'node' && nodeById.has(parsed.id)) {
+          rows.push(parsed);
+        }
+      }
+      return rows;
+    }
+    // Fallback before stackOrder migrates
+    for (const f of [...frames].reverse()) {
+      if (f?.id) rows.push({ kind: 'frame', id: String(f.id) });
+    }
+    for (const { id } of [...nodes].reverse()) rows.push({ kind: 'node', id });
+    return rows;
+  }, [document?.stackOrder, frameById, nodeById, frames, nodes]);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [dockWidth, setDockWidth] = useState(LAYER_DOCK_DEFAULT_W);
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -333,19 +394,138 @@ export default function LayerPanel({
         ) : null}
       </div>
 
-      {/* Layer rows */}
+      {/* Layer rows — top of list = front of stack */}
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
-        {nodes.length ? (
+        {layerRows.length ? (
           <ul>
-            {[...nodes].reverse().map(({ id, node }: any) => {
+            {layerRows.map((row) => {
+              if (row.kind === 'frame') {
+                const frame = frameById.get(row.id);
+                if (!frame) return null;
+                const locked = Boolean(frame.locked);
+                const hidden = Boolean(frame.hidden);
+                const selected =
+                  selectedFrameIds.includes(row.id) ||
+                  (!selectedFrameIds.length && activeFrameId === row.id);
+                return (
+                  <li key={`frame-${row.id}`}>
+                    <div
+                      className={cn(
+                        'group flex min-h-[40px] w-full items-center gap-1 px-2 py-1 text-[13px] transition-colors',
+                        selected
+                          ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+                          : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onSelectFrame) onSelectFrame(row.id);
+                          else dispatch(setActiveFrameId(row.id));
+                        }}
+                        className={cn(
+                          'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left',
+                          hidden && 'opacity-50'
+                        )}
+                      >
+                        <span className={LAYER_ICON_SLOT}>
+                          <LuFrame className="h-[13px] w-[13px] block shrink-0" strokeWidth={1.75} />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">
+                          {String(frame.name || t('editor.tools.frame') || 'Frame')}
+                        </span>
+                      </button>
+                      <Tooltip
+                        title={
+                          hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
+                        }
+                        placement="top"
+                      >
+                        <button
+                          type="button"
+                          aria-label={
+                            hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
+                          }
+                          aria-pressed={hidden}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const nextHidden = !hidden;
+                            dispatch(
+                              updateArtboardFrame({
+                                id: row.id,
+                                patch: { hidden: nextHidden },
+                              })
+                            );
+                            if (nextHidden && selected) {
+                              dispatch(setActiveFrameId(null));
+                            }
+                          }}
+                          className={cn(
+                            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+                            !hidden &&
+                              'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                            selected && !hidden && 'opacity-100'
+                          )}
+                        >
+                          {hidden ? (
+                            <HiOutlineEyeSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          ) : (
+                            <HiOutlineEye className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          )}
+                        </button>
+                      </Tooltip>
+                      <Tooltip
+                        title={
+                          locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
+                        }
+                        placement="top"
+                      >
+                        <button
+                          type="button"
+                          aria-label={
+                            locked
+                              ? t('editor.contextMenu.unlock')
+                              : t('editor.contextMenu.lock')
+                          }
+                          aria-pressed={locked}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            dispatch(
+                              updateArtboardFrame({
+                                id: row.id,
+                                patch: { locked: !locked },
+                              })
+                            );
+                          }}
+                          className={cn(
+                            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+                            !locked &&
+                              'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                            selected && !locked && 'opacity-100'
+                          )}
+                        >
+                          {locked ? (
+                            <HiOutlineLockClosed className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          ) : (
+                            <HiOutlineLockOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          )}
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </li>
+                );
+              }
+
+              const node = nodeById.get(row.id);
+              if (!node) return null;
               const hidden = isNodeHidden(node);
               const locked = isNodeLocked(node);
               return (
-                <li key={id}>
+                <li key={`node-${row.id}`}>
                   <div
                     className={cn(
                       'group flex min-h-[40px] w-full items-center gap-1 px-2 py-1 text-[13px] transition-colors',
-                      selectedNodeId === id
+                      selectedNodeId === row.id
                         ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
                         : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
                     )}
@@ -353,8 +533,8 @@ export default function LayerPanel({
                     <button
                       type="button"
                       onClick={() => {
-                        if (onSelectNode) onSelectNode(id);
-                        else dispatch(setSelectedNodeId(id));
+                        if (onSelectNode) onSelectNode(row.id);
+                        else dispatch(setSelectedNodeId(row.id));
                       }}
                       className={cn(
                         'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left',
@@ -362,7 +542,9 @@ export default function LayerPanel({
                       )}
                     >
                       <LayerIcon node={node} />
-                      <span className="min-w-0 flex-1 truncate">{layerLabel(node)}</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        {layerLabel(node, t('editor.tools.imageGenerator'))}
+                      </span>
                     </button>
                     <Tooltip
                       title={
@@ -381,18 +563,18 @@ export default function LayerPanel({
                           const nextHidden = !hidden;
                           dispatch(
                             patchDocumentNode({
-                              nodeId: id,
+                              nodeId: row.id,
                               patch: hiddenAttrPatch(nextHidden),
                             })
                           );
-                          if (nextHidden && selectedNodeId === id) {
+                          if (nextHidden && selectedNodeId === row.id) {
                             dispatch(setSelectedNodeId(null));
                           }
                         }}
                         className={cn(
                           'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
                           !hidden && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                          selectedNodeId === id && !hidden && 'opacity-100'
+                          selectedNodeId === row.id && !hidden && 'opacity-100'
                         )}
                       >
                         {hidden ? (
@@ -420,7 +602,7 @@ export default function LayerPanel({
                           e.stopPropagation();
                           dispatch(
                             patchDocumentNode({
-                              nodeId: id,
+                              nodeId: row.id,
                               patch: lockedAttrPatch(!locked),
                             })
                           );
@@ -428,7 +610,7 @@ export default function LayerPanel({
                         className={cn(
                           'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
                           !locked && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                          selectedNodeId === id && !locked && 'opacity-100'
+                          selectedNodeId === row.id && !locked && 'opacity-100'
                         )}
                       >
                         {locked ? (

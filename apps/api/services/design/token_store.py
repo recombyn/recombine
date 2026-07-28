@@ -6,204 +6,42 @@ component metrics — not a few prose lines. Injected as named refs for tool_ops
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import time
 from typing import Any
 
 from services.db import connect
 from services.design.catalog import ensure_design_catalog
 
-# Bump when DEFAULT_TOKENS / seed packs change — upgrades existing default rows.
-TOKEN_SCHEMA_VERSION = "2026-07-22-ds-v1"
+# Seed: apps/api/data/design_tokens_seed.json (bump schemaVersion there to upgrade rows).
 
-# Shared shape used by Admin and orchestrator prompt.
-DEFAULT_TOKENS: dict[str, Any] = {
-    "schemaVersion": TOKEN_SCHEMA_VERSION,
-    "grid": 8,
-    "spacing": {"xs": 4, "sm": 8, "md": 16, "lg": 24, "xl": 32, "xxl": 48},
-    "margin": {"safe": 16, "bottomCta": 24},
-    "gap": {"min": 8},
-    "radius": {"none": 0, "sm": 4, "md": 8, "lg": 12, "xl": 16, "xxl": 24, "pill": 999},
-    "radiusAllowed": [0, 4, 8, 12, 16, 24],
-    "type": {
-        "families": ["system-ui", "PingFang SC", "Noto Sans SC"],
-        "familiesMax": 2,
-        "weight": {"regular": 400, "medium": 500, "semibold": 600, "bold": 700},
-        "lineHeight": {"tight": 1.2, "title": 1.25, "body": 1.5, "loose": 1.75},
-        "size": {
-            "display": 40,
-            "h1": 32,
-            "h2": 24,
-            "h3": 20,
-            "bodyLg": 16,
-            "body": 14,
-            "caption": 12,
-            "tiny": 10,
-            "largeText": 24,
-        },
-    },
-    # Semantic palette (TDesign-inspired neutrals + brand blue).
-    "color": {
-        "brand": {
-            "primary": "#0052D9",
-            "primaryHover": "#366EF4",
-            "primaryActive": "#0034B5",
-            "primaryLight": "#F2F3FF",
-        },
-        "status": {
-            "success": "#2BA471",
-            "warning": "#E37318",
-            "danger": "#D54941",
-            "info": "#029CD4",
-        },
-        "text": {
-            "primary": "#000000E6",
-            "secondary": "#00000099",
-            "placeholder": "#00000066",
-            "disabled": "#00000042",
-            "anti": "#FFFFFF",
-        },
-        "bg": {
-            "page": "#F3F3F3",
-            "container": "#FFFFFF",
-            "secondary": "#F8F8F8",
-            "overlay": "#00000066",
-        },
-        "border": {
-            "default": "#DCDCDC",
-            "light": "#EEEEEE",
-            "focus": "#0052D9",
-        },
-        "roles": [
-            "primary",
-            "secondary",
-            "success",
-            "warning",
-            "danger",
-            "text",
-            "muted",
-            "bg",
-            "surface",
-            "border",
-        ],
-        "ratio": {"primary": 60, "secondary": 30, "accent": 10},
-        "hueMax": 3,
-    },
-    "elevation": {
-        "none": "none",
-        "sm": "0 1px 2px rgba(0,0,0,0.08)",
-        "md": "0 3px 8px rgba(0,0,0,0.10)",
-        "lg": "0 6px 16px rgba(0,0,0,0.12)",
-    },
-    "component": {
-        "button": {
-            "height": {"sm": 28, "md": 36, "lg": 44},
-            "paddingX": {"sm": 12, "md": 16, "lg": 20},
-            "radius": "md",
-            "fontSize": {"sm": 12, "md": 14, "lg": 16},
-        },
-        "input": {
-            "height": {"md": 36, "lg": 44},
-            "paddingX": 12,
-            "radius": "md",
-        },
-        "card": {"padding": 16, "radius": "lg", "gap": 12},
-        "tag": {"height": 24, "paddingX": 8, "radius": "sm", "fontSize": 12},
-        "nav": {"height": 56, "itemGap": 8},
-    },
-    "contrast": {"body": 4.5, "large": 3.0},
-    "touch": {"min": 44},
-    "alignSlack": {"min": 2, "max": 8},
-}
 
-_SEED: list[dict[str, Any]] = [
-    {
-        "name": "Website 默认",
-        "scenes": "website",
-        "is_default": 1,
-        "sort_order": 10,
-        "note": "桌面站点 / 落地页：语义色 + 字阶 + 组件尺寸（8px 栅格）",
-        "tokens": {
-            **DEFAULT_TOKENS,
-            "margin": {"safe": 16, "bottomCta": 16},
-            "touch": {"min": 40},
-        },
-    },
-    {
-        "name": "Mobile 默认",
-        "scenes": "mobile",
-        "is_default": 1,
-        "sort_order": 20,
-        "note": "App / H5：触控与底栏更严；字阶略收",
-        "tokens": {
-            **DEFAULT_TOKENS,
-            "margin": {"safe": 16, "bottomCta": 24},
-            "touch": {"min": 44},
-            "type": {
-                **DEFAULT_TOKENS["type"],
-                "size": {
-                    "display": 34,
-                    "h1": 28,
-                    "h2": 20,
-                    "h3": 18,
-                    "bodyLg": 16,
-                    "body": 15,
-                    "caption": 12,
-                    "tiny": 10,
-                    "largeText": 22,
-                },
-            },
-            "component": {
-                **DEFAULT_TOKENS["component"],
-                "button": {
-                    **DEFAULT_TOKENS["component"]["button"],
-                    "height": {"sm": 32, "md": 40, "lg": 48},
-                },
-                "nav": {"height": 48, "itemGap": 8},
-            },
-        },
-    },
-    {
-        "name": "海报默认",
-        "scenes": "poster",
-        "is_default": 1,
-        "sort_order": 30,
-        "note": "海报：更大字阶与安全边；色相可略放宽",
-        "tokens": {
-            **DEFAULT_TOKENS,
-            "margin": {"safe": 24, "bottomCta": 24},
-            "gap": {"min": 8},
-            "type": {
-                **DEFAULT_TOKENS["type"],
-                "size": {
-                    "display": 64,
-                    "h1": 48,
-                    "h2": 32,
-                    "h3": 24,
-                    "bodyLg": 18,
-                    "body": 16,
-                    "caption": 14,
-                    "tiny": 12,
-                    "largeText": 32,
-                },
-            },
-            "color": {**DEFAULT_TOKENS["color"], "hueMax": 4},
-            "contrast": {"body": 4.5, "large": 3.0},
-        },
-    },
-    {
-        "name": "图像默认",
-        "scenes": "image",
-        "is_default": 1,
-        "sort_order": 40,
-        "note": "插画/图标：边距与对比度底线；圆角档略多",
-        "tokens": {
-            **DEFAULT_TOKENS,
-            "margin": {"safe": 16, "bottomCta": 16},
-            "color": {**DEFAULT_TOKENS["color"], "hueMax": 6},
-            "radiusAllowed": [0, 4, 8, 12, 16, 24, 32],
-        },
-    },
-]
+def _load_tokens_seed() -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
+    path = Path(__file__).resolve().parents[2] / "data" / "design_tokens_seed.json"
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return "", {}, []
+    if not isinstance(parsed, dict):
+        return "", {}, []
+    ver = str(parsed.get("schemaVersion") or "").strip()
+    default = parsed.get("defaultTokens")
+    if not isinstance(default, dict):
+        default = {}
+    else:
+        default = dict(default)
+    if ver and not default.get("schemaVersion"):
+        default["schemaVersion"] = ver
+    packs_raw = parsed.get("packs") or []
+    packs = (
+        [x for x in packs_raw if isinstance(x, dict)]
+        if isinstance(packs_raw, list)
+        else []
+    )
+    return ver, default, packs
+
+
+TOKEN_SCHEMA_VERSION, DEFAULT_TOKENS, _SEED = _load_tokens_seed()
 
 
 def _csv_has(csv: str, token: str) -> bool:

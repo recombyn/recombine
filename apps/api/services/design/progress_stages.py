@@ -3,41 +3,41 @@
 Emits `explored` parent + nested `item` lines for:
 prepare → scene → prompt → model → lookup → validate → ops →
 scene_check → critic → refine → done
+
+Labels / event map: apps/api/data/progress_stages.json
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
-# Fixed pipeline — every runtime phase the user should see.
-STAGE_ITEMS: dict[str, str] = {
-    "prepare": "准备任务与上下文",
-    "scene": "确定场景与画布",
-    "prompt": "组装设计提示",
-    "model_wait": "等待模型规划",
-    "model_stream": "模型输出方案",
-    "lookup": "检索 skill / 规则 / 知识 / 美学",
-    "validate": "校验工具操作",
-    "ops": "画到画布上",
-    "scene_check": "回读画布状态",
-    "critic": "目标检查",
-    "refine": "根据检查结果调整",
-    "done": "完成",
-}
 
-_EVENT_STAGE: dict[str, str] = {
-    "decision": "prepare",
-    "skill_start": "model_wait",
-    "skill_progress": "model_stream",
-    "thinking": "model_stream",
-    "token": "model_stream",
-    "tool_ops": "ops",
-    "svg_delta": "ops",
-    "drawing": "ops",
-    "scene_feedback_request": "scene_check",
-    "result": "done",
-    "chat_done": "done",
-}
+def _load_progress_stages() -> tuple[dict[str, str], dict[str, str]]:
+    path = Path(__file__).resolve().parents[2] / "data" / "progress_stages.json"
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, {}
+    if not isinstance(parsed, dict):
+        return {}, {}
+    items_raw = parsed.get("stageItems") or {}
+    events_raw = parsed.get("eventStage") or {}
+    items = (
+        {str(k): str(v) for k, v in items_raw.items()}
+        if isinstance(items_raw, dict)
+        else {}
+    )
+    events = (
+        {str(k): str(v) for k, v in events_raw.items()}
+        if isinstance(events_raw, dict)
+        else {}
+    )
+    return items, events
+
+
+STAGE_ITEMS, _EVENT_STAGE = _load_progress_stages()
 
 _STAGE_ORDER = list(STAGE_ITEMS.keys())
 EXPLORE_ID = "explore-pipeline"
@@ -97,7 +97,7 @@ def _item_label(
     elapsed_s: int | None = None,
     extra: str | None = None,
 ) -> str:
-    base = STAGE_ITEMS.get(stage) or STAGE_ITEMS["prepare"]
+    base = STAGE_ITEMS.get(stage) or STAGE_ITEMS.get("prepare") or stage
     if extra:
         base = f"{base}（{extra}）"
     if elapsed_s is None or stage in ("ops", "done"):

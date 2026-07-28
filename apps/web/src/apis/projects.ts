@@ -56,12 +56,38 @@ export type PatchProjectBody = {
   canvas?: Record<string, unknown>;
 };
 
-export const fetchProjects = (params: { page: number; pageSize: number }) =>
-  request<PaginatedProjects>({
+const PROJECTS_LIST_TTL_MS = 60_000;
+let _projectsPage1Cache: {
+  key: string;
+  at: number;
+  data: PaginatedProjects;
+} | null = null;
+
+export function invalidateProjectsListCache() {
+  _projectsPage1Cache = null;
+}
+
+export const fetchProjects = (params: { page: number; pageSize: number }) => {
+  const key = `${params.page}:${params.pageSize}`;
+  if (
+    params.page === 1 &&
+    _projectsPage1Cache &&
+    _projectsPage1Cache.key === key &&
+    Date.now() - _projectsPage1Cache.at < PROJECTS_LIST_TTL_MS
+  ) {
+    return Promise.resolve(_projectsPage1Cache.data);
+  }
+  return request<PaginatedProjects>({
     url: '/api/v1/projects',
     method: 'get',
     params,
+  }).then((data) => {
+    if (params.page === 1) {
+      _projectsPage1Cache = { key, at: Date.now(), data };
+    }
+    return data;
   });
+};
 
 export const fetchProject = (id: string) =>
   request<{ project: ProjectDto }>({
@@ -78,6 +104,9 @@ export const upsertProjectApi = (
     method: 'put',
     headers,
     data,
+  }).then((res) => {
+    invalidateProjectsListCache();
+    return res;
   });
 
 /** Node-level incremental sync — server merges under the same revision lock. */
@@ -91,12 +120,18 @@ export const patchProjectApi = (
     method: 'patch',
     headers,
     data,
+  }).then((res) => {
+    invalidateProjectsListCache();
+    return res;
   });
 
 export const deleteProjectApi = (id: string) =>
   request<{ ok: boolean }>({
     url: `/api/v1/projects/${encodeURIComponent(id)}`,
     method: 'delete',
+  }).then((res) => {
+    invalidateProjectsListCache();
+    return res;
   });
 
 /** Batch delete — one request for many project ids. */
@@ -105,4 +140,7 @@ export const deleteProjectsApi = (ids: string[]) =>
     url: '/api/v1/projects/batch-delete',
     method: 'post',
     data: { ids },
+  }).then((res) => {
+    invalidateProjectsListCache();
+    return res;
   });

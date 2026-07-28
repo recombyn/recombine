@@ -53,6 +53,6 @@ def test_build_system_includes_field_contract():
     }
     text = build_vision_structure_system(rules)
     assert "看图测试说明" in text
-    assert "FIELD CONTRACT" in text
+    assert "字段契约" in text
     assert "page.theme" in text
-    assert "REQUIRED" in format_schema_for_prompt(parse_structure_schema(rules["aesthetics.vision.structure_schema"]))
+    assert "必填" in format_schema_for_prompt(parse_structure_schema(rules["aesthetics.vision.structure_schema"]))

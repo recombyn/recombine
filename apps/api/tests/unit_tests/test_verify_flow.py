@@ -2,7 +2,7 @@
 """Verify loop + patch scope + graph edges."""
 from __future__ import annotations
 
-from services.design.admin_store import _DEFAULT_AGENT_FLOW_GRAPH, _normalize_agent_flow_graph
+from services.design.admin_store import _load_default_agent_flow_graph, _normalize_agent_flow_graph
 from services.design.agent_controller import (
     _ops_patch_too_broad,
     _structure_verify_issues,
@@ -47,7 +47,7 @@ def test_patch_create_not_broad():
 
 
 def test_observe_goes_to_verify():
-    graph, _ = _normalize_agent_flow_graph(_DEFAULT_AGENT_FLOW_GRAPH)
+    graph, _ = _normalize_agent_flow_graph(_load_default_agent_flow_graph())
     ids = {n["id"] for n in graph["nodes"]}
     assert "verify" in ids
     obs = next(n for n in graph["nodes"] if n["id"] == "observe")
@@ -60,7 +60,7 @@ def test_observe_goes_to_verify():
 
 
 def test_verify_edges():
-    graph, _ = _normalize_agent_flow_graph(_DEFAULT_AGENT_FLOW_GRAPH)
+    graph, _ = _normalize_agent_flow_graph(_load_default_agent_flow_graph())
     ver = next(n for n in graph["nodes"] if n["id"] == "verify")
     outs = [e for e in graph["edges"] if e.get("source") == "verify"]
 
@@ -81,7 +81,7 @@ def test_verify_edges():
 
 
 def test_patch_broad_edge_from_thought():
-    graph, _ = _normalize_agent_flow_graph(_DEFAULT_AGENT_FLOW_GRAPH)
+    graph, _ = _normalize_agent_flow_graph(_load_default_agent_flow_graph())
     thought = next(n for n in graph["nodes"] if n["id"] == "thought")
     outs = [e for e in graph["edges"] if e.get("source") == "thought"]
     chosen, d = choose_outgoing_edges(

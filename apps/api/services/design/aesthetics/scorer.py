@@ -492,41 +492,18 @@ def retrieve_aesthetic_refs(
         if isinstance(r, dict) and r.get("id") is not None
     ][:8]
 
-    # Runtime: extract concrete DESIGN_TOKENS (palette + scene DS).
-    token_guidance = ""
-    analyzed: list[dict[str, Any]] = []
-    try:
-        from services.design.aesthetics.token_extract import (
-            build_aesthetic_token_guidance,
-        )
-
-        token_guidance, analyzed = build_aesthetic_token_guidance(
-            scene=sc,
-            good_refs=good_refs,
-            ok_refs=ok_refs,
-            bad_refs=bad_refs,
-            user_ref_urls=user_urls,
-            canvas_w=canvas_w,
-            canvas_h=canvas_h,
-            slim_corpus=has_user,
-        )
-    except Exception:
-        logger.exception("aesthetic token extract failed")
-    out["analyzedTokens"] = analyzed
-
-    # Slim ladder when user refs dominate: bad-only notes.
+    # Vision-first: CLIP ranks sample images; do NOT inject 短评/tags/DESIGN_TOKENS.
+    # The next thought turn attaches imageUrls and the model should look at them.
     if has_user:
         slim_lines = [
-            "AESTHETIC_REFS（用户附件为主 — 请模仿上方用户令牌）：",
-            "已跳过语料优秀/可用样本（存在用户附件）。可选反例规避提示：",
+            "AESTHETIC_REFS（用户附件为主 — 请看图模仿用户风格）：",
+            "已跳过语料优秀/可用样本图（存在用户附件）。可选反例图仍附上时请避开其失败模式。",
+            "以附图视觉为准。",
         ]
         if bad_refs:
             for i, r in enumerate(bad_refs, start=1):
                 name = (r.get("name") or f"#{r.get('id')}")[:80]
-                note = (r.get("comment") or "").strip()
-                slim_lines.append(
-                    f"{i}. [bad] {name}" + (f" — {note[:120]}" if note else "")
-                )
+                slim_lines.append(f"{i}. [bad] {name} — 见附图，避开")
         else:
             slim_lines.append("（本场景暂无反例样本）")
         ladder = "\n".join(slim_lines)
@@ -536,18 +513,16 @@ def retrieve_aesthetic_refs(
             ok_refs=ok_refs,
             bad_refs=bad_refs,
             matched_by_clip=used_clip,
-            include_vision_hint=False,
+            include_vision_hint=True,
         )
 
-    if token_guidance and ladder:
-        out["guidance"] = f"{token_guidance}\n\n{ladder}"
-    else:
-        out["guidance"] = token_guidance or ladder
+    out["guidance"] = ladder
+    out["analyzedTokens"] = []
 
-    if has_user and (token_guidance or user_urls):
+    if has_user and (user_urls or bad_refs or ladder):
         out["ok"] = True
         out["status"] = "user_primary"
-    elif not has_user and not any_refs and not token_guidance:
+    elif not has_user and not any_refs:
         out["status"] = "skipped"
         out["reason"] = "empty ranked refs"
     out["ms"] = int((_time.time() - t0) * 1000)
@@ -560,13 +535,9 @@ def format_aesthetic_refs_block(
     ok_refs: list[dict[str, Any]] | None = None,
     bad_refs: list[dict[str, Any]] | None = None,
     matched_by_clip: bool = True,
-    include_vision_hint: bool = False,
+    include_vision_hint: bool = True,
 ) -> str:
-    """Prompt block: imitate good, exceed ok baseline, avoid bad.
-
-    Concrete tokens live in AESTHETIC_DESIGN_TOKENS (runtime extract). This ladder
-    is qualitative notes only — do not tell the model to glance at screenshots.
-    """
+    """Prompt block: CLIP-ranked sample images — look at attachments, not 短评/令牌."""
     goods = [r for r in (refs or []) if isinstance(r, dict)]
     mids = [r for r in (ok_refs or []) if isinstance(r, dict)]
     bads = [r for r in (bad_refs or []) if isinstance(r, dict)]
@@ -577,8 +548,6 @@ def format_aesthetic_refs_block(
         out_lines: list[str] = []
         for i, r in enumerate(rows, start=1):
             name = (r.get("name") or f"#{r.get('id')}")[:80]
-            tags = (r.get("tags") or "").strip()
-            comment = (r.get("comment") or "").strip()
             score = r.get("score")
             grade = str(r.get("grade") or "").strip() or "?"
             bits = [f"{i}. [{grade}] {name}"]
@@ -587,32 +556,27 @@ def format_aesthetic_refs_block(
                 bits.append(f"scene={sc_from}")
             if isinstance(score, (int, float)) and float(score) > 0:
                 bits.append(f"sim={float(score):.2f}")
-            if tags:
-                bits.append(f"tags={tags[:80]}")
             out_lines.append(" | ".join(bits))
-            if comment:
-                out_lines.append(f"   备注：{comment[:200]}")
             if include_vision_hint:
                 url = (r.get("imageUrl") or "").strip()
                 if url:
-                    out_lines.append(f"   已附视觉参考图 — {verb}")
+                    out_lines.append(f"   已附图 — 请看图并{verb}（配色/疏密/层级/装饰）")
+                else:
+                    out_lines.append(f"   （无图）仅作等级标记 — {verb}")
         return out_lines
 
     lines = [
-        "AESTHETIC_REFS（质量阶梯说明 — 请服从上方 AESTHETIC_DESIGN_TOKENS）：",
-        "不要逐字抄样本文案。优先用令牌，不要靠猜图。",
+        "AESTHETIC_REFS（向量检索样本图 — 请看附图）：",
+        "优秀→模仿并达到其水准；可用→超越；反例→避开失败模式。勿逐字抄样本文案。",
     ]
     if not matched_by_clip:
-        lines.append("（按时间排序；CLIP 文本匹配不可用）")
+        lines.append("（按时间排序；CLIP 向量匹配不可用）")
 
     if goods:
         lines.extend(
             [
                 "",
-                "优秀（grade=good — 模仿；以此为目标水准）：",
-                "1) 留白：边距与模块间距对齐参考密度，勿贴边/勿挤成一团/勿大片空洞线框。",
-                "2) 层级：标题/副文/正文字号与权重至少两档，勿全页同字号。",
-                "3) 色数：有效强调色通常 ≤6（中性色不计），对齐参考色板纪律。",
+                "优秀（grade=good — 看图模仿；目标水准）：",
             ]
         )
         lines.extend(_lines_for(goods, verb="模仿"))
@@ -621,8 +585,7 @@ def format_aesthetic_refs_block(
         lines.extend(
             [
                 "",
-                "可用（grade=ok — 仅作基线；能用但不算出色 — 请超越）：",
-                "留意平庸之处（节奏弱、层级糊、配色保守发灰），并明显往优秀水准推。",
+                "可用（grade=ok — 看图了解基线，请明显超越）：",
             ]
         )
         lines.extend(_lines_for(mids, verb="超越"))
@@ -633,8 +596,7 @@ def format_aesthetic_refs_block(
         lines.extend(
             [
                 "",
-                "反例（grade=bad — 避开这些失败模式；不要复现）：",
-                "观察其弱点（拥挤、层级扁平、配色嘈杂、线框式空盒、对比不足），并做相反处理。",
+                "反例（grade=bad — 看图避开这些失败模式）：",
             ]
         )
         lines.extend(_lines_for(bads, verb="避开"))
@@ -644,7 +606,7 @@ def format_aesthetic_refs_block(
         )
 
     lines.append(
-        "以优秀质量输出 tool_ops：超越可用基线，避开反例失败模式。"
+        "根据附图写出具体配色与疏密到 tool_ops；将 need_aesthetics 设为 false。"
     )
     return "\n".join(lines)
 
@@ -678,7 +640,7 @@ def format_aesthetics_catalog(*, scene: str = "website") -> str:
     return (
         f"美学样本库（场景={sc}）："
         f"优秀≈{counts['good']}，可用≈{counts['ok']}，反例≈{counts['bad']}。\n"
-        "设 need_aesthetics=true 可获取排序参考与设计令牌"
+        "设 need_aesthetics=true：CLIP 向量检索样本图并附图，请看图"
         "（模仿优秀 / 超越可用 / 避开反例）。\n"
         "当用户附带图片时：仅当 USER_PROMPT 要求匹配/模仿该图风格/配色/布局时，"
         "才设 use_user_refs=true；若附件仅为内容素材、占位，或用户拒绝风格参考"

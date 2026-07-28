@@ -2,415 +2,71 @@
 
 Each action has type + hint/schema for the model; apply runs on the client.
 This module seeds missing rows into design_canvas_tool (never overwrites non-empty Admin hints).
+
+Seed source: apps/api/data/canvas_actions_seed.json
 """
 
 from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from services.db import connect
 
-# kind values align with Admin canvasTools filters.
-_DEFAULT_ACTIONS: list[dict[str, Any]] = [
-    {
-        "op_key": "update_node",
-        "kind": "mutate",
-        "label": "更新节点",
-        "sort_order": 10,
-        "model_hint": (
-            "Patch an existing node by nodeId|id. Geometry: x,y,width,height. "
-            "Style: fill,stroke,opacity,cornerRadius,rotation,blendMode,name, "
-            "flipX/flipY, text styles…. Visibility/edit: hidden (boolean — hide "
-            "from canvas), locked (boolean — block transforms). "
-            "hidden/locked map to attrs as 'true'|'false'."
-        ),
-        "args_schema": {
-            "nodeId": "string",
-            "id": "string?",
-            "x": "number?",
-            "y": "number?",
-            "width": "number?",
-            "height": "number?",
-            "fill": "string?",
-            "stroke": "string?",
-            "opacity": "number?",
-            "text": "string?",
-            "cornerRadius": "number?",
-            "rotation": "number?",
-            "blendMode": "string?",
-            "name": "string?",
-            "flipX": "boolean?",
-            "flipY": "boolean?",
-            "hidden": "boolean?",
-            "locked": "boolean?",
-        },
-    },
-    {
-        "op_key": "create_shape",
-        "kind": "create",
-        "label": "新建形状",
-        "sort_order": 20,
-        "model_hint": (
-            "Add a shape. Args: shapeType|type = rect|ellipse|circle|line|arrow|"
-            "triangle|polygon|star|path|pen|pencil (+ path for pen/pencil/path; "
-            "sides for polygon/star), x,y,width,height, fill, stroke, borderWidth. "
-            "Pen=pen+path; 画笔=pencil+path (stroke-only; brushStyle?; pathPressure?). "
-            "Icons: create_svg / create_icon."
-        ),
-        "args_schema": {
-            "shapeType": (
-                "rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil"
-            ),
-            "x": "number",
-            "y": "number",
-            "width": "number",
-            "height": "number",
-            "sides": "number?",
-            "path": "string? SVG d or point list for pen/pencil",
-            "closed": "boolean?",
-            "brushStyle": "string? pencil brush preset",
-            "pathPressure": "string? csv 0.05-1 per point (pencil)",
-            "fill": "string?",
-            "stroke": "string?",
-            "borderWidth": "number?",
-            "name": "string?",
-        },
-    },
-    {
-        "op_key": "create_text",
-        "kind": "create",
-        "label": "新建文字",
-        "sort_order": 30,
-        "model_hint": "Add a text node. Args: text, x, y, width?, fontSize?, fill?, fontWeight?",
-        "args_schema": {
-            "text": "string",
-            "x": "number",
-            "y": "number",
-            "width": "number?",
-            "fontSize": "number?",
-            "fill": "string?",
-        },
-    },
-    {
-        "op_key": "create_image",
-        "kind": "create",
-        "label": "新建图片",
-        "sort_order": 40,
-        "model_hint": (
-            "Add an image node. Args: src|url or attachmentIndex (user attach), "
-            "x,y,width,height. Or genPrompt for AI image hydrate."
-        ),
-        "args_schema": {
-            "src": "string?",
-            "attachmentIndex": "number?",
-            "genPrompt": "string?",
-            "x": "number",
-            "y": "number",
-            "width": "number",
-            "height": "number",
-        },
-    },
-    {
-        "op_key": "create_svg",
-        "kind": "create",
-        "label": "新建SVG",
-        "sort_order": 50,
-        "model_hint": (
-            "Add SVG icon/illustration. Args: svg (required), x,y,width,height, fill?. "
-            "svg = full <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">…</svg> "
-            "OR fragment (<path d=\"…\"/> / <circle…/>). "
-            "path d: use spaced commands Mm Ll Hh Vv Cc Ss Qq Tt Aa Zz + numbers; "
-            "never glue arc params (bad: a22001…). Backend rejects invalid SVG and retries."
-        ),
-        "args_schema": {
-            "svg": "string (SVG markup, viewBox 0 0 24 24 preferred)",
-            "x": "number",
-            "y": "number",
-            "width": "number",
-            "height": "number",
-            "fill": "string?",
-        },
-    },
-    {
-        "op_key": "create_icon",
-        "kind": "create",
-        "label": "新建图标",
-        "sort_order": 55,
-        "model_hint": (
-            "Same as create_svg for icons. Prefer viewBox 0 0 24 24; valid path d only."
-        ),
-        "args_schema": {
-            "svg": "string (SVG markup, viewBox 0 0 24 24 preferred)",
-            "x": "number",
-            "y": "number",
-            "width": "number",
-            "height": "number",
-            "fill": "string?",
-        },
-    },
-    {
-        "op_key": "create_frame",
-        "kind": "frame",
-        "label": "新建画板",
-        "sort_order": 60,
-        "model_hint": "Create a frame/artboard. Args: x,y,width,height, name?",
-        "args_schema": {
-            "x": "number",
-            "y": "number",
-            "width": "number",
-            "height": "number",
-            "name": "string?",
-        },
-    },
-    {
-        "op_key": "delete_nodes",
-        "kind": "delete",
-        "label": "删除节点",
-        "sort_order": 70,
-        "model_hint": "Remove nodes by id. Args: nodeIds (string[]). Only when user asked to delete.",
-        "args_schema": {"nodeIds": "string[]"},
-    },
-    {
-        "op_key": "update_frame",
-        "kind": "frame",
-        "label": "更新画板",
-        "sort_order": 80,
-        "model_hint": (
-            "Update frame size/name/background/lock. Args: frameId|id (must match "
-            "FOCUS_FRAME_ID when set), width?, height?, name?, backgroundColor?, "
-            "locked? (boolean — prevent moving/resizing the artboard). "
-            "When FOCUS_FRAME_ID is present, always use that id — never retarget by name."
-        ),
-        "args_schema": {
-            "frameId": "string",
-            "width": "number?",
-            "height": "number?",
-            "name": "string?",
-            "backgroundColor": "string?",
-            "locked": "boolean?",
-        },
-    },
-    {
-        "op_key": "delete_frame",
-        "kind": "frame",
-        "label": "删除画板",
-        "sort_order": 90,
-        "model_hint": (
-            "Delete a frame. Args: frameId|id from SCENE_FRAMES. "
-            "Destructive — first turn must ask confirmation (reply+choices), "
-            "emit this op only after user confirms. Never put ids in reply."
-        ),
-        "args_schema": {"frameId": "string"},
-    },
-    {
-        "op_key": "align_nodes",
-        "kind": "arrange",
-        "label": "对齐节点",
-        "sort_order": 100,
-        "model_hint": (
-            "Align 2+ nodes. Args: nodeIds, mode=left|centerX|right|top|middle|bottom "
-            "(FE reads mode; centerX not center)."
-        ),
-        "args_schema": {
-            "nodeIds": "string[]",
-            "mode": "left|centerX|right|top|middle|bottom",
-        },
-    },
-    {
-        "op_key": "distribute_nodes",
-        "kind": "arrange",
-        "label": "分布节点",
-        "sort_order": 110,
-        "model_hint": "Distribute 3+ nodes. Args: nodeIds, axis=h|v (h=horizontal, v=vertical)",
-        "args_schema": {"nodeIds": "string[]", "axis": "h|v"},
-    },
-    {
-        "op_key": "reorder_nodes",
-        "kind": "arrange",
-        "label": "调整层级",
-        "sort_order": 120,
-        "model_hint": "Z-order. Args: nodeIds, action=front|back|forward|backward",
-        "args_schema": {
-            "nodeIds": "string[]",
-            "action": "front|back|forward|backward",
-        },
-    },
-    {
-        "op_key": "group_nodes",
-        "kind": "arrange",
-        "label": "编组",
-        "sort_order": 130,
-        "model_hint": "Group nodes. Args: nodeIds",
-        "args_schema": {"nodeIds": "string[]"},
-    },
-    {
-        "op_key": "ungroup_nodes",
-        "kind": "arrange",
-        "label": "取消编组",
-        "sort_order": 140,
-        "model_hint": "Ungroup. Args: nodeIds (group ids)",
-        "args_schema": {"nodeIds": "string[]"},
-    },
-    {
-        "op_key": "duplicate_nodes",
-        "kind": "arrange",
-        "label": "复制节点",
-        "sort_order": 150,
-        "model_hint": "Duplicate nodes. Args: nodeIds, offsetX?, offsetY?",
-        "args_schema": {
-            "nodeIds": "string[]",
-            "offsetX": "number?",
-            "offsetY": "number?",
-        },
-    },
-    {
-        "op_key": "flip_nodes",
-        "kind": "arrange",
-        "label": "翻转节点",
-        "sort_order": 160,
-        "model_hint": "Flip nodes. Args: nodeIds, flipX?=true and/or flipY?=true",
-        "args_schema": {
-            "nodeIds": "string[]",
-            "flipX": "boolean?",
-            "flipY": "boolean?",
-        },
-    },
-    {
-        "op_key": "boolean_op",
-        "kind": "arrange",
-        "label": "布尔运算",
-        "sort_order": 170,
-        "model_hint": "Boolean on shapes. Args: nodeIds (2+), mode=union|subtract|intersect|exclude",
-        "args_schema": {
-            "nodeIds": "string[]",
-            "mode": "union|subtract|intersect|exclude",
-        },
-    },
-    {
-        "op_key": "set_canvas_background",
-        "kind": "canvas",
-        "label": "画布背景",
-        "sort_order": 180,
-        "model_hint": (
-            "Set infinite-canvas stage background (not artboard fill). "
-            "Args: color|fill|backgroundColor, fillType?=solid|linear|radial|"
-            "angular|diffuse|image, fillEnd?, gradientAngle?, opacity?"
-        ),
-        "args_schema": {
-            "color": "string?",
-            "fill": "string?",
-            "backgroundColor": "string?",
-            "fillType": "solid|linear|radial|angular|diffuse|image?",
-            "fillEnd": "string?",
-            "gradientAngle": "number?",
-            "opacity": "number?",
-        },
-    },
-    {
-        "op_key": "set_viewport",
-        "kind": "canvas",
-        "label": "视口",
-        "sort_order": 190,
-        "model_hint": (
-            "Zoom/fit. Args: action=zoom_in|zoom_out|fit|set; "
-            "for set pass percent (e.g. 100) or zoom (1.0)."
-        ),
-        "args_schema": {
-            "action": "zoom_in|zoom_out|fit|set",
-            "percent": "number?",
-            "zoom": "number?",
-        },
-    },
-    {
-        "op_key": "image_process",
-        "kind": "image",
-        "label": "图片处理",
-        "sort_order": 200,
-        "model_hint": (
-            "Run image toolbar pipeline on a node (spawns processing clone). "
-            "Args: nodeId (image id), kind=upscale|removeBg|eraser|"
-            "editText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. "
-            "Optional: targetWidth, targetHeight, meta (object)."
-        ),
-        "args_schema": {
-            "nodeId": "string",
-            "kind": (
-                "upscale|removeBg|eraser|editText|"
-                "multiAngle|expand|adjust|crop|flipRotate|moveObject|vector"
-            ),
-            "targetWidth": "number?",
-            "targetHeight": "number?",
-            "meta": "object?",
-        },
-    },
-    {
-        "op_key": "export_canvas",
-        "kind": "export",
-        "label": "导出",
-        "sort_order": 210,
-        "model_hint": (
-            "Export canvas/selection download. Args: format=png|jpeg|svg, "
-            "nodeIds? (selection), multiplier? (scale, default 1), filename?"
-        ),
-        "args_schema": {
-            "format": "png|jpeg|svg",
-            "nodeIds": "string[]?",
-            "multiplier": "number?",
-            "filename": "string?",
-        },
-    },
-]
+_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_SEED_PATH = _DATA_DIR / "canvas_actions_seed.json"
+
+_actions_cache: list[dict[str, Any]] | None = None
+_stale_checks_cache: dict[str, dict[str, Any]] | None = None
 
 
-# Seed rows whose older args_schema keys diverge from FE executeDesignTool.
-# On boot we refresh hint+schema when stored schema still uses these markers
-# or is missing the FE-canonical field.
-_STALE_SCHEMA_CHECKS: dict[str, dict[str, Any]] = {
-    "align_nodes": {"must_contain": ("mode",), "stale_if_contains": ('"align"',)},
-    "distribute_nodes": {"must_contain": ('"h|v"',), "stale_if_contains": ()},
-    "reorder_nodes": {
-        "must_contain": ('"action"',),
-        "stale_if_contains": ('"order"', "bring_to_front"),
-    },
-    "flip_nodes": {
-        "must_contain": ("flipX",),
-        "stale_if_contains": ('"axis"',),
-    },
-    "set_viewport": {
-        "must_contain": ('"action"',),
-        "stale_if_contains": (),
-    },
-    "set_canvas_background": {
-        "must_contain": ("color", "fillType"),
-        "stale_if_contains": (),
-    },
-    "image_process": {
-        "must_contain": ("moveObject", "vector"),
-        "stale_if_contains": (),
-    },
-    "create_shape": {
-        "must_contain": ("triangle", "pen"),
-        "stale_if_contains": (),
-    },
-    "create_svg": {
-        "must_contain": ("viewBox",),
-        "stale_if_contains": (),
-    },
-    "create_icon": {
-        "must_contain": ("viewBox",),
-        "stale_if_contains": (),
-    },
-    "update_node": {
-        "must_contain": ("hidden", "locked"),
-        "stale_if_contains": (),
-    },
-    "update_frame": {
-        "must_contain": ("locked",),
-        "stale_if_contains": (),
-    },
-}
+def _load_seed() -> dict[str, Any]:
+    try:
+        parsed = json.loads(_SEED_PATH.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def default_canvas_actions() -> list[dict[str, Any]]:
+    """Seed actions from data/canvas_actions_seed.json (cold-start / fallback)."""
+    global _actions_cache
+    if _actions_cache is not None:
+        return _actions_cache
+    seed = _load_seed()
+    raw = seed.get("actions")
+    out: list[dict[str, Any]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("op_key") or "").strip()
+            if not key:
+                continue
+            out.append(item)
+    _actions_cache = out
+    return out
+
+
+def _stale_schema_checks() -> dict[str, dict[str, Any]]:
+    global _stale_checks_cache
+    if _stale_checks_cache is not None:
+        return _stale_checks_cache
+    seed = _load_seed()
+    raw = seed.get("staleSchemaChecks")
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if not isinstance(v, dict):
+                continue
+            out[str(k)] = {
+                "must_contain": tuple(v.get("must_contain") or ()),
+                "stale_if_contains": tuple(v.get("stale_if_contains") or ()),
+            }
+    _stale_checks_cache = out
+    return out
 
 
 def _schema_is_stale(op_key: str, existing_schema: str, seed_schema: str) -> bool:
@@ -419,7 +75,7 @@ def _schema_is_stale(op_key: str, existing_schema: str, seed_schema: str) -> boo
         return True
     if existing == seed_schema:
         return False
-    check = _STALE_SCHEMA_CHECKS.get(op_key)
+    check = _stale_schema_checks().get(op_key)
     if not check:
         return False
     for needle in check.get("stale_if_contains") or ():
@@ -439,7 +95,7 @@ def ensure_action_registry(*, force_hints: bool = False) -> int:
     now = time.time()
     changed = 0
     with connect() as conn:
-        for item in _DEFAULT_ACTIONS:
+        for item in default_canvas_actions():
             key = item["op_key"]
             schema_s = json.dumps(item.get("args_schema") or {}, ensure_ascii=False)
             row = conn.execute(
@@ -564,4 +220,3 @@ def ensure_action_registry(*, force_hints: bool = False) -> int:
                     pass
         conn.commit()
     return changed
-

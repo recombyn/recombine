@@ -223,10 +223,10 @@ def _canvas_rows_for_tools() -> list[dict[str, Any]]:
     except Exception:
         pass
     try:
-        from services.design.action_registry import _DEFAULT_ACTIONS
+        from services.design.action_registry import default_canvas_actions
 
         out: list[dict[str, Any]] = []
-        for a in _DEFAULT_ACTIONS:
+        for a in default_canvas_actions():
             key = str(a.get("op_key") or "").strip()
             if not key:
                 continue

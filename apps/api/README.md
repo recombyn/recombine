@@ -1,4 +1,70 @@
-# 安装
+# Resume Scene API
+
+FastAPI 后端：画布 Scene 解析 / 项目与广场 / Design Agent / Admin 配置。
+
+OpenAPI：http://127.0.0.1:8000/docs
+
+## 目录结构
+
+```
+apps/api/
+  main.py                 # FastAPI 入口（startup seed / catalog）
+  api/
+    router.py             # 汇总路由
+    v1/                   # HTTP 层（薄）：auth / projects / plaza / design / admin …
+  services/               # 业务层（按域分包）
+    design/               # Agent 流程、规则、字典、美学样本、编排运行时
+    plaza/ auth/ wallet/ llm/ …
+    seed.py               # 启动种子：字体、官方案例等
+  data/                   # 种子 JSON（版本管理；写入 DB 后以 DB 为准）
+  config/                 # settings
+  worker/                 # Celery
+  storage/                # 本地结果 / 上传
+  tests/
+  scripts/
+```
+
+约定：
+
+- **路由不写业务**：`api/v1/*.py` 只做参数校验与调用 `services/`
+- **种子在 `data/`**：流程 / 字典 / 规则默认值用 JSON，避免大段 Python 字面量
+- **Admin 改过的值以 DB 为准**：`ensure_*` 只 INSERT 缺失 key，不覆盖已有配置
+
+## `data/` 种子说明
+
+| 文件 | 用途 |
+|------|------|
+| `agent_flow_default_graph.json` | 默认 Agent 流程图（节点 / 边） |
+| `agent_flow_phase_map.json` | phase → 节点映射（复盘高亮） |
+| `agent_flow_node_templates.json` | 流程设计器左侧节点调色板 |
+| `agent_flow_action_contracts.json` | 阶段 / 节点动作契约（Inspector 绑定） |
+| `canvas_actions_seed.json` | 画布工具 op（`design_canvas_tool` 冷启动种子） |
+| `stage_rule_defaults.json` | 全局规则默认值与描述（提示词 key、开关等） |
+| `design_knowledge_seed.json` | 设计知识库种子（kind 标签 + 条目） |
+| `design_tokens_seed.json` | Design Token 默认包（schemaVersion + packs） |
+| `llm_models_seed.json` | LLM 模型目录 + 生图尺寸预设 + 废弃/过期描述 |
+| `progress_stages.json` | 设计运行阶段文案与事件→阶段映射 |
+| `design_dicts_seed.json` | Admin 字典类型与条目 |
+| `fonts_seed.json` | 字体目录 |
+| `official_cases/` | 官方案例（首页灵感 / 广场种子） |
+
+修改种子后：新环境会自动 seed；已有库需按业务决定是否手工同步或 bump dict `rev`。
+
+## Design / Admin 相关服务
+
+| 模块 | 职责 |
+|------|------|
+| `services/design/flow_runtime.py` | 运行时执行已发布图 |
+| `services/design/admin_store.py` | Admin：流程 CRUD、规则、节点模板、动作契约、复盘 |
+| `services/design/dict_store.py` | 字典 |
+| `services/design/knowledge_store.py` | 设计知识 |
+| `services/design/quality_sample_store.py` | 美学样本 |
+| `services/design/agent_controller.py` | Agent 主控 |
+| `services/design/orchestrator.py` | 任务编排 |
+
+Admin HTTP 前缀：`/api/v1/admin/...`（需管理员会话）。
+
+## 安装
 
 ```bash
 cd apps/api
@@ -11,21 +77,19 @@ pip install -e ../../packages/scene-builder-py
 # 再装 API（含 Celery / Redis / pdf2image）
 pip install -e .
 
-# OCR 可选（阶段二）
+# OCR 可选
 pip install -e ".[ocr,dev]"
-# 另装 PaddlePaddle（按平台选择，示例 CPU）
-# pip install paddlepaddle -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
 ```
 
-## 阶段一运行
+## 本地运行
 
-需要本机/容器具备：
+需要：
 
 - **Redis**（broker + job 状态）
-- **poppler**（`pdf2image`；Windows 需安装并配置 `POPPLER_PATH`）
-- **LibreOffice**（DOCX→PDF；配置 `LIBREOFFICE_PATH`）
+- **poppler**（`pdf2image`；Windows 配置 `POPPLER_PATH`）
+- **LibreOffice**（DOCX→PDF；`LIBREOFFICE_PATH`）
 
-### 1. 启动 Redis
+### 1. Redis
 
 ```bash
 # 仓库根目录
@@ -37,6 +101,7 @@ docker compose up -d redis
 ```bash
 cd apps/api
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
+# 或仓库根：npm run dev:api
 ```
 
 ### 3. Celery worker（另开终端，cwd = apps/api）
@@ -45,84 +110,66 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 celery -A worker.celery_app.celery worker -l info
 ```
 
-Windows 若 `celery` 报错，可用：
+Windows：
 
 ```bash
 celery -A worker.celery_app.celery worker -l info --pool=solo
 ```
 
-### 环境变量示例（`apps/api/.env`）
+### 环境变量（`apps/api/.env`）
+
+复制 `.env.example`。常用项：
 
 ```env
 REDIS_URL=redis://localhost:6379/0
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 LIBREOFFICE_PATH=soffice
-# Windows 示例：
 # POPPLER_PATH=C:\poppler\Library\bin
 IMPORT_DPI=200
 USE_VISION=true
 OCR_LANG=ch
-SCENE_TARGET_WIDTH=794
-PALETTE_K=5
-ENABLE_SAM=false
-ENABLE_LAMA=false
 ```
 
-## 阶段二：页图视觉识别
+LLM / 对象存储等见 `.env.example`。
 
-管线：页图 → OpenCV 预处理 → PPStructure（有则）/ PaddleOCR → KMeans 色板 → Scene。
+## 导入管线
 
-- 未安装 OCR 时：数字 PDF 回退 `pdfplumber`；图片可能空文档 + warning
-- `meta.engines` / `meta.palette` 可在 job 结果里查看
-- SAM / LaMa 默认关闭，仅为可插拔钩子（见 `services/vision/sam.py`、`lama.py`）
-
-## 阶段三：S3 + 前端异步导入
-
-```bash
-pip install -e ".[storage]"
-```
-
-`.env` 中设 `S3_ENABLED=true` 并配置 endpoint / key / bucket（OSS、COS、MinIO、AWS 通用）。  
-前端导入已改为轮询 `/api/v1/import/jobs`，请保持 **API + Redis + Worker** 同时运行。
-
-## 阶段六：健康检查与联调
-
-```bash
-make health
-# 或
-python scripts/smoke_health.py
-```
-
-Docker（含 poppler）：
-
-```bash
-# 可选打入 OCR：INSTALL_OCR=true docker compose build api worker
-docker compose up -d redis api worker
-```
-
-前端在 Redis/Worker 不可用时会自动回退到同步导入接口。
-
-## 接口
-
-### 同步（兼容现有前端）
+### 同步（兼容）
 
 - `POST /api/v1/import/pdf`
 - `POST /api/v1/import/docx`
 - `POST /api/v1/import/image`
 
-返回 Scene JSON；同时会尽量把页图落到 `storage/results/_sync/pages/`。
-
 ### 异步（推荐）
 
-1. `POST /api/v1/import/jobs`  
-   form-data: `file`, `source_type`=`pdf|docx|image`  
-   → `{ "job_id": "...", "status": "queued" }`
+1. `POST /api/v1/import/jobs` → `{ job_id, status }`
+2. `GET /api/v1/import/jobs/{job_id}` → `queued|processing|done|failed`
 
-2. `GET /api/v1/import/jobs/{job_id}`  
-   → `queued|processing|done|failed`；`done` 时含 `document`、`meta.page_images`、`meta.palette`、`meta.engines`
+页图：`storage/results/{job_id}/pages/`。
 
-页图目录：`storage/results/{job_id}/pages/0001.png` …
+未装 OCR 时：数字 PDF 回退 pdfplumber；图片可能空文档。SAM / LaMa 默认关闭。
+
+## 存储（可选）
+
+```bash
+pip install -e ".[storage]"
+```
+
+`.env` 设 `S3_ENABLED=true` 并配置 endpoint / key / bucket。
+
+## 健康检查
+
+```bash
+# 仓库根
+make health
+# 或
+python scripts/smoke_health.py
+```
+
+```bash
+docker compose up -d redis api worker
+```
 
 ## Makefile（仓库根）
 
@@ -131,3 +178,13 @@ make dev-redis
 make dev-api
 make dev-worker
 ```
+
+## 测试
+
+```bash
+# 仓库根
+npm run test:api
+npm run test:api:unit
+```
+
+用例在 `tests/unit_tests/`、`tests/integration_tests/`。

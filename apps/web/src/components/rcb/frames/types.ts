@@ -10,6 +10,8 @@ export type ArtboardFrame = {
   layoutMode?: 'auto' | 'manual';
   /** When true, frame cannot be moved or resized. */
   locked?: boolean;
+  /** When true, artboard plate + chrome are hidden (layer panel eye). */
+  hidden?: boolean;
   /** When true, drag-resize / W·H edits keep width:height (Shift temporarily unlocks). */
   lockAspect?: boolean;
   /** When true, content outside the frame bounds is clipped (hidden). */

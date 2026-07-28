@@ -81,12 +81,32 @@ export type GenerateImageResult = {
   assets?: Array<{ url?: string | null; id?: string | null }> | null;
 };
 
-/** GET /api/v1/chat/models */
-export const listModels = () =>
-  request<ChatModelsResponse>({
+/** GET /api/v1/chat/models — session-cached (single-flight). */
+let _chatModels: ChatModelsResponse | null = null;
+let _chatModelsInflight: Promise<ChatModelsResponse> | null = null;
+
+export function invalidateChatModelsCache() {
+  _chatModels = null;
+  _chatModelsInflight = null;
+}
+
+export const listModels = (opts?: { force?: boolean }) => {
+  if (!opts?.force && _chatModels) return Promise.resolve(_chatModels);
+  if (!opts?.force && _chatModelsInflight) return _chatModelsInflight;
+  const run = request<ChatModelsResponse>({
     url: '/api/v1/chat/models',
     method: 'get',
-  });
+  })
+    .then((data) => {
+      _chatModels = data;
+      return data;
+    })
+    .finally(() => {
+      if (_chatModelsInflight === run) _chatModelsInflight = null;
+    });
+  _chatModelsInflight = run;
+  return run;
+};
 
 /** POST /api/v1/chat/image */
 export const generateImage = (

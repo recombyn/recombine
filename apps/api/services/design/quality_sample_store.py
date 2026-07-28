@@ -282,7 +282,7 @@ def list_quality_samples(
         total, rows = _run(False)
 
     return {
-        "items": [_pub(r) for r in rows],
+        "items": [_pub(r, include_thumb=True) for r in rows],
         "total": total,
         "page": page_n,
         "pageSize": page_size_n,

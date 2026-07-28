@@ -97,7 +97,7 @@ import {
   updateArtboardFrame,
   pushEditorHistory,
 } from '@/store/modules/editor';
-import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
+import { listSceneNodes, stackZIndex } from '@/components/rcb/scene/sceneDocument';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
 import {
   HtmlArtboardFrame,
@@ -762,9 +762,10 @@ export default function EditorPage() {
   const activeFrameId = document?.activeFrameId ?? null;
   const activeFrame = frames.find((f) => f.id === activeFrameId) ?? null;
   const selectedFrames = frames.filter((f) =>
-    selectedFrameIds.length
+    !f.hidden &&
+    (selectedFrameIds.length
       ? selectedFrameIds.includes(f.id)
-      : Boolean(activeFrameId && f.id === activeFrameId)
+      : Boolean(activeFrameId && f.id === activeFrameId))
   );
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const bottomHudRef = useRef<HTMLDivElement | null>(null);
@@ -1404,6 +1405,29 @@ export default function EditorPage() {
     [dispatch, document]
   );
 
+  const focusLayerFrame = useCallback(
+    (frameId: string) => {
+      dispatch(setActiveFrameId(frameId));
+      const frame = (document?.frames || []).find((f: any) => f?.id === frameId);
+      if (!frame) return;
+      const cx = Number(frame.x) + Math.max(1, Number(frame.width) || 1) / 2;
+      const cy = Number(frame.y) + Math.max(1, Number(frame.height) || 1) / 2;
+      const el = stageRef.current;
+      const vw = el?.clientWidth || el?.getBoundingClientRect().width || 0;
+      const vh = el?.clientHeight || el?.getBoundingClientRect().height || 0;
+      if (vw < 1 || vh < 1) return;
+      setCamera((c) => {
+        const z = Math.max(0.05, c.zoom || 1);
+        return {
+          zoom: c.zoom,
+          x: vw / 2 - cx * z,
+          y: vh / 2 - cy * z,
+        };
+      });
+    },
+    [dispatch, document]
+  );
+
   const zoomPercent = Math.round(camera.zoom * 100);
   const projectName = currentTemplate?.name || t('home.untitled');
 
@@ -1418,7 +1442,11 @@ export default function EditorPage() {
       <div className="relative flex min-h-0 flex-1">
         {layersOpen && !isMobileViewport ? (
           <div className="relative z-30 h-full shrink-0">
-            <LayerPanel onClose={() => setLayersOpen(false)} onSelectNode={focusLayerNode} />
+            <LayerPanel
+              onClose={() => setLayersOpen(false)}
+              onSelectNode={focusLayerNode}
+              onSelectFrame={focusLayerFrame}
+            />
           </div>
         ) : null}
 
@@ -1558,10 +1586,12 @@ export default function EditorPage() {
                 showGrid={isGridMode}
                 gridSize={gridSize}
               >
-                {frames.map((frame) => (
+                {frames.map((frame) =>
+                  frame.hidden ? null : (
                   <HtmlArtboardFrame
                     key={`body-${frame.id}`}
                     frame={frame}
+                    zIndex={stackZIndex(document, 'frame', frame.id)}
                     selected={
                       !isDevMode &&
                       (selectedFrameIds.length
@@ -1570,7 +1600,8 @@ export default function EditorPage() {
                     }
                     layer="body"
                   />
-                ))}
+                  )
+                )}
 
                 {/* Shapes live directly under the camera world layer — no fixed paper size. */}
                 <SvgCanvas
@@ -1639,7 +1670,8 @@ export default function EditorPage() {
                     }}
                   />
                 ) : null}
-                {frames.map((frame) => (
+                {frames.map((frame) =>
+                  frame.hidden ? null : (
                   <HtmlArtboardFrame
                     key={`label-${frame.id}`}
                     frame={frame}
@@ -1665,7 +1697,8 @@ export default function EditorPage() {
                     onMoveEnd={isDevMode ? undefined : onFrameMoveEnd}
                     layer="label"
                   />
-                ))}
+                  )
+                )}
 
                 {frameGuides.length ? (
                   <div
@@ -1929,6 +1962,10 @@ export default function EditorPage() {
               onClose={() => setLayersOpen(false)}
               onSelectNode={(nodeId) => {
                 focusLayerNode(nodeId);
+                setLayersOpen(false);
+              }}
+              onSelectFrame={(frameId) => {
+                focusLayerFrame(frameId);
                 setLayersOpen(false);
               }}
             />

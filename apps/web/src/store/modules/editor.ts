@@ -318,6 +318,9 @@ const editorSlice = createSlice({
       const frame = createFrame(framePartial);
       frames.push(frame);
       next.frames = frames;
+      const key = `frame:${frame.id}`;
+      const order = Array.isArray(next.stackOrder) ? next.stackOrder.map(String) : [];
+      if (!order.includes(key)) next.stackOrder = [...order, key];
       // Agent-created frames must not steal selection — only user clicks select.
       if (activate !== false) {
         next.activeFrameId = frame.id;
@@ -407,6 +410,13 @@ const editorSlice = createSlice({
       if (next.activeFrameId && idSet.has(next.activeFrameId)) {
         next.activeFrameId = frames[0]?.id ?? null;
       }
+      if (Array.isArray(next.stackOrder)) {
+        next.stackOrder = next.stackOrder.filter((key: string) => {
+          const k = String(key);
+          if (!k.startsWith('frame:')) return true;
+          return !idSet.has(k.slice(6));
+        });
+      }
       state.selectedFrameIds = (state.selectedFrameIds || []).filter((id) => !idSet.has(id));
       if (next.activeFrameId && !state.selectedFrameIds.includes(next.activeFrameId)) {
         state.selectedFrameIds = next.activeFrameId ? [next.activeFrameId] : [];
@@ -450,6 +460,7 @@ const editorSlice = createSlice({
         'x',
         'y',
         'locked',
+        'hidden',
         'processStatus',
         'processLabel',
         'processKind',

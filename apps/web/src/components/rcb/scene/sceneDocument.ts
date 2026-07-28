@@ -14,6 +14,121 @@ function createPage(id?: string) {
   };
 }
 
+/** Unified paint / layer order: `frame:id` | `node:id` (bottom → top). */
+export function stackFrameKey(id: string) {
+  return `frame:${id}`;
+}
+
+export function stackNodeKey(id: string) {
+  return `node:${id}`;
+}
+
+export function parseStackKey(
+  key: string
+): { kind: 'frame' | 'node'; id: string } | null {
+  if (typeof key !== 'string') return null;
+  if (key.startsWith('frame:')) return { kind: 'frame', id: key.slice(6) };
+  if (key.startsWith('node:')) return { kind: 'node', id: key.slice(5) };
+  return null;
+}
+
+function listRootNodeIds(doc: any): string[] {
+  const page = Array.isArray(doc?.pages) ? doc.pages[0] : null;
+  const fromPage = page?.children;
+  if (Array.isArray(fromPage)) return fromPage.filter(Boolean).map(String);
+  const fromRoot = doc?.deltaSetLike?.ROOT?.children;
+  return Array.isArray(fromRoot) ? fromRoot.filter(Boolean).map(String) : [];
+}
+
+/**
+ * Keep `doc.stackOrder` in sync with frames + root nodes.
+ * Empty → migrate legacy paint (frames under nodes). Missing entries append on top.
+ */
+export function reconcileStackOrder(doc: any): string[] {
+  if (!doc || typeof doc !== 'object') return [];
+  const frameIds = (Array.isArray(doc.frames) ? doc.frames : [])
+    .map((f: any) => (f?.id != null ? String(f.id) : ''))
+    .filter(Boolean);
+  const nodeIds = listRootNodeIds(doc);
+  const frameSet = new Set(frameIds);
+  const nodeSet = new Set(nodeIds);
+  const raw = Array.isArray(doc.stackOrder) ? doc.stackOrder.map(String) : [];
+
+  if (!raw.length) {
+    const migrated = [
+      ...frameIds.map(stackFrameKey),
+      ...nodeIds.map(stackNodeKey),
+    ];
+    doc.stackOrder = migrated;
+    return migrated;
+  }
+
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const key of raw) {
+    const parsed = parseStackKey(key);
+    if (!parsed) continue;
+    if (parsed.kind === 'frame' && !frameSet.has(parsed.id)) continue;
+    if (parsed.kind === 'node' && !nodeSet.has(parsed.id)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(key);
+  }
+  for (const id of frameIds) {
+    const key = stackFrameKey(id);
+    if (seen.has(key)) continue;
+    kept.push(key);
+    seen.add(key);
+  }
+  for (const id of nodeIds) {
+    const key = stackNodeKey(id);
+    if (seen.has(key)) continue;
+    kept.push(key);
+    seen.add(key);
+  }
+  doc.stackOrder = kept;
+  return kept;
+}
+
+/** 1-based CSS z-index from unified stack (0 if missing). */
+export function stackZIndex(doc: any, kind: 'frame' | 'node', id: string): number {
+  const order = Array.isArray(doc?.stackOrder) ? doc.stackOrder : [];
+  const key = kind === 'frame' ? stackFrameKey(id) : stackNodeKey(id);
+  const i = order.indexOf(key);
+  return i >= 0 ? i + 1 : 0;
+}
+
+function reorderKeysInList(
+  ids: string[],
+  selected: string[],
+  action: 'front' | 'back' | 'forward' | 'backward'
+): string[] {
+  if (!selected.length) return ids;
+  const rest = ids.filter((id) => !selected.includes(id));
+  if (action === 'front') return [...rest, ...selected];
+  if (action === 'back') return [...selected, ...rest];
+  if (action === 'forward') {
+    const working = [...ids];
+    for (let i = working.length - 2; i >= 0; i -= 1) {
+      if (selected.includes(working[i]) && !selected.includes(working[i + 1])) {
+        const tmp = working[i];
+        working[i] = working[i + 1];
+        working[i + 1] = tmp;
+      }
+    }
+    return working;
+  }
+  const working = [...ids];
+  for (let i = 1; i < working.length; i += 1) {
+    if (selected.includes(working[i]) && !selected.includes(working[i - 1])) {
+      const tmp = working[i];
+      working[i] = working[i - 1];
+      working[i - 1] = tmp;
+    }
+  }
+  return working;
+}
+
 function emptyDeltaSet() {
   return {
     ROOT: {
@@ -109,6 +224,7 @@ export function normalizeDocument(doc: any) {
   }
   next.activePageId = next.pages[0].id;
   syncRootChildren(next);
+  reconcileStackOrder(next);
   return next;
 }
 
@@ -1101,6 +1217,10 @@ export function addNodeToDocument(doc, nodeId, node) {
     page.children.push(nodeId);
   }
   syncRootChildren(next);
+  const key = stackNodeKey(nodeId);
+  const order = Array.isArray(next.stackOrder) ? next.stackOrder.map(String) : [];
+  if (!order.includes(key)) next.stackOrder = [...order, key];
+  else reconcileStackOrder(next);
   return next;
 }
 
@@ -1133,18 +1253,23 @@ export function mergeImportedIntoDocument(
   // Import artboard frames if present (offset too).
   if (Array.isArray(src.frames) && src.frames.length) {
     const frames = Array.isArray(next.frames) ? [...next.frames] : [];
+    const order = Array.isArray(next.stackOrder) ? [...next.stackOrder] : [];
     src.frames.forEach((f: any) => {
+      const newId = nanoid(8);
       frames.push({
         ...JSON.parse(JSON.stringify(f)),
-        id: nanoid(8),
+        id: newId,
         x: (Number(f.x) || 0) + ox,
         y: (Number(f.y) || 0) + oy,
       });
+      order.push(stackFrameKey(newId));
     });
     next.frames = frames;
+    next.stackOrder = order;
     if (!next.activeFrameId && frames[0]) next.activeFrameId = frames[0].id;
   }
 
+  reconcileStackOrder(next);
   return next;
 }
 
@@ -1159,6 +1284,7 @@ export function removeNodesFromDocument(doc, nodeIds: string[]) {
     });
   });
   syncRootChildren(next);
+  reconcileStackOrder(next);
   return next;
 }
 
@@ -1190,7 +1316,7 @@ export function listSceneNodes(doc) {
     .filter((item: any) => item.node);
 }
 
-/** Reorder selected nodes in z-order (ROOT / page children). */
+/** Reorder selected nodes in z-order (ROOT / page children + unified stack). */
 export function reorderNodesInDocument(
   doc: any,
   nodeIds: string[],
@@ -1203,36 +1329,45 @@ export function reorderNodesInDocument(
   const selected = nodeIds.filter((id) => ids.includes(id));
   if (!selected.length) return next;
 
-  const rest = ids.filter((id) => !selected.includes(id));
-
-  if (action === 'front') {
-    page.children = [...rest, ...selected];
-  } else if (action === 'back') {
-    page.children = [...selected, ...rest];
-  } else if (action === 'forward') {
-    // Move each selected id one step toward the end (keep relative order).
-    let working = [...ids];
-    for (let i = working.length - 2; i >= 0; i -= 1) {
-      if (selected.includes(working[i]) && !selected.includes(working[i + 1])) {
-        const tmp = working[i];
-        working[i] = working[i + 1];
-        working[i + 1] = tmp;
-      }
-    }
-    page.children = working;
-  } else if (action === 'backward') {
-    let working = [...ids];
-    for (let i = 1; i < working.length; i += 1) {
-      if (selected.includes(working[i]) && !selected.includes(working[i - 1])) {
-        const tmp = working[i];
-        working[i] = working[i - 1];
-        working[i - 1] = tmp;
-      }
-    }
-    page.children = working;
-  }
-
+  page.children = reorderKeysInList(ids, selected, action);
   syncRootChildren(next);
+
+  const selectedKeys = selected.map(stackNodeKey);
+  const stack = Array.isArray(next.stackOrder) ? next.stackOrder.map(String) : [];
+  next.stackOrder = reorderKeysInList(stack, selectedKeys, action);
+  reconcileStackOrder(next);
+  return next;
+}
+
+/** Reorder frames and/or nodes in the unified stack (and sync node page children). */
+export function reorderStackInDocument(
+  doc: any,
+  entries: Array<{ kind: 'frame' | 'node'; id: string }>,
+  action: 'front' | 'back' | 'forward' | 'backward'
+) {
+  const next = normalizeDocument(doc);
+  const selectedKeys = entries
+    .map((e) => (e.kind === 'frame' ? stackFrameKey(e.id) : stackNodeKey(e.id)))
+    .filter((key) => (next.stackOrder || []).includes(key));
+  if (!selectedKeys.length) return next;
+  next.stackOrder = reorderKeysInList(
+    (next.stackOrder || []).map(String),
+    selectedKeys,
+    action
+  );
+
+  const page = getActivePage(next);
+  if (page) {
+    const nodeSelected = entries
+      .filter((e) => e.kind === 'node')
+      .map((e) => e.id)
+      .filter((id) => (page.children || []).includes(id));
+    if (nodeSelected.length) {
+      page.children = reorderKeysInList([...(page.children || [])], nodeSelected, action);
+      syncRootChildren(next);
+    }
+  }
+  reconcileStackOrder(next);
   return next;
 }
 
@@ -1613,6 +1748,7 @@ export function pasteClipboardIntoDocument(
   const newFrameIds: string[] = [];
   if (clipboard!.frames?.length) {
     const frames = Array.isArray(next.frames) ? [...next.frames] : [];
+    const order = Array.isArray(next.stackOrder) ? [...next.stackOrder] : [];
     clipboard!.frames.forEach(({ id, frame: raw }) => {
       const frame = JSON.parse(JSON.stringify(raw));
       const newId = frameIdMap.get(id)!;
@@ -1625,14 +1761,17 @@ export function pasteClipboardIntoDocument(
       delete frame.processKind;
       frames.push(frame);
       newFrameIds.push(newId);
+      order.push(stackFrameKey(newId));
     });
     next = {
       ...next,
       frames,
+      stackOrder: order,
       activeFrameId: newFrameIds[0] || next.activeFrameId || null,
     };
   }
 
+  reconcileStackOrder(next);
   return { document: next, ids: newIds, frameIds: newFrameIds };
 }
 

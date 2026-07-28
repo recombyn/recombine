@@ -1341,10 +1341,10 @@ const en = {
     providerNamePh: 'e.g. DMXAPI',
     providerWebsite: 'Website',
     providerModelKind: 'Model type',
-    providerModelKindText: 'Text',
+    providerModelKindText: 'Chat',
     providerModelKindVision: 'Multimodal',
     providerModelKindHint:
-      'Text for chat/edit; multimodal for vision. Use platform models for image generation (billed credits).',
+      'Chat for conversation/edit; multimodal for vision. Use platform models for image generation (billed credits).',
     providerModelKindRequired: 'Please select a model type',
     providerApiKeyPh: 'Fill this first — other fields can follow',
     providerApiKeyHint:

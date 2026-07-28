@@ -26,7 +26,7 @@ import {
   type ArtboardFrame,
 } from '@/store/modules/editor';
 import Tooltip from '@/components/base/tooltip';
-import { SEL_ICON_BTN, SEL_TOOL_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
+import { SEL_ICON_BTN, SEL_SIZE_INPUT, SEL_TOOL_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
 import { SelectionToolbarShell } from '@/components/rcb/selection/SelectionToolbarShell';
 import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelectionPanel';
 import { cn } from '@/utils/classnames';
@@ -69,8 +69,12 @@ export default function FrameContextToolbar({ frame }: Props) {
 
   const setSize = (axis: 'w' | 'h', raw: string) => {
     if (canvasLocked) return;
-    const n = Math.max(40, Math.round(Number(raw) || 0));
-    if (!Number.isFinite(n)) return;
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return;
+    const n = Math.round(Number(trimmed));
+    if (!Number.isFinite(n) || n < 40) return;
+    if (axis === 'w' && n === Math.round(frame.width)) return;
+    if (axis === 'h' && n === Math.round(frame.height)) return;
     if (aspectLocked) {
       const ratio = frame.width / Math.max(1, frame.height);
       if (axis === 'w') {
@@ -234,7 +238,7 @@ export default function FrameContextToolbar({ frame }: Props) {
       <label className={cn(field, canvasLocked && 'opacity-50')}>
         <span className="text-[var(--muted)]">W</span>
         <input
-          className="w-11 bg-transparent text-[12px] outline-none tabular-nums"
+          className={SEL_SIZE_INPUT}
           value={Math.round(frame.width)}
           disabled={canvasLocked}
           onChange={(e) => setSize('w', e.target.value)}
@@ -278,7 +282,7 @@ export default function FrameContextToolbar({ frame }: Props) {
       <label className={cn(field, canvasLocked && 'opacity-50')}>
         <span className="text-[var(--muted)]">H</span>
         <input
-          className="w-11 bg-transparent text-[12px] outline-none tabular-nums"
+          className={SEL_SIZE_INPUT}
           value={Math.round(frame.height)}
           disabled={canvasLocked}
           onChange={(e) => setSize('h', e.target.value)}

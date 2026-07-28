@@ -27,23 +27,43 @@ export const fetchMyLiked = (params: { page: number; pageSize: number }) =>
     skipInflightDedupe: true,
   });
 
-export const fetchMyLikedIds = () =>
-  request<{ ids: string[] }>({
+let _likedIdsCache: { at: number; data: { ids: string[] } } | null = null;
+const LIKED_IDS_TTL_MS = 60_000;
+
+export function invalidateMyLikedIdsCache() {
+  _likedIdsCache = null;
+}
+
+export const fetchMyLikedIds = () => {
+  if (_likedIdsCache && Date.now() - _likedIdsCache.at < LIKED_IDS_TTL_MS) {
+    return Promise.resolve(_likedIdsCache.data);
+  }
+  return request<{ ids: string[] }>({
     url: '/api/v1/me/liked/ids',
     method: 'get',
     skipInflightDedupe: true,
+  }).then((data) => {
+    _likedIdsCache = { at: Date.now(), data };
+    return data;
   });
+};
 
 export const likePlazaItem = (submissionId: string) =>
   request<{ ok: boolean; liked: boolean; id: string; likeCount?: number }>({
     url: `/api/v1/me/liked/${encodeURIComponent(submissionId)}`,
     method: 'put',
+  }).then((data) => {
+    invalidateMyLikedIdsCache();
+    return data;
   });
 
 export const unlikePlazaItem = (submissionId: string) =>
   request<{ ok: boolean; liked: boolean; id: string; likeCount?: number }>({
     url: `/api/v1/me/liked/${encodeURIComponent(submissionId)}`,
     method: 'delete',
+  }).then((data) => {
+    invalidateMyLikedIdsCache();
+    return data;
   });
 
 /** Migrate legacy localStorage like ids → server. */
@@ -52,4 +72,7 @@ export const syncMyLiked = (ids: string[]) =>
     url: '/api/v1/me/liked/sync',
     method: 'post',
     data: { ids },
+  }).then((data) => {
+    invalidateMyLikedIdsCache();
+    return data;
   });

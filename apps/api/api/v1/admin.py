@@ -65,6 +65,11 @@ from services.design.knowledge_store import (
     soft_delete_knowledge,
     upsert_knowledge,
 )
+from services.design.prompt_pack_store import (
+    list_prompt_packs,
+    soft_delete_prompt_pack,
+    upsert_prompt_pack,
+)
 from services.design.quality_sample_store import (
     get_quality_sample,
     hard_delete_quality_sample,
@@ -92,6 +97,8 @@ from services.design.admin_store import (
     get_agent_flow_version,
     list_agent_flows,
     list_agent_flow_node_templates,
+    get_agent_flow_action_contracts,
+    upsert_agent_flow_action_contracts,
     list_decision_logs,
     list_canvas_tools_admin,
     list_optimize_patches,
@@ -783,10 +790,6 @@ def admin_design_runtime_settings(
     return {"items": items}
 
 
-def _is_agent_prompt_key(key: str) -> bool:
-    return _is_prompt_page_key(key)
-
-
 @router.put("/design/runtime-settings")
 def admin_upsert_design_runtime_setting(
     body: RuntimeSettingIn,
@@ -820,6 +823,49 @@ def admin_list_agent_flow_node_templates(
 ) -> dict[str, Any]:
     """左侧可拖节点模板（存全局规则，前端勿写死）。"""
     return {"items": list_agent_flow_node_templates()}
+
+
+@router.get("/design/agent-flow-action-contracts")
+def admin_get_agent_flow_action_contracts(
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """阶段/节点动作契约（独立全局规则，非边条件字典）。"""
+    return get_agent_flow_action_contracts()
+
+
+class AgentFlowActionContractBindingIn(BaseModel):
+    field: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(default="", max_length=128)
+    required: bool | None = None
+    prefer: str = Field(default="", max_length=256)
+
+
+class AgentFlowActionContractIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=128)
+    runtime: str = Field(default="", max_length=512)
+    rule: str = Field(..., min_length=1, max_length=64)
+    bindings: list[AgentFlowActionContractBindingIn] = Field(default_factory=list)
+    injectPreset: dict[str, Any] | None = None
+
+
+class AgentFlowActionContractsPutIn(BaseModel):
+    phases: dict[str, AgentFlowActionContractIn] = Field(default_factory=dict)
+    kinds: dict[str, AgentFlowActionContractIn] = Field(default_factory=dict)
+
+
+@router.put("/design/agent-flow-action-contracts")
+def admin_put_agent_flow_action_contracts(
+    body: AgentFlowActionContractsPutIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """整包覆盖动作契约（phases + kinds）。"""
+    try:
+        return upsert_agent_flow_action_contracts(
+            phases={k: v.model_dump(exclude_none=True) for k, v in body.phases.items()},
+            kinds={k: v.model_dump(exclude_none=True) for k, v in body.kinds.items()},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/design/agent-flows")
@@ -1252,6 +1298,49 @@ def admin_delete_design_knowledge(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     ok = soft_delete_knowledge(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+class DesignPromptPackIn(BaseModel):
+    id: int | None = None
+    kind: str = Field(..., min_length=1, max_length=32)
+    title: str = Field(..., min_length=1, max_length=128)
+    body: str = Field(..., min_length=1)
+    whenToUse: str = ""
+    scenes: str = Field(default="all", max_length=128)
+    sortOrder: int = 0
+    enabled: bool = True
+
+
+@router.get("/design/prompt-packs")
+def admin_design_prompt_packs(
+    kind: str | None = None,
+    enabled: bool | None = Query(default=None),
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    return {"items": list_prompt_packs(kind=kind, enabled=enabled)}
+
+
+@router.put("/design/prompt-packs")
+def admin_upsert_design_prompt_pack(
+    body: DesignPromptPackIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        item = upsert_prompt_pack(body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"item": item}
+
+
+@router.delete("/design/prompt-packs/{item_id}")
+def admin_delete_design_prompt_pack(
+    item_id: int,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    ok = soft_delete_prompt_pack(item_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}

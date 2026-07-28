@@ -34,12 +34,13 @@ _DEFAULT_SCHEMA: dict[str, str] = {
     "elements": "object",
     "elements[].id": "string",
     "elements[].type": (
-        "text|button_primary|button_secondary|pill|card|input|"
-        "logo_lockup|avatar|image|checkbox_legal|decoration|nav_chip"
+        "text|image|shape|line|decoration|logo|qr|icon|"
+        "button|button_primary|button_secondary|pill|card|input|"
+        "avatar|checkbox_legal|nav_chip|other"
     ),
     "elements[].role": (
-        "brand|primary_cta|secondary_cta|dismiss|field|"
-        "account_preview|legal|title|subtitle|chrome"
+        "title|subtitle|body|cta|primary_cta|secondary_cta|"
+        "hero|background|brand|ornament|chrome|field|legal|dismiss|other"
     ),
     "elements[].layout.xPct": "number",
     "elements[].layout.yPct": "number",

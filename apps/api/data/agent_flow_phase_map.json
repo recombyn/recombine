@@ -1,0 +1,23 @@
+{
+  "start": "start",
+  "route": "route",
+  "mode_fork": "mode_fork",
+  "memory": "memory",
+  "plan": "plan",
+  "model_route": "model_route",
+  "thought": "thought",
+  "ask_thought": "ask_thought",
+  "resource_fork": "parallel",
+  "aesthetics_details": "aesthetics_details",
+  "tool_details": "tool_details",
+  "resource_join": "resource_join",
+  "validate_fail": "validate_fail",
+  "reflect": "reflect",
+  "clarify": "clarify",
+  "propose": "propose",
+  "action": "action",
+  "observe": "observe",
+  "verify": "verify",
+  "error": "error",
+  "end": "end"
+}

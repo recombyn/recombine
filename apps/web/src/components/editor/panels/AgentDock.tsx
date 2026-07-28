@@ -2323,7 +2323,7 @@ export default function AgentDock({
     void fetchDesignCatalog()
       .then((cat) => {
         setDesignCatalog(cat);
-        void warmAgentRoutePresetRules();
+        void warmAgentRoutePresetRules(cat.global_rules);
         const keys = (cat.canvas_tools || []).map((t) => t.op_key).filter(Boolean);
         if (keys.length) setAllowedCanvasToolKeys(keys);
         if (styleGroupId == null && cat.style_groups?.[0]) {
@@ -3009,46 +3009,49 @@ export default function AgentDock({
     attachTooltip: attachFull
       ? t('agent.attachMaxReached', { count: attachmentLimit })
       : t('agent.uploadImage'),
-    onPickFromCanvas: () => {
-      if (pickingFromCanvas) {
-        dispatch(clearCanvasAttachPick());
-        return;
-      }
-      // Add current canvas selection first (nodes + artboards), then one-shot pick for more.
-      const doc = document;
-      const attachable = selectedNodeIds.filter((id) =>
-        canAttachNodeToChat(doc?.deltaSetLike?.[id])
-      );
-      const frameId = selectedFrameIds.find(Boolean) || null;
-      const insertChip = (ctx: ComposerContext) => {
-        pinnedContextKeysRef.current.add(ctx.key);
-        contextDismissedKeyRef.current = null;
-        inputRef.current?.insertContextAtCaret(ctx);
-        inputRef.current?.focus();
-      };
-      void (async () => {
-        if (attachable.length) {
-          await applyCanvasAttachPayload({
-            document: doc,
-            payload: attachable.length === 1 ? attachable[0]! : attachable,
-            existingChips: contextChipsRef.current,
-            onAttachFiles: handleAttachFiles,
-            insertChip,
-          });
-        }
-        if (frameId) {
-          await applyCanvasAttachPayload({
-            document: doc,
-            payload: `frame:${frameId}`,
-            existingChips: contextChipsRef.current,
-            onAttachFiles: handleAttachFiles,
-            insertChip,
-          });
-        }
-      })();
-      dispatch(startCanvasAttachPick({ target: 'agent' }));
-    },
-    pickingFromCanvas,
+    // Mobile floating dock: canvas pick is not usable — hide the control.
+    onPickFromCanvas: floating
+      ? undefined
+      : () => {
+          if (pickingFromCanvas) {
+            dispatch(clearCanvasAttachPick());
+            return;
+          }
+          // Add current canvas selection first (nodes + artboards), then one-shot pick for more.
+          const doc = document;
+          const attachable = selectedNodeIds.filter((id) =>
+            canAttachNodeToChat(doc?.deltaSetLike?.[id])
+          );
+          const frameId = selectedFrameIds.find(Boolean) || null;
+          const insertChip = (ctx: ComposerContext) => {
+            pinnedContextKeysRef.current.add(ctx.key);
+            contextDismissedKeyRef.current = null;
+            inputRef.current?.insertContextAtCaret(ctx);
+            inputRef.current?.focus();
+          };
+          void (async () => {
+            if (attachable.length) {
+              await applyCanvasAttachPayload({
+                document: doc,
+                payload: attachable.length === 1 ? attachable[0]! : attachable,
+                existingChips: contextChipsRef.current,
+                onAttachFiles: handleAttachFiles,
+                insertChip,
+              });
+            }
+            if (frameId) {
+              await applyCanvasAttachPayload({
+                document: doc,
+                payload: `frame:${frameId}`,
+                existingChips: contextChipsRef.current,
+                onAttachFiles: handleAttachFiles,
+                insertChip,
+              });
+            }
+          })();
+          dispatch(startCanvasAttachPick({ target: 'agent' }));
+        },
+    pickingFromCanvas: floating ? false : pickingFromCanvas,
     pickFromCanvasTooltip: pickingFromCanvas
       ? t('agent.pickFromCanvasCancel')
       : t('agent.pickFromCanvas'),
@@ -3860,7 +3863,6 @@ export default function AgentDock({
     setModelPanelOpen(false);
     setMentionPanelOpen(false);
     setImageModelPanelOpen(false);
-    setHistoryOpen(false);
   }, [onlyImageInteraction]);
 
   const mentionFloating = useFloating({
@@ -4086,13 +4088,11 @@ export default function AgentDock({
             <button
               type="button"
               aria-label={t('agent.history')}
-              disabled={onlyImageInteraction}
               className={cn(
                 'inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
                 historyOpen && 'bg-[var(--accent-soft)] text-[var(--ink)]'
               )}
               onClick={() => {
-                if (onlyImageInteraction) return;
                 closePopovers();
                 setHistoryOpen((v) => {
                   const next = !v;

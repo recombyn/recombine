@@ -1325,10 +1325,10 @@ const ja = {
     providerNamePh: '例: DMXAPI',
     providerWebsite: '公式サイト',
     providerModelKind: 'モデル種別',
-    providerModelKindText: 'テキスト',
+    providerModelKindText: '対話',
     providerModelKindVision: 'マルチモーダル',
     providerModelKindHint:
-      'テキストは対話・編集、マルチモーダルは画像理解向け。画像生成はプラットフォームモデル（クレジット課金）を使ってください。',
+      '対話はチャット・編集、マルチモーダルは画像理解向け。画像生成はプラットフォームモデル（クレジット課金）を使ってください。',
     providerModelKindRequired: 'モデル種別を選択してください',
     providerApiKeyPh: 'まずここに入力（下の項目は続けて設定可）',
     providerApiKeyHint:

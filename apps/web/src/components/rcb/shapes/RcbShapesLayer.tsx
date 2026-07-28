@@ -3,6 +3,7 @@ import { useRcbCamera, useRcbCameraMotion, useRcbViewportEl } from '../camera/co
 import { rcbViewportSceneBounds } from '../core/math';
 import { boxesIntersect, nodeSceneAabb } from '../core/spatialIndex';
 import { isNodeHidden } from '@/components/rcb/scene/sceneDocument';
+import { stackZIndex } from '@/components/rcb/scene/sceneDocument';
 import RcbShapeHost from './RcbShapeHost';
 
 type Props = {
@@ -28,8 +29,7 @@ const EFFICIENT_ZOOM_SHAPE_THRESHOLD = 80;
 /**
  * Renders each ROOT child as its own shape host (per-shape paint layer).
  * Off-viewport nodes are not mounted (lazy paint); selected/editing stay alive.
- * No CSS isolation here — layer mix-blend-mode must composite with siblings
- * and artboard fills below (Figma-like).
+ * z-index comes from document.stackOrder so shapes can interleave with artboards.
  */
 export default function RcbShapesLayer({
   document,
@@ -121,9 +121,8 @@ export default function RcbShapesLayer({
     <div
       data-rcb-shapes-layer="1"
       className="pointer-events-none absolute left-0 top-0 overflow-visible"
-      style={{ zIndex: 1 }}
     >
-      {ids.map((id, i) => {
+      {ids.map((id) => {
         // Lazy mount: skip React + SVG for off-viewport nodes (re-enter remounts).
         if (culledIds.has(id)) return null;
         const node = document?.deltaSetLike?.[id];
@@ -134,7 +133,7 @@ export default function RcbShapesLayer({
             key={id}
             nodeId={id}
             document={document}
-            zIndex={i + 1}
+            zIndex={stackZIndex(document, 'node', id)}
             reloadToken={patched.has(id) ? `${reloadToken}:${documentPatchToken}` : reloadToken}
             forceHidden={hiddenNodeId === id || layerHidden}
           />

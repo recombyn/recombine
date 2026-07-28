@@ -427,66 +427,74 @@ export function HomeTemplateList({
     return list.filter((item) => (item.name || '').toLowerCase().includes(q));
   }, [templates, nav, query]);
 
-  if (nav === 'account' && authed) {
-    return <MePage onOpenCase={onOpenCase} />;
-  }
-
-  if (nav !== 'home' && authed) {
-    const title = nav === 'recent' ? t('home.recentOpened') : t('home.mine');
-    const showSkeleton = Boolean(authed) && !projectsReady;
-    const enableScrollLoad = nav === 'mine' && !query.trim();
-    const displayCount = enableScrollLoad
-      ? projectsTotal + (importing ? 1 : 0)
-      : listForGrid.length + (importing ? 1 : 0);
-    return (
-      <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
-        <div className="relative mx-auto w-full min-w-0 max-w-[1700px] space-y-8 px-5 pb-10 pt-16 sm:px-8 sm:pt-20 md:px-24 lg:px-[100px] xl:px-[120px]">
-          <TemplateGrid
-            templates={showSkeleton ? [] : listForGrid}
-            title={title}
-            fileCountLabel={
-              showSkeleton
-                ? t('home.fileCount', { count: 0 })
-                : t('home.fileCount', { count: displayCount })
-            }
-            importing={!showSkeleton && importing}
-            importingName={importingName}
-            loading={showSkeleton}
-            loadingMore={enableScrollLoad && projectsLoadingMore}
-            hasMore={enableScrollLoad && projectsHasMore}
-            onLoadMore={enableScrollLoad ? loadMoreProjects : undefined}
-            onCreate={onCreate}
-            createDisabled={importing}
-          />
-        </div>
-      </main>
-    );
-  }
+  const showAccount = nav === 'account' && Boolean(authed);
+  const showMine = nav !== 'home' && Boolean(authed) && !showAccount;
+  const showHome = !showAccount && !showMine;
 
   const homeProjectsLoading = Boolean(authed) && !projectsReady;
+  const mineTitle = nav === 'recent' ? t('home.recentOpened') : t('home.mine');
+  const mineSkeleton = Boolean(authed) && !projectsReady;
+  const mineScrollLoad = nav === 'mine' && !query.trim();
+  const mineDisplayCount = mineScrollLoad
+    ? projectsTotal + (importing ? 1 : 0)
+    : listForGrid.length + (importing ? 1 : 0);
 
   return (
-    <main className="relative min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
-      <div className="relative mx-auto flex w-full min-w-0 max-w-[1700px] flex-col items-stretch px-5 pb-10 pt-0 sm:px-8 md:px-24 lg:px-[100px] xl:px-[120px]">
-        <HomeHero onSubmit={onAgentSubmit} />
-        <div className="flex flex-col space-y-6 sm:space-y-12">
-          <RecentProjectsSection
-            projects={authed ? ownedProjects : []}
-            loading={homeProjectsLoading}
-            disabled={importing}
-            onCreate={onCreate}
-            onViewAll={() => {
-              if (!authed) {
-                navigate(buildLoginUrl('/home'));
-                return;
+    <>
+      {showAccount ? <MePage onOpenCase={onOpenCase} /> : null}
+
+      {showMine ? (
+        <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
+          <div className="relative mx-auto w-full min-w-0 max-w-[1700px] space-y-8 px-5 pb-10 pt-16 sm:px-8 sm:pt-20 md:px-24 lg:px-[100px] xl:px-[120px]">
+            <TemplateGrid
+              templates={mineSkeleton ? [] : listForGrid}
+              title={mineTitle}
+              fileCountLabel={
+                mineSkeleton
+                  ? t('home.fileCount', { count: 0 })
+                  : t('home.fileCount', { count: mineDisplayCount })
               }
-              setNav('mine');
-            }}
-          />
-          <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
+              importing={!mineSkeleton && importing}
+              importingName={importingName}
+              loading={mineSkeleton}
+              loadingMore={mineScrollLoad && projectsLoadingMore}
+              hasMore={mineScrollLoad && projectsHasMore}
+              onLoadMore={mineScrollLoad ? loadMoreProjects : undefined}
+              onCreate={onCreate}
+              createDisabled={importing}
+            />
+          </div>
+        </main>
+      ) : null}
+
+      <main
+        className={cn(
+          'relative min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent',
+          !showHome && 'hidden',
+        )}
+        aria-hidden={!showHome}
+      >
+        <div className="relative mx-auto flex w-full min-w-0 max-w-[1700px] flex-col items-stretch px-5 pb-10 pt-0 sm:px-8 md:px-24 lg:px-[100px] xl:px-[120px]">
+          <HomeHero onSubmit={onAgentSubmit} />
+          <div className="flex flex-col space-y-6 sm:space-y-12">
+            <RecentProjectsSection
+              projects={authed ? ownedProjects : []}
+              loading={homeProjectsLoading}
+              disabled={importing}
+              onCreate={onCreate}
+              onViewAll={() => {
+                if (!authed) {
+                  navigate(buildLoginUrl('/home'));
+                  return;
+                }
+                setNav('mine');
+              }}
+            />
+            <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </>
   );
 }
 

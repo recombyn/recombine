@@ -231,7 +231,13 @@ export function routeOverridesForApi(
 }
 
 /** Warm Admin preset cache (call before send if panel not opened). */
-export async function warmAgentRoutePresetRules(): Promise<void> {
+export async function warmAgentRoutePresetRules(
+  rules?: Record<string, string> | null,
+): Promise<void> {
+  if (rules && typeof rules === 'object') {
+    cachedPresetRules = rules;
+    return;
+  }
   try {
     const cat = await fetchDesignCatalog();
     cachedPresetRules = cat.global_rules || {};
@@ -389,13 +395,9 @@ export function AgentRoutePrefsEditor({
   const patchRouteField = (key: keyof AgentRoutePrefs, value: string) => {
     setRoutePrefs((prev) => {
       const next: AgentRoutePrefs = { ...prev, preset: 'custom', [key]: value };
-      if (compact) {
-        saveAgentRoutePrefs(next);
-        setRouteSaved(true);
-        onChanged?.(next);
-      } else {
-        setRouteSaved(false);
-      }
+      saveAgentRoutePrefs(next);
+      setRouteSaved(true);
+      onChanged?.(next);
       return next;
     });
   };
@@ -426,6 +428,7 @@ export function AgentRoutePrefsEditor({
     { value: 'platform', label: t('account.agentRoutePresetPlatform') },
     { value: 'balanced', label: t('account.agentRoutePresetBalanced') },
     { value: 'quality', label: t('account.agentRoutePresetQuality') },
+    { value: 'custom', label: t('account.agentRoutePresetCustom') },
   ];
 
   const presetShortLabel = (() => {
@@ -722,7 +725,7 @@ export function AgentRoutePrefsEditor({
               open={submenu?.kind === 'preset'}
               onOpenChange={(o) => setSubmenu(o ? { kind: 'preset' } : null)}
               items={[]}
-              floatingClassName="z-[600] agent-route-submenu-popup"
+              floatingClassName="z-[9500] agent-route-submenu-popup"
               referenceClassName="block w-full"
               popupRender={() => renderSubmenuPanel()}
             >
@@ -798,7 +801,7 @@ export function AgentRoutePrefsEditor({
                       setSubmenu(o ? { kind: 'field', key: row.key } : null)
                     }
                     items={[]}
-                    floatingClassName="z-[600] agent-route-submenu-popup"
+                    floatingClassName="z-[9500] agent-route-submenu-popup"
                     referenceClassName="block w-full"
                     popupRender={() => (active ? renderSubmenuPanel() : <div />)}
                   >
@@ -831,7 +834,9 @@ export function AgentRoutePrefsEditor({
           size="large"
           className={selectCls}
           value={
-            routePrefs.preset === 'balanced' || routePrefs.preset === 'quality'
+            routePrefs.preset === 'balanced' ||
+            routePrefs.preset === 'quality' ||
+            routePrefs.preset === 'custom'
               ? routePrefs.preset
               : 'platform'
           }
@@ -845,8 +850,80 @@ export function AgentRoutePrefsEditor({
           ? t('account.agentRouteBalancedNote')
           : routePrefs.preset === 'quality'
             ? t('account.agentRouteQualityNote')
-            : t('account.agentRoutePlatformNote')}
+            : routePrefs.preset === 'custom'
+              ? t('account.agentRouteCard.custom.desc')
+              : t('account.agentRoutePlatformNote')}
       </p>
+
+      {routePrefs.preset === 'custom' ? (
+        <div className="space-y-3 rounded-lg bg-[var(--account-main)] p-3 ring-1 ring-[var(--line)]">
+          {fieldRows.map((row) => {
+            const currentId =
+              String(routePrefs[row.key] || '').trim() || row.opts[0]?.id || '';
+            const currentModel = modelRefOf(routePrefs[row.key], row.opts);
+            return (
+              <label key={row.key} className="block">
+                <span className={labelCls}>{row.label}</span>
+                <Select
+                  size="large"
+                  className={selectCls}
+                  value={currentId}
+                  options={row.opts.map((m) => ({ value: m.id, label: m.label }))}
+                  onChange={(v) => patchRouteField(row.key, String(v))}
+                  labelRender={() => (
+                    <span className="flex min-w-0 items-center gap-2 pr-4">
+                      <ModelBrandIcon model={currentModel} size={18} className="shrink-0" />
+                      <span className="truncate">
+                        {modelLabelOf(routePrefs[row.key], row.opts)}
+                      </span>
+                    </span>
+                  )}
+                  optionRender={(opt) => {
+                    const full = catalogPool.find((x) => x.id === opt.value) || null;
+                    const custom = full ? isUserCustomModel(full) : false;
+                    const priceTag = full && !custom ? modelPriceTagInfo(full, t) : null;
+                    const desc = full ? modelDescription(full, t) : undefined;
+                    return (
+                      <span className="flex w-full min-w-0 items-start gap-2.5">
+                        {full ? (
+                          <ModelBrandIcon model={full} size={18} className="mt-0.5 shrink-0" />
+                        ) : (
+                          <span
+                            className="mt-0.5 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-[var(--line)]/40 text-[10px] font-semibold text-[var(--muted)]"
+                            aria-hidden
+                          >
+                            A
+                          </span>
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="flex min-w-0 items-start justify-between gap-2">
+                            <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-[var(--ink)]">
+                              {opt.label}
+                            </span>
+                            {custom ? (
+                              <ModelMetaBadge label={t('agent.modelBadgeCustom')} />
+                            ) : priceTag ? (
+                              <ModelPriceTag level={priceTag.level} label={priceTag.label} />
+                            ) : null}
+                          </span>
+                          {desc ? (
+                            <span className="mt-0.5 line-clamp-2 block text-[11px] leading-[1.35] text-[var(--muted)]">
+                              {desc}
+                            </span>
+                          ) : null}
+                        </span>
+                      </span>
+                    );
+                  }}
+                />
+              </label>
+            );
+          })}
+          <p className="text-[12px] leading-relaxed text-[var(--muted)]">
+            {t('account.agentRouteCostNote')}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
