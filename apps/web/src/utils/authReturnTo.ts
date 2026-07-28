@@ -2,17 +2,16 @@
  * Post-login / settings return path lives in the URL (`?from=...`), not Redux / sessionStorage.
  */
 
+import { stripLocalePrefix } from '@/i18n/localePath';
+
 const BLOCKED_PREFIXES = [
   '/login',
   '/register',
   '/forgot-password',
   '/account',
-  '/about',
-  '/terms',
-  '/privacy',
 ];
 
-/** Same-origin app path only; falls back to /home. */
+/** Same-origin app path only; falls back to /home. Strips `/zh` etc. for Router basename. */
 export function sanitizeReturnTo(raw: string | null | undefined): string {
   if (!raw || typeof raw !== 'string') return '/home';
   let path = raw.trim();
@@ -27,18 +26,30 @@ export function sanitizeReturnTo(raw: string | null | undefined): string {
     return '/home';
   }
   if (!path.startsWith('/') || path.startsWith('//')) return '/home';
-  const pathname = path.split('?')[0].split('#')[0];
-  if (BLOCKED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+  const pathnameOnly = path.split('?')[0].split('#')[0];
+  const suffix = path.slice(pathnameOnly.length);
+  const stripped = stripLocalePrefix(pathnameOnly);
+  if (BLOCKED_PREFIXES.some((p) => stripped === p || stripped.startsWith(`${p}/`))) {
     return '/home';
   }
-  return path || '/home';
+  return (stripped || '/home') + suffix;
 }
 
-/** `/login` or `/login?from=/editor/...` */
+/** `/home?login=1` or `/home?login=1&from=/editor/...` */
 export function buildLoginUrl(from?: string | null): string {
   const dest = sanitizeReturnTo(from);
-  if (dest === '/home') return '/login';
-  return `/login?from=${encodeURIComponent(dest)}`;
+  if (dest === '/home') return '/home?login=1';
+  return `/home?login=1&from=${encodeURIComponent(dest)}`;
+}
+
+export function isLoginOpen(search: string | URLSearchParams | null | undefined): boolean {
+  const params =
+    typeof search === 'string'
+      ? new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+      : search instanceof URLSearchParams
+        ? search
+        : null;
+  return params?.get('login') === '1';
 }
 
 /**

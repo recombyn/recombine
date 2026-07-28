@@ -137,7 +137,8 @@ function clampInspectDockWidth(width: number): number {
   );
 }
 
-function readStoredInspectDockWidth(): number {
+/** Current inspect dock width (for offsetting overlapping chrome). */
+export function getInspectDockWidth(): number {
   try {
     const raw = localStorage.getItem(INSPECT_DOCK_WIDTH_KEY);
     if (!raw) return INSPECT_DOCK_DEFAULT_W;
@@ -147,6 +148,10 @@ function readStoredInspectDockWidth(): number {
   } catch {
     return INSPECT_DOCK_DEFAULT_W;
   }
+}
+
+function readStoredInspectDockWidth(): number {
+  return getInspectDockWidth();
 }
 
 /** Dev-mode inspect panel: geometry, style, CSS, export (replaces chat). */

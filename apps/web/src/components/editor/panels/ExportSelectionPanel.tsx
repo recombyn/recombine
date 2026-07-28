@@ -22,7 +22,6 @@ import { useSelector } from 'react-redux';
 import {
   HiOutlineArrowDownTray,
   HiOutlineArrowUpTray,
-  HiOutlineChevronDown,
   HiOutlineCodeBracket,
   HiOutlineDocument,
   HiOutlineDocumentDuplicate,
@@ -65,7 +64,7 @@ const VECTOR_FORMAT_OPTIONS: { value: ExportImageFormat; label: string }[] = [
 ];
 
 const selectFieldClass =
-  '!box-border !flex !h-7 !w-full !min-w-0 !rounded-md !border-0 !bg-[color-mix(in_srgb,var(--muted)_12%,var(--surface))] !px-1.5 !pr-5 !text-[11px] !ring-1 !ring-[var(--line)]';
+  '!box-border !flex !h-7 !w-full !min-w-0 !rounded-xl !border-0 !bg-[color-mix(in_srgb,var(--muted)_12%,var(--surface))] !px-1.5 !pr-5 !text-[11px] !ring-1 !ring-[var(--line)]';
 
 export type ExportCropRegion = {
   x: number;
@@ -83,6 +82,47 @@ function defaultSlot(format: ExportImageFormat = 'png'): ExportSlotConfig {
     affix: '',
     format,
   };
+}
+
+function scaleAffixLabel(scale: number): string {
+  return `@${scale}x`;
+}
+
+function resolveExportScale(format: ExportImageFormat, scale: number): number {
+  if (format === 'svg') return 1;
+  return scale;
+}
+
+/** Prefer explicit affix; otherwise auto `@Nx` when scale ≠ 1 (raster only). */
+function resolveExportAffix(
+  slot: Pick<ExportSlotConfig, 'affix' | 'scale'>,
+  format: ExportImageFormat
+): string {
+  const custom = String(slot.affix || '').trim();
+  if (custom) return custom;
+  if (format === 'svg' || slot.scale === 1) return '';
+  return scaleAffixLabel(slot.scale);
+}
+
+function resolveExportSlot(slot: ExportSlotConfig): ExportSlotConfig {
+  const format = slot.format;
+  return {
+    ...slot,
+    format,
+    scale: resolveExportScale(format, slot.scale),
+    affix: resolveExportAffix(slot, format),
+  };
+}
+
+function parseExportFormat(value: string): ExportImageFormat {
+  if (value === 'svg') return 'svg';
+  if (value === 'jpeg') return 'jpeg';
+  return 'png';
+}
+
+function parseAffixMode(value: string): ExportAffixMode {
+  if (value === 'prefix') return 'prefix';
+  return 'suffix';
 }
 
 export type NamedExportCrop = ExportCropRegion & { name?: string };
@@ -187,16 +227,7 @@ export function ExportSelectionPanel({
     }
     setBusy(true);
     try {
-      const resolved: ExportSlotConfig = {
-        ...slot,
-        format,
-        scale: isSvg ? 1 : slot.scale,
-        affix:
-          slot.affix ||
-          (isSvg || slot.scale === 1
-            ? ''
-            : `@${Number.isInteger(slot.scale) ? slot.scale : slot.scale}x`),
-      };
+      const resolved = resolveExportSlot({ ...slot, format });
       let n = 0;
       if (cropList.length > 0) {
         for (let i = 0; i < cropList.length; i += 1) {
@@ -242,7 +273,7 @@ export function ExportSelectionPanel({
       className={cn(
         inline
           ? 'w-full'
-          : 'w-[280px] rounded-[4px] bg-[var(--surface)] p-3 shadow-lg ring-1 ring-[var(--line)]',
+          : 'w-[280px] rounded-xl bg-[var(--surface)] p-3 shadow-lg ring-1 ring-[var(--line)]',
         className
       )}
       onPointerDown={(e) => e.stopPropagation()}
@@ -272,7 +303,7 @@ export function ExportSelectionPanel({
           onChange={(v) =>
             setSlot((s) => ({
               ...s,
-              affixMode: (v === 'prefix' ? 'prefix' : 'suffix') as ExportAffixMode,
+              affixMode: parseAffixMode(String(v)),
             }))
           }
           className={selectFieldClass}
@@ -284,8 +315,7 @@ export function ExportSelectionPanel({
           value={slot.format}
           options={VECTOR_FORMAT_OPTIONS}
           onChange={(v) => {
-            const next =
-              v === 'svg' ? 'svg' : v === 'jpeg' ? 'jpeg' : ('png' as ExportImageFormat);
+            const next = parseExportFormat(String(v));
             setSlot((s) => ({ ...s, format: next }));
           }}
           className={selectFieldClass}
@@ -319,7 +349,7 @@ export function ExportSelectionPanel({
         type="button"
         disabled={busy || !canExport}
         onClick={() => void runExport()}
-        className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded bg-[var(--ink)] text-[12px] font-medium text-[var(--surface)] disabled:opacity-40"
+        className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--ink)] text-[12px] font-medium text-[var(--surface)] disabled:opacity-40"
       >
         <HiOutlineArrowDownTray className="h-3.5 w-3.5" />
         {t('editor.export')}
@@ -547,7 +577,7 @@ export function EditorTopExportButton({ className }: { className?: string }) {
         aria-haspopup="menu"
         disabled={busy}
         className={cn(
-          'inline-flex h-8 items-center gap-1.5 rounded-full bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50',
+          'inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50',
           className
         )}
         {...getReferenceProps({
@@ -565,7 +595,6 @@ export function EditorTopExportButton({ className }: { className?: string }) {
       >
         <HiOutlineArrowUpTray className="h-4 w-4 shrink-0" strokeWidth={1.75} />
         {t('editor.export')}
-        <HiOutlineChevronDown className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
       </button>
 
       <FloatingPortal>

@@ -1,24 +1,37 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { HiHeart } from 'react-icons/hi2';
 import EditProfileDialog from '@/components/home/EditProfileDialog';
 import EmptyState from '@/components/home/EmptyState';
-import PlazaCoverThumb from '@/components/home/PlazaCoverThumb';
+import InspirationCasePreview from '@/components/home/InspirationCasePreview';
+import {
+  InspirationCaseCard,
+} from '@/components/home/InspirationSection';
+import { FlowScrollSection } from '@/components/home/FlowScrollSection';
 import SegmentTabs from '@/components/home/SegmentTabs';
 import { UserAvatar } from '@/components/layout/UserAccountPanel';
-import { useGoEditor } from '@/utils/goEditor';
 import { buildLoginUrl } from '@/utils/authReturnTo';
-import { useInfiniteList } from '@/utils/useInfiniteList';
-import { fetchMyLiked, syncMyLiked } from '@/apis/me';
-import { fetchMyPlazaSubmissions, fetchPlazaItem } from '@/apis/plaza';
-import { resolveCaseTitle, normalizeCaseCategory, type OfficialCaseMeta } from '@/utils/officialCases';
-import { clearLikedCases, loadLikedCases, type LikedCaseItem } from '@/utils/likedCases';
-import { store } from '@/store';
-import { importDocument } from '@/store/modules/editor';
+import {
+  fetchMyLiked,
+  fetchMyLikedIds,
+  likePlazaItem,
+  syncMyLiked,
+  unlikePlazaItem,
+} from '@/apis/me';
+import {
+  fetchMyPlazaSubmissions,
+  fetchPlazaItem,
+  plazaDisplayCoverUrls,
+  recordPlazaUse,
+} from '@/apis/plaza';
+import {
+  caseAuthorLabel,
+  resolveCaseTitle,
+  normalizeCaseCategory,
+  type OfficialCaseMeta,
+} from '@/utils/officialCases';
 import { message } from '@/components/base';
-import { ProjectCardSkeleton } from '@/components/templates/TemplateGrid';
 import { getToken } from '@/utils/token';
 
 /** Edit-profile icon (person + pencil) — stroke follows currentColor. */
@@ -46,181 +59,416 @@ function ProfileEditIcon({ className }: { className?: string }) {
 
 type ProfileTab = 'published' | 'liked';
 
-function EmptyBlock({ hint }: { hint: string }) {
-  return <EmptyState hint={hint} />;
+type LikedCaseItem = OfficialCaseMeta & { likedAt: number };
+
+type Props = {
+  onOpenCase: (meta: OfficialCaseMeta) => void;
+};
+
+const LIKED_LOCAL_PREFIX = 'recombyn-liked-cases-v1:';
+
+/** One-shot migrate local likes → API, then clear localStorage. */
+function loadLocalLikedIds(userId: string): string[] {
+  try {
+    const raw = localStorage.getItem(`${LIKED_LOCAL_PREFIX}${userId}`);
+    if (!raw) return [];
+    const list = JSON.parse(raw) as Array<{ id?: string }>;
+    if (!Array.isArray(list)) return [];
+    return list.map((x) => String(x?.id || '').trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function clearLocalLiked(userId: string) {
+  try {
+    localStorage.removeItem(`${LIKED_LOCAL_PREFIX}${userId}`);
+  } catch {
+    /* ignore */
+  }
+}
+
+function resolveNextLikeCount(
+  current: number,
+  wasLiked: boolean,
+  nowLiked: boolean,
+  serverCount: number
+): number {
+  if (Number.isFinite(serverCount)) return Math.max(0, serverCount);
+  if (nowLiked) return wasLiked ? current : current + 1;
+  return wasLiked ? Math.max(0, current - 1) : current;
+}
+
+function mapLikedItem(x: {
+  id: string;
+  title?: string;
+  category: string;
+  authorName?: string;
+  authorAvatar?: string | null;
+  coverDocument?: unknown | null;
+  thumbnailUrl?: string | string[] | null;
+  customCoverImageUrl?: string | null;
+  panelUrls?: OfficialCaseMeta['panelUrls'];
+  userId?: string;
+  createdAt: number;
+  updatedAt?: number;
+  likedAt?: number;
+  likeCount?: number;
+  useCount?: number;
+}): LikedCaseItem {
+  const urls = plazaDisplayCoverUrls(x);
+  return {
+    id: x.id,
+    name: x.title || '',
+    category: normalizeCaseCategory(x.category),
+    source: 'plaza',
+    authorName: x.authorName,
+    authorAvatar: x.authorAvatar,
+    coverDocument: x.coverDocument ?? null,
+    thumbnailUrls: urls,
+    thumbnail: urls[0] || null,
+    panelUrls: x.panelUrls ?? null,
+    authorUserId: x.userId,
+    createdAt: x.createdAt,
+    updatedAt: x.updatedAt,
+    likeCount: Number(x.likeCount) || 0,
+    useCount: Number(x.useCount) || 0,
+    likedAt: x.likedAt || Date.now(),
+  };
 }
 
 const PAGE_SIZE = 20;
-const GRID =
-  'grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5';
 
-/** 「我的」页：资料区 + 已发布 / 我的喜欢。 */
-export default function MePage(): ReactNode {
+function mapPublishedSubmission(x: {
+  id: string;
+  title: string;
+  category: string;
+  authorName?: string;
+  authorAvatar?: string | null;
+  coverDocument?: unknown | null;
+  thumbnailUrl?: string | string[] | null;
+  customCoverImageUrl?: string | null;
+  panelUrls?: OfficialCaseMeta['panelUrls'];
+  createdAt: number;
+  updatedAt?: number;
+  likeCount?: number;
+  useCount?: number;
+}): OfficialCaseMeta {
+  const urls = plazaDisplayCoverUrls(x);
+  return {
+    id: x.id,
+    name: x.title,
+    category: normalizeCaseCategory(x.category),
+    source: 'plaza',
+    authorName: x.authorName,
+    authorAvatar: x.authorAvatar,
+    coverDocument: x.coverDocument ?? null,
+    thumbnailUrls: urls,
+    thumbnail: urls[0] || null,
+    panelUrls: x.panelUrls ?? null,
+    createdAt: x.createdAt,
+    updatedAt: x.updatedAt,
+    likeCount: Number(x.likeCount) || 0,
+    useCount: Number(x.useCount) || 0,
+  };
+}
+
+/** 「我的」页：资料区 + 已发布 / 我的喜欢 — 卡片与预览同广场。 */
+export default function MePage({ onOpenCase }: Props): ReactNode {
   const { t } = useTranslation();
   const user = useSelector((s: any) => s.auth.user);
-  const dispatch = useDispatch();
   const navigate = useNavigate();
-  const goEditor = useGoEditor();
   const [tab, setTab] = useState<ProfileTab>('published');
   const [editOpen, setEditOpen] = useState(false);
+
   const [liked, setLiked] = useState<LikedCaseItem[]>([]);
-  const [openingLikedId, setOpeningLikedId] = useState<string | null>(null);
+  const [likedPage, setLikedPage] = useState(1);
+  const [likedHasMore, setLikedHasMore] = useState(false);
   const [likedLoading, setLikedLoading] = useState(false);
-  const [published, setPublished] = useState<OfficialCaseMeta[]>([]);
-  const [openingPublishedId, setOpeningPublishedId] = useState<string | null>(null);
+  const [likedLoadingMore, setLikedLoadingMore] = useState(false);
+  /** First fetch done — skip skeleton when switching back to Liked. */
+  const [likedReady, setLikedReady] = useState(false);
+
+  const [publishedAll, setPublishedAll] = useState<OfficialCaseMeta[]>([]);
+  const [publishedVisible, setPublishedVisible] = useState(PAGE_SIZE);
   const [publishedLoading, setPublishedLoading] = useState(false);
+  const [publishedLoadingMore, setPublishedLoadingMore] = useState(false);
+  /** First fetch done — skip skeleton when switching back to Published. */
+  const [publishedReady, setPublishedReady] = useState(false);
+
+  const [likedIds, setLikedIds] = useState<Set<string>>(() => new Set());
+  const [likeBusyId, setLikeBusyId] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [docs, setDocs] = useState<Record<string, unknown>>({});
+  const [remixingId, setRemixingId] = useState<string | null>(null);
+
   const likedMigratedRef = useRef(false);
+  const likedFetchGen = useRef(0);
 
   const displayName = user?.name || user?.email?.split('@')[0] || t('home.account');
   const userId = user?.id as string | undefined;
   const authed = Boolean(userId && getToken());
 
   useEffect(() => {
-    if (tab !== 'liked') return;
+    // New account session — allow first-fetch skeletons again.
+    setLikedReady(false);
+    setPublishedReady(false);
+    setLiked([]);
+    setPublishedAll([]);
+    likedMigratedRef.current = false;
+  }, [userId]);
+
+  useEffect(() => {
     if (!authed || !userId) {
-      setLiked([]);
-      setLikedLoading(false);
+      setLikedIds(new Set());
       return;
     }
     let cancelled = false;
+    void fetchMyLikedIds()
+      .then((res) => {
+        if (!cancelled) setLikedIds(new Set(res.ids || []));
+      })
+      .catch(() => {
+        if (!cancelled) setLikedIds(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authed, userId]);
+
+  useEffect(() => {
+    if (tab !== 'liked') return;
+    if (!authed || !userId) {
+      setLiked([]);
+      setLikedHasMore(false);
+      setLikedLoading(false);
+      setLikedReady(true);
+      return;
+    }
+    // Already loaded once — keep list visible; no skeleton flash on tab switch.
+    if (likedReady) return;
+    let cancelled = false;
+    const gen = ++likedFetchGen.current;
     setLikedLoading(true);
+    setLikedLoadingMore(false);
     void (async () => {
       try {
         if (!likedMigratedRef.current) {
-          const local = loadLikedCases(userId);
-          if (local.length) {
-            await syncMyLiked(local.map((x) => x.id));
-            clearLikedCases(userId);
+          const localIds = loadLocalLikedIds(userId);
+          if (localIds.length) {
+            await syncMyLiked(localIds);
+            clearLocalLiked(userId);
           }
           likedMigratedRef.current = true;
         }
-        const all: LikedCaseItem[] = [];
-        let page = 1;
-        for (;;) {
-          const res = await fetchMyLiked(page, 50);
-          if (cancelled) return;
-          for (const x of res.items || []) {
-            all.push({
-              id: x.id,
-              name: x.title || '',
-              category: normalizeCaseCategory(x.category),
-              source: 'plaza',
-              authorName: x.authorName,
-              authorAvatar: x.authorAvatar,
-              coverDocument: x.coverDocument ?? null,
-              authorUserId: x.userId,
-              createdAt: x.createdAt,
-              likedAt: x.likedAt || Date.now(),
-            });
-          }
-          if (!res.hasMore || page >= 20) break;
-          page += 1;
-        }
-        if (cancelled) return;
-        setLiked(all);
+        if (cancelled || gen !== likedFetchGen.current) return;
+        const res = await fetchMyLiked({ page: 1, pageSize: PAGE_SIZE });
+        if (cancelled || gen !== likedFetchGen.current) return;
+        const items = (res.items || []).map(mapLikedItem);
+        setLiked(items);
+        setLikedIds((prev) => {
+          const next = new Set(prev);
+          for (const item of items) next.add(item.id);
+          return next;
+        });
+        setLikedPage(1);
+        setLikedHasMore(Boolean(res.hasMore));
       } catch {
-        if (!cancelled) {
+        if (!cancelled && gen === likedFetchGen.current) {
           setLiked([]);
+          setLikedHasMore(false);
           message.error(t('home.casesLoadFailed'));
         }
       } finally {
-        if (!cancelled) setLikedLoading(false);
+        if (!cancelled && gen === likedFetchGen.current) {
+          setLikedLoading(false);
+          setLikedReady(true);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [tab, authed, userId, t]);
+  }, [tab, authed, userId, t, likedReady]);
+
+  const loadMoreLiked = useCallback(() => {
+    if (!authed || !likedHasMore || likedLoading || likedLoadingMore) return;
+    const nextPage = likedPage + 1;
+    const gen = likedFetchGen.current;
+    setLikedLoadingMore(true);
+    void fetchMyLiked({ page: nextPage, pageSize: PAGE_SIZE })
+      .then((res) => {
+        if (gen !== likedFetchGen.current) return;
+        const items = (res.items || []).map(mapLikedItem);
+        setLiked((prev) => {
+          const seen = new Set(prev.map((x) => x.id));
+          return [...prev, ...items.filter((x) => !seen.has(x.id))];
+        });
+        setLikedIds((prev) => {
+          const next = new Set(prev);
+          for (const item of items) next.add(item.id);
+          return next;
+        });
+        setLikedPage(nextPage);
+        setLikedHasMore(Boolean(res.hasMore));
+      })
+      .catch(() => {
+        if (gen === likedFetchGen.current) message.error(t('home.casesLoadFailed'));
+      })
+      .finally(() => {
+        if (gen === likedFetchGen.current) setLikedLoadingMore(false);
+      });
+  }, [authed, likedHasMore, likedLoading, likedLoadingMore, likedPage, t]);
 
   useEffect(() => {
-    if (tab !== 'published' || !userId) {
-      if (tab === 'published' && !userId) setPublished([]);
+    if (tab !== 'published') return;
+    if (!userId) {
+      setPublishedAll([]);
+      setPublishedLoading(false);
+      setPublishedReady(true);
       return;
     }
+    // Already loaded once — keep list visible; no skeleton flash on tab switch.
+    if (publishedReady) return;
     let cancelled = false;
     setPublishedLoading(true);
+    setPublishedVisible(PAGE_SIZE);
+    setPublishedLoadingMore(false);
     void fetchMyPlazaSubmissions()
       .then((res) => {
         if (cancelled) return;
         const approved = (res.items || [])
           .filter((x) => x.status === 'approved')
-          .map(
-            (x): OfficialCaseMeta => ({
-              id: x.id,
-              name: x.title,
-              category: normalizeCaseCategory(x.category),
-              source: 'plaza',
-              authorName: x.authorName,
-              authorAvatar: x.authorAvatar,
-              coverDocument: x.coverDocument ?? null,
-              createdAt: x.createdAt,
-            })
-          );
-        setPublished(approved);
+          .map(mapPublishedSubmission);
+        setPublishedAll(approved);
       })
       .catch(() => {
-        if (!cancelled) setPublished([]);
+        if (!cancelled) setPublishedAll([]);
       })
       .finally(() => {
-        if (!cancelled) setPublishedLoading(false);
+        if (!cancelled) {
+          setPublishedLoading(false);
+          setPublishedReady(true);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [tab, userId]);
+  }, [tab, userId, publishedReady]);
 
-  const {
-    visible: visiblePublished,
-    hasMore: hasMorePublished,
-    sentinelRef: publishedSentinel,
-  } = useInfiniteList(published, { pageSize: PAGE_SIZE, resetKey: `pub-${userId}` });
+  const publishedSlice = publishedAll.slice(0, publishedVisible);
+  const publishedHasMore = publishedVisible < publishedAll.length;
 
-  const {
-    visible: visibleLiked,
-    hasMore: hasMoreLiked,
-    sentinelRef: likedSentinel,
-  } = useInfiniteList(liked, { pageSize: PAGE_SIZE, resetKey: `liked-${userId}` });
+  const loadMorePublished = useCallback(() => {
+    if (!publishedHasMore || publishedLoading || publishedLoadingMore) return;
+    setPublishedLoadingMore(true);
+    window.setTimeout(() => {
+      setPublishedVisible((n) => Math.min(n + PAGE_SIZE, publishedAll.length));
+      setPublishedLoadingMore(false);
+    }, 180);
+  }, [publishedAll.length, publishedHasMore, publishedLoading, publishedLoadingMore]);
 
-  const openLiked = async (item: LikedCaseItem) => {
-    if (openingLikedId) return;
-    setOpeningLikedId(item.id);
+  const listForPreview = tab === 'liked' ? liked : publishedAll;
+
+  useEffect(() => {
+    if (!previewId) return;
+    if (docs[previewId] !== undefined) return;
+    let cancelled = false;
+    void fetchPlazaItem(previewId)
+      .then((res) => {
+        if (cancelled) return;
+        const item = res.item;
+        setDocs((prev) =>
+          prev[previewId] !== undefined ? prev : { ...prev, [previewId]: item.document ?? null }
+        );
+        if (Array.isArray(item.panelUrls) && item.panelUrls.length) {
+          const panels = item.panelUrls;
+          setLiked((prev) =>
+            prev.map((c) => (c.id === previewId ? { ...c, panelUrls: panels } : c))
+          );
+          setPublishedAll((prev) =>
+            prev.map((c) => (c.id === previewId ? { ...c, panelUrls: panels } : c))
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDocs((prev) => (prev[previewId] !== undefined ? prev : { ...prev, [previewId]: null }));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewId, docs]);
+
+  const previewMeta = useMemo(
+    () => (previewId ? listForPreview.find((c) => c.id === previewId) || null : null),
+    [listForPreview, previewId]
+  );
+
+  const openPreview = (meta: OfficialCaseMeta) => {
+    setPreviewId(meta.id);
+  };
+
+  const onToggleLike = async (meta: OfficialCaseMeta, e?: MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    if (!userId) {
+      message.warning(t('home.cases.likeNeedLogin'));
+      navigate(buildLoginUrl('/home'));
+      return;
+    }
+    if (likeBusyId === meta.id) return;
+    const wasLiked = likedIds.has(meta.id);
+    setLikeBusyId(meta.id);
     try {
-      const document = (await fetchPlazaItem(item.id)).item.document;
-      const name = resolveCaseTitle(item, t);
-      dispatch(
-        importDocument({
-          name,
-          document,
-          source: 'case',
-          originCaseId: item.id,
-        })
-      );
-      goEditor({ projectId: (store.getState() as any).editor.currentId });
+      const res = await (wasLiked ? unlikePlazaItem(meta.id) : likePlazaItem(meta.id));
+      const nowLiked = Boolean(res?.liked);
+      const serverCount = Number(res?.likeCount);
+      setLikedIds((prev) => {
+        const next = new Set(prev);
+        if (nowLiked) next.add(meta.id);
+        else next.delete(meta.id);
+        return next;
+      });
+      const patchCount = (c: OfficialCaseMeta) =>
+        c.id !== meta.id
+          ? c
+          : {
+              ...c,
+              likeCount: resolveNextLikeCount(
+                Number(c.likeCount) || 0,
+                wasLiked,
+                nowLiked,
+                serverCount
+              ),
+            };
+      setPublishedAll((prev) => prev.map(patchCount));
+      if (!nowLiked) {
+        setLiked((prev) => prev.filter((x) => x.id !== meta.id));
+        if (previewId === meta.id) setPreviewId(null);
+      } else {
+        setLiked((prev) => prev.map(patchCount) as LikedCaseItem[]);
+      }
+      message.success(nowLiked ? t('home.cases.likedToast') : t('home.cases.unlikedToast'));
     } catch {
-      message.error(t('home.casesOpenFailed'));
+      message.error(t('home.casesLoadFailed'));
     } finally {
-      setOpeningLikedId(null);
+      setLikeBusyId(null);
     }
   };
 
-  const openPublished = async (item: OfficialCaseMeta) => {
-    if (openingPublishedId) return;
-    setOpeningPublishedId(item.id);
+  const remix = async (meta: OfficialCaseMeta) => {
+    if (remixingId) return;
+    setRemixingId(meta.id);
     try {
-      const document = (await fetchPlazaItem(item.id)).item.document;
-      dispatch(
-        importDocument({
-          name: resolveCaseTitle(item, t),
-          document,
-          source: 'case',
-          originCaseId: item.id,
-        })
-      );
-      goEditor({ projectId: (store.getState() as any).editor.currentId });
+      void recordPlazaUse(meta.id).catch(() => undefined);
+      setPreviewId(null);
+      onOpenCase(meta);
     } catch {
       message.error(t('home.casesOpenFailed'));
     } finally {
-      setOpeningPublishedId(null);
+      setRemixingId(null);
     }
   };
 
@@ -238,9 +486,9 @@ export default function MePage(): ReactNode {
   ];
 
   return (
-    <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
-      <div className="mx-auto w-full min-w-0 max-w-[1700px] px-[60px] pb-10 pt-6">
-        <header className="flex items-center gap-4">
+    <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent [scrollbar-gutter:stable]">
+      <div className="mx-auto w-full min-w-0 max-w-[1700px] px-5 pb-10 pt-20 sm:px-8 sm:pt-24 md:px-24 lg:px-[100px] xl:px-[120px]">
+        <header className="mx-auto flex w-full max-w-[760px] flex-col items-center gap-4 text-center">
           <button
             type="button"
             onClick={openProfile}
@@ -254,7 +502,7 @@ export default function MePage(): ReactNode {
               size={64}
             />
           </button>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center justify-center gap-2">
             <h1 className="truncate text-[28px] font-semibold tracking-tight text-[var(--ink)]">
               {displayName}
             </h1>
@@ -269,92 +517,99 @@ export default function MePage(): ReactNode {
           </div>
         </header>
 
-        <div className="mt-8">
+        <div className="mt-8 flex w-full justify-start">
           <SegmentTabs
+            size="md"
             tabs={profileTabs}
             value={tab}
             onChange={(id) => setTab(id as ProfileTab)}
           />
         </div>
 
-        <div className="mt-6">
-          {tab === 'published' ? (
-            !userId ? (
-              <EmptyBlock hint={t('plaza.needLogin')} />
-            ) : publishedLoading ? (
-              <div className={GRID}>
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <ProjectCardSkeleton key={`pub-sk-${i}`} />
-                ))}
-              </div>
-            ) : published.length === 0 ? (
-              <EmptyBlock hint={t('me.emptyPublished')} />
+        {/* Keep both panels mounted (hidden) so empty ↔ empty doesn't remount / jump. */}
+        <div className="mt-6 w-full">
+          <div
+            className={tab === 'published' ? 'block' : 'hidden'}
+            role="tabpanel"
+            aria-hidden={tab !== 'published'}
+          >
+            {!userId ? (
+              <EmptyState hint={t('plaza.needLogin')} />
             ) : (
-              <>
-                <div className={GRID}>
-                  {visiblePublished.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      disabled={openingPublishedId === c.id}
-                      onClick={() => void openPublished(c)}
-                      className="group flex w-full flex-col text-left disabled:opacity-60"
-                    >
-                      <PlazaCoverThumb coverDocument={c.coverDocument} />
-                      <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
-                        {resolveCaseTitle(c, t)}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                {hasMorePublished ? (
-                  <div ref={publishedSentinel} className="h-8 w-full" aria-hidden />
-                ) : null}
-              </>
-            )
-          ) : null}
+              <FlowScrollSection
+                loading={publishedLoading}
+                loadingMore={publishedLoadingMore}
+                hasMore={publishedHasMore}
+                onLoadMore={loadMorePublished}
+                isEmpty={publishedAll.length === 0}
+                empty={<EmptyState hint={t('me.emptyPublished')} />}
+              >
+                {publishedSlice.map((c) => (
+                  <InspirationCaseCard
+                    key={c.id}
+                    meta={c}
+                    liked={likedIds.has(c.id)}
+                    likes={Math.max(0, Number(c.likeCount) || 0)}
+                    title={resolveCaseTitle(c, t)}
+                    author={caseAuthorLabel(c, t)}
+                    likeBusy={likeBusyId === c.id}
+                    onOpenPreview={openPreview}
+                    onToggleLike={onToggleLike}
+                    t={t}
+                  />
+                ))}
+              </FlowScrollSection>
+            )}
+          </div>
 
-          {tab === 'liked' ? (
-            !userId ? (
-              <EmptyBlock hint={t('home.cases.likeNeedLogin')} />
-            ) : likedLoading ? (
-              <div className={GRID}>
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <ProjectCardSkeleton key={`liked-sk-${i}`} />
-                ))}
-              </div>
-            ) : liked.length === 0 ? (
-              <EmptyBlock hint={t('me.emptyLiked')} />
+          <div
+            className={tab === 'liked' ? 'block' : 'hidden'}
+            role="tabpanel"
+            aria-hidden={tab !== 'liked'}
+          >
+            {!userId ? (
+              <EmptyState hint={t('home.cases.likeNeedLogin')} />
             ) : (
-              <>
-                <div className={GRID}>
-                  {visibleLiked.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      disabled={openingLikedId === c.id}
-                      onClick={() => void openLiked(c)}
-                      className="group flex w-full flex-col text-left disabled:opacity-60"
-                    >
-                      <PlazaCoverThumb coverDocument={c.coverDocument}>
-                        <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--surface)]/90 text-[#e11d48] shadow-sm ring-1 ring-[var(--line)]">
-                          <HiHeart className="h-3.5 w-3.5 fill-current" aria-hidden />
-                        </span>
-                      </PlazaCoverThumb>
-                      <div className="mt-2 truncate px-0.5 text-[13px] font-medium text-[var(--ink)]">
-                        {resolveCaseTitle(c, t)}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                {hasMoreLiked ? (
-                  <div ref={likedSentinel} className="h-8 w-full" aria-hidden />
-                ) : null}
-              </>
-            )
-          ) : null}
+              <FlowScrollSection
+                loading={likedLoading}
+                loadingMore={likedLoadingMore}
+                hasMore={likedHasMore}
+                onLoadMore={loadMoreLiked}
+                isEmpty={liked.length === 0}
+                empty={<EmptyState hint={t('me.emptyLiked')} />}
+              >
+                {liked.map((c) => (
+                  <InspirationCaseCard
+                    key={c.id}
+                    meta={c}
+                    liked={likedIds.has(c.id)}
+                    likes={Math.max(0, Number(c.likeCount) || 0)}
+                    title={resolveCaseTitle(c, t)}
+                    author={caseAuthorLabel(c, t)}
+                    likeBusy={likeBusyId === c.id}
+                    onOpenPreview={openPreview}
+                    onToggleLike={onToggleLike}
+                    t={t}
+                  />
+                ))}
+              </FlowScrollSection>
+            )}
+          </div>
         </div>
       </div>
+
+      <InspirationCasePreview
+        open={!!previewMeta}
+        caseMeta={previewMeta}
+        projectDocument={previewMeta ? docs[previewMeta.id] ?? null : null}
+        likedIds={likedIds}
+        likeBusy={!!previewMeta && likeBusyId === previewMeta.id}
+        remixing={!!remixingId}
+        onClose={() => setPreviewId(null)}
+        onRemix={(meta) => void remix(meta)}
+        onToggleLike={(meta) => onToggleLike(meta)}
+      />
+
       <EditProfileDialog open={editOpen} onClose={() => setEditOpen(false)} />
     </main>
   );

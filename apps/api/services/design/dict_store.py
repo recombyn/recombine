@@ -12,18 +12,16 @@ TYPE_CATALOG = "__types__"
 _DICTS_READY = False
 _DICTS_LOCK = threading.RLock()
 # Bump when DICT_TYPE_DEFAULTS / DICT_DEFAULTS gain new rows so warm processes re-seed.
-_DICT_SEED_REV = 2
+_DICT_SEED_REV = 6
 _seeded_rev = 0
 
 DICT_TYPE_DEFAULTS = [
     ("scene", "场景", 10),
     ("skill_category", "技能分类", 20),
     ("output_format", "输出格式", 30),
-    ("task_tier", "任务难度", 40),
+    ("task_tier", "模型车道", 40),
     ("precheck_block", "预检拦截", 50),
     ("library_kind", "素材类型", 60),
-    ("flow_ask_slot", "流程追问槽位", 70),
-    ("flow_ask_never", "流程不问项", 80),
     ("flow_edge_condition", "流程边条件", 90),
     ("flow_phase", "流程运行角色", 100),
 ]
@@ -43,9 +41,10 @@ DICT_DEFAULTS = [
     ("precheck_block", "empty_prompt", '空提示词', 10),
     ("precheck_block", "oversized_canvas", '画布过大', 20),
     ("precheck_block", "banned_words", '违禁词', 30),
-    ("task_tier", "simple", '简单', 10),
-    ("task_tier", "medium", '中等', 20),
-    ("task_tier", "complex", '复杂', 30),
+    ("task_tier", "fast", '轻量', 10),
+    ("task_tier", "standard", '标准', 20),
+    ("task_tier", "reasoning", '推理', 30),
+    ("task_tier", "vision", '看图', 40),
     ("library_kind", "style", '风格系统 (System)', 10),
     ("library_kind", "template", '构图模板 (Template)', 20),
     ("library_kind", "icon", '图标', 30),
@@ -55,44 +54,39 @@ DICT_DEFAULTS = [
     ("library_kind", "prompt", '\u63d0\u793a\u8bcd\u6a21\u5f0f (Prompt)', 60),
     ("output_format", "json", "JSON", 10),
     ("output_format", "text", '文本', 20),
-    # —— 流程设计：Ask 追问清单（Admin 可增删；设计器从字典拉取）——
-    ("flow_ask_slot", "goal", "要做什么", 10),
-    ("flow_ask_slot", "brand", "品牌/产品名", 20),
-    ("flow_ask_slot", "copy", "核心文案", 30),
-    ("flow_ask_slot", "audience", "受众", 40),
-    ("flow_ask_slot", "layout", "版式类型", 50),
-    ("flow_ask_slot", "constraints", "硬约束", 60),
-    ("flow_ask_slot", "style", "风格偏好", 70),
-    ("flow_ask_never", "canvas_size", "画布尺寸", 10),
-    ("flow_ask_never", "model_choice", "用哪个模型", 20),
     # —— 主线边条件（intent / flags；无 FE mode 分叉）——
     ("flow_edge_condition", "mode=ask", "Ask 模式", 5),
     ("flow_edge_condition", "mode=agent", "Agent 主线", 10),
     ("flow_edge_condition", "short_plan_on", "开启短计划", 50),
     ("flow_edge_condition", "plan_done", "计划完成", 60),
     ("flow_edge_condition", "llm_call", "调用主模型", 70),
-    ("flow_edge_condition", "need_resources", "需要资源", 80),
     ("flow_edge_condition", "need_knowledge", "需要知识", 90),
     ("flow_edge_condition", "need_aesthetics", "需要美学", 100),
     ("flow_edge_condition", "need_tools", "需要工具", 110),
     ("flow_edge_condition", "fetched", "已拉取", 120),
     ("flow_edge_condition", "ready", "资源就绪", 130),
     ("flow_edge_condition", "next_round", "下一轮思考", 140),
-    ("flow_edge_condition", "dual_on", "开启双采样", 150),
     ("flow_edge_condition", "ops_invalid", "操作非法", 160),
     ("flow_edge_condition", "ops_valid", "操作合法", 170),
     ("flow_edge_condition", "reflect_left", "仍可反思", 180),
     ("flow_edge_condition", "no_reflect", "不可再反思", 190),
-    ("flow_edge_condition", "intent=ask", "意图=追问", 200),
+    ("flow_edge_condition", "intent=ask&no_ops", "意图=追问", 200),
+    ("flow_edge_condition", "intent=ask&has_ops", "追问且带方案", 205),
     ("flow_edge_condition", "intent=chat", "意图=闲聊", 201),
     ("flow_edge_condition", "intent=done", "意图=完成", 202),
-    ("flow_edge_condition", "info_insufficient", "信息不足", 210),
-    ("flow_edge_condition", "info_enough", "信息足够", 220),
-    ("flow_edge_condition", "ask_mode_ops", "提议案", 230),
-    ("flow_edge_condition", "pick_best", "选最优采样", 240),
-    ("flow_edge_condition", "tool_ops", "执行工具", 250),
+    ("flow_edge_condition", "slot_missing", "缺槽追问", 210),
+    ("flow_edge_condition", "mode=ask&has_ops", "Ask 有方案", 230),
+    ("flow_edge_condition", "mode=ask&op_failed", "Ask 确认重试", 240),
     ("flow_edge_condition", "wait_scene", "等待场景", 260),
-    ("flow_edge_condition", "ok", "成功结束", 270),
+    ("flow_edge_condition", "scene_ready", "场景已回写", 265),
+    ("flow_edge_condition", "verify_ok", "校验通过", 266),
+    ("flow_edge_condition", "verify_fail", "校验失败", 267),
+    ("flow_edge_condition", "mode=ask&verify_fail", "Ask 校验失败", 268),
+    ("flow_edge_condition", "verify_fail&reflect_left", "校验失败可反思", 269),
+    ("flow_edge_condition", "verify_fail&no_reflect", "校验失败不可反思", 270),
+    ("flow_edge_condition", "patch_too_broad", "改动过宽", 271),
+    ("flow_edge_condition", "patch_scoped", "改动局部", 272),
+    ("flow_edge_condition", "ok", "成功结束", 275),
     ("flow_edge_condition", "op_failed", "操作失败", 280),
     ("flow_edge_condition", "retry", "重试思考", 290),
     ("flow_edge_condition", "await_user", "等待用户回答", 300),
@@ -125,6 +119,8 @@ DICT_DEFAULTS = [
     ("flow_phase", "hydrate", "生图水合", 220),
     ("flow_phase", "action", "执行画布操作", 230),
     ("flow_phase", "observe", "观察结果", 240),
+    ("flow_phase", "verify", "结果校验", 245),
+    ("flow_phase", "score_case", "评测打分", 246),
     ("flow_phase", "error", "错误出口", 250),
     ("flow_phase", "end", "流程结束", 260),
 ]
@@ -158,20 +154,21 @@ def _pub_type(r: Any) -> dict[str, Any]:
 
 
 def _seed_dict_rows(conn: Any, *, now: float) -> None:
-    """Insert missing default dict items / types (idempotent)."""
+    """Insert missing default dict items / types (idempotent). Never overwrite labels."""
+    # Drop retired dict types.
     conn.execute("DELETE FROM design_dict WHERE dict_type = ?", ("precheck_signal",))
+    for retired in ("flow_ask_slot", "flow_ask_never"):
+        conn.execute("DELETE FROM design_dict WHERE dict_type = ?", (retired,))
+        conn.execute(
+            "DELETE FROM design_dict WHERE dict_type = ? AND code = ?",
+            (TYPE_CATALOG, retired),
+        )
     for dict_type, code, label, sort_order in DICT_DEFAULTS:
         row = conn.execute(
-            "SELECT id, label FROM design_dict WHERE dict_type = ? AND code = ?",
+            "SELECT id FROM design_dict WHERE dict_type = ? AND code = ?",
             (dict_type, code),
         ).fetchone()
         if row:
-            if dict_type == "library_kind" and code in ("style", "template", "prompt"):
-                if str(row["label"] or "") != label:
-                    conn.execute(
-                        "UPDATE design_dict SET label=?, sort_order=?, updated_at=? WHERE id=?",
-                        (label, sort_order, now, int(row["id"])),
-                    )
             continue
         conn.execute(
             "INSERT INTO design_dict (dict_type, code, label, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",

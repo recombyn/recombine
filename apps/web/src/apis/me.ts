@@ -18,11 +18,11 @@ export type PaginatedMeLiked = {
   hasMore: boolean;
 };
 
-export const fetchMyLiked = (page = 1, pageSize = 24) =>
+export const fetchMyLiked = (params: { page: number; pageSize: number }) =>
   request<PaginatedMeLiked>({
     url: '/api/v1/me/liked',
     method: 'get',
-    params: { page, pageSize },
+    params,
     // Always fresh after like/unlike — do not reuse StrictMode GET cache.
     skipInflightDedupe: true,
   });

@@ -23,8 +23,13 @@ type Props = {
   onClearSelection?: () => void;
   /** First nudge of a gesture — caller should snapshot history. */
   onMoveStart?: () => void;
-  onMove: (frameId: string, x: number, y: number) => void;
-  onResize?: (frameId: string, box: SceneBox, handle: ResizeHandle) => void;
+  onMove: (frameId: string, x: number, y: number, opts?: { skipGrid?: boolean }) => void;
+  onResize?: (
+    frameId: string,
+    box: SceneBox,
+    handle: ResizeHandle,
+    opts?: { skipGrid?: boolean; lockAspect?: boolean }
+  ) => void;
   /** Fires when a frame drag becomes active / ends (for hiding titles). */
   onDraggingChange?: (frameId: string | null) => void;
   /**
@@ -98,6 +103,8 @@ type DragState =
       pointerX0: number;
       pointerY0: number;
       aspectRatio: number;
+      /** Persisted aspect lock at pointer-down (Shift inverts while dragging). */
+      aspectLocked: boolean;
       started: boolean;
     }
   | {
@@ -171,6 +178,7 @@ export default function FrameMoveFeature({
           pointerX0: p.x,
           pointerY0: p.y,
           aspectRatio: f.width / Math.max(1, f.height),
+          aspectLocked: Boolean(f.lockAspect),
           started: false,
         };
         return;
@@ -226,7 +234,9 @@ export default function FrameMoveFeature({
           onMoveStart?.();
           onDraggingChangeRef.current?.(drag.id);
         }
-        onMove(drag.id, Math.round(drag.originX + dx), Math.round(drag.originY + dy));
+        onMove(drag.id, Math.round(drag.originX + dx), Math.round(drag.originY + dy), {
+          skipGrid: e.ctrlKey || e.metaKey,
+        });
         return;
       }
 
@@ -237,8 +247,9 @@ export default function FrameMoveFeature({
         onMoveStart?.();
         onDraggingChangeRef.current?.(drag.id);
       }
+      const lockAspect = e.shiftKey ? !drag.aspectLocked : drag.aspectLocked;
       const next = resizeFromHandle(drag.union, drag.handle, dx, dy, 0, {
-        lockAspect: e.shiftKey,
+        lockAspect,
         aspectRatio: drag.aspectRatio,
         min: 40,
       });
@@ -250,7 +261,8 @@ export default function FrameMoveFeature({
           width: Math.max(40, Math.round(next.width)),
           height: Math.max(40, Math.round(next.height)),
         },
-        drag.handle
+        drag.handle,
+        { skipGrid: e.ctrlKey || e.metaKey, lockAspect }
       );
     };
 

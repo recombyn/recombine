@@ -5,7 +5,7 @@ import {
   HiOutlineSwatch,
 } from 'react-icons/hi2';
 import { TbContrast, TbDroplet } from 'react-icons/tb';
-import { cn } from '@/utils/classnames';
+import { SegmentedControl } from '@/components/base';
 import ImageToolPanelShell, {
   PanelFooterActions,
   PanelIconBtn,
@@ -134,30 +134,19 @@ export default function AdjustToolPanel({
         />
       }
     >
-      <div className="mb-2 flex gap-1 rounded bg-[var(--accent-soft)] p-0.5">
-        {(
-          [
-            ['light', HiOutlineSun],
-            ['color', HiOutlineSwatch],
-            ['detail', TbContrast],
-            ['effects', TbDroplet],
-          ] as const
-        ).map(([key, Icon]) => (
-          <button
-            key={key}
-            type="button"
-            className={cn(
-              'inline-flex h-7 flex-1 items-center justify-center rounded transition-colors',
-              tab === key
-                ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                : 'text-[var(--muted)] hover:text-[var(--ink)]'
-            )}
-            onClick={() => setTab(key)}
-          >
-            <Icon className="h-3.5 w-3.5" />
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        className="mb-2"
+        size="sm"
+        fullWidth
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'light', label: <HiOutlineSun className="h-3.5 w-3.5" /> },
+          { value: 'color', label: <HiOutlineSwatch className="h-3.5 w-3.5" /> },
+          { value: 'detail', label: <TbContrast className="h-3.5 w-3.5" /> },
+          { value: 'effects', label: <TbDroplet className="h-3.5 w-3.5" /> },
+        ]}
+      />
 
       <div className="max-h-[280px] overflow-y-auto pr-0.5">
         {rows.map((row) => (

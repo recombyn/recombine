@@ -18,6 +18,12 @@ export function ChatMarkdown({ content, className }: { content: string; classNam
 }
 
 /** Collapsible DeepSeek thinking / chain-of-thought block. */
+function thinkingBlockTitle(streaming?: boolean, content?: string): string {
+  if (streaming && !content) return '思考中…';
+  if (streaming) return '正在思考';
+  return '深度思考';
+}
+
 export function ChatThinkingBlock({
   content,
   streaming,
@@ -37,7 +43,7 @@ export function ChatThinkingBlock({
       >
         <HiOutlineSparkles className="h-3.5 w-3.5 shrink-0" />
         <span className="min-w-0 flex-1 font-medium">
-          {streaming && !content ? '思考中…' : streaming ? '正在思考' : '深度思考'}
+          {thinkingBlockTitle(streaming, content)}
         </span>
         <HiOutlineChevronDown
           className={cn('h-3.5 w-3.5 shrink-0 transition-transform', open && 'rotate-180')}

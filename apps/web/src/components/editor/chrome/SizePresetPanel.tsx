@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Switch } from '@/components/base';
+import Tooltip from '@/components/base/tooltip';
 import { A4_PORTRAIT } from '@/components/rcb/scene/sceneDocument';
 import { cn } from '@/utils/classnames';
 
@@ -26,14 +28,13 @@ export type FrameSizePreset = {
   icon: 'square' | 'portrait' | 'tall' | 'landscape' | 'wide' | 'doc' | 'web' | 'phone' | 'tablet';
 };
 
-/** Left tabs — product categories + custom (Auto prepended when `showAuto`).
- * Order: 海报 → UI(移动) → 网站 → 图片 → 自定义
+/** Category tabs — product categories + custom.
+ * Order: 海报 → UI(移动) → 网站 → 自定义（智能为右侧开关；无 Image tab）
  */
-export const FRAME_PRESET_TABS: { id: Exclude<SizePresetCategory, 'auto'> }[] = [
+export const FRAME_PRESET_TABS: { id: Exclude<SizePresetCategory, 'auto' | 'image'> }[] = [
   { id: 'poster' },
   { id: 'mobile' },
   { id: 'website' },
-  { id: 'image' },
   { id: 'custom' },
 ];
 
@@ -141,18 +142,28 @@ export function applyFramePreset(
   return current;
 }
 
-export function matchFramePreset(width: number, height: number): string {
+export function matchFramePreset(
+  width: number,
+  height: number,
+  preferredCategory?: FramePresetCategory
+): string {
+  let fallback = '';
   for (const p of FRAME_SIZE_PRESETS) {
     if (p.key === 'original') continue;
+    let hit = false;
     if (p.width && p.height) {
-      if (Math.abs(p.width - width) <= 1 && Math.abs(p.height - height) <= 1) return p.key;
-      if (Math.abs(p.width - height) <= 1 && Math.abs(p.height - width) <= 1) return p.key;
+      hit =
+        (Math.abs(p.width - width) <= 1 && Math.abs(p.height - height) <= 1) ||
+        (Math.abs(p.width - height) <= 1 && Math.abs(p.height - width) <= 1);
     } else if (p.ratio) {
       const r = width / Math.max(1, height);
-      if (Math.abs(r - p.ratio) < 0.02) return p.key;
+      hit = Math.abs(r - p.ratio) < 0.02;
     }
+    if (!hit) continue;
+    if (preferredCategory && p.category === preferredCategory) return p.key;
+    if (!fallback) fallback = p.key;
   }
-  return 'custom';
+  return fallback || 'custom';
 }
 
 export function findFramePreset(key: string): FrameSizePreset | undefined {
@@ -187,7 +198,7 @@ export function isCanvasSizeAutoHint(raw: unknown): boolean {
   return /^(?:\d+xauto|autox\d+)$/.test(s);
 }
 
-/** Chip label: `1440 × 900` | `Auto` | `400 × Auto`. */
+/** Chip label: `1440 × 900` | `Smart` | `400 × Smart`. */
 export function formatCanvasSizeChipLabel(
   raw: unknown,
   t: (key: string) => string
@@ -228,18 +239,21 @@ const TAB_I18N: Record<SizePresetCategory, string> = {
 /**
  * Proportional frame outline. Optionally shrink/grow by area vs `relativeToMaxArea`
  * (e.g. A0 vs A6 within the paper tab).
+ * `equalArea` keeps similar ink weight across extreme ratios (21:9 vs 1:1 vs 9:16).
  */
 export function SizeAspectGlyph({
   width,
   height,
   box = 20,
   relativeToMaxArea,
+  equalArea = false,
   className,
 }: {
   width: number;
   height: number;
   box?: number;
   relativeToMaxArea?: number;
+  equalArea?: boolean;
   className?: string;
 }) {
   const w = Math.max(1, width);
@@ -249,7 +263,15 @@ export function SizeAspectGlyph({
   const inner = box - pad * 2;
   let gw: number;
   let gh: number;
-  if (ar >= 1) {
+  if (equalArea) {
+    // Same visual mass inside the box; then fit so nothing clips.
+    const area = inner * inner * 0.5;
+    gw = Math.sqrt(area * ar);
+    gh = Math.sqrt(area / ar);
+    const fit = Math.min(1, inner / gw, inner / gh);
+    gw *= fit;
+    gh *= fit;
+  } else if (ar >= 1) {
     gw = inner;
     gh = Math.max(3, inner / ar);
   } else {
@@ -300,19 +322,26 @@ type SizePresetPanelProps = {
   /** When Auto is selected in the composer chip. */
   autoActive?: boolean;
   /** Called when user picks a fixed-size preset (or Auto / partial custom). */
-  onPick: (preset: FrameSizePreset) => void;
+  onPick: (preset: FrameSizePreset, opts?: { keepOpen?: boolean }) => void;
 };
 
 function resolveTabForKey(key: string, autoActive?: boolean): SizePresetCategory {
-  if (autoActive || key === 'auto') return 'auto';
+  // Smart is a switch, not a tab — keep browsing the matched/preset category.
+  if (autoActive || key === 'auto') {
+    const cat = findFramePreset(key)?.category;
+    if (cat && cat !== 'ratio' && cat !== 'custom' && cat !== 'image') return cat;
+    return 'poster';
+  }
   if (!key || key === 'custom') return 'custom';
   const cat = findFramePreset(key)?.category;
+  // Image presets have no tab — open Custom with the current WxH.
+  if (cat === 'image') return 'custom';
   if (cat && cat !== 'ratio') return cat;
   return 'website';
 }
 
 /**
- * Shared size preset UI — left category tabs + right device list.
+ * Shared size preset UI — underline category tabs + Smart switch + device list.
  * Used by frame toolbar and chat design canvas size picker.
  */
 export default function SizePresetPanel({
@@ -327,17 +356,38 @@ export default function SizePresetPanel({
   onPick,
 }: SizePresetPanelProps): ReactNode {
   const { t } = useTranslation();
+  const preferredMatchCategory =
+    initialCategory && initialCategory !== 'auto' && initialCategory !== 'custom'
+      ? initialCategory
+      : undefined;
   const matchedKey =
     activeKey ||
-    (activeWidth && activeHeight ? matchFramePreset(activeWidth, activeHeight) : '');
+    (activeWidth && activeHeight
+      ? matchFramePreset(activeWidth, activeHeight, preferredMatchCategory)
+      : '');
 
+  // Prefer the tab for the current WxH / preset; scene hint is only a fallback
+  // (otherwise Home/editor scene can pin "Poster" while chip shows 1366×768).
   const resolvedInitial: SizePresetCategory = (() => {
-    if (autoActive && showAuto) return 'auto';
-    if (initialCategory) return initialCategory;
-    return resolveTabForKey(matchedKey, autoActive && showAuto);
+    if (autoActive && showAuto) {
+      if (preferredMatchCategory && preferredMatchCategory !== 'image') {
+        return preferredMatchCategory;
+      }
+      return 'poster';
+    }
+    if (matchedKey && matchedKey !== 'custom' && matchedKey !== 'auto') {
+      return resolveTabForKey(matchedKey, false);
+    }
+    if (activeWidth && activeHeight) return 'custom';
+    if (initialCategory && initialCategory !== 'auto' && initialCategory !== 'image') {
+      return initialCategory;
+    }
+    return resolveTabForKey(matchedKey, false);
   })();
 
-  const [tab, setTab] = useState<SizePresetCategory>(resolvedInitial);
+  const [tab, setTab] = useState<SizePresetCategory>(() =>
+    resolvedInitial === 'auto' || resolvedInitial === 'image' ? 'poster' : resolvedInitial
+  );
   const [customW, setCustomW] = useState(() =>
     activeWidth && activeWidth > 0 ? String(Math.round(activeWidth)) : ''
   );
@@ -346,7 +396,9 @@ export default function SizePresetPanel({
   );
 
   useEffect(() => {
-    setTab(resolvedInitial);
+    const next =
+      resolvedInitial === 'auto' || resolvedInitial === 'image' ? 'poster' : resolvedInitial;
+    setTab(next);
   }, [resolvedInitial]);
 
   useEffect(() => {
@@ -354,17 +406,12 @@ export default function SizePresetPanel({
     if (activeHeight && activeHeight > 0) setCustomH(String(Math.round(activeHeight)));
   }, [activeWidth, activeHeight]);
 
-  const tabs = useMemo(
-    () =>
-      showAuto
-        ? ([{ id: 'auto' as const }, ...FRAME_PRESET_TABS] as { id: SizePresetCategory }[])
-        : FRAME_PRESET_TABS,
-    [showAuto]
-  );
+  const browseTab: Exclude<SizePresetCategory, 'auto' | 'image'> =
+    tab === 'auto' || tab === 'image' ? 'poster' : tab;
 
   const list = useMemo(
-    () => (tab === 'auto' || tab === 'custom' ? [] : presetsByCategory(tab)),
-    [tab]
+    () => (browseTab === 'custom' ? [] : presetsByCategory(browseTab)),
+    [browseTab]
   );
   const maxArea = useMemo(() => {
     let max = 0;
@@ -375,12 +422,42 @@ export default function SizePresetPanel({
   }, [list]);
 
   const pickAuto = () => {
-    onPick({
-      key: 'auto',
-      label: t('editor.frameToolbar.auto'),
-      category: 'custom',
-      icon: 'square',
-    });
+    onPick(
+      {
+        key: 'auto',
+        label: t('editor.frameToolbar.auto'),
+        category: 'custom',
+        icon: 'square',
+      },
+      { keepOpen: true }
+    );
+  };
+
+  const leaveSmart = () => {
+    if (browseTab === 'custom') {
+      const wRaw = String(customW).trim();
+      const hRaw = String(customH).trim();
+      const wNum = wRaw ? Math.round(Number(wRaw)) : NaN;
+      const hNum = hRaw ? Math.round(Number(hRaw)) : NaN;
+      const hasW = Number.isFinite(wNum) && wNum >= 40;
+      const hasH = Number.isFinite(hNum) && hNum >= 40;
+      if (hasW || hasH) {
+        onPick(
+          {
+            key: 'custom',
+            label: t('editor.frameToolbar.custom'),
+            category: 'custom',
+            ...(hasW ? { width: wNum } : {}),
+            ...(hasH ? { height: hNum } : {}),
+            icon: 'square',
+          },
+          { keepOpen: true }
+        );
+        return;
+      }
+    }
+    const first = list[0] || presetsByCategory('poster')[0];
+    if (first?.width && first?.height) onPick(first, { keepOpen: true });
   };
 
   const applyCustom = () => {
@@ -392,7 +469,6 @@ export default function SizePresetPanel({
     const hasH = Number.isFinite(hNum) && hNum >= 40;
     if (!hasW && !hasH) {
       if (showAuto) {
-        setTab('auto');
         pickAuto();
       }
       return;
@@ -407,19 +483,26 @@ export default function SizePresetPanel({
     });
   };
 
+  const smartOn = Boolean(showAuto && autoActive);
+
   return (
-    <div className={cn('flex min-h-[280px] min-w-[360px] items-stretch', className)}>
-      <div
-        role="tablist"
-        aria-orientation="vertical"
-        className="flex w-[7.5rem] shrink-0 flex-col border-r border-[var(--line)]"
-      >
-        <div className="flex flex-col gap-0.5 p-1.5">
-          {tabs.map((item) => {
-            const active =
-              item.id === 'auto'
-                ? Boolean(autoActive) || tab === 'auto'
-                : !autoActive && tab === item.id;
+    <div
+      className={cn(
+        'inline-flex w-max max-w-[calc(100vw-24px)] flex-col',
+        browseTab !== 'custom' && 'min-h-[280px]',
+        className
+      )}
+    >
+      <div className="flex shrink-0 items-end gap-1 border-b border-[var(--ink)]/12 px-1.5 pt-1">
+        <div
+          role="tablist"
+          aria-label={t('editor.frameToolbar.sizePresets')}
+          className="flex min-w-0 flex-1 flex-nowrap gap-x-0.5 overflow-x-hidden"
+        >
+          {FRAME_PRESET_TABS.map((item) => {
+            // Underline follows the browsed category even when Smart is on,
+            // so the tab bar always shows the same hairline + indicator as home.
+            const active = browseTab === item.id;
             return (
               <button
                 key={item.id}
@@ -429,62 +512,69 @@ export default function SizePresetPanel({
                 disabled={disabled}
                 onClick={(e) => {
                   e.stopPropagation();
-                  // Tabs only switch the list — do not onPick (parent closes the popover on pick).
                   setTab(item.id);
                 }}
                 className={cn(
-                  'rounded-lg px-2.5 py-2 text-left text-[12px] font-medium transition-colors disabled:opacity-40',
+                  'relative shrink-0 px-2 pb-2.5 pt-1.5 text-[12px] font-medium tracking-tight transition-colors disabled:opacity-40',
                   active
-                    ? 'bg-[var(--canvas)] text-[var(--ink)]'
-                    : 'text-[var(--muted)] hover:bg-[var(--canvas)]/70 hover:text-[var(--ink)]'
+                    ? 'text-[var(--ink)]'
+                    : 'text-[var(--ink)]/55 hover:text-[var(--ink)]'
                 )}
               >
                 {t(TAB_I18N[item.id])}
+                {active ? (
+                  <span
+                    className="absolute inset-x-1.5 bottom-0 h-[2px] rounded-full bg-[var(--ink)]"
+                    aria-hidden
+                  />
+                ) : null}
               </button>
             );
           })}
         </div>
+        {showAuto ? (
+          <Tooltip title={t('editor.frameToolbar.auto')} placement="top">
+            <label
+              className={cn(
+                'mb-2 ml-0.5 inline-flex shrink-0 cursor-pointer items-center pl-1.5',
+                disabled && 'cursor-not-allowed opacity-40'
+              )}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="sr-only">{t('editor.frameToolbar.auto')}</span>
+              <Switch
+                checked={smartOn}
+                disabled={disabled}
+                onChange={(on) => {
+                  if (on) pickAuto();
+                  else leaveSmart();
+                }}
+              />
+            </label>
+          </Tooltip>
+        ) : null}
       </div>
       <div
         role="listbox"
-        className="min-w-0 flex-1 overflow-y-auto pl-1 pr-1.5"
-        style={{ maxHeight: 'min(340px, 50vh)' }}
+        className={cn(
+          'min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-1.5',
+          smartOn && 'opacity-70'
+        )}
+        style={{ maxHeight: 'min(320px, 50vh)' }}
       >
-        {tab === 'auto' ? (
-          <div className="flex flex-col gap-2 p-3">
-            <p className="text-[13px] font-medium text-[var(--ink)]">
-              {t('editor.frameToolbar.auto')}
-            </p>
-            <p className="text-[12px] leading-relaxed text-[var(--muted)]">
-              {t('editor.frameToolbar.autoHint')}
-            </p>
-            <p className="text-[11px] leading-snug text-[var(--muted)]">
-              {t('editor.frameToolbar.customAutoHint')}
-            </p>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={(e) => {
-                e.stopPropagation();
-                pickAuto();
-              }}
-              className="mt-1 h-9 rounded-lg bg-[var(--ink)] text-[13px] font-medium text-[var(--surface)] transition-opacity hover:opacity-90 disabled:opacity-40"
-            >
-              {t('editor.frameToolbar.apply')}
-            </button>
-          </div>
-        ) : tab === 'custom' ? (
-          <div className="flex flex-col gap-3 p-3">
-            <div className="flex items-center gap-2">
-              <label className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="text-[11px] text-[var(--muted)]">
+        {browseTab === 'custom' ? (
+          <div className="flex w-full flex-col gap-3 p-3">
+            <div className="flex w-full items-end gap-2">
+              <label className="flex w-[120px] shrink-0 flex-col gap-1">
+                <span className="text-[11px] font-medium text-[var(--ink)]/65">
                   {t('editor.frameToolbar.width')}
                 </span>
                 <input
                   type="number"
                   min={40}
                   inputMode="numeric"
-                  disabled={disabled}
+                  disabled={disabled || smartOn}
                   placeholder={showAuto ? t('editor.frameToolbar.auto') : undefined}
                   value={customW}
                   onChange={(e) => setCustomW(e.target.value)}
@@ -494,19 +584,19 @@ export default function SizePresetPanel({
                       applyCustom();
                     }
                   }}
-                  className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[13px] tabular-nums text-[var(--ink)] outline-none [appearance:textfield] focus:border-[var(--ink)]/30 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  className="h-9 w-[120px] rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[13px] tabular-nums text-[var(--ink)] outline-none [appearance:textfield] focus:border-[var(--ink)]/30 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
               </label>
-              <span className="mt-5 text-[13px] text-[var(--muted)]">×</span>
-              <label className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="text-[11px] text-[var(--muted)]">
+              <span className="mb-2 shrink-0 text-[13px] text-[var(--muted)]">×</span>
+              <label className="flex w-[120px] shrink-0 flex-col gap-1">
+                <span className="text-[11px] font-medium text-[var(--ink)]/65">
                   {t('editor.frameToolbar.height')}
                 </span>
                 <input
                   type="number"
                   min={40}
                   inputMode="numeric"
-                  disabled={disabled}
+                  disabled={disabled || smartOn}
                   placeholder={showAuto ? t('editor.frameToolbar.auto') : undefined}
                   value={customH}
                   onChange={(e) => setCustomH(e.target.value)}
@@ -516,30 +606,25 @@ export default function SizePresetPanel({
                       applyCustom();
                     }
                   }}
-                  className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[13px] tabular-nums text-[var(--ink)] outline-none [appearance:textfield] focus:border-[var(--ink)]/30 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  className="h-9 w-[120px] rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[13px] tabular-nums text-[var(--ink)] outline-none [appearance:textfield] focus:border-[var(--ink)]/30 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
               </label>
             </div>
-            {showAuto ? (
-              <p className="text-[11px] leading-snug text-[var(--muted)]">
-                {t('editor.frameToolbar.customAutoHint')}
-              </p>
-            ) : null}
             <button
               type="button"
-              disabled={disabled}
+              disabled={disabled || smartOn}
               onClick={(e) => {
                 e.stopPropagation();
                 applyCustom();
               }}
-              className="h-9 rounded-lg bg-[var(--ink)] text-[13px] font-medium text-[var(--surface)] transition-opacity hover:opacity-90 disabled:opacity-40"
+              className="h-9 w-full rounded-xl bg-[var(--ink)] text-[13px] font-medium text-[var(--surface)] transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               {t('editor.frameToolbar.apply')}
             </button>
           </div>
         ) : (
           list.map((p) => {
-            const selected = !autoActive && matchedKey === p.key;
+            const selected = !smartOn && matchedKey === p.key;
             const sizeHint = p.width && p.height ? `${p.width} x ${p.height}` : '';
             return (
               <button
@@ -553,13 +638,13 @@ export default function SizePresetPanel({
                   if (p.width && p.height) onPick(p);
                 }}
                 className={cn(
-                  'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left text-[13px] transition-colors disabled:opacity-40',
+                  'flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] font-medium tracking-tight transition-colors disabled:opacity-40',
                   selected
-                    ? 'bg-[var(--accent-soft)] font-medium text-[var(--ink)]'
-                    : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]/60'
+                    ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+                    : 'text-[var(--ink)] hover:bg-[var(--canvas)]'
                 )}
               >
-                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-[var(--muted)]">
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-[var(--ink)]/70">
                   {p.width && p.height ? (
                     <SizeAspectGlyph
                       width={p.width}
@@ -569,11 +654,11 @@ export default function SizePresetPanel({
                     />
                   ) : null}
                 </span>
-                <span className="min-w-0 flex-1 truncate">
+                <span className="min-w-0 truncate whitespace-nowrap">
                   {framePresetDisplayLabel(p, t)}
                 </span>
                 {sizeHint ? (
-                  <span className="shrink-0 text-[11px] tabular-nums text-[var(--muted)]">
+                  <span className="shrink-0 text-[12px] font-medium tabular-nums text-[var(--ink)]/50">
                     {sizeHint}
                   </span>
                 ) : null}

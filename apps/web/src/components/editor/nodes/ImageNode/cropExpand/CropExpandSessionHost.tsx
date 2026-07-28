@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   HiOutlineArrowsPointingOut,
-  HiOutlineBolt,
   HiOutlineChevronDown,
   HiOutlineScissors,
 } from 'react-icons/hi2';
@@ -10,6 +9,7 @@ import { BiExit } from 'react-icons/bi';
 import { nanoid } from 'nanoid';
 import { message, DropdownPanel, DropdownPanelItem } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
+import { PanelConfirmCost, IMAGE_TOOL_TOKEN_COST } from '@/components/editor/nodes/ImageNode/toolPanels/ImageToolPanelShell';
 import {
   RcbOverlayPortal,
   rcbScreenPxToScene,
@@ -27,7 +27,7 @@ import {
 } from '@/store/modules/editor';
 import { addNodeToDocument } from '@/components/rcb/scene/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
-import { imageSrcToFile } from '@/apis/upload';
+import { imageSrcToFile } from '@/utils/uploadImage';
 import { cn } from '@/utils/classnames';
 import { AspectPresetGlyph } from '@/components/rcb/selection/AspectRatioPresetMenu';
 import { imageToolBtn, ImageToolSep } from '../imageToolbarShared';
@@ -392,7 +392,7 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
             <button
               type="button"
               disabled={busy}
-              className="mx-[10px] inline-flex h-7 min-w-[52px] items-center justify-center gap-1 rounded-[4px] px-2.5 text-[12px] font-medium bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80"
+              className="mx-[10px] inline-flex h-7 min-w-[52px] items-center justify-center gap-1 rounded-xl px-2.5 text-[12px] font-medium bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80"
               onClick={onConfirm}
             >
               {busy ? (
@@ -401,10 +401,7 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
                 <>
                   <span>确认</span>
                   {mode === 'expand' ? (
-                    <span className="inline-flex items-center gap-0.5 text-[11px] text-white/55">
-                      <HiOutlineBolt className="h-3 w-3" aria-hidden />
-                      <span className="tabular-nums">8</span>
-                    </span>
+                    <PanelConfirmCost amount={IMAGE_TOOL_TOKEN_COST.expand} />
                   ) : null}
                 </>
               )}

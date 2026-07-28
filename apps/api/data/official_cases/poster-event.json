@@ -1,0 +1,116 @@
+{
+  "x": 0,
+  "y": 0,
+  "width": 1080,
+  "height": 1440,
+  "backgroundColor": "",
+  "pages": [
+    {
+      "id": "page1",
+      "children": [
+        "p3",
+        "p4",
+        "p5",
+        "p6"
+      ]
+    }
+  ],
+  "activePageId": "page1",
+  "deltaSetLike": {
+    "ROOT": {
+      "id": "ROOT",
+      "key": "entry",
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "attrs": {},
+      "children": [
+        "p3",
+        "p4",
+        "p5",
+        "p6"
+      ]
+    },
+    "p3": {
+      "id": "p3",
+      "key": "text",
+      "x": 80,
+      "y": 180,
+      "z": 0,
+      "width": 900,
+      "height": 80,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"D\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"e\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"s\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"i\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"g\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"n\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\" \",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"M\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"e\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"e\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"t\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"u\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}},{\"char\":\"p\",\"config\":{\"SIZE\":56,\"COLOR\":\"#F8FAFC\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"Design Meetup\",\"bold\":true,\"font-base\":{\"fontSize\":56,\"color\":\"#F8FAFC\"}}]}]"
+      },
+      "children": []
+    },
+    "p4": {
+      "id": "p4",
+      "key": "text",
+      "x": 80,
+      "y": 280,
+      "z": 0,
+      "width": 900,
+      "height": 48,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"创\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"意\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"分\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"享\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\" \",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"·\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\" \",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"作\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"品\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"交\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"流\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\" \",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"·\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\" \",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"现\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"场\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"连\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}},{\"char\":\"麦\",\"config\":{\"SIZE\":22,\"COLOR\":\"#94A3B8\",\"WEIGHT\":\"normal\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"创意分享 · 作品交流 · 现场连麦\",\"bold\":false,\"font-base\":{\"fontSize\":22,\"color\":\"#94A3B8\"}}]}]"
+      },
+      "children": []
+    },
+    "p5": {
+      "id": "p5",
+      "key": "shape",
+      "x": 80,
+      "y": 1100,
+      "z": 0,
+      "width": 320,
+      "height": 64,
+      "attrs": {
+        "shapeType": "rect",
+        "fill-color": "#38BDF8",
+        "border-color": "transparent",
+        "border-width": 0,
+        "L": "true",
+        "R": "true",
+        "T": "true",
+        "B": "true",
+        "opacity": 1,
+        "angle": 0,
+        "radiusTL": 0,
+        "radiusTR": 0,
+        "radiusBR": 0,
+        "radiusBL": 0
+      },
+      "children": []
+    },
+    "p6": {
+      "id": "p6",
+      "key": "text",
+      "x": 110,
+      "y": 1116,
+      "z": 0,
+      "width": 260,
+      "height": 36,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"免\",\"config\":{\"SIZE\":22,\"COLOR\":\"#0F172A\",\"WEIGHT\":\"bold\"}},{\"char\":\"费\",\"config\":{\"SIZE\":22,\"COLOR\":\"#0F172A\",\"WEIGHT\":\"bold\"}},{\"char\":\"报\",\"config\":{\"SIZE\":22,\"COLOR\":\"#0F172A\",\"WEIGHT\":\"bold\"}},{\"char\":\"名\",\"config\":{\"SIZE\":22,\"COLOR\":\"#0F172A\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"免费报名\",\"bold\":true,\"font-base\":{\"fontSize\":22,\"color\":\"#0F172A\"}}]}]"
+      },
+      "children": []
+    }
+  },
+  "frames": [
+    {
+      "id": "frame1",
+      "name": "Event poster",
+      "x": 0,
+      "y": 0,
+      "width": 1080,
+      "height": 1440,
+      "backgroundColor": "#0F172A"
+    }
+  ],
+  "activeFrameId": "frame1"
+}

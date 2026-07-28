@@ -1,35 +1,233 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useEffect, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineClipboardDocument, HiOutlineLink } from 'react-icons/hi2';
-import { createShareApi, updateShareDocumentApi, type ShareDto } from '@/apis/shares';
-import { Dialog, message } from '@/components/base';
-import { copyText, shareCopyText, shareUrl, type SharePermission } from '@/utils/shareStorage';
+import { HiChevronDown, HiOutlineInformationCircle } from 'react-icons/hi2';
+import {
+  createShareApi,
+  lookupUsersApi,
+  searchUsersApi,
+  updateShareDocumentApi,
+  updateShareMetaApi,
+  type DirectoryUser,
+  type ShareDto,
+  type SharePermission,
+} from '@/apis/shares';
+import { Dialog, Dropdown, Switch, message } from '@/components/base';
+import { UserAvatar } from '@/components/layout/UserAccountPanel';
+import { PlazaPublishForm } from '@/components/templates/PlazaPublishDialog';
+import { submitToPlaza } from '@/apis/plaza';
+import { fetchProject } from '@/apis/projects';
+import { coverDocumentHasContent } from '@/utils/plazaCover';
+import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
 import { cn } from '@/utils/classnames';
+import { isOwnedTemplate } from '@/utils/templatesStorage';
+import { getToken } from '@/utils/token';
+import { buildLoginUrl } from '@/utils/authReturnTo';
+import { useNavigate } from 'react-router-dom';
+import { setTemplateThumbnail } from '@/store/modules/editor';
 
 type Props = {
   open: boolean;
   onClose: () => void;
 };
 
+type LinkAccess = 'edit' | 'download' | 'view';
+type DialogTab = 'share' | 'publish';
+
+function shareUrl(id: string, origin = typeof window !== 'undefined' ? window.location.origin : '') {
+  return `${origin}/s/${id}`;
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+}
+
+function permissionFromLinkAccess(access: LinkAccess): SharePermission {
+  return access === 'edit' ? 'edit' : 'preview';
+}
+
+function accessLabelKey(access: LinkAccess): 'editor.shareCanEdit' | 'editor.shareCanDownload' | 'editor.shareCanView' {
+  if (access === 'edit') return 'editor.shareCanEdit';
+  if (access === 'download') return 'editor.shareCanDownload';
+  return 'editor.shareCanView';
+}
+
+function resolveProjectDisplayName(opts: {
+  templateName?: string;
+  documentName?: string;
+  fallback: string;
+}): string {
+  return opts.templateName || String(opts.documentName || '') || opts.fallback;
+}
+
+function inviteMetaPayload(opts: {
+  userId: string;
+  asEditor: boolean;
+  linkAccess: LinkAccess;
+  editorIds: string[];
+  viewerIds: string[];
+}): {
+  permission: SharePermission;
+  linkPublic?: boolean;
+  editorUserIds: string[];
+  viewerUserIds: string[];
+} {
+  if (opts.asEditor) {
+    return {
+      permission: 'edit',
+      linkPublic: false,
+      editorUserIds: [...opts.editorIds, opts.userId],
+      viewerUserIds: opts.viewerIds.filter((id) => id !== opts.userId),
+    };
+  }
+  return {
+    permission: permissionFromLinkAccess(opts.linkAccess),
+    editorUserIds: opts.editorIds,
+    viewerUserIds: [...opts.viewerIds, opts.userId],
+  };
+}
+
+function collaboratorRolePayload(opts: {
+  userId: string;
+  role: 'edit' | 'view';
+  editorIds: string[];
+  viewerIds: string[];
+  linkAccess: LinkAccess;
+}): {
+  permission: SharePermission;
+  linkPublic: boolean;
+  editorUserIds: string[];
+  viewerUserIds: string[];
+} {
+  let nextEditors = opts.editorIds.filter((id) => id !== opts.userId);
+  let nextViewers = opts.viewerIds.filter((id) => id !== opts.userId);
+  if (opts.role === 'edit') nextEditors = [...nextEditors, opts.userId];
+  else nextViewers = [...nextViewers, opts.userId];
+  return {
+    permission: nextEditors.length ? 'edit' : 'preview',
+    linkPublic: opts.linkAccess === 'view' || opts.linkAccess === 'download',
+    editorUserIds: nextEditors,
+    viewerUserIds: nextViewers,
+  };
+}
+
+function assertCanPublishToPlaza(opts: {
+  hasToken: boolean;
+  document: unknown;
+  projectId: string;
+  currentTpl: { source?: string } | undefined;
+  isOwned: (tpl: { source?: string }) => boolean;
+}): 'ok' | 'login_required' | 'no_document' | 'empty_canvas' | 'need_owned_project' {
+  if (!opts.hasToken) return 'login_required';
+  if (!opts.document) return 'no_document';
+  if (!coverDocumentHasContent(opts.document as any)) return 'empty_canvas';
+  if (!opts.projectId || (opts.currentTpl && !opts.isOwned(opts.currentTpl))) {
+    return 'need_owned_project';
+  }
+  return 'ok';
+}
+
 export default function ShareDialog({ open, onClose }: Props) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
   const document = useSelector((s: any) => s.editor.document);
   const currentId = useSelector((s: any) => s.editor.currentId as string | null);
-  const templates = useSelector((s: any) => s.editor.templates as Array<{ id: string; name?: string }>);
-  const projectName =
-    templates.find((tItem) => tItem.id === currentId)?.name ||
-    String(document?.name || '') ||
-    t('home.untitled', { defaultValue: '未命名作品' });
+  const templates = useSelector(
+    (s: any) =>
+      s.editor.templates as Array<{
+        id: string;
+        name?: string;
+        source?: string;
+        thumbnail?: string | string[] | null;
+        updatedAt?: number;
+      }>
+  );
+  const me = useSelector((s: any) => s.auth?.user as { id?: string; name?: string; email?: string; avatar?: string } | null);
+  const currentTpl = templates.find((tItem) => tItem.id === currentId);
+  const projectName = resolveProjectDisplayName({
+    templateName: currentTpl?.name,
+    documentName: document?.name,
+    fallback: t('home.untitled', { defaultValue: '未命名作品' }),
+  });
+  const coverUrls = normalizeProjectThumbnailUrls(
+    currentTpl?.thumbnail,
+    currentTpl?.updatedAt
+  );
 
-  const [permission, setPermission] = useState<SharePermission>('preview');
+  const [tab, setTab] = useState<DialogTab>('share');
+  const [publishPhase, setPublishPhase] = useState<'confirm' | 'success'>('confirm');
+  const [publishing, setPublishing] = useState(false);
   const [record, setRecord] = useState<ShareDto | null>(null);
   const [busy, setBusy] = useState(false);
+  const [linkEnabled, setLinkEnabled] = useState(true);
+  const [linkAccess, setLinkAccess] = useState<LinkAccess>('view');
+  const [editorIds, setEditorIds] = useState<string[]>([]);
+  const [viewerIds, setViewerIds] = useState<string[]>([]);
+  const [collaborators, setCollaborators] = useState<
+    Array<DirectoryUser & { role: 'edit' | 'view' }>
+  >([]);
+  const [inviteQuery, setInviteQuery] = useState('');
+  const [searchHits, setSearchHits] = useState<DirectoryUser[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedInvite, setSelectedInvite] = useState<DirectoryUser | null>(null);
+  const [inviting, setInviting] = useState(false);
+  const searchTimer = useRef<number | null>(null);
+  const creatingRef = useRef(false);
 
-  // Create server share when dialog opens or permission switches.
+  const url = record && linkEnabled ? shareUrl(record.id) : '';
+
+  const accessLabel = (access: LinkAccess) => t(accessLabelKey(access));
+
+  // Enter Share/Publish: refresh stored collage URLs and pin them to current origin.
+  useEffect(() => {
+    if (!open || !currentId || !getToken()) return;
+    let cancelled = false;
+    void fetchProject(currentId)
+      .then((res) => {
+        if (cancelled) return;
+        const thumbs = normalizeProjectThumbnailUrls(
+          res.project?.thumbnailUrl,
+          res.project?.updatedAt
+        );
+        if (!thumbs.length) return;
+        dispatch(
+          setTemplateThumbnail({
+            id: currentId,
+            thumbnail: thumbs.length === 1 ? thumbs[0] : thumbs,
+            custom: Boolean(res.project?.thumbnailCustom),
+          })
+        );
+      })
+      .catch(() => {
+        /* keep in-memory collage if list fetch fails */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, currentId, dispatch]);
+
   useEffect(() => {
     if (!open) {
       setRecord(null);
+      setTab('share');
+      setPublishPhase('confirm');
+      setPublishing(false);
+      setInviteQuery('');
+      setSearchHits([]);
+      setSelectedInvite(null);
+      creatingRef.current = false;
       return;
     }
     if (!document) {
@@ -37,16 +235,27 @@ export default function ShareDialog({ open, onClose }: Props) {
       message.warning(t('editor.shareNoDocument'));
       return;
     }
+    if (creatingRef.current) return;
+    creatingRef.current = true;
     let cancelled = false;
     setBusy(true);
     void createShareApi({
       document,
       name: projectName,
-      permission,
+      permission: 'preview',
       sourceProjectId: currentId || undefined,
+      editorUserIds: [],
+      viewerUserIds: [],
+      linkPublic: false,
     })
       .then((res) => {
-        if (!cancelled) setRecord(res.share);
+        if (cancelled) return;
+        const s = res.share;
+        setRecord(s);
+        setLinkEnabled(s.linkEnabled !== false);
+        setLinkAccess(s.permission === 'edit' ? 'edit' : 'view');
+        setEditorIds(Array.isArray(s.editorUserIds) ? s.editorUserIds : []);
+        setViewerIds(Array.isArray(s.viewerUserIds) ? s.viewerUserIds : []);
       })
       .catch(() => {
         if (!cancelled) {
@@ -56,149 +265,455 @@ export default function ShareDialog({ open, onClose }: Props) {
       })
       .finally(() => {
         if (!cancelled) setBusy(false);
+        creatingRef.current = false;
       });
     return () => {
       cancelled = true;
     };
-    // Snapshot only at open / permission change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, permission]);
+  }, [open]);
 
-  const url = useMemo(() => (record ? shareUrl(record.id) : ''), [record]);
-
-  const ensureShare = async (): Promise<ShareDto | null> => {
-    if (!document) {
-      message.warning(t('editor.shareNoDocument'));
-      return null;
+  useEffect(() => {
+    if (!open) {
+      setCollaborators([]);
+      return;
     }
-    if (record && record.permission === permission) {
-      try {
-        const res = await updateShareDocumentApi(record.id, document);
-        setRecord(res.share);
-        return res.share;
-      } catch {
-        return record;
-      }
+    const ids = [...new Set([...editorIds, ...viewerIds])];
+    if (!ids.length) {
+      setCollaborators([]);
+      return;
     }
-    try {
-      const res = await createShareApi({
-        document,
-        name: projectName,
-        permission,
-        sourceProjectId: currentId || undefined,
+    let cancelled = false;
+    void lookupUsersApi({ ids: ids.filter(Boolean).join(',') })
+      .then((res) => {
+        if (cancelled) return;
+        const editorSet = new Set(editorIds);
+        setCollaborators(
+          (res.items || []).map((u) => ({
+            ...u,
+            role: editorSet.has(u.id) ? ('edit' as const) : ('view' as const),
+          }))
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setCollaborators([]);
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, editorIds, viewerIds]);
+
+  useEffect(() => {
+    if (!open) return;
+    const q = inviteQuery.trim();
+    if (searchTimer.current) window.clearTimeout(searchTimer.current);
+    if (q.length < 1) {
+      setSearchHits([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    searchTimer.current = window.setTimeout(() => {
+      void searchUsersApi({ q, limit: 12 })
+        .then((res) => setSearchHits(res.items || []))
+        .catch(() => setSearchHits([]))
+        .finally(() => setSearching(false));
+    }, 280);
+    return () => {
+      if (searchTimer.current) window.clearTimeout(searchTimer.current);
+    };
+  }, [inviteQuery, open]);
+
+  const patchMeta = async (next: {
+    permission?: SharePermission;
+    editorUserIds?: string[];
+    viewerUserIds?: string[];
+    linkEnabled?: boolean;
+    linkPublic?: boolean;
+  }) => {
+    if (!record?.id) return null;
+    try {
+      const res = await updateShareMetaApi(record.id, next);
       setRecord(res.share);
+      if (typeof next.linkEnabled === 'boolean') setLinkEnabled(res.share.linkEnabled !== false);
+      if (next.permission) setLinkAccess(next.permission === 'edit' ? 'edit' : 'view');
+      if (next.editorUserIds) setEditorIds(res.share.editorUserIds || []);
+      if (next.viewerUserIds) setViewerIds(res.share.viewerUserIds || []);
       return res.share;
     } catch {
-      message.error(t('editor.shareCopyFailed'));
+      message.error(t('editor.shareUpdateFailed'));
       return null;
     }
   };
 
+  const onToggleLink = (on: boolean) => {
+    setLinkEnabled(on);
+    void patchMeta({ linkEnabled: on });
+  };
+
+  const onPickAccess = (access: LinkAccess) => {
+    setLinkAccess(access);
+    const permission = permissionFromLinkAccess(access);
+    void patchMeta({
+      permission,
+      linkPublic: access === 'view' || access === 'download',
+      editorUserIds: permission === 'edit' ? editorIds : [],
+      viewerUserIds: viewerIds,
+    });
+  };
+
+  const onInvite = async () => {
+    const user = selectedInvite;
+    if (!user?.id || !record?.id) return;
+    if (user.id === me?.id) {
+      message.warning(t('editor.shareInviteSelf'));
+      return;
+    }
+    if (editorIds.includes(user.id) || viewerIds.includes(user.id)) {
+      message.warning(t('editor.shareAlreadyCollaborator'));
+      return;
+    }
+    setInviting(true);
+    const saved = await patchMeta(
+      inviteMetaPayload({
+        userId: user.id,
+        asEditor: linkAccess === 'edit',
+        linkAccess,
+        editorIds,
+        viewerIds,
+      })
+    );
+    setInviting(false);
+    if (!saved) return;
+    setInviteQuery('');
+    setSelectedInvite(null);
+    setSearchHits([]);
+    message.success(t('editor.shareInviteOk'));
+  };
+
+  const onRemoveCollaborator = (userId: string) => {
+    const nextEditors = editorIds.filter((id) => id !== userId);
+    const nextViewers = viewerIds.filter((id) => id !== userId);
+    setEditorIds(nextEditors);
+    setViewerIds(nextViewers);
+    void patchMeta({
+      permission: nextEditors.length || linkAccess === 'edit' ? 'edit' : 'preview',
+      editorUserIds: nextEditors,
+      viewerUserIds: nextViewers,
+    });
+  };
+
+  const onSetCollaboratorRole = (userId: string, role: 'edit' | 'view') => {
+    const payload = collaboratorRolePayload({
+      userId,
+      role,
+      editorIds,
+      viewerIds,
+      linkAccess,
+    });
+    setEditorIds(payload.editorUserIds);
+    setViewerIds(payload.viewerUserIds);
+    void patchMeta(payload);
+  };
+
   const onCopyLink = async () => {
-    const next = await ensureShare();
-    if (!next) return;
+    if (!record || !linkEnabled) return;
+    if (document) {
+      try {
+        await updateShareDocumentApi(record.id, document);
+      } catch {
+        /* still copy current link */
+      }
+    }
     try {
-      await copyText(shareUrl(next.id));
+      await copyText(shareUrl(record.id));
       message.success(t('editor.shareLinkCopied'));
     } catch {
       message.error(t('editor.shareCopyFailed'));
     }
   };
 
-  const onCopyText = async () => {
-    const next = await ensureShare();
-    if (!next) return;
+  const commitPublish = async () => {
+    const gate = assertCanPublishToPlaza({
+      hasToken: Boolean(getToken()),
+      document,
+      projectId: String(currentId || '').trim(),
+      currentTpl,
+      isOwned: isOwnedTemplate,
+    });
+    switch (gate) {
+      case 'login_required':
+        navigate(buildLoginUrl(window.location.pathname + window.location.search));
+        throw new Error('login_required');
+      case 'no_document':
+        message.warning(t('editor.shareNoDocument'));
+        throw new Error('no_document');
+      case 'empty_canvas':
+        message.warning(t('plaza.emptyCanvas'));
+        throw new Error('empty_canvas');
+      case 'need_owned_project':
+        message.warning(t('plaza.needOwnedProject', { defaultValue: '请先保存为项目后再发布' }));
+        throw new Error('need_owned_project');
+      default:
+        break;
+    }
+    const projectId = String(currentId || '').trim();
+    setPublishing(true);
     try {
-      await copyText(
-        shareCopyText(
-          {
-            id: next.id,
-            name: next.name,
-            permission: next.permission,
-            document: next.document,
-            createdAt: next.createdAt,
-            updatedAt: next.updatedAt,
-          },
-          shareUrl(next.id)
-        )
-      );
-      message.success(t('editor.shareTextCopied'));
-    } catch {
-      message.error(t('editor.shareCopyFailed'));
+      await submitToPlaza({
+        projectId,
+        title: projectName,
+        category: 'website',
+        document,
+        thumbnailUrl: String(coverUrls[0] || '').trim() || null,
+      });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message;
+      message.error(typeof detail === 'string' ? detail : t('plaza.submitFailed'));
+      throw err;
+    } finally {
+      setPublishing(false);
     }
   };
 
-  return (
-    <Dialog show={open} onClose={onClose} title={t('editor.shareTitle')} width={420}>
-      <div className="space-y-4">
-        <p className="text-[13px] leading-relaxed text-[var(--muted)]">{t('editor.shareHint')}</p>
+  const ownerName = me?.name || me?.email || 'User';
+  const inviteDisabled = !selectedInvite || inviting || busy;
+  const showPublishThanks = tab === 'publish' && publishPhase === 'success';
 
-        <div>
-          <div className="mb-1.5 text-[12px] font-medium text-[var(--ink)]">{t('editor.sharePermission')}</div>
-          <div
-            role="group"
-            className="inline-flex h-9 items-center rounded-full bg-[var(--accent-soft)] p-0.5"
-          >
+  return (
+    <Dialog
+      show={open}
+      onClose={() => {
+        if (!publishing) onClose();
+      }}
+      width={showPublishThanks ? 440 : 520}
+      className="!rounded-2xl !bg-[var(--surface)]"
+      title={
+        showPublishThanks ? undefined : (
+          <div className="flex items-end gap-5 pr-8">
             {(
               [
-                { id: 'preview' as const, label: t('editor.sharePreview') },
-                { id: 'edit' as const, label: t('editor.shareEdit') },
+                { id: 'share' as const, label: t('editor.shareTabShare') },
+                { id: 'publish' as const, label: t('editor.shareTabPublish') },
               ] as const
-            ).map((opt) => {
-              const active = permission === opt.id;
-              return (
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  if (publishing) return;
+                  setTab(item.id);
+                  if (item.id === 'publish') setPublishPhase('confirm');
+                }}
+                className={cn(
+                  'relative pb-2 text-[15px] font-medium transition-colors',
+                  tab === item.id ? 'text-[var(--ink)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                )}
+              >
+                {item.label}
+                {tab === item.id ? (
+                  <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-[var(--ink)]" />
+                ) : null}
+              </button>
+            ))}
+          </div>
+        )
+      }
+    >
+      {tab === 'publish' ? (
+        <PlazaPublishForm
+          publishing={publishing}
+          projectId={currentId || undefined}
+          projectName={projectName}
+          document={document}
+          coverUrls={coverUrls}
+          coverVersion={Number(currentTpl?.updatedAt) || undefined}
+          onCancel={onClose}
+          onSubmit={commitPublish}
+          onSuccessDone={onClose}
+          onPhaseChange={setPublishPhase}
+        />
+      ) : (
+        <div className="space-y-6 pt-1">
+          <section className="space-y-3">
+            <h3 className="text-[15px] font-semibold leading-none text-[var(--ink)]">
+              {t('editor.shareLinkSection')}
+            </h3>
+            <div className="flex items-center gap-3">
+              <Switch checked={linkEnabled} onChange={onToggleLink} disabled={!record || busy} />
+              <span className="min-w-0 text-[13px] leading-snug text-[var(--muted)]">
+                {linkEnabled ? t('editor.shareLinkOn') : t('editor.shareLinkOff')}
+              </span>
+            </div>
+
+            {linkEnabled ? (
+              <div className="flex items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5">
+                  <span className="min-w-0 flex-1 truncate py-2 text-[13px] text-[var(--ink)]">
+                    {t('editor.shareAnyoneWithLink')}
+                  </span>
+                  <Dropdown
+                    trigger="click"
+                    placement="bottom-end"
+                    selectedKeys={[linkAccess]}
+                    floatingClassName="z-[9100]"
+                    popupClassName="min-w-[140px] !rounded-xl"
+                    itemClassName="aria-selected:!bg-transparent hover:!bg-transparent"
+                    items={[
+                      { key: 'edit', label: t('editor.shareCanEdit') },
+                      { key: 'download', label: t('editor.shareCanDownload') },
+                      { key: 'view', label: t('editor.shareCanView') },
+                    ]}
+                    onClick={(key) => onPickAccess(key as LinkAccess)}
+                  >
+                    <button
+                      type="button"
+                      disabled={!record}
+                      className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-1.5 text-[13px] text-[var(--ink)] disabled:opacity-50"
+                    >
+                      {accessLabel(linkAccess)}
+                      <HiChevronDown
+                        className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]"
+                        aria-hidden
+                      />
+                    </button>
+                  </Dropdown>
+                </div>
                 <button
-                  key={opt.id}
                   type="button"
-                  aria-pressed={active}
-                  onClick={() => setPermission(opt.id)}
-                  className={cn(
-                    'inline-flex h-8 items-center rounded-full px-3 text-[12px] font-medium transition-colors',
-                    active
-                      ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)]'
-                      : 'text-[var(--muted)] hover:text-[var(--ink)]'
-                  )}
+                  disabled={!url || busy}
+                  onClick={() => void onCopyLink()}
+                  className="inline-flex h-9 w-[108px] shrink-0 items-center justify-center rounded-lg bg-[var(--ink)] px-3 text-[13px] font-medium text-[var(--on-brand)] disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90"
                 >
-                  {opt.label}
+                  {t('editor.shareCopyLink')}
                 </button>
-              );
-            })}
-          </div>
-        </div>
+              </div>
+            ) : null}
+          </section>
 
-        <div>
-          <div className="mb-1.5 text-[12px] font-medium text-[var(--ink)]">{t('editor.shareLink')}</div>
-          <div className="flex items-center gap-2">
-            <input
-              readOnly
-              value={busy && !url ? '…' : url || t('editor.shareLinkPlaceholder')}
-              className="h-9 min-w-0 flex-1 rounded-lg bg-[var(--accent-soft)] px-3 text-[12px] text-[var(--ink)] outline-none ring-1 ring-[var(--line)]"
-              onFocus={(e) => e.currentTarget.select()}
-            />
-            <button
-              type="button"
-              aria-label={t('editor.shareCopyLink')}
-              disabled={!url || busy}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--surface)] px-2.5 text-[12px] font-medium text-[var(--ink)] ring-1 ring-[var(--line)] hover:bg-[var(--accent-soft)] disabled:opacity-50"
-              onClick={() => void onCopyLink()}
-            >
-              <HiOutlineLink className="h-4 w-4" />
-              {t('editor.shareCopyLink')}
-            </button>
-          </div>
-        </div>
+          <section className="space-y-3">
+            <h3 className="flex items-center gap-1.5 text-[15px] font-semibold leading-none text-[var(--ink)]">
+              {t('editor.shareInviteTitle')}
+              <span
+                className="inline-flex text-[var(--muted)]"
+                title={t('editor.shareInviteHint')}
+              >
+                <HiOutlineInformationCircle className="h-4 w-4" aria-hidden />
+                <span className="sr-only">{t('editor.shareInviteHint')}</span>
+              </span>
+            </h3>
+            <div className="flex items-start gap-2">
+              <div className="relative min-w-0 flex-1">
+                <input
+                  value={inviteQuery}
+                  onChange={(e) => {
+                    setInviteQuery(e.target.value);
+                    setSelectedInvite(null);
+                  }}
+                  placeholder={t('editor.shareInvitePlaceholder')}
+                  className="h-9 w-full truncate rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 text-[13px] text-[var(--ink)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--ink)]/30"
+                />
+                {(searching || searchHits.length > 0) && inviteQuery.trim() && !selectedInvite ? (
+                  <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 max-h-48 overflow-auto rounded-lg border border-[var(--line)] bg-[var(--surface)] py-1 shadow-lg">
+                    {searching && !searchHits.length ? (
+                      <div className="px-3 py-2 text-[12px] text-[var(--muted)]">Loading...</div>
+                    ) : null}
+                    {searchHits.map((u) => (
+                      <button
+                        key={u.id}
+                        type="button"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--accent-soft)]"
+                        onClick={() => {
+                          setSelectedInvite(u);
+                          setInviteQuery(u.email || u.name || u.id);
+                          setSearchHits([]);
+                        }}
+                      >
+                        <UserAvatar name={u.name} email={u.email} avatar={u.avatar} size={28} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium text-[var(--ink)]">
+                            {u.name}
+                          </span>
+                          <span className="block truncate text-[12px] text-[var(--muted)]">
+                            {u.email || u.id}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                    {!searching && !searchHits.length ? (
+                      <div className="px-3 py-2 text-[12px] text-[var(--muted)]">
+                        {t('editor.shareInviteEmpty')}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                disabled={inviteDisabled}
+                onClick={() => void onInvite()}
+                className={cn(
+                  'inline-flex h-9 w-[108px] shrink-0 items-center justify-center rounded-lg px-3 text-[13px] font-medium',
+                  inviteDisabled
+                    ? 'cursor-not-allowed bg-[var(--accent-soft)] text-[var(--muted)]'
+                    : 'bg-[var(--ink)] text-[var(--on-brand)] hover:opacity-90'
+                )}
+              >
+                {t('editor.shareInviteAction')}
+              </button>
+            </div>
 
-        <button
-          type="button"
-          disabled={!url || busy}
-          className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--accent-soft)] text-[13px] font-medium text-[var(--ink)] hover:bg-[var(--line)] disabled:opacity-50"
-          onClick={() => void onCopyText()}
-        >
-          <HiOutlineClipboardDocument className="h-4 w-4" />
-          {t('editor.shareCopyText')}
-        </button>
-      </div>
+            <div className="space-y-1 pt-1">
+              <div className="text-[13px] text-[var(--muted)]">{t('editor.shareCollaborators')}</div>
+              <ul className="max-h-[220px] space-y-0.5 overflow-y-auto">
+                <li className="flex items-center gap-2.5 py-2">
+                  <UserAvatar name={me?.name} email={me?.email} avatar={me?.avatar} size={32} />
+                  <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--ink)]">
+                    {ownerName}
+                    <span className="text-[var(--muted)]"> [{t('editor.shareMe')}]</span>
+                  </span>
+                  <span className="shrink-0 text-[13px] text-[var(--muted)]">
+                    {t('editor.shareOwner')}
+                  </span>
+                </li>
+                {collaborators.map((u) => (
+                  <li key={u.id} className="flex items-center gap-2.5 py-2">
+                    <UserAvatar name={u.name} email={u.email} avatar={u.avatar} size={32} />
+                    <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--ink)]">
+                      {u.name || u.email || u.id}
+                    </span>
+                    <Dropdown
+                      trigger="click"
+                      placement="bottom-end"
+                      floatingClassName="z-[9100]"
+                      popupClassName="min-w-[140px] !rounded-xl"
+                      itemClassName="aria-selected:!bg-transparent hover:!bg-transparent"
+                      selectedKeys={[u.role]}
+                      items={[
+                        { key: 'edit', label: t('editor.shareCanEdit') },
+                        { key: 'view', label: t('editor.shareCanView') },
+                        { key: 'remove', label: t('editor.shareRemoveCollaborator') },
+                      ]}
+                      onClick={(key) => {
+                        if (key === 'remove') onRemoveCollaborator(u.id);
+                        else if (key === 'edit' || key === 'view') onSetCollaboratorRole(u.id, key);
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="inline-flex shrink-0 items-center gap-0.5 text-[13px] text-[var(--muted)] hover:text-[var(--ink)]"
+                      >
+                        {u.role === 'edit' ? t('editor.shareCanEdit') : t('editor.shareCanView')}
+                        <HiChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      </button>
+                    </Dropdown>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        </div>
+      )}
     </Dialog>
   );
 }

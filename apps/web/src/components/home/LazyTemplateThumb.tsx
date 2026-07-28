@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
-import { projectThumbFrameClass } from '@/utils/projectThumb';
-import { nearestScrollRoot } from '@/utils/useInfiniteList';
+import {
+  projectThumbFrameClass,
+  projectThumbZoomLayerClass,
+} from '@/utils/projectThumb';
+import { nearestScrollRoot } from '@/components/home/InfiniteScroll';
 import { cn } from '@/utils/classnames';
 
 type Props = {
@@ -9,13 +12,13 @@ type Props = {
   fit?: 'contain' | 'cover';
   className?: string;
   children?: ReactNode;
-  /** Keep SVG mounted once shown (default true). */
+  /** Keep thumb mounted once shown (default true). */
   once?: boolean;
 };
 
 /**
- * Mount TemplateThumbnail only when near viewport — avoids dozens of SVG boards
- * blocking the main thread on large project grids.
+ * Mount TemplateThumbnail only when near viewport — avoids dozens of boards
+ * rasterizing on the main thread at once for large project grids.
  */
 export default function LazyTemplateThumb({
   document,
@@ -48,16 +51,18 @@ export default function LazyTemplateThumb({
 
   return (
     <div ref={rootRef} className={projectThumbFrameClass(className)}>
-      {active && document ? (
-        <TemplateThumbnail document={document} fit={fit} />
-      ) : (
-        <div
-          className={cn(
-            'flex h-full w-full items-center justify-center bg-[var(--accent-soft)]',
-            active && 'animate-pulse'
-          )}
-        />
-      )}
+      <div className={cn('absolute inset-0', projectThumbZoomLayerClass)}>
+        {active && document ? (
+          <TemplateThumbnail document={document} fit={fit} />
+        ) : (
+          <div
+            className={cn(
+              'flex h-full w-full items-center justify-center bg-[var(--surface)]',
+              active && 'animate-pulse'
+            )}
+          />
+        )}
+      </div>
       {children}
     </div>
   );

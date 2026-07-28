@@ -8,14 +8,24 @@ import {
   createTextNode,
   expandSelectionWithGroups,
   fitImageSize,
+  canAttachNodeToChat,
+  groupNodesInDocument,
+  isNodeHidden,
+  isNodeLocked,
   measureImageNaturalSize,
   pasteClipboardIntoDocument,
   removeNodesFromDocument,
   reorderNodesInDocument,
   listSceneNodes,
+  resolveSelectionNodeIds,
+  nodeIdsInsideFrames,
+  selectionSharedGroupId,
   snapshotNodesForClipboard,
+  snapshotFramesForClipboard,
   clipboardNodesBounds,
   supportsFill,
+  ungroupNodesInDocument,
+  updateNodeInDocument,
   type SceneClipboardPayload,
 } from '@/components/rcb/scene/sceneDocument';
 import {
@@ -28,6 +38,11 @@ import {
   purgeOrphanSceneNodes,
 } from '@/components/rcb/scene/sceneToSvg';
 import { patchNodesGeometry, sceneToDocumentCoords } from '@/components/rcb/scene/svgToScene';
+import {
+  DEFAULT_TEXT_BOX_WIDTH,
+  measurePlainTextSize,
+  measureWrappedTextSize,
+} from '@/components/rcb/scene/sceneText';
 import { strokeCenterlineToFilledOutline } from '@/components/rcb/scene/outlineToPath';
 import { computeShapeBoolean, type ShapeBox } from '@/components/rcb/selection/shapeBoolean';
 import {
@@ -46,6 +61,7 @@ import {
   inflateSelectionBox,
 } from '@/components/rcb/scene/sceneEffects';
 import { setSceneHitTestBridge } from '@/components/rcb/scene/sceneHitBridge';
+import { RcbSpatialIndex, nodeSceneAabb } from '@/components/rcb/core/spatialIndex';
 import { useSvgBoard } from '@/components/rcb/canvas/useSvgBoard';
 import {
   RcbShapesLayer,
@@ -53,12 +69,23 @@ import {
   setSharedNodeEls,
   getShapeHost,
   listShapeHosts,
+  rcbFitImageIntoViewport,
   rcbScreenToScene,
   type RcbCamera,
   type SvgBoardHandle,
 } from '@/components/rcb';
-import { uploadImageFile, readFileAsDataUrl } from '@/apis/upload';
+import {
+  uploadImageFile,
+  uploadImageFromSrc,
+  readFileAsDataUrl,
+} from '@/utils/uploadImage';
+import {
+  dataTransferHasChatImage,
+  readChatImageDragUrl,
+} from '@/utils/chatImageDrag';
 import { message } from '@/components/base';
+import { exportFabricImage, exportCropSlots, type ExportImageFormat } from '@/components/rcb/scene/exportImage';
+import { useTranslation } from 'react-i18next';
 import {
   parseNodeText,
   parseNodeTextStyle,
@@ -71,7 +98,6 @@ import {
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
 import {
   patchDocumentNode,
-  removeArtboardFrames,
   setActiveFrameId,
   setSelectedFrameIds,
   setMixedSelection,
@@ -88,6 +114,10 @@ import {
   failImageProcess,
   undo,
   redo,
+  clearCanvasAttachPick,
+  setCanvasAttachPickBlocked,
+  setPendingCanvasAttach,
+  setGridMode,
 } from '@/store/modules/editor';
 import { requestProjectFlush } from '@/components/editor/useProjectCloudSync';
 import SvgPaper from './SvgPaper';
@@ -106,6 +136,7 @@ import {
 } from '@/components/rcb';
 import { parseFrameSelId } from '@/components/rcb/selection/SelectionFeature';
 import ImageProcessOverlay from '@/components/editor/nodes/ImageNode/ImageProcessOverlay';
+import ImageGeneratorOverlay from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorOverlay';
 import type { PencilEraseStroke } from '@/components/rcb';
 import { erasePencilNode } from '@/components/rcb';
 import TextInlineEditor from '@/components/editor/nodes/TextNode/TextInlineEditor';
@@ -273,6 +304,20 @@ async function readSystemPastePayload(
   return null;
 }
 
+function fingerprintSystemPaste(payload: SystemPastePayload | null | undefined): string {
+  if (!payload) return '';
+  if (payload.kind === 'image') {
+    const f = payload.file;
+    return `image:${f.type}:${f.size}:${f.name}:${f.lastModified}`;
+  }
+  if (payload.kind === 'svg') {
+    const m = payload.markup;
+    return `svg:${m.length}:${m.slice(0, 96)}:${m.slice(-48)}`;
+  }
+  const t = payload.text;
+  return `text:${t.length}:${t.slice(0, 96)}:${t.slice(-48)}`;
+}
+
 async function readSystemPasteFromNavigator(): Promise<SystemPastePayload | null> {
   const clip = navigator.clipboard;
   if (!clip) return null;
@@ -358,6 +403,45 @@ function frameForFullBleedPlate(doc: any, nodeId: string): { id: string } | null
   return null;
 }
 
+/** Drop image-generator plates + process-shimmer nodes from Chat attach targets. */
+function filterChatAttachNodeIds(doc: any, ids: string[]): string[] {
+  const delta = doc?.deltaSetLike || {};
+  return ids.filter((id) => canAttachNodeToChat(delta[id]));
+}
+
+/** Prefer live selection; fall back to the node under the context menu. */
+function ctxMenuSeedNodeIds(selectedIds: string[], menuNodeId?: string | null): string[] {
+  if (selectedIds.length) return selectedIds;
+  if (menuNodeId) return [menuNodeId];
+  return [];
+}
+
+/** Prefer live artboard selection; fall back to the frame under the context menu. */
+function ctxMenuSeedFrameIds(selectedFrameIds: string[], menuFrameId?: string | null): string[] {
+  if (selectedFrameIds.length) return selectedFrameIds;
+  if (menuFrameId) return [menuFrameId];
+  return [];
+}
+
+/** Resolve a pick click into an attach payload, or null if empty / only blocked nodes. */
+function resolveAttachPickPayload(
+  doc: any,
+  nodeIds: string[],
+  frameId?: string | null
+): { payload: string | string[]; blockedOnly: boolean } | null {
+  const seed = expandSelectionWithGroups(doc, nodeIds || []);
+  const attachable = filterChatAttachNodeIds(doc, seed);
+  if (attachable.length) {
+    return {
+      payload: attachable.length === 1 ? attachable[0]! : attachable,
+      blockedOnly: false,
+    };
+  }
+  if (seed.length) return { payload: '', blockedOnly: true };
+  const fid = String(frameId || '').trim();
+  if (fid) return { payload: `frame:${fid}`, blockedOnly: false };
+  return null;
+}
 
 type SvgCanvasProps = {
   document: any;
@@ -408,6 +492,7 @@ export default function SvgCanvas({
   viewRect = null,
 }: SvgCanvasProps) {
   const dispatch = useDispatch();
+  const { t } = useTranslation();
   const camera = useRcbCamera();
   const activeTool = useSelector((s: any) => s.editor.activeTool);
   const shapeKind = useSelector((s: any) => s.editor.shapeKind);
@@ -436,9 +521,20 @@ export default function SvgCanvas({
   const workspaceMode = useSelector(
     (s: any) => (s.editor.workspaceMode || 'design') as 'design' | 'dev'
   );
+  const canvasAttachPick = useSelector(
+    (s: any) => s.editor.canvasAttachPick as null | { target: string }
+  );
+  const canvasAttachPickRef = useRef(canvasAttachPick);
+  canvasAttachPickRef.current = canvasAttachPick;
+  const onAddToChatRef = useRef(onAddToChat);
+  onAddToChatRef.current = onAddToChat;
+  const hitTestRef = useRef<(x: number, y: number, screen?: { clientX: number; clientY: number }) => string | null>(
+    () => null
+  );
   const [stampTintEpoch, setStampTintEpoch] = useState(0);
   const canUndo = useSelector((s: any) => (s.editor.historyPast?.length || 0) > 0);
   const canRedo = useSelector((s: any) => (s.editor.historyFuture?.length || 0) > 0);
+  const isGridMode = useSelector((s: any) => Boolean(s.editor.isGridMode));
   const imageToolPanelKind = useSelector((s: any) => s.editor.imageToolPanel?.kind as string | undefined);
   const shapeStylePanel = useSelector((s: any) => s.editor.shapeStylePanel as null | { kind: string });
   const shapeStylePanelOpen = Boolean(shapeStylePanel);
@@ -465,12 +561,25 @@ export default function SvgCanvas({
   const [paperEl, setPaperEl] = useState<HTMLElement | null>(null);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const clipboardRef = useRef<SceneClipboardPayload | null>(null);
+  /** When the in-app node clipboard was last written (Ctrl+C / cut / context copy). */
+  const internalClipboardAtRef = useRef(0);
+  /** Last seen OS clipboard fingerprint + when it changed (for paste priority). */
+  const osClipboardMetaRef = useRef<{ fingerprint: string; at: number }>({
+    fingerprint: '',
+    at: 0,
+  });
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   /** Double-click pen path → anchor / handle edit. */
   const [editingPenId, setEditingPenId] = useState<string | null>(null);
   const [pathEditSubtool, setPathEditSubtool] = useState<'select' | 'pen'>('select');
   /** After inline text commit, blank-canvas pointerup must not clear selection. */
   const keepSelectAfterTextEditRef = useRef<string | null>(null);
+  /**
+   * Mixed selection drag live-updates Redux frames (skipHistory) so artboard HTML
+   * moves with the chrome. Snapshot history once before the first frame write so
+   * commit does not push a half-new doc (new frames + old nodes).
+   */
+  const frameGeomHistoryPushedRef = useRef(false);
   const [geometryTransforming, setGeometryTransforming] = useState(false);
   const overlayRoot = useRcbOverlayRoot();
 
@@ -609,6 +718,42 @@ export default function SvgCanvas({
     return [...(doc?.deltaSetLike?.ROOT?.children || [])];
   }, []);
 
+  /** Rebuild when scene membership / geometry tokens change — used to narrow hit-tests. */
+  const nodeSpatialIndex = useMemo(() => {
+    const idx = new RcbSpatialIndex(256);
+    const doc = document;
+    if (!doc) return idx;
+    const page = doc?.pages?.find((p: any) => p.id === doc?.activePageId) || doc?.pages?.[0];
+    const fromPage = page?.children;
+    const ids: string[] = Array.isArray(fromPage) && fromPage.length
+      ? [...fromPage]
+      : [...(doc?.deltaSetLike?.ROOT?.children || [])];
+    for (const id of ids) {
+      const box = nodeSceneAabb(doc, id, 32);
+      if (!box) continue;
+      idx.upsert({ id, ...box });
+    }
+    return idx;
+  }, [document, documentPatchToken, reloadToken]);
+
+  const queryNodeIdsInRect = useCallback(
+    (box: { left: number; top: number; width: number; height: number }) => {
+      const all = listNodeIds();
+      if (all.length < 48) return all;
+      const hits = nodeSpatialIndex.search(
+        box.left,
+        box.top,
+        box.left + box.width,
+        box.top + box.height
+      );
+      if (!hits.length) return all;
+      const allow = new Set(hits.map((h) => h.id));
+      // Keep document z-order.
+      return all.filter((id) => allow.has(id));
+    },
+    [listNodeIds, nodeSpatialIndex]
+  );
+
   const getNodeBox = useCallback((nodeId: string): SceneBox | null => {
     const doc = documentRef.current;
     const node = doc?.deltaSetLike?.[nodeId];
@@ -651,11 +796,23 @@ export default function SvgCanvas({
       const zoom = Math.max(0.05, camera.zoom || 1);
       // ~12px on screen, at least half the stroke hit pad in world units.
       const pad = Math.max(STROKE_HIT / 2, 12 / zoom);
-      const order = [...listNodeIds()].reverse();
+      const allIds = listNodeIds();
+      let order = [...allIds].reverse();
+      // Large scenes: try spatially nearby candidates first (still fall through — never drop).
+      if (allIds.length >= 48) {
+        const nearby = nodeSpatialIndex.searchPoint(x, y, pad + 48);
+        if (nearby.length) {
+          const allow = new Set(nearby.map((n) => n.id));
+          const near = order.filter((id) => allow.has(id));
+          const far = order.filter((id) => !allow.has(id));
+          order = near.length ? [...near, ...far] : order;
+        }
+      }
       for (const id of order) {
         const node = doc?.deltaSetLike?.[id];
+        if (!node || isNodeHidden(node)) continue;
         const box = getNodeBox(id);
-        if (!node || !box) continue;
+        if (!box) continue;
         const shapeType = String(node.attrs?.shapeType || '');
         if (shapeType === 'line' || shapeType === 'arrow') {
           const angle = Number(node.attrs?.angle) || 0;
@@ -749,7 +906,7 @@ export default function SvgCanvas({
       }
       return null;
     },
-    [getNodeBox, listNodeIds, camera.zoom]
+    [getNodeBox, listNodeIds, camera.zoom, nodeSpatialIndex]
   );
 
   useEffect(() => {
@@ -757,6 +914,50 @@ export default function SvgCanvas({
     return () => setSceneHitTestBridge(null);
   }, [hitTest]);
 
+  hitTestRef.current = hitTest;
+
+  /** Apply one canvas pick into composer, then exit pick mode (one pick per activation). */
+  const completeCanvasAttachPick = useCallback(
+    (pickTarget: string, payload: string | string[]) => {
+      if (pickTarget === 'agent') {
+        onAddToChatRef.current?.(payload);
+      } else {
+        // Pending attach keeps the node composer open via the payload — do not
+        // steal selection onto the host plate (that feels like exiting pick).
+        dispatch(setPendingCanvasAttach({ target: pickTarget, payload }));
+      }
+      dispatch(clearCanvasAttachPick());
+    },
+    [dispatch]
+  );
+
+  // Plus / not-allowed cursor while picking for Chat.
+  useEffect(() => {
+    if (!canvasAttachPick || !stageEl) {
+      dispatch(setCanvasAttachPickBlocked(false));
+      return undefined;
+    }
+    const onMove = (e: PointerEvent) => {
+      const pt = rcbScreenToScene(camera, stageEl, e.clientX, e.clientY);
+      const id = hitTestRef.current(pt.x, pt.y, {
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+      if (!id) {
+        dispatch(setCanvasAttachPickBlocked(false));
+        return;
+      }
+      const doc = documentRef.current;
+      const seed = expandSelectionWithGroups(doc, [id]);
+      const attachable = filterChatAttachNodeIds(doc, seed);
+      dispatch(setCanvasAttachPickBlocked(seed.length > 0 && attachable.length === 0));
+    };
+    stageEl.addEventListener('pointermove', onMove);
+    return () => {
+      stageEl.removeEventListener('pointermove', onMove);
+      dispatch(setCanvasAttachPickBlocked(false));
+    };
+  }, [canvasAttachPick, stageEl, dispatch, camera]);
 
   const hitTestFrame = useCallback((x: number, y: number) => {
     const frames: any[] = Array.isArray(documentRef.current?.frames)
@@ -778,6 +979,15 @@ export default function SvgCanvas({
 
   const onSelectFrame = useCallback(
     (frameId: string | null) => {
+      const pick = canvasAttachPickRef.current;
+      if (pick?.target) {
+        if (!frameId) {
+          dispatch(clearCanvasAttachPick());
+          return;
+        }
+        completeCanvasAttachPick(pick.target, `frame:${frameId}`);
+        return;
+      }
       if (!frameId) {
         dispatch(setActiveFrameId(null));
         return;
@@ -786,12 +996,21 @@ export default function SvgCanvas({
       dispatch(setSelectedNodeId(null));
       dispatch(setActiveFrameId(frameId));
     },
-    [dispatch]
+    [dispatch, completeCanvasAttachPick]
   );
 
   const onSelectFrames = useCallback(
     (frameIds: string[]) => {
+      const pick = canvasAttachPickRef.current;
       const ids = Array.isArray(frameIds) ? frameIds.filter(Boolean) : [];
+      if (pick?.target) {
+        if (!ids.length) {
+          dispatch(clearCanvasAttachPick());
+          return;
+        }
+        completeCanvasAttachPick(pick.target, `frame:${ids[0]}`);
+        return;
+      }
       if (!ids.length) {
         dispatch(setActiveFrameId(null));
         return;
@@ -799,11 +1018,26 @@ export default function SvgCanvas({
       dispatch(setSelectedNodeIds([]));
       dispatch(setSelectedFrameIds(ids));
     },
-    [dispatch]
+    [dispatch, completeCanvasAttachPick]
   );
 
   const onSelectMixed = useCallback(
     (nodeIds: string[], frameIds: string[], opts?: { additive?: boolean }) => {
+      const pick = canvasAttachPickRef.current;
+      if (pick?.target && !opts?.additive) {
+        const resolved = resolveAttachPickPayload(
+          documentRef.current,
+          nodeIds || [],
+          (frameIds || [])[0]
+        );
+        if (!resolved) {
+          dispatch(clearCanvasAttachPick());
+          return;
+        }
+        if (resolved.blockedOnly) return; // stay in pick mode
+        completeCanvasAttachPick(pick.target, resolved.payload);
+        return;
+      }
       keepSelectAfterTextEditRef.current = null;
       let nextNodes = expandSelectionWithGroups(documentRef.current, nodeIds || []);
       let nextFrames = [...new Set((frameIds || []).filter(Boolean))];
@@ -823,7 +1057,7 @@ export default function SvgCanvas({
       }
       dispatch(setMixedSelection({ nodeIds: nextNodes, frameIds: nextFrames }));
     },
-    [dispatch]
+    [dispatch, completeCanvasAttachPick]
   );
 
   const onSelect = useCallback(
@@ -832,6 +1066,31 @@ export default function SvgCanvas({
       // Do not re-select after text blur: blank click must clear focus/selection.
       keepSelectAfterTextEditRef.current = null;
       const doc = documentRef.current;
+      const pick = canvasAttachPickRef.current;
+
+      // Composer pick mode — attach hit (group-expanded); blocked nodes keep pick active.
+      if (pick?.target && !opts?.additive) {
+        if (!ids.length) {
+          dispatch(clearCanvasAttachPick());
+          return;
+        }
+        if (ids.length === 1) {
+          const plateFrame = frameForFullBleedPlate(doc, ids[0]);
+          if (plateFrame) {
+            completeCanvasAttachPick(pick.target, `frame:${plateFrame.id}`);
+            return;
+          }
+        }
+        const resolved = resolveAttachPickPayload(doc, ids);
+        if (!resolved) {
+          dispatch(clearCanvasAttachPick());
+          return;
+        }
+        if (resolved.blockedOnly) return;
+        completeCanvasAttachPick(pick.target, resolved.payload);
+        return;
+      }
+
       // Soft-click a near-full-bleed background plate → select the artboard instead
       // (avoids a white+stroke rect looking like a UI overlay on the poster).
       if (!opts?.additive && ids.length === 1) {
@@ -886,7 +1145,7 @@ export default function SvgCanvas({
       // Prefer setSelectedNodeIds only — setSelectedNodeId clears multi-select to [id].
       dispatch(setMixedSelection({ nodeIds: next, frameIds: [] }));
     },
-    [dispatch]
+    [dispatch, completeCanvasAttachPick]
   );
 
   const rebuildNodes = useCallback((doc: any, ids: string[]) => {
@@ -942,6 +1201,12 @@ export default function SvgCanvas({
       if (!frames.length) return { nodePatches, frames };
       // Live preview only — commit merges frames into the document object below.
       if (opts?.preview) {
+        // Push pre-gesture doc before the first Redux frame write (same as title-bar
+        // onFrameMoveStart). Nodes are still pre-gesture in Redux during preview.
+        if (!frameGeomHistoryPushedRef.current) {
+          dispatch(pushEditorHistory());
+          frameGeomHistoryPushedRef.current = true;
+        }
         frames.forEach((fp) => {
           dispatch(
             updateArtboardFrame({
@@ -986,15 +1251,16 @@ export default function SvgCanvas({
             );
             const isStrokeShape = shapeType === 'line' || shapeType === 'arrow';
             const isText = next?.deltaSetLike?.[p.nodeId]?.key === 'text';
-            const isImage = next?.deltaSetLike?.[p.nodeId]?.key === 'image';
             const didResize = Boolean(el?.__sceneDidResize);
             clearSceneDragPreview(board.nodeEls, p.nodeId);
-            if ((didResize && !isImage) || isStrokeShape || isText) {
+            // Images/svg use scale preview while dragging — remount to bake
+            // width/height (and refresh the infinite SVG viewport) on commit.
+            if (didResize || isStrokeShape || isText) {
               void replaceShapePaint(next, board.nodeEls, p.nodeId, board.root ? board : null);
               return;
             }
             const synced = previewSvgNodeGeometry(board.nodeEls, p.nodeId, p);
-            if (!synced && !isImage) {
+            if (!synced) {
               void replaceShapePaint(next, board.nodeEls, p.nodeId, board.root ? board : null);
               return;
             }
@@ -1028,8 +1294,11 @@ export default function SvgCanvas({
         };
       }
       documentRef.current = next;
-      // Preview mutates documentRef only — Redux still holds the pre-gesture doc.
-      if (!options?.skipHistory) dispatch(pushEditorHistory());
+      // Node-only preview leaves Redux pristine; frame preview already pushed history.
+      if (!options?.skipHistory && !frameGeomHistoryPushedRef.current) {
+        dispatch(pushEditorHistory());
+      }
+      frameGeomHistoryPushedRef.current = false;
       dispatch(setDocumentFromCanvas(next));
     },
     [dispatch, readOnly, normalizeGeomPatches, toGeometryPatches, applyFrameGeometryPatches]
@@ -1343,13 +1612,31 @@ export default function SvgCanvas({
     };
   }, [editingTextId, reloadToken, boardEpoch]);
 
+  /**
+   * Size an incoming image against what is actually on screen, so the same file
+   * lands at a usable size whether the user is zoomed way in or way out.
+   */
+  const imageSizeForViewport = useCallback(
+    (natural: { width: number; height: number }) => {
+      const view =
+        overlayRoot?.getBoundingClientRect() ||
+        paperEl?.parentElement?.getBoundingClientRect() ||
+        null;
+      if (!view || view.width < 1 || view.height < 1) {
+        return fitImageSize(natural.width, natural.height, 2400);
+      }
+      return rcbFitImageIntoViewport(natural, view, camera.zoom);
+    },
+    [camera.zoom, overlayRoot, paperEl]
+  );
+
   const placeImageAt = useCallback(
     (src: string, x: number, y: number) => {
       if (readOnly) return;
       void (async () => {
         try {
           const natural = await measureImageNaturalSize(src);
-          const { width, height } = fitImageSize(natural.width, natural.height, 2400);
+          const { width, height } = imageSizeForViewport(natural);
           const latest = documentRef.current;
           if (!latest) return;
           const placed = rcbCenterOnPoint({ x, y }, { width, height });
@@ -1371,7 +1658,7 @@ export default function SvgCanvas({
         }
       })();
     },
-    [dispatch, readOnly]
+    [dispatch, imageSizeForViewport, readOnly]
   );
 
   // Upload: place immediately at the visible viewport center (not world paper center).
@@ -1533,17 +1820,6 @@ export default function SvgCanvas({
         });
         if (fragments == null) continue;
 
-        console.log('[pencil-erase] apply', {
-          id,
-          brushId,
-          strokeWidth,
-          srcPathPressure: Boolean(srcPressure),
-          srcPathPressureParts: srcPressure ? srcPressure.split(',').length : 0,
-          fragments: fragments.length,
-          eraseRadius: stroke.radius,
-          erasePts: stroke.points.length,
-        });
-
         changed = true;
         next = removeNodesFromDocument(next, [id]);
         for (const frag of fragments) {
@@ -1582,14 +1858,6 @@ export default function SvgCanvas({
           if (frag.pathPressure) {
             (nnode.attrs as Record<string, unknown>).pathPressure = frag.pathPressure;
           }
-          console.log('[pencil-erase] node', {
-            nid,
-            borderWidth: nnode.attrs?.['border-width'] ?? nnode.attrs?.strokeWidth,
-            brushStyle: nnode.attrs?.brushStyle,
-            hasPathPressure: Boolean(nnode.attrs?.pathPressure),
-            pathPts: String(nnode.attrs?.path || '').match(/[ML]/gi)?.length ?? 0,
-            pressureParts: frag.pathPressure ? frag.pathPressure.split(',').length : 0,
-          });
           next = addNodeToDocument(next, nid, nnode);
         }
       }
@@ -1800,7 +2068,9 @@ export default function SvgCanvas({
   const deleteSelected = useCallback(
     (ids: string[]) => {
       if (!ids.length || !documentRef.current) return;
-      dispatch(setDocument(removeNodesFromDocument(documentRef.current, ids)));
+      const next = removeNodesFromDocument(documentRef.current, ids);
+      documentRef.current = next;
+      dispatch(setDocument(next));
       dispatch(setSelectedNodeIds([]));
       dispatch(setSelectedNodeId(null));
       // Persist ASAP — refresh must not restore deleted nodes from a stale cloud doc.
@@ -1809,72 +2079,146 @@ export default function SvgCanvas({
     [dispatch]
   );
 
-  const copySelected = useCallback((ids: string[]) => {
-    const snap = snapshotNodesForClipboard(documentRef.current, ids);
-    if (!snap) return false;
-    clipboardRef.current = snap;
+  /**
+   * Delete selected nodes and/or artboards in one history step so Undo restores
+   * frame + content together (Ctrl+A → Delete must not split into two undos).
+   */
+  const deleteCanvasSelection = useCallback(
+    (opts?: { nodeIds?: string[]; frameIds?: string[] }) => {
+      const doc0 = documentRef.current;
+      if (!doc0) return false;
+      const nodeIds = opts?.nodeIds ? [...opts.nodeIds] : [...selectedIdsRef.current];
+      let frameIds = opts?.frameIds ? [...opts.frameIds] : [...selectedFrameIdsRef.current];
+      if (!frameIds.length && !nodeIds.length && activeFrameIdRef.current) {
+        frameIds = [activeFrameIdRef.current];
+      }
+      if (!nodeIds.length && !frameIds.length) return false;
+
+      const inside = frameIds.length ? nodeIdsInsideFrames(doc0, frameIds) : [];
+      const allNodes = [...new Set([...nodeIds, ...inside])];
+
+      let next: any = doc0;
+      if (allNodes.length) next = removeNodesFromDocument(next, allNodes);
+      if (frameIds.length) {
+        const idSet = new Set(frameIds);
+        const frames = (Array.isArray(next.frames) ? next.frames : []).filter(
+          (f: any) => f && !idSet.has(String(f.id))
+        );
+        const active =
+          next.activeFrameId && idSet.has(String(next.activeFrameId))
+            ? frames[0]?.id ?? null
+            : next.activeFrameId ?? null;
+        next = { ...next, frames, activeFrameId: active };
+      }
+
+      documentRef.current = next;
+      dispatch(setDocument(next));
+      dispatch(setSelectedNodeIds([]));
+      dispatch(setSelectedNodeId(null));
+      dispatch(setSelectedFrameIds([]));
+      dispatch(setActiveFrameId(next.activeFrameId ?? null));
+      requestProjectFlush();
+      return true;
+    },
+    [dispatch]
+  );
+
+  const copySelected = useCallback((nodeIds?: string[], frameIds?: string[]) => {
+    const doc = documentRef.current;
+    if (!doc) return false;
+    let nodes = nodeIds ? [...nodeIds] : [...selectedIdsRef.current];
+    let frames = frameIds ? [...frameIds] : [...selectedFrameIdsRef.current];
+    if (!frames.length && !nodes.length && activeFrameIdRef.current) {
+      frames = [activeFrameIdRef.current];
+    }
+    // Same as delete: artboard copy includes content whose center lies inside.
+    if (frames.length) {
+      nodes = [...new Set([...nodes, ...nodeIdsInsideFrames(doc, frames)])];
+    }
+    const nodeSnap = nodes.length ? snapshotNodesForClipboard(doc, nodes) : null;
+    const frameSnap = snapshotFramesForClipboard(doc, frames);
+    if (!nodeSnap?.nodes?.length && !frameSnap.length) return false;
+    clipboardRef.current = {
+      nodes: nodeSnap?.nodes || [],
+      ...(frameSnap.length ? { frames: frameSnap } : {}),
+    };
+    internalClipboardAtRef.current = performance.now();
     return true;
   }, []);
 
   const cutSelected = useCallback(
-    (ids: string[]) => {
-      if (!copySelected(ids)) return;
-      deleteSelected(ids);
+    (nodeIds?: string[], frameIds?: string[]) => {
+      const nodes = nodeIds ? [...nodeIds] : [...selectedIdsRef.current];
+      let frames = frameIds ? [...frameIds] : [...selectedFrameIdsRef.current];
+      if (!frames.length && !nodes.length && activeFrameIdRef.current) {
+        frames = [activeFrameIdRef.current];
+      }
+      if (!copySelected(nodes, frames)) return;
+      deleteCanvasSelection({ nodeIds: nodes, frameIds: frames });
     },
-    [copySelected, deleteSelected]
+    [copySelected, deleteCanvasSelection]
   );
 
   const pasteClipboard = useCallback(
     (opts?: { anchor?: { x: number; y: number } }) => {
       const doc = documentRef.current;
       const payload = clipboardRef.current;
-      if (!doc || !payload?.nodes?.length || readOnly) return;
-      const { document: next, ids: newIds } = pasteClipboardIntoDocument(doc, payload, {
-        offsetX: 24,
-        offsetY: 24,
-        anchor: opts?.anchor,
-      });
-      if (!newIds.length) return;
-      dispatch(setDocument(next));
-      dispatch(setSelectedNodeIds(newIds));
-      dispatch(setSelectedNodeId(newIds.length === 1 ? newIds[0] : null));
-    },
-    [dispatch, readOnly]
-  );
-
-  /** Duplicate selection to the right with a 16px gap. */
-  const duplicateSelected = useCallback(
-    (ids: string[]) => {
-      const doc = documentRef.current;
-      if (!doc || !ids.length || readOnly) return;
-      const snap = snapshotNodesForClipboard(doc, ids);
-      if (!snap) return;
-      const bounds = clipboardNodesBounds(snap);
-      const gap = 16;
-      const { document: next, ids: newIds } = pasteClipboardIntoDocument(doc, snap, {
-        offsetX: (bounds?.width ?? 0) + gap,
-        offsetY: 0,
-      });
-      if (!newIds.length) return;
+      if (!doc || readOnly) return;
+      if (!payload?.nodes?.length && !payload?.frames?.length) return;
+      const { document: next, ids: newIds, frameIds: newFrameIds } = pasteClipboardIntoDocument(
+        doc,
+        payload,
+        {
+          offsetX: 24,
+          offsetY: 24,
+          anchor: opts?.anchor,
+        }
+      );
+      if (!newIds.length && !newFrameIds.length) return;
       documentRef.current = next;
       dispatch(setDocument(next));
-      dispatch(setSelectedNodeIds(newIds));
-      dispatch(setSelectedNodeId(newIds.length === 1 ? newIds[0] : null));
+      dispatch(setMixedSelection({ nodeIds: newIds, frameIds: newFrameIds }));
     },
     [dispatch, readOnly]
   );
 
-  const deleteActiveFrame = useCallback(() => {
-    const ids = selectedFrameIdsRef.current.length
-      ? selectedFrameIdsRef.current
-      : activeFrameIdRef.current
-        ? [activeFrameIdRef.current]
-        : [];
-    if (!ids.length) return false;
-    dispatch(removeArtboardFrames(ids));
-    requestProjectFlush();
-    return true;
-  }, [dispatch]);
+  /** Duplicate selection to the right with a 16px gap (nodes + artboards). */
+  const duplicateSelected = useCallback(
+    (nodeIds?: string[], frameIds?: string[]) => {
+      const doc = documentRef.current;
+      if (!doc || readOnly) return;
+      let nodes = nodeIds ? [...nodeIds] : [...selectedIdsRef.current];
+      let frames = frameIds ? [...frameIds] : [...selectedFrameIdsRef.current];
+      if (!frames.length && !nodes.length && activeFrameIdRef.current) {
+        frames = [activeFrameIdRef.current];
+      }
+      if (frames.length) {
+        nodes = [...new Set([...nodes, ...nodeIdsInsideFrames(doc, frames)])];
+      }
+      const nodeSnap = nodes.length ? snapshotNodesForClipboard(doc, nodes) : null;
+      const frameSnap = snapshotFramesForClipboard(doc, frames);
+      if (!nodeSnap?.nodes?.length && !frameSnap.length) return;
+      const snap: SceneClipboardPayload = {
+        nodes: nodeSnap?.nodes || [],
+        ...(frameSnap.length ? { frames: frameSnap } : {}),
+      };
+      const bounds = clipboardNodesBounds(snap);
+      const gap = 16;
+      const { document: next, ids: newIds, frameIds: newFrameIds } = pasteClipboardIntoDocument(
+        doc,
+        snap,
+        {
+          offsetX: (bounds?.width ?? 0) + gap,
+          offsetY: 0,
+        }
+      );
+      if (!newIds.length && !newFrameIds.length) return;
+      documentRef.current = next;
+      dispatch(setDocument(next));
+      dispatch(setMixedSelection({ nodeIds: newIds, frameIds: newFrameIds }));
+    },
+    [dispatch, readOnly]
+  );
 
   // Context menu: infinite paper is 0×0 — listen on stage (same as SelectionFeature).
   useEffect(() => {
@@ -1895,7 +2239,8 @@ export default function SvgCanvas({
 
       const p = pointerToWorld(camera, { stageEl, paperEl, artboard }, e.clientX, e.clientY);
       const id = hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY });
-      if (id && !selectedIdsRef.current.includes(id)) {
+      const selected = selectedIdsRef.current;
+      if (id && !selected.includes(id)) {
         dispatch(setSelectedNodeIds([id]));
         dispatch(setSelectedNodeId(id));
       }
@@ -1913,8 +2258,10 @@ export default function SvgCanvas({
           const fh = Math.max(1, Number(f.height) || 1);
           if (p.x >= fx && p.x <= fx + fw && p.y >= fy && p.y <= fy + fh) {
             frameId = String(f.id);
-            // Keep multi-frame selection if this frame is already in the set.
-            if (!selectedFrameIdsRef.current.includes(frameId)) {
+            // Only switch to frame selection when nothing is already selected —
+            // keeps layer actions available for the current node selection
+            // (including hidden layers that hit-test skips).
+            if (!selected.length && !selectedFrameIdsRef.current.includes(frameId)) {
               dispatch(setActiveFrameId(frameId));
               dispatch(setSelectedNodeIds([]));
               dispatch(setSelectedNodeId(null));
@@ -1923,12 +2270,14 @@ export default function SvgCanvas({
           }
         }
       }
+      const menuNodeId =
+        id || (selected.length === 1 ? selected[0] : null);
       setCtxMenu({
         clientX: e.clientX,
         clientY: e.clientY,
         sceneX: p.x,
         sceneY: p.y,
-        nodeId: id,
+        nodeId: menuNodeId,
         frameId,
       });
     };
@@ -1936,6 +2285,79 @@ export default function SvgCanvas({
     hitEl.addEventListener('contextmenu', onCtx);
     return () => hitEl.removeEventListener('contextmenu', onCtx);
   }, [paperEl, stageEl, camera, readOnly, artboard, hitTest, dispatch]);
+
+  // Drag chat gallery images onto the canvas → placeholder + upload.
+  useEffect(() => {
+    const hitEl = stageEl || paperEl;
+    if (readOnly || !hitEl) return undefined;
+
+    const onDragOver = (e: DragEvent) => {
+      if (!dataTransferHasChatImage(e.dataTransfer)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    };
+
+    const onDrop = (e: DragEvent) => {
+      const url = readChatImageDragUrl(e.dataTransfer);
+      if (!url) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void (async () => {
+        try {
+          const natural = await measureImageNaturalSize(url);
+          const { width, height } = imageSizeForViewport(natural);
+          const world = pointerToWorld(
+            camera,
+            { stageEl, paperEl, artboard },
+            e.clientX,
+            e.clientY
+          );
+          const placed = rcbCenterOnPoint(world, { width, height });
+          const latest = documentRef.current;
+          if (!latest) return;
+          const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
+          dispatch(
+            startImageUploadPlaceholder({
+              src: url,
+              width,
+              height,
+              x: origin.x,
+              y: origin.y,
+              label: '上传中',
+              name: 'Image',
+            })
+          );
+          finishToSelect();
+          const uploaded = await uploadImageFromSrc(url, 'chat-image.png');
+          dispatch(
+            finishImageProcess({
+              src: uploaded.url,
+              attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
+            })
+          );
+        } catch (err: any) {
+          dispatch(failImageProcess({}));
+          const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
+          message.error(typeof detail === 'string' ? detail : '图片上传失败');
+        }
+      })();
+    };
+
+    hitEl.addEventListener('dragover', onDragOver);
+    hitEl.addEventListener('drop', onDrop);
+    return () => {
+      hitEl.removeEventListener('dragover', onDragOver);
+      hitEl.removeEventListener('drop', onDrop);
+    };
+  }, [
+    artboard,
+    camera,
+    dispatch,
+    imageSizeForViewport,
+    paperEl,
+    readOnly,
+    stageEl,
+  ]);
 
   const runCtxAction = (action: CtxAction) => {
     const ids =
@@ -1950,6 +2372,14 @@ export default function SvgCanvas({
         : null;
     const hitNodeId = ctxMenu?.nodeId ?? null;
     const menuFrameId = ctxMenu?.frameId || activeFrameIdRef.current;
+    // Only expand via artboards that are actually in the selection (or the
+    // frame under the context-menu cursor). Do not use activeFrameId alone —
+    // that would pull unrelated board content into group / lock / export.
+    const frameIdsForAction = selectedFrameIdsRef.current.length
+      ? selectedFrameIdsRef.current
+      : ctxMenu?.frameId
+        ? [String(ctxMenu.frameId)]
+        : [];
     setCtxMenu(null);
 
     if (action === 'upload') {
@@ -1960,23 +2390,60 @@ export default function SvgCanvas({
       return;
     }
     if (action === 'addToChat') {
+      const clearAfter = () => {
+        dispatch(setSelectedNodeIds([]));
+        dispatch(setSelectedNodeId(null));
+        dispatch(setSelectedFrameIds([]));
+        dispatch(setActiveFrameId(null));
+      };
+      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const expanded = resolveSelectionNodeIds(
+        documentRef.current,
+        seedNodes,
+        frameIdsForAction
+      );
       // Box / multi-select → one group chip (unless right-click landed on an unselected node).
       if (
-        ids.length > 1 &&
-        (!hitNodeId || ids.includes(hitNodeId))
+        seedNodes.length &&
+        expanded.length > 1 &&
+        (!hitNodeId || expanded.includes(hitNodeId) || ids.includes(hitNodeId))
       ) {
-        onAddToChat?.(ids);
-      } else {
-        const id = hitNodeId || ids[0];
-        if (id) {
-          onAddToChat?.(id);
-        } else if (menuFrameId) {
-          // Artboard selected (no node under cursor) — pin the frame into Chat.
-          onAddToChat?.(`frame:${menuFrameId}`);
-        }
+        const attachable = filterChatAttachNodeIds(documentRef.current, expanded);
+        if (!attachable.length) return;
+        onAddToChat?.(attachable.length === 1 ? attachable[0]! : attachable);
+        clearAfter();
+        return;
       }
-      dispatch(setSelectedNodeIds([]));
-      dispatch(setSelectedNodeId(null));
+      const id = hitNodeId || ids[0];
+      if (id) {
+        const attachable = filterChatAttachNodeIds(documentRef.current, [id]);
+        if (!attachable.length) return;
+        onAddToChat?.(attachable[0]!);
+        clearAfter();
+        return;
+      }
+      const frameChip = frameIdsForAction[0] || menuFrameId;
+      if (frameChip) {
+        // Artboard selected (no node under cursor) — pin the frame into Chat.
+        onAddToChat?.(`frame:${frameChip}`);
+        clearAfter();
+      }
+      return;
+    }
+    if (action === 'group') {
+      const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIdsForAction);
+      if (targetIds.length < 2) return;
+      const next = groupNodesInDocument(documentRef.current, targetIds);
+      dispatch(setDocument(next));
+      dispatch(setMixedSelection({ nodeIds: targetIds, frameIds: frameIdsForAction }));
+      return;
+    }
+    if (action === 'ungroup') {
+      const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIdsForAction);
+      if (!targetIds.length) return;
+      const next = ungroupNodesInDocument(documentRef.current, targetIds);
+      dispatch(setDocument(next));
+      dispatch(setMixedSelection({ nodeIds: targetIds, frameIds: frameIdsForAction }));
       return;
     }
     if (action === 'undo') {
@@ -1988,11 +2455,11 @@ export default function SvgCanvas({
       return;
     }
     if (action === 'copy') {
-      copySelected(ids);
+      copySelected(ids, frameIdsForAction);
       return;
     }
     if (action === 'cut') {
-      cutSelected(ids);
+      cutSelected(ids, frameIdsForAction);
       return;
     }
     if (action === 'paste') {
@@ -2000,18 +2467,176 @@ export default function SvgCanvas({
       return;
     }
     if (action === 'duplicate') {
-      duplicateSelected(ids);
+      duplicateSelected(ids, frameIdsForAction);
       return;
     }
     if (action === 'delete') {
-      if (ids.length) deleteSelected(ids);
-      else deleteActiveFrame();
+      const frameIds = selectedFrameIdsRef.current.length
+        ? selectedFrameIdsRef.current
+        : !ids.length && (menuFrameId || activeFrameIdRef.current)
+          ? [String(menuFrameId || activeFrameIdRef.current)]
+          : [];
+      deleteCanvasSelection({ nodeIds: ids, frameIds });
       return;
     }
     if (action === 'front' || action === 'forward' || action === 'backward' || action === 'back') {
-      reorderLayer(action, ids);
+      const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIdsForAction);
+      reorderLayer(action, targetIds.length ? targetIds : ids);
+      return;
+    }
+    if (action === 'toggleHidden') {
+      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      // Frame-only selection has no hide target (artboards are not scene nodes).
+      if (!seedNodes.length) return;
+      const targetIds = resolveSelectionNodeIds(
+        documentRef.current,
+        seedNodes,
+        frameIdsForAction
+      );
+      if (!targetIds.length) return;
+      const doc = documentRef.current;
+      if (!doc) return;
+      // Hide if any target is visible; show only when all are hidden.
+      const anyVisible = targetIds.some((id) => !isNodeHidden(doc?.deltaSetLike?.[id]));
+      dispatch(pushEditorHistory());
+      let next = doc;
+      for (const id of targetIds) {
+        next = updateNodeInDocument(next, id, {
+          attrs: { hidden: anyVisible ? 'true' : 'false' },
+        });
+      }
+      dispatch(setDocumentFromCanvas(next));
+      // Drop selection on hide so the canvas cannot keep interacting with it.
+      // Unhide via layers eye, or re-select the layer then Show.
+      if (anyVisible) {
+        dispatch(setSelectedNodeIds([]));
+        dispatch(setSelectedNodeId(null));
+      }
+      return;
+    }
+    if (action === 'toggleLocked') {
+      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const targetIds = seedNodes.length
+        ? resolveSelectionNodeIds(documentRef.current, seedNodes, frameIdsForAction)
+        : [];
+      const doc = documentRef.current;
+      if (targetIds.length && doc) {
+        const anyUnlocked = targetIds.some((id) => !isNodeLocked(doc?.deltaSetLike?.[id]));
+        dispatch(pushEditorHistory());
+        let next = doc;
+        for (const id of targetIds) {
+          next = updateNodeInDocument(next, id, {
+            attrs: { locked: anyUnlocked ? 'true' : 'false' },
+          });
+        }
+        dispatch(setDocumentFromCanvas(next));
+      }
+      // Also toggle co-selected artboards (same gesture as node lock).
+      if (frameIdsForAction.length) {
+        const frames = Array.isArray(documentRef.current?.frames)
+          ? documentRef.current.frames
+          : [];
+        const anyFrameUnlocked = frameIdsForAction.some((fid) => {
+          const frame = frames.find((f: any) => f?.id === fid);
+          return frame && !frame.locked;
+        });
+        for (const fid of frameIdsForAction) {
+          dispatch(
+            updateArtboardFrame({
+              id: fid,
+              patch: { locked: anyFrameUnlocked },
+            })
+          );
+        }
+        return;
+      }
+      if (!targetIds.length && menuFrameId) {
+        const frames = Array.isArray(documentRef.current?.frames)
+          ? documentRef.current.frames
+          : [];
+        const frame = frames.find((f: any) => f?.id === menuFrameId);
+        dispatch(
+          updateArtboardFrame({
+            id: menuFrameId,
+            patch: { locked: !Boolean(frame?.locked) },
+          })
+        );
+      }
+      return;
+    }
+    if (action === 'toggleGrid') {
+      dispatch(setGridMode(!isGridMode));
+      return;
+    }
+    if (action === 'exportPng' || action === 'exportJpg' || action === 'exportSvg') {
+      const format: ExportImageFormat =
+        action === 'exportJpg' ? 'jpeg' : action === 'exportSvg' ? 'svg' : 'png';
+      const doc = documentRef.current;
+      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      // Mixed / node selection: export expanded nodes. Frame-only keeps crop export
+      // so artboard background is preserved.
+      if (seedNodes.length) {
+        const targetIds = resolveSelectionNodeIds(
+          documentRef.current,
+          seedNodes,
+          frameIdsForAction
+        );
+        if (targetIds.length) {
+          const ok = exportFabricImage({
+            selectionOnly: true,
+            nodeIds: targetIds,
+            document: doc,
+            format,
+            filename: t('editor.layerExportName'),
+          });
+          if (ok) {
+            message.success(t(format === 'svg' ? 'editor.exportedSvg' : 'editor.exportedImage'));
+          } else {
+            message.error(t('editor.exportFailed'));
+          }
+          return;
+        }
+      }
+      const exportFrameId = frameIdsForAction[0] || menuFrameId;
+      if (exportFrameId) {
+        const frames = Array.isArray(doc?.frames) ? doc.frames : [];
+        const frame = frames.find((f: any) => f?.id === exportFrameId);
+        if (frame && frame.width > 0 && frame.height > 0) {
+          void exportCropSlots({
+            crop: {
+              x: Number(frame.x) || 0,
+              y: Number(frame.y) || 0,
+              width: Number(frame.width) || 1,
+              height: Number(frame.height) || 1,
+            },
+            backgroundColor: frame.backgroundColor,
+            baseName: String(frame.name || t('editor.pageExportName')),
+            compress: false,
+            document: doc,
+            slots: [
+              {
+                id: 'ctx',
+                scale: 1,
+                affixMode: 'suffix',
+                affix: '',
+                format,
+              },
+            ],
+          }).then((n) => {
+            if (n > 0) {
+              message.success(
+                t(format === 'svg' ? 'editor.exportedSvg' : 'editor.exportedImage')
+              );
+            } else {
+              message.error(t('editor.exportFailed'));
+            }
+          });
+        }
+      }
     }
   };
+  const runCtxActionRef = useRef(runCtxAction);
+  runCtxActionRef.current = runCtxAction;
 
   const onImageFile = (file: File | null) => {
     if (!file) return;
@@ -2021,7 +2646,7 @@ export default function SvgCanvas({
       try {
         const preview = await readFileAsDataUrl(file);
         const natural = await measureImageNaturalSize(preview);
-        const { width, height } = fitImageSize(natural.width, natural.height, 2400);
+        const { width, height } = imageSizeForViewport(natural);
         let x: number | undefined;
         let y: number | undefined;
         if (at) {
@@ -2117,17 +2742,29 @@ export default function SvgCanvas({
       const doc = documentRef.current;
       const content = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (!doc || readOnly || !content.trim()) return false;
-      const probe = createTextNode({ text: content, autoSize: true });
+      // Cap paste width so a long single line does not span the whole artboard.
+      const boardW = Math.max(0, Number(artboard?.width) || 0);
+      const maxW = Math.max(
+        DEFAULT_TEXT_BOX_WIDTH,
+        Math.min(480, boardW > 0 ? Math.round(boardW * 0.5) : 420)
+      );
+      const natural = measurePlainTextSize(content);
+      const wrap = natural.width > maxW;
+      const box = wrap
+        ? measureWrappedTextSize(content, {}, maxW)
+        : { width: natural.width, height: natural.height };
       const origin =
-        placeOriginForSize(
-          { width: Number(probe.node.width) || 160, height: Number(probe.node.height) || 24 },
-          anchor
-        ) || { x: 40, y: 40 };
+        placeOriginForSize({ width: box.width, height: box.height }, anchor) || {
+          x: 40,
+          y: 40,
+        };
       const { id, node } = createTextNode({
         x: origin.x,
         y: origin.y,
         text: content,
-        autoSize: true,
+        width: box.width,
+        height: box.height,
+        autoSize: !wrap,
       });
       const next = addNodeToDocument(doc, id, node);
       documentRef.current = next;
@@ -2137,7 +2774,7 @@ export default function SvgCanvas({
       finishToSelect();
       return true;
     },
-    [dispatch, placeOriginForSize, readOnly]
+    [artboard?.width, dispatch, placeOriginForSize, readOnly]
   );
 
   const insertPastedSvg = useCallback(
@@ -2194,34 +2831,49 @@ export default function SvgCanvas({
     [insertPastedSvg, insertPastedText, readOnly]
   );
 
-  /** OS clipboard (image / SVG / text) first, then in-app node clipboard. */
+  /** Prefer the more recently updated source: canvas nodes vs OS clipboard. */
   const pasteFromOsOrInternal = useCallback(
     async (opts?: {
       anchor?: { x: number; y: number } | null;
       data?: DataTransfer | null;
     }) => {
       if (readOnly) return;
-      const hasInternal = Boolean(clipboardRef.current?.nodes?.length);
+      const hasInternal = Boolean(
+        clipboardRef.current?.nodes?.length || clipboardRef.current?.frames?.length
+      );
       const fromEvent = await readSystemPastePayload(opts?.data ?? null);
       const fromNav =
         !fromEvent && !opts?.data ? await readSystemPasteFromNavigator() : null;
       const system = fromEvent || fromNav;
 
-      // Images / SVG icons always win over in-app node clipboard.
-      if (system && (system.kind === 'image' || system.kind === 'svg')) {
-        const ok = await pasteSystemPayload(system, { anchor: opts?.anchor });
-        if (ok) return;
+      if (system) {
+        const fp = fingerprintSystemPaste(system);
+        if (fp && fp !== osClipboardMetaRef.current.fingerprint) {
+          osClipboardMetaRef.current = { fingerprint: fp, at: performance.now() };
+        } else if (fp && !osClipboardMetaRef.current.at) {
+          // First time we see this OS payload in-session.
+          osClipboardMetaRef.current = { fingerprint: fp, at: performance.now() };
+        }
       }
 
-      // In-app copy/paste of scene nodes (Ctrl+C then Ctrl+V).
-      if (hasInternal) {
+      const preferInternal =
+        hasInternal &&
+        (!system ||
+          internalClipboardAtRef.current >= osClipboardMetaRef.current.at);
+
+      if (preferInternal) {
         pasteClipboard(opts?.anchor ? { anchor: opts.anchor } : undefined);
         return;
       }
 
-      // Plain text only when nothing was copied inside the editor.
-      if (system?.kind === 'text') {
-        await pasteSystemPayload(system, { anchor: opts?.anchor });
+      if (system) {
+        const ok = await pasteSystemPayload(system, { anchor: opts?.anchor });
+        if (ok) return;
+      }
+
+      // System payload missing/failed — fall back to in-app nodes if any.
+      if (hasInternal) {
+        pasteClipboard(opts?.anchor ? { anchor: opts.anchor } : undefined);
       }
     },
     [pasteClipboard, pasteSystemPayload, readOnly]
@@ -2240,15 +2892,34 @@ export default function SvgCanvas({
             ))
       );
 
-    /** Agent composer steals focus when selection syncs chips — still allow canvas Delete. */
-    const isAgentComposerTarget = (t: HTMLElement | null) =>
-      Boolean(t?.closest?.('[data-agent-composer]'));
+    /** Agent dock / image-generator / quick-edit prompt editors. */
+    const isComposerTarget = (t: HTMLElement | null) =>
+      Boolean(
+        t?.closest?.(
+          '[data-agent-composer], [data-image-generator], [data-image-quick-edit]'
+        )
+      );
+
+    const composerPromptText = (t: HTMLElement | null) => {
+      const el =
+        (t?.closest?.('[data-agent-composer]') as HTMLElement | null) ||
+        (t
+          ?.closest?.('[data-image-generator], [data-image-quick-edit]')
+          ?.querySelector?.('[data-agent-composer]') as HTMLElement | null);
+      return (el?.innerText || '').replace(/\u200b/g, '').trim();
+    };
 
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       const target = e.target as HTMLElement | null;
       const typing = isTypingTarget(target);
-      const inAgentComposer = isAgentComposerTarget(target);
+      const inComposer = isComposerTarget(target);
+
+      if (e.key === 'Escape' && canvasAttachPickRef.current) {
+        e.preventDefault();
+        dispatch(clearCanvasAttachPick());
+        return;
+      }
 
       if (mod && (e.key === '=' || e.key === '+')) {
         e.preventDefault();
@@ -2268,51 +2939,87 @@ export default function SvgCanvas({
       }
       if (mod && e.key.toLowerCase() === 'a' && activeTool === 'select' && !typing) {
         e.preventDefault();
-        onSelect(listNodeIds());
+        const doc = documentRef.current;
+        const nodeIds = listNodeIds();
+        const frameIds = (Array.isArray(doc?.frames) ? doc.frames : [])
+          .filter((f: any) => f?.id && !f.locked)
+          .map((f: any) => String(f.id));
+        onSelectMixed(nodeIds, frameIds);
       }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'i') {
         e.preventDefault();
         imagePlaceAtRef.current = null;
         imageInputRef.current?.click();
       }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && !typing) {
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'h' && !typing && !readOnly) {
         const ids = selectedIdsRef.current;
-        if (ids.length > 1) {
-          e.preventDefault();
-          onAddToChat?.(ids);
+        const frameIds = selectedFrameIdsRef.current;
+        const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIds);
+        if (!targetIds.length) return;
+        e.preventDefault();
+        runCtxActionRef.current('toggleHidden');
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'k' && !typing && !readOnly) {
+        const ids = selectedIdsRef.current;
+        const frameIds = selectedFrameIdsRef.current;
+        if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
+        e.preventDefault();
+        runCtxActionRef.current('toggleLocked');
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && !typing) {
+        const clearAfterAddToChat = () => {
           dispatch(setSelectedNodeIds([]));
           dispatch(setSelectedNodeId(null));
+          dispatch(setSelectedFrameIds([]));
+          dispatch(setActiveFrameId(null));
+        };
+        const attachable = filterChatAttachNodeIds(
+          documentRef.current,
+          resolveSelectionNodeIds(
+            documentRef.current,
+            selectedIdsRef.current,
+            selectedFrameIdsRef.current
+          )
+        );
+        if (attachable.length > 1) {
+          e.preventDefault();
+          onAddToChat?.(attachable);
+          clearAfterAddToChat();
           return;
         }
-        const id = ids[0];
+        const id = attachable[0];
         if (id) {
           e.preventDefault();
           onAddToChat?.(id);
-          dispatch(setSelectedNodeIds([]));
-          dispatch(setSelectedNodeId(null));
+          clearAfterAddToChat();
           return;
         }
+        // Selection is only generator / shimmer — do not fall through to artboard.
+        if (selectedIdsRef.current.length || selectedFrameIdsRef.current.length) return;
         if (activeFrameIdRef.current) {
           e.preventDefault();
           onAddToChat?.(`frame:${activeFrameIdRef.current}`);
-          dispatch(setSelectedNodeIds([]));
-          dispatch(setSelectedNodeId(null));
+          clearAfterAddToChat();
         }
       }
       if (mod && !typing && !readOnly) {
         const k = e.key.toLowerCase();
         if (k === 'c') {
           const ids = selectedIdsRef.current;
-          if (!ids.length) return;
+          const frameIds = selectedFrameIdsRef.current;
+          if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
           e.preventDefault();
-          copySelected(ids);
+          copySelected(ids, frameIds);
           return;
         }
         if (k === 'x') {
           const ids = selectedIdsRef.current;
-          if (!ids.length) return;
+          const frameIds = selectedFrameIdsRef.current;
+          if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
           e.preventDefault();
-          cutSelected(ids);
+          cutSelected(ids, frameIds);
           return;
         }
         if (k === 'v') {
@@ -2322,36 +3029,48 @@ export default function SvgCanvas({
         }
         if (k === 'd') {
           const ids = selectedIdsRef.current;
-          if (!ids.length) return;
+          const frameIds = selectedFrameIdsRef.current;
+          if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
           e.preventDefault();
-          duplicateSelected(ids);
+          duplicateSelected(ids, frameIds);
+          return;
+        }
+        if (k === 'g') {
+          const ids = selectedIdsRef.current;
+          const frameIds = selectedFrameIdsRef.current;
+          const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIds);
+          if (targetIds.length < 2) return;
+          e.preventDefault();
+          if (e.shiftKey) {
+            runCtxActionRef.current('ungroup');
+          } else {
+            runCtxActionRef.current('group');
+          }
           return;
         }
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && !readOnly) {
-        // Real text fields / inline editors — never steal Delete.
-        if (typing && !inAgentComposer) return;
-        // Agent composer: if the user is typing a prompt, keep Backspace for text.
-        // Empty / chip-only composer still deletes the canvas selection (Delete always).
-        if (inAgentComposer && e.key === 'Backspace') {
-          const el = target?.closest?.('[data-agent-composer]') as HTMLElement | null;
-          const text = (el?.innerText || '').replace(/\u200b/g, '').trim();
-          if (text) return;
-        }
-        // Fill / color panels handle Delete for gradient stops etc. (only while focused inside).
+      // Delete removes canvas selection. Backspace never does (text editing only).
+      if (e.key === 'Delete' && !readOnly) {
+        // Fill / color panels handle Delete for gradient stops etc.
         if (target?.closest?.('[data-fill-panel], [data-color-panel]')) return;
+        // Prompt has text → keep Delete for forward-delete in the editor.
+        if (inComposer && composerPromptText(target)) return;
+        // Other inputs / inline editors (not composers).
+        if (typing && !inComposer) return;
+        // Empty composer (placeholder only) or canvas focus → delete selection.
         const ids = selectedIdsRef.current;
         const frameIds = selectedFrameIdsRef.current;
         if (ids.length || frameIds.length || activeFrameIdRef.current) {
           e.preventDefault();
-          if (ids.length) deleteSelected(ids);
-          if (frameIds.length || (!ids.length && activeFrameIdRef.current)) {
-            deleteActiveFrame();
-          }
+          deleteCanvasSelection();
         }
       }
       if (e.key === ']' || e.key === '[') {
-        const ids = selectedIdsRef.current;
+        const ids = resolveSelectionNodeIds(
+          documentRef.current,
+          selectedIdsRef.current,
+          selectedFrameIdsRef.current
+        );
         if (!ids.length) return;
         e.preventDefault();
         if (e.key === ']' && mod) reorderLayer('forward', ids);
@@ -2369,9 +3088,9 @@ export default function SvgCanvas({
     readOnly,
     activeTool,
     onSelect,
+    onSelectMixed,
     listNodeIds,
-    deleteSelected,
-    deleteActiveFrame,
+    deleteCanvasSelection,
     reorderLayer,
     copySelected,
     cutSelected,
@@ -2400,7 +3119,9 @@ export default function SvgCanvas({
       const target = e.target as HTMLElement | null;
       if (isTypingTarget(target)) return;
 
-      const hasInternal = Boolean(clipboardRef.current?.nodes?.length);
+      const hasInternal = Boolean(
+        clipboardRef.current?.nodes?.length || clipboardRef.current?.frames?.length
+      );
       const data = e.clipboardData;
       // Peek synchronously so we know whether to claim the event.
       let likelyOs = false;
@@ -2438,32 +3159,36 @@ export default function SvgCanvas({
   const bgType = parseFillType(document?.backgroundFillType);
   const bgOpacity = Number(document?.backgroundOpacity ?? 100);
   const bgColor = String(document?.backgroundColor || '#ffffff');
-  const paperBackground =
-    bgType === 'solid'
-      ? cssSolidWithOpacity(bgColor, bgOpacity)
-      : bgType === 'image'
-        ? (() => {
-            const src = String(document?.backgroundImageSrc || '');
-            if (!src) return cssSolidWithOpacity(bgColor, bgOpacity);
-            return `url(${src}) center / cover no-repeat`;
-          })()
-        : cssPreviewForGradient(
-            {
-              ...parseFillGradient(
-                document?.backgroundGradient,
-                bgType,
-                String(document?.backgroundColor || '#3B82F6')
-              ),
-              type: bgType,
-            },
-            bgOpacity
-          );
+  let paperBackground = cssSolidWithOpacity(bgColor, bgOpacity);
+  if (bgType === 'image') {
+    const src = String(document?.backgroundImageSrc || '');
+    if (src) paperBackground = `url(${src}) center / cover no-repeat`;
+  } else if (bgType !== 'solid') {
+    paperBackground = cssPreviewForGradient(
+      {
+        ...parseFillGradient(
+          document?.backgroundGradient,
+          bgType,
+          String(document?.backgroundColor || '#3B82F6')
+        ),
+        type: bgType,
+      },
+      bgOpacity
+    );
+  }
 
   const ids = useMemo(() => {
     if (selectedNodeIds?.length > 0) return selectedNodeIds;
     if (selectedNodeId) return [selectedNodeId];
     return EMPTY_NODE_IDS;
   }, [selectedNodeIds, selectedNodeId]);
+
+  const keepVisibleIds = useMemo(() => {
+    const out = [...ids];
+    if (editingTextId) out.push(editingTextId);
+    if (editingPenId) out.push(editingPenId);
+    return out;
+  }, [ids, editingTextId, editingPenId]);
 
   // Path-edit stays open on empty selection (blank click must not dismiss).
   // Only leave when the user selects a *different* node.
@@ -2565,6 +3290,7 @@ export default function SvgCanvas({
             documentPatchToken={documentPatchToken}
             lastPatchedNodeIds={lastPatchedNodeIds}
             hiddenNodeId={editingTextId}
+            keepVisibleIds={keepVisibleIds}
           />
         ) : null}
         {/* Scene-space HTML overlays (selection / draw previews). Origin matches SVG. */}
@@ -2572,6 +3298,7 @@ export default function SvgCanvas({
           <SelectionFeature
             enabled={selectMode}
             readOnly={readOnly}
+            attachPickActive={Boolean(canvasAttachPick)}
             document={document}
             selectedNodeIds={ids}
             selectedFrameIds={selectedFrameIds}
@@ -2590,7 +3317,7 @@ export default function SvgCanvas({
             onSelectMixed={onSelectMixed}
             getNodeBox={getNodeBox}
             listNodeIds={listNodeIds}
-            onDeleteSelected={() => deleteSelected(ids)}
+            queryNodeIdsInRect={queryNodeIdsInRect}
             onOpenAgent={onOpenAgent}
             onEditText={(id) => {
               setEditingPenId(null);
@@ -2615,6 +3342,11 @@ export default function SvgCanvas({
             onTransformingChange={setGeometryTransforming}
           />
           <ImageProcessOverlay document={document} hidden={geometryTransforming} />
+          <ImageGeneratorOverlay
+            document={document}
+            hidden={geometryTransforming}
+            readOnly={readOnly}
+          />
           <ShapeDrawFeature
             enabled={shapeMode}
             shapeKind={shapeKind || 'rect'}
@@ -2727,8 +3459,24 @@ export default function SvgCanvas({
 
       <CanvasContextMenu
         menu={ctxMenu}
-        hasNode={Boolean(ids.length || ctxMenu?.nodeId)}
-        canAddToChat={Boolean(ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || activeFrameId)}
+        hasNode={Boolean(
+          ids.length ||
+            ctxMenu?.nodeId ||
+            selectedFrameIds.length ||
+            ctxMenu?.frameId ||
+            activeFrameId
+        )}
+        canAddToChat={(() => {
+          const targetIds = resolveSelectionNodeIds(
+            document,
+            ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId),
+            ctxMenuSeedFrameIds(selectedFrameIds, ctxMenu?.frameId)
+          );
+          if (targetIds.length) {
+            return filterChatAttachNodeIds(document, targetIds).length > 0;
+          }
+          return Boolean(ctxMenu?.frameId || activeFrameId);
+        })()}
         canDelete={Boolean(
           ids.length ||
             ctxMenu?.nodeId ||
@@ -2736,6 +3484,49 @@ export default function SvgCanvas({
             selectedFrameIds.length ||
             activeFrameId
         )}
+        canLayerActions={Boolean(
+          ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || selectedFrameIds.length || activeFrameId
+        )}
+        canToggleHidden={Boolean(ids.length || ctxMenu?.nodeId)}
+        canToggleLocked={Boolean(
+          ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || selectedFrameIds.length || activeFrameId
+        )}
+        canGroup={(() => {
+          const targetIds = resolveSelectionNodeIds(
+            document,
+            ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId),
+            ctxMenuSeedFrameIds(selectedFrameIds, ctxMenu?.frameId)
+          );
+          if (targetIds.length < 2) return false;
+          return !selectionSharedGroupId(document, targetIds);
+        })()}
+        canUngroup={(() => {
+          const targetIds = resolveSelectionNodeIds(
+            document,
+            ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId),
+            ctxMenuSeedFrameIds(selectedFrameIds, ctxMenu?.frameId)
+          );
+          if (targetIds.length < 2) return false;
+          return Boolean(selectionSharedGroupId(document, targetIds));
+        })()}
+        targetHidden={(() => {
+          const targetIds = ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId);
+          if (!targetIds.length) return false;
+          return targetIds.every((id) => isNodeHidden(document?.deltaSetLike?.[id]));
+        })()}
+        targetLocked={(() => {
+          const targetIds = ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId);
+          if (targetIds.length) {
+            return targetIds.every((id) => isNodeLocked(document?.deltaSetLike?.[id]));
+          }
+          const fid = ctxMenu?.frameId || activeFrameId;
+          if (!fid) return false;
+          const frame = (Array.isArray(document?.frames) ? document.frames : []).find(
+            (f: any) => f?.id === fid
+          );
+          return Boolean(frame?.locked);
+        })()}
+        gridOn={isGridMode}
         canUndo={canUndo}
         canRedo={canRedo}
         canPaste

@@ -39,69 +39,6 @@ export function snapCssToDevicePixel(cssPx: number, dpr: number): number {
   return Math.round(cssPx * d) / d;
 }
 
-/**
- * True when browser zoom makes dpr "messy" (not ~1/2/3…).
- * Integer scene coords then map to fractional device pixels → AA seams.
- */
-export function isFractionalDpr(dpr: number): boolean {
-  const nearest = Math.round(dpr);
-  return Math.abs(dpr - nearest) > 0.02;
-}
-
-/**
- * Snap a scene coordinate so that after `screen = scene*zoom + cam` (cam already
- * device-snapped) the result lands on an integer device pixel:
- *   round(scene * zoom * dpr) / (zoom * dpr)
- */
-export function snapSceneToDeviceGrid(scene: number, zoom: number, dpr: number): number {
-  const z = Math.max(0.05, zoom || 1);
-  const d = dpr > 0 ? dpr : 1;
-  const scale = z * d;
-  if (!(scale > 0) || !Number.isFinite(scene)) return scene;
-  return Math.round(scene * scale) / scale;
-}
-
-/**
- * Snap a scene AABB so every edge shares the device grid (flush neighbors stay flush).
- */
-export function snapSceneBoxToDeviceGrid(
-  box: { left: number; top: number; width: number; height: number },
-  zoom: number,
-  dpr: number
-): { left: number; top: number; width: number; height: number; dx: number; dy: number; sx: number; sy: number } {
-  const right = box.left + box.width;
-  const bottom = box.top + box.height;
-  const left = snapSceneToDeviceGrid(box.left, zoom, dpr);
-  const top = snapSceneToDeviceGrid(box.top, zoom, dpr);
-  const r = snapSceneToDeviceGrid(right, zoom, dpr);
-  const b = snapSceneToDeviceGrid(bottom, zoom, dpr);
-  const width = Math.max(1 / Math.max(0.05, zoom * dpr), r - left);
-  const height = Math.max(1 / Math.max(0.05, zoom * dpr), b - top);
-  const sx = box.width > 0 ? width / box.width : 1;
-  const sy = box.height > 0 ? height / box.height : 1;
-  return {
-    left,
-    top,
-    width,
-    height,
-    dx: left - box.left,
-    dy: top - box.top,
-    sx,
-    sy,
-  };
-}
-
-/**
- * Round a length up to the nearest multiple of `dprMultiple`
- * so `length * devicePixelRatio` stays integer-aligned under browser zoom.
- */
-export function alignLengthToDpr(length: number, dprMultiple: number): number {
-  const m = Math.max(1, dprMultiple);
-  const rem = length % m;
-  const aligned = rem === 0 ? length : length + (m - rem);
-  return Math.max(aligned, m);
-}
-
 export function readDevicePixelRatio(win: Window = window): number {
   const n = Number(win.devicePixelRatio);
   return Number.isFinite(n) && n > 0 ? n : 1;

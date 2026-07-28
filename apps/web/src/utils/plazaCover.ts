@@ -2,6 +2,8 @@
  * Plaza list / publish covers — active or first artboard (no dedicated「封面」 required).
  */
 
+import { isExportableSceneNode } from '@/components/rcb/scene/sceneDocument';
+
 export const PLAZA_COVER_FRAME_NAME = '封面';
 
 /** Canonical Plaza card size (list slot). Aspect is no longer a publish gate. */
@@ -127,6 +129,7 @@ function contentBoundsOfNodes(
   for (const id of children) {
     const node = nodes[id];
     if (!node || typeof node !== 'object') continue;
+    if (!isExportableSceneNode(node)) continue;
     const x = num((node as Record<string, unknown>).x);
     const y = num((node as Record<string, unknown>).y);
     const w = Math.max(1, num((node as Record<string, unknown>).width, 1));
@@ -158,6 +161,8 @@ export function extractFrameDocument(
   for (const [key, raw] of Object.entries(dsl)) {
     if (key === 'ROOT' || !raw || typeof raw !== 'object') continue;
     const node = raw as Record<string, unknown>;
+    // Image-generator plates are editor UI — never bake into cover / publish docs.
+    if (!isExportableSceneNode(node)) continue;
     if (!overlapsFrame(node, frame)) continue;
     const cloned = { ...node };
     cloned.x = num(cloned.x) - frame.x;
@@ -230,12 +235,75 @@ export function coverDocumentHasContent(document: unknown): boolean {
   return Array.isArray(children) && children.length > 0;
 }
 
-/** Lightweight doc for Plaza list / publish preview (active or first artboard). */
+/** Lightweight doc for Plaza list / publish preview (active or first artboard, else full doc). */
 export function extractPlazaCoverDocument(
   document: unknown,
   opts?: ExtractFrameOptions
 ): unknown | null {
-  return extractFrameDocument(document, findPlazaCoverFrame(document), opts);
+  const framed = extractFrameDocument(document, findPlazaCoverFrame(document), opts);
+  if (framed) return framed;
+  if (!(document && typeof document === 'object' && coverDocumentHasContent(document))) {
+    return null;
+  }
+  if (!opts?.contentFit) return document;
+
+  // No artboard — still crop to content so loose nodes are not stuck in a huge empty world.
+  const doc = document as Record<string, unknown>;
+  const dsl = (doc.deltaSetLike && typeof doc.deltaSetLike === 'object'
+    ? doc.deltaSetLike
+    : {}) as Record<string, unknown>;
+  const rootChildren = (dsl.ROOT as { children?: unknown } | undefined)?.children;
+  const children = Array.isArray(rootChildren)
+    ? rootChildren
+        .map((id) => String(id))
+        .filter((id) => {
+          const node = dsl[id];
+          return Boolean(node && typeof node === 'object' && isExportableSceneNode(node));
+        })
+    : [];
+  const box = contentBoundsOfNodes(dsl, children);
+  if (!box) return document;
+  const pad = Math.max(12, Math.round(Math.max(box.width, box.height) * 0.08));
+  const x0 = Math.floor(box.x - pad);
+  const y0 = Math.floor(box.y - pad);
+  const outW = Math.max(1, Math.ceil(box.width + pad * 2));
+  const outH = Math.max(1, Math.ceil(box.height + pad * 2));
+  const nodes: Record<string, unknown> = {};
+  for (const id of children) {
+    const raw = dsl[id];
+    if (!raw || typeof raw !== 'object') continue;
+    if (!isExportableSceneNode(raw)) continue;
+    const node = { ...(raw as Record<string, unknown>) };
+    node.x = num(node.x) - x0;
+    node.y = num(node.y) - y0;
+    nodes[id] = node;
+  }
+  const bg =
+    typeof doc.backgroundColor === 'string' && doc.backgroundColor.trim()
+      ? doc.backgroundColor
+      : '#ffffff';
+  return {
+    width: outW,
+    height: outH,
+    backgroundColor: bg,
+    backgroundFillType: 'solid',
+    frames: [
+      {
+        id: 'content',
+        name: 'content',
+        x: 0,
+        y: 0,
+        width: outW,
+        height: outH,
+        backgroundColor: bg,
+      },
+    ],
+    activeFrameId: 'content',
+    deltaSetLike: {
+      ROOT: { id: 'ROOT', children },
+      ...nodes,
+    },
+  };
 }
 
 export type PlazaCoverPublishCheck = {
@@ -245,13 +313,16 @@ export type PlazaCoverPublishCheck = {
   coverDocument: unknown | null;
 };
 
-/** Gate for Plaza publish dialog + API alignment — needs ≥1 artboard. */
+/**
+ * Publish gate — artboard optional. Preview crops to design content so the card
+ * centers the work instead of a mostly-empty artboard.
+ */
 export function checkPlazaCoverForPublish(document: unknown): PlazaCoverPublishCheck {
   const frame = findPlazaCoverFrame(document);
-  const coverDocument = frame ? extractFrameDocument(document, frame) : null;
-  const hasCover = Boolean(frame && coverDocument);
+  const coverDocument = extractPlazaCoverDocument(document, { contentFit: true });
+  const hasCover = Boolean(frame);
   return {
-    ok: hasCover,
+    ok: Boolean(document && typeof document === 'object'),
     hasCover,
     frame,
     coverDocument,

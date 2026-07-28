@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Navigate, Outlet, useLocation, useSearchParams } from 'react-router-dom';
-import { logout } from '@/store/modules/auth';
+import { logout, clearSessionCaches } from '@/store/modules/auth';
 import { buildLoginUrl, readReturnToParam } from '@/utils/authReturnTo';
 import { getToken } from '@/utils/token';
 
@@ -34,6 +34,7 @@ export function GuestOnly() {
   useEffect(() => {
     if (user && !hasToken) {
       dispatch(logout());
+      clearSessionCaches();
     }
   }, [user, hasToken, dispatch]);
 

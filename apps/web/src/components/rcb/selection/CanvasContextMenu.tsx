@@ -8,10 +8,16 @@ import {
   HiOutlineChevronDoubleDown,
   HiOutlineChevronDoubleUp,
   HiOutlineChevronDown,
+  HiOutlineChevronRight,
   HiOutlineChevronUp,
   HiOutlineClipboard,
   HiOutlineClipboardDocument,
+  HiOutlineEye,
+  HiOutlineEyeSlash,
+  HiOutlineLockClosed,
+  HiOutlineLockOpen,
   HiOutlinePhoto,
+  HiOutlineArrowDownTray,
   HiOutlineScissors,
   HiOutlineSquare2Stack,
   HiOutlineTrash,
@@ -26,10 +32,18 @@ type CtxAction =
   | 'copy'
   | 'paste'
   | 'duplicate'
+  | 'group'
+  | 'ungroup'
   | 'front'
   | 'forward'
   | 'backward'
   | 'back'
+  | 'toggleHidden'
+  | 'toggleLocked'
+  | 'toggleGrid'
+  | 'exportPng'
+  | 'exportJpg'
+  | 'exportSvg'
   | 'delete';
 
 export type ContextMenuState = {
@@ -49,6 +63,22 @@ type CanvasContextMenuProps = {
   canAddToChat?: boolean;
   /** Nodes or active artboard frame. */
   canDelete?: boolean;
+  /** Show/hide + lock + export — node or frame target. */
+  canLayerActions?: boolean;
+  /** True when show/hide targets at least one node (not frame-only). */
+  canToggleHidden?: boolean;
+  /** True when lock targets a node or frame. */
+  canToggleLocked?: boolean;
+  /** Current visibility of the menu target (all hidden → show action). */
+  targetHidden?: boolean;
+  /** Current lock of the menu target (all locked → unlock action). */
+  targetLocked?: boolean;
+  /** Grid snap + overlay (on → show “hide grid” label). */
+  gridOn?: boolean;
+  /** Box / multi-select that is not already one shared group. */
+  canGroup?: boolean;
+  /** Selection is exactly one shared group. */
+  canUngroup?: boolean;
   canUndo: boolean;
   canRedo: boolean;
   canPaste?: boolean;
@@ -58,6 +88,54 @@ type CanvasContextMenuProps = {
 };
 
 const ICON_CLASS = 'h-3.5 w-3.5 shrink-0 text-[var(--muted)]';
+
+function IconGroup({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      aria-hidden
+    >
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1.2" strokeDasharray="2.2 1.6" />
+    </svg>
+  );
+}
+
+function IconUngroup({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.35"
+      aria-hidden
+    >
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1.2" strokeDasharray="2.2 1.6" />
+      <path d="M3.5 12.5 L12.5 3.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconGrid({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      aria-hidden
+    >
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1" />
+      <path d="M2.5 8 H13.5" strokeLinecap="round" />
+      <path d="M8 2.5 V13.5" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 const itemClass =
   'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-[var(--ink)] hover:bg-[var(--accent-soft)] disabled:pointer-events-none disabled:opacity-40';
@@ -73,7 +151,7 @@ function MenuItem({
 }: {
   icon: ReactNode;
   label: string;
-  shortcut: string;
+  shortcut?: string;
   disabled?: boolean;
   onClick: () => void;
 }) {
@@ -81,8 +159,72 @@ function MenuItem({
     <button type="button" className={itemClass} disabled={disabled} onClick={onClick}>
       <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <kbd className="shrink-0 text-[10px] text-[var(--muted)]">{shortcut}</kbd>
+      {shortcut ? (
+        <kbd className="shrink-0 text-[10px] text-[var(--muted)]">{shortcut}</kbd>
+      ) : null}
     </button>
+  );
+}
+
+function ExportSubmenu({
+  disabled,
+  onPick,
+}: {
+  disabled?: boolean;
+  onPick: (action: 'exportPng' | 'exportJpg' | 'exportSvg') => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [side, setSide] = useState<'right' | 'left'>('right');
+
+  useLayoutEffect(() => {
+    if (!open || !rowRef.current) return;
+    const rect = rowRef.current.getBoundingClientRect();
+    const spaceRight = window.innerWidth - rect.right;
+    setSide(spaceRight < 140 ? 'left' : 'right');
+  }, [open]);
+
+  return (
+    <div
+      ref={rowRef}
+      className="relative"
+      onMouseEnter={() => {
+        if (!disabled) setOpen(true);
+      }}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button type="button" className={itemClass} disabled={disabled}>
+        <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+          <HiOutlineArrowDownTray className={ICON_CLASS} strokeWidth={1.75} />
+        </span>
+        <span className="min-w-0 flex-1 truncate">{t('editor.contextMenu.export')}</span>
+        <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+      </button>
+      {open && !disabled ? (
+        <div
+          className={
+            side === 'right'
+              ? 'absolute left-full top-0 z-[1] ml-1 min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]'
+              : 'absolute right-full top-0 z-[1] mr-1 min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]'
+          }
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button type="button" className={itemClass} onClick={() => onPick('exportPng')}>
+            PNG
+          </button>
+          <button type="button" className={itemClass} onClick={() => onPick('exportJpg')}>
+            JPG
+          </button>
+          <button type="button" className={itemClass} onClick={() => onPick('exportSvg')}>
+            SVG
+          </button>
+          <button type="button" className={itemClass} disabled title="PSD">
+            PSD
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -92,6 +234,14 @@ export default function CanvasContextMenu({
   hasNode,
   canAddToChat,
   canDelete,
+  canLayerActions,
+  canToggleHidden,
+  canToggleLocked,
+  targetHidden = false,
+  targetLocked = false,
+  gridOn = false,
+  canGroup = false,
+  canUngroup = false,
   canUndo,
   canRedo,
   canPaste = false,
@@ -102,6 +252,9 @@ export default function CanvasContextMenu({
   const { t } = useTranslation();
   const deleteEnabled = canDelete ?? hasNode;
   const addToChatEnabled = canAddToChat ?? hasNode;
+  const layerEnabled = canLayerActions ?? hasNode;
+  const hideEnabled = canToggleHidden ?? hasNode;
+  const lockEnabled = canToggleLocked ?? layerEnabled;
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
@@ -112,7 +265,7 @@ export default function CanvasContextMenu({
     }
     const el = panelRef.current;
     const w = el?.offsetWidth || 200;
-    const h = el?.offsetHeight || 320;
+    const h = el?.offsetHeight || 420;
     const maxL = Math.max(PAD, window.innerWidth - w - PAD);
     const maxT = Math.max(PAD, window.innerHeight - h - PAD);
     setPos({
@@ -138,7 +291,7 @@ export default function CanvasContextMenu({
       <div
         ref={panelRef}
         data-ctx-menu
-        className="fixed z-[70] min-w-[200px] overflow-hidden rounded-[4px] bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
+        className="fixed z-[70] min-w-[200px] overflow-visible rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
         style={{ left: pos?.left ?? menu.clientX, top: pos?.top ?? menu.clientY }}
         onPointerDown={(e) => e.stopPropagation()}
       >
@@ -201,6 +354,21 @@ export default function CanvasContextMenu({
         />
         <div className="my-1 h-px bg-[var(--line)]" />
         <MenuItem
+          icon={<IconGroup className={ICON_CLASS} />}
+          label={t('editor.contextMenu.group')}
+          shortcut={`${modLabel}+G`}
+          disabled={!canGroup}
+          onClick={() => onAction('group')}
+        />
+        <MenuItem
+          icon={<IconUngroup className={ICON_CLASS} />}
+          label={t('editor.contextMenu.ungroup')}
+          shortcut={`${modLabel}+Shift+G`}
+          disabled={!canUngroup}
+          onClick={() => onAction('ungroup')}
+        />
+        <div className="my-1 h-px bg-[var(--line)]" />
+        <MenuItem
           icon={<HiOutlineChevronDoubleUp className={ICON_CLASS} strokeWidth={1.75} />}
           label={t('editor.contextMenu.bringToFront')}
           shortcut="]"
@@ -227,6 +395,51 @@ export default function CanvasContextMenu({
           shortcut="["
           disabled={!hasNode}
           onClick={() => onAction('back')}
+        />
+        <div className="my-1 h-px bg-[var(--line)]" />
+        <MenuItem
+          icon={
+            targetHidden ? (
+              <HiOutlineEyeSlash className={ICON_CLASS} strokeWidth={1.75} />
+            ) : (
+              <HiOutlineEye className={ICON_CLASS} strokeWidth={1.75} />
+            )
+          }
+          label={
+            targetHidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
+          }
+          shortcut={`${modLabel}+Shift+H`}
+          disabled={!hideEnabled}
+          onClick={() => onAction('toggleHidden')}
+        />
+        <MenuItem
+          icon={
+            targetLocked ? (
+              <HiOutlineLockClosed className={ICON_CLASS} strokeWidth={1.75} />
+            ) : (
+              <HiOutlineLockOpen className={ICON_CLASS} strokeWidth={1.75} />
+            )
+          }
+          label={
+            targetLocked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
+          }
+          shortcut={`${modLabel}+Shift+K`}
+          disabled={!lockEnabled}
+          onClick={() => onAction('toggleLocked')}
+        />
+        <MenuItem
+          icon={<IconGrid className={ICON_CLASS} />}
+          label={
+            gridOn
+              ? t('editor.contextMenu.hideGrid')
+              : t('editor.contextMenu.showGrid')
+          }
+          onClick={() => onAction('toggleGrid')}
+        />
+        <div className="my-1 h-px bg-[var(--line)]" />
+        <ExportSubmenu
+          disabled={!layerEnabled}
+          onPick={(action) => onAction(action)}
         />
         <div className="my-1 h-px bg-[var(--line)]" />
         <MenuItem

@@ -1,29 +1,54 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
-import { projectThumbFrameClass } from '@/utils/projectThumb';
-import { nearestScrollRoot } from '@/utils/useInfiniteList';
+import {
+  projectThumbFrameClass,
+  projectThumbZoomLayerClass,
+  withThumbCacheBust,
+} from '@/utils/projectThumb';
+import { nearestScrollRoot } from '@/components/home/InfiniteScroll';
+import {
+  plazaCoverAspectStyle,
+  plazaFlowThumbClass,
+} from '@/components/home/FlowScrollSection';
 import { cn } from '@/utils/classnames';
 
 type Props = {
   /** Lightweight cover document from Plaza list API (`coverDocument`). */
   coverDocument?: unknown | null;
+  /** Optional raster cover — preferred over live rasterization when present. */
+  thumbnail?: string | null;
+  /** Cache-bust token for remote thumbnail URLs. */
+  version?: number | string | null;
+  /**
+   * `fixed` — Projects-style 170px frame.
+   * `flow` — height follows image / document aspect (plaza waterfall).
+   */
+  layout?: 'fixed' | 'flow';
   className?: string;
   children?: ReactNode;
   once?: boolean;
 };
 
 /**
- * Plaza card cover — renders artboard cover from feed payload.
- * Missing cover → empty slot (no placeholder mark).
+ * Plaza card cover — prefer remote raster thumbnail; else rasterize coverDocument to `<img>`.
+ * Media zooms on parent `.group` hover; overlays (`children`) stay unscaled.
  */
 export default function PlazaCoverThumb({
   coverDocument,
+  thumbnail,
+  version,
+  layout = 'fixed',
   className,
   children,
   once = true,
 }: Props): ReactNode {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [active, setActive] = useState(false);
+  const [naturalAspect, setNaturalAspect] = useState<string | null>(null);
+  const thumb =
+    typeof thumbnail === 'string' && thumbnail.trim() ? thumbnail.trim() : '';
+  const src = thumb ? withThumbCacheBust(thumb, version) : '';
+  const flow = layout === 'flow';
 
   useEffect(() => {
     const el = rootRef.current;
@@ -44,13 +69,45 @@ export default function PlazaCoverThumb({
     return () => io.disconnect();
   }, [once]);
 
+  const flowStyle: CSSProperties | undefined = flow
+    ? naturalAspect
+      ? { aspectRatio: naturalAspect }
+      : plazaCoverAspectStyle(coverDocument)
+    : undefined;
+
+  const mediaClass = flow
+    ? 'block h-full w-full object-cover'
+    : 'h-full w-full object-contain';
+
   return (
-    <div ref={rootRef} className={projectThumbFrameClass(className)}>
-      {active && coverDocument ? (
-        <TemplateThumbnail document={coverDocument} fit="cover" />
-      ) : (
-        <div className={cn('h-full w-full bg-[var(--accent-soft)]')} />
-      )}
+    <div
+      ref={rootRef}
+      className={
+        flow ? plazaFlowThumbClass(className) : projectThumbFrameClass(className)
+      }
+      style={flowStyle}
+    >
+      <div className={cn('absolute inset-0', projectThumbZoomLayerClass)}>
+        {src ? (
+          <img
+            key={src}
+            src={src}
+            alt=""
+            className={mediaClass}
+            onLoad={(e) => {
+              if (!flow) return;
+              const img = e.currentTarget;
+              if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                setNaturalAspect(`${img.naturalWidth} / ${img.naturalHeight}`);
+              }
+            }}
+          />
+        ) : active && coverDocument ? (
+          <TemplateThumbnail document={coverDocument} fit={flow ? 'cover' : 'contain'} />
+        ) : (
+          <div className={cn('h-full w-full bg-[var(--surface)]')} />
+        )}
+      </div>
       {children}
     </div>
   );

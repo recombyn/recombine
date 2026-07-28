@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineBell,
+  HiOutlineBookOpen,
   HiOutlineChatBubbleLeftRight,
   HiOutlineFolder,
   HiOutlineHome,
@@ -12,7 +13,7 @@ import {
 } from 'react-icons/hi2';
 import { Dropdown, Tooltip } from '@/components/base';
 import AppLogo from '@/components/base/AppLogo';
-import { fetchAllProjectSummaries } from '@/apis/projects';
+import { fetchProjects } from '@/apis/projects';
 import HomeHero from '@/components/home/HomeHero';
 import InspirationSection from '@/components/home/InspirationSection';
 import MePage from '@/components/home/MePage';
@@ -20,12 +21,20 @@ import RecentProjectsSection from '@/components/home/RecentProjectsSection';
 import type { HomeAgentSubmitPayload } from '@/components/home/HomeAgentComposer';
 import type { OfficialCaseMeta } from '@/utils/officialCases';
 import TemplateGrid from '@/components/templates/TemplateGrid';
-import { hydrateRemoteProjects } from '@/store/modules/editor';
+import { flushCurrentProjectNow } from '@/components/editor/useProjectCloudSync';
+import {
+  appendRemoteProjects,
+  clearProjectsLibrary,
+  hydrateRemoteProjects,
+} from '@/store/modules/editor';
 import { isOwnedTemplate } from '@/utils/templatesStorage';
 import { getToken } from '@/utils/token';
+import { docsUrl } from '@/utils/docsUrl';
+import { buildLoginUrl } from '@/utils/authReturnTo';
 import { cn } from '@/utils/classnames';
 
 const RECENT_LIMIT = 20;
+const PROJECT_PAGE_SIZE = 20;
 
 type Props = {
   nav: string;
@@ -35,40 +44,20 @@ type Props = {
   importingName?: string;
   onCreate: () => void;
   onAgentSubmit: (payload: HomeAgentSubmitPayload) => void;
-  onOpenCase: (meta: OfficialCaseMeta, document: unknown, opts?: { prompt?: string }) => void;
+  onOpenCase: (meta: OfficialCaseMeta) => void;
 };
 
-/** Rail: 40px hit target; icons optically balanced at ~22px visual weight. */
+/** Rail hit target — matches fig1 capsule icons. */
 const RAIL_HIT = 'h-10 w-10';
 const RAIL_STROKE = 1.5;
 
-/** Optically-balanced sizes per icon family. */
 const SZ = {
-  plus: 'h-[22px] w-[22px] shrink-0',
+  plus: 'h-5 w-5 shrink-0',
   home: 'h-[22px] w-[22px] shrink-0',
-  folder: 'h-[20px] w-[20px] shrink-0',
+  folder: 'h-5 w-5 shrink-0',
   user: 'h-[22px] w-[22px] shrink-0',
+  help: 'h-[22px] w-[22px] shrink-0',
 } as const;
-
-function RailPlusIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden
-    >
-      <circle cx="12" cy="12" r="9.25" stroke="currentColor" strokeWidth={RAIL_STROKE} />
-      <path
-        d="M12 7.75v8.5M7.75 12h8.5"
-        stroke="currentColor"
-        strokeWidth={RAIL_STROKE}
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
 
 const RAIL_HELP_WIKI =
   'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink';
@@ -79,24 +68,30 @@ function RailBtn({
   disabled,
   onClick,
   children,
+  className,
 }: {
   tip: string;
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
   children: ReactNode;
+  className?: string;
 }) {
   return (
     <Tooltip title={tip} placement="right" triggerClassName="inline-flex">
       <button
         type="button"
         aria-label={tip}
+        aria-current={active ? 'page' : undefined}
         disabled={disabled}
         onClick={onClick}
         className={cn(
-          'flex items-center justify-center rounded-lg transition-colors disabled:opacity-50',
+          'flex items-center justify-center rounded-full transition-colors disabled:opacity-50',
           RAIL_HIT,
-          active ? 'text-[var(--ink)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'
+          active
+            ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+            : 'text-[var(--ink)]/70 hover:bg-[var(--canvas)] hover:text-[var(--ink)]',
+          className
         )}
       >
         {children}
@@ -110,6 +105,15 @@ function RailHelpMenu() {
 
   const items = useMemo(
     () => [
+      {
+        key: 'guide',
+        label: (
+          <span className="inline-flex items-center gap-2">
+            <HiOutlineBookOpen className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.75} />
+            {t('home.railHelpGuide')}
+          </span>
+        ),
+      },
       {
         key: 'contact',
         label: (
@@ -136,10 +140,14 @@ function RailHelpMenu() {
     <Dropdown
       trigger="click"
       placement="right-end"
-      offset={8}
+      offset={12}
       floatingClassName="z-[600]"
       items={items}
       onClick={(key) => {
+        if (key === 'guide') {
+          window.open(docsUrl('/guide/getting-started'), '_blank', 'noopener,noreferrer');
+          return;
+        }
         if (key === 'contact') {
           window.location.href = 'mailto:702680355@qq.com';
           return;
@@ -151,22 +159,18 @@ function RailHelpMenu() {
         type="button"
         aria-label={t('home.railHelp')}
         className={cn(
-          'flex items-center justify-center rounded-lg bg-transparent',
+          'flex items-center justify-center rounded-full',
           RAIL_HIT,
-          'text-[var(--muted)] transition-colors hover:text-[var(--ink)]'
+          'text-[var(--ink)]/70 transition-colors hover:bg-[var(--canvas)] hover:text-[var(--ink)]'
         )}
       >
-        <HiOutlineQuestionMarkCircle
-          className="h-[22px] w-[22px] shrink-0"
-          strokeWidth={RAIL_STROKE}
-          aria-hidden
-        />
+        <HiOutlineQuestionMarkCircle className={SZ.help} strokeWidth={RAIL_STROKE} aria-hidden />
       </button>
     </Dropdown>
   );
 }
 
-/** Narrow icon rail — create blank canvas + nav, all on the left. */
+/** Left rail — desktop: logo + capsule; mobile: hamburger menu (fig.2). */
 export function HomeSidebar({
   nav,
   setNav,
@@ -179,37 +183,117 @@ export function HomeSidebar({
   onCreate: () => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
+  const authed = Boolean(userId && getToken());
+
+  const goNav = (id: 'home' | 'mine' | 'account') => {
+    if ((id === 'mine' || id === 'account') && !authed) {
+      navigate(buildLoginUrl('/home'));
+      return;
+    }
+    if (id === 'mine') setNav('mine');
+    else setNav(id);
+  };
+
   return (
-    <aside className="flex w-[56px] shrink-0 flex-col items-center border-r border-[var(--line)] bg-[var(--rail)] pb-2 pt-4 text-[var(--ink)]">
-      <AppLogo size={36} className="mb-5" />
-      <nav className="flex flex-1 flex-col items-center gap-1">
-        <RailBtn tip={t('home.newProject')} disabled={importing} onClick={onCreate}>
-          <RailPlusIcon className={SZ.plus} />
-        </RailBtn>
-        {(['home', 'mine', 'account'] as const).map((id) => {
-          const active = nav === id || (id === 'mine' && nav === 'recent');
-          const tip =
-            id === 'home' ? t('home.navHome') : id === 'mine' ? t('home.mine') : t('home.account');
-          const Icon =
-            id === 'home' ? HiOutlineHome : id === 'mine' ? HiOutlineFolder : HiOutlineUser;
-          const sz = id === 'mine' ? SZ.folder : id === 'home' ? SZ.home : SZ.user;
-          return (
-            <RailBtn
-              key={id}
-              tip={tip}
-              active={active}
-              onClick={() => {
-                if (id === 'mine') setNav('mine');
-                else setNav(id);
-              }}
+    <>
+      {/* Mobile top bar — brand only; nav menu lives after avatar in HomeTopBar. */}
+      <div className="pointer-events-none fixed inset-x-0 top-0 z-30 flex h-20 items-start pt-4 px-4 [background:linear-gradient(to_bottom,var(--canvas)_60%,transparent)] md:hidden">
+        <div className="pointer-events-auto inline-flex min-w-0 items-center gap-2 leading-none">
+          <AppLogo size={22} />
+          <span
+            className="-translate-y-px truncate text-[15px] font-medium leading-none tracking-tight text-[var(--ink)] [font-family:var(--font-hero)]"
+            aria-hidden
+          >
+            {t('app.name').toLowerCase()}
+          </span>
+        </div>
+      </div>
+
+      {/* Desktop logo — top-left. */}
+      <div className="pointer-events-none fixed left-0 top-0 z-30 hidden items-center p-5 pl-6 md:flex">
+        <div className="pointer-events-auto inline-flex items-center gap-2 leading-none">
+          <AppLogo size={22} />
+          <span
+            className="-translate-y-px text-[15px] font-medium leading-none tracking-tight text-[var(--ink)] [font-family:var(--font-hero)]"
+            aria-hidden
+          >
+            {t('app.name').toLowerCase()}
+          </span>
+        </div>
+      </div>
+
+      {/* Desktop rail — + / nav capsule (inset from screen edge). */}
+      <aside
+        className="pointer-events-none fixed inset-y-0 left-4 z-30 hidden w-[72px] flex-col items-center justify-center md:flex"
+        aria-label={t('app.name')}
+      >
+        <div className="pointer-events-auto flex flex-col items-center px-1">
+          <Tooltip title={t('home.newProject')} placement="right" triggerClassName="inline-flex">
+            <button
+              type="button"
+              aria-label={t('home.newProject')}
+              disabled={importing}
+              onClick={onCreate}
+              className={cn(
+                'group relative flex items-center justify-center rounded-full',
+                RAIL_HIT,
+                'bg-[var(--ink)] text-[var(--on-brand)]',
+                'shadow-[0_0_0_3px_var(--surface),0_0_0_4px_#c8c8c8]',
+                'transition-opacity duration-300 ease-out hover:opacity-90 disabled:opacity-50'
+              )}
             >
-              <Icon className={sz} strokeWidth={RAIL_STROKE} aria-hidden />
-            </RailBtn>
-          );
-        })}
-      </nav>
-      <RailHelpMenu />
-    </aside>
+              <svg
+                className={cn(
+                  SZ.plus,
+                  'transition-transform duration-300 ease-out group-hover:rotate-90'
+                )}
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+              >
+                <path
+                  d="M12 6.5v11M6.5 12h11"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </Tooltip>
+
+          <nav
+            className="mt-5 flex flex-col items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--surface)]/95 px-1.5 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.03)] backdrop-blur-sm"
+            aria-label={t('app.name')}
+          >
+            {(['home', 'mine', 'account'] as const).map((id) => {
+              const active = nav === id || (id === 'mine' && nav === 'recent');
+              const tip =
+                id === 'home'
+                  ? t('home.navHome')
+                  : id === 'mine'
+                    ? t('home.mine')
+                    : t('home.account');
+              const Icon =
+                id === 'home' ? HiOutlineHome : id === 'mine' ? HiOutlineFolder : HiOutlineUser;
+              const sz = id === 'mine' ? SZ.folder : id === 'home' ? SZ.home : SZ.user;
+              return (
+                <RailBtn
+                  key={id}
+                  tip={tip}
+                  active={active}
+                  onClick={() => goNav(id)}
+                >
+                  <Icon className={sz} strokeWidth={RAIL_STROKE} aria-hidden />
+                </RailBtn>
+              );
+            })}
+            <RailHelpMenu />
+          </nav>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -225,36 +309,98 @@ export function HomeTemplateList({
 }: Props) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const templates = useSelector((state: any) => state.editor.templates);
   const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
   // Token is in localStorage only — Redux has no auth.token field.
   const authed = Boolean(userId && getToken());
   /** Logged-in: skeleton until first Projects API hydrate (avoid localStorage flash). */
   const [projectsReady, setProjectsReady] = useState(() => !authed);
+  const [projectsPage, setProjectsPage] = useState(1);
+  const [projectsHasMore, setProjectsHasMore] = useState(false);
+  const [projectsTotal, setProjectsTotal] = useState(0);
+  const [projectsLoadingMore, setProjectsLoadingMore] = useState(false);
+  const projectsFetchGen = useRef(0);
+
+  /** Guest must not stay on Projects / Me — bounce home + open login. */
+  useEffect(() => {
+    if (authed) return;
+    if (nav !== 'mine' && nav !== 'account' && nav !== 'recent') return;
+    setNav('home');
+    navigate(buildLoginUrl('/home'));
+  }, [authed, nav, navigate, setNav]);
 
   useEffect(() => {
     if (!authed) {
-      // Logged out: no local project library — clear owned list from memory.
-      dispatch(hydrateRemoteProjects([]));
+      // Logged out: wipe in-memory library (hydrate([]) can keep currentId rows).
+      dispatch(clearProjectsLibrary());
       setProjectsReady(true);
+      setProjectsPage(1);
+      setProjectsHasMore(false);
+      setProjectsTotal(0);
       return;
     }
     let cancelled = false;
+    const gen = ++projectsFetchGen.current;
     setProjectsReady(false);
-    void fetchAllProjectSummaries()
-      .then((all) => {
-        if (!cancelled) dispatch(hydrateRemoteProjects(all));
-      })
-      .catch(() => {
-        if (!cancelled) dispatch(hydrateRemoteProjects([]));
-      })
-      .finally(() => {
-        if (!cancelled) setProjectsReady(true);
-      });
+    setProjectsLoadingMore(false);
+    void (async () => {
+      // Wait for editor leave-flush (doc + cover) so list thumbs are not one revision behind.
+      try {
+        await flushCurrentProjectNow({ force: true });
+      } catch {
+        /* list anyway */
+      }
+      if (cancelled || gen !== projectsFetchGen.current) return;
+      try {
+        const res = await fetchProjects({ page: 1, pageSize: PROJECT_PAGE_SIZE });
+        if (cancelled || gen !== projectsFetchGen.current) return;
+        dispatch(hydrateRemoteProjects(res.projects || []));
+        setProjectsPage(1);
+        setProjectsHasMore(Boolean(res.hasMore));
+        setProjectsTotal(Number(res.total) || (res.projects || []).length);
+      } catch {
+        if (!cancelled && gen === projectsFetchGen.current) {
+          dispatch(hydrateRemoteProjects([]));
+          setProjectsHasMore(false);
+          setProjectsTotal(0);
+        }
+      } finally {
+        if (!cancelled && gen === projectsFetchGen.current) setProjectsReady(true);
+      }
+    })();
     return () => {
       cancelled = true;
     };
   }, [authed, dispatch]);
+
+  const loadMoreProjects = useCallback(() => {
+    if (!authed || !projectsHasMore || projectsLoadingMore || !projectsReady) return;
+    const nextPage = projectsPage + 1;
+    const gen = projectsFetchGen.current;
+    setProjectsLoadingMore(true);
+    void (async () => {
+      try {
+        const res = await fetchProjects({ page: nextPage, pageSize: PROJECT_PAGE_SIZE });
+        if (gen !== projectsFetchGen.current) return;
+        dispatch(appendRemoteProjects(res.projects || []));
+        setProjectsPage(nextPage);
+        setProjectsHasMore(Boolean(res.hasMore));
+        if (Number.isFinite(Number(res.total))) setProjectsTotal(Number(res.total));
+      } catch {
+        /* keep current page; user can scroll again */
+      } finally {
+        if (gen === projectsFetchGen.current) setProjectsLoadingMore(false);
+      }
+    })();
+  }, [
+    authed,
+    dispatch,
+    projectsHasMore,
+    projectsLoadingMore,
+    projectsPage,
+    projectsReady,
+  ]);
 
   const ownedProjects = useMemo(
     () => (templates as any[]).filter((item) => isOwnedTemplate(item)),
@@ -273,7 +419,7 @@ export function HomeTemplateList({
             (Number(a.openedAt) || Number(a.updatedAt) || 0)
         )
         .slice(0, RECENT_LIMIT);
-    // Projects (mine): only owned works � not case/scratch open sessions.
+      // Projects (mine): only owned works — not case/scratch open sessions.
     } else {
       list = list.filter((item) => isOwnedTemplate(item));
     }
@@ -281,26 +427,36 @@ export function HomeTemplateList({
     return list.filter((item) => (item.name || '').toLowerCase().includes(q));
   }, [templates, nav, query]);
 
-  if (nav === 'account') {
-    return <MePage />;
+  if (nav === 'account' && authed) {
+    return <MePage onOpenCase={onOpenCase} />;
   }
 
-  if (nav !== 'home') {
+  if (nav !== 'home' && authed) {
     const title = nav === 'recent' ? t('home.recentOpened') : t('home.mine');
     const showSkeleton = Boolean(authed) && !projectsReady;
-    const displayCount = listForGrid.length + (importing ? 1 : 0);
+    const enableScrollLoad = nav === 'mine' && !query.trim();
+    const displayCount = enableScrollLoad
+      ? projectsTotal + (importing ? 1 : 0)
+      : listForGrid.length + (importing ? 1 : 0);
     return (
-      <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
-        <div className="relative mx-auto w-full min-w-0 max-w-[1700px] space-y-8 px-[60px] pb-10 pt-6">
+      <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
+        <div className="relative mx-auto w-full min-w-0 max-w-[1700px] space-y-8 px-5 pb-10 pt-16 sm:px-8 sm:pt-20 md:px-24 lg:px-[100px] xl:px-[120px]">
           <TemplateGrid
             templates={showSkeleton ? [] : listForGrid}
             title={title}
             fileCountLabel={
-              showSkeleton ? t('home.fileCount', { count: 0 }) : t('home.fileCount', { count: displayCount })
+              showSkeleton
+                ? t('home.fileCount', { count: 0 })
+                : t('home.fileCount', { count: displayCount })
             }
             importing={!showSkeleton && importing}
             importingName={importingName}
             loading={showSkeleton}
+            loadingMore={enableScrollLoad && projectsLoadingMore}
+            hasMore={enableScrollLoad && projectsHasMore}
+            onLoadMore={enableScrollLoad ? loadMoreProjects : undefined}
+            onCreate={onCreate}
+            createDisabled={importing}
           />
         </div>
       </main>
@@ -311,16 +467,24 @@ export function HomeTemplateList({
 
   return (
     <main className="relative min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
-      <div className="relative mx-auto flex w-full min-w-0 max-w-[1700px] flex-col items-stretch space-y-12 px-[60px] pb-10 pt-0">
+      <div className="relative mx-auto flex w-full min-w-0 max-w-[1700px] flex-col items-stretch px-5 pb-10 pt-0 sm:px-8 md:px-24 lg:px-[100px] xl:px-[120px]">
         <HomeHero onSubmit={onAgentSubmit} />
-        <RecentProjectsSection
-          projects={ownedProjects}
-          loading={homeProjectsLoading}
-          disabled={importing}
-          onCreate={onCreate}
-          onViewAll={() => setNav('mine')}
-        />
-        <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
+        <div className="flex flex-col space-y-6 sm:space-y-12">
+          <RecentProjectsSection
+            projects={authed ? ownedProjects : []}
+            loading={homeProjectsLoading}
+            disabled={importing}
+            onCreate={onCreate}
+            onViewAll={() => {
+              if (!authed) {
+                navigate(buildLoginUrl('/home'));
+                return;
+              }
+              setNav('mine');
+            }}
+          />
+          <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
+        </div>
       </div>
     </main>
   );

@@ -1,17 +1,36 @@
-import type { ReactNode } from 'react';
+import { forwardRef, useRef, type ReactNode, type Ref } from 'react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  HiOutlineArrowDownTray,
   HiOutlineArrowUturnLeft,
   HiOutlineChevronRight,
 } from 'react-icons/hi2';
 import { ChatMarkdown } from '@/components/editor/panels/ChatMarkdown';
+import { ContextChipPill } from '@/components/editor/panels/AgentComposerInput';
+import { ModelBrandIcon } from '@/components/editor/panels/agent/ModelPickerPanel';
+import { Image } from '@/components/base/image';
+import {
+  VirtualList,
+  type VirtualListHandle,
+} from '@/components/base/VirtualList';
 import { cn } from '@/utils/classnames';
+import { setChatImageDragData } from '@/utils/chatImageDrag';
+import { imageSrcToFile } from '@/utils/uploadImage';
 
 export type ChatUiMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** @ chips shown like the composer (label + kind + optional thumb). */
+  contexts?: Array<{
+    key: string;
+    label: string;
+    kind: string;
+    thumbUrl?: string;
+  }>;
+  /** `content` with U+FFFC where each context chip sat (inline layout in the bubble). */
+  contentMarked?: string;
   /** Design deep-think / reasoner stream — shown inside the foldable gray process. */
   thinking?: string;
   /** Intent analysis — shown inside the foldable gray process, not as final reply. */
@@ -22,7 +41,12 @@ export type ChatUiMessage = {
     id: string;
     name: string;
     status: 'running' | 'done' | 'error' | 'pending';
+    kind?: 'thought' | 'explored' | 'tool' | 'added' | 'updated' | 'skipped' | 'deleted';
     summary?: string;
+    /** Nested lines under Explored (Cursor: Thought briefly / Read file…). */
+    items?: Array<{ id: string; name: string; summary?: string }>;
+    /** Expandable markdown body (diagrams / long notes). */
+    body?: string;
   }>;
   /** Seedream / Image-mode results shown as a gallery (not SVG). */
   images?: string[];
@@ -30,6 +54,10 @@ export type ChatUiMessage = {
   imagePendingCount?: number;
   /** Image-gen aspect (e.g. 9:16) — sizes shimmer / gallery cards. */
   imageAspectRatio?: string;
+  /** Image-gen model id — brand icon in the worked-for row. */
+  imageModelId?: string;
+  /** Image-gen model display name shown before "Worked for …". */
+  imageModelLabel?: string;
   /** Canvas was mutated by the reply to this user turn; restore available while editing (in-memory). */
   canRestore?: boolean;
   /** Epoch ms when this assistant turn started streaming. */
@@ -38,6 +66,10 @@ export type ChatUiMessage = {
   durationMs?: number;
   /** Quick-reply chips from ask_user (e.g. create canvas). */
   choices?: string[];
+  /** Ask mode: proposed tool_ops waiting for the model-named apply_choice chip. */
+  proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+  /** Ask mode: which choices[] label applies proposedOps (from model). */
+  applyChoice?: string;
   /** Live-draw pipeline progress — kept for training UI; not shown in normal chat. */
   pipeline?: {
     category: string;
@@ -66,28 +98,123 @@ type Props = {
   onCancelEdit: () => void;
   onRestore: (userId: string) => void;
   onChoice?: (choice: string) => void;
-  /** Hover「添加到画布」— place generated image on the editor canvas. */
-  onAddImageToCanvas?: (src: string) => void;
+  className?: string;
 };
 
 function hasFoldableProcess(assistant: ChatUiMessage): boolean {
   return Boolean(assistant.steps?.length);
 }
 
-/** Gallery / shimmer cards: min width 128px, height from aspect ratio. */
+/** Gallery / shimmer cards — wide enough for hover CTA; scroll when many. */
 function cardBoxFromAspect(raw?: string): { width: number; height: number } {
-  const MIN_W = 128;
+  const TARGET_W = 168;
   let rw = 1;
   let rh = 1;
   const s = String(raw || '1:1').trim();
-  const m = /^(\d+(?:\.\d+)?)\s*[:x×]\s*(\d+(?:\.\d+)?)$/i.exec(s);
-  if (m) {
-    rw = Math.max(0.01, Number(m[1]));
-    rh = Math.max(0.01, Number(m[2]));
+  if (s === 'smart' || s.toLowerCase() === 'auto') {
+    /* keep 1:1 */
+  } else {
+    const m = /^(\d+(?:\.\d+)?)\s*[:x×]\s*(\d+(?:\.\d+)?)$/i.exec(s);
+    if (m) {
+      rw = Math.max(0.01, Number(m[1]));
+      rh = Math.max(0.01, Number(m[2]));
+    }
   }
-  const width = MIN_W;
-  const height = Math.max(48, Math.round((width * rh) / rw));
+  const width = TARGET_W;
+  const height = Math.max(96, Math.min(280, Math.round((width * rh) / rw)));
   return { width, height };
+}
+
+/** User bubble: attachment thumbs above text (composer strip / 图2); @ chips inline. */
+function UserMessageBody({
+  content,
+  contentMarked,
+  contexts,
+}: {
+  content: string;
+  contentMarked?: string;
+  contexts?: ChatUiMessage['contexts'];
+}): ReactNode {
+  const chips = contexts || [];
+  const attachments = chips.filter((c) => c.kind === 'attachment');
+  const inline = chips.filter((c) => c.kind !== 'attachment');
+
+  const attachmentStrip =
+    attachments.length > 0 ? (
+      <div className="mb-1.5 flex flex-wrap gap-1.5">
+        {attachments.map((a) => {
+          const src = String(a.thumbUrl || '').trim();
+          return (
+            <div
+              key={a.key}
+              title={a.label}
+              className="h-9 w-9 shrink-0 overflow-hidden rounded-md border border-[var(--line)] bg-[var(--canvas)]"
+            >
+              {src ? (
+                <img src={src} alt={a.label} className="h-full w-full object-cover" />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center px-0.5 text-center text-[8px] leading-tight text-[var(--muted)]">
+                  {a.label}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    ) : null;
+
+  if (!inline.length) {
+    return (
+      <>
+        {attachmentStrip}
+        {content || (attachments.length ? '' : '...')}
+      </>
+    );
+  }
+
+  const marked =
+    contentMarked && contentMarked.includes('\uFFFC')
+      ? contentMarked
+      : `${'\uFFFC'.repeat(inline.length)}${content || ''}`;
+
+  const parts = marked.split('\uFFFC');
+  const nodes: ReactNode[] = [];
+  let chipIdx = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part) nodes.push(<span key={`t-${i}`}>{part}</span>);
+    if (i < parts.length - 1) {
+      const c = inline[chipIdx++];
+      if (c) {
+        nodes.push(
+          <ContextChipPill
+            key={`${c.key}-${chipIdx}`}
+            label={c.label}
+            thumbUrl={c.thumbUrl}
+            className="mx-0.5"
+          />
+        );
+      }
+    }
+  }
+  while (chipIdx < inline.length) {
+    const c = inline[chipIdx++];
+    if (!c) break;
+    nodes.push(
+      <ContextChipPill
+        key={`${c.key}-${chipIdx}`}
+        label={c.label}
+        thumbUrl={c.thumbUrl}
+        className="mx-0.5"
+      />
+    );
+  }
+  return (
+    <>
+      {attachmentStrip}
+      {nodes.length ? nodes : content || '...'}
+    </>
+  );
 }
 
 function AssistantProcessBody({
@@ -95,41 +222,191 @@ function AssistantProcessBody({
 }: {
   assistant: ChatUiMessage;
 }): ReactNode {
-  // Cursor-style activity log (图1): Thought / Explored / Tool call + ops / Added —
-  // never dump intent-analysis essays into this fold.
-  const steps = assistant.steps || [];
+  // Cursor-style: Thought / Explored (expandable) / Tool call + ops / Added
+  const raw = assistant.steps || [];
+  // Dedupe by id so React keys stay unique even if state briefly raced.
+  const seen = new Set<string>();
+  const steps = raw.filter((s) => {
+    const id = String(s.id || '');
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
   return (
-    <div className="mt-1 flex flex-col gap-2 border-l border-[var(--line)] pl-2.5 text-[12px] leading-relaxed text-[var(--muted)]">
-      {steps.length ? (
-        <ul className="flex flex-col gap-1">
-          {steps.map((step) => (
-            <li key={step.id} className="flex flex-col gap-0.5">
-              <span>
-                {step.name}
-                {step.status === 'running' && !/[.…]$/.test(step.name.trim()) ? '…' : ''}
-              </span>
-              {step.summary?.trim() ? (
-                <span className="whitespace-pre-wrap leading-snug text-[var(--muted)]">
-                  {step.summary}
+    <div className="mt-1 flex flex-col gap-1.5 border-l border-[var(--line)] pl-2.5 text-[12px] leading-relaxed text-[var(--muted)]">
+      {steps.map((step, i) => (
+        <ProcessStepRow key={`${step.id}-${i}`} step={step} />
+      ))}
+    </div>
+  );
+}
+
+function ProcessStepRow({
+  step,
+}: {
+  step: NonNullable<ChatUiMessage['steps']>[number];
+}): ReactNode {
+  const expandable =
+    step.kind === 'explored' &&
+    Boolean((step.items && step.items.length) || step.body?.trim() || step.summary?.trim());
+  const [open, setOpen] = useState(
+    () => step.status === 'running' || Boolean(step.body?.trim())
+  );
+
+  useEffect(() => {
+    if (step.status === 'running') setOpen(true);
+  }, [step.status, step.id]);
+
+  if (!expandable) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span>
+          {step.name}
+          {step.status === 'running' && !/[.…]$/.test(step.name.trim()) ? '…' : ''}
+        </span>
+        {step.summary?.trim() ? (
+          <span className="whitespace-pre-wrap leading-snug text-[var(--muted)]">
+            {step.summary}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        className="group inline-flex max-w-full items-center gap-0.5 rounded px-0.5 text-left text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span>
+          {step.name}
+          {step.status === 'running' && !/[.…]$/.test(step.name.trim()) ? '…' : ''}
+        </span>
+        <HiOutlineChevronRight
+          className={cn(
+            'h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform',
+            open && 'rotate-90'
+          )}
+          aria-hidden
+        />
+      </button>
+      {open ? (
+        <div className="ml-0.5 flex flex-col gap-1 border-l border-[var(--line)] pl-2.5">
+          {(step.items || []).map((it) => (
+            <div key={it.id} className="flex flex-col gap-0.5">
+              <span>{it.name}</span>
+              {it.summary?.trim() ? (
+                <span className="whitespace-pre-wrap text-[11px] leading-snug opacity-80">
+                  {it.summary}
                 </span>
               ) : null}
-            </li>
+            </div>
           ))}
-        </ul>
+          {step.summary?.trim() && !(step.items || []).length ? (
+            <span className="whitespace-pre-wrap leading-snug">{step.summary}</span>
+          ) : null}
+          {step.body?.trim() ? (
+            <div className="min-w-0 text-[12px] leading-relaxed text-[var(--ink)]">
+              <ChatMarkdown content={step.body} />
+            </div>
+          ) : null}
+        </div>
       ) : null}
+    </div>
+  );
+}
+
+function ChatResultImageCard({
+  src,
+  box,
+}: {
+  src: string;
+  box: { width: number; height: number };
+}): ReactNode {
+  const { t } = useTranslation();
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const draggedRef = useRef(false);
+
+  const download = async () => {
+    try {
+      const file = await imageSrcToFile(src, 'image.png');
+      const objectUrl = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = file.name || 'image.png';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      window.open(src, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  return (
+    <div
+      className="group relative shrink-0 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--canvas)]"
+      style={{ width: box.width, height: box.height }}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable
+        loading="lazy"
+        className="block h-full w-full cursor-grab object-cover active:cursor-grabbing"
+        onDragStart={(e) => {
+          draggedRef.current = true;
+          setChatImageDragData(e.dataTransfer, src);
+        }}
+        onDragEnd={() => {
+          // Click often follows a completed drag — ignore the next click once.
+          window.setTimeout(() => {
+            draggedRef.current = false;
+          }, 0);
+        }}
+        onClick={() => {
+          if (draggedRef.current) {
+            draggedRef.current = false;
+            return;
+          }
+          setPreviewOpen(true);
+        }}
+      />
+      <button
+        type="button"
+        aria-label={t('agent.downloadImage', { defaultValue: '下载图片' })}
+        title={t('agent.downloadImage', { defaultValue: '下载图片' })}
+        className="absolute bottom-1.5 right-1.5 z-[1] inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-black/55 text-white shadow-sm backdrop-blur-[2px] transition-colors hover:bg-black/70"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void download();
+        }}
+      >
+        <HiOutlineArrowDownTray className="h-3.5 w-3.5" strokeWidth={1.75} />
+      </button>
+      <Image
+        src={src}
+        alt=""
+        lazy={false}
+        preview={{ open: previewOpen, onOpenChange: setPreviewOpen, previewOnClick: false }}
+        className="pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0"
+        imgClassName="!hidden"
+      />
     </div>
   );
 }
 
 function ImageGenGallery({
   assistant,
-  onAddImageToCanvas,
 }: {
   assistant: ChatUiMessage;
-  onAddImageToCanvas?: (src: string) => void;
   sending?: boolean;
 }): ReactNode {
-  const { t } = useTranslation();
   const images = assistant.images || [];
   const pending = Math.max(0, Number(assistant.imagePendingCount) || 0);
   const slots = Math.max(images.length, pending);
@@ -142,33 +419,11 @@ function ImageGenGallery({
         const src = images[i];
         if (src) {
           return (
-            <div
+            <ChatResultImageCard
               key={`${assistant.id}-img-${i}`}
-              className="group relative shrink-0 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--canvas)]"
-              style={{ width: box.width, height: box.height }}
-            >
-              <img
-                src={src}
-                alt=""
-                className="block h-full w-full object-cover"
-                loading="lazy"
-              />
-              {onAddImageToCanvas ? (
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/55 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                  <button
-                    type="button"
-                    className="inline-flex h-7 items-center rounded-md bg-[var(--ink)] px-2.5 text-[11px] font-medium text-[var(--on-brand)] shadow-sm"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onAddImageToCanvas(src);
-                    }}
-                  >
-                    {t('agent.addImageToCanvas', { defaultValue: 'Add to canvas' })}
-                  </button>
-                </div>
-              ) : null}
-            </div>
+              src={src}
+              box={box}
+            />
           );
         }
         return (
@@ -188,13 +443,11 @@ function AssistantTurn({
   assistant,
   worked,
   onChoice,
-  onAddImageToCanvas,
   sending,
 }: {
   assistant: ChatUiMessage;
   worked: string | null;
   onChoice?: (choice: string) => void;
-  onAddImageToCanvas?: (src: string) => void;
   sending: boolean;
 }): ReactNode {
   const { t } = useTranslation();
@@ -210,42 +463,62 @@ function AssistantTurn({
   const showImageGallery =
     Boolean(assistant.images?.length) ||
     (Number(assistant.imagePendingCount) || 0) > 0;
+  const imageModelLabel = String(assistant.imageModelLabel || '').trim();
+  const imageModelId = String(assistant.imageModelId || '').trim();
+  const showImageModel = Boolean(imageModelLabel || imageModelId);
+
+  const workedMeta = (
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[12px] font-normal text-[var(--muted)]">
+      {showImageModel ? (
+        <>
+          <ModelBrandIcon
+            model={{ id: imageModelId || imageModelLabel, label: imageModelLabel }}
+            size={14}
+            className="opacity-55"
+          />
+          <span className="truncate">{imageModelLabel || imageModelId}</span>
+        </>
+      ) : null}
+      {worked ? (
+        <span className={cn('shrink-0', showImageModel && 'whitespace-nowrap')}>
+          {worked}
+        </span>
+      ) : null}
+    </span>
+  );
 
   return (
     <div
       data-assistant-id={assistant.id}
       className="flex min-w-0 flex-col gap-1.5 px-0.5"
     >
-      {worked ? (
+      {worked || showImageModel ? (
         foldable ? (
           <button
             type="button"
-            title={processOpen ? t('agent.collapseProcess', { defaultValue: '收起过程' }) : t('agent.expandProcess', { defaultValue: '展开过程' })}
+            title={processOpen ? t('agent.collapseProcess') : t('agent.expandProcess')}
             className="group inline-flex max-w-full cursor-pointer items-center gap-0.5 rounded px-0.5 text-left text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
             onClick={() => setProcessOpen((v) => !v)}
             aria-expanded={processOpen}
           >
-            <span>{worked}</span>
+            {workedMeta}
             <HiOutlineChevronRight
               className={cn(
-                'h-3.5 w-3.5 shrink-0 opacity-0 transition-[opacity,transform] group-hover:opacity-100',
-                processOpen && 'rotate-90 opacity-70 group-hover:opacity-100'
+                'h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform',
+                processOpen && 'rotate-90'
               )}
+              aria-hidden
             />
           </button>
         ) : (
-          <div className="text-[12px] text-[var(--muted)]">{worked}</div>
+          <div className="min-w-0">{workedMeta}</div>
         )
       ) : null}
 
       {showProcess ? <AssistantProcessBody assistant={assistant} /> : null}
 
       {showImageGallery ? (
-        <ImageGenGallery
-          assistant={assistant}
-          onAddImageToCanvas={onAddImageToCanvas}
-          sending={sending}
-        />
+        <ImageGenGallery assistant={assistant} sending={sending} />
       ) : null}
 
       {assistant.content ? (
@@ -261,7 +534,11 @@ function AssistantTurn({
           <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
         </div>
       ) : null}
-      {!streaming && assistant.choices?.length && onChoice ? (
+      {/* Only pending Ask proposals — hide chips after apply or once the turn is stale. */}
+      {!streaming &&
+      assistant.proposedOps?.length &&
+      assistant.choices?.length &&
+      onChoice ? (
         <div className="mt-1 flex flex-col items-start gap-1.5">
           {assistant.choices
             .filter((c) => c !== '取消')
@@ -270,7 +547,7 @@ function AssistantTurn({
                 key={c}
                 type="button"
                 disabled={sending}
-                className="inline-flex h-7 max-w-full items-center rounded-full border border-[var(--line)] bg-[var(--accent-soft)] px-2.5 text-[11px] text-[var(--ink)] transition-colors hover:bg-[var(--line)] disabled:opacity-40"
+                className="inline-flex h-7 max-w-full items-center rounded-xl border border-[var(--line)] bg-[var(--accent-soft)] px-2.5 text-[11px] text-[var(--ink)] transition-colors hover:bg-[var(--line)] disabled:opacity-40"
                 onClick={() => onChoice(c)}
               >
                 {c}
@@ -282,28 +559,50 @@ function AssistantTurn({
   );
 }
 
-export default function ChatTurnList({
-  turns,
-  editingUserId,
-  editComposer,
-  sending,
-  formatWorked,
-  hasCheckpoint,
-  onBeginEdit,
-  onCancelEdit,
-  onRestore,
-  onChoice,
-  onAddImageToCanvas,
-}: Props): ReactNode {
+const ChatTurnList = forwardRef(function ChatTurnList(
+  {
+    turns,
+    editingUserId,
+    editComposer,
+    sending,
+    formatWorked,
+    hasCheckpoint,
+    onBeginEdit,
+    onCancelEdit,
+    onRestore,
+    onChoice,
+    className,
+  }: Props,
+  ref: Ref<VirtualListHandle>
+): ReactNode {
   const { t } = useTranslation();
+
   return (
-    <div className="flex min-w-0 flex-col gap-5 py-2">
-      {turns.map(({ user: m, assistant }) => {
+    <VirtualList
+      ref={ref}
+      items={turns}
+      estimateSize={180}
+      overscan={4}
+      gap={20}
+      getItemKey={(turn) => turn.user?.id || turn.assistant?.id || 'turn'}
+      className={cn('px-4 py-2', className)}
+      contentClassName="py-2"
+      empty={
+        <div className="flex flex-1 flex-col items-center justify-center px-4">
+          <p className="text-center text-[14px] text-[var(--muted)]">
+            {t('agent.emptyHint', {
+              defaultValue: '描述你想要的设计，或上传参考图开始',
+            })}
+          </p>
+        </div>
+      }
+    >
+      {({ user: m, assistant }) => {
         const isEditing = Boolean(m && editingUserId === m.id);
         const worked = formatWorked(assistant);
         const canRestore = Boolean(m && hasCheckpoint(m.id));
         return (
-          <div key={m?.id || assistant?.id} className="flex w-full min-w-0 flex-col gap-1.5">
+          <div className="flex w-full min-w-0 flex-col gap-1.5">
             {m ? (
               isEditing ? (
                 <div className="flex min-w-0 flex-col gap-1.5">
@@ -341,7 +640,11 @@ export default function ChatTurnList({
                     )}
                     title={t('agent.clickToEdit')}
                   >
-                    {m.content || '...'}
+                    <UserMessageBody
+                      content={m.content}
+                      contentMarked={m.contentMarked}
+                      contexts={m.contexts}
+                    />
                   </div>
                   {canRestore ? (
                     <button
@@ -376,13 +679,14 @@ export default function ChatTurnList({
                 assistant={assistant}
                 worked={worked}
                 onChoice={onChoice}
-                onAddImageToCanvas={onAddImageToCanvas}
                 sending={sending}
               />
             ) : null}
           </div>
         );
-      })}
-    </div>
+      }}
+    </VirtualList>
   );
-}
+});
+
+export default ChatTurnList;

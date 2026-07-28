@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ipaddress
+import logging
+import socket
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
+import httpx
 from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
@@ -14,6 +18,10 @@ from services.storage import get_bytes
 from services import uploads as upload_store
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_MAX_PROXY_BYTES = 25 * 1024 * 1024
+_PROXY_TIMEOUT = httpx.Timeout(60.0, connect=20.0)
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -57,6 +65,7 @@ def _user_owns_key(user_id: str, key: str) -> bool:
         key.startswith(f"uploads/{user_id}/")
         or key.startswith(f"assets/{user_id}/")
         or key.startswith(f"font-tasks/{user_id}/")
+        or key.startswith(f"projects/{user_id}/")
         # Quality-sample originals (server-written); any authed user may fetch for vision/preview.
         or key.startswith("assets/quality-samples/")
     )
@@ -77,12 +86,13 @@ def _object_key_from_url(raw: str) -> str | None:
         if path.startswith(api_prefix):
             key = path[len(api_prefix) :].lstrip("/")
             return key or None
-        # Public object URL: …/uploads/{userId}/…
-        marker = "/uploads/"
-        idx = path.find(marker)
-        if idx >= 0:
-            key = path[idx + 1 :].lstrip("/")  # uploads/…
-            return key if key.startswith("uploads/") else None
+        # Public object URL: …/uploads|assets|font-tasks/{userId}/…
+        for marker in ("/uploads/", "/assets/", "/font-tasks/"):
+            idx = path.find(marker)
+            if idx >= 0:
+                key = path[idx + 1 :].lstrip("/")
+                if key.startswith(("uploads/", "assets/", "font-tasks/")):
+                    return key
         # Fallback: strip configured public base path if present.
         base = (settings.s3_public_base_url or "").rstrip("/")
         if base and s.startswith(base + "/"):
@@ -102,6 +112,89 @@ def _file_response(key: str) -> Response:
         media_type=_mime_for_key(key),
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+def _host_is_blocked(hostname: str | None) -> bool:
+    host = (hostname or "").strip().lower().rstrip(".")
+    if not host or host == "localhost" or host.endswith(".local") or host.endswith(".internal"):
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return True
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return True
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return True
+    return False
+
+
+def _proxy_remote_image(url: str) -> Response:
+    """
+    Server-side fetch for third-party image URLs (Seedream/Ark TOS, etc.) so the
+    browser can inline them for export without CORS.
+    """
+    current = (url or "").strip()
+    if not current:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    with httpx.Client(timeout=_PROXY_TIMEOUT, follow_redirects=False) as client:
+        for _ in range(5):
+            parsed = urlparse(current)
+            if parsed.scheme not in ("http", "https"):
+                raise HTTPException(status_code=404, detail="Not found")
+            if _host_is_blocked(parsed.hostname):
+                raise HTTPException(status_code=404, detail="Not found")
+            try:
+                resp = client.get(current)
+            except httpx.HTTPError as err:
+                logger.warning("upload content proxy fetch failed: %s", err)
+                raise HTTPException(status_code=502, detail="upstream fetch failed") from err
+
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = (resp.headers.get("location") or "").strip()
+                if not loc:
+                    raise HTTPException(status_code=404, detail="Not found")
+                current = urljoin(current, loc)
+                continue
+
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=404, detail="Not found")
+
+            data = resp.content or b""
+            if len(data) < 8:
+                raise HTTPException(status_code=404, detail="Not found")
+            if len(data) > _MAX_PROXY_BYTES:
+                raise HTTPException(status_code=413, detail="image too large")
+
+            ctype = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if ctype.startswith("image/"):
+                media = ctype
+            elif ctype in ("", "application/octet-stream", "binary/octet-stream"):
+                # Signed CDN URLs often omit a useful Content-Type.
+                media = _mime_for_key(parsed.path or "") or "image/png"
+                if media == "application/octet-stream":
+                    media = "image/png"
+            else:
+                raise HTTPException(status_code=404, detail="Not found")
+
+            return Response(
+                content=data,
+                media_type=media,
+                headers={"Cache-Control": "private, max-age=3600"},
+            )
+
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 @router.post("")
@@ -137,18 +230,29 @@ async def upload_files(
 
 @router.get("/content")
 def get_upload_content_by_url(
-    url: str = Query(..., min_length=1, description="Display URL (COS/public or /api/v1/uploads/files/…)"),
+    url: str = Query(
+        ...,
+        min_length=1,
+        description="Display URL (COS/API path, or remote AI CDN image URL)",
+    ),
     authorization: str | None = Header(default=None),
 ) -> Response:
     """
-    Resolve a public COS / API display URL to bytes via storage (same-origin for canvas crop/export).
-    Avoids browser CORS on the object bucket.
+    Resolve an image display URL to bytes (same-origin for canvas crop/export).
+
+    1. Owned upload/asset object key → read from storage
+    2. Else http(s) remote (Seedream/Ark TOS, etc.) → server-side proxy (avoids CORS)
     """
     user = _require_user(authorization)
-    key = _object_key_from_url(url)
-    if not key or ".." in key or not _user_owns_key(user.id, key):
-        raise HTTPException(status_code=404, detail="Not found")
-    return _file_response(key)
+    raw = (url or "").strip()
+    key = _object_key_from_url(raw)
+    if key and ".." not in key and _user_owns_key(user.id, key):
+        return _file_response(key)
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return _proxy_remote_image(raw)
+
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 @router.get("/files/{object_key:path}")

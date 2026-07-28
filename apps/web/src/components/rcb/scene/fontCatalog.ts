@@ -119,7 +119,7 @@ export function injectFontFaces(catalog: FontFamilyNode[], opts?: { force?: bool
 }
 
 async function loadCatalogFromApi(): Promise<FontFamilyNode[]> {
-  const page = await fetchFonts(1, 500);
+  const page = await fetchFonts({ page: 1, pageSize: 500 });
   return normalizeCatalog(page.items || []);
 }
 

@@ -26,6 +26,12 @@ export type PlazaSubmissionDto = {
   source?: 'plaza';
   /** Plaza list cover (artboard preview). Full canvas only on item detail. */
   coverDocument?: unknown | null;
+  /** Up to 4 cover image URLs for list collage (admin custom overrides to one). */
+  thumbnailUrl?: string | string[] | null;
+  /** Admin-uploaded list cover raster. */
+  customCoverImageUrl?: string | null;
+  /** HD PNG panels written on admin approve. */
+  panelUrls?: Array<{ id: string; name?: string; url: string }> | null;
   document?: unknown;
   likeCount?: number;
   useCount?: number;
@@ -44,11 +50,37 @@ export type PlazaFeedItemDto = {
   updatedAt?: number;
   reviewedAt?: number | null;
   source: 'plaza';
-  /** Plaza list cover snapshot — render with PlazaCoverThumb. */
+  /** Plaza list cover snapshot — render with PlazaCoverThumb / TemplateThumbnail. */
   coverDocument?: unknown | null;
+  thumbnailUrl?: string | string[] | null;
+  customCoverImageUrl?: string | null;
+  /** HD PNG panels written on admin approve. */
+  panelUrls?: Array<{ id: string; name?: string; url: string }> | null;
   likeCount?: number;
   useCount?: number;
 };
+
+/** Display cover URLs: admin custom wins as a one-tile collage, else submit array. */
+export function plazaDisplayCoverUrls(item: {
+  customCoverImageUrl?: string | null;
+  thumbnailUrl?: string | string[] | null;
+}): string[] {
+  const custom = String(item.customCoverImageUrl || '').trim();
+  if (custom) return [custom];
+  if (Array.isArray(item.thumbnailUrl)) {
+    return item.thumbnailUrl.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 4);
+  }
+  const one = String(item.thumbnailUrl || '').trim();
+  return one ? [one] : [];
+}
+
+/** @deprecated use plazaDisplayCoverUrls */
+export function plazaDisplayCoverUrl(item: {
+  customCoverImageUrl?: string | null;
+  thumbnailUrl?: string | string[] | null;
+}): string | null {
+  return plazaDisplayCoverUrls(item)[0] || null;
+}
 
 export const recordPlazaUse = (submissionId: string) =>
   request<{ ok: boolean; useCount: number }>({
@@ -56,17 +88,37 @@ export const recordPlazaUse = (submissionId: string) =>
     method: 'post',
   });
 
-export const submitToPlaza = (payload: {
+export const submitToPlaza = (data: {
   projectId: string;
   title: string;
   category?: string;
   document: unknown;
-}) =>
-  request<{ item: PlazaSubmissionDto }>({
+  /** Project's saved cover URL (webp/png) — used when admin has no custom cover. */
+  thumbnailUrl?: string | null;
+}) => {
+  // Freeze a plain snapshot so later editor edits never mutate the payload in flight
+  // or share object identity with the live project document.
+  let document: unknown = data.document;
+  try {
+    document = JSON.parse(JSON.stringify(data.document));
+  } catch {
+    document = data.document;
+  }
+  const thumbnailUrl = String(data.thumbnailUrl || '').trim();
+  return request<{ item: PlazaSubmissionDto }>({
     url: '/api/v1/plaza/submit',
     method: 'post',
-    data: payload,
+    data: {
+      projectId: data.projectId,
+      title: data.title,
+      category: data.category,
+      document,
+      ...(thumbnailUrl && !thumbnailUrl.startsWith('data:')
+        ? { thumbnailUrl }
+        : {}),
+    },
   });
+};
 
 export const fetchMyPlazaSubmissions = () =>
   request<{ items: PlazaSubmissionDto[] }>({
@@ -83,25 +135,17 @@ export type PaginatedPlazaFeed = {
   tab?: PlazaFeedTab;
 };
 
-export const fetchPlazaFeed = (opts: {
-  page?: number;
-  pageSize?: number;
-  tab?: PlazaFeedTab;
-  /** Filter by plaza category; omit / all = no filter. */
-  category?: PlazaCategoryFilter | string | null;
-  /** Filter by creator user id(s). */
-  authorIds?: string[];
-} = {}) =>
+export const fetchPlazaFeed = (params: {
+  page: number;
+  pageSize: number;
+  tab: PlazaFeedTab;
+  category?: string;
+  authorIds?: string;
+}) =>
   request<PaginatedPlazaFeed>({
     url: '/api/v1/plaza/feed',
     method: 'get',
-    params: {
-      page: opts.page ?? 1,
-      pageSize: opts.pageSize ?? 12,
-      tab: opts.tab ?? 'recommended',
-      ...(opts.category && opts.category !== 'all' ? { category: opts.category } : {}),
-      ...(opts.authorIds?.length ? { authorIds: opts.authorIds.join(',') } : {}),
-    },
+    params,
   });
 
 export const fetchPlazaItem = (id: string) =>

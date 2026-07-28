@@ -2,7 +2,16 @@ import { useRef, useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
-import { detectImportSourceType, importViaJob } from '@/apis/import';
+import {
+  createImportJob,
+  getImportJob,
+  importDocx,
+  importImage,
+  importPdf,
+  type ImportJobResult,
+  type ImportSourceType,
+} from '@/apis/import';
+import { healthCheck } from '@/apis/health';
 import { message } from '@/components/base';
 import ImportFileDialog, {
   IMPORT_ACCEPT,
@@ -14,9 +23,110 @@ import { HomeSidebar, HomeTemplateList, useHomeNav } from '@/components/layout/H
 import { store } from '@/store';
 import { importDocument } from '@/store/modules/editor';
 import { useGoEditor } from '@/utils/goEditor';
-import { saveHomeAgentBoot } from '@/utils/homeAgentBoot';
-import type { OfficialCaseMeta } from '@/utils/officialCases';
+import {
+  buildPlazaStyleSkillChip,
+  type OfficialCaseMeta,
+} from '@/utils/officialCases';
 import { cn } from '@/utils/classnames';
+
+function detectImportSourceType(file: File): ImportSourceType | null {
+  const name = file.name.toLowerCase();
+  const type = file.type;
+  if (/\.(psd|xd|rp|fig)$/i.test(name) || /photoshop|x-psd/i.test(type)) return null;
+  if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(name)) return 'image';
+  if (type.startsWith('image/')) return 'image';
+  if (name.endsWith('.pdf') || type === 'application/pdf') return 'pdf';
+  if (/\.(docx?|doc)$/i.test(name) || type.includes('word')) return 'docx';
+  return null;
+}
+
+function fileForm(file: File, extra?: Record<string, string>): FormData {
+  const data = new FormData();
+  data.append('file', file);
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) data.append(k, v);
+  }
+  return data;
+}
+
+async function importSync(file: File, sourceType: ImportSourceType): Promise<ImportJobResult> {
+  const form = fileForm(file);
+  const sync =
+    sourceType === 'pdf'
+      ? importPdf(form)
+      : sourceType === 'docx'
+        ? importDocx(form)
+        : importImage(form);
+  const res: any = await sync;
+  return {
+    job_id: res?.job_id ?? null,
+    status: (res?.status as ImportJobResult['status']) || 'done',
+    document: res?.document ?? null,
+    meta: res?.meta ?? null,
+    error: res?.error ?? null,
+    progress: 100,
+  };
+}
+
+async function importViaJob(
+  file: File,
+  sourceType: ImportSourceType,
+  options?: {
+    intervalMs?: number;
+    timeoutMs?: number;
+    onProgress?: (status: ImportJobResult) => void;
+    allowSyncFallback?: boolean;
+  }
+): Promise<ImportJobResult> {
+  const intervalMs = options?.intervalMs ?? 1200;
+  const timeoutMs = options?.timeoutMs ?? 180000;
+  const allowSyncFallback = options?.allowSyncFallback !== false;
+
+  let canQueue = false;
+  try {
+    const health = await healthCheck();
+    canQueue = Boolean(health?.checks?.redis && health?.checks?.worker);
+  } catch {
+    canQueue = false;
+  }
+
+  if (allowSyncFallback && !canQueue) {
+    options?.onProgress?.({ job_id: null, status: 'processing', progress: 20 });
+    return importSync(file, sourceType);
+  }
+
+  let created: { job_id: string; status: 'queued' };
+  try {
+    created = await createImportJob(fileForm(file, { source_type: sourceType }));
+  } catch (err) {
+    if (!allowSyncFallback) throw err;
+    options?.onProgress?.({ job_id: null, status: 'processing', progress: 20 });
+    return importSync(file, sourceType);
+  }
+
+  const jobId = created.job_id;
+  const started = Date.now();
+  options?.onProgress?.({ job_id: jobId, status: 'queued', progress: 0 });
+
+  while (Date.now() - started < timeoutMs) {
+    let status: ImportJobResult;
+    try {
+      status = await getImportJob(jobId);
+    } catch (err) {
+      if (!allowSyncFallback) throw err;
+      return importSync(file, sourceType);
+    }
+    options?.onProgress?.(status);
+    if (status.status === 'done' || status.status === 'failed') return status;
+    if (allowSyncFallback && status.status === 'queued' && Date.now() - started > 8000) {
+      return importSync(file, sourceType);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+
+  if (allowSyncFallback) return importSync(file, sourceType);
+  throw new Error('Import job timed out');
+}
 
 /**
  * Scene document validation for JSON import (mirrors workflow Zod.safeParse flow).
@@ -100,6 +210,51 @@ function currentProjectId(): string | undefined {
   return typeof id === 'string' && id.trim() ? id : undefined;
 }
 
+function mapAgentBootAttachments(attachments: HomeAgentSubmitPayload['attachments']) {
+  return attachments
+    .filter((a) => a.dataUrl || a.thumbUrl)
+    .map((a) => {
+      const ref = String(a.dataUrl || '').trim();
+      const remote = ref.startsWith('http://') || ref.startsWith('https://');
+      return {
+        key: a.key,
+        label: a.label,
+        kind: 'attachment' as const,
+        dataUrl: a.dataUrl,
+        thumbUrl: remote ? undefined : a.thumbUrl,
+        uploadKey: a.uploadKey,
+      };
+    });
+}
+
+function resolveImportEmptyMessage(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  sourceType: ImportSourceType,
+  warnings: string[]
+): string {
+  const joined = warnings.join('\n');
+  if (/Poppler|pdftoppm/i.test(joined)) return t('home.importNeedPoppler');
+  if (/LibreOffice|soffice/i.test(joined) && sourceType === 'docx') {
+    return t('home.importNeedLibreOffice');
+  }
+  if (sourceType === 'image') return t('home.importImageEmpty');
+  if (sourceType === 'pdf') return t('home.importPdfEmpty');
+  return t('home.importEmpty');
+}
+
+function showImportWarningsIfAny(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  warnings: string[]
+) {
+  if (warnings.some((w) => /text-only DOCX|approximate/i.test(w))) {
+    message.warning(t('home.importDocxFallback'), 6);
+    return;
+  }
+  if (warnings.some((w) => /raster-fallback|OCR produced no text/i.test(w))) {
+    message.warning(t('home.importRasterFallback'), 6);
+  }
+}
+
 export default function HomePage() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -111,62 +266,41 @@ export default function HomePage() {
     useHomeNav();
 
   const handleCreate = () => {
-    goEditor({ createNew: true });
+    goEditor({ createNew: true, newWindow: true });
   };
 
   const handleAgentSubmit = (payload: HomeAgentSubmitPayload) => {
     const prompt = payload.prompt.trim();
     if (!prompt) return;
-    saveHomeAgentBoot({
-      prompt,
-      autoSubmit: true,
-      modelId: payload.modelId ?? null,
-      imageAspectRatio: payload.imageAspectRatio ?? null,
-      imageQuality: payload.imageQuality ?? null,
-      imageResolution: payload.imageResolution ?? null,
-      scene: payload.scene ?? null,
-      attachments: payload.attachments
-        .filter((a) => a.dataUrl || a.thumbUrl)
-        .map((a) => {
-          const ref = String(a.dataUrl || '').trim();
-          const remote = ref.startsWith('http://') || ref.startsWith('https://');
-          return {
-            key: a.key,
-            label: a.label,
-            kind: 'attachment' as const,
-            dataUrl: a.dataUrl,
-            // Skip huge data-URL thumbs when vision ref is already a public https URL.
-            thumbUrl: remote ? undefined : a.thumbUrl,
-            uploadKey: a.uploadKey,
-          };
-        }),
+    goEditor({
+      createNew: true,
+      fromHomeAgent: true,
+      newWindow: true,
+      homeAgentBoot: {
+        prompt,
+        autoSubmit: true,
+        modelId: payload.modelId ?? null,
+        interactionMode: payload.interactionMode ?? null,
+        imageAspectRatio: payload.imageAspectRatio ?? null,
+        scene: payload.scene ?? null,
+        attachments: mapAgentBootAttachments(payload.attachments),
+      },
     });
-    goEditor({ createNew: true, fromHomeAgent: true });
   };
 
-  const handleOpenCase = (
-    meta: OfficialCaseMeta,
-    document: unknown,
-    opts?: { prompt?: string }
-  ) => {
-    const name =
-      (meta.name || '').trim() ||
-      (meta.nameKey ? t(`home.cases.${meta.nameKey}`) : t('home.untitled'));
-    dispatch(
-      importDocument({
-        name,
-        document,
-        source: 'case',
-        originCaseId: meta.id,
-      })
-    );
-    const prompt = (opts?.prompt || '').trim();
-    if (prompt) {
-      saveHomeAgentBoot({ prompt, autoSubmit: false });
-      goEditor({ projectId: currentProjectId(), fromHomeAgent: true });
-    } else {
-      goEditor({ projectId: currentProjectId() });
-    }
+  const handleOpenCase = (meta: OfficialCaseMeta) => {
+    // Blank canvas + skill chip in chat — do not clone the case document or dump prompt text.
+    goEditor({
+      createNew: true,
+      fromHomeAgent: true,
+      newWindow: true,
+      homeAgentBoot: {
+        prompt: '',
+        autoSubmit: false,
+        scene: meta.category,
+        contexts: [buildPlazaStyleSkillChip(meta, t)],
+      },
+    });
   };
 
   const handleImportJson = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -225,26 +359,11 @@ export default function HomePage() {
       const children = document?.deltaSetLike?.ROOT?.children;
       const warnings = res.meta?.warnings || [];
       if (!children?.length) {
-        const joined = warnings.join('\n');
-        if (/Poppler|pdftoppm/i.test(joined)) {
-          message.error(t('home.importNeedPoppler'), 8);
-        } else if (/LibreOffice|soffice/i.test(joined) && sourceType === 'docx') {
-          message.error(t('home.importNeedLibreOffice'), 8);
-        } else if (sourceType === 'image') {
-          message.error(t('home.importImageEmpty'));
-        } else if (sourceType === 'pdf') {
-          message.error(t('home.importPdfEmpty'), 8);
-        } else {
-          message.error(t('home.importEmpty'), 8);
-        }
+        message.error(resolveImportEmptyMessage(t, sourceType, warnings), 8);
         return;
       }
       dispatch(importDocument({ name, document, source: 'import' }));
-      if (warnings.some((w) => /text-only DOCX|approximate/i.test(w))) {
-        message.warning(t('home.importDocxFallback'), 6);
-      } else if (warnings.some((w) => /raster-fallback|OCR produced no text/i.test(w))) {
-        message.warning(t('home.importRasterFallback'), 6);
-      }
+      showImportWarningsIfAny(t, warnings);
       message.success(t('home.importSuccess'));
       goEditor({ projectId: currentProjectId() });
     } catch (err: any) {
@@ -271,20 +390,20 @@ export default function HomePage() {
   };
 
   return (
-    <div className="relative flex h-full overflow-hidden bg-[var(--canvas)]">
+    <div
+      className={cn(
+        'relative h-full overflow-hidden',
+        'home-hero-canvas'
+      )}
+    >
       <HomeSidebar
         nav={nav}
         setNav={setNav}
         importing={importing}
         onCreate={handleCreate}
       />
-      <div
-        className={cn(
-          'relative flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden',
-          nav === 'home' ? 'home-hero-canvas' : 'bg-[var(--surface)]'
-        )}
-      >
-        <HomeTopBar />
+      <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
+        <HomeTopBar setNav={setNav} />
         <HomeTemplateList
           nav={nav}
           setNav={setNav}

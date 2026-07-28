@@ -20,11 +20,15 @@ _DEFAULT_ACTIONS: list[dict[str, Any]] = [
         "label": "更新节点",
         "sort_order": 10,
         "model_hint": (
-            "Patch an existing node by id. Args: id (required), plus any of "
-            "x,y,width,height,fill,stroke,opacity,text,cornerRadius,…"
+            "Patch an existing node by nodeId|id. Geometry: x,y,width,height. "
+            "Style: fill,stroke,opacity,cornerRadius,rotation,blendMode,name, "
+            "flipX/flipY, text styles…. Visibility/edit: hidden (boolean — hide "
+            "from canvas), locked (boolean — block transforms). "
+            "hidden/locked map to attrs as 'true'|'false'."
         ),
         "args_schema": {
-            "id": "string",
+            "nodeId": "string",
+            "id": "string?",
             "x": "number?",
             "y": "number?",
             "width": "number?",
@@ -34,6 +38,13 @@ _DEFAULT_ACTIONS: list[dict[str, Any]] = [
             "opacity": "number?",
             "text": "string?",
             "cornerRadius": "number?",
+            "rotation": "number?",
+            "blendMode": "string?",
+            "name": "string?",
+            "flipX": "boolean?",
+            "flipY": "boolean?",
+            "hidden": "boolean?",
+            "locked": "boolean?",
         },
     },
     {
@@ -45,7 +56,8 @@ _DEFAULT_ACTIONS: list[dict[str, Any]] = [
             "Add a shape. Args: shapeType|type = rect|ellipse|circle|line|arrow|"
             "triangle|polygon|star|path|pen|pencil (+ path for pen/pencil/path; "
             "sides for polygon/star), x,y,width,height, fill, stroke, borderWidth. "
-            "Pen=pen+path; 画笔=pencil+path (stroke-only). Icons: create_svg / create_icon."
+            "Pen=pen+path; 画笔=pencil+path (stroke-only; brushStyle?; pathPressure?). "
+            "Icons: create_svg / create_icon."
         ),
         "args_schema": {
             "shapeType": (
@@ -58,6 +70,8 @@ _DEFAULT_ACTIONS: list[dict[str, Any]] = [
             "sides": "number?",
             "path": "string? SVG d or point list for pen/pencil",
             "closed": "boolean?",
+            "brushStyle": "string? pencil brush preset",
+            "pathPressure": "string? csv 0.05-1 per point (pencil)",
             "fill": "string?",
             "stroke": "string?",
             "borderWidth": "number?",
@@ -163,12 +177,19 @@ _DEFAULT_ACTIONS: list[dict[str, Any]] = [
         "kind": "frame",
         "label": "更新画板",
         "sort_order": 80,
-        "model_hint": "Update frame size/name. Args: frameId|id, width?, height?, name?",
+        "model_hint": (
+            "Update frame size/name/background/lock. Args: frameId|id (must match "
+            "FOCUS_FRAME_ID when set), width?, height?, name?, backgroundColor?, "
+            "locked? (boolean — prevent moving/resizing the artboard). "
+            "When FOCUS_FRAME_ID is present, always use that id — never retarget by name."
+        ),
         "args_schema": {
             "frameId": "string",
             "width": "number?",
             "height": "number?",
             "name": "string?",
+            "backgroundColor": "string?",
+            "locked": "boolean?",
         },
     },
     {
@@ -309,14 +330,14 @@ _DEFAULT_ACTIONS: list[dict[str, Any]] = [
         "sort_order": 200,
         "model_hint": (
             "Run image toolbar pipeline on a node (spawns processing clone). "
-            "Args: nodeId (image id), kind=upscale|removeBg|eraser|editElements|"
+            "Args: nodeId (image id), kind=upscale|removeBg|eraser|"
             "editText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. "
             "Optional: targetWidth, targetHeight, meta (object)."
         ),
         "args_schema": {
             "nodeId": "string",
             "kind": (
-                "upscale|removeBg|eraser|editElements|editText|"
+                "upscale|removeBg|eraser|editText|"
                 "multiAngle|expand|adjust|crop|flipRotate|moveObject|vector"
             ),
             "targetWidth": "number?",
@@ -381,6 +402,14 @@ _STALE_SCHEMA_CHECKS: dict[str, dict[str, Any]] = {
         "must_contain": ("viewBox",),
         "stale_if_contains": (),
     },
+    "update_node": {
+        "must_contain": ("hidden", "locked"),
+        "stale_if_contains": (),
+    },
+    "update_frame": {
+        "must_contain": ("locked",),
+        "stale_if_contains": (),
+    },
 }
 
 
@@ -405,7 +434,7 @@ def _schema_is_stale(op_key: str, existing_schema: str, seed_schema: str) -> boo
 def ensure_action_registry(*, force_hints: bool = False) -> int:
     """Insert missing design_canvas_tool rows. Returns number of inserts/updates.
 
-    Never overwrites a non-empty model_hint unless force_hints=True or schema is stale.
+    Never overwrites a non-empty model_hint / label unless force_hints=True.
     """
     now = time.time()
     changed = 0
@@ -467,10 +496,9 @@ def ensure_action_registry(*, force_hints: bool = False) -> int:
                 existing_schema = str(row["args_schema"] or "").strip()
             except Exception:
                 existing_schema = ""
-            # Refresh create_shape hint when pen/pencil not documented yet.
-            needs_pen_hint = key == "create_shape" and "pen" not in hint.lower()
-            stale = _schema_is_stale(key, existing_schema, schema_s)
-            if force_hints or not hint or needs_pen_hint or stale:
+            # Existing row is Admin-owned: only fill empty columns. Never rewrite
+            # kind/label/hint/sort_order when already set (unless force_hints).
+            if force_hints:
                 try:
                     conn.execute(
                         """
@@ -507,24 +535,33 @@ def ensure_action_registry(*, force_hints: bool = False) -> int:
                         ),
                     )
                     changed += 1
-            else:
-                # Fill args_schema only when empty.
-                if not existing_schema:
-                    try:
-                        conn.execute(
-                            """
-                            UPDATE design_canvas_tool
-                            SET args_schema=?, updated_at=?
-                            WHERE op_key=?
-                            """,
-                            (schema_s, now, key),
-                        )
-                        changed += 1
-                    except Exception:
-                        pass
+                continue
+            if not hint and item.get("model_hint"):
+                try:
+                    conn.execute(
+                        """
+                        UPDATE design_canvas_tool
+                        SET model_hint=?, updated_at=?
+                        WHERE op_key=? AND (model_hint IS NULL OR model_hint = '')
+                        """,
+                        (item["model_hint"], now, key),
+                    )
+                    changed += 1
+                except Exception:
+                    pass
+            if not existing_schema:
+                try:
+                    conn.execute(
+                        """
+                        UPDATE design_canvas_tool
+                        SET args_schema=?, updated_at=?
+                        WHERE op_key=?
+                        """,
+                        (schema_s, now, key),
+                    )
+                    changed += 1
+                except Exception:
+                    pass
         conn.commit()
     return changed
 
-
-def default_action_keys() -> list[str]:
-    return [a["op_key"] for a in _DEFAULT_ACTIONS]

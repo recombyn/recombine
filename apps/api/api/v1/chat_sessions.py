@@ -33,6 +33,8 @@ class ChatMessageIn(BaseModel):
     id: str | None = None
     role: str = "user"
     content: str = ""
+    contexts: list[dict[str, Any]] | None = None
+    contentMarked: str | None = None
     thinking: str | None = None
     durationMs: int | None = None
     intent: str | None = None

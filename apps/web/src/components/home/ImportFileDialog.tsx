@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineDocumentText,
@@ -29,33 +29,48 @@ type KindOption = {
   formats: string;
 };
 
+const KIND_OPTIONS: KindOption[] = [
+  {
+    id: 'image',
+    icon: HiOutlinePhoto,
+    titleKey: 'importFile.image',
+    formats: 'PNG · JPG · WEBP',
+  },
+  {
+    id: 'pdf',
+    icon: HiOutlineDocument,
+    titleKey: 'importFile.pdf',
+    formats: 'PDF',
+  },
+  {
+    id: 'docx',
+    icon: HiOutlineDocumentText,
+    titleKey: 'importFile.word',
+    formats: 'DOC · DOCX',
+  },
+];
+
+function confirmImport(
+  kind: ImportFileKind,
+  onConfirm: (kind: ImportFileKind) => void,
+  onClose: () => void
+) {
+  onConfirm(kind);
+  onClose();
+}
+
+function kindCardClass(selected: boolean): string {
+  return cn(
+    'flex h-full min-w-0 flex-col items-center gap-2.5 rounded-xl px-3 py-8 text-center transition',
+    selected
+      ? 'bg-[var(--accent-soft)] ring-1 ring-[var(--accent)]'
+      : 'bg-[var(--canvas)] hover:bg-[var(--accent-soft)]'
+  );
+}
+
 export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
   const { t } = useTranslation();
   const [kind, setKind] = useState<ImportFileKind>('image');
-
-  const options: KindOption[] = useMemo(
-    () => [
-      {
-        id: 'image',
-        icon: HiOutlinePhoto,
-        titleKey: 'importFile.image',
-        formats: 'PNG · JPG · WEBP',
-      },
-      {
-        id: 'pdf',
-        icon: HiOutlineDocument,
-        titleKey: 'importFile.pdf',
-        formats: 'PDF',
-      },
-      {
-        id: 'docx',
-        icon: HiOutlineDocumentText,
-        titleKey: 'importFile.word',
-        formats: 'DOC · DOCX',
-      },
-    ],
-    []
-  );
 
   useEffect(() => {
     if (open) setKind('image');
@@ -78,10 +93,7 @@ export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
           <Button
             size="small"
             type="primary"
-            onClick={() => {
-              onConfirm(kind);
-              onClose();
-            }}
+            onClick={() => confirmImport(kind, onConfirm, onClose)}
           >
             {t('importFile.import')}
           </Button>
@@ -91,7 +103,7 @@ export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
       <p className="mb-6 text-[13px] text-[var(--muted)]">{t('importFile.hint')}</p>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {options.map((opt) => {
+        {KIND_OPTIONS.map((opt) => {
           const TypeIcon = opt.icon;
           const selected = kind === opt.id;
           return (
@@ -101,15 +113,9 @@ export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
               onClick={() => setKind(opt.id)}
               onDoubleClick={() => {
                 setKind(opt.id);
-                onConfirm(opt.id);
-                onClose();
+                confirmImport(opt.id, onConfirm, onClose);
               }}
-              className={cn(
-                'flex h-full min-w-0 flex-col items-center gap-2.5 rounded-xl px-3 py-8 text-center transition',
-                selected
-                  ? 'bg-[var(--accent-soft)] ring-1 ring-[var(--accent)]'
-                  : 'bg-[var(--canvas)] hover:bg-[var(--accent-soft)]'
-              )}
+              className={kindCardClass(selected)}
             >
               <TypeIcon className="h-8 w-8 text-[var(--ink)]" strokeWidth={1.5} />
               <span className="text-[13px] font-medium text-[var(--ink)]">{t(opt.titleKey)}</span>

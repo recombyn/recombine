@@ -32,8 +32,13 @@ import AgentComposerInput, {
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
-import ImageAspectRatioPicker from '@/components/editor/panels/agent/ImageAspectRatioPicker';
-import { formatCanvasSizeChipLabel } from '@/components/editor/chrome/SizePresetPanel';
+import ImageAspectRatioPicker, {
+  AspectRatioGlyph,
+} from '@/components/editor/panels/agent/ImageAspectRatioPicker';
+import {
+  formatCanvasSizeChipLabel,
+  isCanvasSizeAutoHint,
+} from '@/components/editor/chrome/SizePresetPanel';
 import { cn } from '@/utils/classnames';
 
 /** Run mode — Auto toggle = agent; image models still use composerMode for gen UI. */
@@ -118,7 +123,8 @@ type Props = {
   /** Image-mode settings / model / credit send (Image Generator–style chrome). */
   imageModeControls?: ImageModeComposerControls | null;
   modelButtonProps: {
-    title: string;
+    /** @deprecated Unused — model chip no longer shows a hover tip. */
+    title?: string;
     open: boolean;
     /** Preferred: Dropdown-hosted primary panel (flip / shift, stable anchor). */
     panel?: ReactNode;
@@ -282,8 +288,15 @@ function AttachmentUploadSpinner(): ReactNode {
   );
 }
 
-/** Square footprint shared by attachment chips and inline attach buttons. */
-export const COMPOSER_ATTACHMENT_CHIP_CLASS = 'h-9 w-9 shrink-0 rounded-md';
+/** Soft circular footprint for attach / pick actions. */
+export const COMPOSER_ATTACHMENT_CHIP_CLASS = 'h-9 w-9 shrink-0 rounded-xl';
+/** Circular action button (upload / pick from canvas) — not boxy. */
+export const COMPOSER_ATTACH_ACTION_CLASS =
+  'h-9 w-9 shrink-0 rounded-full inline-flex items-center justify-center transition disabled:opacity-40';
+export const COMPOSER_ATTACH_ACTION_IDLE =
+  'bg-[var(--canvas)] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]';
+export const COMPOSER_ATTACH_ACTION_ACTIVE =
+  'bg-[var(--ink)] text-[var(--surface)] hover:bg-[var(--ink)] hover:text-[var(--surface)]';
 
 /**
  * One composer attachment square — thumbnail, upload spinner, remove badge and
@@ -307,7 +320,7 @@ export function ComposerAttachmentChip({
   const previewKind = attachmentPreviewKind(thumbSrc);
   const uploading = a.uploadStatus === 'uploading';
   const canPreview = !uploading && (previewKind === 'image' || previewKind === 'audio');
-  const title = uploading
+  const tip = uploading
     ? t('agent.attachUploading', { name: a.label })
     : canPreview
       ? `预览 ${a.label}`
@@ -317,10 +330,11 @@ export function ComposerAttachmentChip({
       <button
         type="button"
         disabled={disabled || uploading || !canPreview}
-        title={title}
+        aria-label={tip}
         aria-busy={uploading || undefined}
         className={cn(
-          'relative h-full w-full overflow-hidden rounded-md border border-[var(--line)] bg-[var(--surface)]',
+          'relative h-full w-full overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)]',
+          'outline-none ring-0 focus:outline-none focus-visible:outline-none focus-visible:ring-0',
           canPreview && 'cursor-zoom-in hover:border-[var(--ink)]/30',
           (uploading || !canPreview) && 'cursor-default'
         )}
@@ -368,7 +382,7 @@ export function ComposerAttachmentChip({
       offset={8}
       items={[]}
       floatingClassName="z-[90]"
-      referenceClassName="inline-flex"
+      referenceClassName="inline-flex outline-none ring-0 focus:outline-none focus-visible:outline-none"
       popupRender={() =>
         previewKind === 'audio' ? (
           <AttachmentAudioPreview src={thumbSrc} />
@@ -413,15 +427,6 @@ function interactionModeLabel(
   if (mode === 'image') return t('agent.interactionImage');
   if (mode === 'ask') return t('agent.interactionAsk');
   return t('agent.interactionAgent');
-}
-
-function interactionModeTooltip(
-  mode: ComposerInteractionMode,
-  t: (key: string) => string
-): string {
-  if (mode === 'image') return t('agent.interactionImageItem');
-  if (mode === 'ask') return t('agent.interactionAskItem');
-  return t('agent.interactionAgentItem');
 }
 
 function interactionModeIcon(mode: ComposerInteractionMode): ReactNode {
@@ -529,7 +534,6 @@ function ComposerInteractionModePicker({
     >
       <button
         type="button"
-        title={interactionModeTooltip(interactionMode, t)}
         aria-label={interactionModeLabel(interactionMode, t)}
         disabled={disabled}
         className={cn(TOOL_ICON_BTN, modeMenuOpen && TOOL_ICON_BTN_ACTIVE)}
@@ -553,17 +557,11 @@ function buildAttachPlusButton(opts: {
     <button
       type="button"
       disabled={opts.disabled || opts.sending || !opts.onAttachFiles}
-      title={opts.attachTooltip || opts.t('agent.uploadImage')}
-      aria-label={opts.t('agent.uploadAttach')}
+      aria-label={opts.attachTooltip || opts.t('agent.uploadImage')}
       onClick={opts.onClick}
       className={
         opts.isImageMode
-          ? cn(
-              COMPOSER_ATTACHMENT_CHIP_CLASS,
-              'inline-flex items-center justify-center border border-dashed border-[var(--line)]',
-              'bg-[var(--surface)] text-[var(--muted)] transition',
-              'hover:border-[var(--ink)]/30 hover:text-[var(--ink)] disabled:opacity-40'
-            )
+          ? cn(COMPOSER_ATTACH_ACTION_CLASS, COMPOSER_ATTACH_ACTION_IDLE)
           : TOOL_ICON_BTN
       }
     >
@@ -584,18 +582,14 @@ function buildPickFromCanvasButton(opts: {
     <button
       type="button"
       disabled={opts.disabled || opts.sending}
-      title={opts.tooltip}
       aria-label={opts.tooltip}
       aria-pressed={opts.active || false}
       onClick={opts.onClick}
       className={
         opts.isImageMode
           ? cn(
-              COMPOSER_ATTACHMENT_CHIP_CLASS,
-              'inline-flex items-center justify-center border border-dashed border-[var(--line)]',
-              'bg-[var(--surface)] text-[var(--muted)] transition',
-              'hover:border-[var(--ink)]/30 hover:text-[var(--ink)] disabled:opacity-40',
-              opts.active && 'border-[var(--ink)]/40 text-[var(--ink)]'
+              COMPOSER_ATTACH_ACTION_CLASS,
+              opts.active ? COMPOSER_ATTACH_ACTION_ACTIVE : COMPOSER_ATTACH_ACTION_IDLE
             )
           : cn(TOOL_ICON_BTN, opts.active && TOOL_ICON_BTN_ACTIVE)
       }
@@ -718,10 +712,6 @@ export default function AgentComposerShell({
     onAttachFiles(files, { mention: true });
   };
 
-  const aspectLabel = t('agent.designCanvasSize', {
-    size: formatCanvasSizeChipLabel(imageAspectRatio, t),
-  });
-
   const attachPlusBtn = buildAttachPlusButton({
     isImageMode,
     disabled,
@@ -765,9 +755,11 @@ export default function AgentComposerShell({
               onRemove={removeAttachment}
             />
           ))}
-          {attachPlusBtn}
+          <Tooltip tip={attachTooltip || t('agent.uploadImage')} placement="top">
+            {attachPlusBtn}
+          </Tooltip>
           {pickFromCanvasBtn ? (
-            <Tooltip title={pickCanvasTooltip} placement="top">
+            <Tooltip tip={pickCanvasTooltip} placement="top">
               {pickFromCanvasBtn}
             </Tooltip>
           ) : null}
@@ -855,7 +847,6 @@ export default function AgentComposerShell({
             <button
               type="button"
               disabled={disabled || sending}
-              title={imageSettingsSummary}
               aria-label={t('editor.tools.imageSettings')}
               aria-expanded={imageSettingsOpen}
               className={cn(
@@ -871,89 +862,84 @@ export default function AgentComposerShell({
         ) : null}
 
         {!isImageMode && modelButtonProps.panel != null && modelButtonProps.onOpenChange ? (
-          <Tooltip
-            title={modelButtonProps.title}
-            placement="top"
-            disabled={modelButtonProps.open}
+          <Dropdown
+            trigger="click"
+            placement={modelButtonProps.panelPlacement ?? 'top-start'}
+            strategy="fixed"
+            offset={8}
+            open={modelButtonProps.open}
+            onOpenChange={modelButtonProps.onOpenChange}
+            items={[]}
+            nestedDismissGuard="[data-agent-route-submenu], .agent-route-submenu-popup"
+            floatingClassName="z-[80]"
+            referenceClassName="inline-flex"
+            popupRender={() => (
+              <div onPointerDown={(e) => e.stopPropagation()}>{modelButtonProps.panel}</div>
+            )}
           >
-            <Dropdown
-              trigger="click"
-              placement={modelButtonProps.panelPlacement ?? 'top-start'}
-              strategy="fixed"
-              offset={8}
-              open={modelButtonProps.open}
-              onOpenChange={modelButtonProps.onOpenChange}
-              items={[]}
-              nestedDismissGuard="[data-agent-route-submenu], .agent-route-submenu-popup"
-              floatingClassName="z-[80]"
-              referenceClassName="inline-flex"
-              popupRender={() => (
-                <div onPointerDown={(e) => e.stopPropagation()}>{modelButtonProps.panel}</div>
-              )}
-            >
-              <button
-                type="button"
-                aria-label={t('agent.selectModel')}
-                aria-expanded={modelButtonProps.open}
-                className={cn(TOOL_ICON_BTN, modelButtonProps.open && TOOL_ICON_BTN_ACTIVE)}
-              >
-                {modelButtonProps.icon ?? (
-                  <Icon name="editor-model-cube" width={16} height={16} />
-                )}
-              </button>
-            </Dropdown>
-          </Tooltip>
-        ) : !isImageMode ? (
-          <Tooltip title={modelButtonProps.title} placement="top" disabled={modelButtonProps.open}>
             <button
               type="button"
-              ref={modelButtonProps.ref}
               aria-label={t('agent.selectModel')}
               aria-expanded={modelButtonProps.open}
               className={cn(TOOL_ICON_BTN, modelButtonProps.open && TOOL_ICON_BTN_ACTIVE)}
-              {...(modelButtonProps.getReferenceProps?.({
-                onClick: modelButtonProps.onClick,
-              }) ?? { onClick: modelButtonProps.onClick })}
             >
               {modelButtonProps.icon ?? (
                 <Icon name="editor-model-cube" width={16} height={16} />
               )}
             </button>
-          </Tooltip>
+          </Dropdown>
+        ) : !isImageMode ? (
+          <button
+            type="button"
+            ref={modelButtonProps.ref}
+            aria-label={t('agent.selectModel')}
+            aria-expanded={modelButtonProps.open}
+            className={cn(TOOL_ICON_BTN, modelButtonProps.open && TOOL_ICON_BTN_ACTIVE)}
+            {...(modelButtonProps.getReferenceProps?.({
+              onClick: modelButtonProps.onClick,
+            }) ?? { onClick: modelButtonProps.onClick })}
+          >
+            {modelButtonProps.icon ?? (
+              <Icon name="editor-model-cube" width={16} height={16} />
+            )}
+          </button>
         ) : null}
 
         {showAspectBtn ? (
-          <Tooltip title={aspectLabel} placement="top" disabled={aspectOpen}>
-            <button
-              type="button"
-              ref={aspectFloating.refs.setReference}
-              aria-label={t('agent.designCanvasSizeAria', {
-                defaultValue: t('agent.imageSettingsAria'),
-              })}
-              aria-expanded={aspectOpen}
-              aria-haspopup="dialog"
-              disabled={disabled}
-              className={cn(
-                'inline-flex h-7 max-w-[9.5rem] shrink-0 items-center rounded-xl px-2 text-[12px] font-medium tabular-nums text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:opacity-40',
-                aspectOpen && TOOL_ICON_BTN_ACTIVE
-              )}
-              {...aspectIx.getReferenceProps()}
-            >
+          <button
+            type="button"
+            ref={aspectFloating.refs.setReference}
+            aria-label={t('agent.designCanvasSizeAria', {
+              defaultValue: t('agent.imageSettingsAria'),
+            })}
+            aria-expanded={aspectOpen}
+            aria-haspopup="dialog"
+            disabled={disabled}
+            className={cn(
+              'inline-flex h-7 max-w-[9.5rem] shrink-0 items-center rounded-xl px-2 text-[12px] font-medium tabular-nums text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:opacity-40',
+              aspectOpen && TOOL_ICON_BTN_ACTIVE
+            )}
+            {...aspectIx.getReferenceProps()}
+          >
+            <span className="inline-flex min-w-0 items-center gap-1">
+              {isCanvasSizeAutoHint(imageAspectRatio) ? (
+                <AspectRatioGlyph ratio="smart" size={14} className="shrink-0" />
+              ) : null}
               <span className="truncate">
                 {formatCanvasSizeChipLabel(imageAspectRatio, t)}
               </span>
-            </button>
-          </Tooltip>
+            </span>
+          </button>
         ) : null}
 
         <div className="ml-auto flex items-center gap-1.5">
           {!isImageMode ? (
             <>
-              <Tooltip title={attachTooltip || t('agent.uploadImage')} placement="top">
+              <Tooltip tip={attachTooltip || t('agent.uploadImage')} placement="top">
                 {attachPlusBtn}
               </Tooltip>
               {pickFromCanvasBtn ? (
-                <Tooltip title={pickCanvasTooltip} placement="top">
+                <Tooltip tip={pickCanvasTooltip} placement="top">
                   {pickFromCanvasBtn}
                 </Tooltip>
               ) : null}

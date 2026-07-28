@@ -84,3 +84,13 @@ export function rcbViewportSceneBounds(
     height: Math.max(1, stage.height / z),
   };
 }
+
+/**
+ * Quantize zoom while the camera is moving (efficient-zoom).
+ * Keeps cull / LOD stable across tiny wheel deltas; idle uses true zoom.
+ */
+export function rcbStepZoom(zoom: number, step = 0.05): number {
+  const z = Math.max(0.05, zoom || 1);
+  const s = Math.max(0.01, step);
+  return Math.round(Math.round(z / s) * s * 1e4) / 1e4;
+}

@@ -22,7 +22,7 @@ import { AlphaSlider } from '@/components/base/colorPicker/AlphaSlider';
 import { HueSlider } from '@/components/base/colorPicker/HueSlider';
 import { SaturationValueArea } from '@/components/base/colorPicker/SaturationValueArea';
 import Tooltip from '@/components/base/tooltip';
-import { pickScreenColor } from '@/utils/pickScreenColor';
+import { pickScreenColor } from './pickScreenColor';
 import { cn } from '@/utils/classnames';
 
 export type Rgba = { r: number; g: number; b: number; a: number };

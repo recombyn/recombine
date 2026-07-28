@@ -251,65 +251,31 @@ def _pub(r: Any) -> dict[str, Any]:
 
 
 def ensure_design_token_packs() -> None:
-    """Seed when empty; upgrade default packs when schema version drifts."""
+    """Insert seed packs only when the table is empty. Never overwrite Admin packs."""
     now = time.time()
     with connect() as conn:
         n = int(conn.execute("SELECT COUNT(*) AS c FROM design_token_pack").fetchone()["c"] or 0)
-        if n == 0:
-            for item in _SEED:
-                conn.execute(
-                    """
-                    INSERT INTO design_token_pack
-                    (name, scenes, tokens_json, is_default, sort_order, enabled, note, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
-                    """,
-                    (
-                        item["name"],
-                        item["scenes"],
-                        json.dumps(item["tokens"], ensure_ascii=False),
-                        1 if item.get("is_default") else 0,
-                        int(item.get("sort_order") or 0),
-                        item.get("note") or "",
-                        now,
-                        now,
-                    ),
-                )
-            conn.commit()
+        if n > 0:
             return
-
-        # Upgrade official defaults whose schemaVersion is missing/outdated.
-        by_name = {s["name"]: s for s in _SEED}
-        rows = conn.execute(
-            "SELECT id, name, scenes, tokens_json, is_default FROM design_token_pack WHERE enabled = 1"
-        ).fetchall()
-        upgraded = 0
-        for r in rows:
-            seed = by_name.get(str(r["name"] or ""))
-            if not seed:
-                continue
-            if str(r["scenes"] or "") != str(seed["scenes"]):
-                continue
-            cur = _parse_tokens(r["tokens_json"])
-            if str(cur.get("schemaVersion") or "") == TOKEN_SCHEMA_VERSION:
-                continue
+        for item in _SEED:
             conn.execute(
                 """
-                UPDATE design_token_pack
-                SET tokens_json = ?, note = ?, is_default = ?, sort_order = ?, updated_at = ?
-                WHERE id = ?
+                INSERT INTO design_token_pack
+                (name, scenes, tokens_json, is_default, sort_order, enabled, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
                 """,
                 (
-                    json.dumps(seed["tokens"], ensure_ascii=False),
-                    seed.get("note") or "",
-                    1 if seed.get("is_default") else 0,
-                    int(seed.get("sort_order") or 0),
+                    item["name"],
+                    item["scenes"],
+                    json.dumps(item["tokens"], ensure_ascii=False),
+                    1 if item.get("is_default") else 0,
+                    int(item.get("sort_order") or 0),
+                    item.get("note") or "",
                     now,
-                    int(r["id"]),
+                    now,
                 ),
             )
-            upgraded += 1
-        if upgraded:
-            conn.commit()
+        conn.commit()
 
 
 def list_token_packs(*, enabled: bool | None = True, ensure: bool = True) -> list[dict[str, Any]]:

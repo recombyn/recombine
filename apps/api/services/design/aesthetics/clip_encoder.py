@@ -43,12 +43,18 @@ def _ensure_model() -> None:
             return
         try:
             import os
+            import time
 
             import open_clip
             import torch
 
             # China-friendly HF mirror if not already set (weights download).
             os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+            t0 = time.time()
+            msg = "[exec] +0.00s mode=embed phase=clip_load_start"
+            logger.info(msg)
+            print(msg, flush=True)
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model, _, preprocess = open_clip.create_model_and_transforms(
@@ -61,7 +67,14 @@ def _ensure_model() -> None:
             _preprocess = preprocess
             _device = device
             _load_error = None
+            took = time.time() - t0
             logger.info("OpenCLIP ViT-B-32 loaded on %s", device)
+            done = (
+                f"[exec] +{took:6.2f}s mode=embed phase=clip_load_done "
+                f"device={device!r} took_s={took:.2f}"
+            )
+            logger.info(done)
+            print(done, flush=True)
         except Exception as exc:
             _load_error = str(exc)
             logger.exception("OpenCLIP load failed")

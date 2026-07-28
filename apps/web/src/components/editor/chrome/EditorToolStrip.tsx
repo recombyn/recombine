@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { HiOutlinePhoto } from 'react-icons/hi2';
 import {
   LuArrowUpRight,
   LuCircle,
@@ -9,6 +8,8 @@ import {
   LuHand,
   LuHexagon,
   LuImage,
+  LuImagePlus,
+  LuImageUp,
   LuMinus,
   LuMousePointer2,
   LuPaintBucket,
@@ -22,12 +23,12 @@ import {
 import { Dropdown, Tooltip, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
-import FontGeneratorPanel from '@/components/editor/chrome/FontGeneratorPanel';
-import { uploadImageFile, readFileAsDataUrl } from '@/apis/upload';
+import { uploadImageFile, readFileAsDataUrl } from '@/utils/uploadImage';
 import {
   setActiveTool,
   setShapeKind,
   startImageUploadPlaceholder,
+  spawnImageGenerator,
   finishImageProcess,
   failImageProcess,
 } from '@/store/modules/editor';
@@ -36,7 +37,12 @@ import {
   measureImageNaturalSize,
 } from '@/components/rcb/scene/sceneDocument';
 import { sceneToDocumentCoords } from '@/components/rcb/scene/svgToScene';
-import { rcbCenterOnPoint, rcbScreenToScene, type RcbCamera } from '@/components/rcb';
+import {
+  rcbCenterOnPoint,
+  rcbFitImageIntoViewport,
+  rcbScreenToScene,
+  type RcbCamera,
+} from '@/components/rcb';
 import { cn } from '@/utils/classnames';
 
 const MENU_ICON_CLASS = 'h-4 w-4';
@@ -219,11 +225,13 @@ export default function EditorToolStrip({
   className,
   camera,
   stageEl = null,
+  compact = false,
 }: {
   className?: string;
   /** Used to place toolbar image uploads at the visible viewport center. */
   camera?: RcbCamera;
   stageEl?: HTMLElement | null;
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -232,7 +240,6 @@ export default function EditorToolStrip({
   const document = useSelector((state: any) => state.editor.document);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [fontGenOpen, setFontGenOpen] = useState(false);
 
   const L = useMemo(
     () => ({
@@ -251,7 +258,7 @@ export default function EditorToolStrip({
       polygon: t('editor.tools.polygon'),
       star: t('editor.tools.star'),
       uploadImage: t('editor.tools.uploadImage'),
-      fontGen: t('editor.tools.fontGen'),
+      imageGenerator: t('editor.tools.imageGenerator'),
       uploading: t('editor.tools.uploading'),
       uploadFail: t('editor.tools.uploadFail'),
     }),
@@ -294,9 +301,57 @@ export default function EditorToolStrip({
     [L.arrow, L.circle, L.line, L.polygon, L.rect, L.star]
   );
 
+  const spawnImageGeneratorAtView = () => {
+    if (!document) return;
+    let width = 360;
+    let height = 360;
+    let x = 40;
+    let y = 40;
+    if (camera && stageEl) {
+      const view = stageEl.getBoundingClientRect();
+      if (view.width > 0 && view.height > 0) {
+        const sized = rcbFitImageIntoViewport(
+          { width: 1024, height: 1024 },
+          view,
+          camera.zoom,
+          { minRatio: 0.28, maxRatio: 0.42 }
+        );
+        width = sized.width;
+        height = sized.height;
+        const center = rcbScreenToScene(
+          camera,
+          stageEl,
+          view.left + view.width / 2,
+          view.top + view.height / 2
+        );
+        const placed = rcbCenterOnPoint(center, { width, height });
+        const origin = sceneToDocumentCoords(document, placed.left, placed.top);
+        x = origin.x;
+        y = origin.y;
+      }
+    }
+    dispatch(
+      spawnImageGenerator({
+        x,
+        y,
+        width,
+        height,
+        name: L.imageGenerator,
+      })
+    );
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable ||
+        target?.closest?.('[contenteditable="true"],[data-agent-composer],[data-image-generator]')
+      ) {
+        return;
+      }
       const key = e.key.toLowerCase();
       if (key === 'v' && !e.shiftKey) {
         window.dispatchEvent(new Event('resume:exit-path-edit'));
@@ -312,9 +367,11 @@ export default function EditorToolStrip({
       if (key === 'l' && !e.shiftKey) dispatch(setShapeKind('line'));
       if (key === 'l' && e.shiftKey) dispatch(setShapeKind('arrow'));
       if (key === 'o' && !e.shiftKey) dispatch(setShapeKind('circle'));
-      if (key === 'i' && e.shiftKey) {
-        dispatch(setActiveTool('image'));
+      if (key === 'i' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         imageInputRef.current?.click();
+      }
+      if (key === 'a' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        spawnImageGeneratorAtView();
       }
       if (key === 'p' && !e.shiftKey) dispatch(setActiveTool('pen'));
       if (key === 'p' && e.shiftKey) dispatch(setActiveTool('pencil'));
@@ -326,7 +383,8 @@ export default function EditorToolStrip({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dispatch]);
+    // Intentionally stable: always call latest spawn via closure from this render's effect re-run when deps change.
+  }, [camera, dispatch, document, L.imageGenerator, stageEl]);
 
   const onPickImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -335,25 +393,30 @@ export default function EditorToolStrip({
     try {
       const preview = await readFileAsDataUrl(file);
       const natural = await measureImageNaturalSize(preview);
-      // Keep natural aspect; soft-cap long edge so huge photos stay editable on canvas.
-      const { width, height } = fitImageSize(natural.width, natural.height, 2400);
+      const view = stageEl?.getBoundingClientRect() || null;
+      const placeable =
+        camera && stageEl && document && view && view.width > 0 && view.height > 0
+          ? { camera, stageEl, document, view }
+          : null;
+      // Size against the visible viewport so an upload reads the same at any zoom;
+      // soft-cap the long edge only when the stage is not measurable yet.
+      const { width, height } = placeable
+        ? rcbFitImageIntoViewport(natural, placeable.view, placeable.camera.zoom)
+        : fitImageSize(natural.width, natural.height, 2400);
       let x: number | undefined;
       let y: number | undefined;
       // Place at the current visible viewport center (not artboard / world origin).
-      if (camera && stageEl && document) {
-        const view = stageEl.getBoundingClientRect();
-        if (view.width > 0 && view.height > 0) {
-          const center = rcbScreenToScene(
-            camera,
-            stageEl,
-            view.left + view.width / 2,
-            view.top + view.height / 2
-          );
-          const placed = rcbCenterOnPoint(center, { width, height });
-          const origin = sceneToDocumentCoords(document, placed.left, placed.top);
-          x = origin.x;
-          y = origin.y;
-        }
+      if (placeable) {
+        const center = rcbScreenToScene(
+          placeable.camera,
+          placeable.stageEl,
+          placeable.view.left + placeable.view.width / 2,
+          placeable.view.top + placeable.view.height / 2
+        );
+        const placed = rcbCenterOnPoint(center, { width, height });
+        const origin = sceneToDocumentCoords(placeable.document, placed.left, placed.top);
+        x = origin.x;
+        y = origin.y;
       }
       dispatch(
         startImageUploadPlaceholder({
@@ -413,9 +476,8 @@ export default function EditorToolStrip({
 
   return (
     <div className="relative">
-      <FontGeneratorPanel open={fontGenOpen} onClose={() => setFontGenOpen(false)} />
       <FloatingToolbar
-        className={cn('gap-2.5 px-3.5 py-2', className)}
+        className={cn(compact ? 'gap-1.5 px-2.5 py-1.5' : 'gap-2.5 px-3.5 py-2', className)}
       >
       {/* Select / Move — click selects, hover for 选择/移动 */}
       <SplitToolButton
@@ -461,41 +523,45 @@ export default function EditorToolStrip({
         </ToolIcon>
       </SplitToolButton>
 
-      {/* 钢笔 — options dock at page top-center while active */}
-      <ToolBtn
-        tip={`${L.pen} P`}
-        ariaLabel={`${L.pen} P`}
-        active={penActive}
-        onClick={() => dispatch(setActiveTool('pen'))}
-      >
-        <ToolIcon>
-          <PenIcon className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
-        </ToolIcon>
-      </ToolBtn>
+      {!compact ? (
+        <>
+          {/* 钢笔 — options dock at page top-center while active */}
+          <ToolBtn
+            tip={`${L.pen} P`}
+            ariaLabel={`${L.pen} P`}
+            active={penActive}
+            onClick={() => dispatch(setActiveTool('pen'))}
+          >
+            <ToolIcon>
+              <PenIcon className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
+            </ToolIcon>
+          </ToolBtn>
 
-      {/* 画笔 — options dock at page top-center while active */}
-      <ToolBtn
-        tip={L.pencil}
-        ariaLabel={`${L.pencil} Shift+P`}
-        active={pencilActive}
-        onClick={() => dispatch(setActiveTool('pencil'))}
-      >
-        <ToolIcon>
-          <PencilIcon className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
-        </ToolIcon>
-      </ToolBtn>
+          {/* 画笔 — options dock at page top-center while active */}
+          <ToolBtn
+            tip={L.pencil}
+            ariaLabel={`${L.pencil} Shift+P`}
+            active={pencilActive}
+            onClick={() => dispatch(setActiveTool('pencil'))}
+          >
+            <ToolIcon>
+              <PencilIcon className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
+            </ToolIcon>
+          </ToolBtn>
 
-      {/* 油漆桶 — uses pen stroke color as fill */}
-      <ToolBtn
-        tip={`${L.bucket} B`}
-        ariaLabel={`${L.bucket} B`}
-        active={bucketActive}
-        onClick={() => dispatch(setActiveTool('bucket'))}
-      >
-        <ToolIcon>
-          <LuPaintBucket className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
-        </ToolIcon>
-      </ToolBtn>
+          {/* 油漆桶 — uses pen stroke color as fill */}
+          <ToolBtn
+            tip={`${L.bucket} B`}
+            ariaLabel={`${L.bucket} B`}
+            active={bucketActive}
+            onClick={() => dispatch(setActiveTool('bucket'))}
+          >
+            <ToolIcon>
+              <LuPaintBucket className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
+            </ToolIcon>
+          </ToolBtn>
+        </>
+      ) : null}
 
       {/* 文字 */}
       <ToolBtn
@@ -519,30 +585,26 @@ export default function EditorToolStrip({
         </ToolIcon>
       </ToolBtn>
 
-      {/* 图片 */}
+      {/* 图片上传 */}
       <ToolBtn
-        tip={`${L.uploadImage} (I)`}
+        tip={`${L.uploadImage} I`}
         active={imageActive}
         onClick={openImageUpload}
       >
         <ToolIcon>
-          <HiOutlinePhoto className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
+          <LuImageUp className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
         </ToolIcon>
       </ToolBtn>
 
-      {/* 字体生成器 */}
+      <span className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />
+
+      {/* 图像生成器 — places a generator node at viewport center */}
       <ToolBtn
-        tip={L.fontGen}
-        active={fontGenOpen}
-        onClick={() => setFontGenOpen((v) => !v)}
+        tip={`${L.imageGenerator} A`}
+        onClick={spawnImageGeneratorAtView}
       >
         <ToolIcon>
-          <span className="relative inline-flex h-3.5 w-3.5 items-center justify-center rounded-[2px] border border-current text-[8px] font-semibold leading-none">
-            T
-            <span className="absolute -bottom-0.5 -right-0.5 flex h-1.5 w-1.5 items-center justify-center rounded-full bg-current text-[4px] font-bold leading-none text-[var(--surface)]">
-              +
-            </span>
-          </span>
+          <LuImagePlus className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
         </ToolIcon>
       </ToolBtn>
 

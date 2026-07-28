@@ -34,6 +34,12 @@ def _pack_message_meta(m: dict[str, Any]) -> str | None:
         cleaned = [str(u).strip() for u in images if isinstance(u, str) and str(u).strip()]
         if cleaned:
             meta["images"] = cleaned[:24]
+    contexts = m.get("contexts")
+    if isinstance(contexts, list) and contexts:
+        meta["contexts"] = contexts
+    content_marked = m.get("contentMarked")
+    if isinstance(content_marked, str) and content_marked:
+        meta["contentMarked"] = content_marked
     if not meta:
         return None
     try:
@@ -68,6 +74,10 @@ def _message_public(m: dict[str, Any], *, sort_fallback: int = 0) -> dict[str, A
         meta["steps"] = m["steps"]
     if m.get("images") and "images" not in meta:
         meta["images"] = m["images"]
+    if m.get("contexts") and "contexts" not in meta:
+        meta["contexts"] = m["contexts"]
+    if m.get("contentMarked") and "contentMarked" not in meta:
+        meta["contentMarked"] = m["contentMarked"]
 
     out: dict[str, Any] = {
         "id": (m.get("id") or "").strip() or f"msg_{sort_fallback}",
@@ -87,6 +97,10 @@ def _message_public(m: dict[str, Any], *, sort_fallback: int = 0) -> dict[str, A
         out["images"] = [
             str(u).strip() for u in meta["images"] if isinstance(u, str) and str(u).strip()
         ][:24]
+    if isinstance(meta.get("contexts"), list) and meta["contexts"]:
+        out["contexts"] = meta["contexts"]
+    if isinstance(meta.get("contentMarked"), str) and meta["contentMarked"]:
+        out["contentMarked"] = meta["contentMarked"]
     return out
 
 

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { cn } from '@/utils/classnames';
 import {
   RcbCameraContext,
+  RcbCameraMotionContext,
   RcbDevicePixelRatioContext,
   RcbOverlayRootContext,
   RcbViewportElContext,
@@ -11,7 +12,7 @@ import {
   installDprDebugHelpers,
   logDprCameraState,
 } from '../core/dprDebug';
-import { rcbFitCamera, rcbZoomAtPoint } from '../core/math';
+import { rcbFitCamera, rcbStepZoom, rcbZoomAtPoint } from '../core/math';
 import { RCB_DEFAULT_CAMERA, type RcbCamera } from '../core/types';
 
 export type { RcbCamera };
@@ -50,8 +51,9 @@ export type RcbCanvasProps = {
   children: ReactNode;
   /** Optional SVG defs / ambient nodes inside the viewport (not scaled). */
   defs?: ReactNode;
-  /** Dot grid behind the world layer. Default true. */
+  /** Scene-space grid overlay (matches snap gridSize). */
   showGrid?: boolean;
+  gridSize?: number;
   stageRef?: RefObject<HTMLDivElement | null>;
   cursor?: string;
   background?: string;
@@ -64,9 +66,8 @@ export type RcbCanvasProps = {
  *
  * Layers:
  *   1. Viewport — wheel / pan, overflow hidden
- *   2. Optional grid (screen space)
- *   3. World — CSS `translate3d + scale` (scene content)
- *   4. Overlay — unscaled screen UI only (toolbars / labels via RcbOverlayPortal)
+ *   2. World — CSS `translate3d + scale` (optional grid + scene content)
+ *   3. Overlay — unscaled screen UI only (toolbars / labels via RcbOverlayPortal)
  *
  * Selection chrome + align guides live in the world layer (scene coords) so
  * browser zoom + canvas zoom cannot desync boxes from shapes. DPR is tracked
@@ -86,7 +87,8 @@ export default function RcbCanvas({
   className,
   children,
   defs = null,
-  showGrid = true,
+  showGrid = false,
+  gridSize = 10,
   stageRef: stageRefProp,
   cursor,
   background,
@@ -98,6 +100,8 @@ export default function RcbCanvas({
   const panRef = useRef<{ x: number; y: number } | null>(null);
   const pendingPanRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const spaceDown = useRef(false);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [cameraMoving, setCameraMoving] = useState(false);
   const emptyDragPansRef = useRef(emptyDragPans);
   const shouldBlockEmptyPanRef = useRef(shouldBlockEmptyPan);
   const panBlockSelectorRef = useRef(panBlockSelector);
@@ -108,6 +112,29 @@ export default function RcbCanvas({
   const [devicePixelRatio, setDevicePixelRatio] = useState(() => readDevicePixelRatio());
 
   cameraRef.current = camera;
+
+  const markCameraMoving = useCallback(() => {
+    setCameraMoving(true);
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => {
+      settleTimerRef.current = null;
+      setCameraMoving(false);
+    }, 140);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    };
+  }, []);
+
+  const cameraMotion = useMemo(
+    () => ({
+      moving: cameraMoving,
+      efficientZoom: cameraMoving ? rcbStepZoom(camera.zoom) : camera.zoom,
+    }),
+    [cameraMoving, camera.zoom]
+  );
 
   // Browser zoom / HiDPI — keep DPR in sync.
   useEffect(() => subscribeDevicePixelRatio(setDevicePixelRatio), []);
@@ -178,22 +205,34 @@ export default function RcbCanvas({
   useEffect(() => {
     const key = fitKey || 'default';
     if (emptyWorld) {
+      // Remember we opened empty so the first real artboard can still autofit.
       if (fittedKey.current !== key) fittedKey.current = `${key}:empty`;
       return;
     }
-    if (fittedKey.current === key || fittedKey.current === `${key}:empty`) {
-      fittedKey.current = key;
-      return;
-    }
-    const el = stageRef.current;
+    // Already fitted for this key — skip. Do NOT treat `:empty` as fitted:
+    // empty → first frame must run rcbFitCamera so content centers in the viewport.
+    if (fittedKey.current === key) return;
+    const el = stageRef.current || viewportEl;
     if (!el) return;
+    let cancelled = false;
+    let tries = 0;
     const applyFit = () => {
-      const r = el.getBoundingClientRect();
-      if (r.width < 40 || r.height < 40) return;
+      if (cancelled) return;
+      const stage = stageRef.current || viewportEl;
+      if (!stage) return;
+      const r = stage.getBoundingClientRect();
+      if (r.width < 40 || r.height < 40) {
+        // Stage not laid out yet — retry a few frames.
+        if (tries++ < 30) requestAnimationFrame(applyFit);
+        return;
+      }
       fittedKey.current = key;
       onCameraChange(rcbFitCamera({ width: r.width, height: r.height }, artboard));
     };
     applyFit();
+    return () => {
+      cancelled = true;
+    };
   }, [
     fitKey,
     emptyWorld,
@@ -203,6 +242,7 @@ export default function RcbCanvas({
     artboard.height,
     onCameraChange,
     stageRef,
+    viewportEl,
   ]);
 
   useEffect(() => {
@@ -254,6 +294,7 @@ export default function RcbCanvas({
       const localX = e.clientX - rect.left;
       const localY = e.clientY - rect.top;
       const cam = cameraRef.current;
+      markCameraMoving();
 
       if (e.ctrlKey || e.metaKey) {
         onCameraChange(rcbZoomAtPoint(cam, cam.zoom * (e.deltaY > 0 ? 0.92 : 1.08), localX, localY));
@@ -280,6 +321,7 @@ export default function RcbCanvas({
         const dy = e.clientY - panRef.current.y;
         panRef.current = { x: e.clientX, y: e.clientY };
         const cam = cameraRef.current;
+        markCameraMoving();
         onCameraChange({ ...cam, x: cam.x + dx, y: cam.y + dy });
         return;
       }
@@ -309,9 +351,16 @@ export default function RcbCanvas({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [panMode, onCameraChange, stageRef]);
+  }, [panMode, onCameraChange, stageRef, markCameraMoving]);
 
   const panning = panMode || spaceHeld;
+
+  // Re-assert after child tool effects (pen cleanup used to wipe style.cursor).
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || panning) return;
+    el.style.cursor = cursor || '';
+  }, [cursor, panning, stageRef]);
 
   // Snap pan to the device-pixel grid so translate doesn't add extra frac error
   // on top of scene*dpr (critical at browser 90% → dpr≈0.9).
@@ -321,6 +370,7 @@ export default function RcbCanvas({
 
   return (
     <RcbCameraContext.Provider value={camera}>
+      <RcbCameraMotionContext.Provider value={cameraMotion}>
       <RcbDevicePixelRatioContext.Provider value={devicePixelRatio}>
         <RcbViewportElContext.Provider value={viewportEl}>
           <RcbOverlayRootContext.Provider value={overlayEl}>
@@ -332,23 +382,21 @@ export default function RcbCanvas({
               className={cn(
                 'relative h-full w-full overflow-hidden',
                 !background && 'bg-[var(--canvas)]',
-                panning ? 'cursor-grab active:cursor-grabbing' : cursor || 'cursor-default',
+                panning
+                  ? 'cursor-grab active:cursor-grabbing'
+                    : cursor
+                    ? // Force nested shapes / chrome to inherit tool cursor (eraser / pencil / …).
+                      '[&_*]:!cursor-inherit'
+                    : 'cursor-default',
                 className
               )}
-              style={background ? { background } : undefined}
+              style={{
+                ...(background ? { background } : null),
+                // Always set so leaving a tool clears any previous inline cursor.
+                cursor: !panning && cursor ? cursor : '',
+              }}
             >
               {defs}
-              {showGrid ? (
-                <div
-                  className="pointer-events-none absolute inset-0 z-0 opacity-[0.35]"
-                  style={{
-                    backgroundImage:
-                      'radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--line) 70%, transparent) 1px, transparent 0)',
-                    backgroundSize: `${24 * camera.zoom}px ${24 * camera.zoom}px`,
-                    backgroundPosition: `${camera.x}px ${camera.y}px`,
-                  }}
-                />
-              ) : null}
               {/* Camera layer. Shapes + selection chrome. */}
               <div
                 className="rcb-html-layer absolute left-0 top-0 z-[1] origin-top-left overflow-visible [&>*]:pointer-events-auto"
@@ -362,6 +410,21 @@ export default function RcbCanvas({
                   ['--rcb-scale' as string]: `calc(1 / ${camZ})`,
                 }}
               >
+                {showGrid && gridSize > 0 ? (
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute z-0 opacity-[0.4]"
+                    style={{
+                      left: -100000,
+                      top: -100000,
+                      width: 200000,
+                      height: 200000,
+                      backgroundImage:
+                        'radial-gradient(circle at 0.5px 0.5px, color-mix(in srgb, var(--line) 75%, transparent) 0.55px, transparent 0)',
+                      backgroundSize: `${gridSize}px ${gridSize}px`,
+                    }}
+                  />
+                ) : null}
                 {children}
               </div>
               <div
@@ -373,6 +436,7 @@ export default function RcbCanvas({
           </RcbOverlayRootContext.Provider>
         </RcbViewportElContext.Provider>
       </RcbDevicePixelRatioContext.Provider>
+      </RcbCameraMotionContext.Provider>
     </RcbCameraContext.Provider>
   );
 }

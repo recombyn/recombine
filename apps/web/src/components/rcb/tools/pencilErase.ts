@@ -44,36 +44,6 @@ export function distToEraseStroke(px: number, py: number, erase: ErasePt[]) {
   return min;
 }
 
-function avgSpacing(pts: ErasePt[]) {
-  if (pts.length < 2) return 0;
-  let sum = 0;
-  for (let i = 1; i < pts.length; i += 1) {
-    sum += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-  }
-  return sum / (pts.length - 1);
-}
-
-function avgPressure(pts: ErasePt[]) {
-  const vals = pts
-    .map((p) => p.pressure)
-    .filter((p): p is number => typeof p === 'number' && Number.isFinite(p));
-  if (!vals.length) return null;
-  return vals.reduce((a, b) => a + b, 0) / vals.length;
-}
-
-function pressureStats(pts: ErasePt[]) {
-  const vals = pts
-    .map((p) => p.pressure)
-    .filter((p): p is number => typeof p === 'number' && Number.isFinite(p));
-  if (!vals.length) return { count: 0, min: null as number | null, max: null as number | null, avg: null as number | null };
-  return {
-    count: vals.length,
-    min: Math.min(...vals),
-    max: Math.max(...vals),
-    avg: vals.reduce((a, b) => a + b, 0) / vals.length,
-  };
-}
-
 /**
  * Bake perfect-freehand velocity pressure onto original points (1:1).
  * Same recurrence as perfect-freehand's simulatePressure — locks thickness so
@@ -109,7 +79,7 @@ function bakeSimulatedPressures(
  */
 function densifyTagged(pts: ErasePt[], spacing: number): TaggedPt[] {
   if (pts.length < 2) return pts.map((p, i) => ({ ...p, vertexIndex: i }));
-  const step = Math.max(0.75, spacing);
+  const step = Math.max(0.35, spacing);
   const out: TaggedPt[] = [{ ...pts[0], vertexIndex: 0 }];
   for (let i = 1; i < pts.length; i += 1) {
     const a = pts[i - 1];
@@ -249,9 +219,6 @@ export function erasePencilNode(opts: {
   const local = parseSimplePathPoints(String(opts.pathD || ''));
   if (local.length < 2) return null;
 
-  const hadStoredPressure = Boolean(
-    opts.pathPressure && parsePathPressures(opts.pathPressure, local.length)
-  );
   const pressures = parsePathPressures(opts.pathPressure, local.length);
   const withPressure: ErasePt[] = bakeSimulatedPressures(
     local.map((p, i) => (pressures ? { ...p, pressure: pressures[i] } : { ...p })),
@@ -261,9 +228,13 @@ export function erasePencilNode(opts: {
 
   const brush = findPencilBrush(opts.brushId || 'solid');
   const inkHalf = brushSize(brush, opts.strokeWidth) / 2;
+  // Match cursor / trail: cut only under the tip. Adding inkHalf made holes much wider
+  // than the dashed tip (remaining freehand caps do not fully fill back).
   const tipR = Math.max(0.5, Number(opts.eraseRadius) || 0);
-  const hitRadius = tipR + inkHalf;
-  const spacing = Math.max(1.25, Math.min(inkHalf, tipR) * 0.45);
+  // Tip Px drives the cut so the size slider clearly changes erase range.
+  const hitRadius = tipR + inkHalf * 0.2;
+  // Sample denser than the tip so thin erasers cannot skip between points.
+  const spacing = Math.max(0.35, Math.min(inkHalf, tipR) * 0.4);
   const dense = densifyTagged(withPressure, spacing);
 
   let hitCount = 0;
@@ -272,23 +243,6 @@ export function erasePencilNode(opts: {
       hitCount += 1;
     }
   }
-
-  console.log('[pencil-erase] in', {
-    brushId: opts.brushId || 'solid',
-    strokeWidth: opts.strokeWidth,
-    sizeFactor: brush.sizeFactor,
-    inkHalf,
-    tipR,
-    hitRadius,
-    densifySpacing: spacing,
-    hadStoredPressure,
-    pts: local.length,
-    densePts: dense.length,
-    avgSpacing: Number(avgSpacing(withPressure).toFixed(2)),
-    pressure: pressureStats(withPressure),
-    erasePts: opts.eraseScene.length,
-    hitCount,
-  });
 
   if (hitCount === 0) return null;
 
@@ -338,31 +292,7 @@ export function erasePencilNode(opts: {
       height: box.height,
       pathPressure,
     });
-    console.log('[pencil-erase] frag', {
-      pts: localSeg.length,
-      avgSpacing: Number(avgSpacing(localSeg).toFixed(2)),
-      pressure: pressureStats(localSeg),
-      pathPressureLen: pathPressure ? pathPressure.split(',').length : 0,
-      box: {
-        w: Number(box.width.toFixed(1)),
-        h: Number(box.height.toFixed(1)),
-        pad: Number(pad.toFixed(1)),
-      },
-    });
   }
-
-  console.log('[pencil-erase] out', {
-    fragments: out.length,
-    inAvgPressure: avgPressure(withPressure),
-    outAvgPressure:
-      out.length && out[0].pathPressure
-        ? avgPressure(
-            (parsePathPressures(out[0].pathPressure, parseSimplePathPoints(out[0].pathD).length) || []).map(
-              (pressure) => ({ x: 0, y: 0, pressure })
-            )
-          )
-        : null,
-  });
 
   return out;
 }

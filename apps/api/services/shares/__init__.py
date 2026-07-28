@@ -5,6 +5,7 @@ from services.shares.store import (
     create_share,
     get_share,
     update_share_document,
+    update_share_meta,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "create_share",
     "get_share",
     "update_share_document",
+    "update_share_meta",
 ]

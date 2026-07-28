@@ -6,8 +6,11 @@ import {
   HiOutlineBars3BottomLeft,
   HiOutlineBars3BottomRight,
   HiOutlineBold,
+  HiOutlineChatBubbleLeftRight,
   HiOutlineCodeBracket,
   HiOutlineItalic,
+  HiOutlineLink,
+  HiOutlineLinkSlash,
   HiOutlineStrikethrough,
 } from 'react-icons/hi2';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
@@ -19,8 +22,9 @@ import {
   openImageToolPanel,
 } from '@/store/modules/editor';
 import FlipRotateToolbar from '@/components/editor/nodes/ImageNode/FlipRotateToolbar';
+import ImageQuickEditComposer from '@/components/editor/nodes/ImageNode/ImageQuickEditComposer';
 import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelectionPanel';
-import { imageToolBtn } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
+import { ImageToolSep, imageToolBtn } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
 import {
   buildMarkdownTextAttrs,
   buildTextAttrsPreservingMarkdown,
@@ -32,7 +36,7 @@ import {
   parseNodeTextStyle,
 } from '@/components/rcb/scene/sceneText';
 import { markdownToPlain } from '@/components/rcb/scene/sceneMarkdown';
-import { isIconImageNode, type ImageProcessKind } from '@/components/rcb/scene/sceneDocument';
+import { isIconImageNode, isImageGeneratorNode, type ImageProcessKind } from '@/components/rcb/scene/sceneDocument';
 import ToolbarMenuSelect from './ToolbarMenuSelect';
 import BlendModeControl from './BlendModeControl';
 import {
@@ -108,6 +112,10 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
     kind === 'image' &&
     imageToolPanel?.kind === 'flipRotate' &&
     imageToolPanel?.nodeId === nodeId;
+  const quickEditOpen =
+    kind === 'image' &&
+    imageToolPanel?.kind === 'quickEdit' &&
+    imageToolPanel?.nodeId === nodeId;
   const [mdOpen, setMdOpen] = useState(false);
   const [fontCatalogTick, setFontCatalogTick] = useState(0);
   const style = useMemo(
@@ -126,6 +134,8 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
   }, []);
 
   if (!node || !box) return null;
+  // Generator plate uses its own composer overlay — hide photo AI selection chrome.
+  if (isImageGeneratorNode(node)) return null;
 
   const patchTextStyle = (partial: Record<string, unknown>) => {
     const next = buildTextAttrsPreservingMarkdown(node.attrs || {}, {
@@ -167,6 +177,12 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
   };
 
   const showBlend = !(kind === 'image' && isIconImageNode(node));
+  const imageAspectLocked = (() => {
+    const raw = node?.attrs?.lockAspect;
+    if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+    if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+    return kind === 'image';
+  })();
   const blendControl = showBlend ? (
     <BlendModeControl
       blendMode={node?.attrs?.blendMode}
@@ -180,6 +196,10 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
       }
     />
   ) : null;
+
+  if (quickEditOpen) {
+    return <ImageQuickEditComposer document={document} nodeId={nodeId} box={box} />;
+  }
 
   return (
     <>
@@ -396,6 +416,17 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
               />
             ) : (
               <>
+                <button
+                  type="button"
+                  className={imageToolBtn}
+                  onClick={() =>
+                    dispatch(openImageToolPanel({ nodeId, kind: 'quickEdit' }))
+                  }
+                >
+                  <HiOutlineChatBubbleLeftRight className="h-4 w-4" strokeWidth={2} />
+                  <span>{t('editor.imageToolbar.chat')}</span>
+                </button>
+                <ImageToolSep />
                 <ImageToolbarEditTools
                   onUpscale={(preset) =>
                     runImageProcess('upscale', t('editor.imageToolbar.processingUpscale'), {
@@ -403,17 +434,16 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                       targetHeight: preset.height,
                     })
                   }
-                  onRemoveBg={() =>
-                    runImageProcess('removeBg', t('editor.imageToolbar.processingRemoveBg'))
+                  onRemoveBg={(mode) =>
+                    runImageProcess(
+                      'removeBg',
+                      t('editor.imageToolbar.processingRemoveBg'),
+                      undefined,
+                      { cutoutMode: mode }
+                    )
                   }
                   onEraser={() =>
                     dispatch(openImageToolPanel({ nodeId, kind: 'eraser' }))
-                  }
-                  onEditElements={() =>
-                    runImageProcess(
-                      'editElements',
-                      t('editor.imageToolbar.processingEditElements')
-                    )
                   }
                   onMultiAngle={() =>
                     dispatch(openImageToolPanel({ nodeId, kind: 'multiAngle' }))
@@ -478,6 +508,44 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                   }}
                 />
                 <Sep />
+                <Tooltip
+                  title={
+                    imageAspectLocked
+                      ? t('editor.imageToolbar.unlockAspect')
+                      : t('editor.imageToolbar.lockAspect')
+                  }
+                  placement="top"
+                >
+                  <button
+                    type="button"
+                    aria-label={
+                      imageAspectLocked
+                        ? t('editor.imageToolbar.unlockAspect')
+                        : t('editor.imageToolbar.lockAspect')
+                    }
+                    aria-pressed={imageAspectLocked}
+                    className={cn(
+                      'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
+                      imageAspectLocked && 'bg-[var(--accent-soft)] text-[var(--ink)]'
+                    )}
+                    onClick={() =>
+                      dispatch(
+                        patchDocumentNode({
+                          nodeId,
+                          patch: {
+                            attrs: { lockAspect: imageAspectLocked ? 'false' : 'true' },
+                          },
+                        })
+                      )
+                    }
+                  >
+                    {imageAspectLocked ? (
+                      <HiOutlineLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    ) : (
+                      <HiOutlineLinkSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    )}
+                  </button>
+                </Tooltip>
                 <ImageFullscreenPreviewButton src={String(node?.attrs?.src || '')} />
                 <ExportSelectionPopover
                   nodeIds={[nodeId]}

@@ -16,6 +16,7 @@ import {
 import {
   HiOutlineArrowRightOnRectangle,
   HiOutlineBolt,
+  HiOutlineChevronLeft,
   HiOutlineChevronRight,
   HiOutlineGlobeAlt,
   HiOutlineInformationCircle,
@@ -23,20 +24,55 @@ import {
   HiOutlineUserCircle,
 } from 'react-icons/hi2';
 import { message } from '@/components/base';
+import AccountSettingsDialog, {
+  type AccountSettingsTab,
+} from '@/components/layout/AccountSettingsDialog';
 import PlansDialog from '@/components/layout/PlansDialog';
 import { getMe, logout as logoutRemote } from '@/apis/auth';
 import { fetchWallet } from '@/apis/wallet';
-import { logout, setSession } from '@/store/modules/auth';
+import { logout, setSession, clearSessionCaches } from '@/store/modules/auth';
+import { clearProjectsLibrary } from '@/store/modules/editor';
 import { formatTokens, planLabelKey, type LedgerEntry, type PlanId } from '@/utils/wallet';
 import { clearWallet, syncFromServer } from '@/store/modules/wallet';
 import { getToken } from '@/utils/token';
+import { docsUrl } from '@/utils/docsUrl';
 import { SUPPORTED_LANGS } from '@/i18n';
+import { buildLocaleSwitchUrl, normalizeI18nLang } from '@/i18n/localePath';
 import { applyTheme, getStoredThemeMode, type ThemeMode } from '@/theme';
 import { cn } from '@/utils/classnames';
 
+const NARROW_MQ = '(max-width: 767px)';
+
+function useNarrowViewport() {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(NARROW_MQ).matches : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_MQ);
+    const sync = () => setNarrow(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+  return narrow;
+}
 function userInitial(name?: string, email?: string) {
   const raw = (name || email || 'U').trim();
   return (raw[0] || 'U').toUpperCase();
+}
+
+/** OAuth / system placeholders — show initials instead of a generic silhouette. */
+function isPlaceholderAvatarUrl(url: string | null | undefined): boolean {
+  const raw = (url || '').trim();
+  if (!raw) return true;
+  const low = raw.toLowerCase();
+  if (low === 'null' || low === 'undefined' || low === 'none') return true;
+  // Google OAuth default photo (…/a/default)
+  if (low.includes('googleusercontent.com') && /\/a\/default(?:[/?#]|$)/i.test(low)) {
+    return true;
+  }
+  if (/\/a\/default(?:[/?#]|$)/i.test(low)) return true;
+  return false;
 }
 
 /** Shared avatar — same image / brand fallback everywhere (chip + menu). */
@@ -54,6 +90,11 @@ function UserAvatar({
   className?: string;
 }) {
   const url = typeof avatar === 'string' && avatar.trim() ? avatar.trim() : null;
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [url]);
+
   const dim = `${size}px`;
   const isBrandLogo =
     url != null && /\/logo(-mark|192|512)?\.png(?:\?|$)/i.test(url.split('?')[0] || '');
@@ -75,7 +116,7 @@ function UserAvatar({
       </span>
     );
   }
-  if (url) {
+  if (url && !isPlaceholderAvatarUrl(url) && !imgFailed) {
     return (
       <img
         src={url}
@@ -87,6 +128,7 @@ function UserAvatar({
           className
         )}
         style={{ width: dim, height: dim }}
+        onError={() => setImgFailed(true)}
       />
     );
   }
@@ -119,6 +161,11 @@ type Props = {
 
 type FlyoutKind = 'lang' | 'theme' | null;
 
+const MENU_ICON = 'h-[18px] w-[18px] shrink-0';
+const MENU_STROKE = 1.6;
+/** Same width as Back chevron so option labels line up with "Back" text. */
+const DRILL_LEAD = 'inline-flex h-4 w-4 min-w-4 shrink-0 items-center justify-center';
+
 function MenuRow({
   icon,
   label,
@@ -148,8 +195,50 @@ function MenuRow({
   );
 }
 
-const MENU_ICON = 'h-[18px] w-[18px] shrink-0';
-const MENU_STROKE = 1.6;
+/** Drill option / back row. Lead (e.g. Back chevron) only when provided — no empty icon slot. */
+function DrillListRow({
+  label,
+  onClick,
+  active,
+  leading,
+}: {
+  label: string;
+  onClick?: () => void;
+  active?: boolean;
+  leading?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex w-full items-center gap-1 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+        active && 'bg-[var(--accent-soft)] font-medium'
+      )}
+    >
+      {leading ? (
+        <span className={DRILL_LEAD} aria-hidden>
+          {leading}
+        </span>
+      ) : null}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+    </button>
+  );
+}
+
+function DrillBackRow({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <div className="mb-1">
+      <DrillListRow
+        label={label}
+        onClick={onClick}
+        leading={
+          <HiOutlineChevronLeft className="h-4 w-4" strokeWidth={MENU_STROKE} aria-hidden />
+        }
+      />
+    </div>
+  );
+}
 
 /** Prefer opening to the right (chevron direction); flip left only when clipped. */
 function SideFlyout({ children }: { children: ReactNode }) {
@@ -178,7 +267,7 @@ function SideFlyout({ children }: { children: ReactNode }) {
     >
       <div
         className={cn(
-          'min-w-[148px] overflow-hidden rounded-lg bg-white py-1',
+          'min-w-[148px] overflow-hidden rounded-lg bg-[var(--surface)] py-1',
           'shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]'
         )}
         style={{ backgroundColor: 'var(--surface)' }}
@@ -196,14 +285,17 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
   const planId = useSelector((state: any) => state.wallet?.planId ?? 'free') as PlanId;
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<AccountSettingsTab>('billing');
   const [plansOpen, setPlansOpen] = useState(false);
   const [flyout, setFlyout] = useState<FlyoutKind>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
+  const narrow = useNarrowViewport();
 
   const { refs, floatingStyles, context } = useFloating({
     open,
     onOpenChange,
-    placement: 'bottom-end',
+    placement: narrow ? 'bottom' : 'bottom-end',
     whileElementsMounted: autoUpdate,
     middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
   });
@@ -236,7 +328,7 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
           })
         );
         if (typeof res.tokens === 'number') {
-          dispatch(syncFromServer({ tokens: res.tokens }));
+          dispatch(syncFromServer({ tokens: res.tokens, planId: (res as any).planId }));
         }
       })
       .catch(() => undefined);
@@ -246,6 +338,9 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
         dispatch(
           syncFromServer({
             tokens: res.tokens,
+            planId: res.planId,
+            planExpiresAt: res.planExpiresAt ?? null,
+            planLocked: Boolean(res.planLocked),
             ledger: (res.ledger || []) as LedgerEntry[],
           })
         );
@@ -258,8 +353,8 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
 
   const close = () => onOpenChange(false);
 
-  const currentLang = i18n.resolvedLanguage || i18n.language || 'zh-CN';
-  const currentLangLabel = LANG_LABEL[currentLang] || LANG_LABEL['zh-CN'];
+  const currentLang = normalizeI18nLang(i18n.resolvedLanguage || i18n.language);
+  const currentLangLabel = LANG_LABEL[currentLang] || LANG_LABEL.en;
 
   const themeOptions: { mode: ThemeMode; label: string }[] = [
     { mode: 'light', label: t('theme.light') },
@@ -274,23 +369,31 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
   const doLogout = () => {
     dispatch(logout());
     dispatch(clearWallet());
+    dispatch(clearProjectsLibrary());
+    clearSessionCaches();
     void logoutRemote().catch(() => undefined);
     message.success(t('home.loggedOut'));
     close();
-    navigate('/login', { replace: true });
+    navigate('/home', { replace: true });
   };
 
   const changeLang = (code: string) => {
-    void i18n.changeLanguage(code).then(() => {
-      document.documentElement.lang = code;
-    });
     setFlyout(null);
+    if (normalizeI18nLang(code) === currentLang) return;
+    // Remount Router with new basename (`/zh/home` ↔ `/home`).
+    window.location.assign(buildLocaleSwitchUrl(code));
   };
 
   const changeTheme = (next: ThemeMode) => {
     applyTheme(next);
     setThemeMode(next);
     setFlyout(null);
+  };
+
+  const openSettings = (tab: AccountSettingsTab = 'billing') => {
+    close();
+    setSettingsTab(tab);
+    setSettingsOpen(true);
   };
 
   const openPlans = () => {
@@ -309,7 +412,7 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
             ref={refs.setFloating}
             style={floatingStyles}
             {...getFloatingProps()}
-            className="z-[600] w-[250px]"
+            className={cn('z-[600]', narrow ? 'w-[min(100vw-1.5rem,280px)]' : 'w-[250px]')}
           >
             <div
               className="overflow-visible rounded-xl shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]"
@@ -335,152 +438,206 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
                 </div>
               </div>
 
-              {/* Plan + upgrade */}
-              <div className="border-t border-[var(--line)] px-3.5 py-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    close();
-                    window.open('/account?tab=usage', '_blank', 'noopener,noreferrer');
-                  }}
-                  className="mb-2.5 flex w-full items-center gap-2 text-left"
-                >
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--ink)]">
-                    {planLabel}
-                  </span>
-                  <span className="inline-flex shrink-0 items-center gap-1 text-[13px] tabular-nums text-[var(--muted)]">
-                    <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={MENU_STROKE} aria-hidden />
-                    {formatTokens(tokens)}
-                    <HiOutlineChevronRight className="h-3.5 w-3.5" aria-hidden />
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={openPlans}
-                  className="flex w-full items-center justify-center rounded-lg bg-[var(--ink)] px-3 py-2.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
-                >
-                  {t('wallet.upgrade')}
-                </button>
+              {/* Plan + upgrade — hide while drilling into lang/theme on narrow */}
+              {!(narrow && flyout) ? (
+                <div className="border-t border-[var(--line)] px-3.5 py-3">
+                  <button
+                    type="button"
+                    onClick={() => openSettings('billing')}
+                    className="mb-2.5 flex w-full items-center gap-2 text-left"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--ink)]">
+                      {planLabel}
+                    </span>
+                    <span className="inline-flex shrink-0 items-center gap-1 text-[13px] tabular-nums text-[var(--muted)]">
+                      <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={MENU_STROKE} aria-hidden />
+                      {formatTokens(tokens)}
+                      <HiOutlineChevronRight className="h-3.5 w-3.5" aria-hidden />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openPlans}
+                    className="flex w-full items-center justify-center rounded-xl bg-[var(--ink)] px-3 py-2.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
+                  >
+                    {t('wallet.upgrade')}
+                  </button>
+                </div>
+              ) : null}
+
+              {/* Menu — narrow: drill-in for lang/theme; desktop: side flyout */}
+              <div
+                className={cn(
+                  'border-t border-[var(--line)]',
+                  narrow && (flyout === 'lang' || flyout === 'theme')
+                    ? 'px-2 py-2'
+                    : 'px-1.5 py-1.5'
+                )}
+              >
+                {narrow && flyout === 'lang' ? (
+                  <>
+                    <DrillBackRow label={t('common.back')} onClick={() => setFlyout(null)} />
+                    {SUPPORTED_LANGS.map(({ code }) => (
+                      <DrillListRow
+                        key={code}
+                        label={LANG_LABEL[code]}
+                        active={currentLang === code}
+                        onClick={() => changeLang(code)}
+                      />
+                    ))}
+                  </>
+                ) : narrow && flyout === 'theme' ? (
+                  <>
+                    <DrillBackRow label={t('common.back')} onClick={() => setFlyout(null)} />
+                    {themeOptions.map(({ mode, label }) => (
+                      <DrillListRow
+                        key={mode}
+                        label={label}
+                        active={themeMode === mode}
+                        onClick={() => changeTheme(mode)}
+                      />
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <div
+                      className="relative"
+                      onMouseEnter={() => {
+                        if (!narrow) setFlyout('lang');
+                      }}
+                      onMouseLeave={() => {
+                        if (!narrow) setFlyout((v) => (v === 'lang' ? null : v));
+                      }}
+                    >
+                      <MenuRow
+                        icon={
+                          <HiOutlineGlobeAlt
+                            className={MENU_ICON}
+                            strokeWidth={MENU_STROKE}
+                            aria-hidden
+                          />
+                        }
+                        label={currentLangLabel}
+                        active={flyout === 'lang'}
+                        onClick={() => setFlyout((v) => (v === 'lang' ? null : 'lang'))}
+                        trailing={
+                          <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                        }
+                      />
+                      {!narrow && flyout === 'lang' ? (
+                        <SideFlyout>
+                          {SUPPORTED_LANGS.map(({ code }) => (
+                            <button
+                              key={code}
+                              type="button"
+                              onClick={() => changeLang(code)}
+                              className={cn(
+                                'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+                                currentLang === code && 'font-medium'
+                              )}
+                            >
+                              {LANG_LABEL[code]}
+                            </button>
+                          ))}
+                        </SideFlyout>
+                      ) : null}
+                    </div>
+
+                    <div
+                      className="relative"
+                      onMouseEnter={() => {
+                        if (!narrow) setFlyout('theme');
+                      }}
+                      onMouseLeave={() => {
+                        if (!narrow) setFlyout((v) => (v === 'theme' ? null : v));
+                      }}
+                    >
+                      <MenuRow
+                        icon={
+                          <HiOutlineMoon className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
+                        }
+                        label={`${t('theme.label')} · ${themeLabel}`}
+                        active={flyout === 'theme'}
+                        onClick={() => setFlyout((v) => (v === 'theme' ? null : 'theme'))}
+                        trailing={
+                          <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                        }
+                      />
+                      {!narrow && flyout === 'theme' ? (
+                        <SideFlyout>
+                          {themeOptions.map(({ mode, label }) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => changeTheme(mode)}
+                              className={cn(
+                                'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+                                themeMode === mode && 'font-medium'
+                              )}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </SideFlyout>
+                      ) : null}
+                    </div>
+
+                    <MenuRow
+                      icon={
+                        <HiOutlineUserCircle
+                          className={MENU_ICON}
+                          strokeWidth={MENU_STROKE}
+                          aria-hidden
+                        />
+                      }
+                      label={t('wallet.menuManageAccount')}
+                      onClick={() => openSettings('profile')}
+                    />
+
+                    <MenuRow
+                      icon={
+                        <HiOutlineInformationCircle
+                          className={MENU_ICON}
+                          strokeWidth={MENU_STROKE}
+                          aria-hidden
+                        />
+                      }
+                      label={t('about.title')}
+                      onClick={() => {
+                        close();
+                        window.open(docsUrl('/legal/about'), '_blank', 'noopener,noreferrer');
+                      }}
+                    />
+                  </>
+                )}
               </div>
 
-              {/* Menu */}
-              <div className="border-t border-[var(--line)] px-1.5 py-1.5">
-                <div
-                  className="relative"
-                  onMouseEnter={() => setFlyout('lang')}
-                  onMouseLeave={() => setFlyout((v) => (v === 'lang' ? null : v))}
-                >
+              {/* Logout — hide while drilling */}
+              {!(narrow && flyout) ? (
+                <div className="border-t border-[var(--line)] px-1.5 py-1.5">
                   <MenuRow
                     icon={
-                      <HiOutlineGlobeAlt className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
+                      <HiOutlineArrowRightOnRectangle
+                        className={MENU_ICON}
+                        strokeWidth={MENU_STROKE}
+                        aria-hidden
+                      />
                     }
-                    label={currentLangLabel}
-                    active={flyout === 'lang'}
-                    onClick={() => setFlyout((v) => (v === 'lang' ? null : 'lang'))}
-                    trailing={
-                      <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
-                    }
+                    label={t('home.logout')}
+                    onClick={doLogout}
                   />
-                  {flyout === 'lang' ? (
-                    <SideFlyout>
-                      {SUPPORTED_LANGS.map(({ code }) => (
-                        <button
-                          key={code}
-                          type="button"
-                          onClick={() => changeLang(code)}
-                          className={cn(
-                            'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
-                            currentLang === code && 'font-medium'
-                          )}
-                        >
-                          {LANG_LABEL[code]}
-                        </button>
-                      ))}
-                    </SideFlyout>
-                  ) : null}
                 </div>
-
-                <div
-                  className="relative"
-                  onMouseEnter={() => setFlyout('theme')}
-                  onMouseLeave={() => setFlyout((v) => (v === 'theme' ? null : v))}
-                >
-                  <MenuRow
-                    icon={
-                      <HiOutlineMoon className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
-                    }
-                    label={`${t('theme.label')} · ${themeLabel}`}
-                    active={flyout === 'theme'}
-                    onClick={() => setFlyout((v) => (v === 'theme' ? null : 'theme'))}
-                    trailing={
-                      <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
-                    }
-                  />
-                  {flyout === 'theme' ? (
-                    <SideFlyout>
-                      {themeOptions.map(({ mode, label }) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => changeTheme(mode)}
-                          className={cn(
-                            'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
-                            themeMode === mode && 'font-medium'
-                          )}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </SideFlyout>
-                  ) : null}
-                </div>
-
-                <MenuRow
-                  icon={
-                    <HiOutlineUserCircle className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
-                  }
-                  label={t('wallet.menuManageAccount')}
-                  onClick={() => {
-                    close();
-                    window.open('/account', '_blank', 'noopener,noreferrer');
-                  }}
-                />
-
-                <MenuRow
-                  icon={
-                    <HiOutlineInformationCircle
-                      className={MENU_ICON}
-                      strokeWidth={MENU_STROKE}
-                      aria-hidden
-                    />
-                  }
-                  label={t('about.title')}
-                  onClick={() => {
-                    close();
-                    window.open('/about', '_blank', 'noopener,noreferrer');
-                  }}
-                />
-              </div>
-
-              {/* Logout */}
-              <div className="border-t border-[var(--line)] px-1.5 py-1.5">
-                <MenuRow
-                  icon={
-                    <HiOutlineArrowRightOnRectangle
-                      className={MENU_ICON}
-                      strokeWidth={MENU_STROKE}
-                      aria-hidden
-                    />
-                  }
-                  label={t('home.logout')}
-                  onClick={doLogout}
-                />
-              </div>
+              ) : null}
             </div>
           </div>
         </FloatingPortal>
       ) : null}
 
+      <AccountSettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        initialTab={settingsTab}
+      />
       <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} />
     </>
   );

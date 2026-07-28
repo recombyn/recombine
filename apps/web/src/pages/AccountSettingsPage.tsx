@@ -3,10 +3,10 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowLeft, HiOutlinePencil } from 'react-icons/hi2';
-import { getMe, updateProfile, changeEmailPassword } from '@/apis/auth';
+import { getMe, updateProfile } from '@/apis/auth';
 import { fetchWallet } from '@/apis/wallet';
-import { Button, Input, message } from '@/components/base';
-import PlansDialog from '@/components/layout/PlansDialog';
+import { Button, Input, message, ProgressBar } from '@/components/base';
+import AccountSettingsDialog from '@/components/layout/AccountSettingsDialog';
 import WalletLedgerPanel from '@/components/layout/WalletLedgerPanel';
 import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import AgentModelsPanel from '@/components/editor/panels/agent/AgentModelsPanel';
@@ -15,6 +15,7 @@ import { syncFromServer } from '@/store/modules/wallet';
 import { formatTokens, type LedgerEntry } from '@/utils/wallet';
 import { getToken } from '@/utils/token';
 import { readReturnToParam } from '@/utils/authReturnTo';
+import { docsUrl } from '@/utils/docsUrl';
 import { cn } from '@/utils/classnames';
 
 const NAME_RE = /^[\p{L}\p{N}\s.'\-_]{1,40}$/u;
@@ -55,6 +56,40 @@ function accountShowsSubtitle(tab: AccountTab): boolean {
   return tab === 'profile' || tab === 'agent';
 }
 
+type ProfileValidateResult =
+  | { ok: true; name: string; bio: string | null }
+  | { ok: false; warnKey: string };
+
+function validateProfileFields(opts: {
+  name: string;
+  bio: string;
+  hasUser: boolean;
+}): ProfileValidateResult {
+  const trimmed = opts.name.trim();
+  if (!trimmed) return { ok: false, warnKey: 'me.nameRequired' };
+  if (trimmed.length > 40 || !NAME_RE.test(trimmed)) return { ok: false, warnKey: 'me.nameHint' };
+  if (!opts.hasUser) return { ok: false, warnKey: 'me.needLogin' };
+  return { ok: true, name: trimmed, bio: opts.bio.trim().slice(0, MAX_BIO) || null };
+}
+
+function avatarFileRejectReason(file: File): 'type' | 'size' | null {
+  if (!file.type.startsWith('image/')) return 'type';
+  if (file.size > MAX_AVATAR_MB * 1024 * 1024) return 'size';
+  return null;
+}
+
+function readAvatarDataUrl(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || '');
+      resolve(url.startsWith('data:image/') ? url : null);
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
 /** Account hub — left nav + centered profile / usage & billing. */
 export default function AccountSettingsPage(): ReactNode {
   const { t } = useTranslation();
@@ -70,11 +105,7 @@ export default function AccountSettingsPage(): ReactNode {
   const [bio, setBio] = useState('');
   const [avatar, setAvatar] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [plansOpen, setPlansOpen] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const setTab = (next: AccountTab) => {
     const from = searchParams.get('from');
@@ -100,13 +131,12 @@ export default function AccountSettingsPage(): ReactNode {
               provider: res.user.provider,
               bio: res.user.bio,
               role: res.user.role,
-              hasPassword: res.user.hasPassword,
             },
             token: getToken() || undefined,
           })
         );
         if (typeof res.tokens === 'number') {
-          dispatch(syncFromServer({ tokens: res.tokens }));
+          dispatch(syncFromServer({ tokens: res.tokens, planId: (res as any).planId }));
         }
       })
       .catch(() => undefined);
@@ -116,6 +146,9 @@ export default function AccountSettingsPage(): ReactNode {
         dispatch(
           syncFromServer({
             tokens: res.tokens,
+            planId: res.planId,
+            planExpiresAt: res.planExpiresAt ?? null,
+            planLocked: Boolean(res.planLocked),
             ledger: (res.ledger || []) as LedgerEntry[],
           })
         );
@@ -138,55 +171,42 @@ export default function AccountSettingsPage(): ReactNode {
   const planRemaining = Math.min(balance, creditCap);
   const planUsed = Math.max(0, creditCap - planRemaining);
   const usedPct = Math.min(100, Math.round((planUsed / creditCap) * 100));
-  const remainPct = 100 - usedPct;
 
   const onAvatarFile = (file: File | null) => {
     if (!file || saving) return;
-    if (!file.type.startsWith('image/')) {
+    const reject = avatarFileRejectReason(file);
+    if (reject === 'type') {
       message.warning(t('me.avatarTypeError'));
       return;
     }
-    if (file.size > MAX_AVATAR_MB * 1024 * 1024) {
+    if (reject === 'size') {
       message.warning(t('me.avatarSizeError', { mb: MAX_AVATAR_MB }));
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result || '');
-      if (url.startsWith('data:image/')) setAvatar(url);
-    };
-    reader.readAsDataURL(file);
+    void readAvatarDataUrl(file).then((url) => {
+      if (url) setAvatar(url);
+    });
   };
 
   const onSave = async () => {
-    const trimmed = name.trim();
-    if (!trimmed) {
-      message.warning(t('me.nameRequired'));
+    const checked = validateProfileFields({ name, bio, hasUser: Boolean(user) });
+    if (checked.ok === false) {
+      message.warning(t(checked.warnKey));
       return;
     }
-    if (trimmed.length > 40 || !NAME_RE.test(trimmed)) {
-      message.warning(t('me.nameHint'));
-      return;
-    }
-    if (!user) {
-      message.warning(t('me.needLogin'));
-      return;
-    }
-    if (saving) return;
-    const nextBio = bio.trim().slice(0, MAX_BIO) || null;
+    if (!user || saving) return;
     setSaving(true);
     try {
-      const res = await updateProfile({ name: trimmed, bio: nextBio, avatar });
+      const res = await updateProfile({ name: checked.name, bio: checked.bio, avatar });
       dispatch(
         setUser({
           ...user,
           id: res.user.id || user.id,
           name: res.user.name,
-          bio: res.user.bio ?? nextBio,
+          bio: res.user.bio ?? checked.bio,
           avatar: res.user.avatar ?? avatar,
           email: res.user.email || user.email,
           provider: res.user.provider || user.provider,
-          hasPassword: res.user.hasPassword ?? user.hasPassword,
         })
       );
       message.success(t('me.profileSaved'));
@@ -197,53 +217,9 @@ export default function AccountSettingsPage(): ReactNode {
     }
   };
 
-  const onChangePassword = async () => {
-    if (!user) {
-      message.warning(t('me.needLogin'));
-      return;
-    }
-    if (currentPassword.length < 6 || newPassword.length < 6) {
-      message.warning(t('auth.passwordShort'));
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      message.warning(t('account.passwordMismatch'));
-      return;
-    }
-    if (currentPassword === newPassword) {
-      message.warning(t('account.passwordSame'));
-      return;
-    }
-    if (passwordSaving) return;
-    setPasswordSaving(true);
-    try {
-      const res = await changeEmailPassword({
-        currentPassword,
-        newPassword,
-      });
-      dispatch(
-        setUser({
-          ...user,
-          hasPassword: res.user.hasPassword ?? true,
-        })
-      );
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      message.success(t('account.passwordChanged'));
-    } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data
-        ?.detail;
-      const msg = typeof detail === 'string' ? detail : null;
-      message.error(msg || t('account.passwordChangeFailed'));
-    } finally {
-      setPasswordSaving(false);
-    }
-  };
 
   const providerLabel =
     user?.provider === 'google' ? t('account.loginGoogle') : t('account.loginEmail');
-  const canChangePassword = Boolean(user?.hasPassword);
 
   const navItems: { id: AccountTab; label: string }[] = [
     { id: 'profile', label: t('account.navProfile') },
@@ -431,61 +407,6 @@ export default function AccountSettingsPage(): ReactNode {
                 </dl>
               </section>
 
-              <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">
-                <h2 className="mb-1 text-[15px] font-semibold text-[var(--ink)]">
-                  {t('account.passwordSection')}
-                </h2>
-                <p className="mb-5 text-[13px] text-[var(--muted)]">
-                  {canChangePassword
-                    ? t('account.passwordSectionHint')
-                    : t('account.passwordGoogleOnly')}
-                </p>
-                {canChangePassword ? (
-                  <div className="max-w-md space-y-3">
-                    <Input
-                      size="large"
-                      type="outlined"
-                      inputType="password"
-                      placeholder={t('account.currentPassword')}
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.target.value)}
-                      className="!h-11 !rounded-lg !bg-[var(--account-main)]"
-                    />
-                    <Input
-                      size="large"
-                      type="outlined"
-                      inputType="password"
-                      placeholder={t('account.newPassword')}
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      className="!h-11 !rounded-lg !bg-[var(--account-main)]"
-                    />
-                    <Input
-                      size="large"
-                      type="outlined"
-                      inputType="password"
-                      placeholder={t('account.confirmPassword')}
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void onChangePassword();
-                      }}
-                      className="!h-11 !rounded-lg !bg-[var(--account-main)]"
-                    />
-                    <div className="flex justify-end pt-1">
-                      <Button
-                        type="primary"
-                        shape="round"
-                        loading={passwordSaving}
-                        disabled={passwordSaving}
-                        onClick={() => void onChangePassword()}
-                      >
-                        {t('account.changePassword')}
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-              </section>
 
               <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">
                 <h2 className="mb-5 text-[15px] font-semibold text-[var(--ink)]">
@@ -498,8 +419,8 @@ export default function AccountSettingsPage(): ReactNode {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setPlansOpen(true)}
-                      className="shrink-0 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
+                      onClick={() => setSettingsOpen(true)}
+                      className="shrink-0 rounded-xl bg-[var(--ink)] px-3 py-1.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90"
                     >
                       {t('wallet.upgrade')}
                     </button>
@@ -517,49 +438,49 @@ export default function AccountSettingsPage(): ReactNode {
                         {t('wallet.creditsRemaining', { count: formatTokens(tokens) })}
                       </span>
                     </div>
-                    <div
-                      className="flex h-1.5 overflow-hidden rounded-full"
-                      role="img"
+                    <ProgressBar
+                      percent={usedPct}
+                      active
+                      height={8}
                       aria-label={t('wallet.creditsBarAria', {
                         used: formatTokens(planUsed),
                         remain: formatTokens(planRemaining),
                         total: formatTokens(creditCap),
                       })}
-                    >
-                      <div
-                        className="h-full bg-[var(--ink)] transition-[width]"
-                        style={{ width: `${usedPct}%` }}
-                      />
-                      <div
-                        className="h-full bg-[color-mix(in_srgb,var(--ink)_22%,transparent)] transition-[width]"
-                        style={{ width: `${remainPct}%` }}
-                      />
-                    </div>
+                    />
                   </button>
                 </div>
               </section>
 
               <p className="pt-1 text-[12px] text-[var(--muted)]">
-                <Link
-                  to="/privacy"
+                <a
+                  href={docsUrl('/legal/privacy')}
+                  target="_blank"
+                  rel="noreferrer"
                   className="underline decoration-[var(--line)] underline-offset-2 hover:text-[var(--ink)]"
                 >
                   {t('auth.privacy')}
-                </Link>
+                </a>
                 <span className="mx-2 text-[var(--line)]">|</span>
-                <Link
-                  to="/terms"
+                <a
+                  href={docsUrl('/legal/terms')}
+                  target="_blank"
+                  rel="noreferrer"
                   className="underline decoration-[var(--line)] underline-offset-2 hover:text-[var(--ink)]"
                 >
                   {t('auth.terms')}
-                </Link>
+                </a>
               </p>
             </div>
           ) : null}
         </div>
       </main>
 
-      <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} />
+      <AccountSettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        initialTab="plans"
+      />
     </div>
   );
 }

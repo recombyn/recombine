@@ -99,6 +99,8 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             id {pk},
             rule_key VARCHAR(64) NOT NULL UNIQUE,
             rule_value {text} NOT NULL,
+            description {text},
+            enabled INTEGER NOT NULL DEFAULT 1,
             updated_at DOUBLE NOT NULL
         ){engine}
         """,
@@ -300,7 +302,47 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
     _ensure_design_skill_key_column(conn, mysql=mysql)
     _ensure_canvas_tool_kind_column(conn, mysql=mysql)
     _ensure_canvas_tool_args_schema_column(conn, mysql=mysql)
+    _ensure_global_rule_meta_columns(conn, mysql=mysql)
     conn.commit()
+
+
+def _ensure_global_rule_meta_columns(conn: Any, *, mysql: bool) -> None:
+    """Add description / enabled on design_global_rule (idempotent)."""
+    text = "LONGTEXT" if mysql else "TEXT"
+    cols = (
+        ("description", f"{text} NULL"),
+        ("enabled", "INTEGER NOT NULL DEFAULT 1"),
+    )
+    try:
+        if mysql:
+            for name, col_def in cols:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'design_global_rule'
+                      AND COLUMN_NAME = ?
+                    """,
+                    (name,),
+                ).fetchone()
+                if int((row or {}).get("c") or 0) > 0:
+                    continue
+                conn.execute(f"ALTER TABLE design_global_rule ADD COLUMN {name} {col_def}")
+        else:
+            existing = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(design_global_rule)").fetchall()
+            }
+            for name, col_def in cols:
+                if name in existing:
+                    continue
+                conn.execute(f"ALTER TABLE design_global_rule ADD COLUMN {name} {col_def}")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 def _ensure_canvas_tool_args_schema_column(conn: Any, *, mysql: bool) -> None:

@@ -9,6 +9,38 @@ from services.plaza.store import list_feed, _row_to_meta
 from services.storage import delete_object
 
 
+def _page_args(page: int = 1, page_size: int = 20, *, max_size: int = 100) -> tuple[int, int, int]:
+    page_n = max(1, int(page or 1))
+    page_size_n = max(1, min(int(page_size or 20), max_size))
+    offset = (page_n - 1) * page_size_n
+    return page_n, page_size_n, offset
+
+
+def _like_term(q: str | None) -> str | None:
+    raw = (q or "").strip()
+    return f"%{raw}%" if raw else None
+
+
+def _ms(ts: Any) -> int:
+    return int(float(ts) * 1000)
+
+
+def _paged(items: list[Any], *, page_n: int, page_size_n: int, total: int) -> dict[str, Any]:
+    return {"items": items, "page": page_n, "pageSize": page_size_n, "total": total}
+
+
+def _empty_feed(page: int, page_size: int, tab_n: str) -> dict[str, Any]:
+    page_n, page_size_n, _ = _page_args(page, page_size)
+    return {
+        "items": [],
+        "page": page_n,
+        "pageSize": page_size_n,
+        "total": 0,
+        "hasMore": False,
+        "tab": tab_n,
+    }
+
+
 def list_all_projects(
     *,
     page: int = 1,
@@ -16,13 +48,11 @@ def list_all_projects(
     q: str | None = None,
 ) -> dict[str, Any]:
     init_schema()
-    page_n = max(1, int(page or 1))
-    page_size_n = max(1, min(int(page_size or 20), 100))
-    offset = (page_n - 1) * page_size_n
+    page_n, page_size_n, offset = _page_args(page, page_size)
     where = ["1=1"]
     params: list[Any] = []
-    if q and q.strip():
-        like = f"%{q.strip()}%"
+    like = _like_term(q)
+    if like:
         where.append("(p.name LIKE ? OR p.user_id LIKE ? OR u.email LIKE ? OR u.name LIKE ?)")
         params.extend([like, like, like, like])
     where_sql = " AND ".join(where)
@@ -56,33 +86,12 @@ def list_all_projects(
             "userEmail": r["user_email"],
             "userName": r["user_name"],
             "name": r["name"],
-            "updatedAt": int(float(r["updated_at"]) * 1000),
-            "createdAt": int(float(r["created_at"]) * 1000),
+            "updatedAt": _ms(r["updated_at"]),
+            "createdAt": _ms(r["created_at"]),
         }
         for r in rows
     ]
-    return {"items": items, "page": page_n, "pageSize": page_size_n, "total": total}
-
-
-def delete_project_admin(project_id: str) -> bool:
-    init_schema()
-    pid = (project_id or "").strip()
-    if not pid:
-        return False
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT document_key, thumbnail_key FROM projects WHERE id = ?",
-            (pid,),
-        ).fetchone()
-        if not row:
-            return False
-        conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
-        conn.commit()
-    if row["document_key"]:
-        delete_object(row["document_key"])
-    if row["thumbnail_key"]:
-        delete_object(row["thumbnail_key"])
-    return True
+    return _paged(items, page_n=page_n, page_size_n=page_size_n, total=total)
 
 
 def list_all_assets(
@@ -93,17 +102,15 @@ def list_all_assets(
     q: str | None = None,
 ) -> dict[str, Any]:
     init_schema()
-    page_n = max(1, int(page or 1))
-    page_size_n = max(1, min(int(page_size or 20), 100))
-    offset = (page_n - 1) * page_size_n
+    page_n, page_size_n, offset = _page_args(page, page_size)
     where = ["1=1"]
     params: list[Any] = []
     kind_n = (kind or "").strip().lower()
     if kind_n in ("image", "video", "font"):
         where.append("a.kind = ?")
         params.append(kind_n)
-    if q and q.strip():
-        like = f"%{q.strip()}%"
+    like = _like_term(q)
+    if like:
         where.append("(a.user_id LIKE ? OR a.prompt LIKE ? OR u.email LIKE ?)")
         params.extend([like, like, like])
     where_sql = " AND ".join(where)
@@ -140,11 +147,11 @@ def list_all_assets(
             "url": r["url"],
             "source": r["source"],
             "prompt": r["prompt"],
-            "createdAt": int(float(r["created_at"]) * 1000),
+            "createdAt": _ms(r["created_at"]),
         }
         for r in rows
     ]
-    return {"items": items, "page": page_n, "pageSize": page_size_n, "total": total}
+    return _paged(items, page_n=page_n, page_size_n=page_size_n, total=total)
 
 
 def delete_asset_admin(asset_id: str) -> bool:
@@ -173,13 +180,11 @@ def list_all_likes(
     q: str | None = None,
 ) -> dict[str, Any]:
     init_schema()
-    page_n = max(1, int(page or 1))
-    page_size_n = max(1, min(int(page_size or 20), 100))
-    offset = (page_n - 1) * page_size_n
+    page_n, page_size_n, offset = _page_args(page, page_size)
     where = ["1=1"]
     params: list[Any] = []
-    if q and q.strip():
-        like = f"%{q.strip()}%"
+    like = _like_term(q)
+    if like:
         where.append(
             "(l.user_id LIKE ? OR l.submission_id LIKE ? OR s.title LIKE ?"
             " OR u.email LIKE ?)"
@@ -221,11 +226,11 @@ def list_all_likes(
             "submissionTitle": r["submission_title"],
             "authorName": r["author_name"],
             "submissionStatus": r["submission_status"],
-            "createdAt": int(float(r["created_at"]) * 1000),
+            "createdAt": _ms(r["created_at"]),
         }
         for r in rows
     ]
-    return {"items": items, "page": page_n, "pageSize": page_size_n, "total": total}
+    return _paged(items, page_n=page_n, page_size_n=page_size_n, total=total)
 
 
 def delete_like_admin(user_id: str, submission_id: str) -> bool:
@@ -251,6 +256,11 @@ def delete_like_admin(user_id: str, submission_id: str) -> bool:
     return deleted
 
 
+def _normalize_admin_feed_tab(tab: str | None) -> str:
+    tab_n = (tab or "recommended").strip().lower()
+    return tab_n if tab_n in ("recommended", "latest", "following") else "recommended"
+
+
 def list_plaza_feed_admin(
     *,
     tab: str = "recommended",
@@ -259,27 +269,15 @@ def list_plaza_feed_admin(
     user_id: str | None = None,
 ) -> dict[str, Any]:
     """Approved plaza feed: recommended | latest."""
-    tab_n = (tab or "recommended").strip().lower()
-    if tab_n not in ("recommended", "latest", "following"):
-        tab_n = "recommended"
-    author_ids: list[str] | None = None
+    tab_n = _normalize_admin_feed_tab(tab)
     if tab_n == "following":
-        return {
-            "items": [],
-            "page": max(1, int(page or 1)),
-            "pageSize": max(1, min(int(page_size or 20), 100)),
-            "total": 0,
-            "hasMore": False,
-            "tab": tab_n,
-        }
+        return _empty_feed(page, page_size, tab_n)
     uid = (user_id or "").strip()
-    if uid:
-        author_ids = [uid]
     return list_feed(
         page=page,
         page_size=page_size,
         tab=tab_n,
-        author_ids=author_ids,
+        author_ids=[uid] if uid else None,
         visible_only=False,
     )
 
@@ -292,13 +290,11 @@ def list_plaza_published(
 ) -> dict[str, Any]:
     """All approved plaza submissions (已发布)."""
     init_schema()
-    page_n = max(1, int(page or 1))
-    page_size_n = max(1, min(int(page_size or 20), 100))
-    offset = (page_n - 1) * page_size_n
+    page_n, page_size_n, offset = _page_args(page, page_size)
     where = ["status = 'approved'"]
     params: list[Any] = []
-    if q and q.strip():
-        like = f"%{q.strip()}%"
+    like = _like_term(q)
+    if like:
         where.append("(title LIKE ? OR author_name LIKE ? OR user_id LIKE ?)")
         params.extend([like, like, like])
     where_sql = " AND ".join(where)
@@ -317,9 +313,9 @@ def list_plaza_published(
             """,
             tuple(params + [page_size_n, offset]),
         ).fetchall()
-    return {
-        "items": [_row_to_meta(r) for r in rows],
-        "page": page_n,
-        "pageSize": page_size_n,
-        "total": total,
-    }
+    return _paged(
+        [_row_to_meta(r) for r in rows],
+        page_n=page_n,
+        page_size_n=page_size_n,
+        total=total,
+    )

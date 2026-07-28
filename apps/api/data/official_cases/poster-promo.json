@@ -1,0 +1,116 @@
+{
+  "x": 0,
+  "y": 0,
+  "width": 1242,
+  "height": 1660,
+  "backgroundColor": "",
+  "pages": [
+    {
+      "id": "page1",
+      "children": [
+        "a2",
+        "a3",
+        "a4",
+        "a5"
+      ]
+    }
+  ],
+  "activePageId": "page1",
+  "deltaSetLike": {
+    "ROOT": {
+      "id": "ROOT",
+      "key": "entry",
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "attrs": {},
+      "children": [
+        "a2",
+        "a3",
+        "a4",
+        "a5"
+      ]
+    },
+    "a2": {
+      "id": "a2",
+      "key": "shape",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "width": 1242,
+      "height": 420,
+      "attrs": {
+        "shapeType": "rect",
+        "fill-color": "#EA580C",
+        "border-color": "transparent",
+        "border-width": 0,
+        "L": "true",
+        "R": "true",
+        "T": "true",
+        "B": "true",
+        "opacity": 1,
+        "angle": 0,
+        "radiusTL": 0,
+        "radiusTR": 0,
+        "radiusBR": 0,
+        "radiusBL": 0
+      },
+      "children": []
+    },
+    "a3": {
+      "id": "a3",
+      "key": "text",
+      "x": 80,
+      "y": 140,
+      "z": 0,
+      "width": 1000,
+      "height": 90,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"暑\",\"config\":{\"SIZE\":64,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}},{\"char\":\"期\",\"config\":{\"SIZE\":64,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}},{\"char\":\"特\",\"config\":{\"SIZE\":64,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}},{\"char\":\"惠\",\"config\":{\"SIZE\":64,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"暑期特惠\",\"bold\":true,\"font-base\":{\"fontSize\":64,\"color\":\"#FFFFFF\"}}]}]"
+      },
+      "children": []
+    },
+    "a4": {
+      "id": "a4",
+      "key": "text",
+      "x": 80,
+      "y": 250,
+      "z": 0,
+      "width": 800,
+      "height": 40,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"全\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"场\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"简\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"历\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"模\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"板\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\" \",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"5\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\" \",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"折\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}},{\"char\":\"起\",\"config\":{\"SIZE\":28,\"COLOR\":\"#FFEDD5\",\"WEIGHT\":\"normal\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"全场简历模板 5 折起\",\"bold\":false,\"font-base\":{\"fontSize\":28,\"color\":\"#FFEDD5\"}}]}]"
+      },
+      "children": []
+    },
+    "a5": {
+      "id": "a5",
+      "key": "text",
+      "x": 80,
+      "y": 520,
+      "z": 0,
+      "width": 1000,
+      "height": 120,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"一\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"键\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"套\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"用\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"官\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"方\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"案\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"例\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"，\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"快\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"速\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"输\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"出\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"作\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"品\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"集\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"封\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"面\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"与\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"活\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"动\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"海\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"报\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}},{\"char\":\"。\",\"config\":{\"SIZE\":24,\"COLOR\":\"#9A3412\",\"WEIGHT\":\"normal\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"一键套用官方案例，快速输出作品集封面与活动海报。\",\"bold\":false,\"font-base\":{\"fontSize\":24,\"color\":\"#9A3412\"}}]}]"
+      },
+      "children": []
+    }
+  },
+  "frames": [
+    {
+      "id": "frame1",
+      "name": "Promo poster",
+      "x": 0,
+      "y": 0,
+      "width": 1242,
+      "height": 1660,
+      "backgroundColor": "#FFF7ED"
+    }
+  ],
+  "activeFrameId": "frame1"
+}

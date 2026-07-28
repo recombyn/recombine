@@ -1,11 +1,31 @@
 .angle-editor-scene {
+  /* Theme-aware wires / faces: dark used white-on-black; light needs ink-on-canvas. */
+  --mae-face-bg: color-mix(in srgb, var(--ink) 8%, var(--canvas));
+  --mae-face-edge: color-mix(in srgb, var(--ink) 28%, transparent);
+  --mae-face-edge-soft: color-mix(in srgb, var(--ink) 12%, transparent);
+  --mae-face-label: color-mix(in srgb, var(--ink) 38%, transparent);
+  --mae-wire: color-mix(in srgb, var(--ink) 28%, transparent);
+  --mae-wire-axis: color-mix(in srgb, var(--ink) 32%, transparent);
+  --mae-arrow: color-mix(in srgb, var(--ink) 55%, transparent);
+  --mae-arrow-hover-bg: color-mix(in srgb, var(--ink) 10%, transparent);
+  --mae-subject-border: color-mix(in srgb, var(--ink) 16%, transparent);
+  --mae-subject-bg: color-mix(in srgb, var(--ink) 6%, var(--canvas));
+  --mae-subject-shadow: 0 1px 8px color-mix(in srgb, var(--ink) 18%, transparent);
+
   position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
   overflow: hidden;
   user-select: none;
-  background: #fff;
+  background: var(--canvas, #141414);
+}
+
+/* Preserve the original dark-mode cube weight (near #1f1f1f). */
+html[data-theme='dark'] .angle-editor-scene {
+  --mae-face-bg: #1f1f1f;
+  --mae-subject-bg: #1a1a1a;
+  --mae-subject-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
 }
 
 .angle-editor-scene .unified-scene {
@@ -58,11 +78,11 @@
   align-items: center;
   justify-content: center;
   border-radius: 2px;
-  border: 1px solid #d0d0d0;
-  background: #fff;
+  border: 1px solid var(--mae-face-edge-soft);
+  background: var(--mae-face-bg);
   overflow: hidden;
   backface-visibility: hidden;
-  color: #c4c4c4;
+  color: var(--mae-face-label);
   font-size: 22px;
   font-weight: 500;
   letter-spacing: 0.02em;
@@ -73,22 +93,22 @@
   border: none;
   /* Vertical edges especially get lost with border + rotateX; inset shadows stay painted. */
   box-shadow:
-    inset 0 0 0 1px #c4c4c4,
-    0 0 0 0.5px rgba(160, 160, 160, 0.35);
-  background: #fff;
+    inset 0 0 0 1px var(--mae-face-edge),
+    0 0 0 0.5px var(--mae-face-edge-soft);
+  background: var(--mae-face-bg);
   font-size: 28px;
   font-weight: 500;
-  color: #c8c8c8;
+  color: var(--mae-face-label);
   /* Keep side faces (L / R) visible when nearly edge-on. */
   backface-visibility: visible;
 }
 
 .angle-editor-scene .mode-skybox .angle-editor-cube-face.has-image {
   border: none;
-  background: #fff;
+  background: var(--mae-face-bg);
   box-shadow:
-    inset 0 0 0 1px #c4c4c4,
-    0 0 0 0.5px rgba(160, 160, 160, 0.35);
+    inset 0 0 0 1px var(--mae-face-edge),
+    0 0 0 0.5px var(--mae-face-edge-soft);
 }
 
 .angle-editor-scene .mode-skybox .angle-editor-face-image-content {
@@ -127,9 +147,9 @@
   object-fit: contain;
   object-position: center;
   border-radius: 2px;
-  border: 1px solid #d4d4d4;
-  background: #fff;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--mae-subject-border);
+  background: var(--mae-subject-bg);
+  box-shadow: var(--mae-subject-shadow);
   user-select: none;
   pointer-events: none;
 }
@@ -138,8 +158,8 @@
   width: 100%;
   height: 100%;
   border-radius: 2px;
-  border: 1px solid #d4d4d4;
-  background: #f7f7f7;
+  border: 1px solid var(--mae-subject-border);
+  background: var(--mae-subject-bg);
 }
 
 .angle-editor-scene .angle-editor-face-front {
@@ -188,10 +208,10 @@
   height: var(--mae-globe-size);
   margin-left: calc(var(--mae-globe-size) / -2);
   margin-top: calc(var(--mae-globe-size) / -2);
-  border: 1px solid rgba(120, 120, 120, 0.45);
+  border: 1px solid var(--mae-wire);
   border-radius: 50%;
   box-sizing: border-box;
-  opacity: 0.32;
+  opacity: 0.55;
   transform-style: preserve-3d;
   backface-visibility: visible;
 }
@@ -203,8 +223,8 @@
   width: 1px;
   height: var(--mae-globe-size);
   transform: translate(-50%, -50%);
-  background: rgba(120, 120, 120, 0.35);
-  opacity: 0.55;
+  background: var(--mae-wire-axis);
+  opacity: 0.65;
   pointer-events: none;
 }
 
@@ -370,14 +390,14 @@
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #9a9a9a;
+  color: var(--mae-arrow);
   cursor: pointer;
   pointer-events: auto;
 }
 
 .angle-editor-scene .angle-editor-direction-btn:hover {
-  color: #333;
-  background: rgba(255, 255, 255, 0.7);
+  color: var(--ink);
+  background: var(--mae-arrow-hover-bg);
 }
 
 .angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-up {
@@ -408,6 +428,6 @@
   align-items: center;
   justify-content: center;
   z-index: 1;
-  background: #fff;
+  background: var(--canvas, #141414);
   pointer-events: none;
 }

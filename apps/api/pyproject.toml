@@ -27,7 +27,14 @@ dependencies = [
   "zstandard>=0.22.0",
   "svg.path>=6.3",
   "langgraph>=0.4.0",
+  "langgraph-checkpoint-mysql[pymysql]>=2.0.0",
+  "langgraph-checkpoint-sqlite>=2.0.0",
+  "aiomysql>=0.2.0",
+  "asyncmy>=0.2.9",
+  "langchain>=0.3.0",
   "langchain-core>=0.3.0",
+  "langchain-openai>=1.0.0",
+  "langchain-text-splitters>=0.3.0",
 ]
 
 [project.optional-dependencies]

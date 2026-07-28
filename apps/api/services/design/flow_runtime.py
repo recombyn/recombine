@@ -37,10 +37,16 @@ def eval_edge_condition(condition: str, ctx: dict[str, Any] | None) -> bool:
     - empty → always true (unconditional)
     - flag name → ctx[flag] truthy, or flag in ctx["flags"]
     - field=value / field==value → string equality on ctx[field]
+    - a&b / a&&b → all conjuncts true (recursive)
     """
     cond = (condition or "").strip()
     if not cond:
         return True
+    # AND first so mode=ask&op_failed does not split on '=' incorrectly.
+    if "&&" in cond or "&" in cond:
+        parts = [p.strip() for p in cond.replace("&&", "&").split("&") if p.strip()]
+        return all(eval_edge_condition(p, ctx) for p in parts) if parts else True
+
     data = ctx or {}
     flags = data.get("flags")
     flag_set = {str(x).strip() for x in flags} if isinstance(flags, (list, set, tuple)) else set()
@@ -61,7 +67,6 @@ def eval_edge_condition(condition: str, ctx: dict[str, Any] | None) -> bool:
         return True
     if cond in data:
         return bool(data.get(cond))
-    # Soft match: common intent shortcuts like intent=ask/chat already handled above.
     return False
 
 
@@ -77,7 +82,6 @@ def choose_outgoing_edges(
     Returns (edges, detail). detail keys: via, edge_id, condition, label, priority,
     is_default, candidate_count.
     """
-    kind = str(node.get("kind") or "").lower()
     outs = sorted(edges, key=lambda e: (_edge_priority(e), str(e.get("id") or "")))
     empty: dict[str, Any] = {
         "via": "none",
@@ -90,7 +94,9 @@ def choose_outgoing_edges(
     }
     if not outs:
         return [], empty
-    if explore_all or kind == "parallel":
+    # Fan-out only when explore_all (Admin dry-run). Runtime uses exclusive match
+    # so parallel gateways still honor condition/priority/isDefault.
+    if explore_all:
         first = outs[0]
         return list(outs), {
             "via": "parallel",

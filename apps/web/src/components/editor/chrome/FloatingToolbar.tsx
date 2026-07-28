@@ -11,7 +11,7 @@ type FloatingToolbarProps = HTMLAttributes<HTMLDivElement> & {
 };
 
 /**
- * Floating editor toolbar chrome — pill container, circular tool hits.
+ * Floating editor toolbar chrome — full pill ends (tool strips / HUD).
  */
 export function FloatingToolbar({
   bare = false,

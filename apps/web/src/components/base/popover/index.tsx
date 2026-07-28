@@ -226,7 +226,7 @@ const CustomPopover = ({
             className={cn(
               'w-fit min-w-[130px] overflow-hidden bg-[var(--color-background-default-base)] p-2 shadow-lg',
               'focus:outline-none focus-visible:outline-none',
-              !popupClassName?.includes('rounded') && 'rounded-[8px]',
+              !popupClassName?.includes('rounded') && 'rounded-xl',
               popupClassName
             )}
             {...(trigger === 'hover'

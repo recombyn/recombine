@@ -32,6 +32,7 @@ import {
 } from './sceneEffects';
 import type { StrokeAlign, StrokeLinecap, StrokeLinejoin } from './sceneEffects';
 import { isTransparentFill, resolveDocumentBackground, resolveFill } from './sceneFill';
+import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isNodeHidden } from './sceneDocument';
 import {
   filletPathD,
   polygonRadiiFromCorners,
@@ -942,28 +943,71 @@ export async function nodeToSvgElement(
     const boxH = Math.max(1, Number(node.height) || 100);
     const meta = objectMeta(node);
     const cssFilter = String(node.attrs?.cssFilter || '').trim();
-    const cornerR = radiiFromAttrs(node.attrs);
+    const isGen = isImageGeneratorNode(node);
+    // Generator plates are always sharp (artboard-like), even for older docs with radius attrs.
+    const cornerR = isGen
+      ? { tl: 0, tr: 0, br: 0, bl: 0 }
+      : radiiFromAttrs(node.attrs);
     const clipD = roundedRectPath(boxW, boxH, cornerR);
 
     if (!src && !processing) {
       const g = appendChild(parent, svgEl('g'));
       const plate = appendChild(g, svgEl('path', { d: clipD }));
-      setFill(plate, '#E5E7EB');
-      setStroke(plate, { color: '#9CA3AF', width: 1.5, dasharray: '6 4' });
+      // Generator: soft gray plate + centered photo icon (no selection chrome).
+      // Empty image upload placeholder: dashed border wash.
+      setFill(plate, isGen ? '#E8EAED' : '#E5E7EB');
+      setStroke(plate, {
+        color: isGen ? 'rgba(0,0,0,0.06)' : '#9CA3AF',
+        width: isGen ? 1 : 1.5,
+        dasharray: isGen ? undefined : '6 4',
+      });
       setAttrs(plate, { 'data-radius-body': '1' });
-      const wash = appendChild(
-        g,
-        svgEl('rect', {
-          x: 8,
-          y: 8,
-          width: Math.max(1, boxW - 16),
-          height: Math.max(1, boxH - 16),
-          'pointer-events': 'none',
-        })
-      );
-      setFill(wash, '#F9FAFB');
-      setStroke(wash, 'none');
+      if (isGen) {
+        // Solid landscape glyph (sun + two peaks) — flat fill, no frame.
+        // Scale with the plate (~34% of the shorter side); no tiny absolute cap.
+        const iconSize = Math.max(72, Math.min(boxW, boxH) * 0.34);
+        const ix = (boxW - iconSize) / 2;
+        const iy = (boxH - iconSize) / 2;
+        const s = iconSize / 24;
+        const icon = appendChild(
+          g,
+          svgEl('g', {
+            transform: `translate(${ix},${iy}) scale(${s})`,
+            'pointer-events': 'none',
+          })
+        );
+        // Sun (upper-right) — light gray so it sits softly on the plate
+        const sun = appendChild(
+          icon,
+          svgEl('circle', { cx: 16.5, cy: 7.5, r: 2.25 })
+        );
+        setFill(sun, '#D1D5DB');
+        setStroke(sun, 'none');
+        // Twin peaks silhouette
+        const peaks = appendChild(
+          icon,
+          svgEl('path', {
+            d: 'M3.5 18.5 L9.2 10.2 L13.1 15.1 L16.4 11.4 L20.5 18.5 Z',
+          })
+        );
+        setFill(peaks, '#D1D5DB');
+        setStroke(peaks, 'none');
+      } else {
+        const wash = appendChild(
+          g,
+          svgEl('rect', {
+            x: 8,
+            y: 8,
+            width: Math.max(1, boxW - 16),
+            height: Math.max(1, boxH - 16),
+            'pointer-events': 'none',
+          })
+        );
+        setFill(wash, '#F9FAFB');
+        setStroke(wash, 'none');
+      }
       tagNode(g, nodeId, 'image', undefined, left, top, boxW, boxH);
+      if (isGen || processing) setAttrs(g, { 'data-export-ignore': '1' });
       applyMeta(g, left, top, meta, boxW, boxH);
       return g;
     }
@@ -976,7 +1020,14 @@ export async function nodeToSvgElement(
       if (previewSrc) {
         const img = appendChild(
           g,
-          svgEl('image', { width: boxW, height: boxH, x: 0, y: 0 })
+          svgEl('image', {
+            width: boxW,
+            height: boxH,
+            x: 0,
+            y: 0,
+            // Fill the node box (like rects) — default SVG `meet` letterboxes.
+            preserveAspectRatio: 'none',
+          })
         );
         setSvgImageHref(img, previewSrc);
         if (cssFilter) setStyles(img, { filter: cssFilter });
@@ -1005,6 +1056,8 @@ export async function nodeToSvgElement(
       }
 
       tagNode(g, nodeId, 'image', undefined, left, top, boxW, boxH);
+      // Process shimmer is editor chrome — never bake into export / cover clones.
+      setAttrs(g, { 'data-export-ignore': '1' });
       applyMeta(g, left, top, meta, boxW, boxH);
       applyNodeShadow(root, g, node);
       (g as any).__sceneCornerRadii = { ...cornerR };
@@ -1012,7 +1065,18 @@ export async function nodeToSvgElement(
     }
 
     const g = appendChild(parent, svgEl('g'));
-    const img = appendChild(g, svgEl('image', { width: boxW, height: boxH, x: 0, y: 0 }));
+    const img = appendChild(
+      g,
+      svgEl('image', {
+        width: boxW,
+        height: boxH,
+        x: 0,
+        y: 0,
+        // Stretch to the control box — same as shapes filling their bounds.
+        // Default `xMidYMid meet` keeps photo aspect and leaves empty gutters.
+        preserveAspectRatio: 'none',
+      })
+    );
     setSvgImageHref(img, String(src));
     const clipId = nextClipId('img-clip');
     const defs = ensureDefs(root);
@@ -1024,6 +1088,7 @@ export async function nodeToSvgElement(
     setAttrs(g, { 'data-radius-clip-id': clipId });
     (g as any).__sceneCornerRadii = { ...cornerR };
     tagNode(g, nodeId, 'image', undefined, left, top, boxW, boxH);
+    if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
     applyMeta(g, left, top, meta, boxW, boxH);
     applyNodeShadow(root, g, node);
     if (cssFilter && cssFilter !== 'none') {
@@ -1121,13 +1186,14 @@ export async function loadSceneOntoSvg(
   document: any,
   loadSeq = 0,
   boardMeta?: { loadSeq?: number },
-  opts?: { infinite?: boolean }
+  opts?: { infinite?: boolean; /** Skip generators + process-shimmer plates (export / cover). */ omitNonExportable?: boolean; /** @deprecated use omitNonExportable */ omitImageGenerators?: boolean }
 ) {
   if (!root || !layer || !document?.deltaSetLike?.ROOT) {
     return new Map<string, SVGElement>();
   }
 
   const infinite = Boolean(opts?.infinite);
+  const omitNonExportable = Boolean(opts?.omitNonExportable || opts?.omitImageGenerators);
   const w = Math.round(document.width || 794);
   const h = Math.round(document.height || 1123);
   if (infinite) {
@@ -1150,6 +1216,7 @@ export async function loadSceneOntoSvg(
   for (const nodeId of children) {
     if (boardMeta && loadSeq && boardMeta.loadSeq !== loadSeq) return nodeEls;
     const node = document.deltaSetLike[nodeId];
+    if (omitNonExportable ? !isExportableSceneNode(node) : isNodeHidden(node)) continue;
     try {
       const el = await nodeToSvgElement(root, layer, document, node, nodeId);
       if (boardMeta && loadSeq && boardMeta.loadSeq !== loadSeq) {
@@ -1223,74 +1290,6 @@ function setPathD(target: Element | null | undefined, d: string): boolean {
   if (prev instanceof Element && prev.getAttribute('data-stroke-under') === '1') {
     prev.setAttribute('d', d);
   }
-  return true;
-}
-
-function findRadiusPath(el: SVGElement): Element | null {
-  const clipId = el.getAttribute('data-radius-clip-id') || '';
-  if (clipId) {
-    const clipHost =
-      el.ownerSVGElement?.getElementById(clipId) ||
-      (typeof document !== 'undefined' ? document.getElementById(clipId) : null);
-    if (clipHost) {
-      return (
-        clipHost.querySelector('[data-radius-clip="1"]') ||
-        clipHost.querySelector('path')
-      );
-    }
-  }
-  return (
-    el.querySelector('[data-radius-clip="1"]') ||
-    el.querySelector('[data-radius-body="1"]') ||
-    el.querySelector(':scope > path') ||
-    (el.tagName.toLowerCase() === 'path' ? el : null)
-  );
-}
-
-export function previewSvgNodeRadii(
-  nodeEls: Map<string, SVGElement>,
-  nodeId: string,
-  radii: CornerRadii
-): boolean {
-  const el = nodeEls.get(nodeId);
-  if (!el) return false;
-  const geom = readGeom(el);
-  if (!geom) return false;
-
-  const shapeType = String(
-    (el as any).sceneShapeType || el.getAttribute('data-scene-shape-type') || ''
-  );
-
-  if (shapeType === 'triangle' || shapeType === 'star' || shapeType === 'polygon') {
-    const d = roundedShapePath(shapeType, geom.width, geom.height, radii, readSceneSides(el));
-    if (el.tagName.toLowerCase() === 'path') return setPathD(el, d);
-    return setPathD(findRadiusPath(el), d);
-  }
-
-  if (shapeType === 'path') {
-    const base =
-      String((el as any).__sceneBasePath || '') ||
-      String(el.getAttribute('data-scene-base-path') || '');
-    if (!base) return false;
-    const d = filletPathD(base, radii);
-    if (el.tagName.toLowerCase() === 'path') return setPathD(el, d);
-    return setPathD(findRadiusPath(el), d);
-  }
-
-  const d = roundedRectPath(geom.width, geom.height, radii);
-  if (setPathD(findRadiusPath(el), d)) {
-    if (String((el as any).sceneNodeKey || '') === 'image') {
-      (el as any).__sceneCornerRadii = { ...radii };
-    }
-    return true;
-  }
-
-  const pathEl =
-    el.tagName.toLowerCase() === 'path'
-      ? el
-      : (el.querySelector(':scope > path') as SVGPathElement | null);
-  if (!pathEl) return false;
-  pathEl.setAttribute('d', d);
   return true;
 }
 
@@ -1435,55 +1434,40 @@ function previewResizeImage(
     return false;
   }
 
+  const geom = readGeom(el);
+  if (!geom) return false;
+
   const w = Math.max(1, box.width);
   const h = Math.max(1, box.height);
-  const img = el.querySelector('image') as SVGImageElement | null;
-  if (img) {
-    setAttrs(img, { width: w, height: h, x: 0, y: 0 });
-  }
+  const EPS = 1e-3;
+  const sameSize =
+    Math.abs(geom.width - w) < EPS && Math.abs(geom.height - h) < EPS;
 
-  const stored = anyEl.__sceneCornerRadii as CornerRadii | undefined;
-  const radii: CornerRadii = stored
-    ? {
-        tl: Number(stored.tl) || 0,
-        tr: Number(stored.tr) || 0,
-        br: Number(stored.br) || 0,
-        bl: Number(stored.bl) || 0,
-      }
-    : { tl: 0, tr: 0, br: 0, bl: 0 };
-  const clipD = roundedRectPath(w, h, radii);
-
-  const clipId = el.getAttribute('data-radius-clip-id') || '';
-  if (clipId) {
-    const clipHost =
-      el.ownerSVGElement?.getElementById(clipId) ||
-      (typeof document !== 'undefined' ? document.getElementById(clipId) : null);
-    const pathEl = clipHost?.querySelector('[data-radius-clip="1"], path');
-    setPathD(pathEl, clipD);
-  } else {
-    setPathD(el.querySelector('[data-radius-clip="1"]'), clipD);
-  }
-
-  // Loading / placeholder plates use data-radius-body (no clipPath on the group).
-  el.querySelectorAll('[data-radius-body="1"]').forEach((pathEl) => {
-    setPathD(pathEl, clipD);
-  });
-
-  // Empty-image inset wash (sceneToSvg placeholder).
-  const wash = el.querySelector(':scope > rect') as SVGRectElement | null;
-  if (wash && !wash.hasAttribute('data-radius-body')) {
-    const inset = 8;
-    setAttrs(wash, {
-      x: inset,
-      y: inset,
-      width: Math.max(1, w - inset * 2),
-      height: Math.max(1, h - inset * 2),
+  // Pure translate — keep bitmap attrs; just move the group.
+  if (sameSize && !anyEl.__sceneDidResize) {
+    writeGeom(el, {
+      left: box.left,
+      top: box.top,
+      width: w,
+      height: h,
+      abs: false,
     });
+    reapplySceneTransform(el, box.left, box.top, w, h);
+    return true;
   }
 
-  anyEl.__sceneDidResize = false;
-  delete anyEl.__sceneDragBaseW;
-  delete anyEl.__sceneDragBaseH;
+  // Live resize: scale the group (same as svg/custom-path nodes). Mutating
+  // <image width/height> alone does not reliably repaint under per-shape
+  // infinite SVG hosts — the control box moves while the bitmap stays put.
+  // Final size is baked via replaceShapePaint on commit.
+  if (!anyEl.__sceneDragBaseW) {
+    anyEl.__sceneDragBaseW = geom.width;
+    anyEl.__sceneDragBaseH = geom.height;
+  }
+  anyEl.__sceneDidResize = true;
+  const bw = Math.max(1, Number(anyEl.__sceneDragBaseW) || geom.width);
+  const bh = Math.max(1, Number(anyEl.__sceneDragBaseH) || geom.height);
+
   writeGeom(el, {
     left: box.left,
     top: box.top,
@@ -1491,7 +1475,7 @@ function previewResizeImage(
     height: h,
     abs: false,
   });
-  reapplySceneTransform(el, box.left, box.top, w, h);
+  reapplySceneTransformScaled(el, box.left, box.top, bw, bh, w / bw, h / bh);
   return true;
 }
 
@@ -1939,20 +1923,4 @@ export function createSvgBoard(
   }
   const layer = appendChild(root, svgEl('g', { id: 'scene-layer' }));
   return { root, layer };
-}
-
-export async function documentToSvgString(document: any): Promise<string> {
-  if (typeof window === 'undefined' || !document) return '';
-  const host = window.document.createElement('div');
-  host.setAttribute('data-rcb-export-host', '1');
-  host.style.cssText =
-    'position:fixed;left:-99999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
-  window.document.body.appendChild(host);
-  try {
-    const { root, layer } = createSvgBoard(host, 794, 1123, { infinite: true });
-    await loadSceneOntoSvg(root, layer, document, 1, { loadSeq: 1 }, { infinite: true });
-    return new XMLSerializer().serializeToString(root);
-  } finally {
-    host.remove();
-  }
 }

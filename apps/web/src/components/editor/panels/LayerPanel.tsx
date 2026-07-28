@@ -14,15 +14,23 @@ import { RxText } from 'react-icons/rx';
 import {
   HiOutlineChevronDown,
   HiOutlineChevronUp,
+  HiOutlineEye,
+  HiOutlineEyeSlash,
+  HiOutlineLockClosed,
+  HiOutlineLockOpen,
   HiOutlineMinus,
   HiOutlinePhoto,
   HiOutlineStop,
 } from 'react-icons/hi2';
 import { TbArrowUpRight, TbCircle, TbPolygon, TbStar, TbTriangle } from 'react-icons/tb';
 import Tooltip from '@/components/base/tooltip';
-import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
+import {
+  isNodeHidden,
+  isNodeLocked,
+  listSceneNodes,
+} from '@/components/rcb/scene/sceneDocument';
 import { cn } from '@/utils/classnames';
-import { setSelectedNodeId } from '@/store/modules/editor';
+import { patchDocumentNode, setSelectedNodeId } from '@/store/modules/editor';
 
 const LAYER_DOCK_WIDTH_KEY = 'layer-dock-width';
 const LAYER_DOCK_MIN_W = 180;
@@ -147,14 +155,24 @@ function layerLabel(node: { key: string; attrs?: { shapeType?: string } }) {
   return map[kind] || kind;
 }
 
+function hiddenAttrPatch(nextHidden: boolean) {
+  return { attrs: { hidden: nextHidden ? 'true' : 'false' } };
+}
+
+function lockedAttrPatch(nextLocked: boolean) {
+  return { attrs: { locked: nextLocked ? 'true' : 'false' } };
+}
+
 /** Left layers dock — history + scene nodes (fig.2). */
 export default function LayerPanel({
   onClose,
   onSelectNode,
+  mobile = false,
 }: {
   onClose?: () => void;
   /** Select + pan camera so the node is centered in the current viewport. */
   onSelectNode?: (nodeId: string) => void;
+  mobile?: boolean;
 } = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -240,23 +258,28 @@ export default function LayerPanel({
 
   return (
     <aside
-      style={{ width: dockWidth }}
-      className="relative flex h-full shrink-0 flex-col overflow-hidden border-r border-[var(--line)] bg-[var(--surface)]"
+      style={mobile ? { width: 'min(20rem, 82vw)' } : { width: dockWidth }}
+      className={cn(
+        'relative flex h-full shrink-0 flex-col overflow-hidden border-r border-[var(--line)] bg-[var(--surface)]',
+        mobile && 'shadow-[0_18px_48px_rgba(12,12,13,0.24)]'
+      )}
     >
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('editor.resizeLayersDock')}
-        aria-valuemin={LAYER_DOCK_MIN_W}
-        aria-valuemax={LAYER_DOCK_MAX_W}
-        aria-valuenow={dockWidth}
-        className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize touch-none hover:bg-[var(--accent)]/25 active:bg-[var(--accent)]/40"
-        onPointerDown={onDockResizePointerDown}
-        onPointerMove={onDockResizePointerMove}
-        onPointerUp={endDockResize}
-        onPointerCancel={endDockResize}
-        onDoubleClick={() => persistDockWidth(LAYER_DOCK_DEFAULT_W)}
-      />
+      {!mobile ? (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('editor.resizeLayersDock')}
+          aria-valuemin={LAYER_DOCK_MIN_W}
+          aria-valuemax={LAYER_DOCK_MAX_W}
+          aria-valuenow={dockWidth}
+          className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize touch-none hover:bg-[var(--accent)]/25 active:bg-[var(--accent)]/40"
+          onPointerDown={onDockResizePointerDown}
+          onPointerMove={onDockResizePointerMove}
+          onPointerUp={endDockResize}
+          onPointerCancel={endDockResize}
+          onDoubleClick={() => persistDockWidth(LAYER_DOCK_DEFAULT_W)}
+        />
+      ) : null}
       <div className="flex h-11 shrink-0 items-center justify-between px-3">
         <span className="text-[14px] font-semibold text-[var(--ink)]">{t('editor.layers')}</span>
         {onClose ? (
@@ -288,23 +311,25 @@ export default function LayerPanel({
           )}
         </button>
         {historyOpen ? (
-          historyItems.length ? (
-            <ul className="mt-1 max-h-[120px] space-y-0.5 overflow-y-auto">
-              {historyItems.map((item) => (
-                <li
-                  key={item.id}
-                  className="truncate rounded-md px-2 py-1.5 text-[12px] text-[var(--muted)]"
-                >
-                  {item.label}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="flex flex-col items-center justify-center gap-2 py-6 text-[var(--muted)]">
-              <HiOutlinePhoto className="h-8 w-8 opacity-40" />
-              <p className="text-[12px]">{t('editor.noHistory')}</p>
-            </div>
-          )
+          <div className="mt-1 h-[120px] overflow-y-auto">
+            {historyItems.length ? (
+              <ul className="space-y-0.5">
+                {historyItems.map((item) => (
+                  <li
+                    key={item.id}
+                    className="truncate rounded-md px-2 py-1.5 text-[12px] text-[var(--muted)]"
+                  >
+                    {item.label}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-[var(--muted)]">
+                <HiOutlinePhoto className="h-8 w-8 opacity-40" />
+                <p className="text-[12px]">{t('editor.noHistory')}</p>
+              </div>
+            )}
+          </div>
         ) : null}
       </div>
 
@@ -312,26 +337,111 @@ export default function LayerPanel({
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
         {nodes.length ? (
           <ul>
-            {[...nodes].reverse().map(({ id, node }: any) => (
-              <li key={id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onSelectNode) onSelectNode(id);
-                    else dispatch(setSelectedNodeId(id));
-                  }}
-                  className={cn(
-                    'flex min-h-[40px] w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] transition-colors',
-                    selectedNodeId === id
-                      ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-                      : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
-                  )}
-                >
-                  <LayerIcon node={node} />
-                  <span className="min-w-0 flex-1 truncate">{layerLabel(node)}</span>
-                </button>
-              </li>
-            ))}
+            {[...nodes].reverse().map(({ id, node }: any) => {
+              const hidden = isNodeHidden(node);
+              const locked = isNodeLocked(node);
+              return (
+                <li key={id}>
+                  <div
+                    className={cn(
+                      'group flex min-h-[40px] w-full items-center gap-1 px-2 py-1 text-[13px] transition-colors',
+                      selectedNodeId === id
+                        ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+                        : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onSelectNode) onSelectNode(id);
+                        else dispatch(setSelectedNodeId(id));
+                      }}
+                      className={cn(
+                        'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left',
+                        hidden && 'opacity-50'
+                      )}
+                    >
+                      <LayerIcon node={node} />
+                      <span className="min-w-0 flex-1 truncate">{layerLabel(node)}</span>
+                    </button>
+                    <Tooltip
+                      title={
+                        hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
+                      }
+                      placement="top"
+                    >
+                      <button
+                        type="button"
+                        aria-label={
+                          hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
+                        }
+                        aria-pressed={hidden}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const nextHidden = !hidden;
+                          dispatch(
+                            patchDocumentNode({
+                              nodeId: id,
+                              patch: hiddenAttrPatch(nextHidden),
+                            })
+                          );
+                          if (nextHidden && selectedNodeId === id) {
+                            dispatch(setSelectedNodeId(null));
+                          }
+                        }}
+                        className={cn(
+                          'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+                          !hidden && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                          selectedNodeId === id && !hidden && 'opacity-100'
+                        )}
+                      >
+                        {hidden ? (
+                          <HiOutlineEyeSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        ) : (
+                          <HiOutlineEye className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        )}
+                      </button>
+                    </Tooltip>
+                    <Tooltip
+                      title={
+                        locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
+                      }
+                      placement="top"
+                    >
+                      <button
+                        type="button"
+                        aria-label={
+                          locked
+                            ? t('editor.contextMenu.unlock')
+                            : t('editor.contextMenu.lock')
+                        }
+                        aria-pressed={locked}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dispatch(
+                            patchDocumentNode({
+                              nodeId: id,
+                              patch: lockedAttrPatch(!locked),
+                            })
+                          );
+                        }}
+                        className={cn(
+                          'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+                          !locked && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                          selectedNodeId === id && !locked && 'opacity-100'
+                        )}
+                      >
+                        {locked ? (
+                          <HiOutlineLockClosed className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        ) : (
+                          <HiOutlineLockOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        )}
+                      </button>
+                    </Tooltip>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="px-3 py-8 text-center text-[12px] text-[var(--muted)]">{t('editor.noLayers')}</p>

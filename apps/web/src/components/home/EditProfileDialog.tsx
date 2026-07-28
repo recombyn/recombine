@@ -17,6 +17,38 @@ type Props = {
   onClose: () => void;
 };
 
+type ProfileValidateResult = { ok: true; name: string; bio: string | null } | { ok: false; warnKey: string };
+
+function validateProfileFields(opts: {
+  name: string;
+  bio: string;
+  hasUser: boolean;
+}): ProfileValidateResult {
+  const trimmed = opts.name.trim();
+  if (!trimmed) return { ok: false, warnKey: 'me.nameRequired' };
+  if (trimmed.length > 40 || !NAME_RE.test(trimmed)) return { ok: false, warnKey: 'me.nameHint' };
+  if (!opts.hasUser) return { ok: false, warnKey: 'me.needLogin' };
+  return { ok: true, name: trimmed, bio: opts.bio.trim().slice(0, MAX_BIO) || null };
+}
+
+function readAvatarDataUrl(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || '');
+      resolve(url.startsWith('data:image/') ? url : null);
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+function avatarFileRejectReason(file: File): 'type' | 'size' | null {
+  if (!file.type.startsWith('image/')) return 'type';
+  if (file.size > MAX_AVATAR_MB * 1024 * 1024) return 'size';
+  return null;
+}
+
 export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -45,47 +77,36 @@ export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
 
   const onAvatarFile = (file: File | null) => {
     if (!file || saving) return;
-    if (!file.type.startsWith('image/')) {
+    const reject = avatarFileRejectReason(file);
+    if (reject === 'type') {
       message.warning(t('me.avatarTypeError'));
       return;
     }
-    if (file.size > MAX_AVATAR_MB * 1024 * 1024) {
+    if (reject === 'size') {
       message.warning(t('me.avatarSizeError', { mb: MAX_AVATAR_MB }));
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result || '');
-      if (url.startsWith('data:image/')) setAvatar(url);
-    };
-    reader.readAsDataURL(file);
+    void readAvatarDataUrl(file).then((url) => {
+      if (url) setAvatar(url);
+    });
   };
 
   const onSave = async () => {
-    const trimmed = name.trim();
-    if (!trimmed) {
-      message.warning(t('me.nameRequired'));
+    const checked = validateProfileFields({ name, bio, hasUser: Boolean(user) });
+    if (checked.ok === false) {
+      message.warning(t(checked.warnKey));
       return;
     }
-    if (trimmed.length > 40 || !NAME_RE.test(trimmed)) {
-      message.warning(t('me.nameHint'));
-      return;
-    }
-    if (!user) {
-      message.warning(t('me.needLogin'));
-      return;
-    }
-    if (saving) return;
-    const nextBio = bio.trim().slice(0, MAX_BIO) || null;
+    if (!user || saving) return;
     setSaving(true);
     try {
-      const res = await updateProfile({ name: trimmed, bio: nextBio, avatar });
+      const res = await updateProfile({ name: checked.name, bio: checked.bio, avatar });
       dispatch(
         setUser({
           ...user,
           id: res.user.id || user.id,
           name: res.user.name,
-          bio: res.user.bio ?? nextBio,
+          bio: res.user.bio ?? checked.bio,
           avatar: res.user.avatar ?? avatar,
           email: res.user.email || user.email,
           provider: res.user.provider || user.provider,
@@ -108,6 +129,7 @@ export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
         onClose();
       }}
       width={420}
+      style={{ maxWidth: 'min(420px, calc(100vw - 4rem))' }}
       className="!rounded-2xl !px-0 !pb-4 !pt-0"
       bodyClassName="!p-0"
       footerClassName="!px-5 !pt-2"

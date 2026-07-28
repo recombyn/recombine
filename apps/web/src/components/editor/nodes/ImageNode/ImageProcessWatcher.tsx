@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { message } from '@/components/base';
 import { processImageTool } from '@/apis/imageTools';
-import { uploadImageFromSrc } from '@/apis/upload';
+import { uploadImageFromSrc } from '@/utils/uploadImage';
 import { fetchWallet } from '@/apis/wallet';
 import { failImageProcess, finishImageProcess } from '@/store/modules/editor';
 import { syncFromServer } from '@/store/modules/wallet';
@@ -12,7 +12,6 @@ const AI_KINDS = new Set([
   'removeBg',
   'multiAngle',
   'expand',
-  'editElements',
   'editText',
   'adjust',
 ]);
@@ -71,7 +70,8 @@ function refreshWallet(dispatch: (action: unknown) => void) {
 function processFailMessage(err: any): string {
   const status = err?.response?.status;
   const detail = err?.response?.data?.detail || err?.message;
-  if (status === 402 || detail === 'Insufficient credits') return 'Token 不足，请充值后再试';
+  if (status === 402 || detail === 'Insufficient credits' || detail === 'Insufficient tokens')
+    return 'Token 不足，请充值后再试';
   if (status === 401) return '请先登录后再使用 AI 工具';
   if (typeof detail === 'string' && detail.trim()) return detail;
   return '图片处理失败';
@@ -127,18 +127,28 @@ export default function ImageProcessWatcher() {
       const meta = parseMeta(liveNode?.attrs?.processMeta);
 
       try {
-        const res = await processImageTool({
+        const processBody: {
+          kind: string;
+          image: string;
+          meta?: Record<string, unknown>;
+          aspect_ratio?: string;
+          quality?: string;
+          resolution?: string;
+        } = {
           kind,
           image,
-          meta,
-          aspect_ratio: aspectFromBox(w, h),
           quality: 'high',
-          resolution: resolutionFor(kind, liveNode),
-        });
+        };
+        if (meta) processBody.meta = meta;
+        const aspect = aspectFromBox(w, h);
+        if (aspect) processBody.aspect_ratio = aspect;
+        const resolution = resolutionFor(kind, liveNode);
+        if (resolution) processBody.resolution = resolution;
+        const res = await processImageTool(processBody);
         if (cancelled) return;
 
         const layers = Array.isArray(res?.layers) ? res.layers : [];
-        if (layers.length > 0 && (kind === 'editElements' || kind === 'editText')) {
+        if (layers.length > 0 && kind === 'editText') {
           const persisted = await Promise.all(
             layers.map(async (layer: any, i: number) => {
               const src = String(layer?.src || '').trim();
@@ -156,13 +166,9 @@ export default function ImageProcessWatcher() {
               sourceHeight: Number(res.height) || undefined,
             })
           );
-          const labels: Record<string, string> = {
-            editElements: '元素拆分完成',
-            editText: '文字识别完成',
-          };
           const warn = Array.isArray(res.warnings) ? res.warnings.filter(Boolean) : [];
           if (warn.length) message.warning(warn[0]);
-          else message.success(labels[kind] || '处理完成');
+          else message.success('文字识别完成');
           refreshWallet(dispatch);
           return;
         }
@@ -187,7 +193,6 @@ export default function ImageProcessWatcher() {
           upscale: '高清放大完成',
           multiAngle: '多角度生成完成',
           expand: '扩展完成',
-          editElements: '编辑元素完成',
           editText: '编辑文字完成',
           vector: '矢量化完成',
           adjust: '调整完成',

@@ -22,6 +22,10 @@ type WalletState = {
   ledger: LedgerEntry[];
   /** Membership plan; `credits` mirrors `tokens` for older UI. */
   planId: PlanId;
+  /** Paid plan end (unix seconds); null when free / unset. */
+  planExpiresAt: number | null;
+  /** True while paid plan term is still active — block plan switches. */
+  planLocked: boolean;
   credits: number;
   creditsIncluded: number;
   demoUsageSeeded?: boolean;
@@ -47,10 +51,18 @@ function defaultState(): WalletState {
     tokens: 0,
     ledger: [],
     planId: 'free',
+    planExpiresAt: null,
+    planLocked: false,
     credits: 0,
     creditsIncluded: PLAN_CATALOG.free.creditsIncluded,
     demoUsageSeeded: true,
   };
+}
+
+function normalizeExpiresAt(raw: unknown): number | null {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function persist(state: WalletState) {
@@ -61,6 +73,8 @@ function persist(state: WalletState) {
         tokens: state.tokens,
         ledger: state.ledger.slice(0, 200),
         planId: state.planId,
+        planExpiresAt: state.planExpiresAt,
+        planLocked: state.planLocked,
         credits: state.credits,
         creditsIncluded: state.creditsIncluded,
         demoUsageSeeded: state.demoUsageSeeded ?? true,
@@ -83,10 +97,14 @@ function loadWallet(): WalletState {
             (e) => e && typeof e.id === 'string' && typeof e.amount === 'number'
           )
         : [];
+      const planExpiresAt = normalizeExpiresAt(parsed?.planExpiresAt);
+      const planLocked = Boolean(parsed?.planLocked) && planId !== 'free';
       return {
         tokens,
         ledger,
         planId,
+        planExpiresAt,
+        planLocked,
         credits: tokens,
         creditsIncluded: Number(parsed?.creditsIncluded) || PLAN_CATALOG[planId].creditsIncluded,
         demoUsageSeeded: Boolean(parsed?.demoUsageSeeded ?? true),
@@ -104,6 +122,8 @@ function loadWallet(): WalletState {
           tokens,
           ledger: [],
           planId,
+          planExpiresAt: null,
+          planLocked: false,
           credits: tokens,
           creditsIncluded: Number(old?.creditsIncluded) || PLAN_CATALOG[planId].creditsIncluded,
           demoUsageSeeded: Boolean(old?.demoUsageSeeded ?? true),
@@ -127,12 +147,31 @@ const walletSlice = createSlice({
     /** Replace local state from authenticated API (card-key wallet). */
     syncFromServer(
       state,
-      action: PayloadAction<{ tokens: number; ledger?: LedgerEntry[] }>
+      action: PayloadAction<{
+        tokens: number;
+        ledger?: LedgerEntry[];
+        planId?: PlanId | string;
+        planExpiresAt?: number | null;
+        planLocked?: boolean;
+      }>
     ) {
       state.tokens = roundTokens(action.payload.tokens);
       syncCreditsAlias(state);
       if (Array.isArray(action.payload.ledger)) {
         state.ledger = action.payload.ledger;
+      }
+      if (action.payload.planId != null) {
+        const planId = normalizePlanId(action.payload.planId);
+        state.planId = planId;
+        state.creditsIncluded = PLAN_CATALOG[planId].creditsIncluded;
+      }
+      if (action.payload.planExpiresAt !== undefined) {
+        state.planExpiresAt = normalizeExpiresAt(action.payload.planExpiresAt);
+      }
+      if (action.payload.planLocked !== undefined) {
+        state.planLocked = Boolean(action.payload.planLocked) && state.planId !== 'free';
+      } else if (state.planId === 'free') {
+        state.planLocked = false;
       }
       persist(state);
     },
@@ -185,16 +224,26 @@ const walletSlice = createSlice({
       state.tokens = 0;
       syncCreditsAlias(state);
       state.ledger = [];
-      persist(state);
+      state.planId = 'free';
+      state.planExpiresAt = null;
+      state.planLocked = false;
+      state.creditsIncluded = PLAN_CATALOG.free.creditsIncluded;
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(LEGACY_V2);
+      } catch {
+        /* ignore */
+      }
     },
 
 
-    /** Membership switch — refreshes monthly token allotment. */
+    /** Membership switch — blocked while a paid plan term is active. */
     setPlan(state, action: PayloadAction<{ planId: PlanId; refreshCredits?: boolean }>) {
       const planId = action.payload.planId;
       const def = PLAN_CATALOG[planId];
       if (!def) return;
       const prev = state.planId;
+      if (state.planLocked && planId !== prev) return;
       state.planId = planId;
       state.creditsIncluded = def.creditsIncluded;
       if (action.payload.refreshCredits !== false) {

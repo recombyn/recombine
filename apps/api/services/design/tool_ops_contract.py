@@ -73,16 +73,17 @@ def allowed_canvas_tool_keys() -> frozenset[str]:
     )
 
 
-def format_canvas_tools_for_model() -> str:
+def format_canvas_tools_for_model(rules: dict[str, str] | None = None) -> str:
     """Capability block for LLM prompts — Action registry (+ schema + hint)."""
+    del rules  # allowlist = design_canvas_tool.enabled only
     tools = list_canvas_tools(enabled_only=True)
     if not tools:
         return (
-            "Canvas tools: (none configured in design_canvas_tool — "
-            "Admin must enable op_keys; FE executes by the same key)."
+            "画布工具：（design_canvas_tool 未配置 — "
+            "请在 Admin 启用 op_key；前端按同一 key 执行）。"
         )
     lines: list[str] = [
-        "Canvas Action registry (op `name` keys; FE executeDesignTool by same key):"
+        "画布 Action 注册表（op 的 `name`；前端 executeDesignTool 使用同一 key）："
     ]
     for t in tools:
         key = t["op_key"]
@@ -98,20 +99,133 @@ def format_canvas_tools_for_model() -> str:
         lines.append("- " + " — ".join(parts))
     return "\n".join(lines)
 
-_DEFAULT_MAX_OPS = 128
-# Hard ceiling only (JSON bomb / runaway); do not use as a "keep designs small" budget.
-_HARD_MAX_OPS = 256
+
+def format_canvas_tools_catalog(rules: dict[str, str] | None = None) -> str:
+    """Short tool index for deferred loading — names + one-line purpose only."""
+    del rules
+    tools = list_canvas_tools(enabled_only=True)
+    if not tools:
+        return (
+            "画布工具目录：（未配置 — 请在 Admin 启用 op_key）。"
+        )
+    lines: list[str] = [
+        "画布工具目录（仅名称；输出 tool_ops 前请先用 need_tools 申请详情）："
+    ]
+    for t in tools:
+        key = str(t.get("op_key") or "").strip()
+        if not key:
+            continue
+        label = str(t.get("label") or "").strip()
+        hint = str(t.get("model_hint") or "").strip()
+        blurb = label or (hint[:48] + ("…" if len(hint) > 48 else "") if hint else "")
+        if blurb:
+            lines.append(f"- `{key}` — {blurb}")
+        else:
+            lines.append(f"- `{key}`")
+    return "\n".join(lines)
+
+
+def format_canvas_tools_details(
+    op_keys: list[str] | tuple[str, ...] | set[str],
+    *,
+    rules: dict[str, str] | None = None,
+) -> str:
+    """Full hint + args_schema for selected op_keys only."""
+    del rules
+    wanted: list[str] = []
+    seen: set[str] = set()
+    for raw in op_keys or []:
+        key = str(raw or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        wanted.append(key)
+        if len(wanted) >= 12:
+            break
+    if not wanted:
+        return ""
+    by_key = {
+        str(t.get("op_key") or "").strip(): t
+        for t in list_canvas_tools(enabled_only=True)
+        if t.get("op_key")
+    }
+    lines: list[str] = [
+        "TOOL_DETAILS（请用这些 op 的 `name` 写入 tool_ops；不要再申请 need_tools）："
+    ]
+    missing: list[str] = []
+    for key in wanted:
+        t = by_key.get(key)
+        if not t:
+            missing.append(key)
+            continue
+        label = str(t.get("label") or "").strip()
+        hint = str(t.get("model_hint") or "").strip()
+        schema = str(t.get("args_schema") or "").strip()
+        head = f"### `{key}`" + (f" ({label})" if label else "")
+        lines.append(head)
+        if hint:
+            lines.append(f"说明：{hint}")
+        if schema:
+            lines.append(f"参数：{schema}")
+    if missing:
+        lines.append("未知工具（已忽略）：" + ", ".join(missing))
+    return "\n".join(lines)
+
+
+def normalize_need_tools(
+    raw: Any,
+    *,
+    max_n: int = 8,
+) -> list[str]:
+    """Parse model need_tools → allowlisted op_keys (order preserved)."""
+    if raw is None:
+        return []
+    items: list[Any]
+    if isinstance(raw, str):
+        items = re.split(r"[\s,;|]+", raw)
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return []
+    allow = allowed_canvas_tool_keys()
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(item or "").strip()
+        if not key or key in seen:
+            continue
+        if allow and key not in allow:
+            continue
+        seen.add(key)
+        out.append(key)
+        if len(out) >= max_n:
+            break
+    return out
 
 
 def _max_ops_per_step(rules: dict[str, str] | None) -> int:
+    """Admin ``tool_ops.max_per_step`` (+ optional ``tool_ops.hard_max`` clamp).
+
+    Empty / invalid max_per_step → code default (P0 zero-base Admin).
+    Empty hard_max → no code clamp.
+    """
+    _DEFAULT_MAX = 32
     rules = rules or {}
     raw = str(rules.get("tool_ops.max_per_step") or "").strip()
     if not raw:
-        return _DEFAULT_MAX_OPS
-    try:
-        return max(1, min(_HARD_MAX_OPS, int(raw)))
-    except ValueError:
-        return _DEFAULT_MAX_OPS
+        n = _DEFAULT_MAX
+    else:
+        try:
+            n = max(0, int(raw))
+        except ValueError:
+            n = _DEFAULT_MAX
+    hard_raw = str(rules.get("tool_ops.hard_max") or "").strip()
+    if hard_raw:
+        try:
+            n = min(n, max(0, int(hard_raw)))
+        except ValueError:
+            pass
+    return n
 
 
 def _parse_raw_ops(content: str | dict[str, Any] | list[Any] | None) -> list[dict[str, Any]]:
@@ -917,19 +1031,16 @@ def assess_tool_ops_result(
     nodes: list[dict[str, Any]] | None = None,
     rules: dict[str, str] | None = None,
 ) -> tuple[bool, str]:
-    """Post-validate tool_ops result (density + light structure). Rules may tighten."""
+    """Post-validate tool_ops result (density + light structure). Admin rules only."""
     intent_l = (intent or "").strip().lower()
     if intent_l not in ("create", "sibling"):
         return True, "ok"
 
+    rules = rules or {}
     create_names = {
-        "create_shape",
-        "create_text",
-        "create_image",
-        "create_path",
-        "create_group",
-        "create_frame",
-        "create_svg",
+        x.strip()
+        for x in str(rules.get("validate.create_op_names") or "").split("|")
+        if x.strip()
     }
     creates = [
         o
@@ -939,44 +1050,36 @@ def assess_tool_ops_result(
     texts = [o for o in creates if str(o.get("name") or "") == "create_text"]
     scene_l = (scene or "").strip().lower()
 
-    min_creates = 2
+    min_creates = 0
+    raw_min = ""
+    if scene_l:
+        raw_min = str(rules.get(f"validate.min_creates.{scene_l}") or "").strip()
+    if not raw_min:
+        raw_min = str(rules.get("validate.min_creates") or "").strip()
+    if raw_min:
+        try:
+            min_creates = max(0, int(raw_min))
+        except ValueError:
+            min_creates = 0
+
     min_texts = 0
-    require_text_if_sparse = False
-    if scene_l in ("website", "mobile"):
-        min_creates = 2
-        require_text_if_sparse = True
-        sparse_create_ceiling = 4
-    elif scene_l == "poster":
-        min_creates = 3
-        sparse_create_ceiling = 3
-    else:
-        sparse_create_ceiling = 2
-    # Admin overrides (numbers only — no prompt copy).
     try:
-        if (rules or {}).get("validate.min_creates"):
-            min_creates = max(1, int(str(rules.get("validate.min_creates")).strip()))
-    except ValueError:
-        pass
-    try:
-        if (rules or {}).get("validate.min_texts"):
+        if rules.get("validate.min_texts"):
             min_texts = max(0, int(str(rules.get("validate.min_texts")).strip()))
-            require_text_if_sparse = False
     except ValueError:
         pass
 
-    if len(creates) < min_creates:
+    if min_creates and len(creates) < min_creates:
         return False, f"sparse_tool_ops:too_few_elements:{len(creates)}<{min_creates}"
     if min_texts and len(texts) < min_texts:
         return False, f"sparse_tool_ops:missing_ui_copy:{len(texts)}<{min_texts}"
-    if (
-        require_text_if_sparse
-        and len(texts) < 1
-        and len(creates) < sparse_create_ceiling
-    ):
-        return False, "sparse_tool_ops:missing_ui_copy"
 
     # Structure: prefer non-empty scene inventory when present.
-    if nodes is not None and _rule_flag(rules, "validate.require_nodes", "1"):
+    if (
+        min_creates
+        and nodes is not None
+        and _rule_flag(rules, "validate.require_nodes", "1")
+    ):
         living = [
             n
             for n in nodes

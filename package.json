@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "workspaces": [
-    "apps/web"
+    "apps/web",
+    "apps/docs"
   ],
   "scripts": {
     "dev": "npm run dev --workspace=apps/web",
     "dev:web": "npm run dev --workspace=apps/web",
+    "dev:docs": "npm run dev --workspace=apps/docs",
+    "build:docs": "npm run build --workspace=apps/docs",
     "dev:api": "cd apps/api && python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000",
     "build": "npm run build --workspace=apps/web",
     "test": "npm run test:web && npm run test:api",

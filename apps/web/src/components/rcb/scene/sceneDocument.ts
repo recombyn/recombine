@@ -6,9 +6,6 @@ import { clampShapeSides, DEFAULT_SHAPE_SIDES } from './sceneShapes';
 export const DEFAULT_CANVAS = { width: 794, height: 1123 };
 
 export const A4_PORTRAIT = { ...DEFAULT_CANVAS };
-export const A4_LANDSCAPE = { width: 1123, height: 794 };
-export const A4_WIDTH = DEFAULT_CANVAS.width;
-export const A4_HEIGHT = DEFAULT_CANVAS.height;
 
 function createPage(id?: string) {
   return {
@@ -234,6 +231,10 @@ export function setDocumentCanvasMeta(doc: any, patch: Record<string, any> = {})
   if (patch.backgroundImageAdjust != null) next.backgroundImageAdjust = patch.backgroundImageAdjust;
   if (patch.width != null) next.width = Math.max(100, Math.round(patch.width) || DEFAULT_CANVAS.width);
   if (patch.height != null) next.height = Math.max(100, Math.round(patch.height) || DEFAULT_CANVAS.height);
+  if (patch.gridSize != null) {
+    const g = Number(patch.gridSize);
+    if (Number.isFinite(g) && g > 0) next.gridSize = g;
+  }
   return next;
 }
 
@@ -277,39 +278,6 @@ export function createTextNode({
   };
 }
 
-export function createRectNode({ x = 40, y = 40, width = 200, height = 2 }) {
-  const id = nanoid(10);
-  return {
-    id,
-    node: {
-      id,
-      key: 'rect',
-      x,
-      y,
-      z: 0,
-      width,
-      height,
-      attrs: {
-        L: 'false',
-        R: 'false',
-        T: 'false',
-        B: 'true',
-        'border-color': '#333333',
-        'border-width': 1,
-        'fill-color': 'transparent',
-        opacity: 1,
-        angle: 0,
-        radiusTL: 0,
-        radiusTR: 0,
-        radiusBR: 0,
-        radiusBL: 0,
-        radiusLinked: 'true',
-      },
-      children: [],
-    },
-  };
-}
-
 /** shapeType: rect | line | arrow | circle | triangle | star | polygon | path | pen | pencil */
 export function createShapeNode({
   x = 40,
@@ -325,6 +293,7 @@ export function createShapeNode({
   angle = 0,
   brushStyle,
   brushStampSrc,
+  pathPressure,
   sides,
   opacity = 1,
 }: {
@@ -343,6 +312,8 @@ export function createShapeNode({
   brushStyle?: string;
   /** Embedded stamp tip for custom / portable stamp brushes. */
   brushStampSrc?: string;
+  /** Comma-separated 0–1 pressures aligned with path points (pencil). */
+  pathPressure?: string;
   /** Polygon side count / star point count (default 5). */
   sides?: number;
   /** 0–1 node opacity (brush-time opacity for pencil). */
@@ -439,6 +410,7 @@ export function createShapeNode({
         }),
         ...(brushStyle ? { brushStyle } : {}),
         ...(brushStampSrc ? { brushStampSrc } : {}),
+        ...(shapeType === 'pencil' && pathPressure ? { pathPressure } : {}),
       },
       children: [],
     },
@@ -514,6 +486,8 @@ export function createImageNode({
         name: name || (kind === 'icon' ? 'Icon' : 'Image'),
         assetKind: kind,
         mode: 'FIT',
+        /** Default on — drag-resize keeps width:height (Shift temporarily unlocks). */
+        lockAspect: 'true',
         radiusTL: 0,
         radiusTR: 0,
         radiusBR: 0,
@@ -523,6 +497,248 @@ export function createImageNode({
       children: [],
     },
   };
+}
+
+/** Canvas image-generator plate (empty image + generator overlay until promote). */
+function attrFlagTrue(value: unknown): boolean {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
+export function isImageGeneratorNode(node: any): boolean {
+  return Boolean(node) && node.key === 'image' && attrFlagTrue(node.attrs?.imageGenerator);
+}
+
+/** Layer hidden — skipped in SVG render + hit-test. */
+export function isNodeHidden(node: any): boolean {
+  return Boolean(node) && attrFlagTrue(node.attrs?.hidden);
+}
+
+/**
+ * Nodes that belong in export / cover / thumbnail output.
+ * Skip editor-only chrome: image-generator plates and in-progress process shimmer.
+ */
+export function isExportableSceneNode(node: any): boolean {
+  if (!node || isNodeHidden(node)) return false;
+  if (isImageGeneratorNode(node)) return false;
+  if (String(node?.attrs?.processStatus || '') === 'running') return false;
+  return true;
+}
+
+/** True while an image job (upload / remove-bg / …) shows the loading shimmer. */
+export function isImageProcessRunning(node: any): boolean {
+  return Boolean(node) && String(node?.attrs?.processStatus || '') === 'running';
+}
+
+/**
+ * Nodes that may be pinned into Chat (右键 / 快捷键 / composer).
+ * Image-generator plates and process-shimmer nodes stay out.
+ */
+export function canAttachNodeToChat(node: any): boolean {
+  if (!node) return false;
+  if (isImageGeneratorNode(node)) return false;
+  if (isImageProcessRunning(node)) return false;
+  return true;
+}
+
+/** Layer locked — still visible/selectable, but transforms are blocked. */
+export function isNodeLocked(node: any): boolean {
+  return Boolean(node) && attrFlagTrue(node.attrs?.locked);
+}
+
+/**
+ * Spawn an Image Generator plate. Same `image` key so hit-test / select
+ * keep working; `attrs.imageGenerator` flips on the HTML composer overlay.
+ * After generate, call `promoteImageGeneratorToImage` to become a normal photo.
+ * Export / cover / thumbnails skip these plates via `isExportableSceneNode`.
+ */
+export function createImageGeneratorNode({
+  x = 40,
+  y = 40,
+  width = 360,
+  height = 360,
+  name = 'Image Generator',
+}: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+} = {}) {
+  const id = nanoid(10);
+  const iw = Math.max(120, Math.round(Number(width) || 360));
+  const ih = Math.max(120, Math.round(Number(height) || 360));
+  return {
+    id,
+    node: {
+      id,
+      key: 'image',
+      x: Math.round(Number(x) || 0),
+      y: Math.round(Number(y) || 0),
+      z: 0,
+      width: iw,
+      height: ih,
+      attrs: {
+        src: '',
+        name: name || 'Image Generator',
+        assetKind: 'image',
+        imageGenerator: true,
+        // Durable gen settings — survive overlay remount / deselect.
+        imageGenAspect: '1:1',
+        imageGenResolution: '2K',
+        imageGenCount: 1,
+        mode: 'FIT',
+        radiusTL: 0,
+        radiusTR: 0,
+        radiusBR: 0,
+        radiusBL: 0,
+        radiusLinked: 'true',
+      } as Record<string, unknown>,
+      children: [],
+    },
+  };
+}
+
+/** Parse durable multi-gen stack URLs from image node attrs. */
+export function parseImageVariants(attrs: any): string[] {
+  const raw = attrs?.imageVariants;
+  if (Array.isArray(raw)) {
+    return raw.map((u) => String(u || '').trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((u) => String(u || '').trim()).filter(Boolean);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return [];
+}
+
+/** All stack URLs for an image node (falls back to single `src`). */
+export function listImageVariantUrls(node: any): string[] {
+  if (!node || node.key !== 'image') return [];
+  const variants = parseImageVariants(node.attrs);
+  if (variants.length) return variants;
+  const src = String(node.attrs?.src || '').trim();
+  return src ? [src] : [];
+}
+
+export function writeImageVariantsAttr(attrs: Record<string, unknown>, urls: string[]) {
+  const cleaned = [...new Set(urls.map((u) => String(u || '').trim()).filter(Boolean))];
+  if (cleaned.length <= 1) {
+    delete attrs.imageVariants;
+  } else {
+    attrs.imageVariants = JSON.stringify(cleaned);
+  }
+}
+
+/**
+ * Turn a generator plate into a normal image node (same id / selection).
+ * Clears generator + process attrs and applies the result `src` + geometry.
+ * When `variants` has 2+ URLs, stores them on `attrs.imageVariants` for stack UI.
+ */
+export function promoteImageGeneratorToImage(
+  doc: any,
+  nodeId: string,
+  {
+    src,
+    width,
+    height,
+    x,
+    y,
+    name,
+    variants,
+    genPrompt,
+  }: {
+    src: string;
+    width?: number;
+    height?: number;
+    x?: number;
+    y?: number;
+    name?: string;
+    /** All generated URLs (including `src`); persisted when length > 1. */
+    variants?: string[];
+    /** Original text prompt — used to prefill quick-edit Chat. */
+    genPrompt?: string;
+  }
+) {
+  if (!doc || !nodeId || !src) return doc;
+  const next = normalizeDocument(doc);
+  const node = next.deltaSetLike?.[nodeId];
+  if (!node || node.key !== 'image') return doc;
+  const attrs = { ...(node.attrs || {}) };
+  delete attrs.imageGenerator;
+  delete attrs.imageGenAspect;
+  delete attrs.imageGenResolution;
+  delete attrs.imageGenCount;
+  delete attrs.imageGenModel;
+  delete attrs.processStatus;
+  delete attrs.processKind;
+  delete attrs.processLabel;
+  delete attrs.processSourceId;
+  delete attrs.processTargetWidth;
+  delete attrs.processTargetHeight;
+  delete attrs.processMeta;
+  attrs.src = src;
+  attrs.assetKind = 'image';
+  if (name) attrs.name = name;
+  const prompt = String(genPrompt || '').trim();
+  if (prompt) attrs.genPrompt = prompt;
+  else delete attrs.genPrompt;
+  const stack = Array.isArray(variants) ? variants : [];
+  const withMain = stack.includes(src) ? stack : [src, ...stack];
+  writeImageVariantsAttr(attrs, withMain);
+  node.attrs = attrs;
+  if (width != null) node.width = Math.max(1, Math.round(width));
+  if (height != null) node.height = Math.max(1, Math.round(height));
+  if (x != null) node.x = Math.round(x);
+  if (y != null) node.y = Math.round(y);
+  return next;
+}
+
+/**
+ * Pull one stack URL out into a sibling image node (to the right).
+ * Removes it from the source stack when successful.
+ */
+export function detachImageVariantToNode(
+  doc: any,
+  nodeId: string,
+  url: string,
+  { gap = 16, name = 'Image' }: { gap?: number; name?: string } = {}
+) {
+  const src = String(url || '').trim();
+  if (!doc || !nodeId || !src) return { document: doc, id: null as string | null };
+  const next = normalizeDocument(doc);
+  const source = next.deltaSetLike?.[nodeId];
+  if (!source || source.key !== 'image') return { document: doc, id: null as string | null };
+  const stack = listImageVariantUrls(source);
+  if (!stack.includes(src)) return { document: doc, id: null as string | null };
+
+  const width = Math.max(1, Math.round(Number(source.width) || 200));
+  const height = Math.max(1, Math.round(Number(source.height) || 200));
+  const { id, node } = createImageNode({
+    x: (Number(source.x) || 0) + width + gap,
+    y: Number(source.y) || 0,
+    width,
+    height,
+    src,
+    name: name || String(source.attrs?.name || 'Image'),
+    assetKind: 'image',
+  });
+  let document = addNodeToDocument(next, id, node);
+
+  const remaining = stack.filter((u) => u !== src);
+  const mainSrc = String(source.attrs?.src || '').trim();
+  const attrs = { ...(document.deltaSetLike[nodeId].attrs || {}) };
+  if (mainSrc === src) {
+    attrs.src = remaining[0] || '';
+  }
+  writeImageVariantsAttr(attrs, remaining);
+  document.deltaSetLike[nodeId].attrs = attrs;
+  return { document, id };
 }
 
 /**
@@ -602,7 +818,6 @@ export type ImageProcessKind =
   | 'upscale'
   | 'removeBg'
   | 'eraser'
-  | 'editElements'
   | 'editText'
   | 'multiAngle'
   | 'moveObject'
@@ -612,7 +827,8 @@ export type ImageProcessKind =
   | 'vector'
   | 'flipRotate'
   | 'import'
-  | 'upload';
+  | 'upload'
+  | 'generate';
 
 /**
  * Blank loading plate for PDF/DOCX import — selectable / transformable while parsing.
@@ -707,53 +923,6 @@ export function spawnImageUploadPlaceholderNode(
   return { document: addNodeToDocument(doc, id, node), id };
 }
 
-/**
- * Upscale image pixel data to ~target resolution (long-edge match, aspect preserved).
- * Does not change scene node width/height — only returns a higher-res data URL.
- */
-export async function upscaleImageDataUrl(
-  src: string,
-  targetWidth: number,
-  targetHeight: number
-): Promise<string> {
-  const { width: nw, height: nh } = await measureImageNaturalSize(src);
-  const longTarget = Math.max(1, Math.round(targetWidth) || 1, Math.round(targetHeight) || 1);
-  const longSrc = Math.max(nw, nh);
-  const scale = Math.max(1, longTarget / longSrc);
-  let outW = Math.max(1, Math.round(nw * scale));
-  let outH = Math.max(1, Math.round(nh * scale));
-  const MAX_SIDE = 8192;
-  if (outW > MAX_SIDE || outH > MAX_SIDE) {
-    const fit = Math.min(MAX_SIDE / outW, MAX_SIDE / outH);
-    outW = Math.max(1, Math.round(outW * fit));
-    outH = Math.max(1, Math.round(outH * fit));
-  }
-
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const canvas = window.document.createElement('canvas');
-        canvas.width = outW;
-        canvas.height = outH;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('no-2d'));
-          return;
-        }
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, outW, outH);
-        resolve(canvas.toDataURL('image/png'));
-      } catch (err) {
-        reject(err);
-      }
-    };
-    img.onerror = () => reject(new Error('image load failed'));
-    img.src = src;
-  });
-}
-
 /** Clone image to the right as a loading process node — original stays untouched. */
 export function spawnImageProcessNode(
   doc: any,
@@ -840,7 +1009,7 @@ export type DecomposeLayer = {
 };
 
 /**
- * Replace a process placeholder with split layers (editElements / editText).
+ * Replace a process placeholder with split layers (editText).
  * Layer coords are in source-image pixels; scaled into the placeholder's box.
  */
 export function applyImageDecomposeLayers(
@@ -979,16 +1148,6 @@ export function mergeImportedIntoDocument(
   return next;
 }
 
-export function removeNodeFromDocument(doc, nodeId) {
-  const next = normalizeDocument(doc);
-  delete next.deltaSetLike[nodeId];
-  next.pages.forEach((page: any) => {
-    page.children = page.children.filter((id: string) => id !== nodeId);
-  });
-  syncRootChildren(next);
-  return next;
-}
-
 export function removeNodesFromDocument(doc, nodeIds: string[]) {
   const ids = Array.isArray(nodeIds) ? nodeIds.filter(Boolean) : [];
   if (!ids.length) return doc;
@@ -1075,10 +1234,6 @@ export function reorderNodesInDocument(
 
   syncRootChildren(next);
   return next;
-}
-
-export function isRectLikeNode(node: any) {
-  return supportsCornerRadius(node);
 }
 
 /**
@@ -1283,18 +1438,64 @@ export function ungroupNodesInDocument(doc: any, nodeIds: string[]) {
   return next;
 }
 
+/** Scene nodes whose center lies inside any of the given artboards. */
+export function nodeIdsInsideFrames(doc: any, frameIds: string[]): string[] {
+  if (!doc || !frameIds?.length) return [];
+  const wanted = new Set(frameIds.filter(Boolean).map(String));
+  if (!wanted.size) return [];
+  const frames = (Array.isArray(doc.frames) ? doc.frames : []).filter(
+    (f: any) => f?.id && wanted.has(String(f.id))
+  );
+  if (!frames.length) return [];
+  const out: string[] = [];
+  for (const { id, node } of listSceneNodes(doc)) {
+    if (!node) continue;
+    const left = Number(node.x) || 0;
+    const top = Number(node.y) || 0;
+    const w = Math.max(1, Number(node.width) || 1);
+    const h = Math.max(1, Number(node.height) || 1);
+    const cx = left + w / 2;
+    const cy = top + h / 2;
+    const inside = frames.some((f: any) => {
+      const fx = Number(f.x) || 0;
+      const fy = Number(f.y) || 0;
+      const fw = Math.max(1, Number(f.width) || 1);
+      const fh = Math.max(1, Number(f.height) || 1);
+      return cx >= fx && cx <= fx + fw && cy >= fy && cy <= fy + fh;
+    });
+    if (inside) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Nodes to operate on for a canvas selection: explicit node ids plus content
+ * inside selected artboards (same expansion delete / copy already use).
+ */
+export function resolveSelectionNodeIds(
+  doc: any,
+  nodeIds: string[],
+  frameIds: string[] = []
+): string[] {
+  const inside = nodeIdsInsideFrames(doc, frameIds);
+  return [...new Set([...(nodeIds || []).filter(Boolean), ...inside])];
+}
+
 export type SceneClipboardPayload = {
   nodes: Array<{ id: string; node: any }>;
+  /** Artboards included in the same copy/cut/duplicate batch. */
+  frames?: Array<{ id: string; frame: any }>;
 };
 
-/** Axis-aligned bounds of clipboard nodes (document x/y/width/height). */
+/** Axis-aligned bounds of clipboard nodes + frames (document coords). */
 export function clipboardNodesBounds(clipboard: SceneClipboardPayload | null | undefined) {
-  if (!clipboard?.nodes?.length) return null;
+  if (!clipboard) return null;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  clipboard.nodes.forEach(({ node }) => {
+  let any = false;
+  (clipboard.nodes || []).forEach(({ node }) => {
     const x = Number(node.x) || 0;
     const y = Number(node.y) || 0;
     const w = Math.max(0, Number(node.width) || 0);
@@ -1303,8 +1504,20 @@ export function clipboardNodesBounds(clipboard: SceneClipboardPayload | null | u
     minY = Math.min(minY, y);
     maxX = Math.max(maxX, x + w);
     maxY = Math.max(maxY, y + h);
+    any = true;
   });
-  if (!Number.isFinite(minX)) return null;
+  (clipboard.frames || []).forEach(({ frame }) => {
+    const x = Number(frame.x) || 0;
+    const y = Number(frame.y) || 0;
+    const w = Math.max(0, Number(frame.width) || 0);
+    const h = Math.max(0, Number(frame.height) || 0);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + w);
+    maxY = Math.max(maxY, y + h);
+    any = true;
+  });
+  if (!any || !Number.isFinite(minX)) return null;
   return {
     left: minX,
     top: minY,
@@ -1333,8 +1546,24 @@ export function snapshotNodesForClipboard(
   return nodes.length ? { nodes } : null;
 }
 
+/** Deep-clone selected artboards for copy / cut / duplicate. */
+export function snapshotFramesForClipboard(
+  doc: any,
+  frameIds: string[]
+): NonNullable<SceneClipboardPayload['frames']> {
+  const wanted = new Set((frameIds || []).filter(Boolean).map(String));
+  if (!wanted.size || !doc) return [];
+  const frames = Array.isArray(doc.frames) ? doc.frames : [];
+  const out: NonNullable<SceneClipboardPayload['frames']> = [];
+  frames.forEach((f: any) => {
+    if (!f?.id || !wanted.has(String(f.id))) return;
+    out.push({ id: String(f.id), frame: JSON.parse(JSON.stringify(f)) });
+  });
+  return out;
+}
+
 /**
- * Paste clipboard nodes with new ids.
+ * Paste clipboard nodes + artboards with new ids.
  * - Default: nudge by offset (keyboard paste).
  * - `anchor`: place union top-left at that scene point (context-menu paste).
  */
@@ -1342,30 +1571,31 @@ export function pasteClipboardIntoDocument(
   doc: any,
   clipboard: SceneClipboardPayload | null | undefined,
   opts?: { offsetX?: number; offsetY?: number; anchor?: { x: number; y: number } }
-): { document: any; ids: string[] } {
-  if (!doc || !clipboard?.nodes?.length) return { document: doc, ids: [] };
+): { document: any; ids: string[]; frameIds: string[] } {
+  const hasNodes = Boolean(clipboard?.nodes?.length);
+  const hasFrames = Boolean(clipboard?.frames?.length);
+  if (!doc || (!hasNodes && !hasFrames)) {
+    return { document: doc, ids: [], frameIds: [] };
+  }
   let next = normalizeDocument(doc);
   const idMap = new Map<string, string>();
   const groupMap = new Map<string, string>();
-  clipboard.nodes.forEach(({ id }) => idMap.set(id, nanoid(10)));
+  const frameIdMap = new Map<string, string>();
+  (clipboard!.nodes || []).forEach(({ id }) => idMap.set(id, nanoid(10)));
+  (clipboard!.frames || []).forEach(({ id }) => frameIdMap.set(id, nanoid(10)));
 
   let ox = opts?.offsetX ?? 24;
   let oy = opts?.offsetY ?? 24;
   if (opts?.anchor) {
-    let minX = Infinity;
-    let minY = Infinity;
-    clipboard.nodes.forEach(({ node }) => {
-      minX = Math.min(minX, Number(node.x) || 0);
-      minY = Math.min(minY, Number(node.y) || 0);
-    });
-    if (Number.isFinite(minX) && Number.isFinite(minY)) {
-      ox = opts.anchor.x - minX;
-      oy = opts.anchor.y - minY;
+    const bounds = clipboardNodesBounds(clipboard);
+    if (bounds) {
+      ox = opts.anchor.x - bounds.left;
+      oy = opts.anchor.y - bounds.top;
     }
   }
 
   const newIds: string[] = [];
-  clipboard.nodes.forEach(({ id, node: raw }) => {
+  (clipboard!.nodes || []).forEach(({ id, node: raw }) => {
     const node = JSON.parse(JSON.stringify(raw));
     const newId = idMap.get(id)!;
     node.id = newId;
@@ -1379,6 +1609,30 @@ export function pasteClipboardIntoDocument(
     next = addNodeToDocument(next, newId, node);
     newIds.push(newId);
   });
-  return { document: next, ids: newIds };
+
+  const newFrameIds: string[] = [];
+  if (clipboard!.frames?.length) {
+    const frames = Array.isArray(next.frames) ? [...next.frames] : [];
+    clipboard!.frames.forEach(({ id, frame: raw }) => {
+      const frame = JSON.parse(JSON.stringify(raw));
+      const newId = frameIdMap.get(id)!;
+      frame.id = newId;
+      frame.x = (Number(frame.x) || 0) + ox;
+      frame.y = (Number(frame.y) || 0) + oy;
+      // Drop transient chrome that should not clone with the artboard.
+      delete frame.processStatus;
+      delete frame.processLabel;
+      delete frame.processKind;
+      frames.push(frame);
+      newFrameIds.push(newId);
+    });
+    next = {
+      ...next,
+      frames,
+      activeFrameId: newFrameIds[0] || next.activeFrameId || null,
+    };
+  }
+
+  return { document: next, ids: newIds, frameIds: newFrameIds };
 }
 

@@ -8,6 +8,15 @@ export type ChatSessionMessageDto = {
   id?: string;
   role: string;
   content: string;
+  /** Display chips for @ mentions (persisted with the turn). */
+  contexts?: Array<{
+    key: string;
+    label: string;
+    kind: string;
+    thumbUrl?: string;
+  }> | null;
+  /** `content` with U+FFFC where each chip sat (inline bubble layout). */
+  contentMarked?: string | null;
   thinking?: string | null;
   durationMs?: number | null;
   intent?: string | null;
@@ -31,30 +40,26 @@ export type ChatSessionDto = {
   messages: ChatSessionMessageDto[];
 };
 
-export const fetchChatSessions = (projectId: string) =>
-  request<{ sessions: ChatSessionDto[] }>({
-    url: '/api/v1/chat-sessions/sessions',
-    method: 'get',
-    params: { projectId: projectId || '__none__' },
-  });
-
-export const upsertChatSessionApi = (payload: {
+export type UpsertChatSessionBody = {
   projectId: string;
   id?: string;
   title: string;
   messages: ChatSessionMessageDto[];
-  taskState?: Record<string, unknown> | null;
-}) =>
+  taskState?: Record<string, unknown>;
+};
+
+export const fetchChatSessions = (params: { projectId: string }) =>
+  request<{ sessions: ChatSessionDto[] }>({
+    url: '/api/v1/chat-sessions/sessions',
+    method: 'get',
+    params,
+  });
+
+export const upsertChatSessionApi = (data: UpsertChatSessionBody) =>
   request<{ session: ChatSessionDto }>({
     url: '/api/v1/chat-sessions/sessions',
     method: 'put',
-    data: {
-      projectId: payload.projectId || '__none__',
-      id: payload.id,
-      title: payload.title,
-      messages: payload.messages,
-      taskState: payload.taskState ?? undefined,
-    },
+    data,
   });
 
 export const deleteChatSessionApi = (id: string) =>

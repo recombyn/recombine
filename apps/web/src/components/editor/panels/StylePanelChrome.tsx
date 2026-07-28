@@ -1,27 +1,33 @@
 import type { ReactNode } from 'react';
 import { BiExit } from 'react-icons/bi';
 import Tooltip from '@/components/base/tooltip';
+import {
+  SEGMENTED_CHIP,
+  SEGMENTED_CHIP_IDLE,
+  SEGMENTED_TRACK,
+} from '@/components/base/segmented';
 import { FillVisibilityIcon } from '@/components/editor/nodes/ShapeNode/FillVisibilityIcon';
 import { cn } from '@/utils/classnames';
 
-/** Shared size for style-panel icon toggles (stroke sides / align / cap / join). */
-export const PANEL_ICON_BTN =
-  'inline-flex h-full w-full min-w-0 items-center justify-center rounded-[4px] text-[var(--muted)] transition-colors';
-
-export const PANEL_ICON_BTN_ACTIVE =
-  'bg-[var(--surface)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)]';
-
 /**
- * Full-width track; each Tooltip wrapper is flex-1 so N slots split width evenly (1/N).
- * Tooltip defaults to inline-block — must force flex-1 on the wrapper or slots collapse.
+ * Full-width track — literally the same chrome as `SegmentedControl`.
+ * Tooltip wrappers must be flex-1 so N slots split width evenly.
  */
-export const PANEL_ICON_TRACK =
-  'flex h-8 w-full items-stretch gap-0.5 rounded-[4px] bg-[var(--accent-soft)] p-0.5';
+export const PANEL_ICON_TRACK = cn(SEGMENTED_TRACK, 'flex w-full gap-0.5');
 
 /** Equal-width slot wrapper (Tooltip trigger). */
 export const PANEL_ICON_SLOT = 'min-w-0 flex-1 basis-0';
 
 export const PANEL_ICON_SVG = 'h-3.5 w-3.5';
+
+/** Shared size for style-panel icon toggles (stroke sides / align / cap / join). */
+export const PANEL_ICON_BTN = cn(
+  SEGMENTED_CHIP,
+  'w-full min-w-0 text-[var(--muted)]'
+);
+
+export const PANEL_ICON_BTN_ACTIVE =
+  'bg-[var(--surface)] text-[var(--ink)] shadow-sm';
 
 /**
  * Equal-sized icon toggle group — one active selection (align / cap / join).
@@ -182,7 +188,7 @@ export function StylePanelShell({
     <div
       {...attrs}
       className={cn(
-        'overflow-hidden rounded-[4px] bg-[var(--surface)] shadow-[0_12px_40px_rgba(15,23,42,0.16)] ring-1 ring-[var(--line)]',
+        'overflow-hidden rounded-xl bg-[var(--surface)] shadow-[0_12px_40px_rgba(15,23,42,0.16)] ring-1 ring-[var(--line)]',
         className
       )}
       style={width ? { width } : undefined}

@@ -64,6 +64,8 @@ class SubmitIn(BaseModel):
     title: str = Field(default="", max_length=120)
     category: str = Field(default="website", max_length=32)
     document: dict[str, Any]
+    # Optional project cover URL snapshot (http(s) / site path), or list of up to 4.
+    thumbnailUrl: str | list[str] | None = Field(default=None)
 
 
 class RejectIn(BaseModel):
@@ -85,6 +87,7 @@ def plaza_submit(
             title=body.title,
             document=body.document,
             category=body.category,
+            thumbnail_url=body.thumbnailUrl,
         )
     except PlazaError as err:
         raise _plaza_http(err) from err
@@ -95,6 +98,22 @@ def plaza_submit(
 def plaza_mine(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = _require_user(authorization)
     return {"items": list_mine(user.id)}
+
+
+def _parse_author_ids(raw: str | None) -> list[str] | None:
+    ids = [p.strip() for p in (raw or "").split(",") if p.strip()]
+    return ids or None
+
+
+def _require_public_plaza_item(submission_id: str) -> dict[str, Any]:
+    item = get_submission(submission_id, include_document=True)
+    if (
+        not item
+        or item.get("status") != "approved"
+        or item.get("isVisible") is False
+    ):
+        raise HTTPException(status_code=404, detail="Not found")
+    return item
 
 
 @router.get("/feed")
@@ -113,27 +132,19 @@ def plaza_feed(
     category=optional category filter (website|mobile|image|poster)
     authorIds=comma-separated user ids to filter works by creator.
     """
-    ids = [p.strip() for p in (authorIds or "").split(",") if p.strip()]
     return list_feed(
         limit=limit,
         page=page,
         page_size=pageSize,
         tab=tab,
-        author_ids=ids or None,
+        author_ids=_parse_author_ids(authorIds),
         category=category,
     )
 
 
 @router.get("/items/{submission_id}")
 def plaza_item(submission_id: str) -> dict[str, Any]:
-    item = get_submission(submission_id, include_document=True)
-    if (
-        not item
-        or item.get("status") != "approved"
-        or item.get("isVisible") is False
-    ):
-        raise HTTPException(status_code=404, detail="Not found")
-    return {"item": item}
+    return {"item": _require_public_plaza_item(submission_id)}
 
 
 @router.post("/items/{submission_id}/use")

@@ -1,882 +1,403 @@
-"""OpenAI-compatible tool schemas for the canvas design agent."""
+"""Canvas design agent tools — Admin registry + named functions + Pydantic args.
+
+Convention (LangChain StructuredTool):
+- Tool name        → function ``__name__`` (canvas: Admin ``op_key``)
+- Tool description → function ``__doc__`` (canvas: Admin ``model_hint``)
+- Tool parameters  → Pydantic ``args_schema`` (``Field`` descriptions)
+
+Canvas paint tools are built from Admin ``design_canvas_tool``.
+Meta tools are real functions + explicit Pydantic models in this module.
+
+System prompts live in ``design_global_rule`` (Admin), not in this module.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 
-DESIGN_AGENT_SYSTEM = """You are recombyn Design Agent for an SVG design canvas.
-
-Use the tool-calling loop: reply, look up materials, or emit canvas tool_ops.
-Full design jobs use API /design/run (agent_loop) — same playbook as these tools.
-
-Hard rules:
-1. Prefer create_shape / create_text / create_image / create_frame for local edits.
-2. VECTOR ONLY for chrome & icons. Use align_nodes / distribute_nodes for polish.
-3. Images: user attach → create_image with attachmentIndex; otherwise placeholder.
-4. NEVER delete_nodes unless the user explicitly asked to delete.
-5. Text: functional copy is always create_text.
-6. After mutations, finish with a short Chinese summary.
-7. Never invent tool names. User-facing text in Chinese.
-"""
+_META_TOOL_NAMES = frozenset(
+    {
+        "get_scene_summary",
+        "ask_user",
+        "list_capabilities",
+        "finish",
+    }
+)
 
 
-def _fill_stroke_shadow_props() -> dict[str, Any]:
-    """Shared style properties for create_shape + update_node."""
-    return {
-        "fill": {"type": "string", "description": "CSS color / gradient stop 0"},
-        "fillEnd": {"type": "string", "description": "Second gradient stop"},
-        "fillType": {
-            "type": "string",
-            "enum": ["solid", "linear", "radial", "angular", "diffuse", "image"],
-        },
-        "gradientAngle": {"type": "number"},
-        "fillOpacity": {"type": "number", "description": "Fill opacity 0-100"},
-        "meshSize": {
-            "type": "number",
-            "description": "Diffuse mesh grid 3-8 (default 4)",
-        },
-        "meshPoints": {
-            "type": "array",
-            "description": "Diffuse mesh points [{x,y,color}] in percent 0-100",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "number"},
-                    "y": {"type": "number"},
-                    "color": {"type": "string"},
-                },
-            },
-        },
-        "fillImageSrc": {"type": "string", "description": "Image fill URL / data URL"},
-        "fillImageFit": {
-            "type": "string",
-            "enum": ["fill", "fit", "crop", "tile"],
-        },
-        "fillImageRotate": {"type": "number"},
-        "stroke": {"type": "string"},
-        "borderWidth": {"type": "number"},
-        "strokeOpacity": {"type": "number", "description": "Stroke opacity 0-100"},
-        "strokeStyle": {
-            "type": "string",
-            "enum": [
-                "solid",
-                "dashed",
-                "dotted",
-                "long-dash",
-                "short-dash",
-                "dash-dot",
-                "dash-dot-dot",
-                "dense-dot",
-            ],
-            "description": "Dashed stroke preset (maps to SVG dasharray)",
-        },
-        "strokeAlign": {
-            "type": "string",
-            "enum": ["center", "inside", "outside"],
-        },
-        "strokeLinecap": {"type": "string", "enum": ["butt", "round", "square"]},
-        "strokeLinejoin": {"type": "string", "enum": ["miter", "round", "bevel"]},
-        "strokeSides": {
+# --- Pydantic args models (meta tools) ---------------------------------------
+
+
+class EmptyArgs(BaseModel):
+    """No parameters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AskUserArgs(BaseModel):
+    """Parameters for ``ask_user``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(description="Question shown to the user")
+    options: list[str] | None = Field(
+        default=None,
+        description="Optional choice chips (one action each; do not include Cancel)",
+    )
+
+
+class FinishArgs(BaseModel):
+    """Parameters for ``finish``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(
+        description="Short Chinese summary after canvas mutations succeeded",
+    )
+
+
+# --- Admin compact schema → Pydantic ----------------------------------------
+
+
+def _parse_compact_field_spec(spec: Any) -> tuple[dict[str, Any], bool]:
+    """Admin compact field → (JSON-Schema property, is_optional)."""
+    if isinstance(spec, dict):
+        return dict(spec), False
+    s = str(spec or "string").strip()
+    optional = s.endswith("?")
+    if optional:
+        s = s[:-1].strip()
+    if s.endswith("[]"):
+        item, _ = _parse_compact_field_spec(s[:-2].strip())
+        return {"type": "array", "items": item}, optional
+    if s in ("string", "str"):
+        return {"type": "string"}, optional
+    if s in ("number", "float"):
+        return {"type": "number"}, optional
+    if s in ("integer", "int"):
+        return {"type": "integer"}, optional
+    if s in ("boolean", "bool"):
+        return {"type": "boolean"}, optional
+    if s in ("object", "dict"):
+        return {"type": "object"}, optional
+    if s in ("array", "list"):
+        return {"type": "array", "items": {"type": "string"}}, optional
+    if "|" in s:
+        enums = [p.strip() for p in s.split("|") if p.strip()]
+        return {"type": "string", "enum": enums}, optional
+    return {"type": "string", "description": s}, optional
+
+
+def _args_schema_to_json_schema(raw: Any) -> dict[str, Any]:
+    """Admin ``args_schema`` → OpenAI-style parameters object."""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {"type": "object", "properties": {}, "additionalProperties": True}
+        try:
+            raw = json.loads(text)
+        except Exception:
+            return {"type": "object", "properties": {}, "additionalProperties": True}
+    if not isinstance(raw, dict):
+        return {"type": "object", "properties": {}, "additionalProperties": True}
+    if raw.get("type") == "object" and isinstance(raw.get("properties"), dict):
+        return {
             "type": "object",
-            "description": "Per-side strokes for rect-like shapes",
-            "properties": {
-                "T": {"type": "boolean"},
-                "R": {"type": "boolean"},
-                "B": {"type": "boolean"},
-                "L": {"type": "boolean"},
-            },
+            "properties": dict(raw.get("properties") or {}),
+            "required": list(raw.get("required") or []),
+            "additionalProperties": bool(raw.get("additionalProperties", False)),
+        }
+    props: dict[str, Any] = {}
+    required: list[str] = []
+    for key, spec in raw.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        prop, optional = _parse_compact_field_spec(spec)
+        props[name] = prop
+        if not optional:
+            required.append(name)
+    return {
+        "type": "object",
+        "properties": props,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def _python_type_from_json_prop(meta: dict[str, Any]) -> Any:
+    """JSON-Schema property → Python/typing annotation for create_model."""
+    enums = meta.get("enum")
+    if isinstance(enums, list) and enums:
+        vals = tuple(str(x) for x in enums)
+        return Literal.__getitem__(vals)  # type: ignore[index]
+
+    t = str(meta.get("type") or "string")
+    if t == "number":
+        return float
+    if t == "integer":
+        return int
+    if t == "boolean":
+        return bool
+    if t == "array":
+        return list
+    if t == "object":
+        return dict
+    return str
+
+
+class _ForbidBase(BaseModel):
+    """Base for dynamically created canvas args models."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def pydantic_model_from_args_schema(
+    op_key: str,
+    raw: Any,
+    *,
+    model_name: str | None = None,
+) -> type[BaseModel]:
+    """Build a Pydantic args model from Admin compact / JSON Schema."""
+    parameters = _args_schema_to_json_schema(raw)
+    props = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}
+    required = set(parameters.get("required") or [])
+    field_defs: dict[str, Any] = {}
+    for key, meta in props.items():
+        meta = meta if isinstance(meta, dict) else {}
+        typ = _python_type_from_json_prop(meta)
+        desc_f = str(meta.get("description") or key)
+        if key in required:
+            field_defs[key] = (typ, Field(description=desc_f))
+        else:
+            field_defs[key] = (typ | None, Field(default=None, description=desc_f))
+    name = model_name or f"{op_key}_Args"
+    if not field_defs:
+        return create_model(name, __base__=_ForbidBase)
+    return create_model(name, __base__=_ForbidBase, **field_defs)
+
+
+def _parameters_from_pydantic(model: type[BaseModel] | None) -> dict[str, Any]:
+    """Pydantic model → OpenAI function ``parameters`` object."""
+    if model is None:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+    schema = model.model_json_schema()
+    out: dict[str, Any] = {
+        "type": "object",
+        "properties": dict(schema.get("properties") or {}),
+        "additionalProperties": False,
+    }
+    req = schema.get("required")
+    if isinstance(req, list) and req:
+        out["required"] = list(req)
+    # Keep $defs when nested models exist (rare for our tools).
+    if "$defs" in schema:
+        out["$defs"] = schema["$defs"]
+    return out
+
+
+def _doc_first_line(fn: Any) -> str:
+    import inspect
+
+    text = inspect.cleandoc(getattr(fn, "__doc__", None) or "").strip()
+    if not text:
+        return str(getattr(fn, "__name__", "tool") or "tool")
+    return text.split("\n\n")[0].replace("\n", " ").strip()
+
+
+# --- Canvas rows ------------------------------------------------------------
+
+
+def _canvas_rows_for_tools() -> list[dict[str, Any]]:
+    """Enabled Admin canvas tools; fall back to action_registry seed defaults."""
+    try:
+        from services.design.tool_ops_contract import list_canvas_tools
+
+        rows = list_canvas_tools(enabled_only=True)
+        if rows:
+            return rows
+    except Exception:
+        pass
+    try:
+        from services.design.action_registry import _DEFAULT_ACTIONS
+
+        out: list[dict[str, Any]] = []
+        for a in _DEFAULT_ACTIONS:
+            key = str(a.get("op_key") or "").strip()
+            if not key:
+                continue
+            schema = a.get("args_schema")
+            if not isinstance(schema, str):
+                schema = json.dumps(schema or {}, ensure_ascii=False)
+            out.append(
+                {
+                    "op_key": key,
+                    "kind": str(a.get("kind") or "node"),
+                    "label": str(a.get("label") or "").strip(),
+                    "model_hint": str(a.get("model_hint") or "").strip(),
+                    "args_schema": schema,
+                }
+            )
+        return out
+    except Exception:
+        return []
+
+
+def _delegated_payload(name: str, **kwargs: Any) -> str:
+    """Client executes canvas mutations; server only acknowledges the tool call."""
+    args = {k: v for k, v in kwargs.items() if v is not None}
+    return json.dumps(
+        {"status": "delegated_to_client", "name": name, "args": args},
+        ensure_ascii=False,
+    )
+
+
+# --- Meta tools: function name + docstring + Pydantic args_schema -----------
+
+
+def get_scene_summary() -> str:
+    """Read frames + nodes. Call when unsure about canvas state or which artboard exists."""
+    return _delegated_payload("get_scene_summary")
+
+
+def ask_user(question: str, options: list[str] | None = None) -> str:
+    """Stop and ask the user: unclear target frame, OR mid-task confirmation.
+
+    Provide option chips (one action each; do not include Cancel).
+    """
+    return _delegated_payload("ask_user", question=question, options=options)
+
+
+def list_capabilities() -> str:
+    """List which canvas/editor features the Agent can control vs which are not wired yet.
+
+    Call when the user asks about zoom, canvas color, agent mode, preview, share, export,
+    or chrome. Export IS available via export_canvas.
+    """
+    return _delegated_payload("list_capabilities")
+
+
+def finish(summary: str) -> str:
+    """Mark the design task complete AFTER canvas tools succeeded.
+
+    Call only after create_frame / create_shape / create_text / update_node (etc.) ran.
+    Do not call if you only wrote a plan in chat.
+    """
+    return _delegated_payload("finish", summary=summary)
+
+
+def _meta_tool_specs() -> list[tuple[Any, type[BaseModel]]]:
+    """(function, Pydantic args model) — name/doc from function, params from model."""
+    return [
+        (get_scene_summary, EmptyArgs),
+        (ask_user, AskUserArgs),
+        (list_capabilities, EmptyArgs),
+        (finish, FinishArgs),
+    ]
+
+
+def _structured_tool_from_fn(
+    fn: Any,
+    args_model: type[BaseModel] | None,
+) -> Any:
+    """LangChain tool: ``__name__`` / ``__doc__`` + optional Pydantic ``args_schema``."""
+    import inspect
+
+    from langchain_core.tools import StructuredTool
+
+    kwargs: dict[str, Any] = {
+        "func": fn,
+        "description": inspect.cleandoc(fn.__doc__ or fn.__name__),
+    }
+    if args_model is not None:
+        kwargs["args_schema"] = args_model
+    return StructuredTool.from_function(**kwargs)
+
+
+def _make_canvas_tool(op_key: str, description: str, args_model: type[BaseModel]) -> Any:
+    """Dynamic canvas tool: name=op_key, doc=model_hint, params=Pydantic model."""
+
+    def _run(**kwargs: Any) -> str:
+        return _delegated_payload(op_key, **kwargs)
+
+    _run.__name__ = op_key
+    _run.__doc__ = description or op_key
+    return _structured_tool_from_fn(_run, args_model)
+
+
+def _openai_fn_def(
+    name: str,
+    description: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": (description or name).strip(),
+            "parameters": parameters
+            if isinstance(parameters, dict)
+            else {"type": "object", "properties": {}},
         },
-        "shadowEnabled": {"type": "boolean"},
-        "shadowVisible": {"type": "boolean"},
-        "shadowColor": {"type": "string"},
-        "shadowBlur": {"type": "number"},
-        "shadowX": {"type": "number"},
-        "shadowY": {"type": "number"},
-        "cornerRadius": {"type": "number"},
-        "radiusTL": {"type": "number"},
-        "radiusTR": {"type": "number"},
-        "radiusBR": {"type": "number"},
-        "radiusBL": {"type": "number"},
-        "opacity": {"type": "number"},
-        "blendMode": {
-            "type": "string",
-            "description": "pass-through|normal|multiply|screen|overlay|...",
-        },
-        "rotation": {"type": "number"},
-        "name": {"type": "string"},
     }
 
 
 def design_tool_definitions() -> list[dict[str, Any]]:
-    """OpenAI function-calling tool list for DeepSeek / compatible providers."""
-    style = _fill_stroke_shadow_props()
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_scene_summary",
-                "description": "Read frames + nodes. Call when unsure about canvas state or which artboard exists.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "ask_user",
-                "description": (
-                    "Stop and ask the user: unclear target frame, OR mid-task confirmation "
-                    "(e.g. layout done — continue color?). "
-                    "Provide option chips (one action each; do not include Cancel)."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "question": {"type": "string"},
-                        "options": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                    },
-                    "required": ["question"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_capabilities",
-                "description": (
-                    "List which canvas/editor features the Agent can control vs which are "
-                    "NOT wired yet (产品预览/分享等). Call when the user asks about "
-                    "zoom, canvas color, agent mode, preview, share, export, or chrome. "
-                    "Export IS available via export_canvas. For unavailable items, tell "
-                    "the user in Chinese how to do it manually."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "set_viewport",
-                "description": (
-                    "Control canvas zoom / fit view. "
-                    "action: zoom_in|zoom_out|fit|set. For set, pass percent (e.g. 100) or zoom (1.0)."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["zoom_in", "zoom_out", "fit", "set"],
-                        },
-                        "percent": {
-                            "type": "number",
-                            "description": "Target zoom percent when action=set (e.g. 50, 100, 200)",
-                        },
-                        "zoom": {
-                            "type": "number",
-                            "description": "Target zoom factor when action=set (1 = 100%)",
-                        },
-                    },
-                    "required": ["action"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "set_canvas_background",
-                "description": (
-                    "Set the infinite-canvas stage background (not artboard frame fill). "
-                    "Supports solid / linear / radial / angular / diffuse / image."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "color": {"type": "string"},
-                        "fillType": {
-                            "type": "string",
-                            "enum": [
-                                "solid",
-                                "linear",
-                                "radial",
-                                "angular",
-                                "diffuse",
-                                "image",
-                            ],
-                        },
-                        "fillEnd": {"type": "string"},
-                        "gradientAngle": {"type": "number"},
-                        "meshSize": {"type": "number"},
-                        "fillImageSrc": {"type": "string"},
-                        "opacity": {"type": "number"},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "set_agent_mode",
-                "description": (
-                    "Set Agent execution mode (Execution mode dialog): "
-                    "collaborative = pause every phase; "
-                    "milestone = pause at major gates; "
-                    "auto = full auto."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "mode": {
-                            "type": "string",
-                            "enum": ["collaborative", "milestone", "auto"],
-                        },
-                    },
-                    "required": ["mode"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "toggle_editor_panel",
-                "description": (
-                    "Open/close editor chrome panels: layers, minimap, agent_settings. "
-                    "Export uses export_canvas — not this tool. "
-                    "Product preview / share are NOT available — say so if asked."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "panel": {
-                            "type": "string",
-                            "enum": ["layers", "minimap", "agent_settings"],
-                        },
-                        "open": {"type": "boolean"},
-                    },
-                    "required": ["panel"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_frame",
-                "description": (
-                    "Create a new artboard/frame. Required when the user wants another poster/page "
-                    "beside an existing one (same size, place to the right/left with a gap). "
-                    "Also call when the canvas is empty. Prefer this over ask_user when they already requested a design. "
-                    "Default background is white (#FFFFFF) — do NOT set a thematic backgroundColor until the color phase. "
-                    "Do NOT fill the artboard with gray placeholder rects for layout; use create_text labels instead."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "backgroundColor": {
-                            "type": "string",
-                            "description": "Default #FFFFFF; thematic colors only in color phase",
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "update_frame",
-                "description": (
-                    "Resize, rename, or set artboard backgroundColor. "
-                    "Set thematic backgroundColor only in the color phase."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "frameId": {"type": "string"},
-                        "name": {"type": "string"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "backgroundColor": {"type": "string"},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_shape",
-                "description": (
-                    "Create a vector shape. Prefer closed path/pen for custom icons and irregular forms. "
-                    "shapeType pen|path: pass SVG path d (+ closed=true for fills). "
-                    "shapeType pencil: freehand stroke; optional brushStyle (solid, calligraphy, marker, …). "
-                    "Fills: solid|linear|radial|angular|diffuse (meshSize/meshPoints)|image (fillImageSrc). "
-                    "Stroke: stroke/borderWidth + strokeStyle (dashed|dotted|…) + strokeAlign/cap/join. "
-                    "Shadow: shadowEnabled + shadowBlur/X/Y/Color. "
-                    "For true cuts/unions use boolean_op — do not fake with overlapping clash colors. "
-                    "Filled shapes default to NO stroke — pass stroke/borderWidth only when you need an outline. "
-                    "For full-bleed poster backgrounds: only in the color phase use update_frame "
-                    "backgroundColor. Early phases keep a white artboard and use create_text for "
-                    "zone labels — never gray/colored layout placeholder rects."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "shapeType": {
-                            "type": "string",
-                            "enum": [
-                                "rect",
-                                "circle",
-                                "ellipse",
-                                "line",
-                                "arrow",
-                                "triangle",
-                                "polygon",
-                                "star",
-                                "path",
-                                "pen",
-                                "pencil",
-                            ],
-                        },
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "sides": {"type": "number"},
-                        "path": {
-                            "type": "string",
-                            "description": "SVG path d for path/pen/pencil; close the shape for fills",
-                        },
-                        "closed": {
-                            "type": "boolean",
-                            "description": "Close path and allow fill (icons / blobs)",
-                        },
-                        "brushStyle": {
-                            "type": "string",
-                            "description": (
-                                "Pencil brush preset id "
-                                "(solid, calligraphy, marker, pencil-hb, …)"
-                            ),
-                        },
-                        **style,
-                    },
-                    "required": ["shapeType", "x", "y", "width", "height"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_text",
-                "description": (
-                    "Create a native editable text node (same as the editor text tool). "
-                    "Optional width = text-box / wrap column width — runtime honors it. "
-                    "Omit width to hug single-line content. "
-                    "Optional height; omit to measure from text (+ wrap if width set). "
-                    "Pass a real text-box width (e.g. title ~content width, body ~column); "
-                    "do not default short labels to the full artboard width."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "text": {"type": "string"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "fontSize": {"type": "number"},
-                        "color": {"type": "string"},
-                        "fontWeight": {"type": "string"},
-                        "fontFamily": {"type": "string"},
-                        "fontStyle": {"type": "string", "enum": ["normal", "italic"]},
-                        "textAlign": {
-                            "type": "string",
-                            "enum": ["left", "center", "right"],
-                        },
-                        "lineHeight": {"type": "number"},
-                        "letterSpacing": {"type": "number"},
-                        "textDecoration": {
-                            "type": "string",
-                            "enum": ["none", "underline", "line-through"],
-                        },
-                        "opacity": {"type": "number"},
-                        "blendMode": {"type": "string"},
-                        "shadowEnabled": {"type": "boolean"},
-                        "shadowColor": {"type": "string"},
-                        "shadowBlur": {"type": "number"},
-                        "shadowX": {"type": "number"},
-                        "shadowY": {"type": "number"},
-                        "name": {"type": "string"},
-                    },
-                    "required": ["x", "y", "text"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_image",
-                "description": (
-                    "Place an image slot. Without attachmentIndex/src → template placeholder "
-                    "(user replaces later). With attachmentIndex → fill user-attached image. "
-                    "Do NOT invent photos; do NOT call image generation."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "attachmentIndex": {
-                            "type": "number",
-                            "description": "0-based index into user-attached images",
-                        },
-                        "src": {"type": "string"},
-                        "placeholder": {
-                            "type": "string",
-                            "enum": ["image", "avatar"],
-                        },
-                        "name": {"type": "string"},
-                    },
-                    "required": ["x", "y", "width", "height"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_svg",
-                "description": (
-                    "Add an SVG markup node (icons, illustrations). "
-                    "Pass well-formed svg: prefer <svg viewBox=\"0 0 24 24\">…</svg> "
-                    "or path/circle fragment. path d must use spaced SVG commands; "
-                    "invalid SVG is rejected and the agent must retry."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "svg": {"type": "string"},
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "fill": {"type": "string"},
-                        "name": {"type": "string"},
-                    },
-                    "required": ["svg", "x", "y", "width", "height"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_icon",
-                "description": (
-                    "Icon SVG node (same as create_svg). Prefer viewBox 0 0 24 24; "
-                    "valid path d only — backend rejects broken markup."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "svg": {"type": "string"},
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "fill": {"type": "string"},
-                        "name": {"type": "string"},
-                    },
-                    "required": ["svg", "x", "y", "width", "height"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "update_node",
-                "description": (
-                    "Update an EXISTING node's geometry or style by nodeId. "
-                    "Supports solid/linear/radial/angular/diffuse/image fills, "
-                    "strokeStyle (dashed…), stroke align/cap/join, drop shadow, "
-                    "blend, corner radii, rotation, flip, path, and full text styles. "
-                    "Required when the user @-mentions or selects an element "
-                    "(e.g. change fill to red). Do NOT create_shape for that case."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeId": {"type": "string"},
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "width": {"type": "number"},
-                        "height": {"type": "number"},
-                        "flipX": {"type": "boolean"},
-                        "flipY": {"type": "boolean"},
-                        "path": {
-                            "type": "string",
-                            "description": "SVG path d for path/pen nodes",
-                        },
-                        "closed": {"type": "boolean"},
-                        "text": {"type": "string"},
-                        "fontSize": {"type": "number"},
-                        "fontWeight": {"type": "string"},
-                        "fontFamily": {"type": "string"},
-                        "fontStyle": {"type": "string", "enum": ["normal", "italic"]},
-                        "textAlign": {
-                            "type": "string",
-                            "enum": ["left", "center", "right"],
-                        },
-                        "lineHeight": {"type": "number"},
-                        "letterSpacing": {"type": "number"},
-                        "textDecoration": {
-                            "type": "string",
-                            "enum": ["none", "underline", "line-through"],
-                        },
-                        "color": {
-                            "type": "string",
-                            "description": "Text color (text nodes)",
-                        },
-                        **style,
-                    },
-                    "required": ["nodeId"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "align_nodes",
-                "description": (
-                    "Align 2+ nodes relative to their combined bounding box. "
-                    "Modes: left|centerX|right|top|middle|bottom."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "mode": {
-                            "type": "string",
-                            "enum": [
-                                "left",
-                                "centerX",
-                                "right",
-                                "top",
-                                "middle",
-                                "bottom",
-                            ],
-                        },
-                    },
-                    "required": ["nodeIds", "mode"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "distribute_nodes",
-                "description": (
-                    "Evenly distribute 3+ nodes along an axis (equal gaps). "
-                    "axis: h = horizontal, v = vertical."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "axis": {"type": "string", "enum": ["h", "v"]},
-                    },
-                    "required": ["nodeIds", "axis"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "boolean_op",
-                "description": (
-                    "Boolean combine 2+ closed shapes into one path node "
-                    "(union|subtract|intersect|exclude). "
-                    "First node is the base for subtract. Replaces inputs with the result. "
-                    "Use for icon cuts, punched holes, merged silhouettes."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "mode": {
-                            "type": "string",
-                            "enum": ["union", "subtract", "intersect", "exclude"],
-                        },
-                    },
-                    "required": ["nodeIds", "mode"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "reorder_nodes",
-                "description": (
-                    "Change z-order (layer stacking). "
-                    "action: front|back|forward|backward."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "action": {
-                            "type": "string",
-                            "enum": ["front", "back", "forward", "backward"],
-                        },
-                    },
-                    "required": ["nodeIds", "action"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "group_nodes",
-                "description": "Group 2+ nodes so they move/select together.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                    },
-                    "required": ["nodeIds"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "ungroup_nodes",
-                "description": "Remove group membership from the given nodes.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                    },
-                    "required": ["nodeIds"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "duplicate_nodes",
-                "description": (
-                    "Duplicate nodes with a small offset. Returns new node ids."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "offsetX": {"type": "number"},
-                        "offsetY": {"type": "number"},
-                    },
-                    "required": ["nodeIds"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "flip_nodes",
-                "description": "Flip nodes horizontally and/or vertically.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "flipX": {"type": "boolean"},
-                        "flipY": {"type": "boolean"},
-                    },
-                    "required": ["nodeIds"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "image_process",
-                "description": (
-                    "Start image toolbar pipeline on an image node "
-                    "(upscale|removeBg|eraser|editElements|editText|multiAngle|"
-                    "expand|adjust|crop|flipRotate|moveObject|vector)."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeId": {"type": "string"},
-                        "kind": {
-                            "type": "string",
-                            "enum": [
-                                "upscale",
-                                "removeBg",
-                                "eraser",
-                                "editElements",
-                                "editText",
-                                "multiAngle",
-                                "expand",
-                                "adjust",
-                                "crop",
-                                "flipRotate",
-                                "moveObject",
-                                "vector",
-                            ],
-                        },
-                        "targetWidth": {"type": "number"},
-                        "targetHeight": {"type": "number"},
-                        "label": {"type": "string"},
-                    },
-                    "required": ["nodeId", "kind"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "export_canvas",
-                "description": (
-                    "Download canvas or selection as png|jpeg|svg. "
-                    "Optional nodeIds for selection-only export."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "format": {
-                            "type": "string",
-                            "enum": ["png", "jpeg", "svg"],
-                        },
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "multiplier": {"type": "number"},
-                        "filename": {"type": "string"},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "delete_nodes",
-                "description": (
-                    "Delete one or more nodes by id. "
-                    "FORBIDDEN unless the user explicitly asked to delete/remove those elements. "
-                    "Never delete to clear space for a new poster — create_frame instead. "
-                    "Never delete existing work without explicit user permission."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeIds": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        }
-                    },
-                    "required": ["nodeIds"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "delete_frame",
-                "description": (
-                    "Delete an artboard/frame by frameId from SCENE_FRAMES. "
-                    "Destructive — ask the user to confirm first (reply + choices); "
-                    "call only after they confirm. Never put ids in the user reply."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "frameId": {"type": "string"},
-                    },
-                    "required": ["frameId"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "finish",
-                "description": (
-                    "Mark the design task complete AFTER canvas tools succeeded "
-                    "(create_frame / create_shape / create_text / update_node). "
-                    "Do not call if you only wrote a plan in chat."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "summary": {"type": "string"},
-                    },
-                    "required": ["summary"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    ]
+    """OpenAI function-calling list: meta + Admin-enabled canvas ops."""
+    out: list[dict[str, Any]] = []
+    for fn, model in _meta_tool_specs():
+        out.append(
+            _openai_fn_def(
+                fn.__name__,
+                _doc_first_line(fn),
+                _parameters_from_pydantic(model),
+            )
+        )
+
+    seen = set(_META_TOOL_NAMES)
+    for row in _canvas_rows_for_tools():
+        key = str(row.get("op_key") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        hint = str(row.get("model_hint") or "").strip()
+        label = str(row.get("label") or "").strip()
+        desc = hint or (f"{label} ({key})" if label else key)
+        model = pydantic_model_from_args_schema(key, row.get("args_schema"))
+        out.append(_openai_fn_def(key, desc, _parameters_from_pydantic(model)))
+    return out
+
+
+def design_langchain_tools() -> list[Any]:
+    """LangChain StructuredTools: function name/doc + Pydantic args_schema.
+
+    Canvas tools are Admin-driven and return ``delegated_to_client``.
+    ``generate_image`` is appended as the server-side tool.
+    """
+    tools: list[Any] = []
+    for fn, model in _meta_tool_specs():
+        tools.append(_structured_tool_from_fn(fn, model))
+
+    seen = set(_META_TOOL_NAMES)
+    for row in _canvas_rows_for_tools():
+        key = str(row.get("op_key") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        hint = str(row.get("model_hint") or "").strip()
+        label = str(row.get("label") or "").strip()
+        desc = hint or (f"{label} ({key})" if label else key)
+        model = pydantic_model_from_args_schema(key, row.get("args_schema"))
+        tools.append(_make_canvas_tool(key, desc, model))
+
+    try:
+        from services.llm.image import image_chain
+
+        tools.append(image_chain)
+    except Exception:
+        pass
+    return tools

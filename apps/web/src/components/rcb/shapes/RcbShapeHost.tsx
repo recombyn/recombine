@@ -41,6 +41,7 @@ function setHostPaintOpacity(el: SVGElement | null | undefined, hidden: boolean)
 
 /**
  * One native SVG board per scene node under the camera world layer.
+ * Only mounted while in (or near) the viewport — see RcbShapesLayer culling.
  * Patch / drag-preview stay in SvgCanvas via shapeHostRegistry.
  */
 export default function RcbShapeHost({
@@ -61,6 +62,8 @@ export default function RcbShapeHost({
   const blendCss = blendModeToCss(blendMode);
   // Remount when stroke/fill paint attrs change — not on every geometry nudge.
   const paintToken = [
+    node?.attrs?.hidden,
+    node?.attrs?.locked,
     node?.attrs?.strokeAlign,
     node?.attrs?.['stroke-align'],
     node?.attrs?.['border-width'],

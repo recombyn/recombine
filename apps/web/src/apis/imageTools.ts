@@ -1,6 +1,6 @@
 /**
  * Image toolbar AI tools — POST /api/v1/image/process
- * (Seedream i2i, or vision decompose for editElements / editText).
+ * (Seedream i2i, or vision decompose for editText).
  */
 
 import { request } from '@/utils/request';
@@ -10,19 +10,18 @@ export type ImageProcessKindApi =
   | 'removeBg'
   | 'multiAngle'
   | 'expand'
-  | 'editElements'
   | 'editText'
   | 'vector'
   | 'adjust';
 
-export type ImageProcessParams = {
+export type ImageProcessBody = {
   kind: ImageProcessKindApi | string;
   image: string;
-  meta?: Record<string, unknown> | null;
-  aspect_ratio?: string | null;
-  quality?: string | null;
-  resolution?: string | null;
-  model?: string | null;
+  meta?: Record<string, unknown>;
+  aspect_ratio?: string;
+  quality?: string;
+  resolution?: string;
+  model?: string;
 };
 
 export type ImageDecomposeLayer = {
@@ -46,7 +45,7 @@ export type ImageProcessResult = {
   text?: string | null;
   kind: string;
   model?: string;
-  /** editElements / editText: split layers in source-pixel coords */
+  /** editText: split layers in source-pixel coords */
   layers?: ImageDecomposeLayer[];
   width?: number;
   height?: number;
@@ -56,20 +55,12 @@ export type ImageProcessResult = {
   credits?: number;
 };
 
-/** Run an image toolbar tool on the API (AI / Seedream / vision). */
-export const processImageTool = (data: ImageProcessParams) =>
+/** Run an image toolbar tool on the API (Seedream i2i or local rembg / OCR). */
+export const processImageTool = (data: ImageProcessBody) =>
   request<ImageProcessResult>({
     url: '/api/v1/image/process',
     method: 'post',
-    data: {
-      kind: data.kind,
-      image: data.image,
-      meta: data.meta || undefined,
-      aspect_ratio: data.aspect_ratio || undefined,
-      quality: data.quality || undefined,
-      resolution: data.resolution || undefined,
-      model: data.model || undefined,
-    },
-    // Seedream / OCR can be slow
+    data,
+    // Local rembg may download weights on first run; Seedream i2i can also be slow.
     timeout: 180000,
   });

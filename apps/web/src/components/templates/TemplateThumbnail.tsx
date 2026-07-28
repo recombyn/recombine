@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createSvgBoard, loadSceneOntoSvg } from '@/components/rcb/scene/sceneToSvg';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  PREVIEW_PNG_MAX_EDGE,
+  renderDocumentThumbnail,
+  type ThumbRasterOptions,
+} from '@/utils/renderProjectThumbnail';
 
 function isEmptyDocument(document: any) {
   const children = document?.deltaSetLike?.ROOT?.children;
@@ -15,87 +19,78 @@ function paperBackground(document: any): string {
   return '#ffffff';
 }
 
-/** Theme-aware preview; empty docs use surface tint instead of forced white. */
+/**
+ * List-card preview — always a raster `<img>`, never a live SVG in the DOM.
+ * (SVG is only used off-screen while rasterizing.)
+ */
 export default function TemplateThumbnail({
   document,
   fit = 'contain',
+  /** Prefer remote HD PNG URLs (after plaza approve) over client raster. */
+  imageUrl,
+  format = 'webp',
+  maxEdge,
 }: {
-  document: any;
-  /** `cover` fills the card (inspiration masonry); `contain` letterboxes. */
+  document?: any;
+  /** `cover` fills the card; `contain` letterboxes. */
   fit?: 'contain' | 'cover';
+  imageUrl?: string | null;
+  format?: ThumbRasterOptions['format'];
+  maxEdge?: number;
 }) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [scale, setScale] = useState(1);
-
-  const empty = !document || isEmptyDocument(document);
-  const frame = Array.isArray(document?.frames) ? document.frames[0] : null;
-  const docWidth = Math.max(1, Number(frame?.width || document?.width) || 794);
-  const docHeight = Math.max(1, Number(frame?.height || document?.height) || 1123);
+  const remote = typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : '';
+  const empty = !remote && (!document || isEmptyDocument(document));
   const paperBg = useMemo(() => paperBackground(document), [document]);
-
-  const previewDoc = useMemo(() => {
-    if (!document || empty) return null;
-    // Thumbnail paints artboard paper via document background (frames are HTML in the editor).
-    return {
-      ...document,
-      width: docWidth,
-      height: docHeight,
-      backgroundColor: paperBg,
-      backgroundFillType: 'solid',
-    };
-  }, [document, empty, docWidth, docHeight, paperBg]);
+  const [src, setSrc] = useState<string | null>(remote || null);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el || empty) return undefined;
-    const updateScale = () => {
-      const width = el.clientWidth || docWidth;
-      const height = el.clientHeight || docHeight;
-      const sx = width / docWidth;
-      const sy = height / docHeight;
-      setScale(fit === 'cover' ? Math.max(sx, sy) : Math.min(sx, sy));
-    };
-    updateScale();
-    const observer = new ResizeObserver(updateScale);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [docWidth, docHeight, empty, fit]);
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host || !previewDoc) return undefined;
-
-    const { root, layer } = createSvgBoard(host, docWidth, docHeight);
+    if (remote) {
+      setSrc(remote);
+      return undefined;
+    }
+    if (empty) {
+      setSrc(null);
+      return undefined;
+    }
     let cancelled = false;
-    loadSceneOntoSvg(root, layer, previewDoc).then(() => {
-      if (cancelled) return;
+    setSrc(null);
+    const edge =
+      maxEdge ?? (format === 'png' ? PREVIEW_PNG_MAX_EDGE : undefined);
+    void renderDocumentThumbnail(document, { format, maxEdge: edge }).then((url) => {
+      if (!cancelled) setSrc(url);
     });
-
     return () => {
       cancelled = true;
-      root.remove();
     };
-  }, [previewDoc, docWidth, docHeight]);
+  }, [document, empty, remote, format, maxEdge]);
 
   if (empty) {
     return <div className="h-full w-full bg-[var(--accent-soft)]" />;
   }
 
+  if (!src) {
+    return (
+      <div
+        className="h-full w-full animate-pulse bg-[var(--accent-soft)]"
+        style={{ backgroundColor: paperBg }}
+      />
+    );
+  }
+
   return (
     <div
-      ref={containerRef}
       className="relative h-full w-full overflow-hidden"
       style={{ backgroundColor: paperBg }}
     >
-      <div
-        ref={hostRef}
-        className="absolute left-1/2 top-1/2 origin-center [&>svg]:block"
-        style={{
-          width: docWidth,
-          height: docHeight,
-          transform: `translate(-50%, -50%) scale(${scale})`,
-        }}
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        className={
+          fit === 'cover'
+            ? 'h-full w-full object-cover'
+            : 'h-full w-full object-contain'
+        }
       />
     </div>
   );

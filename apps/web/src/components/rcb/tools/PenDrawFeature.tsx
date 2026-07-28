@@ -13,6 +13,7 @@ import {
 } from './penPath';
 import RcbSceneOverlaySvg from '../canvas/RcbSceneOverlaySvg';
 import { isEditablePathNode } from '../scene/outlineToPath';
+import { PEN_CURSOR } from './PencilDrawFeature';
 
 type HandleSide = 'in' | 'out';
 
@@ -100,7 +101,7 @@ function hitAnchor(
   return best;
 }
 
-/** Diamond control-handle corners (axis-aligned bbox → rotated square). */
+/** Diamond control-handle corners (axis-aligned bbox ??rotated square). */
 function handleDiamondPoints(cx: number, cy: number, r: number) {
   return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
 }
@@ -122,7 +123,7 @@ function clearHandle(anchor: PenAnchor, side: HandleSide): PenAnchor {
   return next;
 }
 
-/** Drop both in/out handles → sharp corner. */
+/** Drop both in/out handles ??sharp corner. */
 function clearAllHandles(anchor: PenAnchor): PenAnchor {
   return { x: anchor.x, y: anchor.y };
 }
@@ -138,7 +139,7 @@ function setHandle(
     if (side === 'out') {
       return withMirroredHandles({ x: anchor.x, y: anchor.y, outX: hx, outY: hy });
     }
-    // Dragging in with mirror → set out as mirror of in.
+    // Dragging in with mirror ??set out as mirror of in.
     const mirrored = withMirroredHandles({
       x: anchor.x,
       y: anchor.y,
@@ -172,7 +173,7 @@ function setHandle(
 /**
  * Bezier pen tool: click anchors, drag for handles, re-drag / delete in|out handles,
  * click curved anchor to clear handles (corner), close near first,
- * Enter / Esc / toolbar「退出编辑」finish as open path.
+ * Enter / Esc / toolbar??????finish as open path.
  */
 export default function PenDrawFeature({
   enabled,
@@ -203,7 +204,7 @@ export default function PenDrawFeature({
   const anchorsRef = useRef<PenAnchor[]>([]);
   const selectedHandleRef = useRef<HandleHit | null>(null);
   const prevCursorRef = useRef<string>('');
-  /** Last click on an existing anchor — second click within window → corner. */
+  /** Last click on an existing anchor ??second click within window ??corner. */
   const lastAnchorTapRef = useRef<{ index: number; t: number } | null>(null);
   const onCommitRef = useRef(onCommit);
   const onCancelRef = useRef(onCancel);
@@ -237,7 +238,7 @@ export default function PenDrawFeature({
 
   /**
    * Commit open/closed path.
-   * `leaveTool`: Esc / ✓ / switch-to-select — exit to select after commit.
+   * `leaveTool`: Esc / ??/ switch-to-select ??exit to select after commit.
    * Closing the path by clicking the first point keeps the pen tool for the next stroke.
    */
   const finish = (closed: boolean, opts?: { leaveTool?: boolean }) => {
@@ -342,8 +343,9 @@ export default function PenDrawFeature({
     };
 
     const exitOpen = () => {
-      if (hitEl) setPaperCursor(hitEl, '');
-      // Esc / ✓ / Enter: commit open path (≥2 anchors) and leave the pen tool.
+      // Do not clear hitEl.style.cursor ? RcbCanvas owns the tool cursor via React.
+      // Clearing here races the next tool (e.g. pencil) and wipes its icon cursor.
+      // Esc / Enter: commit open path and leave the pen tool.
       finish(false, { leaveTool: true });
     };
 
@@ -372,7 +374,7 @@ export default function PenDrawFeature({
 
     const onExitEvent = () => exitOpen();
 
-    // Always listen while pen is active — do not require hitEl (Esc / ✓ must work).
+    // Always listen while pen is active ??do not require hitEl (Esc / ??must work).
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('resume:exit-pen', onExitEvent);
 
@@ -390,11 +392,11 @@ export default function PenDrawFeature({
       const list = anchorsRef.current;
       const { anchor: anchorR, handle: handleR } = radii();
 
-      // Prefer the anchor disc over nearby handle diamonds (click center → corner).
+      // Prefer the anchor disc over nearby handle diamonds (click center ??corner).
       const anchorIdx = hitAnchor(list, p, anchorR);
       const handleHit = anchorIdx >= 0 ? null : hitHandle(list, p, handleR);
 
-      // Alt/Option + click handle → delete that side (in = left, out = right).
+      // Alt/Option + click handle ??delete that side (in = left, out = right).
       if (handleHit && (e.altKey || e.metaKey)) {
         setAnchors((prev) => {
           const next = [...prev];
@@ -404,7 +406,7 @@ export default function PenDrawFeature({
         setSelectedHandle(null);
         setHoverHandle(null);
         setHoverAnchor(null);
-        setPaperCursor(hitEl || paperEl, 'crosshair');
+        setPaperCursor(hitEl || paperEl, PEN_CURSOR);
         return;
       }
 
@@ -434,7 +436,7 @@ export default function PenDrawFeature({
 
       setSelectedHandle(null);
       setHoverHandle(null);
-      setPaperCursor(hitEl || paperEl, 'crosshair');
+      setPaperCursor(hitEl || paperEl, PEN_CURSOR);
 
       if (nearClose(p)) {
         closingRef.current = true;
@@ -450,7 +452,7 @@ export default function PenDrawFeature({
         return;
       }
 
-      // Click / double-click existing anchor: clear handles → sharp corner.
+      // Click / double-click existing anchor: clear handles ??sharp corner.
       if (anchorIdx >= 0) {
         const a = list[anchorIdx];
         const now = performance.now();
@@ -551,7 +553,7 @@ export default function PenDrawFeature({
         setCursor(null);
         setHoverHandle(null);
         setHoverAnchor(null);
-        setPaperCursor(hitEl || paperEl, 'crosshair');
+        setPaperCursor(hitEl || paperEl, PEN_CURSOR);
         return;
       }
 
@@ -576,7 +578,7 @@ export default function PenDrawFeature({
         return;
       }
 
-      setPaperCursor(hitEl || paperEl, 'crosshair');
+      setPaperCursor(hitEl || paperEl, PEN_CURSOR);
       setCursor(p);
       setCloseHot(nearClose(p));
     };
@@ -604,7 +606,7 @@ export default function PenDrawFeature({
           const hit = hitHandle(anchorsRef.current, p, handleR);
           setHoverAnchor(null);
           setHoverHandle(hit);
-          setPaperCursor(hitEl || paperEl, hit ? 'grab' : 'crosshair');
+          setPaperCursor(hitEl || paperEl, hit ? 'grab' : PEN_CURSOR);
           setCloseHot(!hit && nearClose(p));
         }
         setCursor(p);
@@ -626,7 +628,7 @@ export default function PenDrawFeature({
       dragKindRef.current = null;
       const p = toScene(e.clientX, e.clientY);
       setCursor(p);
-      setPaperCursor(hitEl || paperEl, 'crosshair');
+      setPaperCursor(hitEl || paperEl, PEN_CURSOR);
     };
 
     const onLeave = () => {
@@ -635,7 +637,7 @@ export default function PenDrawFeature({
       setCloseHot(false);
       setHoverHandle(null);
       setHoverAnchor(null);
-      setPaperCursor(hitEl, 'crosshair');
+      setPaperCursor(hitEl, PEN_CURSOR);
     };
 
     const onDbl = (e: MouseEvent) => {
@@ -651,7 +653,7 @@ export default function PenDrawFeature({
       onEditExistingPath(id);
     };
 
-    setPaperCursor(hitEl, 'crosshair');
+    setPaperCursor(hitEl, PEN_CURSOR);
     // Capture so anchors register even when shapes SVG sits under the pointer.
     hitEl.addEventListener('pointerdown', onDown, true);
     hitEl.addEventListener('pointermove', onMove);
@@ -667,7 +669,8 @@ export default function PenDrawFeature({
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('resume:exit-pen', onExitEvent);
       prevCursorRef.current = '';
-      hitEl.style.cursor = '';
+      // Leave style.cursor alone ? React (RcbCanvas) sets the next tool cursor after commit;
+      // assigning '' here runs in effect cleanup and erases pencil/bucket icons.
     };
   }, [enabled, paperEl, stageEl, camera.zoom, toScene, onCommit, onCancel, strokeWidth, hitTest, onEditExistingPath, document]);
 

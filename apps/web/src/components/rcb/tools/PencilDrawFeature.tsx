@@ -23,6 +23,16 @@ import {
   type RcbCamera as CanvasCamera,
 } from '../core/types';
 import RcbSceneOverlaySvg from '../canvas/RcbSceneOverlaySvg';
+import pencilCursorUrl from '@/assets/svg/editor/cursor_pencil.svg?url';
+import eraserCursorUrl from '@/assets/svg/editor/cursor_eraser.svg?url';
+import penCursorUrl from '@/assets/svg/editor/cursor_pen.svg?url';
+import bucketCursorUrl from '@/assets/svg/editor/cursor_bucket.svg?url';
+
+/** CSS cursors — icons in `assets/svg/editor/cursor_*.svg` (hotspot = tip). */
+export const PENCIL_CURSOR = `url("${pencilCursorUrl}") 2 13, crosshair`;
+export const ERASER_CURSOR = `url("${eraserCursorUrl}") 3 15, crosshair`;
+export const PEN_CURSOR = `url("${penCursorUrl}") 2 2, crosshair`;
+export const BUCKET_CURSOR = `url("${bucketCursorUrl}") 15 18, cell`;
 
 function clientToPaperScene(
   paperEl: HTMLElement | null,
@@ -112,8 +122,8 @@ function eraseTargetsNearStroke(
   targets: PencilEraseTarget[]
 ): boolean {
   if (!points.length || !targets.length) return false;
-  // Pad by tip + a little slack so thick ink near the AABB edge still qualifies.
-  const pad = Math.max(radius * 2, radius + 8);
+  // Pad by tip + slack so thick ink near the node AABB edge still qualifies.
+  const pad = Math.max(radius * 2, radius + 24);
   for (const t of targets) {
     const l = t.left - pad;
     const r = t.left + t.width + pad;
@@ -151,6 +161,7 @@ export default function PencilDrawFeature({
   const previewStampsRef = useRef<SVGGElement | null>(null);
   const tipCursorRef = useRef<SVGCircleElement | null>(null);
   const eraseTrailRef = useRef<SVGPathElement | null>(null);
+  const lastTipPosRef = useRef<{ x: number; y: number } | null>(null);
   const brushRef = useRef(brushId);
   const widthRef = useRef(strokeWidth);
   const colorRef = useRef(strokeColor);
@@ -175,30 +186,22 @@ export default function PencilDrawFeature({
       clientY
     );
 
-  /** World-space tip diameter — matches painted ink (brush sizeFactor / stamp size). */
-  const tipDiameter = () => {
-    const w = Math.max(1, Number(widthRef.current) || 1);
-    if (eraseModeRef.current) return Math.max(8, w);
-    const brush = findPencilBrush(brushRef.current);
-    if (isStampBrush(brush.id, brush.stampSrc)) return stampSizeForBrush(brush, w);
-    return brushSize(brush, w);
-  };
-  const tipRadius = () => tipDiameter() / 2;
-
-  /** Eraser tip — same diameter for trail and commit. */
-  const eraseTipDiameter = () => Math.max(8, Number(widthRef.current) || 1);
+  /** Eraser tip — same diameter for cursor ring, trail, and commit (matches UI Px). */
+  const eraseTipDiameter = () => Math.max(1, Number(widthRef.current) || 1);
   const eraseTipRadius = () => eraseTipDiameter() / 2;
 
   const paintTipCursor = (p: { x: number; y: number } | null) => {
     const el = tipCursorRef.current;
     if (!el) return;
-    if (!p) {
+    // Draw mode uses a fixed pencil CSS cursor; size ring only for eraser.
+    if (!eraseModeRef.current || !p) {
+      if (!p) lastTipPosRef.current = null;
       el.setAttribute('visibility', 'hidden');
       return;
     }
+    lastTipPosRef.current = p;
     const zoom = Math.max(0.05, cameraRef.current.zoom || 1);
-    const r = tipRadius();
-    // Radius tracks brush size in world space; ring stroke stays ~1px on screen.
+    const r = eraseTipRadius();
     el.setAttribute('cx', String(p.x));
     el.setAttribute('cy', String(p.y));
     el.setAttribute('r', String(r));
@@ -422,28 +425,19 @@ export default function PencilDrawFeature({
   useEffect(() => {
     if (!eraseMode) {
       paintEraseTrail([]);
+      lastTipPosRef.current = null;
+      const el = tipCursorRef.current;
+      if (el) el.setAttribute('visibility', 'hidden');
     }
   }, [eraseMode]);
 
-  // Refresh tip radius when slider / brush changes (even if pointer is idle).
+  // Refresh tip radius / trail width when slider changes (even if pointer is idle).
   useEffect(() => {
-    const el = tipCursorRef.current;
-    if (!el || el.getAttribute('visibility') === 'hidden') return;
-    const zoom = Math.max(0.05, camera.zoom || 1);
-    el.setAttribute('r', String(tipRadius()));
-    el.setAttribute('stroke-width', String(1.25 / zoom));
-    el.setAttribute('stroke-dasharray', `${3 / zoom} ${2 / zoom}`);
-  }, [strokeWidth, brushId, eraseMode, camera.zoom]);
-
-  useEffect(() => {
-    const hitEl = stageEl || paperEl;
-    if (!enabled || !hitEl) return undefined;
-    const prev = hitEl.style.cursor;
-    hitEl.style.cursor = 'none';
-    return () => {
-      hitEl.style.cursor = prev;
-    };
-  }, [enabled, stageEl, paperEl]);
+    if (!eraseMode) return;
+    const pos = lastTipPosRef.current;
+    if (pos) paintTipCursor(pos);
+    if (pts.current.length >= 2) paintEraseTrail(pts.current);
+  }, [strokeWidth, eraseMode, camera.zoom]);
 
   if (!enabled) return null;
 
@@ -459,15 +453,15 @@ export default function PencilDrawFeature({
       <path
         ref={eraseTrailRef}
         fill="none"
-        stroke="rgba(148,163,184,0.35)"
+        stroke="rgba(20,20,20,0.28)"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <circle
         ref={tipCursorRef}
         visibility="hidden"
-        fill="rgba(148,163,184,0.25)"
-        stroke="rgba(71,85,105,0.85)"
+        fill="rgba(20,20,20,0.12)"
+        stroke="rgba(20,20,20,0.85)"
         strokeWidth={1.25}
         strokeDasharray="3 2"
       />

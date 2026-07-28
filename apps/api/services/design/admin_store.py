@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -16,6 +17,7 @@ from typing import Any
 from services.design.catalog import ensure_design_catalog, get_skill
 from services.db import connect
 
+_log = logging.getLogger("design.admin_store")
 _STAGE_RULES_LOCK = threading.Lock()
 _STAGE_RULES_READY = False
 
@@ -240,24 +242,6 @@ def upsert_global_rule(
 _AGENT_FLOW_RULE_KEY = "agent.flow.default_graph_json"
 _AGENT_FLOW_PHASE_MAP_KEY = "agent.flow.phase_map_json"
 
-_DEFAULT_ASK_CONFIG: dict[str, Any] = {
-    "slots": ["goal", "brand", "copy", "constraints"],
-    "neverAsk": ["canvas_size", "model_choice"],
-    "maxQuestionsPerTurn": 1,
-    "provideChoices": True,
-    "allowInvent": False,
-}
-
-
-def _fresh_ask_config() -> dict[str, Any]:
-    return {
-        "slots": list(_DEFAULT_ASK_CONFIG["slots"]),
-        "neverAsk": list(_DEFAULT_ASK_CONFIG["neverAsk"]),
-        "maxQuestionsPerTurn": int(_DEFAULT_ASK_CONFIG["maxQuestionsPerTurn"]),
-        "provideChoices": bool(_DEFAULT_ASK_CONFIG["provideChoices"]),
-        "allowInvent": bool(_DEFAULT_ASK_CONFIG["allowInvent"]),
-    }
-
 _DEFAULT_AGENT_FLOW_GRAPH: dict[str, Any] = {
     "version": 1,
     "nodes": [
@@ -278,92 +262,97 @@ _DEFAULT_AGENT_FLOW_GRAPH: dict[str, Any] = {
         {
             "id": "mode_fork",
             "label": "条件分支",
-            "description": "",
+            "description": "Ask / Agent 分线",
             "kind": "if_else",
             "capability": "control",
             "phaseKey": "mode_fork",
             "x": 880,
             "y": 400,
         },
-        # Ask 只是主线上多一步追问；够了再回到 Agent 主循环
+        # —— Ask 子图：思考与 Agent 同契约；人闸只用 clarify + propose ——
         {
             "id": "ask_thought",
-            "label": "人工介入",
-            "description": "",
+            "label": "Ask 主思考",
+            "description": "同主 ReAct；未填一次问齐；用户改口须重想再确认",
             "kind": "ask",
             "capability": "prompt",
             "phaseKey": "ask_thought",
             "promptKey": "agent.prompt.ask_system",
-            "inject": {"mode": "none", "specs": ["agent.prompt.ask_system"], "validate": ["json_contract"]},
-            "askConfig": _fresh_ask_config(),
+            "inject": {
+                "mode": "catalog",
+                "catalogs": ["canvas_tools", "knowledge", "aesthetics"],
+                "deferDetails": True,
+                "specs": ["agent.prompt.react_system", "agent.prompt.ask_system"],
+                "validate": ["json_contract"],
+            },
             "x": 1160,
-            "y": 640,
+            "y": 720,
         },
         {
             "id": "clarify",
-            "label": "人工介入",
-            "description": "",
+            "label": "追问用户",
+            "description": "缺项/风格/生图/重试等：一次问齐仍缺的；等用户答完再继续",
             "kind": "ask",
             "capability": "prompt",
             "phaseKey": "clarify",
             "promptKey": "agent.prompt.ask_system",
             "inject": {"mode": "none", "specs": ["agent.prompt.ask_system"]},
-            "askConfig": _fresh_ask_config(),
-            "x": 1440,
-            "y": 640,
+            "x": 1480,
+            "y": 720,
         },
         {
             "id": "propose",
-            "label": "人工介入",
-            "description": "",
+            "label": "确认开始设计",
+            "description": "有方案后等确认再上屏；用户改需求则作废本案重想",
             "kind": "ask",
             "capability": "prompt",
             "phaseKey": "propose",
             "promptKey": "agent.prompt.ask_system",
             "inject": {"mode": "none", "specs": ["agent.prompt.ask_system"]},
-            "askConfig": _fresh_ask_config(),
-            "x": 1440,
-            "y": 800,
+            "x": 1480,
+            "y": 960,
         },
-        # —— Agent 主循环（Ask / Agent 共用）——
-        {"id": "plan", "label": "LLM", "description": "", "kind": "llm", "capability": "prompt", "phaseKey": "plan", "promptKey": "agent.prompt.plan_system", "inject": {"mode": "none", "specs": ["agent.prompt.plan_system"]}, "x": 1160, "y": 200},
+        # —— Agent 主循环 ——
+        {"id": "plan", "label": "短计划", "description": "", "kind": "llm", "capability": "prompt", "phaseKey": "plan", "promptKey": "agent.prompt.plan_system", "inject": {"mode": "none", "specs": ["agent.prompt.plan_system"]}, "x": 1160, "y": 200},
         {"id": "model_route", "label": "模型路由", "description": "", "kind": "classifier", "capability": "model_route", "phaseKey": "model_route", "configRef": "precheck.model_threshold", "x": 1440, "y": 400},
-        {"id": "thought", "label": "LLM", "description": "", "kind": "llm", "capability": "prompt", "phaseKey": "thought", "promptKey": "agent.prompt.react_system", "configRef": "models+routes", "inject": {"mode": "catalog", "catalogs": ["canvas_tools", "knowledge", "aesthetics"], "deferDetails": True, "specs": ["agent.prompt.react_system"], "validate": ["json_contract"]}, "x": 1720, "y": 400},
-        {"id": "resource_fork", "label": "并行网关", "description": "", "kind": "parallel", "capability": "control", "phaseKey": "resource_fork", "x": 2000, "y": 400},
-        {"id": "need_knowledge", "label": "知识检索", "description": "", "kind": "resource", "capability": "knowledge", "phaseKey": "need_knowledge", "configRef": "design_knowledge", "inject": {"mode": "catalog", "source": "knowledge"}, "x": 2000, "y": 160},
-        {"id": "need_aesthetics", "label": "知识检索", "description": "", "kind": "resource", "capability": "aesthetics", "phaseKey": "need_aesthetics", "configRef": "quality_samples", "inject": {"mode": "catalog", "source": "aesthetics"}, "x": 2000, "y": 280},
-        {"id": "need_tools", "label": "Agent", "description": "", "kind": "resource", "capability": "canvas_tools", "phaseKey": "need_tools", "configRef": "canvas_tools", "inject": {"mode": "catalog", "source": "canvas_tools"}, "x": 2000, "y": 520},
-        {"id": "knowledge_details", "label": "知识检索", "description": "", "kind": "resource", "capability": "knowledge", "phaseKey": "knowledge_details", "configRef": "design_knowledge", "inject": {"mode": "details", "source": "knowledge"}, "x": 2280, "y": 160},
-        {"id": "aesthetics_details", "label": "知识检索", "description": "", "kind": "resource", "capability": "aesthetics", "phaseKey": "aesthetics_details", "configRef": "quality_samples", "inject": {"mode": "details", "source": "aesthetics", "specs": ["aesthetics.prompt.vision_structure", "aesthetics.vision.structure_schema"]}, "x": 2280, "y": 280},
-        {"id": "tool_details", "label": "Agent", "description": "", "kind": "resource", "capability": "canvas_tools", "phaseKey": "tool_details", "configRef": "canvas_tools", "inject": {"mode": "details", "source": "canvas_tools", "validate": ["tool_args_schema"]}, "x": 2280, "y": 520},
-        {"id": "resource_join", "label": "汇聚", "description": "", "kind": "join", "capability": "control", "phaseKey": "resource_join", "joinMode": "and", "x": 2560, "y": 400},
-        {"id": "dual_sample", "label": "LLM", "description": "", "kind": "llm", "capability": "prompt", "phaseKey": "dual_sample", "promptKey": "agent.prompt.react_system", "inject": {"mode": "catalog", "catalogs": ["canvas_tools", "knowledge", "aesthetics"], "deferDetails": True}, "x": 1720, "y": 640},
-        {"id": "validate_fail", "label": "条件分支", "description": "", "kind": "guard", "capability": "control", "phaseKey": "validate_fail", "inject": {"mode": "none", "validate": ["validate.checklist", "svg_markup"]}, "x": 1720, "y": 800},
-        {"id": "reflect", "label": "循环", "description": "", "kind": "loop", "capability": "control", "phaseKey": "reflect", "x": 2000, "y": 800},
-        {"id": "hydrate", "label": "代码执行", "description": "", "kind": "tool", "capability": "canvas_tools", "phaseKey": "hydrate", "configRef": "assets.image_default_model", "inject": {"mode": "none", "validate": ["create_image.genPrompt"]}, "x": 1720, "y": 960},
-        {"id": "action", "label": "代码执行", "description": "", "kind": "tool", "capability": "canvas_tools", "phaseKey": "action", "configRef": "canvas_tools", "inject": {"mode": "details", "source": "canvas_tools", "validate": ["svg_markup", "tool_args_schema", "validate.checklist"]}, "x": 2000, "y": 960},
-        {"id": "observe", "label": "输出", "description": "", "kind": "observe", "capability": "io", "phaseKey": "observe", "x": 2280, "y": 960},
-        {"id": "error", "label": "错误结束", "description": "", "kind": "error", "capability": "control", "phaseKey": "error", "x": 2280, "y": 800},
+        {"id": "thought", "label": "Agent 主思考", "description": "", "kind": "llm", "capability": "prompt", "phaseKey": "thought", "promptKey": "agent.prompt.react_system", "configRef": "models+routes", "inject": {"mode": "catalog", "catalogs": ["canvas_tools", "knowledge", "aesthetics"], "deferDetails": True, "specs": ["agent.prompt.react_system"], "validate": ["json_contract"]}, "x": 1720, "y": 400},
+        {"id": "resource_fork", "label": "资源并行", "description": "", "kind": "parallel", "capability": "control", "phaseKey": "resource_fork", "x": 2000, "y": 400},
+        {"id": "need_knowledge", "label": "申请知识", "description": "", "kind": "resource", "capability": "knowledge", "phaseKey": "need_knowledge", "configRef": "design_knowledge", "inject": {"mode": "catalog", "source": "knowledge"}, "x": 2000, "y": 160},
+        {"id": "need_aesthetics", "label": "申请美学", "description": "", "kind": "resource", "capability": "aesthetics", "phaseKey": "need_aesthetics", "configRef": "quality_samples", "inject": {"mode": "catalog", "source": "aesthetics"}, "x": 2000, "y": 280},
+        {"id": "need_tools", "label": "申请工具", "description": "", "kind": "resource", "capability": "canvas_tools", "phaseKey": "need_tools", "configRef": "canvas_tools", "inject": {"mode": "catalog", "source": "canvas_tools"}, "x": 2000, "y": 520},
+        {"id": "knowledge_details", "label": "注入知识", "description": "", "kind": "resource", "capability": "knowledge", "phaseKey": "knowledge_details", "configRef": "design_knowledge", "inject": {"mode": "details", "source": "knowledge"}, "x": 2280, "y": 160},
+        {"id": "aesthetics_details", "label": "注入美学", "description": "", "kind": "resource", "capability": "aesthetics", "phaseKey": "aesthetics_details", "configRef": "quality_samples", "inject": {"mode": "details", "source": "aesthetics", "specs": ["aesthetics.prompt.vision_structure", "aesthetics.vision.structure_schema"]}, "x": 2280, "y": 280},
+        {"id": "tool_details", "label": "注入工具", "description": "", "kind": "resource", "capability": "canvas_tools", "phaseKey": "tool_details", "configRef": "canvas_tools", "inject": {"mode": "details", "source": "canvas_tools", "validate": ["tool_args_schema"]}, "x": 2280, "y": 520},
+        {"id": "resource_join", "label": "资源汇聚", "description": "", "kind": "join", "capability": "control", "phaseKey": "resource_join", "joinMode": "and", "x": 2560, "y": 400},
+        {"id": "dual_sample", "label": "双采样", "description": "", "kind": "llm", "capability": "prompt", "phaseKey": "dual_sample", "promptKey": "agent.prompt.react_system", "inject": {"mode": "catalog", "catalogs": ["canvas_tools", "knowledge", "aesthetics"], "deferDetails": True}, "x": 1720, "y": 640},
+        {"id": "validate_fail", "label": "校验失败", "description": "", "kind": "guard", "capability": "control", "phaseKey": "validate_fail", "inject": {"mode": "none", "validate": ["validate.checklist", "svg_markup"]}, "x": 1720, "y": 800},
+        {"id": "reflect", "label": "反思重试", "description": "", "kind": "loop", "capability": "control", "phaseKey": "reflect", "x": 2000, "y": 800},
+        {"id": "hydrate", "label": "生图水合", "description": "", "kind": "tool", "capability": "canvas_tools", "phaseKey": "hydrate", "configRef": "assets.image_default_model", "inject": {"mode": "none", "validate": ["create_image.genPrompt"]}, "x": 1720, "y": 960},
+        {"id": "action", "label": "执行画布", "description": "", "kind": "tool", "capability": "canvas_tools", "phaseKey": "action", "configRef": "canvas_tools", "inject": {"mode": "details", "source": "canvas_tools", "validate": ["svg_markup", "tool_args_schema", "validate.checklist"]}, "x": 2000, "y": 960},
+        {"id": "observe", "label": "观察结果", "description": "", "kind": "observe", "capability": "io", "phaseKey": "observe", "x": 2280, "y": 960},
+        {"id": "error", "label": "错误结束", "description": "", "kind": "error", "capability": "control", "phaseKey": "error", "x": 2560, "y": 800},
         {"id": "end", "label": "结束", "description": "", "kind": "end", "capability": "control", "phaseKey": "end", "x": 2560, "y": 960},
     ],
     "edges": [
         {"id": "e0", "source": "start", "target": "route", "label": "", "condition": "", "priority": 100, "isDefault": True},
         {"id": "e0a", "source": "route", "target": "memory", "label": "", "condition": "", "priority": 10, "isDefault": True},
         {"id": "e0b", "source": "memory", "target": "mode_fork", "label": "", "condition": "", "priority": 10, "isDefault": True},
-        # Ask 模式优先于短计划（FE interaction_mode=ask → flags.mode=ask）
         {"id": "e_mode_ask", "source": "mode_fork", "target": "ask_thought", "label": "Ask 模式", "condition": "mode=ask", "priority": 5, "isDefault": False},
         {"id": "e_mode_agent_plan", "source": "mode_fork", "target": "plan", "label": "开启短计划", "condition": "short_plan_on", "priority": 10, "isDefault": False},
-        # Agent 主线默认
         {"id": "e_mode_agent", "source": "mode_fork", "target": "model_route", "label": "Agent 主线", "condition": "mode=agent", "priority": 20, "isDefault": True},
-        {"id": "e_ask_insuff", "source": "ask_thought", "target": "clarify", "label": "信息不足", "condition": "info_insufficient", "priority": 10, "isDefault": False},
-        {"id": "e_ask_intent", "source": "ask_thought", "target": "clarify", "label": "意图=追问", "condition": "intent=ask", "priority": 15, "isDefault": False},
-        {"id": "e_ask_propose", "source": "ask_thought", "target": "propose", "label": "Ask 提议案", "condition": "ask_mode_ops", "priority": 8, "isDefault": False},
+        # Ask：缺信息/要资源确认/要生图确认 → 统一 clarify；有方案 → propose；齐了 → 主循环
+        {"id": "e_ask_insuff", "source": "ask_thought", "target": "clarify", "label": "信息不足", "condition": "info_insufficient", "priority": 5, "isDefault": False},
+        {"id": "e_ask_intent", "source": "ask_thought", "target": "clarify", "label": "意图=追问", "condition": "intent=ask", "priority": 6, "isDefault": False},
+        {"id": "e_ask_res", "source": "ask_thought", "target": "clarify", "label": "确认资源前追问", "condition": "need_resources", "priority": 7, "isDefault": False},
+        {"id": "e_ask_hydrate", "source": "ask_thought", "target": "clarify", "label": "确认生图前追问", "condition": "need_hydrate", "priority": 8, "isDefault": False},
+        {"id": "e_ask_propose", "source": "ask_thought", "target": "propose", "label": "确认开始设计", "condition": "ask_mode_ops", "priority": 9, "isDefault": False},
+        {"id": "e_ask_chat", "source": "ask_thought", "target": "end", "label": "闲聊结束", "condition": "intent=chat", "priority": 16, "isDefault": False},
+        {"id": "e_ask_done", "source": "ask_thought", "target": "end", "label": "完成结束", "condition": "intent=done", "priority": 17, "isDefault": False},
         {"id": "e_ask_enough", "source": "ask_thought", "target": "model_route", "label": "信息足够", "condition": "info_enough", "priority": 20, "isDefault": True},
         {"id": "e_clarify_wait", "source": "clarify", "target": "end", "label": "等待用户回答", "condition": "await_user", "priority": 10, "isDefault": True},
         {"id": "e_propose_wait", "source": "propose", "target": "end", "label": "等待用户确认", "condition": "await_confirm", "priority": 10, "isDefault": True},
         # Agent 主循环
         {"id": "e4", "source": "plan", "target": "model_route", "label": "计划完成", "condition": "plan_done", "priority": 10, "isDefault": True},
-        # 分档/看图/多模态都在 model_route 节点内配置，不拆成多个 LLM 节点
         {"id": "e5", "source": "model_route", "target": "thought", "label": "调用主模型", "condition": "llm_call", "priority": 10, "isDefault": True},
         {"id": "e6", "source": "thought", "target": "resource_fork", "label": "需要资源", "condition": "need_resources", "priority": 10, "isDefault": False},
         {"id": "e6a", "source": "resource_fork", "target": "need_knowledge", "label": "需要知识", "condition": "need_knowledge", "priority": 10, "isDefault": False},
@@ -384,11 +373,15 @@ _DEFAULT_AGENT_FLOW_GRAPH: dict[str, Any] = {
         {"id": "e19b", "source": "thought", "target": "end", "label": "闲聊结束", "condition": "intent=chat", "priority": 42, "isDefault": False},
         {"id": "e19c", "source": "thought", "target": "end", "label": "完成结束", "condition": "intent=done", "priority": 43, "isDefault": False},
         {"id": "e20", "source": "thought", "target": "propose", "label": "Ask 提议案", "condition": "ask_mode_ops", "priority": 50, "isDefault": False},
-        {"id": "e21", "source": "thought", "target": "hydrate", "label": "操作合法", "condition": "ops_valid", "priority": 60, "isDefault": False},
-        {"id": "e22", "source": "dual_sample", "target": "hydrate", "label": "选最优采样", "condition": "pick_best", "priority": 10, "isDefault": True},
+        {"id": "e21", "source": "thought", "target": "hydrate", "label": "需生图水合", "condition": "need_hydrate", "priority": 55, "isDefault": False},
+        {"id": "e21b", "source": "thought", "target": "action", "label": "操作合法", "condition": "ops_valid", "priority": 60, "isDefault": False},
+        {"id": "e22", "source": "dual_sample", "target": "hydrate", "label": "双采样需水合", "condition": "need_hydrate", "priority": 5, "isDefault": False},
+        {"id": "e22b", "source": "dual_sample", "target": "action", "label": "选最优采样", "condition": "pick_best", "priority": 10, "isDefault": True},
         {"id": "e23", "source": "hydrate", "target": "action", "label": "执行工具", "condition": "tool_ops", "priority": 10, "isDefault": True},
         {"id": "e24", "source": "action", "target": "observe", "label": "等待场景", "condition": "wait_scene", "priority": 10, "isDefault": True},
         {"id": "e25", "source": "observe", "target": "end", "label": "成功结束", "condition": "ok", "priority": 10, "isDefault": True},
+        # Ask 失败先追问是否重试；Agent 走自动反思
+        {"id": "e_ask_obs_retry", "source": "observe", "target": "clarify", "label": "Ask 确认重试", "condition": "mode=ask", "priority": 15, "isDefault": False},
         {"id": "e26", "source": "observe", "target": "reflect", "label": "操作失败", "condition": "op_failed", "priority": 20, "isDefault": False},
         {"id": "e27", "source": "reflect", "target": "thought", "label": "重试思考", "condition": "retry", "priority": 10, "isDefault": True},
         {"id": "e30", "source": "reflect", "target": "error", "label": "反思耗尽", "condition": "reflect_exhausted", "priority": 20, "isDefault": False},
@@ -427,6 +420,258 @@ _DEFAULT_AGENT_PHASE_MAP: dict[str, str] = {
     "error": "error",
     "end": "end",
 }
+
+
+
+_DEFAULT_AGENT_FLOW_NODE_TEMPLATES: list[dict[str, Any]] = [
+  {
+    "key": "start",
+    "label": "开始",
+    "kind": "start",
+    "category": "basic",
+    "description": "流程入口，定义输入变量",
+    "capability": "io",
+    "phaseKey": "start",
+    "promptKey": None,
+    "configRef": None,
+    "preview": "定义输入",
+    "pickerTab": "start"
+  },
+  {
+    "key": "end",
+    "label": "结束",
+    "kind": "end",
+    "category": "basic",
+    "description": "流程出口，汇总输出变量",
+    "capability": "control",
+    "phaseKey": "end",
+    "promptKey": None,
+    "configRef": None,
+    "preview": "输出结果",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "error",
+    "label": "错误结束",
+    "kind": "error",
+    "category": "basic",
+    "description": "异常出口",
+    "capability": "control",
+    "phaseKey": "error",
+    "promptKey": None,
+    "configRef": None,
+    "preview": "错误出口",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "llm",
+    "label": "LLM",
+    "kind": "llm",
+    "category": "basic",
+    "description": "调用 LLM 处理文本 / 结构化输出",
+    "capability": "prompt",
+    "phaseKey": None,
+    "promptKey": "agent.prompt.react_system",
+    "configRef": None,
+    "preview": "选择模型与提示词",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "knowledge",
+    "label": "知识检索",
+    "kind": "knowledge",
+    "category": "basic",
+    "description": "从知识库检索相关片段",
+    "capability": "knowledge",
+    "phaseKey": "resource_fork",
+    "promptKey": None,
+    "configRef": "design_knowledge",
+    "preview": "检索知识库",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "agent",
+    "label": "Agent",
+    "kind": "agent",
+    "category": "basic",
+    "description": "自主工具调用循环",
+    "capability": "prompt",
+    "phaseKey": None,
+    "promptKey": "agent.prompt.react_system",
+    "configRef": None,
+    "preview": "工具调用 Agent",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "classifier",
+    "label": "问题分类器",
+    "kind": "classifier",
+    "category": "question",
+    "description": "按意图分流到不同分支",
+    "capability": "model_route",
+    "phaseKey": None,
+    "promptKey": None,
+    "configRef": None,
+    "preview": "分类并路由",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "if_else",
+    "label": "条件分支",
+    "kind": "if_else",
+    "category": "logic",
+    "description": "IF / ELSE 条件判断",
+    "capability": "control",
+    "phaseKey": None,
+    "promptKey": None,
+    "configRef": None,
+    "preview": "IF / ELSE",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "parallel",
+    "label": "并行网关",
+    "kind": "parallel",
+    "category": "logic",
+    "description": "分叉：同时激活所有出边分支",
+    "capability": "control",
+    "phaseKey": None,
+    "promptKey": None,
+    "configRef": None,
+    "preview": "并行分叉",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "join",
+    "label": "汇聚",
+    "kind": "join",
+    "category": "logic",
+    "description": "汇合：等待所有入边到达后再继续（AND）",
+    "capability": "control",
+    "phaseKey": None,
+    "promptKey": None,
+    "configRef": None,
+    "preview": "全部汇合",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "human",
+    "label": "人工介入",
+    "kind": "human",
+    "category": "logic",
+    "description": "暂停等待人工确认或追问",
+    "capability": "prompt",
+    "phaseKey": None,
+    "promptKey": "agent.prompt.ask_system",
+    "configRef": None,
+    "preview": "等待人工",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "loop",
+    "label": "循环",
+    "kind": "loop",
+    "category": "logic",
+    "description": "按条件重复执行",
+    "capability": "control",
+    "phaseKey": None,
+    "promptKey": None,
+    "configRef": None,
+    "preview": "循环执行",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "code",
+    "label": "代码执行",
+    "kind": "code",
+    "category": "transform",
+    "description": "运行自定义脚本做转换",
+    "capability": None,
+    "phaseKey": None,
+    "promptKey": None,
+    "configRef": None,
+    "preview": "Python / JS",
+    "pickerTab": "tools"
+  },
+  {
+    "key": "output",
+    "label": "输出",
+    "kind": "output",
+    "category": "basic",
+    "description": "向外暴露流程结果",
+    "capability": "io",
+    "phaseKey": None,
+    "promptKey": None,
+    "configRef": None,
+    "preview": "输出变量",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "resource_load",
+    "label": "资源加载",
+    "kind": "resource",
+    "category": "basic",
+    "description": "批量拉取知识 / 美学 / 工具详情",
+    "capability": "knowledge",
+    "phaseKey": "resource_fork",
+    "promptKey": None,
+    "configRef": "design_knowledge",
+    "preview": "按需注入资源",
+    "pickerTab": "nodes"
+  },
+  {
+    "key": "verify",
+    "label": "结果校验",
+    "kind": "observe",
+    "category": "basic",
+    "description": "结构/美学门禁；写 verify_ok / verify_fail",
+    "capability": "io",
+    "phaseKey": "verify",
+    "promptKey": None,
+    "configRef": None,
+    "preview": "校验画布结果",
+    "pickerTab": "nodes"
+  }
+]
+
+def list_agent_flow_node_templates() -> list[dict[str, Any]]:
+    """Admin 节点调色板模板：优先读全局规则，否则返回种子默认。"""
+    ensure_stage_rules()
+    rules = {r["ruleKey"]: r["ruleValue"] for r in list_global_rules()}
+    raw = str(rules.get(_AGENT_FLOW_NODE_TEMPLATES_KEY) or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and parsed:
+                out: list[dict[str, Any]] = []
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        continue
+                    key = str(item.get("key") or "").strip()
+                    kind = str(item.get("kind") or "").strip()
+                    label = str(item.get("label") or "").strip()
+                    if not key or not kind or not label:
+                        continue
+                    out.append(
+                        {
+                            "key": key,
+                            "label": label,
+                            "kind": kind,
+                            "category": str(item.get("category") or "basic"),
+                            "description": str(item.get("description") or ""),
+                            "capability": str(item.get("capability") or "") or None,
+                            "phaseKey": str(item.get("phaseKey") or "") or None,
+                            "promptKey": str(item.get("promptKey") or "") or None,
+                            "configRef": str(item.get("configRef") or "") or None,
+                            "preview": str(item.get("preview") or "") or None,
+                            "pickerTab": str(item.get("pickerTab") or "nodes") or "nodes",
+                        }
+                    )
+                if out:
+                    return out
+        except Exception:
+            _log.exception("parse agent flow node templates failed")
+    return json.loads(json.dumps(_DEFAULT_AGENT_FLOW_NODE_TEMPLATES, ensure_ascii=False))
 
 
 def get_agent_flow_config() -> dict[str, Any]:
@@ -602,106 +847,153 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             edges.append({"id": eid, "source": "error", "target": "end", "label": "fail_end"})
             changed = True
 
-    # Reflect runtime `_gather_deferred_resource_details`: fan-out need_* in parallel, then join.
+    # Collapse legacy fake-parallel resource lane → single resource_fork with mode outs.
     edge_ids = {str(e.get("id") or "") for e in edges}
-    need_ids = [x for x in ("need_knowledge", "need_aesthetics", "need_tools") if x in ids]
-    detail_ids = [
-        x
-        for x in ("knowledge_details", "aesthetics_details", "tool_details")
-        if x in ids
-    ]
-    if (
-        "thought" in ids
-        and len(need_ids) >= 2
-        and "resource_fork" not in ids
-        and "resource_join" not in ids
-    ):
-        thought_n = next(n for n in nodes if str(n.get("id")) == "thought")
-        tx = float(thought_n.get("x") or 1000)
-        ty = float(thought_n.get("y") or 280)
-        nodes.extend(
-            [
+    _DEAD_RES = {
+        "need_knowledge",
+        "need_aesthetics",
+        "need_tools",
+        "knowledge_details",
+        "aesthetics_details",
+        "tool_details",
+        "resource_join",
+    }
+    if "thought" in ids and ("resource_fork" in ids or ids & _DEAD_RES):
+        if "resource_fork" not in ids:
+            thought_n = next(n for n in nodes if str(n.get("id")) == "thought")
+            tx = float(thought_n.get("x") or 1000)
+            ty = float(thought_n.get("y") or 280)
+            nodes.append(
                 {
                     "id": "resource_fork",
-                    "label": "并行网关",
-                    "description": "并行拉取知识/美学/工具",
-                    "kind": "parallel",
+                    "label": "资源加载",
+                    "description": "批量拉取知识/美学/工具详情后按 mode 回到思考",
+                    "kind": "resource",
                     "capability": "control",
-                    "phaseKey": "",
+                    "phaseKey": "resource_fork",
                     "x": tx + 240,
                     "y": ty,
-                },
-                {
-                    "id": "resource_join",
-                    "label": "汇聚",
-                    "description": "资源就绪后回到思考",
-                    "kind": "join",
-                    "capability": "control",
-                    "phaseKey": "",
-                    "joinMode": "and",
-                    "x": tx + 960,
-                    "y": ty,
-                },
-            ]
-        )
-        # Park need_* / details in a clean parallel lane to the right of thought.
-        lane = {
-            "need_knowledge": (tx + 480, ty - 240),
-            "need_aesthetics": (tx + 480, ty - 80),
-            "need_tools": (tx + 480, ty + 80),
-            "knowledge_details": (tx + 720, ty - 240),
-            "aesthetics_details": (tx + 720, ty - 80),
-            "tool_details": (tx + 720, ty + 80),
-        }
+                }
+            )
+            ids.add("resource_fork")
+            changed = True
         for n in nodes:
-            pos = lane.get(str(n.get("id") or ""))
-            if not pos:
+            if str(n.get("id") or "") != "resource_fork":
                 continue
-            n["x"], n["y"] = pos
-        ids.add("resource_fork")
-        ids.add("resource_join")
-        # Drop direct thought → need_* and details → thought; rewire via fork/join.
-        edges = [
-            e
-            for e in edges
-            if not (
-                str(e.get("source") or "") == "thought"
-                and str(e.get("target") or "") in set(need_ids)
-            )
-            and not (
-                str(e.get("source") or "") in set(detail_ids)
-                and str(e.get("target") or "") == "thought"
-            )
-        ]
-        edge_ids = {str(e.get("id") or "") for e in edges}
+            if str(n.get("kind") or "") == "parallel":
+                n["kind"] = "resource"
+                n["label"] = n.get("label") or "资源加载"
+                changed = True
+            if not str(n.get("phaseKey") or "").strip():
+                n["phaseKey"] = "resource_fork"
+                changed = True
+            break
 
-        def _add_edge(eid: str, source: str, target: str, label: str, *, is_default: bool = False, priority: int = 10) -> None:
-            nonlocal edges, edge_ids
-            name = eid
+        def _rewire_to_fork(eid_hint: str, src: str, cond: str, *, priority: int) -> None:
+            nonlocal edges, edge_ids, changed
+            for e in edges:
+                if str(e.get("source") or "") != src:
+                    continue
+                c = str(e.get("condition") or "")
+                if c != cond:
+                    continue
+                if str(e.get("target") or "") != "resource_fork":
+                    e["target"] = "resource_fork"
+                    e["condition"] = cond
+                    e["priority"] = priority
+                    e["isDefault"] = False
+                    changed = True
+                return
+            name = eid_hint
             n = 0
             while name in edge_ids:
                 n += 1
-                name = f"{eid}_{n}"
+                name = f"{eid_hint}_{n}"
             edges.append(
                 {
                     "id": name,
-                    "source": source,
-                    "target": target,
-                    "label": label,
-                    "condition": label,
+                    "source": src,
+                    "target": "resource_fork",
+                    "label": "",
+                    "condition": cond,
                     "priority": priority,
-                    "isDefault": is_default,
+                    "isDefault": False,
                 }
             )
             edge_ids.add(name)
+            changed = True
 
-        _add_edge("e_res_fork", "thought", "resource_fork", "need_resources")
-        for nid in need_ids:
-            _add_edge(f"e_fork_{nid}", "resource_fork", nid, nid)
-        for did in detail_ids:
-            _add_edge(f"e_join_{did}", did, "resource_join", "ready", is_default=True)
-        _add_edge("e_res_join", "resource_join", "thought", "next_round", is_default=True)
-        changed = True
+        # Drop edges into/out of dead parallel nodes; keep thought/ask → fork.
+        drop_ids = _DEAD_RES
+        edges = [
+            e
+            for e in edges
+            if str(e.get("source") or "") not in drop_ids
+            and str(e.get("target") or "") not in drop_ids
+        ]
+        edge_ids = {str(e.get("id") or "") for e in edges}
+        if ids & drop_ids:
+            nodes[:] = [n for n in nodes if str(n.get("id") or "") not in drop_ids]
+            ids -= drop_ids
+            changed = True
+
+        _rewire_to_fork("e6_tools", "thought", "need_tools&no_ops", priority=10)
+        _rewire_to_fork("e6_know", "thought", "need_knowledge&no_ops", priority=11)
+        _rewire_to_fork("e6_aes", "thought", "need_aesthetics&no_ops", priority=12)
+        if "ask_thought" in ids:
+            _rewire_to_fork("e_ask_res_tools", "ask_thought", "need_tools&no_ops", priority=7)
+            _rewire_to_fork("e_ask_res_know", "ask_thought", "need_knowledge&no_ops", priority=8)
+            _rewire_to_fork("e_ask_res_aes", "ask_thought", "need_aesthetics&no_ops", priority=9)
+
+        # Fork outs: mode split back to thought / ask_thought (no join).
+        has_agent_out = any(
+            str(e.get("source") or "") == "resource_fork"
+            and str(e.get("target") or "") == "thought"
+            for e in edges
+        )
+        has_ask_out = any(
+            str(e.get("source") or "") == "resource_fork"
+            and str(e.get("target") or "") == "ask_thought"
+            for e in edges
+        )
+        if not has_agent_out:
+            name = "e_res_agent"
+            n = 0
+            while name in edge_ids:
+                n += 1
+                name = f"e_res_agent_{n}"
+            edges.append(
+                {
+                    "id": name,
+                    "source": "resource_fork",
+                    "target": "thought",
+                    "label": "下一轮思考",
+                    "condition": "mode=agent",
+                    "priority": 10,
+                    "isDefault": True,
+                }
+            )
+            edge_ids.add(name)
+            changed = True
+        if "ask_thought" in ids and not has_ask_out:
+            name = "e_res_ask"
+            n = 0
+            while name in edge_ids:
+                n += 1
+                name = f"e_res_ask_{n}"
+            edges.append(
+                {
+                    "id": name,
+                    "source": "resource_fork",
+                    "target": "ask_thought",
+                    "label": "Ask 下一轮",
+                    "condition": "mode=ask",
+                    "priority": 5,
+                    "isDefault": False,
+                }
+            )
+            edge_ids.add(name)
+            changed = True
 
     # Migrate legacy label-only edges → schedule fields; default joinMode on joins.
     for e in edges:
@@ -744,13 +1036,6 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 if seeded:
                     n["inject"] = seeded
                     changed = True
-            # Ask 追问清单
-            pk = str(n.get("phaseKey") or n.get("id") or "")
-            kind = str(n.get("kind") or "").lower()
-            needs_ask = pk in {"clarify", "propose", "ask_thought"} or kind in {"ask", "human"}
-            if needs_ask and not (isinstance(n.get("askConfig"), dict) and n.get("askConfig")):
-                n["askConfig"] = _fresh_ask_config()
-                changed = True
     except Exception:
         pass
 
@@ -784,7 +1069,6 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                     "phaseKey": "ask_thought",
                     "promptKey": "agent.prompt.ask_system",
                     "inject": {"mode": "none", "specs": ["agent.prompt.ask_system"]},
-                    "askConfig": _fresh_ask_config(),
                     "x": float(mem_n.get("x") or 520) + 480,
                     "y": float(mem_n.get("y") or 400) + 240,
                 }
@@ -811,6 +1095,10 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             is_default: bool = False,
         ) -> None:
             nonlocal changed
+            # Never create a second edge with the same id (React Flow keys).
+            for e in edges:
+                if str(e.get("id") or "") == eid:
+                    return
             if _has_edge(src, tgt, condition):
                 return
             edges.append(
@@ -850,14 +1138,17 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             changed = True
 
         _add_edge("e_mem_fork", "memory", "mode_fork", is_default=True)
-        # Migrate / ensure FE Ask mode edge (mode=ask), not intent=ask at fork time.
+        # Ask 走 ask_thought 子图；Agent 走 model_route 主线
         migrated_mode_ask = False
         for e in edges:
             if str(e.get("source") or "") != "mode_fork":
                 continue
-            if str(e.get("target") or "") != "ask_thought":
+            tgt = str(e.get("target") or "")
+            cond = str(e.get("condition") or "")
+            if cond != "mode=ask" and tgt != "ask_thought":
                 continue
-            if str(e.get("condition") or "") != "mode=ask":
+            if tgt != "ask_thought" or cond != "mode=ask":
+                e["target"] = "ask_thought"
                 e["condition"] = "mode=ask"
                 e["label"] = "Ask 模式"
                 e["priority"] = 5
@@ -887,17 +1178,198 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             "e_ask_enough",
             "ask_thought",
             "model_route",
-            condition="info_enough",
+            condition="",
             priority=20,
             is_default=True,
         )
         if "clarify" in ids:
             _add_edge(
-                "e_ask_insuff",
+                "e_ask_slot",
                 "ask_thought",
                 "clarify",
-                condition="info_insufficient",
+                condition="slot_missing",
+                priority=5,
+            )
+            _add_edge(
+                "e_ask_intent",
+                "ask_thought",
+                "clarify",
+                condition="intent=ask&no_ops",
+                priority=6,
+            )
+            _add_edge(
+                "e_ask_obs_retry",
+                "observe",
+                "clarify",
+                condition="mode=ask&op_failed",
+                priority=15,
+            )
+            _add_edge(
+                "e_ask_propose",
+                "ask_thought",
+                "propose",
+                condition="mode=ask&has_ops",
                 priority=10,
+            )
+        # Drop legacy hydrate / dual_sample nodes; action owns hydrate.
+        _drop_phases = {"hydrate", "dual_sample"}
+        if ids & _drop_phases:
+            for e in edges:
+                if str(e.get("target") or "") in _drop_phases:
+                    e["target"] = "action"
+                    changed = True
+                if str(e.get("source") or "") in _drop_phases:
+                    e["source"] = "action" if "action" in ids else e.get("source")
+                    if str(e.get("condition") or "") in ("ops_valid", ""):
+                        e["condition"] = "ops_valid" if str(e.get("source")) != "action" else "wait_scene"
+                    changed = True
+            nodes[:] = [n for n in nodes if str(n.get("id") or "") not in _drop_phases]
+            ids -= _drop_phases
+            changed = True
+        # observe → verify; op_failed still clarify/reflect
+        if "observe" in ids:
+            if "verify" not in ids:
+                nodes.append(
+                    {
+                        "id": "verify",
+                        "label": "结果校验",
+                        "description": "结构/美学门禁；只写 verify_* flag",
+                        "kind": "observe",
+                        "capability": "io",
+                        "phaseKey": "verify",
+                        "x": 2420,
+                        "y": 960,
+                    }
+                )
+                ids.add("verify")
+                changed = True
+            for e in edges:
+                if str(e.get("id") or "") == "e_ask_obs_retry" or (
+                    str(e.get("source") or "") == "observe"
+                    and str(e.get("target") or "") == "clarify"
+                    and str(e.get("condition") or "") in ("mode=ask", "Ask 确认重试")
+                ):
+                    e["condition"] = "mode=ask&op_failed"
+                    e["priority"] = 15
+                    e["isDefault"] = False
+                    changed = True
+                if str(e.get("source") or "") == "observe" and str(e.get("target") or "") == "end":
+                    # legacy ok→end becomes scene_ready→verify
+                    e["target"] = "verify"
+                    e["condition"] = "scene_ready"
+                    e["label"] = e.get("label") or "场景已回写"
+                    e["priority"] = 5
+                    e["isDefault"] = False
+                    if not e.get("id"):
+                        e["id"] = "e_obs_verify"
+                    changed = True
+                if (
+                    str(e.get("source") or "") == "observe"
+                    and str(e.get("target") or "") == "thought"
+                    and str(e.get("condition") or "") == "retry"
+                ):
+                    # retry after success now leaves from verify
+                    e["source"] = "verify"
+                    if not e.get("id"):
+                        e["id"] = "e_verify_retry"
+                    changed = True
+            _add_edge(
+                "e_obs_verify",
+                "observe",
+                "verify",
+                condition="scene_ready",
+                priority=5,
+            )
+            _add_edge("e_verify_ok", "verify", "end", condition="ok", priority=5)
+            _add_edge(
+                "e_verify_ask",
+                "verify",
+                "clarify",
+                condition="mode=ask&verify_fail",
+                priority=10,
+            )
+            _add_edge(
+                "e_verify_reflect",
+                "verify",
+                "reflect",
+                condition="verify_fail&reflect_left",
+                priority=15,
+            )
+            _add_edge(
+                "e_verify_clarify",
+                "verify",
+                "clarify",
+                condition="verify_fail&no_reflect",
+                priority=20,
+            )
+            _add_edge(
+                "e_verify_retry",
+                "verify",
+                "thought",
+                condition="retry",
+                priority=25,
+            )
+            if "thought" in ids and "validate_fail" in ids:
+                _add_edge(
+                    "e_patch_broad",
+                    "thought",
+                    "validate_fail",
+                    condition="patch_too_broad",
+                    priority=28,
+                )
+        for e in edges:
+            if (
+                str(e.get("condition") or "") == "intent=ask"
+                and str(e.get("target") or "") == "clarify"
+            ):
+                e["condition"] = "intent=ask&no_ops"
+                changed = True
+        # 合并历史拆出的 confirm_* → clarify（同 phaseKey，功能重复）
+        _dup_confirm = {"confirm_resources", "confirm_hydrate", "confirm_retry"}
+        if ids & _dup_confirm:
+            for e in edges:
+                tgt = str(e.get("target") or "")
+                if tgt in _dup_confirm:
+                    e["target"] = "clarify"
+                    if str(e.get("label") or "").startswith("确认"):
+                        pass
+                    changed = True
+                src = str(e.get("source") or "")
+                if src in _dup_confirm:
+                    e["source"] = "clarify"
+                    changed = True
+            nodes[:] = [n for n in nodes if str(n.get("id")) not in _dup_confirm]
+            ids -= _dup_confirm
+            changed = True
+        _add_edge(
+            "e_ask_chat",
+            "ask_thought",
+            "end",
+            condition="intent=chat",
+            priority=16,
+        )
+        _add_edge(
+            "e_ask_done",
+            "ask_thought",
+            "end",
+            condition="intent=done",
+            priority=17,
+        )
+        # Agent 主线 thought：闲聊/完成须走到流程图 end（否则 runtime 会 via=settle 跳过「结束」）
+        if "thought" in ids and "end" in ids:
+            _add_edge(
+                "e19b",
+                "thought",
+                "end",
+                condition="intent=chat",
+                priority=42,
+            )
+            _add_edge(
+                "e19c",
+                "thought",
+                "end",
+                condition="intent=done",
+                priority=43,
             )
         if "propose" in ids:
             for e in edges:
@@ -909,10 +1381,10 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                     pri = int(e.get("priority", 100))
                 except (TypeError, ValueError):
                     pri = 100
-                if str(e.get("condition") or "") != "ask_mode_ops" or pri >= 20:
-                    e["condition"] = "ask_mode_ops"
-                    e["label"] = "Ask 提议案"
-                    e["priority"] = 8
+                if str(e.get("condition") or "") != "mode=ask&has_ops" or pri >= 20:
+                    e["condition"] = "mode=ask&has_ops"
+                    e["label"] = "确认开始设计"
+                    e["priority"] = 9
                     e["isDefault"] = False
                     changed = True
                 break
@@ -921,8 +1393,8 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                     "e_ask_propose",
                     "ask_thought",
                     "propose",
-                    condition="ask_mode_ops",
-                    priority=8,
+                    condition="mode=ask&has_ops",
+                    priority=9,
                 )
 
     # Collapse legacy leaf model nodes (simple/medium/complex/vision/multimodal)
@@ -985,6 +1457,21 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
     if _refresh_builtin_node_copy(nodes):
         changed = True
 
+    # Collapse duplicate edge ids (legacy normalize could append same eid twice).
+    seen_eids: set[str] = set()
+    deduped_edges: list[dict[str, Any]] = []
+    for e in edges:
+        eid = str(e.get("id") or "").strip()
+        if eid and eid in seen_eids:
+            changed = True
+            continue
+        if eid:
+            seen_eids.add(eid)
+        deduped_edges.append(e)
+    if len(deduped_edges) != len(edges):
+        changed = True
+    edges = deduped_edges
+
     if not changed:
         return raw, False
     return {"version": int(raw.get("version") or 1), "nodes": nodes, "edges": edges}, True
@@ -996,13 +1483,15 @@ def _refresh_builtin_node_copy(nodes: list[dict[str, Any]]) -> bool:
         "route": {
             "label": "任务分流",
             "description": (
-                "根据用户输入估算任务难度（简单/中等/复杂），"
+                "用 LangChain 结构化路由判定车道（轻量/标准/推理/看图），"
                 "随后进入 Ask / Agent 模式分线（mode_fork）。"
             ),
             "legacy_labels": {"", "条件分支", "任务路由"},
             "legacy_descs": {
                 "",
                 "任务路由",
+                "根据用户输入估算任务难度（简单/中等/复杂），"
+                "随后进入 Ask / Agent 模式分线（mode_fork）。",
                 "根据用户输入估算任务难度（简单/中等/复杂）与运行模式，"
                 "然后固定进入 Agent 主循环（连线 agent_loop）。几乎无可配参数。",
             },
@@ -1052,7 +1541,7 @@ def _load_flows_catalog() -> list[dict[str, Any]]:
     seed = {
         "id": "default",
         "name": "默认 Agent 流程",
-        "description": "当前线上 ReAct Host 默认执行图",
+        "description": "当前线上 Design Agent 默认执行图（LangGraph runtime）",
         "updatedAt": int(time.time() * 1000),
         "createdAt": int(time.time() * 1000),
         "graph": legacy.get("graph") or _empty_graph(),
@@ -1094,9 +1583,15 @@ def list_agent_flows() -> list[dict[str, Any]]:
     return out
 
 
-def _flow_public_view(it: dict[str, Any], *, graph: dict[str, Any], phase_map: dict[str, Any]) -> dict[str, Any]:
+def _flow_public_view(
+    it: dict[str, Any],
+    *,
+    graph: dict[str, Any],
+    phase_map: dict[str, Any],
+    include_published_graph: bool = False,
+) -> dict[str, Any]:
     versions = it.get("versions") if isinstance(it.get("versions"), list) else []
-    return {
+    out: dict[str, Any] = {
         "id": str(it.get("id")),
         "name": str(it.get("name") or "未命名流程"),
         "description": str(it.get("description") or ""),
@@ -1106,15 +1601,6 @@ def _flow_public_view(it: dict[str, Any], *, graph: dict[str, Any], phase_map: d
         "phaseMap": {str(k): str(v) for k, v in phase_map.items()},
         "publishedVersion": int(it.get("publishedVersion") or 0) or None,
         "publishedAt": it.get("publishedAt"),
-        "publishedGraph": it.get("publishedGraph")
-        if isinstance(it.get("publishedGraph"), dict)
-        else None,
-        "publishedPhaseMap": {
-            str(k): str(v)
-            for k, v in (it.get("publishedPhaseMap") or {}).items()
-        }
-        if isinstance(it.get("publishedPhaseMap"), dict)
-        else None,
         "versions": [
             {
                 "version": int(v.get("version") or 0),
@@ -1128,9 +1614,32 @@ def _flow_public_view(it: dict[str, Any], *, graph: dict[str, Any], phase_map: d
             if isinstance(v, dict)
         ][-20:],
     }
+    # publishedGraph duplicates draft and can be MBs with prompt bloat — opt-in only.
+    if include_published_graph:
+        out["publishedGraph"] = (
+            it.get("publishedGraph")
+            if isinstance(it.get("publishedGraph"), dict)
+            else None
+        )
+        out["publishedPhaseMap"] = (
+            {
+                str(k): str(v)
+                for k, v in (it.get("publishedPhaseMap") or {}).items()
+            }
+            if isinstance(it.get("publishedPhaseMap"), dict)
+            else None
+        )
+    else:
+        out["publishedGraph"] = None
+        out["publishedPhaseMap"] = None
+    return out
 
 
-def get_agent_flow(flow_id: str) -> dict[str, Any] | None:
+def get_agent_flow(
+    flow_id: str,
+    *,
+    include_published_graph: bool = False,
+) -> dict[str, Any] | None:
     fid = (flow_id or "").strip()
     if not fid:
         return None
@@ -1140,21 +1649,9 @@ def get_agent_flow(flow_id: str) -> dict[str, Any] | None:
             continue
         graph = it.get("graph") if isinstance(it.get("graph"), dict) else _empty_graph()
         phase_map = it.get("phaseMap") if isinstance(it.get("phaseMap"), dict) else {}
-        graph, changed = _normalize_agent_flow_graph(graph)
-        if changed:
-            items[idx] = {
-                **it,
-                "graph": graph,
-                "phaseMap": {
-                    **{str(k): str(v) for k, v in phase_map.items()},
-                    "start": "start",
-                    "end": str(phase_map.get("end") or "end"),
-                },
-                "updatedAt": int(time.time() * 1000),
-            }
-            _save_flows_catalog(items)
-            it = items[idx]
-            phase_map = it.get("phaseMap") if isinstance(it.get("phaseMap"), dict) else phase_map
+        # Normalize in-memory for runtime/Admin display only — never persist on GET
+        # (would overwrite Admin graph with local template patches).
+        graph, _changed = _normalize_agent_flow_graph(graph)
         # First-time: seed published from draft so runtime has a version.
         if not int(it.get("publishedVersion") or 0):
             it = publish_agent_flow(fid, note="auto-seed") or it
@@ -1167,7 +1664,62 @@ def get_agent_flow(flow_id: str) -> dict[str, Any] | None:
                 it = refreshed
                 graph = it.get("graph") if isinstance(it.get("graph"), dict) else graph
                 phase_map = it.get("phaseMap") if isinstance(it.get("phaseMap"), dict) else phase_map
-        return _flow_public_view(it, graph=graph, phase_map=phase_map)
+                graph, _ = _normalize_agent_flow_graph(
+                    graph if isinstance(graph, dict) else _empty_graph()
+                )
+        return _flow_public_view(
+            it,
+            graph=graph,
+            phase_map=phase_map,
+            include_published_graph=include_published_graph,
+        )
+    return None
+
+
+def get_agent_flow_version(flow_id: str, version: int) -> dict[str, Any] | None:
+    """Return one published snapshot (graph + phaseMap) by version number."""
+    fid = (flow_id or "").strip()
+    ver = int(version or 0)
+    if not fid or ver <= 0:
+        return None
+    items = _load_flows_catalog()
+    raw = next((x for x in items if str(x.get("id")) == fid), None)
+    if not raw:
+        return None
+    if int(raw.get("publishedVersion") or 0) == ver and isinstance(
+        raw.get("publishedGraph"), dict
+    ):
+        graph, _ = _normalize_agent_flow_graph(raw.get("publishedGraph"))
+        return {
+            "id": fid,
+            "version": ver,
+            "publishedAt": raw.get("publishedAt"),
+            "name": str(raw.get("name") or f"v{ver}"),
+            "graph": graph,
+            "phaseMap": {
+                str(k): str(v)
+                for k, v in (raw.get("publishedPhaseMap") or {}).items()
+            },
+        }
+    history = raw.get("versions") if isinstance(raw.get("versions"), list) else []
+    for v in history:
+        if not isinstance(v, dict):
+            continue
+        if int(v.get("version") or 0) != ver:
+            continue
+        graph = v.get("graph") if isinstance(v.get("graph"), dict) else None
+        if not graph:
+            return None
+        phase_map = v.get("phaseMap") if isinstance(v.get("phaseMap"), dict) else {}
+        graph, _ = _normalize_agent_flow_graph(graph)
+        return {
+            "id": fid,
+            "version": ver,
+            "publishedAt": v.get("publishedAt"),
+            "name": str(v.get("name") or f"v{ver}"),
+            "graph": graph,
+            "phaseMap": {str(k): str(v2) for k, v2 in phase_map.items()},
+        }
     return None
 
 
@@ -1187,23 +1739,25 @@ def get_published_agent_flow(flow_id: str = "default") -> dict[str, Any] | None:
         pub_graph = raw.get("publishedGraph")
         if not isinstance(pub_graph, dict):
             return None
+        graph, _ = _normalize_agent_flow_graph(pub_graph)
         return {
             "id": fid,
             "name": str(raw.get("name") or ""),
             "version": int(raw.get("publishedVersion") or 0),
             "publishedAt": raw.get("publishedAt"),
-            "graph": pub_graph,
+            "graph": graph,
             "phaseMap": {
                 str(k): str(v)
                 for k, v in (raw.get("publishedPhaseMap") or {}).items()
             },
         }
+    graph, _ = _normalize_agent_flow_graph(pub_graph)
     return {
         "id": fid,
         "name": str(item.get("name") or ""),
         "version": int(item.get("publishedVersion") or 0),
         "publishedAt": item.get("publishedAt"),
-        "graph": pub_graph,
+        "graph": graph,
         "phaseMap": dict(item.get("publishedPhaseMap") or {}),
     }
 
@@ -1843,7 +2397,7 @@ def _parse_task_meta(raw: Any) -> dict[str, Any]:
 
 
 def skill_metrics_summary() -> dict[str, Any]:
-    """Aggregate design_task for ReAct Host dashboard (last 500 + global totals)."""
+    """Aggregate design_task for Design Agent runtime dashboard (last 500 + global totals)."""
     ensure_design_catalog()
     with connect() as conn:
         total = conn.execute("SELECT COUNT(*) AS c FROM design_task").fetchone()
@@ -2145,7 +2699,8 @@ def clear_decision_logs() -> dict[str, Any]:
 
 
 STAGE_RULE_DEFAULTS: dict[str, str] = {
-    # Runtime knobs seeded once into design_global_rule (Admin 可改；运行时只读表).
+    # Seed-only bootstrap into design_global_rule (missing/empty keys).
+    # Runtime MUST read the DB via get_global_rules — never fall back to this dict.
     "agent.persona.auto": "我是 Recombyn Auto 设计助手",
     "agent.persona.locked": "我是 Recombyn Auto 设计助手，使用的模型是{model_label}",
     # Off by default — short plan adds an extra LLM round before ReAct.
@@ -2153,6 +2708,9 @@ STAGE_RULE_DEFAULTS: dict[str, str] = {
     "agent.react.dual_sample": "0",
     # On by default — catalog first; full tool/knowledge/aesthetics after need_*.
     "agent.react.defer_tools": "1",
+    "agent.verify.aesthetics": "0",
+    # Optional: run LangChain create_agent (server tools) during hydrate / official_agent node.
+    "agent.react.official_agent": "0",
     # Dialogue context: facts + rolling summary + recent verbatim (not full chat dump).
     "memory.dialogue.recent_turns": "4",
     "memory.dialogue.recent_chars": "1200",
@@ -2160,9 +2718,13 @@ STAGE_RULE_DEFAULTS: dict[str, str] = {
     "memory.dialogue.facts_max": "12",
     "memory.dialogue.per_turn_chars": "400",
     "agent.prompt.react_system": (
-        "你是画布编辑器的设计 Agent。\n"
-        "快速决策并行动。不要复述 schema、ReAct 或 Host 内部实现。\n"
+        "# 身份\n"
+        "- 你是画布编辑器的设计 Agent。快速决策并行动。\n"
+        "- 不要复述 schema、ReAct 或运行时内部实现。\n"
+        "- 被问「你是谁 / 什么模型」时：用 IDENTITY 回答（可附一句简短愿帮），"
+        "不要编造其他产品名。\n"
         "\n"
+        "# 指令\n"
         "只输出一个 JSON 对象（不要 markdown 代码块）：\n"
         "{\n"
         '  "thought": "≤12 个汉字或 ≤8 个英文词；仅作界面进度",\n'
@@ -2175,8 +2737,13 @@ STAGE_RULE_DEFAULTS: dict[str, str] = {
         "\n"
         "规则：\n"
         '- thought 示例："打招呼" / "加标题" — 绝不提及 intent、tool_ops、done、JSON 或 ReAct。\n'
-        "- chat / ask / done：必须写 reply；tool_ops 必须为 []。\n"
+        "- chat / ask / done：必须写非空 reply；tool_ops 必须为 []。"
+        "运行时不会代写问候或追问文案。\n"
+        "- chat 问候示例语气：「你好，我是 Recombyn Auto 设计助手。可以说说你想改画布的什么…」"
+        "（须由你写出完整 reply，勿空回复）。\n"
         "- edit / create：tool_ops 必须是非空数组，且仅含允许的画布操作；reply 可选。\n"
+        "- 画布增删改（加矩形/文字/改颜色/排版…）禁止 intent=chat；"
+        "信息够 → create|edit + tool_ops；缺关键槽 → intent=ask（reply 一次问齐）。\n"
         "- 动手前先确认关键信息：产品/品牌名、核心文案、受众、必要版式类型、用户明确的硬约束。"
         "若关键槽位缺失且瞎编会歪曲用户（假品牌、假口号、假法务文案）：intent=ask，只问一个聚焦问题，"
         "可选 choices 为短答案芯片；tool_ops=[]。\n"
@@ -2184,89 +2751,203 @@ STAGE_RULE_DEFAULTS: dict[str, str] = {
         "- UI / 版式 / 海报 / App 界面：优先 create_shape / create_text / create_frame；"
         "create_image 仅用于照片位。\n"
         "- 纯出图需求（生成一张图 / illustration / photo / 配图且无 UI 框）："
-        "intent=create，空白时用 create_frame + create_image（genPrompt，Host 经 Seedream 水合）。"
+        "intent=create，空白时用 create_frame + create_image（genPrompt，运行时经 Seedream 水合）。"
         "不要拒绝，也不要让用户切换模式。\n"
         "- 用户附件 → create_image 用 attachmentIndex；否则用 genPrompt 或 src。\n"
         "- 附件：根据 USER_PROMPT 判断是否为风格参考。"
         "申请 need_aesthetics 时，仅当用户要匹配附件风格才设 use_user_refs=true；"
         "若「不要参考/内容素材/仅作配图」则 false。\n"
-        "- 若有 PLAN：按顺序执行；一步 ReAct 可覆盖多项计划。\n"
-        "- 若有 LAST_ERROR / PRIOR_ERRORS：先修该错误；不要重复非法操作。\n"
+        "- 若有 <plan>：按顺序执行；一步 ReAct 可覆盖多项计划。\n"
+        "- 若有 <errors>：先修该错误；不要重复非法操作。\n"
         "- 不要发明 SCENE_NODES / FOCUS_FRAME_ID 中不存在的节点 id。\n"
         "- CANVAS_SIZE 为具体 WxH（如 375x812）：create_frame 必须用该尺寸。\n"
         "- CANVAS_SIZE 为 auto / unknown：由你自选 WxH（优先参考图比例；"
         "登录/移动约 375×812；网站约 1440×900）。在 create_frame 上写 width/height。"
         "不要向用户追问尺寸。\n"
-        "- 不要输出调试转储、查找协议或 Host 内部细节。\n"
-        "- 被问「你是谁 / 什么模型」时：用 IDENTITY 回答（可附一句简短愿帮），"
-        "不要编造其他产品名。"
+        "- 不要输出调试转储、查找协议或运行时内部细节。\n"
+        "\n"
+        "# 示例\n"
+        "- 输入：「你好」→ intent=chat，reply 问候，tool_ops=[]。\n"
+        "- 输入：「添加一个矩形」→ intent=create，tool_ops 含 create_shape（缺尺寸颜色可自定默认，勿 chat）。\n"
+        "- 输入：「标题改成蓝色」→ intent=edit，只改目标文字颜色。\n"
+        "- 输入：「做登录页」但缺品牌名 → intent=ask，一个聚焦问题 + choices。"
     ),
     "agent.prompt.plan_system": (
-        "你为设计 Agent 规划画布工作。\n"
+        "# 身份\n"
+        "- 你为设计 Agent 规划画布工作（只出计划，不执行 tool_ops）。\n"
+        "\n"
+        "# 指令\n"
         '只输出一个 JSON 对象：{"plan":["...","..."]}\n'
-        "规则：\n"
         "- 3～5 条短中文步骤（每条 ≤16 字）。\n"
         "- 只写具体画布动作（建板/标题/配色/配图/收尾…）。\n"
-        "- 不要写 tool_ops、不要谈 schema、不要 markdown。"
+        "- 不要写 tool_ops、不要谈 schema、不要 markdown。\n"
+        "\n"
+        "# 示例\n"
+        '- {"plan":["建移动画板","写标题副标","配主色与按钮","收尾对齐"]}'
     ),
     "agent.prompt.size_auto": (
         "SIZE_MODE: auto — 在 create_frame 上自行选择宽高；不要向用户追问尺寸。"
     ),
     "agent.prompt.ask_canvas_size": "请先选择画布尺寸（或告诉我宽×高），再继续创建。",
     "agent.prompt.chat_fallback": (
+        # Model-facing example only (not used by runtime). Prefer writing this into reply yourself.
         "你好，{persona}。可以说说你想改画布的什么，或直接描述要生成的内容。"
     ),
     "agent.prompt.unsafe_ops_ask": (
         "这次改动我没法安全执行{error}。可以换个说法，或告诉我更具体的目标吗？"
     ),
-    # Ask = clarify + optional confirm-before-paint (not silent invent).
+    # Ask = same thinking as Agent; runtime confirms before paint only.
     "agent.prompt.ask_system": (
-        "ASK_MODE：JSON 契约与上文相同。本回合 Host 不会上屏改画布。\n"
-        "你的职责：信息不足时先追问，够了再提议案。\n"
+        "# 指令 · Ask 模式（叠在主 ReAct 之上）\n"
+        "思考过程与主模式完全相同：先判断需要哪些信息、已有什么、缺什么。\n"
+        "差别只有：本回合不会上屏；信息够时出 tool_ops 等用户确认。\n"
+        "运行时不会代写追问文案：intent=ask 时 reply 必须非空（一次问齐仍缺项）。\n"
         "\n"
-        "1）信息不足（缺关键槽位：要做什么、品牌/产品名、设计必须展示的核心文案、硬约束）：\n"
-        "- intent=ask（或 chat）；tool_ops=[]；done=true。\n"
-        "- reply = 一个清晰的中文问题（用户用英文则可用英文）。\n"
-        "- choices = 2～4 个可点选的短答案芯片（具体选项，忌空泛）。\n"
-        "- 不要编造品牌名、口号或法务/营销文案来填空。\n"
-        "- 不要追问画布尺寸（尺寸由 Host/auto 处理）。\n"
+        "## 信息不足\n"
+        "列出本任务仍缺的槽位（尺寸、颜色、风格、品牌/文案、是否检索美学、是否生图等），"
+        "把所有未填项一次问齐——不要拆成多轮各问一项。\n"
+        "- intent=ask；tool_ops=[]；done=true。\n"
+        "- reply = 一条消息里问清全部未填项（可分点列举）。\n"
+        "- choices = 覆盖主要未填项的短答案芯片（可含「你看着办」「不需要」）。\n"
+        "- 用户说「你看着办 / 不需要 / 用默认」→ 该槽视为已授权，由你自行补全，勿再问。\n"
+        "- 用户只答了一部分：下一回合只把仍缺的项再一次问齐，已答过的不要重复问。\n"
+        "- 不要编造品牌名、口号或法务文案；不要追问画布尺寸。\n"
         "\n"
-        "2）信息足够可行动：\n"
-        "- intent=edit|create，并用 tool_ops 提出改动。\n"
-        "- reply 必须简要说明将改什么（绝不可空）。\n"
-        "- 设置 choices + apply_choice = 表示「执行这些操作」的标签。\n"
-        "- 不要声称画布已经改完——等用户确认（点芯片或输入 apply_choice）。\n"
+        "## 用户主动补充 / 改需求（必须重新思考确认）\n"
+        "除你提出的问题外，用户可能：直接给参数、否决方案、修改已定项、提新建议、加约束。\n"
+        "只要需求相对上一方案有变，就必须重新走一遍思考，不能沿用旧 tool_ops 假装已确认。\n"
+        "- 新信息只补齐旧缺口、无冲突 → 合并进方案，再 intent=edit|create + 新 tool_ops，"
+        "用 reply 复述变更点并再次请确认（choices + apply_choice）。\n"
+        "- 否决 / 改尺寸颜色风格 / 加新要求导致旧方案失效 → 作废上一案；"
+        "若又缺槽，intent=ask 把新缺口（含用户新提但未说清的）一次问齐；"
+        "若已够，出新 tool_ops 再确认。\n"
+        "- 用户建议与已有槽冲突时，以用户最新表述为准，并在 reply 里点明「按你刚说的改为…」。\n"
+        "- 禁止在用户改口后仍输出旧案或声称「已按原方案添加」。\n"
         "\n"
-        "拿不准时优先澄清提问，不要过早给 tool_ops。"
+        "## 信息足够\n"
+        "所需槽位已齐，或用户已授权默认，且相对上一确认案无未消化的改口：\n"
+        "- intent=edit|create + 非空 tool_ops。\n"
+        "- reply 说明「将要」改什么（未来时），绝不可写「已添加/已完成」。\n"
+        "- choices + apply_choice = 确认执行标签；等用户点选后再上屏。\n"
+        "\n"
+        "# 示例\n"
+        "- 「加个矩形」缺尺寸颜色 → intent=ask，一次问尺寸+颜色（可附「你看着办」）。\n"
+        "- 用户只回了尺寸 → 再问仍缺的颜色。\n"
+        "- 用户说颜色你看着办 → 自行填色 + tool_ops + apply_choice。\n"
+        "- 已提议案后用户说「改成圆角蓝色」→ 重出 tool_ops，reply 说明变更，再确认。\n"
+        "- 用户否决并说「不要矩形改做按钮」→ 作废旧案，按新目标重新问缺项或出新案再确认。"
     ),
     "agent.prompt.ask_blocked_edit": "",
     "agent.prompt.partial_system": (
-        "你用 tool_ops 对画布做局部图层编辑。\n"
-        "输出：带 ops 数组的 JSON。"
+        "# 身份\n"
+        "- 你用 tool_ops 对画布做局部图层编辑。\n"
+        "\n"
+        "# 指令\n"
+        "- 只输出带 ops 数组的 JSON；只改相关节点，不重排整版。\n"
+        "- 不要发明不存在的节点 id。\n"
+        "\n"
+        "# 示例\n"
+        '- 输入：「标题改红」→ ops 只改目标文字 fill。'
     ),
     "agent.prompt.chat_agent_system": (
-        "你是 recombyn 设计 Agent，面向 SVG 设计画布。\n"
+        "# 身份\n"
+        "- 你是 recombyn 设计画布 Agent（SVG 编辑器）。\n"
+        "- 目标：帮用户高效完成画布创作与修改；对用户可见回复使用中文，简洁专业。\n"
         "\n"
-        "使用工具调用循环：回复用户、查找素材，或输出画布 tool_ops。\n"
-        "完整设计任务走 API /design/run（agent_loop）——玩法与这些工具一致。\n"
+        "# 指令\n"
+        "- 使用工具调用循环：先回复或说明意图，再查找素材 / 发出画布工具。\n"
+        "- 局部改动优先：create_shape / create_text / create_image / create_frame。\n"
+        "- 界面框与图标只用矢量；收尾用 align_nodes / distribute_nodes。\n"
+        "- 图片：用户附件 → create_image + attachmentIndex；"
+        "否则 create_image + genPrompt（运行时水合）或 src。\n"
+        "- 除非用户明确要求删除，否则绝不 delete_nodes。\n"
+        "- 功能性文案一律用 create_text。\n"
+        "- 改完后用简短中文总结；不要发明工具名。\n"
         "\n"
-        "硬性规则：\n"
-        "1. 局部改动优先 create_shape / create_text / create_image / create_frame。\n"
-        "2. 界面框与图标只用矢量。用 align_nodes / distribute_nodes 做收尾对齐。\n"
-        "3. 图片：用户附件 → create_image + attachmentIndex；"
-        "否则 create_image + genPrompt（Host 水合）或 src。\n"
-        "4. 除非用户明确要求删除，否则绝不 delete_nodes。\n"
-        "5. 功能性文案一律用 create_text。\n"
-        "6. 改完后用简短中文总结。\n"
-        "7. 不要发明工具名。对用户可见文案用中文。"
+        "# 示例\n"
+        "- 输入：「标题改成蓝色」→ 只改目标文字颜色，不重排整版。\n"
+        "- 输入：「做一张登录页」→ 用 shape/text/frame 搭 UI；"
+        "缺品牌名等关键信息时先 ask_user。\n"
+        "- 输入：「按这张参考图风格做海报」→ 需要看图/美学时先申请资源，再画布 ops。"
+    ),
+    "agent.prompt.need_tools_overlay": (
+        "# 指令 · 按需资源\n"
+        "完整工具 schema、知识正文、美学参考不在 system 中；短目录只列出可申请项。\n"
+        "\n"
+        "只输出一个 JSON 对象（允许额外字段）：\n"
+        "{\n"
+        '  "thought": "...",\n'
+        '  "intent": "chat|ask|done|edit|create",\n'
+        '  "reply": "...",\n'
+        '  "need_tools": ["create_text"],\n'
+        '  "need_knowledge": ["palette","layout"],\n'
+        '  "need_aesthetics": false,\n'
+        '  "use_user_refs": false,\n'
+        '  "tool_ops": [],\n'
+        '  "done": true\n'
+        "}\n"
+        "\n"
+        "规则：\n"
+        "- chat / ask / done：必须写 reply；need_*=空/false；tool_ops=[]；done=true。\n"
+        "- edit / create 且尚未拿到详情：按需设置 need_tools / need_knowledge / need_aesthetics"
+        "（只能从目录中选）；tool_ops=[]；done=false。运行时会在下一回合注入详情。\n"
+        "- 同一回合可同时申请多种资源（工具 + 知识 + 美学）。\n"
+        "- 附件：阅读 USER_PROMPT — 不要默认附件=风格参考。\n"
+        "  仅当用户要匹配/模仿附件风格（配色/照着这张/同款）时 use_user_refs=true。\n"
+        "  附件是 logo/照片位、纯内容素材，或用户拒绝风格参考"
+        "（不要参考/别学这张/不要这张的风格）时 use_user_refs=false。\n"
+        "  need_aesthetics=true + use_user_refs=false → 语料质量阶梯；\n"
+        "  need_aesthetics=true + use_user_refs=true → 运行时从附件抽取令牌。\n"
+        "- 出现 TOOL_DETAILS / KNOWLEDGE_DETAILS / AESTHETIC_REFS 时：输出 tool_ops；"
+        "清空对应 need_*；不要重复申请同一资源。\n"
+        "- 不要发明目录中不存在的 op 名或知识 kind。\n"
+        "\n"
+        "# 示例\n"
+        "- 缺 schema → need_tools=[\"create_text\"]，tool_ops=[]。\n"
+        "- 已有 TOOL_DETAILS → 写 tool_ops，need_tools=[]。"
+    ),
+    "agent.prompt.lc_tools_overlay": (
+        "# 指令 · 工具调用\n"
+        "- 你使用 LangChain tool calling（不是 JSON tool_ops）。\n"
+        "- 先用中文 1～3 句说明接下来要做什么（会流式展示给用户），再调用工具。\n"
+        "- 画布改动只能通过 tool calls（create_shape / create_text / create_frame / …）。\n"
+        "  禁止输出 JSON；禁止在正文里写 tool_ops / intent / done。\n"
+        "- 「添加矩形/文字/画板、改颜色、排版」等：必须调画布工具或先 request_tool_schemas；"
+        "禁止只说「准备添加…」然后不调工具（那会被当成闲聊结束）。\n"
+        "- 纯聊天（你好/你是谁）：只输出文字，不调工具。\n"
+        "- 需要用户确认或缺关键信息：调用 ask_user(question, choices?)。\n"
+        "- 目录里只有短名、需要完整 schema：调用 request_tool_schemas / "
+        "request_knowledge / request_aesthetics，本回合不要画布 ops。\n"
+        "- 可跨会话记忆：recall_long_term_memory / remember_long_term_memory。\n"
+        "- 画布工具成功后可调用 finish(summary=简短中文结果)。\n"
+        "- 不要发明工具名。"
+    ),
+    "agent.prompt.official_agent_system": (
+        "# 身份\n"
+        "- 你是服务端工具 Agent（非画布编辑器）。\n"
+        "\n"
+        "# 指令\n"
+        "- 只使用 generate_image 等后端可执行工具。\n"
+        "- 画布节点编辑由其它流程节点处理；不要假装已改画布。\n"
+        "\n"
+        "# 示例\n"
+        "- 用户要配图 → 调用 generate_image。\n"
+        "- 用户要改图层位置 → 说明本节点不负责画布编辑。"
     ),
     # Vision structure: Admin「提示词」页可编辑；样本入库 + 用户参考图共用。
     "aesthetics.prompt.vision_structure": (
-        "你是设计结构抽取助手。对附图做统一看图：识别页面主题与分区，"
-        "列出所有主要可见元素，给出每个元素相对画板的 layout（百分比）与 design tokens。\n"
-        "只描述图中有的内容，不要按通用登录/注册模板脑补缺失模块。\n"
-        "layout 用相对百分比（xPct/yPct/wPct/hPct）；色值用 #RRGGBB。\n"
-        "只输出一个 JSON 对象（可含 comment/tags/name 与 structure），不要 markdown。"
+        "# 身份\n"
+        "- 你是设计结构抽取助手（看图 → 结构化 layout / tokens）。\n"
+        "\n"
+        "# 指令\n"
+        "- 对附图识别页面主题与分区，列出所有主要可见元素。\n"
+        "- 给出每个元素相对画板的 layout（百分比）与 design tokens。\n"
+        "- 只描述图中有的内容，不要按通用登录/注册模板脑补缺失模块。\n"
+        "- layout 用相对百分比（xPct/yPct/wPct/hPct）；色值用 #RRGGBB。\n"
+        "- 只输出一个 JSON 对象（可含 comment/tags/name 与 structure），不要 markdown。\n"
+        "\n"
+        "# 示例\n"
+        "- 图中有顶栏 logo + 中央表单 → elements 只含可见项，勿补「忘记密码」若图中没有。"
     ),
     "aesthetics.vision.structure_schema": (
         '{"schemaVersion":"number","page.theme":"light|dark",'
@@ -2284,32 +2965,60 @@ STAGE_RULE_DEFAULTS: dict[str, str] = {
         '"elements[].tokens.fill":"string?","elements[].tokens.text":"string?",'
         '"elements[].tokens.radius":"number?","palette":"object","summary":"string"}'
     ),
+    "precheck.router_system": (
+        "# Identity\n"
+        "- You are a model router for a design-canvas agent (SVG editor).\n"
+        "- Pick exactly one lane for the next LLM call. Prefer the cheapest lane that can succeed.\n"
+        "\n"
+        "# Instructions\n"
+        "Lanes:\n"
+        "- fast: short Q&A, status checks, rename/recolor one element, no layout redesign\n"
+        "- standard: typical canvas edits (add/move/style several elements), moderate poster/work\n"
+        "- reasoning: blank canvas create, multi-artboard, design system, complex multi-step layout\n"
+        "- vision: user attached image(s) that must be understood "
+        "(match style, describe, edit from screenshot)\n"
+        "\n"
+        "Rules:\n"
+        "- If images are attached AND understanding them matters → vision\n"
+        "- If images are attached but only as optional refs and task is tiny text → fast or standard\n"
+        "- needs_image_gen=true only when the user clearly wants AI-generated raster images\n"
+        "- rationale: one short English or Chinese sentence\n"
+        "\n"
+        "# Examples\n"
+        '- "标题改红" → fast\n'
+        '- "做一张登录页" (blank) → reasoning\n'
+        '- "按这张参考图风格做海报" + image → vision\n'
+    ),
     "agent.flow.default_graph_json": json.dumps(_DEFAULT_AGENT_FLOW_GRAPH, ensure_ascii=False),
     "agent.flow.phase_map_json": json.dumps(_DEFAULT_AGENT_PHASE_MAP, ensure_ascii=False),
+    "agent.flow.node_templates_json": json.dumps(
+        _DEFAULT_AGENT_FLOW_NODE_TEMPLATES, ensure_ascii=False
+    ),
     # 标准版默认路由：纯国内（方舟 Seed / DeepSeek / Seedream）
     "precheck.model_threshold": (
-        "simple->doubao-seed-2-1-turbo;"
-        "medium->deepseek-v4-flash;"
-        "complex->deepseek-v4-pro;"
+        "fast->doubao-seed-2-1-turbo;"
+        "standard->deepseek-v4-flash;"
+        "reasoning->deepseek-v4-pro;"
         "else->deepseek-v4-flash"
     ),
     "precheck.vision_model": "doubao-seed-2-1-turbo",
     "precheck.fallback_chain": (
         "deepseek-v4-pro,deepseek-v4-flash,doubao-seed-2-1-turbo"
     ),
+    "precheck.router_model": "doubao-seed-2-1-turbo",
     "assets.image_default_model": "doubao-seedream-5-0-lite",
     # Pro / Max 用户偏好档（含海外模型）
     "precheck.user_preset.balanced": (
-        "simple->doubao-seed-2-1-turbo;"
-        "medium->or-gpt-5-6-luna;"
-        "complex->or-gemini-3-flash-preview;"
+        "fast->doubao-seed-2-1-turbo;"
+        "standard->or-gpt-5-6-luna;"
+        "reasoning->or-gemini-3-flash-preview;"
         "vision->or-gemini-3-flash-preview;"
         "image->or-gpt-image-2"
     ),
     "precheck.user_preset.quality": (
-        "simple->or-gemini-3-flash-preview;"
-        "medium->or-gemini-3-5-flash;"
-        "complex->or-gpt-5-6-sol;"
+        "fast->or-gemini-3-flash-preview;"
+        "standard->or-gemini-3-5-flash;"
+        "reasoning->or-gpt-5-6-sol;"
         "vision->or-gemini-3-5-flash;"
         "image->or-gpt-image-2"
     ),
@@ -2324,6 +3033,7 @@ STAGE_RULE_DESCRIPTIONS: dict[str, str] = {
     "agent.react.short_plan": "短计划（ReAct 前多一轮，默认关）",
     "agent.react.dual_sample": "双采样（默认关）",
     "agent.react.defer_tools": "按需加载工具/知识/美学（need_*，默认开）",
+    "agent.react.official_agent": "官方 create_agent（服务端工具，默认关）",
     "memory.dialogue.recent_turns": "对话近轮原文条数",
     "memory.dialogue.recent_chars": "近轮原文总字数上限",
     "memory.dialogue.summary_chars": "对话滚动摘要字数上限",
@@ -2333,20 +3043,27 @@ STAGE_RULE_DESCRIPTIONS: dict[str, str] = {
     "agent.prompt.plan_system": "短 Plan 系统提示",
     "agent.prompt.size_auto": "Auto 尺寸说明",
     "agent.prompt.ask_canvas_size": "追问画布尺寸",
-    "agent.prompt.chat_fallback": "闲聊空回复兜底",
+    "agent.prompt.chat_fallback": "闲聊 reply 示例（仅提示词；运行时不代写）",
     "agent.prompt.unsafe_ops_ask": "tool_ops 无法安全执行",
-    "agent.prompt.ask_system": "Ask 叠层（缺信息先追问；够了再提议案确认）",
+    "agent.prompt.ask_system": "Ask 叠层（未填一次问齐；改需求重想再确认）",
     "agent.prompt.ask_blocked_edit": "Ask 有方案但 reply 为空",
     "agent.prompt.partial_system": "局部改层 system",
     "agent.prompt.chat_agent_system": "工具调用聊天 system",
+    "agent.prompt.need_tools_overlay": "ReAct 按需资源叠层（need_*）",
+    "agent.prompt.lc_tools_overlay": "LangChain 工具调用叠层",
+    "agent.prompt.official_agent_system": "官方服务端工具 Agent system",
     "aesthetics.prompt.vision_structure": "看图说明（样本 / 用户参考图共用）",
     "aesthetics.vision.structure_schema": "看图契约参数（必填/可选，同画布能力）",
     "agent.flow.default_graph_json": "Agent 默认流程图（Admin 流程设计）",
     "agent.flow.phase_map_json": "流程 phase→节点 映射（复盘高亮）",
+    "agent.flow.node_templates_json": "流程设计器左侧节点调色板模板",
+    "agent.verify.aesthetics": "结果校验是否启用美学 CLIP 门禁（默认关）",
     "agent.flows.catalog_json": "Agent 流程目录（多流程表格）",
-    "precheck.model_threshold": "标准版 Auto 分档模型（简单/中等/复杂）",
+    "precheck.model_threshold": "标准版 Auto 车道模型（轻量/标准/推理）",
     "precheck.vision_model": "标准版看图模型",
     "precheck.fallback_chain": "标准版降级重试链",
+    "precheck.router_model": "车道分类器模型（便宜模型）",
+    "precheck.router_system": "车道分类器 system",
     "assets.image_default_model": "标准版默认生图模型",
     "precheck.user_preset.balanced": "用户 Auto 偏好 · Pro",
     "precheck.user_preset.quality": "用户 Auto 偏好 · Max",
@@ -2354,227 +3071,47 @@ STAGE_RULE_DESCRIPTIONS: dict[str, str] = {
 
 
 def ensure_stage_rules() -> None:
-    """Idempotently insert stage rule keys if missing (no overwrite); drop obsolete keys."""
+    """Insert missing ``design_global_rule`` keys from seed. Never overwrite DB values."""
     global _STAGE_RULES_READY
     ensure_design_catalog()
     with _STAGE_RULES_LOCK:
         with connect() as conn:
-            # Always fill missing keys from STAGE_RULE_DEFAULTS (never overwrite Admin values).
+            # INSERT-only for missing keys. Existing Admin values are never touched.
             merged_defaults = dict(STAGE_RULE_DEFAULTS)
             now = time.time()
             rows = conn.execute("SELECT rule_key FROM design_global_rule").fetchall()
             existing = {str(r["rule_key"]) for r in rows}
             for key, val in merged_defaults.items():
-                if key not in existing:
-                    desc = STAGE_RULE_DESCRIPTIONS.get(key, "")
-                    try:
-                        conn.execute(
-                            """
-                            INSERT INTO design_global_rule
-                                (rule_key, rule_value, description, enabled, updated_at)
-                            VALUES (?, ?, ?, 1, ?)
-                            """,
-                            (key, val, desc, now),
-                        )
-                    except Exception:
-                        conn.execute(
-                            "INSERT INTO design_global_rule (rule_key, rule_value, updated_at) VALUES (?, ?, ?)",
-                            (key, val, now),
-                        )
+                if key in existing:
                     continue
-                # Key exists but empty → fill from seed (never clobber Admin text).
-                if not val:
-                    continue
+                desc = STAGE_RULE_DESCRIPTIONS.get(key, "")
                 try:
-                    row = conn.execute(
-                        "SELECT rule_value FROM design_global_rule WHERE rule_key = ?",
-                        (key,),
-                    ).fetchone()
-                    cur = str((row["rule_value"] if row else "") or "").strip()
-                    if not cur:
-                        conn.execute(
-                            """
-                            UPDATE design_global_rule
-                            SET rule_value = ?, updated_at = ?
-                            WHERE rule_key = ?
-                            """,
-                            (val, now, key),
-                        )
-                except Exception:
-                    pass
-            _STAGE_RULES_READY = True
-            # One-shot: migrate Ask / Design prompts when still on old contracts.
-            # Does not clobber admin edits that already use the new fields.
-            try:
-                _PROMPT_MIGRATIONS = (
-                    (
-                        "agent.prompt.ask_system",
-                        (
-                            "NEVER touch the canvas",
-                            "tool_ops MUST always be []",
-                            'choices": ["确认执行"',
-                            "propose → user confirms",
-                            "Design Assistant in ASK mode",
-                            'intent": "ask|chat|done"',
-                            "ASK_MODE (confirm-before-paint)",
-                            "wait for the click.",
-                            "Host will NOT paint this turn. When intent=edit|create with tool_ops:",
-                            "ASK_MODE: Same JSON contract and tool_ops as above.",
-                            "ASK_MODE: Same JSON contract as above.",
-                            "Your job is to ASK when information is insufficient",
-                        ),
-                        "拿不准时优先澄清提问",
-                    ),
-                    (
-                        "agent.prompt.ask_blocked_edit",
-                        (
-                            "切到 Agent 模式",
-                            "switch to Agent",
-                            "确认执行",
-                            "点下方选项",
-                            "请点下方选项",
-                            "我先给出方案",
-                            "方案已准备好",
-                        ),
-                        "ask_blocked_cleared_v1",
-                    ),
-                    (
-                        "agent.prompt.react_system",
-                        (
-                            "Do not invent another product name.",
-                            "Decide quickly, then act. Do not narrate schema, ReAct, or Host internals.",
-                            "Know what you need before painting",
-                            "You are the Design Agent for a canvas editor.",
-                            "Output ONE JSON object only",
-                        ),
-                        "你是画布编辑器的设计 Agent",
-                    ),
-                    (
-                        "agent.prompt.plan_system",
-                        (
-                            "You plan canvas work for a design agent.",
-                            "Output ONE JSON object only",
-                        ),
-                        "你为设计 Agent 规划画布工作",
-                    ),
-                    (
-                        "agent.prompt.size_auto",
-                        (
-                            "pick width/height yourself on create_frame",
-                            "do not ask the user for size",
-                        ),
-                        "自行选择宽高",
-                    ),
-                    (
-                        "agent.prompt.partial_system",
-                        (
-                            "You operate the canvas with tool_ops",
-                            "OUTPUT: JSON with an ops array",
-                        ),
-                        "你用 tool_ops 对画布做局部图层编辑",
-                    ),
-                    (
-                        "agent.prompt.chat_agent_system",
-                        (
-                            "You are recombyn Design Agent for an SVG design canvas.",
-                            "Use the tool-calling loop",
-                            "Hard rules:",
-                        ),
-                        "你是 recombyn 设计 Agent",
-                    ),
-                )
-                for key, old_marks, new_mark in _PROMPT_MIGRATIONS:
-                    fresh = merged_defaults.get(key) or ""
-                    if not fresh or new_mark.lower() in fresh.lower():
-                        # still patch DB if DB is stale but defaults already new
-                        pass
-                    row = conn.execute(
-                        "SELECT rule_value FROM design_global_rule WHERE rule_key = ?",
-                        (key,),
-                    ).fetchone()
-                    if not row:
-                        continue
-                    cur = str(row["rule_value"] or "")
-                    if not cur:
-                        continue
-                    if new_mark.lower() in cur.lower():
-                        continue
-                    if not any(m in cur for m in old_marks):
-                        continue
-                    if not fresh:
-                        continue
                     conn.execute(
                         """
-                        UPDATE design_global_rule
-                        SET rule_value = ?, updated_at = ?
-                        WHERE rule_key = ?
+                        INSERT INTO design_global_rule
+                            (rule_key, rule_value, description, enabled, updated_at)
+                        VALUES (?, ?, ?, 1, ?)
                         """,
-                        (fresh, now, key),
+                        (key, val, desc, now),
                     )
-                    desc = STAGE_RULE_DESCRIPTIONS.get(key, "")
-                    if desc:
-                        conn.execute(
-                            """
-                            UPDATE design_global_rule
-                            SET description = ?
-                            WHERE rule_key = ?
-                              AND (description IS NULL OR description = '')
-                            """,
-                            (desc, key),
-                        )
-            except Exception:
-                pass
-            # One-shot: 标准版强制改为纯国内阶梯（并清掉已下线的 glm-5-2）
-            try:
-                marker_key = "precheck.platform_domestic_v1"
-                mark_row = conn.execute(
-                    "SELECT rule_value FROM design_global_rule WHERE rule_key = ?",
-                    (marker_key,),
-                ).fetchone()
-                if not mark_row:
-                    domestic_keys = (
-                        "precheck.model_threshold",
-                        "precheck.vision_model",
-                        "precheck.fallback_chain",
-                        "assets.image_default_model",
+                except Exception:
+                    conn.execute(
+                        "INSERT INTO design_global_rule (rule_key, rule_value, updated_at) VALUES (?, ?, ?)",
+                        (key, val, now),
                     )
-                    for key in domestic_keys:
-                        val = merged_defaults.get(key) or ""
-                        if not val:
-                            continue
-                        desc = STAGE_RULE_DESCRIPTIONS.get(key, "")
-                        existing = conn.execute(
-                            "SELECT rule_key FROM design_global_rule WHERE rule_key = ?",
-                            (key,),
-                        ).fetchone()
-                        if existing:
-                            conn.execute(
-                                """
-                                UPDATE design_global_rule
-                                SET rule_value = ?, updated_at = ?
-                                WHERE rule_key = ?
-                                """,
-                                (val, now, key),
-                            )
-                        else:
-                            try:
-                                conn.execute(
-                                    """
-                                    INSERT INTO design_global_rule
-                                        (rule_key, rule_value, description, enabled, updated_at)
-                                    VALUES (?, ?, ?, 1, ?)
-                                    """,
-                                    (key, val, desc, now),
-                                )
-                            except Exception:
-                                conn.execute(
-                                    """
-                                    INSERT INTO design_global_rule
-                                        (rule_key, rule_value, updated_at)
-                                    VALUES (?, ?, ?)
-                                    """,
-                                    (key, val, now),
-                                )
+            _STAGE_RULES_READY = True
+            # Markers only (no force-UPDATE of Admin prompt / route text).
+            for marker_key, marker_desc in (
+                ("agent.prompt.pe_structure_v1", "提示词结构种子标记（不覆盖已有值）"),
+                ("precheck.platform_domestic_v1", "国内路由种子标记（不覆盖已有值）"),
+            ):
+                try:
+                    mark_row = conn.execute(
+                        "SELECT rule_value FROM design_global_rule WHERE rule_key = ?",
+                        (marker_key,),
+                    ).fetchone()
+                    if mark_row:
+                        continue
                     try:
                         conn.execute(
                             """
@@ -2582,12 +3119,7 @@ def ensure_stage_rules() -> None:
                                 (rule_key, rule_value, description, enabled, updated_at)
                             VALUES (?, ?, ?, 1, ?)
                             """,
-                            (
-                                marker_key,
-                                "1",
-                                "标准版已切纯国内路由（一次性）",
-                                now,
-                            ),
+                            (marker_key, "1", marker_desc, now),
                         )
                     except Exception:
                         conn.execute(
@@ -2597,30 +3129,8 @@ def ensure_stage_rules() -> None:
                             """,
                             (marker_key, "1", now),
                         )
-                # Scrub retired GLM id from any rule text (even after marker).
-                rows = conn.execute(
-                    "SELECT rule_key, rule_value FROM design_global_rule"
-                ).fetchall()
-                for r in rows:
-                    key = str(r["rule_key"] or "")
-                    cur = str(r["rule_value"] or "")
-                    if "glm-5-2" not in cur.lower():
-                        continue
-                    fixed = (
-                        cur.replace("glm-5-2", "deepseek-v4-flash")
-                        .replace("GLM-5-2", "deepseek-v4-flash")
-                    )
-                    if fixed != cur:
-                        conn.execute(
-                            """
-                            UPDATE design_global_rule
-                            SET rule_value = ?, updated_at = ?
-                            WHERE rule_key = ?
-                            """,
-                            (fixed, now, key),
-                        )
-            except Exception:
-                pass
+                except Exception:
+                    pass
             # Always fill empty「用途」from known map (never overwrite admin edits).
             try:
                 for key, desc in STAGE_RULE_DESCRIPTIONS.items():
@@ -2637,82 +3147,40 @@ def ensure_stage_rules() -> None:
                     )
             except Exception:
                 pass
-            # Patch frame-name map: append any scene=… pairs from defaults that are missing
-            # (e.g. new scenes) without wiping admin edits to existing entries.
-            default_names = STAGE_RULE_DEFAULTS.get("create.frame_name_by_scene") or ""
-            row = conn.execute(
-                "SELECT rule_value FROM design_global_rule WHERE rule_key = ?",
-                ("create.frame_name_by_scene",),
-            ).fetchone()
-            if row and default_names:
-                cur = str(row["rule_value"] or "")
-                have = {
-                    p.split("=", 1)[0].strip().lower()
-                    for p in re.split(r"[;\n]+", cur)
-                    if "=" in p
-                }
-                missing = [
-                    p.strip()
-                    for p in re.split(r"[;\n]+", default_names)
-                    if "=" in p and p.split("=", 1)[0].strip().lower() not in have
-                ]
-                if missing:
-                    patched = cur.rstrip(";") + (";" if cur.strip() else "") + ";".join(missing)
-                    conn.execute(
-                        "UPDATE design_global_rule SET rule_value = ?, updated_at = ? WHERE rule_key = ?",
-                        (patched, time.time(), "create.frame_name_by_scene"),
-                    )
-            # One-time FULL wipe: rules + skill mega-prompts + execute flows.
-            flag_row = conn.execute(
-                "SELECT rule_value FROM design_global_rule WHERE rule_key = ?",
-                ("legacy.agent_zero_v3",),
-            ).fetchone()
-            if not flag_row:
-                now_z = time.time()
-                conn.execute("DELETE FROM design_global_rule")
-                try:
-                    conn.execute("DELETE FROM design_skill")
-                except Exception:
+            # Legacy wipe marker: insert only — never DELETE Admin rules/skills/flows.
+            try:
+                flag_row = conn.execute(
+                    "SELECT rule_value FROM design_global_rule WHERE rule_key = ?",
+                    ("legacy.agent_zero_v3",),
+                ).fetchone()
+                if not flag_row:
+                    now_z = time.time()
                     try:
                         conn.execute(
-                            "UPDATE design_skill SET enabled = 0, updated_at = ?",
-                            (now_z,),
+                            """
+                            INSERT INTO design_global_rule
+                              (rule_key, rule_value, description, enabled, updated_at)
+                            VALUES (?, ?, ?, 1, ?)
+                            """,
+                            (
+                                "legacy.agent_zero_v3",
+                                str(int(now_z)),
+                                "历史清空标记（已禁用实际清空，避免覆盖库内数据）",
+                                now_z,
+                            ),
                         )
                     except Exception:
-                        pass
-                try:
-                    conn.execute("DELETE FROM design_execute_flow")
-                except Exception:
-                    try:
                         conn.execute(
-                            "UPDATE design_execute_flow SET skill_ids = ?",
-                            ("[]",),
+                            """
+                            INSERT INTO design_global_rule (rule_key, rule_value, updated_at)
+                            VALUES (?, ?, ?)
+                            """,
+                            ("legacy.agent_zero_v3", str(int(now_z)), now_z),
                         )
-                    except Exception:
-                        pass
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO design_global_rule
-                          (rule_key, rule_value, description, enabled, updated_at)
-                        VALUES (?, ?, ?, 1, ?)
-                        """,
-                        (
-                            "legacy.agent_zero_v3",
-                            str(int(now_z)),
-                            "全表清空 v3：rules/skills/flows 已删；Admin 仅留设计知识/美学/推理集群",
-                            now_z,
-                        ),
-                    )
-                except Exception:
-                    conn.execute(
-                        """
-                        INSERT INTO design_global_rule (rule_key, rule_value, updated_at)
-                        VALUES (?, ?, ?)
-                        """,
-                        ("legacy.agent_zero_v3", str(int(now_z)), now_z),
-                    )
+            except Exception:
+                pass
             conn.commit()
+
 
 
 def suggest_skill_optimize(skill_id: int) -> dict[str, Any]:

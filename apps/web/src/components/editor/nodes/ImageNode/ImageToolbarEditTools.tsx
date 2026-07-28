@@ -1,16 +1,13 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  HiOutlineCube,
-  HiOutlineSquare3Stack3D,
-} from 'react-icons/hi2';
+import { HiOutlineCube } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
-import { Icon } from '@/components/base';
 import { cn } from '@/utils/classnames';
 import ImageUpscaleMenu, { type UpscalePreset } from './ImageUpscaleMenu';
+import ImageRemoveBgMenu, { type RemoveBgMode } from './ImageRemoveBgMenu';
 import { ImageToolSep, imageToolBtn } from './imageToolbarShared';
 
-const TOOL_ICON_SIZE = 16;
+export type { RemoveBgMode };
 
 function Tool({
   label,
@@ -40,15 +37,13 @@ export default function ImageToolbarEditTools({
   onUpscale,
   onRemoveBg,
   onEraser,
-  onEditElements,
   onMultiAngle,
   previewSlot,
   downloadSlot,
 }: {
   onUpscale: (preset: UpscalePreset) => void;
-  onRemoveBg: () => void;
+  onRemoveBg: (mode: RemoveBgMode) => void;
   onEraser: () => void;
-  onEditElements: () => void;
   onMultiAngle: () => void;
   previewSlot?: ReactNode;
   downloadSlot?: ReactNode;
@@ -58,19 +53,9 @@ export default function ImageToolbarEditTools({
   return (
     <>
       <ImageUpscaleMenu onPick={onUpscale} />
-      <Tool label={t('editor.imageToolbar.removeBg')} onClick={onRemoveBg}>
-        <Icon
-          name="editor-remove_bg"
-          width={TOOL_ICON_SIZE}
-          height={TOOL_ICON_SIZE}
-          className="text-current"
-        />
-      </Tool>
+      <ImageRemoveBgMenu onPick={onRemoveBg} />
       <Tool label={t('editor.imageToolbar.eraser')} onClick={onEraser}>
         <LuEraser className="h-4 w-4" />
-      </Tool>
-      <Tool label={t('editor.imageToolbar.editElements')} onClick={onEditElements}>
-        <HiOutlineSquare3Stack3D className="h-4 w-4" />
       </Tool>
       <Tool label={t('editor.imageToolbar.multiAngle')} onClick={onMultiAngle}>
         <HiOutlineCube className="h-4 w-4" />

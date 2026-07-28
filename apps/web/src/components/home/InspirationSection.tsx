@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { HiHeart } from 'react-icons/hi2';
+import {
+  HiHeart,
+  HiOutlineDocumentArrowDown,
+  HiOutlinePhoto,
+} from 'react-icons/hi2';
 import {
   fetchMyLikedIds,
   likePlazaItem,
@@ -11,13 +15,14 @@ import {
 import {
   fetchPlazaFeed,
   fetchPlazaItem,
+  plazaDisplayCoverUrls,
   recordPlazaUse,
   type PlazaCategoryFilter,
 } from '@/apis/plaza';
 import {
   caseAuthorLabel,
-  resolveCaseTitle,
   resolveCasePrompt,
+  resolveCaseTitle,
   type OfficialCaseCategory,
   type OfficialCaseMeta,
   normalizeCaseCategory,
@@ -25,23 +30,90 @@ import {
 import InspirationCasePreview from '@/components/home/InspirationCasePreview';
 import EmptyState from '@/components/home/EmptyState';
 import PlazaCoverThumb from '@/components/home/PlazaCoverThumb';
-import { projectThumbFrameClass } from '@/utils/projectThumb';
+import { FlowScrollSection } from '@/components/home/FlowScrollSection';
 import SegmentTabs from '@/components/home/SegmentTabs';
-import { formatStatCount } from '@/utils/likedCases';
-import { nearestScrollRoot } from '@/utils/useInfiniteList';
+import { Dropdown, message } from '@/components/base';
+import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import { cn } from '@/utils/classnames';
 import { buildLoginUrl } from '@/utils/authReturnTo';
-import { message } from '@/components/base';
+import { imageSrcToFile } from '@/utils/uploadImage';
 
 type Props = {
-  onOpenCase: (meta: OfficialCaseMeta, document: unknown, opts?: { prompt?: string }) => void;
+  onOpenCase: (meta: OfficialCaseMeta) => void;
   disabled?: boolean;
 };
 
 type PlazaTab = PlazaCategoryFilter;
 
-const TABS: PlazaTab[] = ['all', 'website', 'mobile', 'image', 'poster'];
+const TABS: PlazaTab[] = ['all', 'poster', 'mobile', 'website', 'image'];
 const PAGE_SIZE = 12;
+
+/** Use-menu trigger — tilted cards + sparkle (design ref SVG). */
+function UseCaseMenuIcon({ className }: { className?: string }): ReactNode {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 14 14"
+      className={className}
+      aria-hidden
+    >
+      <g fill="currentColor">
+        <path d="M6.216 1.498c.7-.187 1.42.228 1.607.928L9.172 7.46a.85.85 0 0 0-.667.581l-.346 1.036a.88.88 0 0 1-.553.553l-1.036.346c-.796.266-.796 1.393 0 1.66l1.036.345.02.008-2.919.784c-.7.187-1.42-.229-1.607-.928L1.062 4.237c-.188-.7.227-1.42.927-1.607zm2.333.48q.219.009.433.094l3.787 1.55c.67.274.992 1.04.717 1.711l-1.838 4.491-.585-.194a.88.88 0 0 1-.552-.553l-.302-.904z" />
+        <path d="M9.006 8.465a.35.35 0 0 1 .656 0l.488 1.319a.35.35 0 0 0 .207.207l1.319.488a.35.35 0 0 1 0 .656l-1.319.488a.35.35 0 0 0-.207.207l-.488 1.318a.35.35 0 0 1-.656 0l-.488-1.318a.35.35 0 0 0-.207-.207l-1.318-.488a.35.35 0 0 1 0-.656L8.31 9.99a.35.35 0 0 0 .207-.207z" />
+      </g>
+    </svg>
+  );
+}
+
+function formatStatCount(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(n);
+}
+
+function coverImageUrl(meta: OfficialCaseMeta): string {
+  const fromList =
+    Array.isArray(meta.thumbnailUrls) && meta.thumbnailUrls.length
+      ? meta.thumbnailUrls.find((u) => String(u || '').trim())
+      : '';
+  const fromThumb = String(meta.thumbnail || '').trim();
+  const fromPanel = meta.panelUrls?.find((p) => String(p?.url || '').trim())?.url;
+  return String(fromList || fromThumb || fromPanel || '').trim();
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyImageToClipboard(url: string): Promise<boolean> {
+  const src = String(url || '').trim();
+  if (!src) return false;
+  try {
+    // COS/plaza covers lack browser CORS — go through /api/v1/uploads/content.
+    const file = await imageSrcToFile(src, 'inspiration.png');
+    const type = file.type && file.type.startsWith('image/') ? file.type : 'image/png';
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+      await navigator.clipboard.writeText(src);
+      return true;
+    }
+    await navigator.clipboard.write([new ClipboardItem({ [type]: file })]);
+    return true;
+  } catch {
+    try {
+      await navigator.clipboard.writeText(src);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 
 function feedToMeta(item: {
   id: string;
@@ -51,10 +123,15 @@ function feedToMeta(item: {
   authorName: string;
   authorAvatar?: string | null;
   coverDocument?: unknown | null;
+  thumbnailUrl?: string | string[] | null;
+  customCoverImageUrl?: string | null;
+  panelUrls?: Array<{ id: string; name?: string; url: string }> | null;
   createdAt: number;
   likeCount?: number;
   useCount?: number;
+  updatedAt?: number;
 }): OfficialCaseMeta {
+  const urls = plazaDisplayCoverUrls(item);
   return {
     id: item.id,
     name: item.title,
@@ -63,20 +140,205 @@ function feedToMeta(item: {
     authorName: item.authorName,
     authorAvatar: item.authorAvatar,
     coverDocument: item.coverDocument ?? null,
+    thumbnailUrls: urls,
+    thumbnail: urls[0] || null,
+    panelUrls: item.panelUrls ?? null,
     authorUserId: item.userId,
     createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
     likeCount: Number(item.likeCount) || 0,
     useCount: Number(item.useCount) || 0,
   };
 }
 
-async function loadCaseDocument(
-  meta: OfficialCaseMeta,
-  cache: Record<string, unknown>
-): Promise<unknown> {
-  if (cache[meta.id]) return cache[meta.id];
-  const res = await fetchPlazaItem(meta.id);
-  return res.item.document;
+function resolveNextLikeCount(
+  current: number,
+  wasLiked: boolean,
+  nowLiked: boolean,
+  serverCount: number
+): number {
+  if (Number.isFinite(serverCount)) return Math.max(0, serverCount);
+  const base = current;
+  if (nowLiked) return wasLiked ? base : base + 1;
+  return wasLiked ? Math.max(0, base - 1) : base;
+}
+
+export function InspirationCaseCard({
+  meta,
+  liked,
+  likes,
+  title,
+  author,
+  disabled,
+  likeBusy,
+  onOpenPreview,
+  onToggleLike,
+  t,
+}: {
+  meta: OfficialCaseMeta;
+  liked: boolean;
+  likes: number;
+  title: string;
+  author: string;
+  disabled?: boolean;
+  likeBusy: boolean;
+  onOpenPreview: (meta: OfficialCaseMeta) => void;
+  onToggleLike: (meta: OfficialCaseMeta, e?: MouseEvent) => void;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+}): ReactNode {
+  const initial = (author[0] || 'R').toUpperCase();
+  const useMenuItems: MenuItemType[] = [
+    {
+      key: 'prompt',
+      label: (
+        <span className="inline-flex items-center gap-2">
+          <HiOutlineDocumentArrowDown className="h-3.5 w-3.5" strokeWidth={1.75} />
+          {t('home.cases.usePrompt')}
+        </span>
+      ),
+    },
+    {
+      key: 'image',
+      label: (
+        <span className="inline-flex items-center gap-2">
+          <HiOutlinePhoto className="h-3.5 w-3.5" strokeWidth={1.75} />
+          {t('home.cases.useImage')}
+        </span>
+      ),
+    },
+  ];
+
+  const onUseMenu = (key: string) => {
+    void (async () => {
+      if (key === 'prompt') {
+        const prompt = resolveCasePrompt(meta, t);
+        const ok = await copyTextToClipboard(prompt);
+        if (ok) {
+          message.success(t('home.cases.promptCopied'));
+          void recordPlazaUse(meta.id).catch(() => undefined);
+        } else {
+          message.error(t('home.cases.copyFailed'));
+        }
+        return;
+      }
+      if (key === 'image') {
+        const url = coverImageUrl(meta);
+        if (!url) {
+          message.error(t('home.cases.copyFailed'));
+          return;
+        }
+        const ok = await copyImageToClipboard(url);
+        if (ok) {
+          message.success(t('home.cases.imageCopied'));
+          void recordPlazaUse(meta.id).catch(() => undefined);
+        } else {
+          message.error(t('home.cases.copyFailed'));
+        }
+      }
+    })();
+  };
+
+  return (
+    <article className="group min-w-0">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onOpenPreview(meta)}
+        className="block w-full text-left disabled:opacity-60"
+        aria-label={title}
+      >
+        <PlazaCoverThumb
+          coverDocument={meta.coverDocument}
+          thumbnail={
+            (Array.isArray(meta.thumbnailUrls) && meta.thumbnailUrls[0]) ||
+            meta.thumbnail ||
+            null
+          }
+          version={Number(meta.updatedAt) || Number(meta.createdAt) || undefined}
+          layout="flow"
+        >
+          {/* Hover title — bottom scrim gradient (see plaza showcase covers). */}
+          <span
+            className={cn(
+              'pointer-events-none absolute inset-x-0 bottom-0 z-10',
+              'bg-gradient-to-t from-black/70 via-black/35 to-transparent',
+              'px-2.5 pb-2.5 pt-10',
+              'opacity-0 transition-opacity duration-300 group-hover:opacity-100'
+            )}
+          >
+            <span className="line-clamp-2 text-left text-[12px] font-medium leading-snug text-white">
+              {title}
+            </span>
+          </span>
+        </PlazaCoverThumb>
+      </button>
+
+      {/* Flow footer — avatar + author; like + use (prompt/image) menu. */}
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onOpenPreview(meta)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:opacity-60"
+        >
+          {meta.authorAvatar ? (
+            <img
+              src={meta.authorAvatar}
+              alt=""
+              className="h-6 w-6 shrink-0 rounded-full object-cover ring-1 ring-[var(--line)]"
+            />
+          ) : (
+            <span
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[9px] font-bold text-[var(--on-brand)]"
+              aria-hidden
+            >
+              {initial}
+            </span>
+          )}
+          <span className="min-w-0 truncate text-[12px] font-medium text-[var(--ink)]">
+            {author}
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-2.5 text-[12px] tabular-nums text-[var(--muted)]">
+          <button
+            type="button"
+            aria-pressed={liked}
+            aria-label={liked ? t('home.cases.unlike') : t('home.cases.like')}
+            disabled={likeBusy}
+            onClick={(e) => void onToggleLike(meta, e)}
+            className={cn(
+              'inline-flex items-center gap-0.5 transition hover:text-[var(--ink)] disabled:opacity-50',
+              liked && 'text-[#e11d48]'
+            )}
+          >
+            <HiHeart className={cn('h-3.5 w-3.5', liked && 'fill-current')} aria-hidden />
+            {formatStatCount(likes)}
+          </button>
+          <Dropdown
+            trigger="click"
+            placement="bottom-end"
+            strategy="fixed"
+            offset={4}
+            items={useMenuItems}
+            onClick={onUseMenu}
+            floatingClassName="z-[600]"
+            popupClassName="min-w-[9.5rem] rounded-xl !bg-[var(--surface)] p-1.5 shadow-[0_8px_28px_rgba(15,23,42,0.14)] ring-1 ring-[var(--line)]"
+          >
+            <button
+              type="button"
+              disabled={disabled}
+              aria-haspopup="menu"
+              aria-label={t('home.cases.use')}
+              title={t('home.cases.use')}
+              className="inline-flex h-5 w-5 items-center justify-center text-[#BCBCBC] transition hover:text-[var(--ink)] disabled:opacity-50"
+            >
+              <UseCaseMenuIcon className="h-[14px] w-[14px]" />
+            </button>
+          </Dropdown>
+        </div>
+      </div>
+    </article>
+  );
 }
 
 export default function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
@@ -95,7 +357,6 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
   const [likedIds, setLikedIds] = useState<Set<string>>(() => new Set());
   const [likeBusyId, setLikeBusyId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const fetchGen = useRef(0);
 
   useEffect(() => {
@@ -123,12 +384,18 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
       if (append) setLoadingMore(true);
       else setLoading(true);
       try {
-        const feed = await fetchPlazaFeed({
+        const feedParams: {
+          page: number;
+          pageSize: number;
+          tab: 'latest';
+          category?: string;
+        } = {
           page: nextPage,
           pageSize: PAGE_SIZE,
           tab: 'latest',
-          category: nextTab,
-        });
+        };
+        if (nextTab && nextTab !== 'all') feedParams.category = nextTab;
+        const feed = await fetchPlazaFeed(feedParams);
         if (gen !== fetchGen.current) return;
         const mapped = (feed.items || []).map(feedToMeta);
         setCases((prev) => (append ? [...prev, ...mapped] : mapped));
@@ -152,20 +419,9 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     void loadPage(tab, 1, false);
   }, [tab, loadPage]);
 
-  // Server-side infinite scroll → next feed page only.
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el || !hasMore || loading || loadingMore) return undefined;
-    const root = nearestScrollRoot(el);
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((e) => e.isIntersecting)) return;
-        void loadPage(tab, page + 1, true);
-      },
-      { root, rootMargin: '320px 0px', threshold: 0 }
-    );
-    io.observe(el);
-    return () => io.disconnect();
+  const onLoadMore = useCallback(() => {
+    if (!hasMore || loading || loadingMore) return;
+    void loadPage(tab, page + 1, true);
   }, [hasMore, loading, loadingMore, loadPage, page, tab]);
 
   // Document JSON only when preview opens (not for list thumbnails).
@@ -175,10 +431,20 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     let cancelled = false;
     const meta = cases.find((c) => c.id === previewId);
     if (!meta) return;
-    void loadCaseDocument(meta, docs)
-      .then((doc) => {
+    void fetchPlazaItem(meta.id)
+      .then((res) => {
         if (cancelled) return;
-        setDocs((prev) => (prev[previewId] !== undefined ? prev : { ...prev, [previewId]: doc }));
+        const item = res.item;
+        setDocs((prev) =>
+          prev[previewId] !== undefined ? prev : { ...prev, [previewId]: item.document ?? null }
+        );
+        if (Array.isArray(item.panelUrls) && item.panelUrls.length) {
+          setCases((prev) =>
+            prev.map((c) =>
+              c.id === previewId ? { ...c, panelUrls: item.panelUrls ?? null } : c
+            )
+          );
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -204,7 +470,6 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     if (disabled || openingId) return;
     setOpeningId(meta.id);
     try {
-      const document = docs[meta.id] || (await loadCaseDocument(meta, docs));
       void recordPlazaUse(meta.id)
         .then((res) => {
           const n = Number(res.useCount);
@@ -215,7 +480,8 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
         })
         .catch(() => undefined);
       setPreviewId(null);
-      onOpenCase(meta, document, { prompt: resolveCasePrompt(meta, t) });
+      // Skill chip → chat; blank canvas (handled by HomePage). No document clone.
+      onOpenCase(meta);
     } catch {
       message.error(t('home.casesOpenFailed'));
     } finally {
@@ -247,14 +513,15 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
       setCases((prev) =>
         prev.map((c) => {
           if (c.id !== meta.id) return c;
-          const nextCount = Number.isFinite(serverCount)
-            ? Math.max(0, serverCount)
-            : (() => {
-                const base = Number(c.likeCount) || 0;
-                if (nowLiked) return wasLiked ? base : base + 1;
-                return wasLiked ? Math.max(0, base - 1) : base;
-              })();
-          return { ...c, likeCount: nextCount };
+          return {
+            ...c,
+            likeCount: resolveNextLikeCount(
+              Number(c.likeCount) || 0,
+              wasLiked,
+              nowLiked,
+              serverCount
+            ),
+          };
         })
       );
       message.success(nowLiked ? t('home.cases.likedToast') : t('home.cases.unlikedToast'));
@@ -273,120 +540,44 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     setTab(next);
   };
 
-  const gridClass =
-    'grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5';
-
   return (
     <section className="w-full min-w-0">
-      <h2 className="mb-3 text-[16px] font-semibold tracking-tight text-[var(--ink)]">
+      <h2 className="mb-3 text-[18px] font-semibold tracking-tight text-[var(--ink)]">
         {t('home.cases.title')}
       </h2>
       <SegmentTabs
         className="mb-5"
+        size="sm"
         aria-label={t('home.cases.title')}
         tabs={TABS.map((id) => ({ id, label: t(`home.cases.cat.${id}`) }))}
         value={tab}
         onChange={onTabClick}
       />
 
-      {loading ? (
-        <div className={cn(gridClass, 'w-full')}>
-          {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} aria-busy="true">
-              <div className={projectThumbFrameClass('skeleton-bone shadow-none')} />
-              <div className="mt-2.5 flex items-center gap-2">
-                <div className="skeleton-bone !rounded-full h-8 w-8 shrink-0" />
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="skeleton-bone h-3 w-3/4" />
-                  <div className="skeleton-bone h-2.5 w-1/2" />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : cases.length === 0 ? (
-        <EmptyState hint={t('home.cases.empty')} />
-      ) : (
-        <>
-          <div className={cn(gridClass, 'w-full')}>
-            {cases.map((c) => {
-              const liked = likedIds.has(c.id);
-              const likes = Math.max(0, Number(c.likeCount) || 0);
-              const title = resolveCaseTitle(c, t);
-              const author = caseAuthorLabel(c, t);
-              const initial = (author[0] || 'R').toUpperCase();
-              return (
-                <article key={c.id} className="group min-w-0">
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => openPreview(c)}
-                    className="block w-full text-left disabled:opacity-60"
-                  >
-                    {/* Plaza feed coverDocument only — no full canvas fetch */}
-                    <PlazaCoverThumb coverDocument={c.coverDocument} />
-                  </button>
-
-                  <div className="mt-2.5 flex items-start gap-2">
-                    {c.authorAvatar ? (
-                      <img
-                        src={c.authorAvatar}
-                        alt=""
-                        className="mt-0.5 h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-[var(--line)]"
-                      />
-                    ) : (
-                      <span
-                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[9px] font-bold text-[var(--on-brand)]"
-                        aria-hidden
-                      >
-                        {initial}
-                      </span>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => openPreview(c)}
-                        className="block w-full truncate text-left text-[13px] font-semibold leading-snug text-[var(--ink)] hover:underline disabled:opacity-60"
-                        title={title}
-                      >
-                        {title}
-                      </button>
-                      <div className="mt-0.5 truncate text-[12px] text-[var(--muted)]">{author}</div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2.5 pt-1 text-[12px] tabular-nums text-[var(--muted)]">
-                      <button
-                        type="button"
-                        aria-pressed={liked}
-                        aria-label={liked ? t('home.cases.unlike') : t('home.cases.like')}
-                        disabled={likeBusyId === c.id}
-                        onClick={(e) => void onToggleLike(c, e)}
-                        className={cn(
-                          'inline-flex items-center gap-0.5 transition hover:text-[var(--ink)] disabled:opacity-50',
-                          liked && 'text-[#e11d48]'
-                        )}
-                      >
-                        <HiHeart
-                          className={cn('h-3.5 w-3.5', liked && 'fill-current')}
-                          aria-hidden
-                        />
-                        {formatStatCount(likes)}
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-          {hasMore || loadingMore ? (
-            <div ref={sentinelRef} className="flex h-10 w-full items-center justify-center" aria-hidden>
-              {loadingMore ? (
-                <span className="text-[12px] text-[var(--muted)]">…</span>
-              ) : null}
-            </div>
-          ) : null}
-        </>
-      )}
+      <FlowScrollSection
+        loading={loading}
+        loadingMore={loadingMore}
+        hasMore={hasMore}
+        onLoadMore={onLoadMore}
+        isEmpty={cases.length === 0}
+        empty={<EmptyState hint={t('home.cases.empty')} />}
+      >
+        {cases.map((c) => (
+          <InspirationCaseCard
+            key={c.id}
+            meta={c}
+            liked={likedIds.has(c.id)}
+            likes={Math.max(0, Number(c.likeCount) || 0)}
+            title={resolveCaseTitle(c, t)}
+            author={caseAuthorLabel(c, t)}
+            disabled={disabled}
+            likeBusy={likeBusyId === c.id}
+            onOpenPreview={openPreview}
+            onToggleLike={onToggleLike}
+            t={t}
+          />
+        ))}
+      </FlowScrollSection>
 
       <InspirationCasePreview
         open={!!previewMeta}

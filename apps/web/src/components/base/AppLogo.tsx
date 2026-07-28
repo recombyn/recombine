@@ -5,7 +5,7 @@ import { cn } from '@/utils/classnames';
 export type LogoScheme = 'dark' | 'light';
 
 type Props = {
-  /** Outer square size in px. */
+  /** Outer square size in px — always rendered 1:1. */
   size?: number;
   className?: string;
   bordered?: boolean;
@@ -20,9 +20,8 @@ function readResolvedScheme(): LogoScheme {
 }
 
 /**
- * Brand mark 1:1 from static SVG (not Icon sprite — gradients/clipPath break under `<use>`).
- * Files: `/logo-mark.svg`, `/logo-mark-light.svg`
- * Scale: pass `size` (e.g. 48 / 64 / 96).
+ * Brand mark — raster PNG via `<img src>` (`/logo-mark.png`, `/logo-mark-light.png`).
+ * Used by: HomeBody, LoginDialog, EditorBootOverlay.
  */
 export default function AppLogo({
   size = 36,
@@ -50,29 +49,32 @@ export default function AppLogo({
     return () => obs.disconnect();
   }, [scheme]);
 
-  const src = resolved === 'light' ? '/logo-mark-light.svg' : '/logo-mark.svg';
+  const src = resolved === 'light' ? '/logo-mark-light.png' : '/logo-mark.png';
 
   return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center justify-center',
-        bordered && 'ring-1 ring-[var(--line)]',
-        className
-      )}
+    <img
+      src={src}
+      alt={t('app.name')}
+      width={size}
+      height={size}
+      draggable={false}
+      className={cn('block shrink-0', className)}
       style={{
         width: size,
         height: size,
-        ...(bordered ? { borderRadius: '36%' } : null),
+        minWidth: size,
+        minHeight: size,
+        maxWidth: size,
+        maxHeight: size,
+        aspectRatio: '1 / 1',
+        objectFit: 'contain',
+        flex: '0 0 auto',
+        // Beat Tailwind preflight `img { height: auto }`
+        // so flex parents cannot stretch the bitmap.
+        ...(bordered
+          ? { borderRadius: '36%', boxShadow: 'inset 0 0 0 1px var(--line)' }
+          : null),
       }}
-    >
-      <img
-        src={src}
-        alt={t('app.name')}
-        width={size}
-        height={size}
-        className="block h-full w-full object-contain"
-        draggable={false}
-      />
-    </span>
+    />
   );
 }

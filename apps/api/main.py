@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 for _name in (
     "services.design.orchestrator",
-    "services.design.agent_loop",
+    "services.design.agent_controller",
     "services.design.llm_step",
     "design.run_api",
     "design.llm_step",

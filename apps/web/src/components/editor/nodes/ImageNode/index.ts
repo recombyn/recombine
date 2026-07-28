@@ -3,6 +3,7 @@ export { default as ImageToolbarEditTools } from './ImageToolbarEditTools';
 export { default as IconAnnotateToolbar } from './IconAnnotateToolbar';
 export { default as ImageUpscaleMenu } from './ImageUpscaleMenu';
 export { default as ImageProcessOverlay } from './ImageProcessOverlay';
+export { default as ImageVariantsOverlay } from './ImageVariantsOverlay';
 export { default as ImageProcessWatcher } from './ImageProcessWatcher';
 export { default as ImageToolPanelHost } from './toolPanels/ImageToolPanelHost';
 export { default as CropExpandSessionHost } from './cropExpand/CropExpandSessionHost';

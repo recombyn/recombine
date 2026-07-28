@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type WheelEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FloatingPortal } from '@floating-ui/react';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { HiHeart, HiOutlineEye, HiOutlineShare, HiOutlineXMark } from 'react-icons/hi2';
 import type { OfficialCaseMeta } from '@/utils/officialCases';
 import {
-  caseAuthorId,
   caseAuthorLabel,
   normalizeCaseCategory,
   resolveCasePrompt,
@@ -13,13 +11,178 @@ import {
 } from '@/utils/officialCases';
 import AuthorFollowAvatar from '@/components/home/AuthorFollowAvatar';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
-import { formatStatCount } from '@/utils/likedCases';
 import {
   extractFrameDocument,
   listArtboardFrames,
   type PlazaCoverFrame,
 } from '@/utils/plazaCover';
 import { cn } from '@/utils/classnames';
+
+type PanelUrlItem = { id: string; name?: string; url: string };
+
+function formatStatCount(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(n);
+}
+
+function parsePanelUrls(caseMeta: OfficialCaseMeta | null): PanelUrlItem[] {
+  const raw = (caseMeta as { panelUrls?: unknown } | null)?.panelUrls;
+  if (!Array.isArray(raw)) return [];
+  const out: PanelUrlItem[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const row = raw[i];
+    if (!row || typeof row !== 'object') continue;
+    const url = String((row as { url?: unknown }).url || '').trim();
+    if (!url) continue;
+    out.push({
+      id: String((row as { id?: unknown }).id || `panel-${i}`),
+      name: String((row as { name?: unknown }).name || '').trim() || undefined,
+      url,
+    });
+  }
+  return out;
+}
+
+function pickActiveId(
+  prev: string | null,
+  candidates: Array<{ id?: string | null }>,
+  preferredId?: string
+): string | null {
+  const ids = candidates.map((c) => String(c.id || '').trim()).filter(Boolean);
+  if (prev && ids.includes(prev)) return prev;
+  if (preferredId && ids.includes(preferredId)) return preferredId;
+  return ids[0] || null;
+}
+
+function cycleListItem<T extends { id?: string | null }>(
+  items: T[],
+  currentId: string | null | undefined,
+  delta: number
+): T | null {
+  if (!items.length) return null;
+  const idx = Math.max(
+    0,
+    items.findIndex((p) => String(p.id || '') === String(currentId || ''))
+  );
+  return items[(idx + delta + items.length) % items.length] || null;
+}
+
+function frameThumbLabel(
+  frame: PlazaCoverFrame,
+  index: number,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  return String(frame.name || '').trim() || `${t('editor.pageExportName')}-${index + 1}`;
+}
+
+function panelThumbLabel(
+  panel: PanelUrlItem,
+  index: number,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  return String(panel.name || '').trim() || `${t('editor.pageExportName')}-${index + 1}`;
+}
+
+async function shareCasePreview(title: string, author: string) {
+  const text = `${title} — ${author}`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title, text });
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+  } catch {
+    /* user cancelled / denied */
+  }
+}
+
+function PreviewFrameThumb({
+  id,
+  label,
+  active,
+  onSelect,
+  children,
+}: {
+  id: string;
+  label: string;
+  active: boolean;
+  onSelect: () => void;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      data-preview-frame-thumb={id}
+      aria-label={label}
+      aria-current={active ? 'true' : undefined}
+      title={label}
+      onClick={onSelect}
+      className={cn(
+        'relative h-[100px] w-[100px] shrink-0 overflow-hidden rounded-xl border bg-[#ececec] transition',
+        active ? 'border-[var(--ink)]' : 'border-transparent opacity-80 hover:opacity-100'
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PreviewFrameThumbMobile({
+  id,
+  label,
+  active,
+  onSelect,
+  children,
+}: {
+  id: string;
+  label: string;
+  active: boolean;
+  onSelect: () => void;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-current={active ? 'true' : undefined}
+      onClick={onSelect}
+      className={cn(
+        'relative h-[100px] w-[100px] shrink-0 overflow-hidden rounded-xl border bg-[#ececec]',
+        active ? 'border-[var(--ink)]' : 'border-transparent opacity-70'
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SkillPromptCard({
+  prompt,
+  skillLabel: _skillLabel,
+  compact,
+}: {
+  prompt: string;
+  skillLabel: string;
+  compact?: boolean;
+}): ReactNode {
+  return (
+    <div
+      className={cn(
+        'rounded-2xl bg-[var(--accent-soft)]',
+        compact ? 'px-3 py-2.5' : 'px-4 py-3.5'
+      )}
+    >
+      <p
+        className={cn(
+          'text-[var(--ink)]',
+          compact ? 'text-[12px] leading-relaxed' : 'text-[14px] leading-[1.7]'
+        )}
+      >
+        {prompt}
+      </p>
+    </div>
+  );
+}
 
 type Props = {
   open: boolean;
@@ -51,9 +214,11 @@ export default function InspirationCasePreview({
   onToggleLike,
 }: Props): ReactNode {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const [entered, setEntered] = useState(false);
   const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
+
+  const panelUrls = useMemo(() => parsePanelUrls(caseMeta), [caseMeta]);
+  const usePanelImages = panelUrls.length > 0;
 
   useEffect(() => {
     if (!open) {
@@ -73,24 +238,29 @@ export default function InspirationCasePreview({
       setActiveFrameId(null);
       return;
     }
+    if (usePanelImages) {
+      setActiveFrameId((prev) => pickActiveId(prev, panelUrls));
+      return;
+    }
     if (!frames.length) {
       setActiveFrameId(null);
       return;
     }
-    setActiveFrameId((prev) => {
-      if (prev && frames.some((f) => f.id === prev)) return prev;
-      const active = String(
-        (projectDocument as { activeFrameId?: unknown })?.activeFrameId || ''
-      ).trim();
-      if (active && frames.some((f) => f.id === active)) return active;
-      return frames[0]?.id || null;
-    });
-  }, [open, caseMeta?.id, frames, projectDocument]);
+    const preferred = String(
+      (projectDocument as { activeFrameId?: unknown })?.activeFrameId || ''
+    ).trim();
+    setActiveFrameId((prev) => pickActiveId(prev, frames, preferred || undefined));
+  }, [open, caseMeta?.id, frames, projectDocument, usePanelImages, panelUrls]);
 
   const activeFrame: PlazaCoverFrame | null = useMemo(() => {
-    if (!frames.length) return null;
+    if (usePanelImages || !frames.length) return null;
     return frames.find((f) => f.id === activeFrameId) || frames[0] || null;
-  }, [frames, activeFrameId]);
+  }, [frames, activeFrameId, usePanelImages]);
+
+  const activePanelUrl = useMemo(() => {
+    if (!usePanelImages) return null;
+    return panelUrls.find((p) => p.id === activeFrameId) || panelUrls[0] || null;
+  }, [usePanelImages, panelUrls, activeFrameId]);
 
   const frameDocs = useMemo(() => {
     const map: Record<string, unknown> = {};
@@ -104,34 +274,48 @@ export default function InspirationCasePreview({
   }, [projectDocument, frames]);
 
   const previewDoc = useMemo(() => {
+    if (usePanelImages) return null;
     if (activeFrame?.id && frameDocs[activeFrame.id]) return frameDocs[activeFrame.id];
     // No artboards: fall back to full document / nodes.
     return projectDocument;
-  }, [activeFrame, frameDocs, projectDocument]);
+  }, [activeFrame, frameDocs, projectDocument, usePanelImages]);
 
   const goFrame = (delta: number) => {
-    if (!frames.length) return;
-    const idx = Math.max(
-      0,
-      frames.findIndex((f) => f.id === (activeFrame?.id || activeFrameId))
-    );
-    const next = frames[(idx + delta + frames.length) % frames.length];
+    if (usePanelImages) {
+      const next = cycleListItem(panelUrls, activePanelUrl?.id || activeFrameId, delta);
+      if (next?.id) setActiveFrameId(next.id);
+      return;
+    }
+    const next = cycleListItem(frames, activeFrame?.id || activeFrameId, delta);
     if (next?.id) setActiveFrameId(next.id);
   };
 
   const wheelLockRef = useRef(0);
-  const onPreviewWheel = (e: WheelEvent<HTMLDivElement>) => {
-    if (frames.length < 2) return;
-    // Prefer vertical wheel; fall back to horizontal trackpad.
-    const dy = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-    if (!dy) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const now = Date.now();
-    if (now - wheelLockRef.current < 280) return;
-    wheelLockRef.current = now;
-    goFrame(dy > 0 ? 1 : -1);
-  };
+  const previewWheelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = previewWheelRef.current;
+    if (!el || !open) return;
+
+    const onWheel = (e: globalThis.WheelEvent) => {
+      const count = usePanelImages ? panelUrls.length : frames.length;
+      if (count < 2) return;
+      // Prefer vertical wheel; fall back to horizontal trackpad.
+      const dy = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (!dy) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const now = Date.now();
+      if (now - wheelLockRef.current < 280) return;
+      wheelLockRef.current = now;
+      goFrame(dy > 0 ? 1 : -1);
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+    // goFrame closes over latest frame/panel state via deps below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, usePanelImages, panelUrls, frames, activeFrameId, activePanelUrl]);
 
   useEffect(() => {
     if (!open || !activeFrameId) return;
@@ -160,7 +344,7 @@ export default function InspirationCasePreview({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, caseMeta, activeFrameId, frames, onClose]);
+  }, [open, caseMeta, activeFrameId, frames, panelUrls, usePanelImages, onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -175,47 +359,23 @@ export default function InspirationCasePreview({
 
   const title = resolveCaseTitle(caseMeta, t);
   const author = caseAuthorLabel(caseMeta, t);
-  const authorId = caseAuthorId(caseMeta);
   const liked = likedIds.has(caseMeta.id);
   const likes = Math.max(0, Number(caseMeta.likeCount) || 0);
   const uses = Math.max(0, Number(caseMeta.useCount) || 0);
-  const canSwitch = frames.length > 1;
+  const canSwitch = usePanelImages ? panelUrls.length > 1 : frames.length > 1;
+  /** Left rail thumbs — show even when only one panel/artboard. */
+  const showThumbRail = usePanelImages ? panelUrls.length > 0 : frames.length > 0;
   const prompt = resolveCasePrompt(caseMeta, t);
   const categoryLabel = t(`home.cases.cat.${normalizeCaseCategory(caseMeta.category)}`);
-  const hasDoc = Boolean(previewDoc);
-
-  const openProfile = () => {
-    onClose();
-    navigate(`/u/${encodeURIComponent(authorId)}`, {
-      state: {
-        authorName: author,
-        authorAvatar: caseMeta.authorAvatar || null,
-      },
-    });
-  };
-
-  const onShare = async () => {
-    const text = `${title} — ${author}`;
-    try {
-      if (navigator.share) {
-        await navigator.share({ title, text });
-        return;
-      }
-      await navigator.clipboard.writeText(text);
-    } catch {
-      /* user cancelled / denied */
-    }
-  };
-
-  const frameLabel = (frame: PlazaCoverFrame, i: number) =>
-    String(frame.name || '').trim() || `${t('editor.pageExportName')}-${i + 1}`;
+  const hasDoc = Boolean(activePanelUrl?.url || previewDoc);
+  const onShare = () => void shareCasePreview(title, author);
 
   return (
     <FloatingPortal>
       <div
         className={cn(
           'fixed inset-0 z-[850] transition-[background-color] duration-300',
-          entered ? 'bg-[rgba(12,12,13,0.8)]' : 'bg-transparent'
+          entered ? 'bg-[var(--preview-overlay)]' : 'bg-transparent'
         )}
         role="presentation"
         onClick={onClose}
@@ -237,13 +397,13 @@ export default function InspirationCasePreview({
           aria-label={title}
           className={cn(
             'fixed bottom-0 left-0 right-0 z-[855] flex gap-3 overflow-hidden p-[15px]',
-            'top-[50px] rounded-t-[14px] bg-[#F6F6F6]',
+            'top-[50px] rounded-t-[14px] bg-[var(--canvas)]',
             'transition-transform duration-[420ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform',
             entered ? 'translate-y-0' : '-translate-y-10'
           )}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[#F6F6F6]">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--canvas)]">
             <div className="mb-3 flex shrink-0 items-center gap-3">
               <h2 className="min-w-0 flex-1 truncate text-[16px] font-semibold leading-tight text-[var(--ink)]">
                 {title}
@@ -251,53 +411,66 @@ export default function InspirationCasePreview({
               <div className="hidden shrink-0 items-center gap-2 md:flex">
                 <button
                   type="button"
-                  disabled={remixing || !hasDoc}
+                  disabled={remixing}
                   onClick={() => onRemix(caseMeta)}
-                  className="inline-flex h-8 items-center justify-center rounded-full bg-[var(--ink)] px-3.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
+                  className="inline-flex h-8 items-center justify-center rounded-xl bg-[var(--ink)] px-3.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
                 >
                   {remixing ? t('home.cases.remixing') : t('home.cases.makeSame')}
                 </button>
               </div>
             </div>
 
-            <div className="flex min-h-0 min-w-0 flex-1" onWheel={onPreviewWheel}>
-              {canSwitch ? (
+            <div ref={previewWheelRef} className="flex min-h-0 min-w-0 flex-1">
+              {showThumbRail ? (
                 <div className="hidden w-[100px] shrink-0 flex-col gap-2.5 overflow-y-auto py-px md:flex">
-                  {frames.map((frame, i) => {
-                    const id = frame.id || `frame-${i}`;
-                    const active = id === (activeFrame?.id || activeFrameId);
-                    const thumb = frameDocs[id];
-                    const label = frameLabel(frame, i);
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        data-preview-frame-thumb={id}
-                        aria-label={label}
-                        aria-current={active ? 'true' : undefined}
-                        title={label}
-                        onClick={() => setActiveFrameId(id)}
-                        className={cn(
-                          'relative h-[100px] w-[100px] shrink-0 overflow-hidden rounded border bg-[#ececec] transition',
-                          active
-                            ? 'border-[var(--ink)]'
-                            : 'border-transparent opacity-80 hover:opacity-100'
-                        )}
-                      >
-                        {thumb ? (
-                          <TemplateThumbnail document={thumb} fit="cover" />
-                        ) : (
-                          <div className="skeleton-bone h-full w-full" aria-hidden />
-                        )}
-                      </button>
-                    );
-                  })}
+                  {usePanelImages
+                    ? panelUrls.map((panel, i) => {
+                        const id = panel.id || `panel-${i}`;
+                        const active = id === (activePanelUrl?.id || activeFrameId);
+                        const label = panelThumbLabel(panel, i, t);
+                        return (
+                          <PreviewFrameThumb
+                            key={id}
+                            id={id}
+                            label={label}
+                            active={active}
+                            onSelect={() => setActiveFrameId(id)}
+                          >
+                            <TemplateThumbnail imageUrl={panel.url} fit="cover" />
+                          </PreviewFrameThumb>
+                        );
+                      })
+                    : frames.map((frame, i) => {
+                        const id = frame.id || `frame-${i}`;
+                        const active = id === (activeFrame?.id || activeFrameId);
+                        const thumb = frameDocs[id];
+                        const label = frameThumbLabel(frame, i, t);
+                        return (
+                          <PreviewFrameThumb
+                            key={id}
+                            id={id}
+                            label={label}
+                            active={active}
+                            onSelect={() => setActiveFrameId(id)}
+                          >
+                            {thumb ? (
+                              <TemplateThumbnail document={thumb} fit="cover" />
+                            ) : (
+                              <div className="skeleton-bone h-full w-full" aria-hidden />
+                            )}
+                          </PreviewFrameThumb>
+                        );
+                      })}
                 </div>
               ) : null}
 
               <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center px-3">
-                {previewDoc ? (
-                  <div className="relative h-full w-full max-h-full overflow-hidden rounded-2xl">
+                {activePanelUrl?.url ? (
+                  <div className="relative flex h-full max-h-full w-full items-center justify-center overflow-hidden rounded-2xl">
+                    <TemplateThumbnail imageUrl={activePanelUrl.url} fit="contain" />
+                  </div>
+                ) : previewDoc ? (
+                  <div className="relative flex h-full max-h-full w-full items-center justify-center overflow-hidden rounded-2xl">
                     <TemplateThumbnail document={previewDoc} fit="contain" />
                   </div>
                 ) : (
@@ -308,25 +481,115 @@ export default function InspirationCasePreview({
                 )}
               </div>
             </div>
+
+            {/* Mobile: prompt + artboard thumbs + CTA — in-flow so preview centers above it */}
+            <div className="mt-3 flex shrink-0 flex-col bg-[var(--surface)] md:hidden">
+              <div className="px-1 pt-1">
+                <SkillPromptCard prompt={prompt} skillLabel={t('agent.skill')} compact />
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2 text-left">
+                    <AuthorFollowAvatar name={author} avatar={caseMeta.authorAvatar} size={28} />
+                    <span className="truncate text-[13px] font-medium text-[var(--ink)]">{author}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3 text-[12px] tabular-nums text-[var(--muted)]">
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={t('home.cases.useCount', { count: uses })}
+                    >
+                      <HiOutlineEye className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                      {formatStatCount(uses)}
+                    </span>
+                    <button
+                      type="button"
+                      aria-pressed={liked}
+                      disabled={likeBusy}
+                      onClick={() => onToggleLike(caseMeta)}
+                      className="inline-flex items-center gap-1 transition disabled:opacity-50"
+                      title={liked ? t('home.cases.unlike') : t('home.cases.like')}
+                    >
+                      <HiHeart className="h-4 w-4 fill-current" aria-hidden />
+                      {formatStatCount(likes)}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={t('home.cases.share')}
+                      onClick={() => void onShare()}
+                      className="inline-flex items-center"
+                    >
+                      <HiOutlineShare className="h-4 w-4" strokeWidth={1.75} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {showThumbRail ? (
+                <div className="px-0 pt-3">
+                  <div className="flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {usePanelImages
+                      ? panelUrls.map((panel, i) => {
+                          const id = panel.id || `panel-${i}`;
+                          const active = id === (activePanelUrl?.id || activeFrameId);
+                          const label = panelThumbLabel(panel, i, t);
+                          return (
+                            <PreviewFrameThumbMobile
+                              key={id}
+                              id={id}
+                              label={label}
+                              active={active}
+                              onSelect={() => setActiveFrameId(id)}
+                            >
+                              <TemplateThumbnail imageUrl={panel.url} fit="cover" />
+                            </PreviewFrameThumbMobile>
+                          );
+                        })
+                      : frames.map((frame, i) => {
+                          const id = frame.id || `frame-${i}`;
+                          const active = id === (activeFrame?.id || activeFrameId);
+                          const thumb = frameDocs[id];
+                          const label = frameThumbLabel(frame, i, t);
+                          return (
+                            <PreviewFrameThumbMobile
+                              key={id}
+                              id={id}
+                              label={label}
+                              active={active}
+                              onSelect={() => setActiveFrameId(id)}
+                            >
+                              {thumb ? (
+                                <TemplateThumbnail document={thumb} fit="cover" />
+                              ) : (
+                                <div className="skeleton-bone h-full w-full" aria-hidden />
+                              )}
+                            </PreviewFrameThumbMobile>
+                          );
+                        })}
+                  </div>
+                </div>
+              ) : null}
+              <div className="pt-3">
+                <button
+                  type="button"
+                  disabled={remixing}
+                  onClick={() => onRemix(caseMeta)}
+                  className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-[var(--ink)] px-4 text-[14px] font-semibold text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
+                >
+                  {remixing ? t('home.cases.remixing') : t('home.cases.remix')}
+                </button>
+              </div>
+            </div>
           </div>
 
-          <aside className="hidden w-[min(400px,36vw)] shrink-0 flex-col bg-[#F6F6F6] md:flex">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#E8E8E8] bg-white">
+          <aside className="hidden w-[min(400px,36vw)] shrink-0 flex-col bg-[var(--canvas)] md:flex">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)]">
               <div className="flex items-center gap-2 px-4 pb-3 pt-4">
                 <AuthorFollowAvatar
                   name={author}
                   avatar={caseMeta.authorAvatar}
                   size={36}
-                  onOpenProfile={openProfile}
                 />
-                <button
-                  type="button"
-                  onClick={openProfile}
-                  className="min-w-0 flex-1 truncate text-left text-[14px] font-semibold text-[var(--ink)] hover:underline"
-                >
+                <span className="min-w-0 flex-1 truncate text-left text-[14px] font-semibold text-[var(--ink)]">
                   {author}
-                </button>
-                <div className="flex shrink-0 items-center gap-3.5 text-[12px] tabular-nums text-[#8a8a8a]">
+                </span>
+                <div className="flex shrink-0 items-center gap-3.5 text-[12px] tabular-nums text-[var(--muted)]">
                   <span
                     className="inline-flex items-center gap-1"
                     title={t('home.cases.useCount', { count: uses })}
@@ -339,7 +602,7 @@ export default function InspirationCasePreview({
                     aria-pressed={liked}
                     disabled={likeBusy}
                     onClick={() => onToggleLike(caseMeta)}
-                    className="inline-flex items-center gap-1 transition hover:text-[#5c5c5c] disabled:opacity-50"
+                    className="inline-flex items-center gap-1 transition hover:text-[var(--ink)] disabled:opacity-50"
                     title={liked ? t('home.cases.unlike') : t('home.cases.like')}
                   >
                     <HiHeart className="h-4 w-4 fill-current" aria-hidden />
@@ -349,7 +612,7 @@ export default function InspirationCasePreview({
                     type="button"
                     aria-label={t('home.cases.share')}
                     onClick={() => void onShare()}
-                    className="inline-flex items-center transition hover:text-[#5c5c5c]"
+                    className="inline-flex items-center transition hover:text-[var(--ink)]"
                   >
                     <HiOutlineShare className="h-4 w-4" strokeWidth={1.75} />
                   </button>
@@ -357,102 +620,12 @@ export default function InspirationCasePreview({
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-                <div className="rounded-2xl bg-[#F5F5F5] px-4 py-3.5 text-[14px] leading-[1.7] text-[var(--ink)]">
-                  {prompt}
-                </div>
+                <SkillPromptCard prompt={prompt} skillLabel={t('agent.skill')} />
                 <p className="mt-5 text-[12px] font-medium text-[var(--muted)]">{categoryLabel}</p>
                 <p className="mt-1 text-[14px] font-medium text-[var(--ink)]">{title}</p>
               </div>
             </div>
           </aside>
-
-          {/* Mobile: prompt + artboard thumbs + CTA */}
-          <div className="absolute inset-x-0 bottom-0 flex flex-col bg-white md:hidden">
-            <div className="px-4 pt-3">
-              <div className="rounded-2xl bg-[#F5F5F5] px-3 py-2.5 text-[12px] leading-relaxed text-[var(--ink)]">
-                {prompt}
-              </div>
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={openProfile}
-                  className="flex min-w-0 items-center gap-2 text-left"
-                >
-                  <AuthorFollowAvatar name={author} avatar={caseMeta.authorAvatar} size={28} />
-                  <span className="truncate text-[13px] font-medium text-[var(--ink)]">{author}</span>
-                </button>
-                <div className="flex shrink-0 items-center gap-3 text-[12px] tabular-nums text-[#8a8a8a]">
-                  <span
-                    className="inline-flex items-center gap-1"
-                    title={t('home.cases.useCount', { count: uses })}
-                  >
-                    <HiOutlineEye className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-                    {formatStatCount(uses)}
-                  </span>
-                  <button
-                    type="button"
-                    aria-pressed={liked}
-                    disabled={likeBusy}
-                    onClick={() => onToggleLike(caseMeta)}
-                    className="inline-flex items-center gap-1 transition disabled:opacity-50"
-                    title={liked ? t('home.cases.unlike') : t('home.cases.like')}
-                  >
-                    <HiHeart className="h-4 w-4 fill-current" aria-hidden />
-                    {formatStatCount(likes)}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={t('home.cases.share')}
-                    onClick={() => void onShare()}
-                    className="inline-flex items-center"
-                  >
-                    <HiOutlineShare className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                </div>
-              </div>
-            </div>
-            {canSwitch ? (
-              <div className="px-3 pt-3">
-                <div className="flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {frames.map((frame, i) => {
-                    const id = frame.id || `frame-${i}`;
-                    const active = id === (activeFrame?.id || activeFrameId);
-                    const thumb = frameDocs[id];
-                    const label = frameLabel(frame, i);
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        aria-label={label}
-                        aria-current={active ? 'true' : undefined}
-                        onClick={() => setActiveFrameId(id)}
-                        className={cn(
-                          'relative h-[100px] w-[100px] shrink-0 overflow-hidden rounded border bg-[#ececec]',
-                          active ? 'border-[var(--ink)]' : 'border-transparent opacity-70'
-                        )}
-                      >
-                        {thumb ? (
-                          <TemplateThumbnail document={thumb} fit="cover" />
-                        ) : (
-                          <div className="skeleton-bone h-full w-full" aria-hidden />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
-            <div className="px-4 py-3">
-              <button
-                type="button"
-                disabled={remixing || !hasDoc}
-                onClick={() => onRemix(caseMeta)}
-                className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-[var(--ink)] px-4 text-[14px] font-semibold text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
-              >
-                {remixing ? t('home.cases.remixing') : t('home.cases.remix')}
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </FloatingPortal>

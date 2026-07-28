@@ -1,15 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import {
-  RcbOverlayPortal,
-  useRcbCamera,
-} from '../camera/context';
-import {
-  rcbSceneToScreen,
-} from '../core/math';
-import {
-  NODE_TITLE_LABEL_GAP_PX,
-  NODE_TITLE_LABEL_LINE_PX,
-} from '../selection/SelectionToolbarShell';
+import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { RcbOverlayPortal, useRcbCamera } from '../camera/context';
+import { rcbSceneToScreen } from '../core/math';
+import NodeTitleLabel from '../selection/NodeTitleLabel';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 
 type HtmlArtboardFrameProps = {
@@ -18,7 +10,7 @@ type HtmlArtboardFrameProps = {
   onSelect?: () => void;
   onRename?: (name: string) => void;
   /** Drag the label to move the artboard. */
-  onMove?: (x: number, y: number) => void;
+  onMove?: (x: number, y: number, opts?: { skipGrid?: boolean }) => void;
   onMoveStart?: () => void;
   /** Label drag ended (clear guides, etc.). */
   onMoveEnd?: () => void;
@@ -35,7 +27,6 @@ type HtmlArtboardFrameProps = {
  */
 export default function HtmlArtboardFrame({
   frame,
-  selected,
   onSelect,
   onRename,
   onMove,
@@ -43,56 +34,9 @@ export default function HtmlArtboardFrame({
   onMoveEnd,
   hideTitle = false,
   layer = 'body',
-}: HtmlArtboardFrameProps) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(frame.name || 'Frame');
-  const [labelDragging, setLabelDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const labelDragRef = useRef<{
-    originX: number;
-    originY: number;
-    clientX0: number;
-    clientY0: number;
-    started: boolean;
-  } | null>(null);
+}: HtmlArtboardFrameProps): ReactNode {
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
-
-  useEffect(() => {
-    if (!editing) setDraft(frame.name || 'Frame');
-  }, [frame.name, editing]);
-
-  useEffect(() => {
-    if (!editing) return;
-    const el = inputRef.current;
-    if (!el) return;
-    el.focus();
-    el.select();
-  }, [editing]);
-
-  useEffect(() => {
-    if (!editing) return undefined;
-    const onPointerDown = (e: PointerEvent) => {
-      const root = rootRef.current;
-      const target = e.target as Node | null;
-      if (root && target && root.contains(target)) return;
-      window.requestAnimationFrame(() => {
-        const el = inputRef.current;
-        const value = (el?.value ?? '').trim() || 'Frame';
-        setEditing(false);
-        if (value !== (frame.name || 'Frame')) onRename?.(value);
-      });
-    };
-    window.addEventListener('pointerdown', onPointerDown, true);
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [editing, frame.name, onRename]);
-
-  const commit = () => {
-    const next = draft.trim() || 'Frame';
-    setEditing(false);
-    if (next !== (frame.name || 'Frame')) onRename?.(next);
-  };
 
   const stageBox = useMemo(() => {
     const origin = rcbSceneToScreen(camera, frame.x, frame.y);
@@ -104,19 +48,8 @@ export default function HtmlArtboardFrame({
     };
   }, [camera, frame.x, frame.y, frame.width, frame.height, z]);
 
-  const labelStyle = useMemo(
-    () => ({
-      left: stageBox.left,
-      // Fixed screen-pixel offset above the frame — does not grow with zoom.
-      top: stageBox.top - NODE_TITLE_LABEL_GAP_PX - NODE_TITLE_LABEL_LINE_PX,
-      width: stageBox.width,
-      height: NODE_TITLE_LABEL_LINE_PX,
-    }),
-    [stageBox]
-  );
-
   const generating = String(frame.processStatus || '') === 'running';
-  const processLabel = String(frame.processLabel || '生成中…');
+  const processLabel = String(frame.processLabel || 'Preparing…');
 
   const processOverlayStyle = useMemo(
     (): CSSProperties => ({
@@ -141,119 +74,46 @@ export default function HtmlArtboardFrame({
 
   if (layer === 'label') {
     return (
-      <RcbOverlayPortal>
-        {/* Screen-fixed frame edge. Selection blue comes from FrameSelectionChrome
-            (same 1.5px as shape chrome) — do not double-draw a thick inset here. */}
-        <div
-          className="pointer-events-none absolute z-[5]"
-          style={{
-            left: stageBox.left,
-            top: stageBox.top,
-            width: stageBox.width,
-            height: stageBox.height,
-            boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
-          }}
-          aria-hidden
-        />
-
-        {hideTitle || labelDragging ? null : (
+      <>
+        <RcbOverlayPortal>
+          {/* Screen-fixed frame edge. Selection blue comes from FrameSelectionChrome
+              (same 1.5px as shape chrome) — do not double-draw a thick inset here. */}
           <div
-            ref={rootRef}
-            data-frame-id={frame.id}
-            data-frame-label
-            className="pointer-events-auto absolute z-[6] flex w-full items-center justify-between gap-2 text-[11px] font-medium leading-none text-[var(--muted)]"
-            style={labelStyle}
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              if (editing) return;
-              onSelect?.();
-              if (!onMove || e.button !== 0) return;
-              labelDragRef.current = {
-                originX: frame.x,
-                originY: frame.y,
-                clientX0: e.clientX,
-                clientY0: e.clientY,
-                started: false,
-              };
-              const onMoveWin = (ev: PointerEvent) => {
-                const drag = labelDragRef.current;
-                if (!drag) return;
-                const dx = (ev.clientX - drag.clientX0) / z;
-                const dy = (ev.clientY - drag.clientY0) / z;
-                if (!drag.started) {
-                  if (Math.hypot(dx, dy) < 3) return;
-                  drag.started = true;
-                  setLabelDragging(true);
-                  onMoveStart?.();
-                }
-                onMove(Math.round(drag.originX + dx), Math.round(drag.originY + dy));
-              };
-              const onUpWin = () => {
-                const wasDragging = labelDragRef.current?.started;
-                labelDragRef.current = null;
-                setLabelDragging(false);
-                window.removeEventListener('pointermove', onMoveWin);
-                window.removeEventListener('pointerup', onUpWin);
-                if (wasDragging) onMoveEnd?.();
-              };
-              window.addEventListener('pointermove', onMoveWin);
-              window.addEventListener('pointerup', onUpWin);
+            className="pointer-events-none absolute z-[5]"
+            style={{
+              left: stageBox.left,
+              top: stageBox.top,
+              width: stageBox.width,
+              height: stageBox.height,
+              boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
             }}
-          >
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-              <span aria-hidden className="select-none">
-                #
-              </span>
-              {editing ? (
-                <input
-                  ref={inputRef}
-                  value={draft}
-                  aria-label="Frame name"
-                  size={Math.max(1, draft.length || 1)}
-                  className="h-4 appearance-none border-0 bg-transparent p-0 text-[11px] font-medium leading-none text-[var(--ink)] shadow-none outline-none ring-0 focus:border-0 focus:outline-none focus:ring-0"
-                  style={{
-                    width: `${Math.max(1, draft.length || 1)}ch`,
-                    fieldSizing: 'content',
-                  } as CSSProperties}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onBlur={commit}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      commit();
-                    }
-                    if (e.key === 'Escape') {
-                      e.preventDefault();
-                      setDraft(frame.name || 'Frame');
-                      setEditing(false);
-                    }
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="truncate text-left leading-none text-[var(--muted)] hover:text-[var(--ink)]"
-                  onDoubleClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onSelect?.();
-                    setDraft(frame.name || 'Frame');
-                    setEditing(true);
-                  }}
-                >
-                  {frame.name || 'Frame'}
-                </button>
-              )}
-            </div>
-            <span className="shrink-0 tabular-nums leading-none text-[var(--muted)] opacity-80">
-              {Math.round(frame.width)}
-              {' × '}
-              {Math.round(frame.height)}
-            </span>
-          </div>
-        )}
-      </RcbOverlayPortal>
+            aria-hidden
+          />
+        </RcbOverlayPortal>
+        <NodeTitleLabel
+          box={{
+            left: frame.x,
+            top: frame.y,
+            width: frame.width,
+            height: frame.height,
+          }}
+          name={frame.name || 'Frame'}
+          sizeWidth={frame.width}
+          sizeHeight={frame.height}
+          dataAttr="frame-label"
+          icon="frame"
+          dataProps={{ 'data-frame-id': frame.id }}
+          hidden={hideTitle}
+          onSelect={onSelect}
+          onRename={onRename}
+          onMove={onMove}
+          onMoveStart={onMoveStart}
+          onMoveEnd={onMoveEnd}
+          originX={frame.x}
+          originY={frame.y}
+          renameAriaLabel="Frame name"
+        />
+      </>
     );
   }
 

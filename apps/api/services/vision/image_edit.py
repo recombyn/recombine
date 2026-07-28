@@ -1,12 +1,12 @@
-"""Image toolbar: editElements / editText → split into canvas layers.
-
-editElements
-  - SAM / layout figures / OpenCV contours + OCR text + inpainted background
+"""Image toolbar vision decompose (editText OCR).
 
 editText
   - OCR only → editable text layers (font/color)
   - Background = original with text inpainted
   - Do NOT split other visual subjects
+
+Note: generative / multi-RGBA layer decompose (editElements) was removed;
+true layer separation needs GPU models (e.g. Qwen-Image-Layered).
 """
 
 from __future__ import annotations
@@ -430,7 +430,7 @@ async def decompose_image(
     if not ocr_available():
         raise RuntimeError(
             "OCR unavailable. Install vision extras: pip install -e '.[ocr]' "
-            "(PaddleOCR + OpenCV required for 编辑元素 / 编辑文字)."
+            "(PaddleOCR + OpenCV required for 编辑文字)."
         )
 
     bgr = await _load_bgr(image)

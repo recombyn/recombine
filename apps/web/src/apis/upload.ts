@@ -1,10 +1,8 @@
 /**
  * Image upload → backend → Tencent COS (or local store).
- * Frontend only sends File(s); display the returned `url`.
  */
 
 import { request } from '@/utils/request';
-import { getToken } from '@/utils/token';
 
 export type UploadedFileItem = {
   url: string;
@@ -21,241 +19,17 @@ export type UploadFilesResult = {
 };
 
 /** Upload one or more images. Form field name: `files`. */
-export function uploadFiles(files: File | File[]): Promise<UploadFilesResult> {
-  const list = Array.isArray(files) ? files : [files];
-  if (!list.length) return Promise.reject(new Error('files required'));
-
-  const form = new FormData();
-  for (const file of list) {
-    form.append('files', file, file.name);
-  }
-
-  return request<UploadFilesResult>({
+export const uploadFiles = (data: FormData) =>
+  request<UploadFilesResult>({
     url: '/api/v1/uploads',
     method: 'post',
-    data: form,
+    data,
     timeout: 120000,
   });
-}
 
-/** Upload a single image and return its public/display URL. */
-export async function uploadImageFile(file: File): Promise<UploadedFileItem> {
-  const res = await uploadFiles(file);
-  const item = res?.items?.[0];
-  if (!item?.url) throw new Error('upload returned no url');
-  return item;
-}
-
-/** Delete a previously uploaded object by storage key (no-op when logged out / empty). */
-export async function deleteUploadedFile(key: string | null | undefined): Promise<void> {
-  const objectKey = String(key || '').trim().replace(/^\/+/, '');
-  if (!objectKey || !getToken()) return;
-  // Same path as GET — avoid DELETE "" on /uploads (often 405 with empty-path routes).
-  const path = objectKey
-    .split('/')
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join('/');
-  await request<{ ok: boolean }>({
-    url: `/api/v1/uploads/files/${path}`,
+/** DELETE /api/v1/uploads/files/{encodedKeyPath} */
+export const deleteUploadedFile = (encodedKeyPath: string) =>
+  request<{ ok: boolean }>({
+    url: `/api/v1/uploads/files/${encodedKeyPath}`,
     method: 'delete',
   });
-}
-
-/**
- * Agent composer attach: upload to server, keep a local preview for thumbnails
- * (local `/api/v1/uploads/files/…` URLs need auth and cannot be used in `<img src>`).
- */
-export async function uploadComposerAttachment(file: File): Promise<{
-  uploadKey: string;
-  url: string;
-  /** Best ref for vision / create_image (https when available, else data URL). */
-  imageRef: string;
-  previewDataUrl: string;
-  name: string;
-}> {
-  const previewDataUrl = await readFileAsDataUrl(file);
-  const uploaded = await uploadImageFile(file);
-  const url = String(uploaded.url || '').trim();
-  const uploadKey = String(uploaded.key || '').trim();
-  if (!uploadKey) throw new Error('upload returned no key');
-  const imageRef =
-    url.startsWith('http://') || url.startsWith('https://') ? url : previewDataUrl;
-  return {
-    uploadKey,
-    url,
-    imageRef,
-    previewDataUrl,
-    name: String(uploaded.name || file.name || 'image'),
-  };
-}
-
-/** Local data-URL preview for upload placeholders (before COS returns). */
-export function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || '');
-      if (!result) reject(new Error('empty file preview'));
-      else resolve(result);
-    };
-    reader.onerror = () => reject(new Error('failed to read image file'));
-    reader.readAsDataURL(file);
-  });
-}
-
-/** Already stored on our upload/COS route — no need to re-upload. */
-export function isOurStoredImageUrl(src: string): boolean {
-  const s = (src || '').trim();
-  if (!s || s.startsWith('data:')) return false;
-  if (s.startsWith('/api/v1/uploads/')) return true;
-  try {
-    const u = new URL(s, typeof window !== 'undefined' ? window.location.origin : 'http://local');
-    return u.pathname.startsWith('/api/v1/uploads/');
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Resolve storage object key from a display URL.
- * Works for `/api/v1/uploads/files/{key}` and public COS/S3 `…/{key}` where key starts with `uploads/`.
- * Pixel ops must use the authenticated same-origin route — COS often blocks browser CORS fetch.
- */
-export function resolveUploadObjectKey(src: string): string | null {
-  const s = (src || '').trim();
-  if (!s || s.startsWith('data:') || s.startsWith('blob:')) return null;
-
-  const fromPath = (pathname: string): string | null => {
-    const apiPrefix = '/api/v1/uploads/files/';
-    if (pathname.startsWith(apiPrefix)) {
-      const key = decodeURIComponent(pathname.slice(apiPrefix.length)).replace(/^\/+/, '');
-      return key || null;
-    }
-    // Public object URL: …/uploads/{userId}/yyyy/mm/uuid.ext
-    const marker = '/uploads/';
-    const idx = pathname.indexOf(marker);
-    if (idx >= 0) {
-      const key = decodeURIComponent(pathname.slice(idx + 1)).replace(/^\/+/, '');
-      return key.startsWith('uploads/') ? key : null;
-    }
-    return null;
-  };
-
-  try {
-    const u = new URL(s, typeof window !== 'undefined' ? window.location.origin : 'http://local');
-    return fromPath(u.pathname);
-  } catch {
-    if (s.startsWith('/')) return fromPath(s.split('?')[0] || s);
-    return null;
-  }
-}
-
-function extForMime(mime: string): string {
-  const m = (mime || '').toLowerCase();
-  if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
-  if (m.includes('webp')) return 'webp';
-  if (m.includes('gif')) return 'gif';
-  if (m.includes('svg')) return 'svg';
-  return 'png';
-}
-
-async function fetchUploadBytesByKey(key: string): Promise<Blob> {
-  const path = key
-    .split('/')
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join('/');
-  const absolute = `${window.location.origin}/api/v1/uploads/files/${path}`;
-  const headers: HeadersInit = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(absolute, { headers, mode: 'cors', credentials: 'omit' });
-  if (!res.ok) throw new Error(`failed to fetch upload (${res.status})`);
-  const blob = await res.blob();
-  if (!blob || blob.size < 8) throw new Error('empty upload body');
-  return blob;
-}
-
-/** Same-origin proxy for COS public URLs (server resolves key + streams bytes). */
-async function fetchUploadBytesByDisplayUrl(src: string): Promise<Blob> {
-  const absolute = `${window.location.origin}/api/v1/uploads/content?url=${encodeURIComponent(src)}`;
-  const headers: HeadersInit = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(absolute, { headers, mode: 'cors', credentials: 'omit' });
-  if (!res.ok) throw new Error(`failed to fetch upload content (${res.status})`);
-  const blob = await res.blob();
-  if (!blob || blob.size < 8) throw new Error('empty upload body');
-  return blob;
-}
-
-/** Convert a data URL / blob URL / http(s) image into a File. */
-export async function imageSrcToFile(
-  src: string,
-  filename = 'image.png',
-  opts?: { uploadKey?: string | null }
-): Promise<File> {
-  const s = (src || '').trim();
-  if (!s) throw new Error('empty image src');
-
-  let blob: Blob | null = null;
-  if (s.startsWith('data:') || s.startsWith('blob:')) {
-    const res = await fetch(s);
-    if (!res.ok) throw new Error('failed to read image data');
-    blob = await res.blob();
-  } else {
-    const key = String(opts?.uploadKey || '').trim() || resolveUploadObjectKey(s);
-    // 1) Auth download by object key (local disk + COS via get_bytes).
-    if (key) {
-      try {
-        blob = await fetchUploadBytesByKey(key);
-      } catch (err) {
-        console.warn('[upload] key fetch failed', err);
-      }
-    }
-    // 2) Auth download by display URL — server strips COS host (avoids browser CORS).
-    if (!blob && /^https?:\/\//i.test(s)) {
-      try {
-        blob = await fetchUploadBytesByDisplayUrl(s);
-      } catch (err) {
-        console.warn('[upload] content-by-url failed', err);
-      }
-    }
-    // 3) Last resort: direct fetch (same-origin /api or CORS-enabled hosts).
-    if (!blob) {
-      const absolute = s.startsWith('/')
-        ? `${window.location.origin}${s}`
-        : s;
-      const headers: HeadersInit = {};
-      const token = getToken();
-      if (token && (s.startsWith('/api/') || absolute.includes('/api/v1/uploads/'))) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-      const res = await fetch(absolute, { headers, mode: 'cors', credentials: 'omit' });
-      if (!res.ok) throw new Error(`failed to fetch image (${res.status})`);
-      blob = await res.blob();
-    }
-  }
-
-  if (!blob || blob.size < 8) throw new Error('empty image body');
-  const mime = blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'image/png';
-  const ext = extForMime(mime);
-  const name = filename.includes('.') ? filename : `${filename}.${ext}`;
-  return new File([blob], name, { type: mime });
-}
-
-/**
- * Persist an AI / tool result image to our file server and return the stored URL.
- * Skips re-upload when `src` is already one of our upload URLs.
- */
-export async function uploadImageFromSrc(
-  src: string,
-  filename = 'processed.png'
-): Promise<UploadedFileItem> {
-  const s = (src || '').trim();
-  if (!s) throw new Error('empty image src');
-  if (isOurStoredImageUrl(s)) return { url: s };
-  const file = await imageSrcToFile(s, filename);
-  return uploadImageFile(file);
-}

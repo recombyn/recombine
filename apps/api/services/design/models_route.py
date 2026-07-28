@@ -1,20 +1,64 @@
-"""Model routing for design pipeline.
+"""LangChain-style model routing for the design agent runtime graph.
 
-Mainstream-style router (not just prompt length):
-  1) Score task tier from length + keywords + skill category bumps
-  2) Map tier -> model via precheck.model_threshold (per-tier matrix)
-  3) Optional fallback_chain for retries / degrade
-  4) precheck.vision_model when multimodal images are attached
+Flow (recommended LC pattern):
+  1) Router node: cheap model + structured output → ``ModelRouteDecision``
+  2) Map ``lane`` → catalog id via Admin ``precheck.model_threshold``
+  3) Lock / user Auto overrides / vision soft-switch / fallback_chain
+
+Lanes (not difficulty tiers):
+  - fast      — Q&A, tiny tweaks, no layout redesign
+  - standard  — typical canvas edits / moderate posters
+  - reasoning — blank create, multi-artboard, design systems, hard multi-step
+  - vision    — must understand attached images
+  - image     — image-generation catalog slot (not a text chat lane)
+
+Legacy Admin keys ``simple|medium|complex`` still parse → ``fast|standard|reasoning``.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 
-STRUCTURE_CATEGORIES = {"plan", "layout", "element", "color"}
-ADVANCED_CATEGORIES = {"validate", "render", "refine", "typography"}
+ROUTE_LANES = ("fast", "standard", "reasoning", "vision")
+IMAGE_SLOT = "image"
+
+# Old product keys → new lanes (read path only).
+_LEGACY_LANE_ALIASES = {
+    "simple": "fast",
+    "medium": "standard",
+    "complex": "reasoning",
+    "else": "standard",
+}
+
+LANE_LABELS_ZH = {
+    "fast": "轻量",
+    "standard": "标准",
+    "reasoning": "推理",
+    "vision": "看图",
+    "image": "生图",
+}
+
+_ROUTER_SYSTEM_KEY = "precheck.router_system"
+
+
+class ModelRouteDecision(BaseModel):
+    """Structured router output (LangChain ``response_format`` / ``with_structured_output``)."""
+
+    lane: Literal["fast", "standard", "reasoning", "vision"] = Field(
+        description="Model lane for this turn",
+    )
+    needs_image_gen: bool = Field(
+        default=False,
+        description="True when the user needs AI image generation",
+    )
+    rationale: str = Field(
+        default="",
+        description="Short reason for the lane choice",
+    )
 
 
 def _split_list(raw: str, seps: str = "|;,") -> list[str]:
@@ -24,172 +68,127 @@ def _split_list(raw: str, seps: str = "|;,") -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def parse_tier_thresholds(rules: dict[str, str] | None) -> tuple[int, int]:
-    medium_min, complex_min = 80, 280
-    raw = str((rules or {}).get("precheck.tier_thresholds") or "").strip()
-    for part in raw.split(";"):
-        part = part.strip()
-        if "=" not in part:
-            continue
-        k, v = part.split("=", 1)
-        k, v = k.strip().lower(), v.strip()
-        try:
-            n = int(v)
-        except ValueError:
-            continue
-        if k in ("medium_min", "medium"):
-            medium_min = max(1, n)
-        elif k in ("complex_min", "complex"):
-            complex_min = max(medium_min + 1, n)
-    return medium_min, complex_min
+def normalize_lane(raw: str | None) -> str:
+    s = str(raw or "").strip().lower()
+    if not s:
+        return "standard"
+    s = _LEGACY_LANE_ALIASES.get(s, s)
+    if s in ROUTE_LANES or s == IMAGE_SLOT:
+        return s
+    return "standard"
 
 
-def parse_model_routes(rules: dict[str, str] | None) -> dict[str, str]:
-    raw = str((rules or {}).get("precheck.model_threshold") or "").strip()
+def parse_model_lanes(rules: dict[str, str] | None) -> dict[str, str]:
+    """Parse Admin lane→model map from ``precheck.model_threshold`` (or ``model_lanes``)."""
+    raw = str(
+        (rules or {}).get("precheck.model_lanes")
+        or (rules or {}).get("precheck.model_threshold")
+        or ""
+    ).strip()
     out: dict[str, str] = {}
     if not raw:
-        return out
+        return {
+            "fast": "doubao-seed-2-1-turbo",
+            "standard": "deepseek-v4-flash",
+            "reasoning": "deepseek-v4-pro",
+            "vision": "doubao-seed-2-1-turbo",
+            "image": "doubao-seedream-5-0-lite",
+            "else": "deepseek-v4-flash",
+        }
     for part in raw.split(";"):
         part = part.strip()
         if not part or "->" not in part:
             continue
         left, right = part.split("->", 1)
-        left, right = left.strip().lower(), right.strip()
-        if left and right:
-            out[left] = right
+        key = normalize_lane(left.strip().lower())
+        # Preserve explicit vision/image keys; normalize_lane maps else→standard.
+        left_l = left.strip().lower()
+        if left_l in ("vision", "image"):
+            key = left_l
+        elif left_l == "else":
+            key = "else"
+        val = right.strip()
+        if key and val:
+            out[key] = val
+    # Promote legacy-only maps that never used new names.
+    for legacy, lane in (("simple", "fast"), ("medium", "standard"), ("complex", "reasoning")):
+        if lane not in out:
+            # Re-parse raw for un-normalized legacy keys.
+            for part in raw.split(";"):
+                part = part.strip()
+                if not part or "->" not in part:
+                    continue
+                left, right = part.split("->", 1)
+                if left.strip().lower() == legacy and right.strip():
+                    out.setdefault(lane, right.strip())
     if "else" in out:
-        for tier in ("simple", "medium"):
-            out.setdefault(tier, out["else"])
+        out.setdefault("fast", out["else"])
+        out.setdefault("standard", out["else"])
+    out.setdefault(
+        "else",
+        out.get("standard") or out.get("reasoning") or out.get("fast") or "deepseek-v4-flash",
+    )
     return out
+
+
+# Back-compat alias used by older imports / Admin copy.
+def parse_model_routes(rules: dict[str, str] | None) -> dict[str, str]:
+    return parse_model_lanes(rules)
 
 
 def parse_fallback_chain(rules: dict[str, str] | None) -> list[str]:
     raw = str((rules or {}).get("precheck.fallback_chain") or "").strip()
     if not raw:
-        routes = parse_model_routes(rules)
+        lanes = parse_model_lanes(rules)
         chain: list[str] = []
-        for k in ("complex", "medium", "else", "simple"):
-            m = routes.get(k)
+        for k in ("reasoning", "standard", "else", "fast"):
+            m = lanes.get(k)
             if m and m not in chain:
                 chain.append(m)
         return chain
     return _split_list(raw, "|;,")
 
 
-def _keyword_hits(prompt: str, pattern: str) -> int:
-    if not pattern or not prompt:
-        return 0
-    try:
-        return len(re.findall(pattern, prompt, flags=re.I))
-    except re.error:
-        return 0
+def enabled_lanes(rules: dict[str, str] | None) -> list[str]:
+    raw = str(
+        (rules or {}).get("precheck.route_lanes")
+        or (rules or {}).get("precheck.task_tiers")
+        or "fast|standard|reasoning|vision"
+    ).strip()
+    lanes = [normalize_lane(x) for x in _split_list(raw, "|;,")]
+    # Drop image from chat lanes if present.
+    lanes = [x for x in lanes if x in ROUTE_LANES]
+    return lanes or ["fast", "standard", "reasoning", "vision"]
 
 
-def _default_complex_kw() -> str:
-    # Chinese + English banks (unicode escapes keep file ASCII-safe)
-    return (
-        "\u591a\u753b\u677f|\u6574\u9875|\u54c1\u724c\u7cfb\u7edf|design system|dashboard|"
-        "\u6570\u636e\u770b\u677f|\u7ec4\u4ef6\u5e93|\u8bbe\u8ba1\u89c4\u8303|\u54cd\u5e94\u5f0f|"
-        "\u591a\u7aef|\u65e0\u969c\u788d|\u5370\u5237|\u51fa\u8840|\u4e13\u8272|\u590d\u6742\u4ea4\u4e92|"
-        "\u5b8c\u6574\u540e\u53f0|\u591a\u9875\u9762"
-    )
+# Back-compat
+def enabled_tiers(rules: dict[str, str] | None) -> list[str]:
+    return enabled_lanes(rules)
 
 
-def _default_medium_kw() -> str:
-    return (
-        "\u6d77\u62a5|banner|\u914d\u8272|\u56fe\u6807\u7ec4|\u63d2\u753b\u7ec4|\u767b\u5f55\u9875|"
-        "\u843d\u5730\u9875|landing|\u5361\u7247|\u6a21\u5757|\u7248\u5f0f|\u6807\u9898\u5c42\u7ea7|"
-        "\u4e3b\u89c6\u89c9|\u4fc3\u9500"
-    )
-
-
-def estimate_task_tier(
-    prompt: str,
-    *,
-    rules: dict[str, str] | None = None,
-    skill_category: str | None = None,
-    scene: str | None = None,
-) -> str:
-    """Multi-signal tier: length + keywords + category/scene bumps."""
-    text = (prompt or "").strip()
-    n = len(text)
-    medium_min, complex_min = parse_tier_thresholds(rules)
-    score = 0
-
-    if n >= complex_min:
-        score += 2
-    elif n >= medium_min:
-        score += 1
-
-    complex_kw = (rules or {}).get("precheck.complex_keywords") or _default_complex_kw()
-    medium_kw = (rules or {}).get("precheck.medium_keywords") or _default_medium_kw()
-    c_hits = _keyword_hits(text, complex_kw)
-    m_hits = _keyword_hits(text, medium_kw)
-    if c_hits >= 2:
-        score += 2
-    elif c_hits == 1:
-        score += 1
-    if m_hits >= 2 and score < 2:
-        score += 1
-
-    cat = (skill_category or "").strip().lower()
-    if cat in ADVANCED_CATEGORIES:
-        score += 1
-    if cat in ("validate", "refine"):
-        score += 1
-
-    sc = (scene or "").strip().lower()
-    if sc in ("website", "mobile") and n >= medium_min:
-        score += 1
-
-    if score >= 3:
-        return "complex"
-    if score >= 1:
-        return "medium"
-    return "simple"
-
-
-def clamp_tier(tier: str, enabled: list[str] | None) -> str:
-    t = (tier or "simple").lower()
+def clamp_lane(lane: str, enabled: list[str] | None) -> str:
+    t = normalize_lane(lane)
+    if t == "vision" and (not enabled or "vision" in [x.lower() for x in (enabled or [])]):
+        if not enabled or "vision" in [x.lower() for x in enabled]:
+            return "vision"
     if not enabled:
-        return t
-    enabled_l = [x.lower() for x in enabled]
+        return t if t in ROUTE_LANES else "standard"
+    enabled_l = [normalize_lane(x) for x in enabled]
     if t in enabled_l:
         return t
-    order = ["complex", "medium", "simple"]
+    order = ["reasoning", "standard", "fast", "vision"]
     try:
         idx = order.index(t)
     except ValueError:
-        idx = 2
+        idx = 1
     for cand in order[idx:]:
         if cand in enabled_l:
             return cand
-    return enabled_l[-1]
+    return enabled_l[0]
 
 
-def enabled_tiers(rules: dict[str, str] | None) -> list[str]:
-    raw = str((rules or {}).get("precheck.task_tiers") or "simple|medium|complex").strip()
-    tiers = [x.lower() for x in _split_list(raw, "|;,")]
-    return tiers or ["simple", "medium", "complex"]
-
-
-def family_from_precheck(
-    prompt: str,
-    rules: dict[str, str] | None,
-    *,
-    skill_category: str | None = None,
-    scene: str | None = None,
-) -> tuple[str | None, str]:
-    """Return (model_ref, tier)."""
-    routes = parse_model_routes(rules)
-    tier = estimate_task_tier(
-        prompt, rules=rules, skill_category=skill_category, scene=scene
-    )
-    tier = clamp_tier(tier, enabled_tiers(rules))
-    if not routes:
-        return None, tier
-    model = routes.get(tier) or routes.get("else")
-    return model, tier
+def clamp_tier(tier: str, enabled: list[str] | None) -> str:
+    return clamp_lane(tier, enabled)
 
 
 def pick_fallback_model(
@@ -211,7 +210,6 @@ def normalize_model_ref(selected: str | None) -> str:
     s = str(selected if selected is not None else "auto").strip().lower()
     if not s or s == "auto":
         return "auto"
-    # Legacy family aliases — keep as aliases; concrete routing happens in resolve.
     if s in ("doubao-seed", "doubao-pro"):
         return "doubao"
     if s in ("deepseek-chat", "deepseek-reasoner"):
@@ -223,8 +221,6 @@ def _is_concrete(ref: str) -> bool:
     return ref not in ("doubao", "deepseek", "auto", "glm", "kimi") and bool(ref)
 
 
-# Catalog ids that accept multimodal image_url (Ark Seed 2.1 Pro / Turbo).
-# Official Ark example uses doubao-seed-2-1-turbo-260628 with image_url.
 _VISION_MODEL_IDS = frozenset(
     {
         "doubao-seed-2-1-pro",
@@ -246,7 +242,16 @@ def model_supports_vision(model_ref: str | None) -> bool:
     ref = str(model_ref or "").strip().lower()
     if not ref or "seedream" in ref:
         return False
-    # Seed 2.0 Mini / flash / text-only — never treat as vision.
+    try:
+        from services.llm.catalog_store import get_model
+
+        item = get_model(ref)
+        if item:
+            types = item.get("referenceTypes") or item.get("reference_types") or []
+            if isinstance(types, list) and types:
+                return "vision" in types
+    except Exception:
+        pass
     if "mini" in ref or "flash" in ref:
         return False
     if ref in _VISION_MODEL_IDS:
@@ -255,18 +260,19 @@ def model_supports_vision(model_ref: str | None) -> bool:
 
 
 def _vision_ok(model_ref: str | None) -> bool:
-    """Reload-safe wrapper — never bind the public name as a local."""
     return model_supports_vision(model_ref)
 
 
 def resolve_vision_model(rules: dict[str, str] | None) -> str:
-    """Pick vision chat model from precheck rules (not a hardcoded constant)."""
     candidates: list[str] = []
     raw = str((rules or {}).get("precheck.vision_model") or "").strip()
     if raw:
         candidates.append(raw)
+    lanes = parse_model_lanes(rules)
+    if lanes.get("vision"):
+        candidates.append(lanes["vision"])
     candidates.extend(parse_fallback_chain(rules))
-    candidates.extend(parse_model_routes(rules).values())
+    candidates.extend(lanes.values())
     for mid in candidates:
         if _vision_ok(mid):
             return mid
@@ -279,14 +285,13 @@ def ensure_vision_model(
     has_images: bool,
     rules: dict[str, str] | None = None,
     prefer: str | None = None,
+    allow_switch: bool = True,
 ) -> tuple[str, str | None]:
-    """
-    If images are attached and model cannot see them, switch via precheck.vision_model.
-    Returns (model_ref, override_reason_or_none).
-    """
     if not has_images:
         return model_ref, None
     if _vision_ok(model_ref):
+        return model_ref, None
+    if not allow_switch:
         return model_ref, None
     vision = (prefer or "").strip()
     if not _vision_ok(vision):
@@ -298,56 +303,298 @@ def ensure_vision_model(
     return vision, f"precheck_vision_from_{normalize_model_ref(model_ref)}"
 
 
+def is_user_locked_model(user_selected_model: str | None) -> bool:
+    return _is_concrete(normalize_model_ref(user_selected_model))
+
+
+def pin_user_locked_model_routes(
+    rules: dict[str, str] | None,
+    user_selected_model: str | None,
+) -> dict[str, str]:
+    """Lock: all lanes + vision + fallback pin to the concrete catalog id."""
+    out = dict(rules or {})
+    mid = normalize_model_ref(user_selected_model)
+    if not _is_concrete(mid):
+        return out
+    out["precheck.model_threshold"] = (
+        f"fast->{mid};standard->{mid};reasoning->{mid};else->{mid}"
+    )
+    out["precheck.model_lanes"] = out["precheck.model_threshold"]
+    out["precheck.vision_model"] = mid
+    out["precheck.fallback_chain"] = mid
+    return out
+
+
 def apply_user_route_overrides(
     rules: dict[str, str] | None,
     overrides: dict[str, Any] | None,
 ) -> dict[str, str]:
-    """
-    Merge end-user Auto routing prefs into a copy of platform rules.
-
-    Allowed keys only: simple / medium / complex / vision / image.
-    Never accept fallback_chain, retry, keywords, thresholds, or blocks from clients.
-    """
+    """Merge user Auto prefs. Accepts new lanes and legacy simple/medium/complex."""
     out = dict(rules or {})
     if not overrides or not isinstance(overrides, dict):
         return out
 
-    routes = parse_model_routes(out)
-    for tier in ("simple", "medium", "complex"):
-        raw = overrides.get(tier)
+    lanes = parse_model_lanes(out)
+    for key in ("fast", "standard", "reasoning", "simple", "medium", "complex"):
+        raw = overrides.get(key)
         mid = str(raw or "").strip()
         if mid and mid.lower() not in ("auto", "platform", "default"):
-            routes[tier] = mid
-    if routes:
-        # Preserve else if present; otherwise derive from medium/complex.
-        if "else" not in routes:
-            routes["else"] = (
-                routes.get("medium")
-                or routes.get("complex")
-                or routes.get("simple")
+            lanes[normalize_lane(key)] = mid
+    if lanes:
+        if "else" not in lanes:
+            lanes["else"] = (
+                lanes.get("standard")
+                or lanes.get("reasoning")
+                or lanes.get("fast")
                 or resolve_vision_model(out)
             )
-        out["precheck.model_threshold"] = ";".join(
-            f"{k}->{v}" for k, v in routes.items() if k and v
+        serialized = ";".join(
+            f"{k}->{v}"
+            for k, v in lanes.items()
+            if k and v and k in ("fast", "standard", "reasoning", "else", "vision", "image")
         )
+        out["precheck.model_threshold"] = serialized
+        out["precheck.model_lanes"] = serialized
 
     vision = str(
-        overrides.get("vision")
-        or overrides.get("vision_model")
-        or ""
+        overrides.get("vision") or overrides.get("vision_model") or ""
     ).strip()
     if vision and vision.lower() not in ("auto", "platform", "default"):
         out["precheck.vision_model"] = vision
 
     image = str(
-        overrides.get("image")
-        or overrides.get("image_default_model")
-        or ""
+        overrides.get("image") or overrides.get("image_default_model") or ""
     ).strip()
     if image and image.lower() not in ("auto", "platform", "default"):
         out["assets.image_default_model"] = image
 
     return out
+
+
+def heuristic_route_lane(
+    prompt: str,
+    *,
+    has_images: bool = False,
+    canvas_node_count: int = 0,
+    scene: str | None = None,
+) -> ModelRouteDecision:
+    """Deterministic fallback when the LLM router is unavailable."""
+    text = (prompt or "").strip()
+    n = len(text)
+    low = text.lower()
+
+    if has_images and (
+        n >= 20
+        or any(
+            k in text
+            for k in (
+                "参考",
+                "风格",
+                "看图",
+                "附件",
+                "截图",
+                "仿",
+                "match",
+                "style",
+                "reference",
+                "screenshot",
+            )
+        )
+    ):
+        return ModelRouteDecision(
+            lane="vision",
+            needs_image_gen=False,
+            rationale="heuristic: images + understand intent",
+        )
+
+    gen_hints = (
+        "生成图",
+        "生图",
+        "ai图",
+        "文生图",
+        "generate image",
+        "text to image",
+        "seedream",
+    )
+    needs_img = any(h in low or h in text for h in gen_hints)
+
+    create_hints = (
+        "从零",
+        "空白",
+        "整页",
+        "多画板",
+        "设计系统",
+        "整站",
+        "dashboard",
+        "design system",
+        "from scratch",
+        "blank",
+    )
+    emptyish = canvas_node_count <= 2
+    if emptyish and (n >= 60 or any(h in low or h in text for h in create_hints)):
+        return ModelRouteDecision(
+            lane="reasoning",
+            needs_image_gen=needs_img,
+            rationale="heuristic: empty/create-heavy",
+        )
+    if n >= 220 or any(h in low or h in text for h in create_hints):
+        return ModelRouteDecision(
+            lane="reasoning",
+            needs_image_gen=needs_img,
+            rationale="heuristic: long/complex ask",
+        )
+    if n < 40 and canvas_node_count > 0:
+        return ModelRouteDecision(
+            lane="fast",
+            needs_image_gen=needs_img,
+            rationale="heuristic: short edit on existing canvas",
+        )
+    sc = (scene or "").strip().lower()
+    if sc in ("website", "mobile") and n >= 80:
+        return ModelRouteDecision(
+            lane="reasoning",
+            needs_image_gen=needs_img,
+            rationale="heuristic: website/mobile scope",
+        )
+    return ModelRouteDecision(
+        lane="standard",
+        needs_image_gen=needs_img,
+        rationale="heuristic: default standard",
+    )
+
+
+def estimate_task_tier(
+    prompt: str,
+    *,
+    rules: dict[str, str] | None = None,
+    skill_category: str | None = None,
+    scene: str | None = None,
+    has_images: bool = False,
+    canvas_node_count: int = 0,
+) -> str:
+    """Back-compat name → returns a lane id (fast|standard|reasoning|vision)."""
+    del rules, skill_category
+    return heuristic_route_lane(
+        prompt,
+        has_images=has_images,
+        canvas_node_count=canvas_node_count,
+        scene=scene,
+    ).lane
+
+
+def model_for_lane(
+    lane: str,
+    rules: dict[str, str] | None,
+) -> str:
+    lanes = parse_model_lanes(rules)
+    key = normalize_lane(lane)
+    if key == "vision":
+        return (
+            str((rules or {}).get("precheck.vision_model") or "").strip()
+            or lanes.get("vision")
+            or resolve_vision_model(rules)
+        )
+    return lanes.get(key) or lanes.get("else") or lanes.get("standard") or "deepseek-v4-flash"
+
+
+def family_from_precheck(
+    prompt: str,
+    rules: dict[str, str] | None,
+    *,
+    skill_category: str | None = None,
+    scene: str | None = None,
+    has_images: bool = False,
+    canvas_node_count: int = 0,
+    route_lane: str | None = None,
+) -> tuple[str | None, str]:
+    """Return (model_ref, lane). Uses ``route_lane`` when provided (from LLM router)."""
+    del skill_category
+    if route_lane:
+        lane = clamp_lane(route_lane, enabled_lanes(rules))
+    else:
+        lane = clamp_lane(
+            heuristic_route_lane(
+                prompt,
+                has_images=has_images,
+                canvas_node_count=canvas_node_count,
+                scene=scene,
+            ).lane,
+            enabled_lanes(rules),
+        )
+    return model_for_lane(lane, rules), lane
+
+
+def router_model_id(rules: dict[str, str] | None) -> str:
+    """Cheap model for the LangChain structured router call."""
+    raw = str((rules or {}).get("precheck.router_model") or "").strip()
+    if raw:
+        return raw
+    lanes = parse_model_lanes(rules)
+    return lanes.get("fast") or lanes.get("else") or "doubao-seed-2-1-turbo"
+
+
+async def classify_model_route(
+    *,
+    prompt: str,
+    rules: dict[str, str] | None = None,
+    has_images: bool = False,
+    canvas_node_count: int = 0,
+    scene: str | None = None,
+    interaction_mode: str | None = None,
+) -> ModelRouteDecision:
+    """LangChain structured router. Falls back to ``heuristic_route_lane`` on error."""
+    fallback = heuristic_route_lane(
+        prompt,
+        has_images=has_images,
+        canvas_node_count=canvas_node_count,
+        scene=scene,
+    )
+    # Ask / no-paint UI mode: stay cheap unless images need understanding.
+    mode = str(interaction_mode or "").strip().lower()
+    if mode == "ask" and not has_images:
+        return ModelRouteDecision(
+            lane="fast",
+            needs_image_gen=False,
+            rationale="ask mode → fast",
+        )
+
+    user_blob = (
+        f"scene={scene or 'unknown'}\n"
+        f"has_images={bool(has_images)}\n"
+        f"canvas_node_count={int(canvas_node_count)}\n"
+        f"interaction_mode={mode or 'agent'}\n"
+        f"user_prompt:\n{(prompt or '').strip()[:4000]}"
+    )
+    try:
+        from services.design.rules_text import _rule_text
+        from services.llm.agent import ainvoke_structured
+
+        router_system = _rule_text(rules, _ROUTER_SYSTEM_KEY).strip()
+        out = await ainvoke_structured(
+            schema=ModelRouteDecision,
+            messages=[{"role": "user", "content": user_blob}],
+            model=router_model_id(rules),
+            system=router_system,
+            source="model_route",
+        )
+        structured = out.get("structured")
+        if isinstance(structured, ModelRouteDecision):
+            decision = structured
+        elif isinstance(structured, dict):
+            decision = ModelRouteDecision.model_validate(structured)
+        else:
+            return fallback
+        lane = clamp_lane(decision.lane, enabled_lanes(rules))
+        # Soft force vision when images present and classifier picked fast with long prompt.
+        if has_images and lane == "fast" and len((prompt or "").strip()) >= 80:
+            lane = "vision"
+        return ModelRouteDecision(
+            lane=lane,  # type: ignore[arg-type]
+            needs_image_gen=bool(decision.needs_image_gen),
+            rationale=(decision.rationale or "").strip() or "llm_router",
+        )
+    except Exception:
+        return fallback
 
 
 def resolve_model_for_skill(
@@ -361,67 +608,71 @@ def resolve_model_for_skill(
     scene: str | None = None,
     attempt: int = 0,
     has_images: bool = False,
+    canvas_node_count: int = 0,
+    route_lane: str | None = None,
 ) -> tuple[str, str]:
-    """Returns (model_ref, reason). Auto mode always follows precheck routes."""
+    """Returns (model_ref, reason). Auto follows lane map; lock skips classifier."""
+    del is_premium
     selected = normalize_model_ref(user_selected_model)
-    category = str(skill.get("category") or "")
     skill_default = str(skill.get("default_model") or "doubao").strip().lower() or "doubao"
 
     def from_precheck(reason_prefix: str) -> tuple[str, str]:
-        pre, tier = family_from_precheck(
-            prompt, rules, skill_category=category, scene=scene
+        pre, lane = family_from_precheck(
+            prompt,
+            rules,
+            scene=scene,
+            has_images=has_images,
+            canvas_node_count=canvas_node_count,
+            route_lane=route_lane,
         )
         primary = pre or skill_default
         if primary in ("doubao", "deepseek", "glm", "kimi"):
-            # Expand family alias via routes.else / complex / fallback head.
-            routes = parse_model_routes(rules)
+            lanes = parse_model_lanes(rules)
             primary = (
-                routes.get("else")
-                or routes.get("medium")
-                or routes.get("complex")
+                lanes.get("else")
+                or lanes.get("standard")
+                or lanes.get("reasoning")
                 or (parse_fallback_chain(rules) or [primary])[0]
             )
         chosen = pick_fallback_model(primary, rules, attempt=attempt)
-        reason = f"{reason_prefix}_{tier}"
+        reason = f"{reason_prefix}_{lane}"
         if attempt > 0 and chosen != primary:
-            reason = f"{reason_prefix}_fallback_{tier}_attempt_{attempt}"
+            reason = f"{reason_prefix}_fallback_{lane}_attempt_{attempt}"
         if has_images and not _vision_ok(chosen):
             vision = resolve_vision_model(rules)
             return vision, f"{reason}+precheck_vision"
+        if lane == "vision" and not _vision_ok(chosen):
+            return resolve_vision_model(rules), f"{reason}+lane_vision"
         return chosen, reason
 
     if run_mode == "single_model":
         if _is_concrete(selected):
-            chosen = selected
-            reason = "user_single_model"
-        elif selected in ("doubao", "deepseek", "glm", "kimi", "auto") or not selected:
+            if has_images and not _vision_ok(selected):
+                return resolve_vision_model(rules), "user_single_model+precheck_vision"
+            return selected, "user_single_model"
+        if selected in ("doubao", "deepseek", "glm", "kimi", "auto") or not selected:
             return from_precheck("single_precheck")
-        else:
-            chosen, reason = skill_default, "single_model_fallback_default"
+        chosen, reason = skill_default, "single_model_fallback_default"
         if has_images and not _vision_ok(chosen):
             return resolve_vision_model(rules), f"{reason}+precheck_vision"
         return chosen, reason
 
     if run_mode == "partial":
         if _is_concrete(selected):
-            chosen, reason = selected, "user_partial_priority"
-        else:
-            return from_precheck("partial_precheck")
-        if has_images and not _vision_ok(chosen):
-            return resolve_vision_model(rules), f"{reason}+precheck_vision"
-        return chosen, reason
+            if has_images and not _vision_ok(selected):
+                return resolve_vision_model(rules), "user_partial_priority+precheck_vision"
+            return selected, "user_partial_priority"
+        return from_precheck("partial_precheck")
 
-    # Agent / default: Auto and family aliases → precheck matrix (never hardcode one model).
     if selected in ("auto", "doubao", "deepseek", "glm", "kimi") or not selected:
-        return from_precheck("precheck_tier")
+        return from_precheck("precheck_lane")
 
-    # User locked a concrete catalog id — respect it (vision gate may still switch).
     if _is_concrete(selected):
         if has_images and not _vision_ok(selected):
             return resolve_vision_model(rules), "user_locked+precheck_vision"
         return selected, "user_locked"
 
-    return from_precheck("precheck_tier")
+    return from_precheck("precheck_lane")
 
 
 def to_endpoint_model_id(model_ref: str) -> str:
@@ -431,9 +682,9 @@ def to_endpoint_model_id(model_ref: str) -> str:
     if ref == "doubao":
         return "doubao-seed-2-1-turbo"
     if ref == "glm":
-        return "glm-5-2"
+        return "deepseek-v4-flash"
     if ref == "kimi":
-        return "kimi-k2-thinking"
+        return "deepseek-v4-pro"
     if ref:
         return ref
     return "doubao-seed-2-1-turbo"

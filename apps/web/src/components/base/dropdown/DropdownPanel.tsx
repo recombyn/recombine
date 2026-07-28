@@ -12,8 +12,7 @@ type DropdownPanelProps = HTMLAttributes<HTMLDivElement> & {
 };
 
 /**
- * Shared floating menu shell — 4px radius, opaque surface fill, ring + shadow.
- * Use for base Dropdown and any custom editor dropdown panels.
+ * Shared floating menu shell — xl radius (size / agent popovers), opaque fill + shadow.
  */
 export const DropdownPanel = forwardRef<HTMLDivElement, DropdownPanelProps>(
   function DropdownPanel({ className, children, style, ...rest }, ref) {
@@ -21,7 +20,7 @@ export const DropdownPanel = forwardRef<HTMLDivElement, DropdownPanelProps>(
       <div
         ref={ref}
         className={cn(
-          'flex flex-col gap-0.5 overflow-hidden rounded-[4px] bg-[var(--surface)] p-1',
+          'flex flex-col gap-0.5 overflow-hidden rounded-xl bg-[var(--surface)] p-1',
           'shadow-[0_8px_28px_rgba(15,23,42,0.16)] ring-1 ring-[var(--line)]',
           'focus:outline-none focus-visible:outline-none',
           className
@@ -56,7 +55,7 @@ export const DropdownPanelItem = forwardRef<HTMLButtonElement, DropdownPanelItem
         disabled={disabled}
         aria-selected={selected}
         className={cn(
-          'flex h-8 w-full shrink-0 items-center gap-2 rounded-[4px] px-2.5 text-left text-[12px] font-medium text-[var(--ink)] transition-colors',
+          'flex h-8 w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left text-[12px] font-medium text-[var(--ink)] transition-colors',
           disabled && 'cursor-not-allowed opacity-50',
           !disabled && (selected ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'),
           className

@@ -5,82 +5,199 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineTrash } from 'react-icons/hi2';
-import { fetchLlmModels, type LlmModel } from '@/apis/chat';
-import { Select } from '@/components/base';
-import PlansDialog from '@/components/layout/PlansDialog';
+import { HiChevronLeft, HiChevronRight, HiOutlineTrash } from 'react-icons/hi2';
+import { listModels, type LlmModel } from '@/apis/chat';
+import { modelAllowsRouteSlot } from '@/components/editor/panels/agent/llmModelMeta';
+import { fetchDesignCatalog } from '@/apis/design';
+import { Dropdown, SegmentedControl, Select, Tooltip } from '@/components/base';
+import AccountSettingsDialog from '@/components/layout/AccountSettingsDialog';
 import { cn } from '@/utils/classnames';
-import { planHasProFeatures, type PlanId } from '@/utils/wallet';
+import { planAllowsCustomModels, type PlanId } from '@/utils/wallet';
 import {
   createCustomLlmProviderId,
   loadCustomLlmProviders,
   saveCustomLlmProviders,
   type CustomLlmProvider,
+  type CustomModelKind,
 } from './customLlmProviders';
+import {
+  AGENT_ROUTE_POPOVER_PANEL,
+  AGENT_ROUTE_PRESET_PANEL,
+  AGENT_ROUTE_SUBMENU_PANEL,
+  ModelBrandIcon,
+  ModelMetaBadge,
+  ModelPriceTag,
+  isUserCustomModel,
+  modelDescription,
+  modelPriceTagInfo,
+} from './ModelPickerPanel';
 
+const NARROW_MQ = '(max-width: 767px)';
+
+function useNarrowViewport() {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(NARROW_MQ).matches : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_MQ);
+    const sync = () => setNarrow(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+  return narrow;
+}
 type Props = {
   onProvidersChange?: () => void;
+  /** When set (e.g. inside settings modal), open plans tab instead of nested dialog. */
+  onRequestUpgrade?: () => void;
 };
 
 export type AgentRoutePreset = 'platform' | 'economy' | 'balanced' | 'quality' | 'custom';
 
 export type AgentRoutePrefs = {
   preset: AgentRoutePreset;
-  simple?: string;
-  medium?: string;
-  complex?: string;
+  fast?: string;
+  standard?: string;
+  reasoning?: string;
   vision?: string;
   image?: string;
 };
 
-const ROUTE_PREFS_KEY = 'resume.agentRoutePrefs.v1';
+const ROUTE_PREFS_KEY = 'resume.agentRoutePrefs.v2';
+const ROUTE_PREFS_KEY_LEGACY = 'resume.agentRoutePrefs.v1';
 
-const ROUTE_PRESETS: Record<Exclude<AgentRoutePreset, 'platform' | 'custom'>, AgentRoutePrefs> = {
+/** Code fallback if Admin has not seeded precheck.user_preset.* yet. */
+const ROUTE_PRESETS_FALLBACK: Record<
+  Exclude<AgentRoutePreset, 'platform' | 'custom'>,
+  AgentRoutePrefs
+> = {
+  /** Legacy key — same domestic ladder as 标准版 platform defaults. */
   economy: {
     preset: 'economy',
-    simple: 'doubao-seed-2-1-turbo',
-    medium: 'doubao-seed-2-1-turbo',
-    complex: 'deepseek-v4-flash',
+    fast: 'doubao-seed-2-1-turbo',
+    standard: 'deepseek-v4-flash',
+    reasoning: 'deepseek-v4-pro',
     vision: 'doubao-seed-2-1-turbo',
     image: 'doubao-seedream-5-0-lite',
   },
   balanced: {
     preset: 'balanced',
-    simple: 'doubao-seed-2-1-turbo',
-    medium: 'glm-5-2',
-    complex: 'deepseek-v4-pro',
-    vision: 'doubao-seed-2-1-pro',
-    image: 'doubao-seedream-5-0-lite',
+    fast: 'doubao-seed-2-1-turbo',
+    standard: 'or-gpt-5-6-luna',
+    reasoning: 'or-gemini-3-flash-preview',
+    vision: 'or-gemini-3-flash-preview',
+    image: 'or-gpt-image-2',
   },
   quality: {
     preset: 'quality',
-    simple: 'doubao-seed-2-1-pro',
-    medium: 'glm-5-2',
-    complex: 'deepseek-v4-pro',
-    vision: 'doubao-seed-2-1-pro',
-    image: 'doubao-seedream-5-0-pro',
+    fast: 'or-gemini-3-flash-preview',
+    standard: 'or-gemini-3-5-flash',
+    reasoning: 'or-gpt-5-6-sol',
+    vision: 'or-gemini-3-5-flash',
+    image: 'or-gpt-image-2',
   },
 };
 
-export function loadAgentRoutePrefs(): AgentRoutePrefs {
-  try {
-    const raw = localStorage.getItem(ROUTE_PREFS_KEY);
-    if (!raw) return { preset: 'platform' };
-    const parsed = JSON.parse(raw) as AgentRoutePrefs;
-    if (!parsed || typeof parsed !== 'object') return { preset: 'platform' };
-    const preset = (parsed.preset || 'platform') as AgentRoutePreset;
-    if (preset === 'platform') return { preset: 'platform' };
-    if (preset !== 'custom' && ROUTE_PRESETS[preset]) {
-      return { ...ROUTE_PRESETS[preset] };
+let cachedPresetRules: Record<string, string> | null = null;
+
+function migrateLegacyRouteKeys(
+  raw: Record<string, unknown>
+): Partial<AgentRoutePrefs> {
+  const out: Partial<AgentRoutePrefs> = {};
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = String(raw[k] || '').trim();
+      if (v) return v;
     }
-    return {
-      preset: 'custom',
-      simple: String(parsed.simple || ''),
-      medium: String(parsed.medium || ''),
-      complex: String(parsed.complex || ''),
-      vision: String(parsed.vision || ''),
-      image: String(parsed.image || ''),
-    };
+    return undefined;
+  };
+  out.fast = pick('fast', 'simple');
+  out.standard = pick('standard', 'medium');
+  out.reasoning = pick('reasoning', 'complex');
+  out.vision = pick('vision');
+  out.image = pick('image');
+  return out;
+}
+
+function parseUserPresetRoutes(raw: string): Partial<AgentRoutePrefs> {
+  const bag: Record<string, unknown> = {};
+  for (const part of String(raw || '').split(';')) {
+    const p = part.trim();
+    if (!p.includes('->')) continue;
+    const [left, right] = p.split('->', 2).map((s) => s.trim());
+    const key = left.toLowerCase();
+    const val = (right || '').trim();
+    if (!val) continue;
+    if (
+      key === 'fast' ||
+      key === 'standard' ||
+      key === 'reasoning' ||
+      key === 'simple' ||
+      key === 'medium' ||
+      key === 'complex' ||
+      key === 'vision' ||
+      key === 'image'
+    ) {
+      bag[key] = val;
+    }
+  }
+  return migrateLegacyRouteKeys(bag);
+}
+
+function resolveNamedPreset(
+  name: Exclude<AgentRoutePreset, 'platform' | 'custom'>,
+  rules?: Record<string, string> | null
+): AgentRoutePrefs {
+  const fallback = ROUTE_PRESETS_FALLBACK[name];
+  const source = rules ?? cachedPresetRules;
+  const raw = source?.[`precheck.user_preset.${name}`] || '';
+  const parsed = parseUserPresetRoutes(raw);
+  return {
+    preset: name,
+    fast: parsed.fast || fallback.fast,
+    standard: parsed.standard || fallback.standard,
+    reasoning: parsed.reasoning || fallback.reasoning,
+    vision: parsed.vision || fallback.vision,
+    image: parsed.image || fallback.image,
+  };
+}
+
+export function loadAgentRoutePrefs(
+  rules?: Record<string, string> | null
+): AgentRoutePrefs {
+  try {
+    const raw =
+      localStorage.getItem(ROUTE_PREFS_KEY) ||
+      localStorage.getItem(ROUTE_PREFS_KEY_LEGACY);
+    if (!raw) return { preset: 'platform' };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return { preset: 'platform' };
+    let preset = (String(parsed.preset || 'platform') || 'platform') as AgentRoutePreset;
+    if (preset === 'economy') {
+      preset = 'platform';
+      try {
+        localStorage.setItem(ROUTE_PREFS_KEY, JSON.stringify({ preset: 'platform' }));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (preset === 'platform') return { preset: 'platform' };
+    if (preset === 'balanced' || preset === 'quality') {
+      return resolveNamedPreset(preset, rules);
+    }
+    if (preset === 'custom') {
+      const migrated = migrateLegacyRouteKeys(parsed);
+      return {
+        preset: 'custom',
+        fast: migrated.fast,
+        standard: migrated.standard,
+        reasoning: migrated.reasoning,
+        vision: migrated.vision,
+        image: migrated.image,
+      };
+    }
+    return { preset: 'platform' };
   } catch {
     return { preset: 'platform' };
   }
@@ -100,15 +217,27 @@ export function routeOverridesForApi(
 ): Record<string, string> | null {
   if (!prefs || prefs.preset === 'platform') return null;
   const base =
-    prefs.preset !== 'custom' && ROUTE_PRESETS[prefs.preset]
-      ? ROUTE_PRESETS[prefs.preset]
+    prefs.preset === 'economy' ||
+    prefs.preset === 'balanced' ||
+    prefs.preset === 'quality'
+      ? resolveNamedPreset(prefs.preset)
       : prefs;
   const out: Record<string, string> = {};
-  for (const key of ['simple', 'medium', 'complex', 'vision', 'image'] as const) {
+  for (const key of ['fast', 'standard', 'reasoning', 'vision', 'image'] as const) {
     const v = String(base[key] || '').trim();
     if (v) out[key] = v;
   }
   return Object.keys(out).length ? out : null;
+}
+
+/** Warm Admin preset cache (call before send if panel not opened). */
+export async function warmAgentRoutePresetRules(): Promise<void> {
+  try {
+    const cat = await fetchDesignCatalog();
+    cachedPresetRules = cat.global_rules || {};
+  } catch {
+    /* keep fallback */
+  }
 }
 
 const fieldClass =
@@ -117,37 +246,86 @@ const fieldClass =
 const selectFieldClass =
   'mt-1.5 w-full !h-10 rounded-lg border-0 bg-[var(--account-main)] px-3 pr-8 text-[14px] text-[var(--ink)] ring-1 ring-[var(--line)]';
 
-function modelOptions(models: LlmModel[], kind: 'text' | 'image'): { id: string; label: string }[] {
-  return models
-    .filter((m) => (kind === 'image' ? m.kind === 'image' : m.kind !== 'image'))
-    .filter((m) => m.id && m.id !== 'auto')
-    .map((m) => ({ id: m.id, label: m.label || m.id }));
+function parseCustomModelKind(value: string): CustomModelKind {
+  if (value === 'vision') return 'vision';
+  return 'text';
 }
 
-export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNode {
+function customModelKindLabelKey(
+  kind: CustomModelKind
+): 'agent.providerModelKindText' | 'agent.providerModelKindVision' {
+  if (kind === 'vision') return 'agent.providerModelKindVision';
+  return 'agent.providerModelKindText';
+}
+
+function modelOptions(
+  models: LlmModel[],
+  slot: 'fast' | 'standard' | 'reasoning' | 'vision' | 'image'
+): { id: string; label: string }[] {
+  const seen = new Set<string>();
+  const out: { id: string; label: string }[] = [];
+  for (const m of models) {
+    if (!m.id || m.id === 'auto') continue;
+    if (!modelAllowsRouteSlot(m, slot)) continue;
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push({ id: m.id, label: m.label || m.id });
+  }
+  return out;
+}
+
+type AgentRoutePrefsEditorProps = {
+  /** Popover in agent dock / home — Lovart-style card (not account form). */
+  compact?: boolean;
+  /** Shown on the compact header left (Agent / Ask). */
+  modeLabel?: string;
+  className?: string;
+  /** Fired after prefs are written to localStorage. */
+  onChanged?: (prefs: AgentRoutePrefs) => void;
+};
+
+type CompactSubmenu =
+  | { kind: 'preset' }
+  | { kind: 'field'; key: 'fast' | 'standard' | 'reasoning' | 'vision' | 'image' }
+  | null;
+
+/**
+ * Auto routing prefs editor — shared by Account settings and Agent/Ask model popover.
+ * Same storage + presets as account.agentRoute* (platform / economy / balanced / quality / custom).
+ */
+export function AgentRoutePrefsEditor({
+  compact = false,
+  modeLabel,
+  className,
+  onChanged,
+}: AgentRoutePrefsEditorProps): ReactNode {
   const { t } = useTranslation();
-  const planId = useSelector((state: any) => (state.wallet?.planId as PlanId) || 'free');
-  const isPro = planHasProFeatures(planId);
-  const [providers, setProviders] = useState<CustomLlmProvider[]>([]);
-  const [name, setName] = useState('');
-  const [website, setWebsite] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [error, setError] = useState('');
-  const [plansOpen, setPlansOpen] = useState(false);
   const [routePrefs, setRoutePrefs] = useState<AgentRoutePrefs>({ preset: 'platform' });
   const [routeSaved, setRouteSaved] = useState(false);
   const [textModels, setTextModels] = useState<LlmModel[]>([]);
   const [imageModels, setImageModels] = useState<LlmModel[]>([]);
+  const [submenu, setSubmenu] = useState<CompactSubmenu>(null);
+  const narrow = useNarrowViewport();
 
   useEffect(() => {
-    setProviders(loadCustomLlmProviders());
     setRoutePrefs(loadAgentRoutePrefs());
+    let cancelled = false;
+    void fetchDesignCatalog()
+      .then((cat) => {
+        if (cancelled) return;
+        const rules = cat.global_rules || {};
+        cachedPresetRules = rules;
+        setRoutePrefs(loadAgentRoutePrefs(rules));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    void fetchLlmModels()
+    void listModels()
       .then((res) => {
         if (cancelled) return;
         setTextModels(res?.models || []);
@@ -159,50 +337,562 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
     };
   }, []);
 
+  const commit = (next: AgentRoutePrefs) => {
+    setRoutePrefs(next);
+    if (next.preset === 'custom') {
+      saveAgentRoutePrefs({
+        preset: 'custom',
+        fast: next.fast,
+        standard: next.standard,
+        reasoning: next.reasoning,
+        vision: next.vision,
+        image: next.image,
+      });
+    } else if (next.preset === 'balanced' || next.preset === 'quality') {
+      saveAgentRoutePrefs({ preset: next.preset });
+    } else {
+      saveAgentRoutePrefs({ preset: 'platform' });
+    }
+    setRouteSaved(true);
+    onChanged?.(next);
+  };
+
+  const applyPreset = (preset: AgentRoutePreset) => {
+    if (preset === 'custom') {
+      const seed =
+        routePrefs.preset === 'balanced' || routePrefs.preset === 'quality'
+          ? resolveNamedPreset(routePrefs.preset)
+          : routePrefs.preset === 'custom'
+            ? routePrefs
+            : resolveNamedPreset('balanced');
+      commit({
+        preset: 'custom',
+        fast: routePrefs.fast || seed.fast,
+        standard: routePrefs.standard || seed.standard,
+        reasoning: routePrefs.reasoning || seed.reasoning,
+        vision: routePrefs.vision || seed.vision,
+        image: routePrefs.image || seed.image,
+      });
+      return;
+    }
+    if (preset === 'platform' || preset === 'economy') {
+      commit({ preset: 'platform' });
+      return;
+    }
+    if (preset === 'balanced' || preset === 'quality') {
+      commit(resolveNamedPreset(preset));
+      return;
+    }
+    commit({ preset: 'platform' });
+  };
+
+  const patchRouteField = (key: keyof AgentRoutePrefs, value: string) => {
+    setRoutePrefs((prev) => {
+      const next: AgentRoutePrefs = { ...prev, preset: 'custom', [key]: value };
+      if (compact) {
+        saveAgentRoutePrefs(next);
+        setRouteSaved(true);
+        onChanged?.(next);
+      } else {
+        setRouteSaved(false);
+      }
+      return next;
+    });
+  };
+
+  const saveRoutePrefs = () => {
+    saveAgentRoutePrefs(routePrefs);
+    setRouteSaved(true);
+    onChanged?.(routePrefs);
+  };
+
+  const catalogPool = (() => {
+    const byId = new Map<string, LlmModel>();
+    for (const m of textModels) {
+      if (m?.id) byId.set(m.id, m);
+    }
+    for (const m of imageModels) {
+      if (!m?.id) continue;
+      byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
+    }
+    return [...byId.values()];
+  })();
+  const fastOpts = modelOptions(catalogPool, 'fast');
+  const standardOpts = modelOptions(catalogPool, 'standard');
+  const reasoningOpts = modelOptions(catalogPool, 'reasoning');
+  const visionOpts = modelOptions(catalogPool, 'vision');
+  const imageOpts = modelOptions(catalogPool, 'image');
+  const presetOptions = [
+    { value: 'platform', label: t('account.agentRoutePresetPlatform') },
+    { value: 'balanced', label: t('account.agentRoutePresetBalanced') },
+    { value: 'quality', label: t('account.agentRoutePresetQuality') },
+  ];
+
+  const presetShortLabel = (() => {
+    switch (routePrefs.preset) {
+      case 'balanced':
+        return t('account.agentRouteCard.balanced.title');
+      case 'quality':
+        return t('account.agentRouteCard.quality.title');
+      case 'custom':
+        return t('account.agentRouteCard.custom.title');
+      default:
+        return t('account.agentRouteCard.platform.title');
+    }
+  })();
+
+  const fieldRows = [
+    { key: 'fast' as const, label: t('account.agentRouteFast'), opts: fastOpts },
+    { key: 'standard' as const, label: t('account.agentRouteStandard'), opts: standardOpts },
+    { key: 'reasoning' as const, label: t('account.agentRouteReasoning'), opts: reasoningOpts },
+    { key: 'vision' as const, label: t('account.agentRouteVision'), opts: visionOpts },
+    { key: 'image' as const, label: t('account.agentRouteImage'), opts: imageOpts },
+  ];
+
+  const modelLabelOf = (id: string | undefined, opts: { id: string; label: string }[]) => {
+    const v = String(id || '').trim();
+    if (!v) return opts[0]?.label || '—';
+    return opts.find((o) => o.id === v)?.label || v;
+  };
+
+  const modelRefOf = (id: string | undefined, opts: { id: string; label: string }[]) => {
+    const v = String(id || '').trim() || opts[0]?.id || '';
+    if (!v) return null;
+    return catalogPool.find((m) => m.id === v) || { id: v, label: opts.find((o) => o.id === v)?.label || v };
+  };
+
+  const headerTitle = modeLabel || t('agent.interactionAgent');
+  /** Named presets → Auto; only `custom` → Custom (shows per-tier picks). */
+  const multimodalAuto = routePrefs.preset !== 'custom';
+
+  if (compact) {
+    const presetOrder = ['platform', 'balanced', 'quality'] as const;
+
+    let submenuTitle = '';
+    let submenuOptions: Array<{ id: string; label: string; desc?: string; model?: LlmModel | null }> =
+      [];
+    if (submenu?.kind === 'preset') {
+      submenuTitle = t('account.agentRoutePreset');
+      submenuOptions = presetOrder.map((id) => ({
+        id,
+        label: t(`account.agentRouteCard.${id}.title`),
+        model: null,
+      }));
+    } else if (submenu?.kind === 'field') {
+      const row = fieldRows.find((r) => r.key === submenu.key);
+      if (row) {
+        submenuTitle = row.label;
+        submenuOptions = row.opts.map((m) => {
+          const full = catalogPool.find((x) => x.id === m.id) || null;
+          return {
+            id: m.id,
+            label: m.label,
+            desc: full ? modelDescription(full, t) : undefined,
+            model: full,
+          };
+        });
+      }
+    }
+
+    const submenuSelectedId =
+      submenu?.kind === 'preset'
+        ? routePrefs.preset === 'economy'
+          ? 'platform'
+          : routePrefs.preset === 'custom'
+            ? ''
+            : routePrefs.preset
+        : submenu?.kind === 'field'
+          ? String(routePrefs[submenu.key] || '')
+          : '';
+
+    const renderSubmenuPanel = (opts?: { embedded?: boolean }) => {
+      const embedded = Boolean(opts?.embedded);
+      if (submenu?.kind === 'preset') {
+        return (
+          <div
+            data-agent-route-submenu=""
+            className={cn(
+              embedded ? 'w-full' : AGENT_ROUTE_PRESET_PANEL,
+              !embedded && 'agent-route-submenu-popup'
+            )}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            {embedded ? (
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => setSubmenu(null)}
+                className="mb-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              >
+                <HiChevronLeft className="h-5 w-5 shrink-0" aria-hidden />
+                {t('agent.routeBack')}
+              </button>
+            ) : (
+              <div className="px-3 pt-2.5 pb-1">
+                <p className="truncate text-[12px] font-medium text-[var(--muted)]">
+                  {t('account.agentRoutePreset')}
+                </p>
+              </div>
+            )}
+            <div className={cn('flex flex-col gap-1.5', embedded ? 'pt-0.5' : 'p-2 pt-1')}>
+              {presetOrder.map((id) => {
+                const active = routePrefs.preset === id;
+                const title = t(`account.agentRouteCard.${id}.title`);
+                const mult = t(`account.agentRouteCard.${id}.mult`);
+                const badge = t(`account.agentRouteCard.${id}.badge`);
+                const desc = t(`account.agentRouteCard.${id}.desc`);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      applyPreset(id);
+                      setSubmenu(null);
+                    }}
+                    className={cn(
+                      'w-full rounded-xl px-3 py-2.5 text-left transition-colors',
+                      active
+                        ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+                        : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="text-[13px] font-bold leading-none">{title}</span>
+                        <span
+                          className={cn(
+                            'inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none',
+                            active
+                              ? 'bg-[var(--surface)] text-[var(--muted)]'
+                              : 'bg-[var(--line)]/55 text-[var(--muted)]'
+                          )}
+                        >
+                          {mult}
+                        </span>
+                      </div>
+                      <span className="shrink-0 text-[11px] leading-none text-[var(--muted)]">
+                        {badge}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 line-clamp-2 text-[12px] leading-snug text-[var(--ink)]/75">
+                      {desc}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div
+          data-agent-route-submenu=""
+          className={cn(
+            embedded ? 'w-full' : AGENT_ROUTE_SUBMENU_PANEL,
+            !embedded && 'agent-route-submenu-popup'
+          )}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {embedded ? (
+            <button
+              type="button"
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => setSubmenu(null)}
+              className="mb-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+            >
+              <HiChevronLeft className="h-5 w-5 shrink-0" aria-hidden />
+              {t('agent.routeBack')}
+            </button>
+          ) : (
+            <div className="px-3 pt-2.5 pb-1">
+              <p className="truncate text-[12px] font-medium text-[var(--muted)]">{submenuTitle}</p>
+            </div>
+          )}
+          <div className={cn(embedded ? 'pt-0.5' : 'p-1.5 pt-0.5')}>
+            {submenuOptions.map((opt) => {
+              const active = submenuSelectedId === opt.id;
+              const custom = opt.model ? isUserCustomModel(opt.model) : false;
+              const priceTag =
+                opt.model && !custom ? modelPriceTagInfo(opt.model, t) : null;
+              return (
+                <button
+                  key={opt.id || '__platform__'}
+                  type="button"
+                  className={cn(
+                    'flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-[var(--ink)] transition-colors',
+                    active ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'
+                  )}
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (submenu?.kind === 'field') {
+                      patchRouteField(submenu.key, opt.id);
+                    }
+                    setSubmenu(null);
+                  }}
+                >
+                  {opt.model ? (
+                    <ModelBrandIcon model={opt.model} size={20} className="mt-0.5" />
+                  ) : (
+                    <span
+                      className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--line)]/40 text-[10px] font-semibold text-[var(--muted)]"
+                      aria-hidden
+                    >
+                      A
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-start justify-between gap-2">
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5">
+                        {opt.label}
+                      </span>
+                      {custom ? (
+                        <ModelMetaBadge label={t('agent.modelBadgeCustom')} />
+                      ) : priceTag ? (
+                        <ModelPriceTag level={priceTag.level} label={priceTag.label} />
+                      ) : null}
+                    </span>
+                    {opt.desc ? (
+                      <span className="mt-0.5 line-clamp-2 text-[11px] leading-[1.35] text-[var(--muted)]">
+                        {opt.desc}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    };
+
+    const openFieldSubmenu = (key: (typeof fieldRows)[number]['key']) => {
+      setSubmenu((v) =>
+        v?.kind === 'field' && v.key === key ? null : { kind: 'field', key }
+      );
+    };
+
+    const openPresetSubmenu = () => {
+      setSubmenu((v) => (v?.kind === 'preset' ? null : { kind: 'preset' }));
+    };
+
+    /** Keep focus inside the parent floating menu — remounting rows would blur to body and flicker-close. */
+    const keepParentMenuFocus = (e: { preventDefault: () => void }) => {
+      e.preventDefault();
+    };
+
+    if (narrow && submenu) {
+      return (
+        <div className={cn(AGENT_ROUTE_POPOVER_PANEL, className)}>
+          <div className="p-2.5">{renderSubmenuPanel({ embedded: true })}</div>
+        </div>
+      );
+    }
+
+    const presetTrigger = (
+      <button
+        type="button"
+        className={cn(
+          'flex w-full min-w-0 items-center justify-between gap-2 rounded-xl bg-[var(--canvas)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--canvas)]/80',
+          submenu?.kind === 'preset' && 'ring-1 ring-[var(--line)]'
+        )}
+        onPointerDown={keepParentMenuFocus}
+        onClick={narrow ? openPresetSubmenu : undefined}
+      >
+        <span className="shrink-0 text-[13px] font-semibold text-[var(--ink)]">{headerTitle}</span>
+        <span className="inline-flex min-w-0 max-w-[58%] items-center gap-0.5 text-[12px] text-[var(--muted)]">
+          <span className="truncate">{presetShortLabel}</span>
+          <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
+        </span>
+      </button>
+    );
+
+    return (
+      <div className={cn(AGENT_ROUTE_POPOVER_PANEL, className)}>
+        <div className="p-2.5">
+          {narrow ? (
+            presetTrigger
+          ) : (
+            <Dropdown
+              trigger="click"
+              placement="right-start"
+              strategy="fixed"
+              offset={20}
+              open={submenu?.kind === 'preset'}
+              onOpenChange={(o) => setSubmenu(o ? { kind: 'preset' } : null)}
+              items={[]}
+              floatingClassName="z-[600] agent-route-submenu-popup"
+              referenceClassName="block w-full"
+              popupRender={() => renderSubmenuPanel()}
+            >
+              {presetTrigger}
+            </Dropdown>
+          )}
+
+          <div className="mx-1 mt-2 border-t border-[var(--line)]" />
+
+          <div className="mt-2.5 flex items-center justify-between gap-2 px-1">
+            <Tooltip title={t('agent.routeMultimodalTip')} placement="top">
+              <span className="cursor-default text-[13px] font-medium text-[var(--ink)]">
+                {t('agent.routeMultimodal')}
+              </span>
+            </Tooltip>
+            <SegmentedControl
+              size="xs"
+              radius="full"
+              aria-label={t('agent.routeMultimodal')}
+              value={multimodalAuto ? 'auto' : 'custom'}
+              onChange={(v) => {
+                if (v === 'auto') {
+                  if (routePrefs.preset === 'custom') applyPreset('platform');
+                } else if (routePrefs.preset !== 'custom') {
+                  applyPreset('custom');
+                }
+                setSubmenu(null);
+              }}
+              options={[
+                { value: 'auto', label: t('agent.routeMultimodalAuto') },
+                { value: 'custom', label: t('agent.routeMultimodalCustom') },
+              ]}
+            />
+          </div>
+
+          {!multimodalAuto ? (
+            <div className="mt-1 px-0.5">
+              {fieldRows.map((row) => {
+                const active = submenu?.kind === 'field' && submenu.key === row.key;
+                const fieldTrigger = (
+                  <button
+                    type="button"
+                    className={cn(
+                      'flex w-full items-center justify-between gap-2 rounded-lg px-1 py-2 text-left transition-colors',
+                      active ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'
+                    )}
+                    onPointerDown={keepParentMenuFocus}
+                    onClick={narrow ? () => openFieldSubmenu(row.key) : undefined}
+                  >
+                    <span className="shrink-0 text-[13px] text-[var(--ink)]">{row.label}</span>
+                    <span className="inline-flex w-[6.75rem] shrink-0 items-center justify-start gap-1 text-[12px] text-[var(--muted)]">
+                      <ModelBrandIcon
+                        model={modelRefOf(routePrefs[row.key], row.opts)}
+                        size={14}
+                      />
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        {modelLabelOf(routePrefs[row.key], row.opts)}
+                      </span>
+                      <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
+                    </span>
+                  </button>
+                );
+                if (narrow) return <div key={row.key}>{fieldTrigger}</div>;
+                return (
+                  <Dropdown
+                    key={row.key}
+                    trigger="click"
+                    placement="right-start"
+                    strategy="fixed"
+                    offset={20}
+                    open={active}
+                    onOpenChange={(o) =>
+                      setSubmenu(o ? { kind: 'field', key: row.key } : null)
+                    }
+                    items={[]}
+                    floatingClassName="z-[600] agent-route-submenu-popup"
+                    referenceClassName="block w-full"
+                    popupRender={() => (active ? renderSubmenuPanel() : <div />)}
+                  >
+                    {fieldTrigger}
+                  </Dropdown>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  const selectCls = selectFieldClass;
+  const labelCls = 'text-[13px] font-medium text-[var(--ink)]';
+
+  return (
+    <div className={cn('space-y-4', className)}>
+      <h2 className="mb-1 text-[15px] font-semibold text-[var(--ink)]">
+        {t('account.agentRouteSection')}
+      </h2>
+      <p className="mb-1 text-[13px] leading-relaxed text-[var(--muted)]">
+        {t('account.agentRouteHint')}
+      </p>
+
+      <div>
+        <span className={labelCls}>{t('account.agentRoutePreset')}</span>
+        <Select
+          size="large"
+          className={selectCls}
+          value={
+            routePrefs.preset === 'balanced' || routePrefs.preset === 'quality'
+              ? routePrefs.preset
+              : 'platform'
+          }
+          options={presetOptions}
+          onChange={(v) => applyPreset(String(v) as AgentRoutePreset)}
+        />
+      </div>
+
+      <p className="text-[12px] leading-relaxed text-[var(--muted)]">
+        {routePrefs.preset === 'balanced'
+          ? t('account.agentRouteBalancedNote')
+          : routePrefs.preset === 'quality'
+            ? t('account.agentRouteQualityNote')
+            : t('account.agentRoutePlatformNote')}
+      </p>
+    </div>
+  );
+}
+
+export default function AgentModelsPanel({
+  onProvidersChange,
+  onRequestUpgrade,
+}: Props): ReactNode {
+  const { t } = useTranslation();
+  const planId = useSelector((state: any) => (state.wallet?.planId as PlanId) || 'free');
+  const canCustom = planAllowsCustomModels(planId);
+  const [providers, setProviders] = useState<CustomLlmProvider[]>([]);
+  const [name, setName] = useState('');
+  const [website, setWebsite] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [modelKind, setModelKind] = useState<CustomModelKind>('text');
+  const [error, setError] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const askUpgrade = () => {
+    if (onRequestUpgrade) onRequestUpgrade();
+    else setSettingsOpen(true);
+  };
+
+  useEffect(() => {
+    setProviders(loadCustomLlmProviders());
+  }, []);
+
   const persistProviders = (next: CustomLlmProvider[]) => {
     setProviders(next);
     saveCustomLlmProviders(next);
     onProvidersChange?.();
   };
 
-  const applyPreset = (preset: AgentRoutePreset) => {
-    if (preset === 'platform') {
-      const next = { preset: 'platform' as const };
-      setRoutePrefs(next);
-      saveAgentRoutePrefs(next);
-      setRouteSaved(true);
-      return;
-    }
-    if (preset === 'custom') {
-      setRoutePrefs((prev) => ({ ...prev, preset: 'custom' }));
-      return;
-    }
-    const next = { ...ROUTE_PRESETS[preset] };
-    setRoutePrefs(next);
-    saveAgentRoutePrefs(next);
-    setRouteSaved(true);
-  };
-
-  const patchRouteField = (key: keyof AgentRoutePrefs, value: string) => {
-    setRoutePrefs((prev) => {
-      const next: AgentRoutePrefs = { ...prev, preset: 'custom', [key]: value };
-      return next;
-    });
-    setRouteSaved(false);
-  };
-
-  const saveRoutePrefs = () => {
-    saveAgentRoutePrefs(routePrefs);
-    setRouteSaved(true);
-  };
-
   const onSaveProvider = () => {
-    if (!isPro) {
-      setPlansOpen(true);
+    if (!canCustom) {
+      askUpgrade();
       return;
     }
     const n = name.trim();
     const url = baseUrl.trim().replace(/\/+$/, '');
+    if (!modelKind) {
+      setError(t('agent.providerModelKindRequired'));
+      return;
+    }
     if (!n) {
       setError(t('agent.providerNameRequired'));
       return;
@@ -222,6 +912,7 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
       website: website.trim(),
       apiKey: apiKey.trim(),
       baseUrl: url,
+      modelKind,
       createdAt: Date.now(),
     };
     persistProviders([next, ...providers]);
@@ -229,113 +920,22 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
     setWebsite('');
     setApiKey('');
     setBaseUrl('');
+    setModelKind('text');
   };
 
   const onRemove = (id: string) => {
-    if (!isPro) {
-      setPlansOpen(true);
+    if (!canCustom) {
+      askUpgrade();
       return;
     }
     persistProviders(providers.filter((p) => p.id !== id));
   };
 
-  const textOpts = modelOptions(textModels, 'text');
-  const imageOpts = modelOptions(imageModels.length ? imageModels : textModels, 'image');
-  const showRouteDetail = routePrefs.preset !== 'platform';
-  const followPlatformLabel = t('account.agentRouteFollowPlatform');
-  const presetOptions = [
-    { value: 'platform', label: t('account.agentRoutePresetPlatform') },
-    { value: 'economy', label: t('account.agentRoutePresetEconomy') },
-    { value: 'balanced', label: t('account.agentRoutePresetBalanced') },
-    { value: 'quality', label: t('account.agentRoutePresetQuality') },
-    { value: 'custom', label: t('account.agentRoutePresetCustom') },
-  ];
-  const textSelectOptions = [
-    { value: '', label: followPlatformLabel },
-    ...textOpts.map((m) => ({ value: m.id, label: m.label })),
-  ];
-  const imageSelectOptions = [
-    { value: '', label: followPlatformLabel },
-    ...imageOpts.map((m) => ({ value: m.id, label: m.label })),
-  ];
-
   return (
     <>
       <div className="space-y-5">
         <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">
-          <h2 className="mb-1 text-[15px] font-semibold text-[var(--ink)]">
-            {t('account.agentRouteSection')}
-          </h2>
-          <p className="mb-5 text-[13px] leading-relaxed text-[var(--muted)]">
-            {t('account.agentRouteHint')}
-          </p>
-
-          <div className="mb-4">
-            <span className="text-[13px] font-medium text-[var(--ink)]">
-              {t('account.agentRoutePreset')}
-            </span>
-            <Select
-              size="large"
-              className={selectFieldClass}
-              value={routePrefs.preset === 'custom' ? 'custom' : routePrefs.preset}
-              options={presetOptions}
-              onChange={(v) => applyPreset(String(v) as AgentRoutePreset)}
-            />
-          </div>
-
-          {showRouteDetail ? (
-            <div className="space-y-4">
-              {(
-                [
-                  ['simple', t('account.agentRouteSimple')],
-                  ['medium', t('account.agentRouteMedium')],
-                  ['complex', t('account.agentRouteComplex')],
-                  ['vision', t('account.agentRouteVision')],
-                ] as const
-              ).map(([key, label]) => (
-                <div key={key}>
-                  <span className="text-[13px] font-medium text-[var(--ink)]">{label}</span>
-                  <Select
-                    size="large"
-                    className={selectFieldClass}
-                    value={routePrefs[key] || ''}
-                    options={textSelectOptions}
-                    onChange={(v) => patchRouteField(key, String(v))}
-                  />
-                </div>
-              ))}
-              <div>
-                <span className="text-[13px] font-medium text-[var(--ink)]">
-                  {t('account.agentRouteImage')}
-                </span>
-                <Select
-                  size="large"
-                  className={selectFieldClass}
-                  value={routePrefs.image || ''}
-                  options={imageSelectOptions}
-                  onChange={(v) => patchRouteField('image', String(v))}
-                />
-              </div>
-              <p className="text-[12px] leading-relaxed text-[var(--muted)]">
-                {t('account.agentRouteCostNote')}
-              </p>
-              {routePrefs.preset === 'custom' ? (
-                <div className="flex justify-end border-t border-[var(--line)] pt-4">
-                  <button
-                    type="button"
-                    className="inline-flex h-9 items-center rounded-full bg-[var(--ink)] px-4 text-[13px] font-medium text-[var(--on-brand)] hover:opacity-90"
-                    onClick={saveRoutePrefs}
-                  >
-                    {routeSaved ? t('account.agentRouteSaved') : t('account.agentRouteSave')}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-[12px] leading-relaxed text-[var(--muted)]">
-              {t('account.agentRoutePlatformNote')}
-            </p>
-          )}
+          <AgentRoutePrefsEditor />
         </section>
 
         <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">
@@ -346,29 +946,53 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
             {t('agent.settingsHint')}
           </p>
 
-          {!isPro ? (
+          {!canCustom ? (
             <div className="mb-5 rounded-lg bg-[var(--account-main)] px-3 py-2.5 text-[13px] leading-relaxed text-[var(--ink)] ring-1 ring-[var(--line)]">
-              <p className="font-medium">{t('agent.providerProRequired')}</p>
-              <p className="mt-1 text-[var(--muted)]">{t('agent.providerProHint')}</p>
+              <p className="font-medium">{t('agent.providerMemberRequired')}</p>
+              <p className="mt-1 text-[var(--muted)]">{t('agent.providerMemberHint')}</p>
               <button
                 type="button"
                 className="mt-2 text-[13px] font-medium text-[var(--ink)] underline underline-offset-2"
-                onClick={() => setPlansOpen(true)}
+                onClick={askUpgrade}
               >
                 {t('agent.providerUpgrade')}
               </button>
             </div>
           ) : null}
 
-          <fieldset disabled={!isPro} className={cn(!isPro && 'opacity-50')}>
+          <fieldset disabled={!canCustom} className={cn(!canCustom && 'opacity-50')}>
             <label className="mb-4 block">
-              <span className="text-[13px] font-medium text-[var(--ink)]">{t('agent.providerName')}</span>
+              <span className="text-[13px] font-medium text-[var(--ink)]">
+                {t('agent.providerModelKind')}
+                <span className="text-red-500"> *</span>
+              </span>
+              <Select
+                size="large"
+                className={selectFieldClass}
+                value={modelKind}
+                options={[
+                  { value: 'text', label: t('agent.providerModelKindText') },
+                  { value: 'vision', label: t('agent.providerModelKindVision') },
+                ]}
+                onChange={(v) => setModelKind(parseCustomModelKind(String(v)))}
+              />
+              <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
+                {t('agent.providerModelKindHint')}
+              </span>
+            </label>
+
+            <label className="mb-4 block">
+              <span className="text-[13px] font-medium text-[var(--ink)]">
+                {t('agent.providerName')}
+                <span className="text-red-500"> *</span>
+              </span>
               <input
                 className={fieldClass}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder={t('agent.providerNamePh')}
                 autoComplete="off"
+                required
               />
             </label>
 
@@ -399,13 +1023,17 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
             </label>
 
             <label className="mb-4 block">
-              <span className="text-[13px] font-medium text-[var(--ink)]">{t('agent.providerBaseUrl')}</span>
+              <span className="text-[13px] font-medium text-[var(--ink)]">
+                {t('agent.providerBaseUrl')}
+                <span className="text-red-500"> *</span>
+              </span>
               <input
                 className={fieldClass}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com"
                 autoComplete="off"
+                required
               />
               <span className="mt-1.5 block rounded-lg bg-[#FFF8E6] px-2.5 py-2 text-[12px] leading-relaxed text-[#8A6D1D] dark:bg-[#3A3218] dark:text-[#E8D48A]">
                 {t('agent.providerBaseUrlHint')}
@@ -418,11 +1046,11 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
           <div className="flex justify-end border-t border-[var(--line)] pt-5">
             <button
               type="button"
-              disabled={!isPro}
-              className="inline-flex h-9 items-center rounded-full bg-[var(--ink)] px-4 text-[13px] font-medium text-[var(--on-brand)] hover:opacity-90 disabled:opacity-50"
+              disabled={!canCustom}
+              className="inline-flex h-9 items-center rounded-xl bg-[var(--ink)] px-4 text-[13px] font-medium text-[var(--on-brand)] hover:opacity-90 disabled:opacity-50"
               onClick={onSaveProvider}
             >
-              {isPro ? t('agent.providerSave') : t('agent.providerSavePro')}
+              {canCustom ? t('agent.providerSave') : t('agent.providerSaveMember')}
             </button>
           </div>
         </section>
@@ -439,7 +1067,12 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
                   className="flex items-center gap-2 rounded-lg bg-[var(--account-main)] px-3 py-2.5 ring-1 ring-[var(--line)]"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[14px] font-medium text-[var(--ink)]">{p.name}</div>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="truncate text-[14px] font-medium text-[var(--ink)]">{p.name}</div>
+                      <span className="shrink-0 rounded-lg bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] text-[var(--muted)]">
+                        {t(customModelKindLabelKey(p.modelKind))}
+                      </span>
+                    </div>
                     <div className="truncate text-[12px] text-[var(--muted)]">{p.baseUrl}</div>
                   </div>
                   <button
@@ -457,7 +1090,13 @@ export default function AgentModelsPanel({ onProvidersChange }: Props): ReactNod
         ) : null}
       </div>
 
-      <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} />
+      {!onRequestUpgrade ? (
+        <AccountSettingsDialog
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          initialTab="plans"
+        />
+      ) : null}
     </>
   );
 }

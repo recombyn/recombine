@@ -1,15 +1,53 @@
 """Hydrate create_image / gen_prompt placeholders into real image URLs."""
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any
 
-async def _hydrate_gen_prompt_images(svg: str, *, limit: int = 2) -> tuple[str, int]:
-    """Fill empty data-gen-prompt <image> slots via Volcengine Seedream."""
+
+def _image_model_from_rules(rules: dict[str, str] | None) -> str:
+    from services.llm.image import resolve_image_model
+
+    mid = str((rules or {}).get("assets.image_default_model") or "").strip()
+    return resolve_image_model(mid or None)
+
+
+def _resolution_for_model(catalog_id: str) -> str:
+    """Catalog default resolution (e.g. 2K) — never hardcode a tier the model rejects."""
+    from services.llm.image import _catalog_image_limits, _pick_resolution
+
+    limits = _catalog_image_limits(catalog_id)
+    return _pick_resolution(None, limits)
+
+
+def _aspect_or_size_from_args(args: dict[str, Any]) -> str:
+    """
+    Prefer concrete WxH when the agent set slot size (Seedream clamps via imageLimits).
+    Otherwise ``auto`` / smart so the provider picks frame within its aspect list.
+    """
+    try:
+        ww = float(args.get("width") or 0)
+        hh = float(args.get("height") or 0)
+    except (TypeError, ValueError):
+        return "auto"
+    if ww >= 40 and hh >= 40:
+        return f"{int(round(ww))}x{int(round(hh))}"
+    return "auto"
+
+
+async def _hydrate_gen_prompt_images(
+    svg: str,
+    *,
+    limit: int = 2,
+    rules: dict[str, str] | None = None,
+) -> tuple[str, int]:
+    """Fill empty data-gen-prompt <image> slots via the routed image model."""
     if not svg or "data-gen-prompt" not in svg.lower():
         return svg, 0
     from services.llm.image import generate_image
+
+    catalog_id = _image_model_from_rules(rules)
+    resolution = _resolution_for_model(catalog_id)
 
     pattern = re.compile(
         r"<image\b[^>]*\bdata-gen-prompt\s*=\s*\"([^\"]+)\"[^>]*/?>",
@@ -29,9 +67,10 @@ async def _hydrate_gen_prompt_images(svg: str, *, limit: int = 2) -> tuple[str, 
         try:
             result = await generate_image(
                 prompt=prompt,
-                aspect_ratio="1:1",
+                model=catalog_id,
+                aspect_ratio="auto",
                 quality="standard",
-                resolution="1K",
+                resolution=resolution,
             )
             url = (result.get("images") or [None])[0]
             if not url:
@@ -52,14 +91,6 @@ async def _hydrate_gen_prompt_images(svg: str, *, limit: int = 2) -> tuple[str, 
         filled += 1
     return out, filled
 
-def _aspect_from_wh(w: Any, h: Any) -> str:
-    try:
-        ww, hh = float(w), float(h)
-        if ww > 0 and hh > 0:
-            return f"{ww:.4g}:{hh:.4g}"
-    except (TypeError, ValueError):
-        pass
-    return "1:1"
 
 def _needs_image_hydrate(op: dict[str, Any]) -> bool:
     if not isinstance(op, dict) or str(op.get("name") or "") != "create_image":
@@ -71,22 +102,27 @@ def _needs_image_hydrate(op: dict[str, Any]) -> bool:
         return False
     return bool(str(args.get("genPrompt") or args.get("prompt") or "").strip())
 
+
 async def _hydrate_tool_ops_images(
     ops: list[dict[str, Any]],
     *,
-    limit: int = 2,
+    limit: int = 6,
     policy: str = "auto",
-) -> list[dict[str, Any]]:
+    rules: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     """
-    Fill create_image ops that only have genPrompt/prompt via Seedream.
-    tool_ops create path skips SVG hydrate — this restores AI imagery.
-    Image gens run in parallel (capped by limit).
+    Fill create_image ops that only have genPrompt/prompt via the routed image model.
+    Uses catalog ``imageLimits`` (default resolution / aspect / pixel clamp).
+    Returns (ops, successful_image_count) for wallet 积分结算.
     """
     if policy != "auto" or not ops or limit <= 0:
-        return ops
+        return ops, 0
     import asyncio
 
     from services.llm.image import generate_image
+
+    catalog_id = _image_model_from_rules(rules)
+    resolution = _resolution_for_model(catalog_id)
 
     pending_idx: list[int] = []
     for i, op in enumerate(ops):
@@ -95,18 +131,19 @@ async def _hydrate_tool_ops_images(
         if _needs_image_hydrate(op):
             pending_idx.append(i)
     if not pending_idx:
-        return ops
+        return ops, 0
 
     async def _one(op: dict[str, Any]) -> dict[str, Any]:
         args = dict(op.get("args") or {}) if isinstance(op.get("args"), dict) else {}
         prompt = str(args.get("genPrompt") or args.get("prompt") or "").strip()
-        aspect = _aspect_from_wh(args.get("width"), args.get("height"))
+        aspect = _aspect_or_size_from_args(args)
         try:
             result = await generate_image(
                 prompt=prompt[:800],
+                model=catalog_id,
                 aspect_ratio=aspect,
                 quality="standard",
-                resolution="1K",
+                resolution=resolution,
             )
             url = (result.get("images") or [None])[0]
         except Exception:
@@ -120,7 +157,10 @@ async def _hydrate_tool_ops_images(
 
     hydrated = await asyncio.gather(*(_one(ops[i]) for i in pending_idx))
     out = list(ops)
+    filled = 0
     for i, new_op in zip(pending_idx, hydrated):
         out[i] = new_op
-    return out
-
+        args = new_op.get("args") if isinstance(new_op.get("args"), dict) else {}
+        if str((args or {}).get("src") or (args or {}).get("url") or "").strip():
+            filled += 1
+    return out, filled

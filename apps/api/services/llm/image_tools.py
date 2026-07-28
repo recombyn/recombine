@@ -1,4 +1,4 @@
-"""Image toolbar AI tools — Seedream i2i + vision decompose (OCR/SAM)."""
+"""Image toolbar AI tools — Seedream i2i + local rembg / OCR decompose."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ IMAGE_PROCESS_KINDS = frozenset(
         "removeBg",
         "multiAngle",
         "expand",
-        "editElements",
         "editText",
         "vector",
         "adjust",
@@ -24,7 +23,7 @@ IMAGE_PROCESS_KINDS = frozenset(
 )
 
 # Vision split / cutout — not Seedream re-render.
-DECOMPOSE_KINDS = frozenset({"editElements", "editText"})
+DECOMPOSE_KINDS = frozenset({"editText"})
 CUTOUT_KINDS = frozenset({"removeBg"})
 
 
@@ -83,9 +82,6 @@ def _prompt_for(
             f"Continue the scene naturally beyond the edges; match lighting, perspective, and style. "
             f"Do not distort the original subject."
         )
-    if kind == "editElements":
-        # Handled by vision.image_edit.decompose_image — keep a stub for safety.
-        return "unused"
     if kind == "editText":
         return "unused"
     if kind == "vector":
@@ -141,8 +137,7 @@ async def process_image_tool(
     """
     Run a toolbar image tool.
 
-    - ``removeBg`` → rembg / GrabCut cutout (transparent PNG)
-    - ``editElements`` → OCR/SAM / OpenCV subject split + inpainted background
+    - ``removeBg`` → local rembg (GrabCut fallback) transparent PNG
     - ``editText`` → vision OCR + inpaint
     - other kinds → Seedream image-to-image
 
@@ -158,7 +153,7 @@ async def process_image_tool(
     if k in CUTOUT_KINDS:
         from services.vision.remove_bg import remove_background
 
-        return await remove_background(src)
+        return await remove_background(src, meta=meta)
 
     if k in DECOMPOSE_KINDS:
         from services.vision.image_edit import decompose_image

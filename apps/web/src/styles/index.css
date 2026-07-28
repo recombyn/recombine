@@ -8,7 +8,7 @@
   :root {
     /* fallback before data-theme applies */
     --surface: #ffffff;
-    --canvas: #f3f3f3;
+    --canvas: #ffffff;
     --rail: #f3f3f3;
     --ink: #141414;
     --muted: #767676;
@@ -16,11 +16,17 @@
     --accent: #141414;
     --accent-soft: #e6e6e6;
     --on-brand: #ffffff;
-    --home-hero-glow-strong: rgba(232, 226, 255, 0.7);
-    --home-hero-glow-soft: rgba(242, 238, 255, 0.45);
-    --home-hero-dot: #d8d8de;
+  --home-hero-glow-strong: rgba(232, 226, 255, 0.7);
+  --home-hero-glow-soft: rgba(242, 238, 255, 0.45);
+  --home-hero-dot: #d8d8de;
+  --home-hero-accent-gradient: linear-gradient(90deg, #141418 0%, #3a3a48 48%, #7a7a8c 100%);
     --font-sans: 'Alibaba PuHuiTi', '阿里巴巴普惠体', 'PingFang SC', 'Microsoft YaHei',
       'Noto Sans SC', system-ui, sans-serif;
+    /* Hero Heiti — geometric sans closer to 星流-style headlines */
+    --font-hero: 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+      'Alibaba PuHuiTi', '阿里巴巴普惠体', system-ui, sans-serif;
+    /* English hero — editorial display serif (Cormorant already in fonts.css) */
+    --font-hero-en: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
   }
 
   html {
@@ -239,18 +245,45 @@ html[data-theme='dark'] .home-hero-canvas {
   animation: skeleton-shimmer 1.35s ease-in-out infinite;
 }
 
-/** Image process loading plate — bright sweep over whatever sits underneath. */
+/**
+ * Soft sweep on a compositor-friendly transform (not background-position).
+ * Wide feathered band + slow cubic ease — avoids a stiff “white bar” look.
+ */
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-130%);
+  }
+  100% {
+    transform: translateX(230%);
+  }
+}
+
+/** Image process loading plate — soft sweep over whatever sits underneath. */
 .image-process-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.image-process-shimmer::after {
+  content: '';
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  left: 0;
+  width: 48%;
   background-image: linear-gradient(
     90deg,
     transparent 0%,
-    transparent 40%,
-    rgba(255, 255, 255, 0.7) 50%,
-    transparent 60%,
+    rgba(255, 255, 255, 0.04) 18%,
+    rgba(255, 255, 255, 0.18) 38%,
+    rgba(255, 255, 255, 0.36) 50%,
+    rgba(255, 255, 255, 0.18) 62%,
+    rgba(255, 255, 255, 0.04) 82%,
     transparent 100%
   );
-  background-size: 220% 100%;
-  animation: skeleton-shimmer 1.55s ease-in-out infinite;
+  animation: shimmer-sweep 2.35s cubic-bezier(0.45, 0.05, 0.25, 1) infinite;
+  will-change: transform;
+  pointer-events: none;
 }
 
 /**
@@ -258,36 +291,64 @@ html[data-theme='dark'] .home-hero-canvas {
  * Used in screen-space overlay so zoom does not enlarge the animation.
  */
 .artboard-process-shimmer {
+  position: relative;
+  overflow: hidden;
   background-color: #e4ecf4;
+  background-image: linear-gradient(105deg, #d5e0eb 0%, #eef3f8 42%, #f7f9fb 100%);
+  background-repeat: no-repeat;
+}
+
+.artboard-process-shimmer::after {
+  content: '';
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  left: 0;
+  width: 48%;
   background-image: linear-gradient(
     90deg,
-    rgba(228, 236, 244, 0) 0%,
-    rgba(228, 236, 244, 0) 32%,
-    rgba(255, 255, 255, 0.92) 50%,
-    rgba(228, 236, 244, 0) 68%,
-    rgba(228, 236, 244, 0) 100%
-  ),
-    linear-gradient(105deg, #d5e0eb 0%, #eef3f8 42%, #f7f9fb 100%);
-  background-size: 220% 100%, 100% 100%;
-  background-repeat: no-repeat;
-  animation: skeleton-shimmer 1.55s ease-in-out infinite;
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 20%,
+    rgba(255, 255, 255, 0.42) 42%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0.42) 58%,
+    rgba(255, 255, 255, 0.1) 80%,
+    transparent 100%
+  );
+  animation: shimmer-sweep 2.35s cubic-bezier(0.45, 0.05, 0.25, 1) infinite;
+  will-change: transform;
+  pointer-events: none;
 }
 
 /** Chat image-gen placeholders — sweep only, no center icon. */
 .chat-image-gen-shimmer {
+  position: relative;
+  overflow: hidden;
   background-color: #e4ecf4;
+  background-image: linear-gradient(105deg, #d5e0eb 0%, #eef3f8 42%, #f7f9fb 100%);
+  background-repeat: no-repeat;
+}
+
+.chat-image-gen-shimmer::after {
+  content: '';
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  left: 0;
+  width: 48%;
   background-image: linear-gradient(
     90deg,
-    rgba(228, 236, 244, 0) 0%,
-    rgba(228, 236, 244, 0) 32%,
-    rgba(255, 255, 255, 0.92) 50%,
-    rgba(228, 236, 244, 0) 68%,
-    rgba(228, 236, 244, 0) 100%
-  ),
-    linear-gradient(105deg, #d5e0eb 0%, #eef3f8 42%, #f7f9fb 100%);
-  background-size: 220% 100%, 100% 100%;
-  background-repeat: no-repeat;
-  animation: skeleton-shimmer 1.55s ease-in-out infinite;
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 20%,
+    rgba(255, 255, 255, 0.42) 42%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0.42) 58%,
+    rgba(255, 255, 255, 0.1) 80%,
+    transparent 100%
+  );
+  animation: shimmer-sweep 2.35s cubic-bezier(0.45, 0.05, 0.25, 1) infinite;
+  will-change: transform;
+  pointer-events: none;
 }
 
 /* Plaza publish thank-you */

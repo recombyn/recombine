@@ -1,12 +1,13 @@
 /**
- * Wallet API — card-key redeem for tokens.
+ * Wallet API — card-key redeem (Token or plan).
  */
 
 import { request } from '@/utils/request';
+import type { PlanId } from '@/utils/wallet';
 
 export type WalletLedgerDto = {
   id: string;
-  kind: 'redeem' | 'spend';
+  kind: 'redeem' | 'spend' | 'plan' | 'recharge';
   amount: number;
   balanceAfter: number;
   detail?: string;
@@ -15,28 +16,23 @@ export type WalletLedgerDto = {
 
 export type WalletDto = {
   tokens: number;
+  planId?: PlanId | string;
+  /** Unix seconds; null when free / unset. */
+  planExpiresAt?: number | null;
+  /** True while a paid plan is still within its term. */
+  planLocked?: boolean;
   ledger: WalletLedgerDto[];
-};
-
-export type PurchaseInfoDto = {
-  xianyuUrl?: string | null;
-  authorContact?: string | null;
-  xianyuQrUrl?: string | null;
-  wechatQrUrl?: string | null;
-  hint?: string;
 };
 
 export type RedeemResultDto = {
+  kind?: 'token' | 'plan' | string;
   tokensAdded: number;
   tokens: number;
+  planId?: PlanId | string;
+  planExpiresAt?: number | null;
+  planLocked?: boolean;
   ledger: WalletLedgerDto[];
 };
-
-export const fetchPurchaseInfo = () =>
-  request<PurchaseInfoDto>({
-    url: '/api/v1/wallet/purchase-info',
-    method: 'get',
-  });
 
 export const fetchWallet = () =>
   request<WalletDto>({
@@ -48,6 +44,9 @@ export type WalletLedgerKindFilter = 'all' | 'redeem' | 'spend';
 
 export type PaginatedWalletLedger = {
   tokens: number;
+  planId?: PlanId | string;
+  planExpiresAt?: number | null;
+  planLocked?: boolean;
   items: WalletLedgerDto[];
   page: number;
   pageSize: number;
@@ -57,19 +56,15 @@ export type PaginatedWalletLedger = {
 };
 
 /** Usage & billing tabs → kind=all|redeem|spend */
-export const fetchWalletLedger = (opts: {
-  page?: number;
-  pageSize?: number;
-  kind?: WalletLedgerKindFilter;
-} = {}) =>
+export const fetchWalletLedger = (params: {
+  page: number;
+  pageSize: number;
+  kind: WalletLedgerKindFilter;
+}) =>
   request<PaginatedWalletLedger>({
     url: '/api/v1/wallet/ledger',
     method: 'get',
-    params: {
-      page: opts.page ?? 1,
-      pageSize: opts.pageSize ?? 15,
-      kind: opts.kind ?? 'all',
-    },
+    params,
   });
 
 export const redeemCardKey = (code: string) =>

@@ -12,6 +12,7 @@ import {
   FILL_SOLID_PRESETS,
   normalizeHex,
 } from '@/components/base/colorPanel';
+import { SegmentedControl } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
 import {
@@ -277,28 +278,16 @@ export default function DiffuseMeshEditor({
         </div>
       </div>
 
-      <div className="flex gap-1 rounded bg-[var(--accent-soft)] p-0.5">
-        {(
-          [
-            ['settings', t('editor.fillDiffuseSettings')],
-            ['presets', t('editor.fillDiffusePresets')],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={cn(
-              'h-7 flex-1 rounded text-[12px] font-medium transition-colors',
-              tab === id
-                ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                : 'text-[var(--muted)] hover:text-[var(--ink)]'
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        size="sm"
+        fullWidth
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'settings', label: t('editor.fillDiffuseSettings') },
+          { value: 'presets', label: t('editor.fillDiffusePresets') },
+        ]}
+      />
 
       {tab === 'settings' ? (
         <div className="space-y-3">

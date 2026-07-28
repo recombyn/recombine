@@ -125,7 +125,7 @@ export function CornerRadiusPanel({
           value={uniform}
           onChange={(e) => setUniform(Number(e.target.value))}
           className={cn(
-            'h-7 w-12 shrink-0 rounded bg-[var(--accent-soft)] px-1.5 text-center text-[12px] tabular-nums outline-none',
+            'h-7 w-12 shrink-0 rounded-xl bg-[var(--accent-soft)] px-1.5 text-center text-[12px] tabular-nums outline-none',
             INPUT_NO_SPIN
           )}
         />
@@ -135,7 +135,7 @@ export function CornerRadiusPanel({
           aria-pressed={value.linked}
           title={value.linked ? '解锁四角' : '锁定四角'}
           className={cn(
-            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors',
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl transition-colors',
             value.linked
               ? 'bg-[var(--surface)] text-[var(--accent)] ring-1 ring-[var(--line)]'
               : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
@@ -162,7 +162,7 @@ export function CornerRadiusPanel({
             key={key}
             title={tip}
             className={cn(
-              'flex h-8 min-w-0 items-center gap-1 rounded bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]',
+              'flex h-8 min-w-0 items-center gap-1 rounded-xl bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]',
               iconEnd ? 'justify-between' : 'flex-row-reverse justify-between'
             )}
           >

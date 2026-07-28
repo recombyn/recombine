@@ -3,9 +3,74 @@ import {
   useImperativeHandle,
   useLayoutEffect,
   useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from 'react';
 import { cn } from '@/utils/classnames';
+
+function editorHasComposerChips(el: HTMLElement | null | undefined): boolean {
+  return Boolean(el?.querySelector('[data-composer-chip="1"]'));
+}
+
+/** Shared pill classes — composer DOM chips + chat history bubbles. */
+export const CONTEXT_CHIP_PILL_CLASS =
+  'inline-flex h-6 max-w-full shrink-0 items-center gap-1 align-middle rounded-lg border border-[var(--line)] bg-[var(--surface)] text-[12px] leading-none text-[var(--ink)]';
+
+const CONTEXT_CHIP_THUMB_CLASS =
+  'h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover ring-1 ring-[var(--line)]';
+
+const CONTEXT_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>';
+
+/** Read-only / history chip matching the composer pill (optional × when `onRemove`). */
+export function ContextChipPill({
+  label,
+  thumbUrl,
+  onRemove,
+  className,
+}: {
+  label: string;
+  thumbUrl?: string;
+  onRemove?: () => void;
+  className?: string;
+}): ReactNode {
+  return (
+    <span
+      className={cn(
+        CONTEXT_CHIP_PILL_CLASS,
+        thumbUrl ? 'pl-1 pr-0.5' : onRemove ? 'pl-1.5 pr-0.5' : 'px-1.5',
+        className
+      )}
+    >
+      {thumbUrl ? (
+        <img src={thumbUrl} alt="" className={CONTEXT_CHIP_THUMB_CLASS} />
+      ) : (
+        <span
+          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[var(--canvas)] text-[var(--muted)] ring-1 ring-[var(--line)]"
+          aria-hidden
+          dangerouslySetInnerHTML={{ __html: CONTEXT_ICON_SVG }}
+        />
+      )}
+      <span className="truncate font-medium">{label}</span>
+      {onRemove ? (
+        <button
+          type="button"
+          aria-label="Remove context"
+          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none text-[var(--muted)] hover:text-[var(--ink)]"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onRemove();
+          }}
+        >
+          ×
+        </button>
+      ) : null}
+    </span>
+  );
+}
 
 /** Selection / frame / pinned element reference chip. */
 export type ComposerContext = {
@@ -22,12 +87,24 @@ export type ComposerContext = {
   thumbUrl?: string;
   /** Object storage key from POST /api/v1/uploads — used to delete on remove. */
   uploadKey?: string;
+  /**
+   * Composer attachment upload lifecycle.
+   * `uploading` → local preview shown with spinner; omit / `ready` once server upload finishes.
+   */
+  uploadStatus?: 'uploading' | 'ready' | 'error';
 };
 
 export type AgentComposerHandle = {
   focus: () => void;
   /** Insert a context chip at the caret (or last known caret / end). */
   insertContextAtCaret: (ctx: ComposerContext) => void;
+  /** Plain text with U+FFFC where each context chip sits (DOM order). */
+  getMarkedText: () => string;
+  /**
+   * Screen rect of the active `@…` mention (last @ with no whitespace after).
+   * Used to anchor the attach picker to the caret, not the whole composer.
+   */
+  getAtMentionAnchorRect: () => DOMRect | null;
 };
 
 function placeCaretAtEnd(el: HTMLElement) {
@@ -50,6 +127,30 @@ function readPlainText(root: HTMLElement): string {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const el = node as HTMLElement;
     if (el.dataset.composerChip === '1') return;
+    el.childNodes.forEach(walk);
+  };
+  root.childNodes.forEach(walk);
+  return out.replace(/\u200b/g, '').replace(/\u00a0/g, ' ');
+}
+
+/** Same as plain text but inserts U+FFFC for each context chip (inline positions). */
+function readMarkedText(root: HTMLElement): string {
+  let out = '';
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += node.textContent || '';
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as HTMLElement;
+    if (el.dataset.composerChip === '1') {
+      out += '\uFFFC';
+      return;
+    }
+    if (el.tagName === 'BR') {
+      out += '\n';
+      return;
+    }
     el.childNodes.forEach(walk);
   };
   root.childNodes.forEach(walk);
@@ -171,7 +272,36 @@ function setPlainTextCaretOffset(root: HTMLElement, target: number): Range {
   return range;
 }
 
-const CHIP_STYLE = '2';
+/** Client rect for the active `@query` token (follows caret / @ glyph). */
+function getAtMentionAnchorRect(root: HTMLElement): DOMRect | null {
+  const text = readPlainText(root);
+  const at = text.lastIndexOf('@');
+  if (at < 0) return null;
+  const after = text.slice(at + 1);
+  if (/\s/.test(after)) return null;
+  try {
+    const start = setPlainTextCaretOffset(root, at);
+    const end = setPlainTextCaretOffset(root, Math.min(text.length, at + 1));
+    const range = document.createRange();
+    range.setStart(start.startContainer, start.startOffset);
+    range.setEnd(end.startContainer, end.startOffset);
+    const rect = range.getBoundingClientRect();
+    if (rect.width > 0 || rect.height > 0) {
+      return new DOMRect(rect.left, rect.top, Math.max(rect.width, 1), Math.max(rect.height, 16));
+    }
+    // Empty editor / collapsed — use caret point with line-height fallback.
+    const caret = start.getBoundingClientRect();
+    if (caret.left || caret.top) {
+      return new DOMRect(caret.left, caret.top, 1, Math.max(caret.height, 16));
+    }
+  } catch {
+    /* fall through */
+  }
+  const box = root.getBoundingClientRect();
+  return new DOMRect(box.left + 8, box.top + 4, 1, 18);
+}
+
+const CHIP_STYLE = '3';
 /** Separates stable ref id from per-insert instance id (`node:abc@@x7k`). */
 export const CHIP_INSTANCE_SEP = '@@';
 
@@ -233,26 +363,24 @@ function buildChip(
   chip.dataset.chipStyle = CHIP_STYLE;
   chip.dataset.chipKind = opts.kind;
   chip.dataset.chipId = opts.id;
-  // Pill chip; square thumb on the left (fig.2), not circular.
-  chip.className =
-    'mr-1 inline-flex h-[24px] max-w-full shrink-0 items-center gap-1 align-middle rounded-full border border-[var(--line)] bg-[var(--surface)] text-[12px] leading-none text-[var(--ink)]';
+  // Keep in sync with CONTEXT_CHIP_PILL_CLASS / ContextChipPill.
+  chip.className = cn(CONTEXT_CHIP_PILL_CLASS, 'mr-1');
 
   let leading: HTMLElement;
   const thumb = String(opts.thumbUrl || '').trim();
   if (thumb) {
-    chip.classList.add('pl-0.5', 'pr-2');
+    chip.classList.add('pl-1', 'pr-0.5');
     const img = document.createElement('img');
     img.src = thumb;
     img.alt = '';
     img.draggable = false;
-    img.className =
-      'h-4 w-4 shrink-0 rounded-[3px] object-cover ring-1 ring-[var(--line)]';
+    img.className = CONTEXT_CHIP_THUMB_CLASS;
     leading = img;
   } else {
-    chip.classList.add('px-2');
+    chip.classList.add('pl-1.5', 'pr-0.5');
     const icon = document.createElement('span');
     icon.className =
-      'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] bg-[var(--canvas)] text-[var(--muted)] ring-1 ring-[var(--line)]';
+      'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[var(--canvas)] text-[var(--muted)] ring-1 ring-[var(--line)]';
     icon.setAttribute('aria-hidden', 'true');
     icon.innerHTML = opts.iconSvg;
     leading = icon;
@@ -266,7 +394,7 @@ function buildChip(
   remove.type = 'button';
   remove.setAttribute('aria-label', 'Remove context');
   remove.className =
-    'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[12px] leading-none text-[var(--muted)] hover:text-[var(--ink)]';
+    'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none text-[var(--muted)] hover:text-[var(--ink)]';
   remove.textContent = '×';
   remove.addEventListener('mousedown', (e) => {
     e.preventDefault();
@@ -278,8 +406,42 @@ function buildChip(
   return chip;
 }
 
-const CONTEXT_ICON =
-  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>';
+const CONTEXT_ICON = CONTEXT_ICON_SVG;
+
+/** Collect image files from a paste / drop DataTransfer. */
+function clipboardImageFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const out: File[] = [];
+  const seen = new Set<string>();
+  const push = (f: File | null) => {
+    if (!f || !f.type.startsWith('image/')) return;
+    const id = `${f.name}:${f.size}:${f.type}:${f.lastModified}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(f);
+  };
+  try {
+    for (const item of Array.from(data.items || [])) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        push(item.getAsFile());
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  if (!out.length) {
+    for (const f of Array.from(data.files || [])) push(f);
+  }
+  return out;
+}
+
+/** Drop bare <img> nodes browsers insert on paste (keep thumbs inside chips). */
+function stripOrphanPasteImages(root: HTMLElement) {
+  root.querySelectorAll('img').forEach((img) => {
+    if (img.closest('[data-composer-chip="1"]')) return;
+    img.remove();
+  });
+}
 
 /**
  * Contenteditable composer: context chips inline; supports insert-at-caret.
@@ -296,6 +458,8 @@ const AgentComposerInput = forwardRef<
     disabled?: boolean;
     placeholder: string;
     className?: string;
+    /** Paste / drop images → upload + @ mention (do not insert raw <img>). */
+    onPasteImages?: (files: File[]) => void;
   }
 >(function AgentComposerInput(
   {
@@ -308,6 +472,7 @@ const AgentComposerInput = forwardRef<
     disabled,
     placeholder,
     className,
+    onPasteImages,
   },
   ref
 ) {
@@ -315,15 +480,26 @@ const AgentComposerInput = forwardRef<
   const contextsRef = useRef(contexts);
   const onContextsChangeRef = useRef(onContextsChange);
   const onChangeRef = useRef(onChange);
+  const onPasteImagesRef = useRef(onPasteImages);
   const skipSyncRef = useRef(false);
   /** Last caret offset in plain text — survives blur (e.g. right-click canvas). */
   const savedCaretRef = useRef<number | null>(null);
   /** Ignore select/focus caret noise while programmatically inserting a chip. */
   const insertingRef = useRef(false);
+  /**
+   * Placeholder follows real DOM chips, not just React `contexts`, so we never
+   * paint the hint over a chip that is still mounted (add/remove race).
+   */
+  const [domHasChips, setDomHasChips] = useState(() => contexts.length > 0);
 
   contextsRef.current = contexts;
   onContextsChangeRef.current = onContextsChange;
   onChangeRef.current = onChange;
+  onPasteImagesRef.current = onPasteImages;
+
+  const syncDomHasChips = () => {
+    setDomHasChips(editorHasComposerChips(editorRef.current));
+  };
 
   const removeContextByKey = (key: string) => {
     onContextsChangeRef.current(contextsRef.current.filter((c) => c.key !== key));
@@ -380,6 +556,8 @@ const AgentComposerInput = forwardRef<
     const spacer = document.createTextNode('\u200b');
     chip.after(spacer);
     scrubComposerScaffold(el);
+    // Hide placeholder immediately — don't wait for the React contexts commit.
+    setDomHasChips(true);
 
     const next = document.createRange();
     next.setStartAfter(spacer);
@@ -512,11 +690,21 @@ const AgentComposerInput = forwardRef<
         insertingRef.current = false;
       }
     },
+    getMarkedText: () => {
+      const el = editorRef.current;
+      if (!el) return '';
+      return readMarkedText(el);
+    },
+    getAtMentionAnchorRect: () => {
+      const el = editorRef.current;
+      return el ? getAtMentionAnchorRect(el) : null;
+    },
   }));
 
   useLayoutEffect(() => {
     if (skipSyncRef.current) {
       skipSyncRef.current = false;
+      syncDomHasChips();
       return;
     }
     const el = editorRef.current;
@@ -534,18 +722,23 @@ const AgentComposerInput = forwardRef<
       el.querySelector(`[data-composer-chip]:not([data-chip-style="${CHIP_STYLE}"])`)
     );
     if (sameCtx && currentText === value && !chipsStale) {
+      syncDomHasChips();
       return;
     }
     // Contexts unchanged but React `value` changed (e.g. cleared after send).
     // Update plain text in place — do not rebuild chips (preserves mid-text chip order).
     if (sameCtx) {
       syncPlainText(el, value);
+      syncDomHasChips();
       return;
     }
     // New context chips only appended — insert at saved caret (not DOM end / not index 0).
+    // Require plain text already in sync. Empty editor + non-empty `value` (e.g. begin
+    // edit user bubble) must writeDom, or insertChip-only + onChange wipes the draft.
     const onlyAppended =
       nextCtxKeys.length > domCtxKeys.length &&
-      domCtxKeys.every((k, i) => nextCtxKeys[i] === k);
+      domCtxKeys.every((k, i) => nextCtxKeys[i] === k) &&
+      currentText === value;
     if (onlyAppended) {
       insertingRef.current = true;
       try {
@@ -560,9 +753,12 @@ const AgentComposerInput = forwardRef<
       skipSyncRef.current = true;
       const text = readPlainText(el);
       if (text !== value) onChangeRef.current(text);
+      syncDomHasChips();
       return;
     }
     writeDom(contexts, value, 'preserve');
+    // After chips are removed from the DOM — only then can the placeholder show.
+    syncDomHasChips();
   }, [contexts, value]);
 
   const handleInput = () => {
@@ -585,6 +781,55 @@ const AgentComposerInput = forwardRef<
     const next = readPlainText(el);
     skipSyncRef.current = true;
     onChangeRef.current(next);
+  };
+
+  const insertPlainAtCaret = (plain: string) => {
+    const el = editorRef.current;
+    if (!el || !plain) return;
+    const sel = window.getSelection();
+    let range: Range | null = null;
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      range = sel.getRangeAt(0);
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+    }
+    range.deleteContents();
+    // Single TextNode — much faster than execCommand for large pastes.
+    const textNode = document.createTextNode(plain);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  };
+
+  const handlePaste = (e: ReactClipboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    const files = clipboardImageFiles(e.clipboardData);
+    if (files.length && onPasteImagesRef.current) {
+      e.preventDefault();
+      rememberCaret();
+      onPasteImagesRef.current(files);
+      return;
+    }
+    // Plain text only — no rich HTML styles; sync React once (skip full DOM rewrite).
+    e.preventDefault();
+    const plain = String(e.clipboardData?.getData('text/plain') || '');
+    if (!plain) return;
+    const el = editorRef.current;
+    if (!el) return;
+    insertPlainAtCaret(plain);
+    stripOrphanPasteImages(el);
+    skipSyncRef.current = true;
+    rememberCaret();
+    const next = readPlainText(el);
+    onChangeRef.current(next);
+    syncDomHasChips();
+    queueMicrotask(() => {
+      skipSyncRef.current = true;
+    });
   };
 
   const handleKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -618,11 +863,12 @@ const AgentComposerInput = forwardRef<
   };
 
   const empty = !value.trim();
-  const hasChips = contexts.length > 0;
-  const showPlaceholder = empty && !hasChips && Boolean(placeholder.trim());
+  // Prefer DOM chip presence so placeholder never overlaps a chip mid-commit.
+  const showPlaceholder =
+    empty && !domHasChips && contexts.length === 0 && Boolean(placeholder.trim());
 
   return (
-    <div className={cn('relative w-full min-w-0 flex-1', className)}>
+    <div className={cn('relative w-full min-w-0 flex-1 cursor-text', className)}>
       <div
         ref={editorRef}
         role="textbox"
@@ -633,21 +879,21 @@ const AgentComposerInput = forwardRef<
         data-agent-composer
         suppressContentEditableWarning
         onInput={handleInput}
+        onPaste={handlePaste}
         onKeyDown={handleKeyDown}
         onKeyUp={rememberCaret}
         onClick={rememberCaret}
         onBlur={rememberCaret}
         onSelect={rememberCaret}
         className={cn(
-          'w-full whitespace-pre-wrap break-words bg-transparent py-0.5 text-[13px] leading-5 text-[var(--ink)] outline-none',
-          'min-h-[26px]',
+          'h-full w-full min-h-[26px] max-h-[140px] cursor-text overflow-y-auto whitespace-pre-wrap break-words bg-transparent py-0.5 text-[13px] leading-5 text-[var(--ink)] outline-none',
           '[&_[data-composer-chip]]:align-middle',
-          disabled && 'pointer-events-none opacity-50'
+          disabled && 'pointer-events-none cursor-default opacity-50'
         )}
       />
       {showPlaceholder ? (
         <div
-          className="pointer-events-none absolute inset-0 text-[13px] leading-5 text-[var(--muted)]"
+          className="pointer-events-none absolute inset-0 cursor-text text-[13px] leading-5 text-[var(--muted)]"
           aria-hidden
         >
           {placeholder}

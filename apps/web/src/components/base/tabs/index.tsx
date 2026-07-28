@@ -1,11 +1,14 @@
 import React from 'react';
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from '@headlessui/react';
+import {
+  SegmentedControl,
+  type SegmentedRadius,
+} from '@/components/base/segmented';
 import { cn } from '@/utils/classnames';
 
 export interface TabsItem {
   value: string;
   label: React.ReactNode;
-  /** Panel body; omit all to hide `TabPanels` */
+  /** Panel body; omit all to hide panels */
   content?: React.ReactNode;
   disabled?: boolean;
 }
@@ -17,74 +20,59 @@ export interface TabsProps {
   onChange?: (index: number) => void;
   className?: string;
   TabListClass?: string;
+  /** @deprecated Unused — chips come from SegmentedControl. */
   TabClass?: string;
   TabPanelsClass?: string;
+  /** Passed to SegmentedControl — default soft rect (`xl`). */
+  radius?: SegmentedRadius;
 }
 
-/** Tab list + optional panels (Headless UI) */
+/** Tab list uses shared `SegmentedControl`; optional panels below. */
 export const Tabs: React.FC<TabsProps> = ({
   items,
   selectedIndex,
   onChange,
   className,
   TabListClass,
-  TabClass,
   TabPanelsClass,
+  radius = 'xl',
 }) => {
-  const isControlled = selectedIndex !== undefined;
+  const index = selectedIndex ?? 0;
+  const value = items[index]?.value ?? items[0]?.value ?? '';
 
   return (
-    <TabGroup
-      defaultIndex={isControlled ? undefined : 0}
-      selectedIndex={selectedIndex}
-      onChange={onChange}
-      className={cn('w-full', className)}
-    >
-      {/* Tabs Navigator */}
+    <div className={cn('w-full', className)}>
       <div className="flex w-full shrink-0 flex-col items-center">
-        <TabList
-          className={cn(
-            'mb-[10px] flex items-center justify-between gap-[10px] rounded-[6px] bg-[var(--color-background-default-secondary)] p-[6px]',
-            TabListClass
-          )}
-        >
-          {items.map((item) => (
-            <Tab
-              key={item.value}
-              disabled={item.disabled}
-              className={cn(
-                'h-6 px-3 rounded-[4px] text-[12px] font-medium flex items-center justify-center',
-                'text-[var(--color-text-default-base)]',
-                'outline-none focus:outline-none focus-visible:outline-none',
-                'data-[selected]:!bg-[var(--color-background-default-base)] data-[selected]:!text-[var(--color-text-default-base)] data-[selected]:!shadow-[0px_1px_4px_0px_rgba(12,12,13,0.05)] data-[selected]:!shadow-[0px_1px_8px_1px_rgba(12,12,13,0.05)]',
-                'data-[selected]:!outline-none data-[selected]:!ring-0 data-[selected]:!border-0',
-                'data-[hover]:bg-[var(--color-background-neutral-tertiary)]',
-                'data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed',
-                TabClass
-              )}
-            >
-              {item.label}
-            </Tab>
-          ))}
-        </TabList>
+        <SegmentedControl
+          radius={radius}
+          className={cn('mb-2.5', TabListClass)}
+          value={value}
+          onChange={(next) => {
+            const i = items.findIndex((it) => it.value === next);
+            if (i >= 0) onChange?.(i);
+          }}
+          options={items.map((item) => ({
+            value: item.value,
+            label: item.label,
+            disabled: item.disabled,
+          }))}
+        />
       </div>
 
-      {/* Panels only when at least one item defines content */}
-      {items.some((item) => item.content !== undefined) && (
-        <TabPanels className={TabPanelsClass}>
-          {items.map((item) => (
-            <TabPanel
-              key={item.value}
-              className="flex min-h-0 w-full flex-1 flex-col"
-            >
-              {item.content}
-            </TabPanel>
-          ))}
-        </TabPanels>
-      )}
-    </TabGroup>
+      {items.some((item) => item.content !== undefined)
+        ? items.map((item, i) =>
+            i === index ? (
+              <div
+                key={item.value}
+                className={cn('flex min-h-0 w-full flex-1 flex-col', TabPanelsClass)}
+              >
+                {item.content}
+              </div>
+            ) : null
+          )
+        : null}
+    </div>
   );
 };
 
 export default Tabs;
-

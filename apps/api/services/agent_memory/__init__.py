@@ -1,3 +1,4 @@
-from services.agent_memory.service import MemoryBundle, memory_service
+"""Agent long-term / short-term memory.
 
-__all__ = ["MemoryBundle", "memory_service"]
+Import from ``services.agent_memory.service`` (and related submodules).
+"""

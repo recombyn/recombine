@@ -1,104 +1,40 @@
 ﻿import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { BiEditAlt } from 'react-icons/bi';
 import {
   HiOutlineCheck,
-  HiOutlineEllipsisHorizontal,
-  HiOutlineGlobeAlt,
   HiOutlineListBullet,
-  HiOutlineXMark,
+  HiOutlineMinus,
 } from 'react-icons/hi2';
 import { RiDeleteBinLine } from 'react-icons/ri';
-import { Button, Dialog, Dropdown, Input, message } from '@/components/base';
-import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
+import { Button, Dialog, Input, message } from '@/components/base';
 import {
   fetchMyPlazaSubmissions,
-  submitToPlaza,
-  type PlazaStatus,
   type PlazaSubmissionDto,
 } from '@/apis/plaza';
-import { fetchProject } from '@/apis/projects';
-import { removeProjectFromCloud, removeProjectsFromCloud } from '@/components/editor/useProjectCloudSync';
+import {
+  removeProjectFromCloud,
+  removeProjectsFromCloud,
+  renameProjectOnCloud,
+  requestProjectFlush,
+} from '@/components/editor/useProjectCloudSync';
 import { cn } from '@/utils/classnames';
-import { useGoEditor } from '@/utils/goEditor';
-import { buildLoginUrl } from '@/utils/authReturnTo';
 import {
   deleteTemplate,
   deleteTemplates,
-  openTemplate,
   renameTemplateById,
-  setDocumentFromCanvas,
 } from '@/store/modules/editor';
-import TemplateThumbnail from './TemplateThumbnail';
-import PlazaPublishDialog from './PlazaPublishDialog';
-import EmptyState from '@/components/home/EmptyState';
+import ProjectCard, {
+  NewProjectCard,
+  ProjectCardSkeleton,
+} from '@/components/home/ProjectCard';
 import {
-  checkPlazaCoverForPublish,
-  coverDocumentHasContent,
-  extractPlazaCoverDocument,
-} from '@/utils/plazaCover';
-import i18n from '@/i18n';
+  GRID_SKELETON_COUNT,
+  InfiniteScrollSection,
+} from '@/components/home/InfiniteScroll';
+import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 
-function formatTemplateTime(timestamp: number | string | Date | null | undefined) {
-  if (timestamp == null || timestamp === '') return '';
-  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
-  const ms = date.getTime();
-  if (!Number.isFinite(ms)) return '';
-  const now = Date.now();
-  const diffMs = Math.max(0, now - ms);
-  const diffMin = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  const locale = i18n.resolvedLanguage || i18n.language || 'zh-CN';
-  if (diffMin < 1) return i18n.t('time.justNow');
-  if (diffMin < 60) return i18n.t('time.minutesAgo', { count: diffMin });
-  if (diffHours < 24) return i18n.t('time.hoursAgo', { count: diffHours });
-  if (diffDays <= 3) return i18n.t('time.daysAgo', { count: diffDays });
-  const sameYear = date.getFullYear() === new Date(now).getFullYear();
-  return date.toLocaleDateString(locale, {
-    year: sameYear ? undefined : 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-  });
-}
-
-/** Own Projects thumb: content-fitted cover, else stored image, else full doc. */
-function ProjectCardThumb({
-  document,
-  thumbnail,
-}: {
-  document?: unknown;
-  thumbnail?: string | null;
-}) {
-  const cover = document
-    ? extractPlazaCoverDocument(document, { contentFit: true })
-    : null;
-  if (cover && coverDocumentHasContent(cover)) {
-    return <TemplateThumbnail document={cover} fit="contain" />;
-  }
-  if (typeof thumbnail === 'string' && thumbnail.trim()) {
-    return <img src={thumbnail} alt="" className="h-full w-full object-contain" />;
-  }
-  if (document) {
-    return <TemplateThumbnail document={document} fit="contain" />;
-  }
-  return <div className="h-full w-full bg-[var(--accent-soft)]" />;
-}
-
-/** Shared card skeleton — thumb shimmer + title / meta lines. */
-export function ProjectCardSkeleton({ label }: { label?: string }) {
-  return (
-    <article className="group" aria-busy="true" aria-label={label || 'loading'}>
-      <div className="skeleton-bone h-[170px] w-full rounded-xl border border-[var(--line)]" />
-      <div className="mt-2.5 space-y-1.5 px-0.5">
-        <div className="skeleton-bone h-3 w-[72%]" />
-        <div className="skeleton-bone h-2.5 w-[48%]" />
-      </div>
-    </article>
-  );
-}
+export { ProjectCardSkeleton };
 
 function ImportSkeletonCard({ name }: { name: string }) {
   const { t } = useTranslation();
@@ -112,188 +48,96 @@ function ImportSkeletonCard({ name }: { name: string }) {
   );
 }
 
-function statusLabelKey(status: PlazaStatus): string {
-  if (status === 'pending') return 'plaza.statusPending';
-  if (status === 'approved') return 'plaza.statusApproved';
-  return 'plaza.statusRejected';
-}
-
-function TemplateCard({
-  item,
-  selected,
-  selectMode,
-  plazaStatus,
-  onToggle,
+/** Batch bar — bottom floating pill (same on all breakpoints). */
+function ProjectBatchBottomBar({
+  total,
+  selectedCount,
+  allSelected,
+  deleting,
+  onToggleSelectAll,
+  onClearSelection,
   onDelete,
-  onRename,
-  onPublish,
+  onCancel,
 }: {
-  item: any;
-  selected: boolean;
-  selectMode: boolean;
-  plazaStatus?: PlazaSubmissionDto | null;
-  onToggle: () => void;
+  total: number;
+  selectedCount: number;
+  allSelected: boolean;
+  deleting: boolean;
+  onToggleSelectAll: () => void;
+  onClearSelection: () => void;
   onDelete: () => void;
-  onRename: () => void;
-  onPublish: () => void;
+  onCancel: () => void;
 }) {
   const { t } = useTranslation();
-  const dispatch = useDispatch();
-  const goEditor = useGoEditor();
-
-  const openEditor = async () => {
-    if (!item.document && item.remoteOnly) {
-      try {
-        const res = await fetchProject(item.id);
-        dispatch(openTemplate(item.id));
-        if (res.project?.document) {
-          dispatch(setDocumentFromCanvas(res.project.document));
-        }
-        goEditor({ projectId: item.id });
-        return;
-      } catch {
-        message.error(t('home.casesLoadFailed'));
-        return;
-      }
-    }
-    dispatch(openTemplate(item.id));
-    goEditor({ projectId: item.id });
-  };
-
-  const menuItems: MenuItemType[] = [
-    {
-      key: 'rename',
-      label: (
-        <span className="inline-flex items-center gap-2">
-          <BiEditAlt className="h-3.5 w-3.5" />
-          {t('home.rename')}
-        </span>
-      ),
-    },
-    {
-      key: 'publish',
-      label: (
-        <span className="inline-flex items-center gap-2">
-          <HiOutlineGlobeAlt className="h-3.5 w-3.5" />
-          {t('plaza.publish')}
-        </span>
-      ),
-      disabled:
-        plazaStatus?.status === 'pending' || plazaStatus?.status === 'approved',
-    },
-    {
-      key: 'delete',
-      label: (
-        <span className="inline-flex items-center gap-2 text-red-500">
-          <RiDeleteBinLine className="h-3.5 w-3.5" />
-          {t('common.delete')}
-        </span>
-      ),
-    },
-  ];
-
-  const onMenu = (key: string) => {
-    if (key === 'rename') onRename();
-    if (key === 'delete') onDelete();
-    if (key === 'publish') onPublish();
-  };
+  const hasSelection = selectedCount > 0;
+  const partial = hasSelection && !allSelected;
 
   return (
-    <article className="group">
-      <div
-        className={cn(
-          'relative overflow-hidden rounded-xl border bg-[var(--accent-soft)] transition group-hover:shadow-[0_8px_24px_rgba(31,35,41,0.08)]',
-          selected
-            ? 'border-[#8eb4e8] shadow-[0_0_0_2px_rgba(91,141,239,0.35)]'
-            : 'border-[var(--line)] hover:border-[var(--color-border-default-base-hover)]'
-        )}
+    <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-4">
+      <FloatingToolbar
+        role="toolbar"
+        aria-label={t('home.batchSelect')}
+        className="pointer-events-auto max-w-full gap-2 overflow-x-auto px-3 py-2 text-[13px] font-medium text-[var(--ink)]"
       >
         <button
           type="button"
-          className="relative block w-full text-left"
-          onClick={() => {
-            if (selectMode) onToggle();
-            else openEditor();
-          }}
+          onClick={onToggleSelectAll}
+          className="inline-flex shrink-0 items-center gap-2"
         >
-          <div className="h-[170px] w-full overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)]">
-            <ProjectCardThumb document={item.document} thumbnail={item.thumbnail} />
-          </div>
-        </button>
-
-        {selectMode ? (
-          <button
-            type="button"
-            aria-label="select"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggle();
-            }}
-            className={cn(
-              'absolute left-1.5 top-1.5 z-20 flex h-3.5 w-3.5 items-center justify-center rounded-[2px] border transition',
-              selected
-                ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--on-brand)]'
-                : 'border-[var(--line)] bg-[var(--surface)]/90 text-transparent'
-            )}
-          >
-            <HiOutlineCheck className="h-2.5 w-2.5" strokeWidth={3} />
-          </button>
-        ) : null}
-
-        {plazaStatus?.status ? (
           <span
             className={cn(
-              'absolute right-1.5 top-1.5 z-10 rounded-md px-1.5 py-0.5 text-[10px] font-medium ring-1',
-              plazaStatus.status === 'pending' &&
-                'bg-[var(--surface)]/95 text-amber-700 ring-amber-200',
-              plazaStatus.status === 'approved' &&
-                'bg-[var(--surface)]/95 text-emerald-700 ring-emerald-200',
-              plazaStatus.status === 'rejected' &&
-                'bg-[var(--surface)]/95 text-red-600 ring-red-200'
+              'flex h-4 w-4 items-center justify-center rounded-[3px] border transition',
+              hasSelection
+                ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--on-brand)]'
+                : 'border-[var(--line)] bg-[var(--surface)] text-transparent'
             )}
+            aria-hidden
           >
-            {t(statusLabelKey(plazaStatus.status))}
+            {allSelected ? (
+              <HiOutlineCheck className="h-2.5 w-2.5" strokeWidth={3} />
+            ) : partial ? (
+              <HiOutlineMinus className="h-2.5 w-2.5" strokeWidth={3} />
+            ) : null}
           </span>
-        ) : null}
-      </div>
+          <span className="whitespace-nowrap">
+            {hasSelection
+              ? t('home.selectedCount', { count: selectedCount })
+              : `${t('home.selectAll')} (${total})`}
+          </span>
+        </button>
 
-      <div className="mt-2.5 flex items-start gap-1 px-0.5">
-        <div className="min-w-0 flex-1">
-          <button
-            type="button"
-            className="block w-full truncate text-left text-[13px] font-medium text-[var(--ink)] hover:opacity-80"
-            onClick={onRename}
-            title={t('home.rename')}
-          >
-            {item.name || t('home.untitled')}
-          </button>
-          <p className="mt-0.5 text-[11px] text-[var(--muted)]">{formatTemplateTime(item.updatedAt)}</p>
-        </div>
-        <div
-          className="shrink-0 pt-0.5"
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <Dropdown
-            trigger="click"
-            placement="bottom-end"
-            offset={4}
-            items={menuItems}
-            onClick={onMenu}
-            floatingClassName="z-[600]"
-            popupClassName="rounded-lg min-w-[140px] !bg-[var(--surface)] shadow-[0_8px_28px_rgba(31,35,41,0.16)] ring-1 ring-[var(--line)]"
-          >
+        <span className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />
+
+        {hasSelection ? (
+          <>
             <button
               type="button"
-              title={t('common.more')}
-              className="flex items-center justify-center p-0.5 text-[var(--muted)] transition-colors hover:text-[var(--ink)]"
+              disabled={deleting}
+              onClick={onDelete}
+              className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-red-500 disabled:opacity-40"
             >
-              <HiOutlineEllipsisHorizontal className="h-4 w-4" />
+              <RiDeleteBinLine className="h-3.5 w-3.5" />
+              {t('common.delete')}
             </button>
-          </Dropdown>
-        </div>
-      </div>
-    </article>
+            <button
+              type="button"
+              onClick={onClearSelection}
+              className="shrink-0 whitespace-nowrap"
+            >
+              {t('home.clearSelection')}
+            </button>
+          </>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={onCancel}
+          className="shrink-0 whitespace-nowrap"
+        >
+          {t('common.cancel')}
+        </button>
+      </FloatingToolbar>
+    </div>
   );
 }
 
@@ -304,6 +148,11 @@ export default function TemplateGrid({
   importing = false,
   importingName = '',
   loading = false,
+  loadingMore = false,
+  hasMore = false,
+  onLoadMore,
+  onCreate,
+  createDisabled = false,
 }: {
   templates: any[];
   title: string;
@@ -312,20 +161,26 @@ export default function TemplateGrid({
   importingName?: string;
   /** Cloud hydrate / first paint */
   loading?: boolean;
+  loadingMore?: boolean;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
+  onCreate?: () => void;
+  createDisabled?: boolean;
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
-  const navigate = useNavigate();
   const user = useSelector((s: any) => s.auth?.user);
+  const currentId = useSelector((s: any) => s.editor?.currentId as string | null);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [renameTarget, setRenameTarget] = useState<any | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
-  const [publishTarget, setPublishTarget] = useState<any | null>(null);
-  const [publishing, setPublishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [plazaByProject, setPlazaByProject] = useState<Record<string, PlazaSubmissionDto>>({});
 
+  const gridClass =
+    'grid w-full grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5';
+  const handleLoadMore = onLoadMore ?? (() => undefined);
   const reloadPlaza = async (signal?: { cancelled: boolean }) => {
     if (!user?.id) {
       if (!signal?.cancelled) setPlazaByProject({});
@@ -404,68 +259,39 @@ export default function TemplateGrid({
 
   const closeRename = () => setRenameTarget(null);
 
+  const commitRenameFor = (item: { id?: string }, name: string) => {
+    const next = name.trim() || t('home.untitled');
+    const id = String(item.id || '');
+    if (!id) return;
+    dispatch(renameTemplateById({ id, name: next }));
+    // Open editor will flush via dirty; otherwise push name to cloud now.
+    if (currentId === id) {
+      requestProjectFlush();
+    } else {
+      void renameProjectOnCloud(id, next);
+    }
+  };
+
   const commitRename = () => {
     if (!renameTarget) return;
-    const next = renameDraft.trim() || t('home.untitled');
-    dispatch(renameTemplateById({ id: renameTarget.id, name: next }));
+    commitRenameFor(renameTarget, renameDraft);
     closeRename();
-  };
-
-  const requestPublish = (item: any) => {
-    if (!user?.id) {
-      message.warning(t('plaza.needLogin'));
-      navigate(buildLoginUrl('/home'));
-      return;
-    }
-    const st = plazaByProject[item.id]?.status;
-    if (st === 'pending') {
-      message.warning(t('plaza.alreadyPending'));
-      return;
-    }
-    if (st === 'approved') {
-      message.warning(t('plaza.alreadyPublished'));
-      return;
-    }
-    setPublishTarget(item);
-  };
-
-  const commitPublish = async () => {
-    if (!publishTarget) return;
-    setPublishing(true);
-    try {
-      const gate = checkPlazaCoverForPublish(publishTarget.document);
-      if (!gate.ok) {
-        message.error(t('plaza.artboardMissingHint'));
-        throw new Error('artboard_required');
-      }
-      await submitToPlaza({
-        projectId: String(publishTarget.id),
-        title: publishTarget.name || t('home.untitled'),
-        category: 'website',
-        document: publishTarget.document,
-      });
-      await reloadPlaza();
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail || err?.message;
-      message.error(typeof detail === 'string' ? detail : t('plaza.submitFailed'));
-      throw err;
-    } finally {
-      setPublishing(false);
-    }
   };
 
   return (
     <div className="w-full min-w-0">
       <div className="mb-2.5 flex min-h-7 items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="truncate text-[24px] font-bold text-[var(--ink)]">{title}</h2>
           <button
             type="button"
             title={selectMode ? t('home.cancelSelect') : t('home.batchSelect')}
             aria-pressed={selectMode}
             disabled={!templates.length && !selectMode}
-            onClick={() => {
+            onClick={(e) => {
               if (selectMode) {
                 exitSelectMode();
+                e.currentTarget.blur();
                 return;
               }
               // Empty list: never enter select mode (avoids toolbar flash).
@@ -473,16 +299,18 @@ export default function TemplateGrid({
               setSelectMode(true);
             }}
             className={cn(
-              '-ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors',
+              'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--line)]',
               selectMode
                 ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-                : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
-              !templates.length && !selectMode && 'cursor-not-allowed opacity-40 hover:bg-transparent'
+                : 'bg-transparent text-[var(--muted)] [@media(hover:hover)]:hover:bg-[var(--accent-soft)] [@media(hover:hover)]:hover:text-[var(--ink)]',
+              !templates.length &&
+                !selectMode &&
+                'cursor-not-allowed opacity-40 [@media(hover:hover)]:hover:bg-transparent'
             )}
           >
-            <HiOutlineListBullet className="h-4 w-4" />
+            <HiOutlineListBullet className="h-5 w-5" />
           </button>
-          <h2 className="truncate text-[14px] font-semibold text-[var(--ink)]">{title}</h2>
           {selectMode && selected.length > 0 ? (
             <span className="shrink-0 text-[12px] text-[var(--muted)]">
               {t('home.selectedCount', { count: selected.length })}
@@ -491,80 +319,59 @@ export default function TemplateGrid({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {selectMode && templates.length > 0 ? (
-            <>
-              <Button size="small" type="default" onClick={selectAll}>
-                <span className="inline-flex items-center gap-1">
-                  <HiOutlineCheck className="h-3.5 w-3.5" />
-                  {t('home.selectAll')}
-                </span>
-              </Button>
-              <Button size="small" type="default" onClick={exitSelectMode}>
-                <span className="inline-flex items-center gap-1">
-                  <HiOutlineXMark className="h-3.5 w-3.5" />
-                  {t('home.cancelSelect')}
-                </span>
-              </Button>
-              <Button
-                size="small"
-                type="primary"
-                loading={deleting}
-                disabled={!selected.length || deleting}
-                className="!border-red-500 !bg-red-500 hover:!bg-red-600 disabled:!opacity-40"
-                onClick={() => void batchDelete()}
-              >
-                <span className="inline-flex items-center gap-1">
-                  <RiDeleteBinLine className="h-3.5 w-3.5" />
-                  {t('home.batchDelete')}
-                </span>
-              </Button>
-            </>
-          ) : (
-            <span className="whitespace-nowrap text-[12px] tracking-normal text-[var(--muted)]">
-              {fileCountLabel}
-            </span>
-          )}
+          <span className="whitespace-nowrap text-[12px] tracking-normal text-[var(--muted)]">
+            {fileCountLabel}
+          </span>
         </div>
       </div>
 
-      {loading ? (
-        <div className="grid w-full grid-cols-5 gap-x-4 gap-y-5">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <ProjectCardSkeleton key={`sk-${i}`} />
-          ))}
-        </div>
-      ) : !templates?.length && !importing ? (
-        <EmptyState hint={t('home.emptyHint')} />
-      ) : (
-        <div className="grid w-full grid-cols-5 gap-x-4 gap-y-5">
-          {importing ? <ImportSkeletonCard name={importingName} /> : null}
-          {templates.map((item) => (
-            <TemplateCard
-              key={item.id}
-              item={item}
-              selected={selected.includes(item.id)}
-              selectMode={selectMode}
-              plazaStatus={plazaByProject[item.id]}
-              onToggle={() => toggle(item.id)}
-              onRename={() => setRenameTarget(item)}
-              onPublish={() => requestPublish(item)}
-              onDelete={() => {
-                const id = item.id;
-                void (async () => {
-                  try {
-                    await removeProjectFromCloud(id);
-                    dispatch(deleteTemplate(id));
-                    setSelected((prev) => prev.filter((x) => x !== id));
-                    message.destructive(t('common.delete'));
-                  } catch {
-                    message.error(t('home.batchDeleteFailed'));
-                  }
-                })();
-              }}
-            />
-          ))}
-        </div>
-      )}
+      <InfiniteScrollSection
+        loading={loading}
+        loadingMore={loadingMore}
+        hasMore={hasMore}
+        onLoadMore={handleLoadMore}
+        gridClassName={gridClass}
+        skeleton={
+          <>
+            {onCreate ? (
+              <NewProjectCard disabled={createDisabled} onClick={onCreate} />
+            ) : null}
+            {Array.from({ length: GRID_SKELETON_COUNT }, (_, i) => (
+              <ProjectCardSkeleton key={`sk-${i}`} />
+            ))}
+          </>
+        }
+      >
+        {onCreate ? (
+          <NewProjectCard disabled={createDisabled} onClick={onCreate} />
+        ) : null}
+        {importing ? <ImportSkeletonCard name={importingName} /> : null}
+        {templates.map((item) => (
+          <ProjectCard
+            key={item.id}
+            item={item}
+            selected={selected.includes(item.id)}
+            selectMode={selectMode}
+            plazaStatus={plazaByProject[item.id]}
+            onToggle={() => toggle(item.id)}
+            onRename={() => setRenameTarget(item)}
+            onCommitRename={(name) => commitRenameFor(item, name)}
+            onDelete={() => {
+              const id = item.id;
+              void (async () => {
+                try {
+                  await removeProjectFromCloud(id);
+                  dispatch(deleteTemplate(id));
+                  setSelected((prev) => prev.filter((x) => x !== id));
+                  message.destructive(t('common.delete'));
+                } catch {
+                  message.error(t('home.batchDeleteFailed'));
+                }
+              })();
+            }}
+          />
+        ))}
+      </InfiniteScrollSection>
 
       <Dialog
         show={Boolean(renameTarget)}
@@ -599,14 +406,21 @@ export default function TemplateGrid({
         />
       </Dialog>
 
-      <PlazaPublishDialog
-        open={Boolean(publishTarget)}
-        publishing={publishing}
-        projectName={publishTarget?.name || t('home.untitled')}
-        document={publishTarget?.document}
-        onClose={() => !publishing && setPublishTarget(null)}
-        onSubmit={commitPublish}
-      />
+      {selectMode && templates.length > 0 ? (
+        <>
+          <div className="h-16" aria-hidden />
+          <ProjectBatchBottomBar
+            total={templates.length}
+            selectedCount={selected.length}
+            allSelected={allSelected}
+            deleting={deleting}
+            onToggleSelectAll={selectAll}
+            onClearSelection={() => setSelected([])}
+            onDelete={() => void batchDelete()}
+            onCancel={exitSelectMode}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

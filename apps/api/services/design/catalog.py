@@ -43,7 +43,6 @@ def ensure_design_catalog(*, force: bool = False) -> None:
         ensure_action_registry()
         _CATALOG_READY = True
 
-
 def _parse_json_list(raw: Any) -> list[Any]:
     if isinstance(raw, list):
         return raw
@@ -102,8 +101,19 @@ def get_skill(skill_id: int) -> dict[str, Any] | None:
 
 
 def get_global_rules() -> dict[str, str]:
+    """Runtime rules map — disabled rows are omitted (callers fall back to code defaults)."""
     with connect() as conn:
-        rows = conn.execute("SELECT rule_key, rule_value FROM design_global_rule").fetchall()
+        try:
+            rows = conn.execute(
+                """
+                SELECT rule_key, rule_value FROM design_global_rule
+                WHERE COALESCE(enabled, 1) = 1
+                """
+            ).fetchall()
+        except Exception:
+            rows = conn.execute(
+                "SELECT rule_key, rule_value FROM design_global_rule"
+            ).fetchall()
     return {str(r["rule_key"]): str(r["rule_value"]) for r in rows}
 
 
@@ -158,7 +168,7 @@ def list_scene_codes() -> list[str]:
             return codes
     except Exception:
         pass
-    return ["website", "mobile", "image", "poster"]
+    return ["website", "mobile", "image", "poster", "drawing"]
 
 
 def get_catalog_payload() -> dict[str, Any]:

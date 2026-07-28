@@ -7,7 +7,6 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { nearestDprMultiple } from '../core/dpr';
 import { rcbSceneToScreen } from '../core/math';
 import { RCB_DEFAULT_CAMERA, type RcbCamera, type RcbVec } from '../core/types';
 
@@ -17,8 +16,24 @@ export const RcbViewportElContext = createContext<HTMLElement | null>(null);
 /** Tracks `window.devicePixelRatio` (updates on browser zoom). */
 export const RcbDevicePixelRatioContext = createContext(1);
 
+/** Camera interaction: pan/zoom in flight → use efficientZoom for cull/LOD. */
+export type RcbCameraMotion = {
+  moving: boolean;
+  /** Stepped while moving; equals live zoom when idle. */
+  efficientZoom: number;
+};
+
+export const RcbCameraMotionContext = createContext<RcbCameraMotion>({
+  moving: false,
+  efficientZoom: RCB_DEFAULT_CAMERA.zoom,
+});
+
 export function useRcbCamera(): RcbCamera {
   return useContext(RcbCameraContext);
+}
+
+export function useRcbCameraMotion(): RcbCameraMotion {
+  return useContext(RcbCameraMotionContext);
 }
 
 export function useRcbOverlayRoot(): HTMLElement | null {
@@ -32,11 +47,6 @@ export function useRcbViewportEl(): HTMLElement | null {
 /** Live devicePixelRatio (browser zoom / HiDPI). */
 export function useRcbDevicePixelRatio(): number {
   return useContext(RcbDevicePixelRatioContext);
-}
-
-/** multiple for aligning lengths under the current DPR. */
-export function useRcbDprMultiple(): number {
-  return nearestDprMultiple(useRcbDevicePixelRatio());
 }
 
 /** Pointer helper: `toScene(clientX, clientY)` using camera + viewport. */

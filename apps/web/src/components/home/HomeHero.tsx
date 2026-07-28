@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineComputerDesktop,
@@ -7,6 +7,7 @@ import {
   HiOutlinePhoto,
   HiOutlineRectangleStack,
 } from 'react-icons/hi2';
+import { SegmentedControl } from '@/components/base/segmented';
 import HomeAgentComposer, {
   type HomeAgentCategory,
   type HomeAgentSubmitPayload,
@@ -28,65 +29,111 @@ const CATEGORIES: Array<{
   { id: 'image', icon: HiOutlinePhoto, labelKey: 'homeCategories.image' },
 ];
 
-/** Home hero — brand mark, serif headline + lead, category pills, composer. */
+function resolveHeroLang(langRaw: string) {
+  const lang = langRaw || '';
+  const isZh = lang === 'zh-CN' || lang === 'zh-TW' || lang.startsWith('zh');
+  const isJa = lang === 'ja' || lang.startsWith('ja');
+  return { isZh, isJa, isLatinHero: !isZh && !isJa };
+}
+
+/**
+ * Home hero — fig2: brand + tagline title, one-click lead, category pills, composer.
+ */
 export default function HomeHero({ onSubmit }: Props): ReactNode {
   const { t, i18n } = useTranslation();
   const [category, setCategory] = useState<HomeAgentCategory>('poster');
-  const lang = i18n.resolvedLanguage || i18n.language || '';
-  const isZh = lang === 'zh-CN' || lang === 'zh-TW' || lang.startsWith('zh');
+  const lastDesignCategoryRef = useRef<HomeAgentCategory>('poster');
+  const { isZh, isJa, isLatinHero } = resolveHeroLang(
+    i18n.resolvedLanguage || i18n.language || ''
+  );
+
+  const setCategorySafe = (next: HomeAgentCategory) => {
+    if (next !== 'image') lastDesignCategoryRef.current = next;
+    setCategory(next);
+  };
+
+  /** Composer Image mode ↔ hero tabs. */
+  const onComposerCategoryChange = (next: HomeAgentCategory) => {
+    if (next === 'image') {
+      setCategory('image');
+      return;
+    }
+    setCategorySafe(lastDesignCategoryRef.current || 'poster');
+  };
+
+  const categoryOptions = useMemo(
+    () =>
+      CATEGORIES.map(({ id, icon: Icon, labelKey }) => {
+        const text = t(labelKey);
+        const active = category === id;
+        return {
+          value: id,
+          label: (
+            <span className="inline-flex items-center gap-1.5">
+              <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden />
+              {/* Mobile inactive: icon-only; md+: always icon + label. */}
+              <span className={cn(!active && 'max-md:sr-only')}>{text}</span>
+            </span>
+          ),
+        };
+      }),
+    [t, category]
+  );
 
   return (
-    <section className="relative mx-auto flex w-full max-w-[760px] shrink-0 flex-col items-center self-center px-1 pb-2 pt-[240px] text-center sm:pt-[276px]">
-      <div className="mb-3 flex flex-col items-center">
+    <section className="relative mx-auto mb-8 flex w-full max-w-[760px] shrink-0 flex-col items-center self-center px-1 pb-2 pt-[190px] text-center sm:mb-12 md:mb-[65px]">
+      <div className="mb-6 flex w-full flex-col items-center">
         <h1
           className={cn(
-            'text-[36px] font-bold leading-[1.15] text-[var(--ink)] sm:text-[48px]',
-            isZh ? 'tracking-[0.12em]' : 'tracking-tight'
+            'flex flex-col items-center font-bold text-[var(--ink)] sm:block',
+            isLatinHero
+              ? 'text-[48px] leading-[1.12] tracking-[-0.02em] sm:text-[56px]'
+              : 'text-[40px] leading-[1.2] tracking-[0.02em] sm:text-[48px]'
           )}
-          style={{ fontFamily: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif' }}
         >
-          {t('app.heroTitle')}
+          <span
+            className="tracking-[-0.02em] sm:inline"
+            style={{ fontFamily: 'var(--font-hero-en)' }}
+          >
+            {t('app.name')}
+          </span>
+          <span className="hidden sm:inline"> </span>
+          <span
+            className="sm:inline"
+            style={{ fontFamily: isLatinHero ? 'var(--font-hero-en)' : 'var(--font-hero)' }}
+          >
+            {t('app.tagline')}
+          </span>
         </h1>
         <p
           className={cn(
-            'mt-3 max-w-[min(100%,36rem)] font-sans text-[15px] leading-relaxed text-[var(--muted)] sm:mt-4 sm:text-[16px]',
-            isZh && 'tracking-[0.08em]'
+            'mt-5 max-w-[min(100%,36rem)] text-[14px] font-normal leading-[1.6] text-[var(--muted)] sm:text-[15px]',
+            (isZh || isJa) && 'tracking-[0.02em]'
           )}
         >
           {t('app.heroLead')}
         </p>
       </div>
 
-      <div
-        className="mb-5 mt-5 inline-flex max-w-full flex-wrap items-center justify-center gap-1 rounded-full border border-[var(--line)] bg-[var(--slider-inactive)] p-1 shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
-        role="tablist"
-        aria-label={t('app.name')}
-      >
-        {CATEGORIES.map(({ id, icon: Icon, labelKey }) => {
-          const active = category === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              className={cn(
-                'inline-flex min-w-[90px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-2 text-[13px] font-medium transition-colors',
-                active
-                  ? 'bg-[var(--surface)] text-[var(--ink)] shadow-[0_1px_3px_rgba(0,0,0,0.08)]'
-                  : 'text-[var(--muted)] hover:text-[var(--ink)]'
-              )}
-              onClick={() => setCategory(id)}
-            >
-              <Icon className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.75} />
-              {t(labelKey)}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="w-full text-left">
-        <HomeAgentComposer category={category} onSubmit={onSubmit} />
+      <div className="mx-auto w-full max-w-[720px]">
+        <div className="mb-6 flex w-full max-w-full justify-center">
+          <SegmentedControl
+            radius="full"
+            size="md"
+            aria-label={t('app.name')}
+            className="w-max max-w-full"
+            options={categoryOptions}
+            value={category}
+            onChange={setCategorySafe}
+          />
+        </div>
+        <div className="text-left">
+          <HomeAgentComposer
+            category={category}
+            onCategoryChange={onComposerCategoryChange}
+            onSubmit={onSubmit}
+          />
+        </div>
       </div>
     </section>
   );

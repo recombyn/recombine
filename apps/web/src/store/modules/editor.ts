@@ -12,8 +12,12 @@ import {
   spawnImageProcessNode,
   spawnImportPlaceholderNode,
   spawnImageUploadPlaceholderNode,
+  createImageGeneratorNode,
+  promoteImageGeneratorToImage,
+  addNodeToDocument,
   removeNodesFromDocument,
   applyImageDecomposeLayers,
+  detachImageVariantToNode,
 } from '@/components/rcb/scene/sceneDocument';
 import {
   loadTemplates,
@@ -22,6 +26,10 @@ import {
   isSessionTemplate,
 } from '@/utils/templatesStorage';
 import type { TemplateSource } from '@/utils/templatesStorage';
+import {
+  normalizeProjectThumbnailUrls,
+  purgeLegacyCustomThumbCache,
+} from '@/utils/projectThumb';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 
 export type { ArtboardFrame } from '@/components/rcb/frames/types';
@@ -33,7 +41,8 @@ export type ImageToolPanelKind =
   | 'expand'
   | 'crop'
   | 'adjust'
-  | 'flipRotate';
+  | 'flipRotate'
+  | 'quickEdit';
 
 function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
   const width = Math.max(40, Math.round(partial?.width || 794));
@@ -59,6 +68,8 @@ function syncLibraryOnEdit(state: any, claim = true) {
   if (!state.currentId || !state.document) return;
   const item = state.templates.find((t: any) => t.id === state.currentId);
   if (!item) return;
+  // Share-edit sessions stay off the Projects library.
+  if (String(state.currentId).startsWith('share_')) return;
   if (!(claim && isSessionTemplate(item))) return;
   item.source = 'user' as TemplateSource;
   item.document = JSON.parse(JSON.stringify(state.document));
@@ -89,6 +100,8 @@ const initialState = {
   historyPast: [] as any[],
   historyFuture: [] as any[],
   activeTool: 'select' as string,
+  /** Local grid snap + overlay (session-persisted; not in cloud document). */
+  isGridMode: false,
   shapeKind: 'rect' as string,
   pendingImageSrc: null as string | null,
   pendingImageProcessId: null as string | null,
@@ -121,10 +134,46 @@ const initialState = {
   devHoverNodeId: null as string | null,
   /** True while the design agent is mutating the canvas (hides selection chrome). */
   agentBusy: false,
+  /**
+   * Composer canvas pick — next click attaches (group-expanded) to the target.
+   * `target`: `'agent'` | `` `node:${nodeId}` ``
+   */
+  canvasAttachPick: null as null | { target: string },
+  /** Hover is over a node that cannot be added (generator / shimmer). */
+  canvasAttachPickBlocked: false,
+  /** Delivered once after a successful pick; composers consume and clear. */
+  pendingCanvasAttach: null as null | { target: string; payload: string | string[] },
 };
 
 function cloneDocument(doc: any) {
   return doc ? normalizeDocument(JSON.parse(JSON.stringify(doc))) : null;
+}
+
+/** Stage fill lives on Redux; SvgCanvas view docs force transparent paper for hosts. */
+const STAGE_CANVAS_META_KEYS = [
+  'backgroundColor',
+  'backgroundFillType',
+  'backgroundGradient',
+  'backgroundOpacity',
+  'backgroundImageSrc',
+  'backgroundImageFit',
+  'backgroundImageRotate',
+  'backgroundImageAdjust',
+] as const;
+
+/**
+ * Embedded canvas passes a view document with `backgroundColor: 'transparent'`.
+ * Geometry commits must not write that back over the real stage fill.
+ */
+function preserveStageCanvasMeta(prev: any, incoming: any) {
+  if (!prev || !incoming || typeof incoming !== 'object') return incoming;
+  if (String(incoming.backgroundColor) !== 'transparent') return incoming;
+  if (String(prev.backgroundColor ?? '') === 'transparent') return incoming;
+  const next = { ...incoming };
+  for (const key of STAGE_CANVAS_META_KEYS) {
+    if (key in prev) next[key] = prev[key];
+  }
+  return next;
 }
 
 function pushHistory(state: typeof initialState) {
@@ -200,13 +249,17 @@ const editorSlice = createSlice({
     },
     setDocument(state, action) {
       pushHistory(state);
-      state.document = normalizeDocument(action.payload);
+      state.document = normalizeDocument(
+        preserveStageCanvasMeta(state.document, action.payload)
+      );
       state.dirty = true;
       state.sceneReloadToken += 1;
       syncLibraryOnEdit(state);
     },
     setDocumentFromCanvas(state, action) {
-      state.document = normalizeDocument(action.payload);
+      state.document = normalizeDocument(
+        preserveStageCanvasMeta(state.document, action.payload)
+      );
       state.dirty = true;
       syncLibraryOnEdit(state);
     },
@@ -335,7 +388,7 @@ const editorSlice = createSlice({
         nodeIds.every((id: string) => panelIds.includes(id));
       if (!same) state.shapeStylePanel = null;
     },
-    /** Remove one or more artboard frames (scene nodes are left as-is). */
+    /** Remove one or more artboard frames. Contained scene nodes are cleared by the canvas delete path. */
     removeArtboardFrames(state, action) {
       if (!state.document) return;
       const ids: string[] = Array.isArray(action.payload)
@@ -415,13 +468,16 @@ const editorSlice = createSlice({
     },
     renameTemplate(state, action) {
       const item = state.templates.find((t) => t.id === state.currentId);
-      if (item) {
-        item.name = action.payload;
-        item.updatedAt = Date.now();
-        // Renaming is an explicit claim → show in Projects.
-        if (isSessionTemplate(item)) item.source = 'user';
-        saveTemplates(state.templates);
-      }
+      if (!item) return;
+      const next = String(action.payload ?? '');
+      if (item.name === next) return;
+      item.name = next;
+      item.updatedAt = Date.now();
+      // Renaming is an explicit claim → show in Projects.
+      if (isSessionTemplate(item)) item.source = 'user';
+      // Name is synced via cloud flush (same path as document edits).
+      state.dirty = true;
+      saveTemplates(state.templates);
     },
     persistCurrent(state, action) {
       if (!state.currentId || !state.document) return;
@@ -488,7 +544,7 @@ const editorSlice = createSlice({
         state.currentId = id;
         state.document = doc;
         clearSelection(state);
-        state.dirty = false;
+        state.dirty = Boolean(payload.dirty);
         state.historyPast = [];
         state.historyFuture = [];
         state.sceneReloadToken += 1;
@@ -508,7 +564,7 @@ const editorSlice = createSlice({
       state.currentId = id;
       state.document = doc;
       clearSelection(state);
-      state.dirty = false;
+      state.dirty = Boolean(payload.dirty);
       state.historyPast = [];
       state.historyFuture = [];
       state.sceneReloadToken += 1;
@@ -650,24 +706,32 @@ const editorSlice = createSlice({
       if (!id) return;
       const item = state.templates.find((t) => t.id === id);
       if (!item) return;
-      item.name = String(name || item.name || '未命名作品');
+      const next = String(name || item.name || '未命名作品');
+      if (item.name === next) return;
+      item.name = next;
       item.updatedAt = Date.now();
       if (isSessionTemplate(item)) item.source = 'user';
+      if (state.currentId === id) state.dirty = true;
       saveTemplates(state.templates);
     },
     /** Store generated/list thumbnail URL or data URL on a project card. */
     setTemplateThumbnail(state, action) {
-      const { id, thumbnail } = action.payload || {};
+      const { id, thumbnail, custom } = action.payload || {};
       if (!id) return;
       const item = state.templates.find((t) => t.id === id);
       if (!item) return;
       item.thumbnail = thumbnail || null;
+      // Do not bump updatedAt — thumb-only writes were racing list hydrate and
+      // pinning stale data: covers over newer COS URLs.
+      if (custom === true) item.thumbnailCustom = true;
+      else if (custom === false) item.thumbnailCustom = false;
     },
     /**
      * Replace owned Projects from GET /projects (cloud is source of truth).
      * Keeps in-memory case/scratch sessions; preserves the open owned doc if still editing.
      */
     hydrateRemoteProjects(state, action) {
+      purgeLegacyCustomThumbCache();
       const rows = Array.isArray(action.payload) ? action.payload : [];
       const prevById = new Map(state.templates.map((t: any) => [t.id, t]));
       const sessions = state.templates.filter((t: any) => isSessionTemplate(t));
@@ -676,12 +740,24 @@ const editorSlice = createSlice({
         .filter((row: any) => row?.id)
         .map((row: any) => {
           const prev = prevById.get(row.id);
+          // Cloud owns custom flag + cover URL. Never prefer local data: over list.
+          const thumbnailCustom = Boolean(row.thumbnailCustom);
           return {
             id: row.id,
             name: row.name || prev?.name || 'Untitled',
             // Keep in-memory document if we already loaded/edited this project.
             document: prev?.document ?? null,
-            thumbnail: row.thumbnailUrl || prev?.thumbnail || null,
+            thumbnail: (() => {
+              const remote = normalizeProjectThumbnailUrls(
+                row.thumbnailUrl,
+                row.updatedAt
+              );
+              if (remote.length) return remote.length === 1 ? remote[0] : remote;
+              const prevThumb = prev?.thumbnail;
+              if (Array.isArray(prevThumb) && prevThumb.length) return prevThumb;
+              return typeof prevThumb === 'string' ? prevThumb : null;
+            })(),
+            thumbnailCustom,
             createdAt: row.createdAt || prev?.createdAt || Date.now(),
             updatedAt: row.updatedAt || prev?.updatedAt || Date.now(),
             openedAt: prev?.openedAt || row.updatedAt || Date.now(),
@@ -706,12 +782,82 @@ const editorSlice = createSlice({
       state.templates = [...remoteItems, ...sessions];
       saveTemplates();
     },
+    /** Append / upsert cloud project rows without dropping already-loaded pages. */
+    appendRemoteProjects(state, action) {
+      purgeLegacyCustomThumbCache();
+      const rows = Array.isArray(action.payload) ? action.payload : [];
+      if (!rows.length) return;
+      const prevById = new Map(state.templates.map((t: any) => [t.id, t]));
+      const sessions = state.templates.filter((t: any) => isSessionTemplate(t));
+      const owned = state.templates.filter((t: any) => isOwnedTemplate(t));
+      const byId = new Map(owned.map((t: any) => [t.id, t]));
+
+      for (const row of rows) {
+        if (!row?.id) continue;
+        const prev = byId.get(row.id) || prevById.get(row.id);
+        const thumbnailCustom = Boolean(row.thumbnailCustom);
+        const remote = normalizeProjectThumbnailUrls(row.thumbnailUrl, row.updatedAt);
+        const prevThumb = prev?.thumbnail;
+        byId.set(row.id, {
+          id: row.id,
+          name: row.name || prev?.name || 'Untitled',
+          document: prev?.document ?? null,
+          thumbnail: remote.length
+            ? remote.length === 1
+              ? remote[0]
+              : remote
+            : Array.isArray(prevThumb) && prevThumb.length
+              ? prevThumb
+              : typeof prevThumb === 'string'
+                ? prevThumb
+                : null,
+          thumbnailCustom,
+          createdAt: row.createdAt || prev?.createdAt || Date.now(),
+          updatedAt: row.updatedAt || prev?.updatedAt || Date.now(),
+          openedAt: prev?.openedAt || row.updatedAt || Date.now(),
+          source: 'user' as const,
+          remoteOnly: !prev?.document && Boolean(row.hasDocument),
+        });
+      }
+
+      const remoteItems = Array.from(byId.values()).sort(
+        (a: any, b: any) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0)
+      );
+      state.templates = [...remoteItems, ...sessions];
+      saveTemplates();
+    },
+    /**
+     * Drop in-memory project library + open document (logout / guest).
+     * hydrateRemoteProjects([]) alone can keep `currentId` owned rows — that
+     * left "Recent projects" populated after sign-out.
+     */
+    clearProjectsLibrary(state) {
+      purgeLegacyCustomThumbCache();
+      state.templates = [];
+      state.currentId = null;
+      state.document = null;
+      state.dirty = false;
+      state.historyPast = [];
+      state.historyFuture = [];
+      state.selectedNodeId = null;
+      state.selectedNodeIds = [];
+      state.selectedFrameIds = [];
+      state.sceneReloadToken += 1;
+      state.documentPatchToken += 1;
+      state.lastPatchedNodeIds = [];
+      saveTemplates();
+    },
     undo(state) {
       if (!state.historyPast.length || !state.document) return;
       state.historyFuture.unshift(cloneDocument(state.document));
       state.document = state.historyPast.pop();
       state.sceneReloadToken += 1;
       state.dirty = true;
+      // Drop selection that pointed at nodes removed by this undo (e.g. detach).
+      const ds = state.document?.deltaSetLike || {};
+      const ids = (state.selectedNodeIds || []).filter((id: string) => Boolean(ds[id]));
+      state.selectedNodeIds = ids;
+      state.selectedNodeId = ids[0] || null;
       syncLibraryOnEdit(state);
     },
     redo(state) {
@@ -720,12 +866,19 @@ const editorSlice = createSlice({
       state.document = state.historyFuture.shift();
       state.sceneReloadToken += 1;
       state.dirty = true;
+      const ds = state.document?.deltaSetLike || {};
+      const ids = (state.selectedNodeIds || []).filter((id: string) => Boolean(ds[id]));
+      state.selectedNodeIds = ids;
+      state.selectedNodeId = ids[0] || null;
       syncLibraryOnEdit(state);
     },
     setActiveTool(state, action) {
       state.activeTool = action.payload;
       if (action.payload !== 'image') state.pendingImageSrc = null;
       if (action.payload !== 'pencil') state.pencilEraseMode = false;
+    },
+    setGridMode(state, action: PayloadAction<boolean>) {
+      state.isGridMode = Boolean(action.payload);
     },
     setShapeKind(state, action) {
       state.shapeKind = action.payload;
@@ -752,7 +905,75 @@ const editorSlice = createSlice({
       pushHistory(state);
       state.document = setDocumentCanvasMeta(state.document, action.payload || {});
       state.dirty = true;
+      // Background is stage CSS — do not bump sceneReloadToken (that remounts every
+      // RcbShapeHost and makes in-flight canvas edits appear to "vanish").
+      syncLibraryOnEdit(state);
+    },
+    /** Spawn canvas Image Generator plate at given document coords. */
+    spawnImageGenerator(state, action) {
+      if (!state.document) return;
+      pushHistory(state);
+      const { id, node } = createImageGeneratorNode({
+        x: action.payload?.x,
+        y: action.payload?.y,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        name: action.payload?.name,
+      });
+      state.document = addNodeToDocument(state.document, id, node);
+      state.dirty = true;
       state.sceneReloadToken += 1;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+    },
+    /** Convert Image Generator plate → normal image node (same id). */
+    /** Pull one multi-gen variant out into a sibling image node (undoable). */
+    detachImageVariant(state, action) {
+      const nodeId = String(action.payload?.nodeId || '');
+      const url = String(action.payload?.url || '').trim();
+      const name = String(action.payload?.name || '').trim() || undefined;
+      if (!state.document || !nodeId || !url) return;
+      pushHistory(state);
+      const { document: next, id } = detachImageVariantToNode(state.document, nodeId, url, {
+        name,
+      });
+      if (!id) {
+        state.historyPast.pop();
+        return;
+      }
+      state.document = next;
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      syncLibraryOnEdit(state);
+    },
+    finishImageGenerator(state, action) {
+      const nodeId = String(action.payload?.nodeId || '');
+      const src = String(action.payload?.src || '').trim();
+      if (!state.document || !nodeId || !src) return;
+      pushHistory(state);
+      const variants = Array.isArray(action.payload?.variants)
+        ? action.payload.variants.map((u: unknown) => String(u || '').trim()).filter(Boolean)
+        : undefined;
+      state.document = promoteImageGeneratorToImage(state.document, nodeId, {
+        src,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        x: action.payload?.x,
+        y: action.payload?.y,
+        name: action.payload?.name,
+        variants,
+        genPrompt: action.payload?.genPrompt,
+      });
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = nodeId;
+      state.selectedNodeIds = [nodeId];
+      if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+      syncLibraryOnEdit(state);
     },
     /** Spawn image node with local preview while remote upload runs. */
     startImageUploadPlaceholder(state, action) {
@@ -812,7 +1033,7 @@ const editorSlice = createSlice({
       const sourceHeight = action.payload?.sourceHeight as number | undefined;
       if (!state.document || !nodeId) return;
 
-      // editElements / editText: replace placeholder with split layers.
+      // editText: replace placeholder with split layers.
       if (Array.isArray(layers) && layers.length > 0) {
         const { document: next, ids } = applyImageDecomposeLayers(state.document, nodeId, layers, {
           sourceWidth,
@@ -843,6 +1064,12 @@ const editorSlice = createSlice({
             ...(extra.name ? { name: String(extra.name) } : {}),
             ...(extra.assetKind ? { assetKind: String(extra.assetKind) } : {}),
             ...(extra.uploadKey ? { uploadKey: String(extra.uploadKey) } : {}),
+            ...(extra.genPrompt != null
+              ? { genPrompt: String(extra.genPrompt || '').trim() || undefined }
+              : {}),
+            ...(extra.imageVariants != null
+              ? { imageVariants: extra.imageVariants }
+              : {}),
           },
         });
       }
@@ -940,6 +1167,46 @@ const editorSlice = createSlice({
     setAgentBusy(state, action) {
       state.agentBusy = Boolean(action.payload);
     },
+    startCanvasAttachPick(state, action: PayloadAction<{ target: string }>) {
+      const target = String(action.payload?.target || '').trim();
+      if (!target) {
+        state.canvasAttachPick = null;
+        state.canvasAttachPickBlocked = false;
+        return;
+      }
+      state.canvasAttachPick = { target };
+      state.canvasAttachPickBlocked = false;
+      state.pendingCanvasAttach = null;
+    },
+    clearCanvasAttachPick(state) {
+      state.canvasAttachPick = null;
+      state.canvasAttachPickBlocked = false;
+    },
+    setCanvasAttachPickBlocked(state, action: PayloadAction<boolean>) {
+      state.canvasAttachPickBlocked = Boolean(action.payload);
+    },
+    setPendingCanvasAttach(
+      state,
+      action: PayloadAction<{ target: string; payload: string | string[] } | null>
+    ) {
+      if (!action.payload) {
+        state.pendingCanvasAttach = null;
+        return;
+      }
+      const target = String(action.payload.target || '').trim();
+      if (!target) {
+        state.pendingCanvasAttach = null;
+        return;
+      }
+      state.pendingCanvasAttach = {
+        target,
+        payload: action.payload.payload,
+      };
+      // Keep canvasAttachPick until consume — cleared by SvgCanvas after one pick.
+    },
+    consumePendingCanvasAttach(state) {
+      state.pendingCanvasAttach = null;
+    },
   },
 });
 
@@ -972,14 +1239,20 @@ export const {
   renameTemplateById,
   setTemplateThumbnail,
   hydrateRemoteProjects,
+  appendRemoteProjects,
+  clearProjectsLibrary,
   undo,
   redo,
   setActiveTool,
+  setGridMode,
   setShapeKind,
   setPendingImageSrc,
   setCanvasSize,
   setCanvasMeta,
   startImageUploadPlaceholder,
+  spawnImageGenerator,
+  finishImageGenerator,
+  detachImageVariant,
   startImageProcess,
   finishImageProcess,
   failImageProcess,
@@ -997,6 +1270,11 @@ export const {
   setWorkspaceMode,
   setDevHoverNodeId,
   setAgentBusy,
+  startCanvasAttachPick,
+  clearCanvasAttachPick,
+  setCanvasAttachPickBlocked,
+  setPendingCanvasAttach,
+  consumePendingCanvasAttach,
 } = editorSlice.actions;
 
 export default editorSlice.reducer;

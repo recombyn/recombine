@@ -48,7 +48,7 @@ def _slug(text: str) -> str:
 
 
 def seed_fonts() -> int:
-    """Upsert fonts_seed.json into fonts table (adds/updates by family)."""
+    """Insert fonts from fonts_seed.json. Skip families that already exist in DB."""
     init_schema()
     path = _api_data() / "fonts_seed.json"
     if not path.is_file():
@@ -66,12 +66,14 @@ def seed_fonts() -> int:
 
     from services import fonts_store
 
-    upserted = 0
+    inserted = 0
     for i, item in enumerate(raw):
         if not isinstance(item, dict):
             continue
         family = str(item.get("family") or "").strip()
         if not family:
+            continue
+        if fonts_store.get_font_by_family(family):
             continue
         display = str(item.get("displayName") or family).strip() or family
         children = item.get("children")
@@ -83,8 +85,8 @@ def seed_fonts() -> int:
             children=children,
             sort_order=i,
         )
-        upserted += 1
-    return upserted
+        inserted += 1
+    return inserted
 
 
 def seed_official_plaza_cases() -> int:

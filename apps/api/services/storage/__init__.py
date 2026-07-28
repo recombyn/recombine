@@ -11,7 +11,13 @@ from config.settings import settings
 class ObjectStorage(Protocol):
     def put_file(self, key: str, path: Path, content_type: str | None = None) -> str: ...
 
-    def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str: ...
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        content_type: str | None = None,
+        cache_control: str | None = None,
+    ) -> str: ...
 
     def get_bytes(self, key: str) -> bytes | None: ...
 
@@ -29,7 +35,14 @@ class LocalStorage:
         # Already on disk in phase-1/2 layout — record key only.
         return key.replace("\\", "/")
 
-    def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        content_type: str | None = None,
+        cache_control: str | None = None,
+    ) -> str:
+        del content_type, cache_control
         root = Path(settings.result_dir).resolve() / "objects"
         dest = root / key.replace("\\", "/")
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -78,10 +91,18 @@ class S3Storage:
         self._client = boto3.client(**kwargs)
         self._bucket = settings.s3_bucket
 
-    def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        content_type: str | None = None,
+        cache_control: str | None = None,
+    ) -> str:
         extra: dict = {}
         if content_type:
             extra["ContentType"] = content_type
+        if cache_control:
+            extra["CacheControl"] = cache_control
         # Public-read so returned COS URLs work in <img> without signed cookies.
         if getattr(settings, "s3_acl_public_read", True):
             extra["ACL"] = "public-read"
@@ -141,8 +162,15 @@ def get_storage() -> ObjectStorage:
     return _storage
 
 
-def put_bytes(key: str, data: bytes, content_type: str | None = None) -> str:
-    return get_storage().put_bytes(key, data, content_type=content_type)
+def put_bytes(
+    key: str,
+    data: bytes,
+    content_type: str | None = None,
+    cache_control: str | None = None,
+) -> str:
+    return get_storage().put_bytes(
+        key, data, content_type=content_type, cache_control=cache_control
+    )
 
 
 def get_bytes(key: str) -> bytes | None:

@@ -114,8 +114,15 @@ export default function ImageToolPanelHost({ document }: { document: any }): Rea
   }, [document, panel]);
 
   if (!panel || !box) return null;
-  // Flip/rotate uses the selection floating toolbar; crop/expand use on-canvas frame.
-  if (panel.kind === 'flipRotate' || panel.kind === 'crop' || panel.kind === 'expand') return null;
+  // Flip/rotate + Chat quick-edit use the selection floating toolbar; crop/expand use on-canvas frame.
+  if (
+    panel.kind === 'flipRotate' ||
+    panel.kind === 'quickEdit' ||
+    panel.kind === 'crop' ||
+    panel.kind === 'expand'
+  ) {
+    return null;
+  }
 
   const close = () => dispatch(closeImageToolPanel());
 

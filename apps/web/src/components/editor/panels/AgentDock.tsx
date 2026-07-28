@@ -228,11 +228,11 @@ function resolveAgentRouteOverrides(
   if (!model || model === 'auto' || isCustomModelId(model)) {
     return routeOverridesForApi();
   }
-  // 锁模：本用户本轮 simple/medium/complex/vision 都用同一模型
+  // 锁模：本用户本轮 fast/standard/reasoning/vision 都用同一模型
   return {
-    simple: model,
-    medium: model,
-    complex: model,
+    fast: model,
+    standard: model,
+    reasoning: model,
     vision: model,
   };
 }
@@ -1082,6 +1082,23 @@ function useChatSessions(documentId: string | null | undefined) {
     [sessionId]
   );
 
+  /** Re-fetch session list (history panel open). Keeps the active turn in place. */
+  const refreshSessions = useCallback(async () => {
+    flushPendingSync();
+    if (!isChatLoggedIn() || apiDisabledRef.current) return;
+    try {
+      const res = await fetchChatSessions({
+        projectId: scope || '__none__',
+      });
+      const remote = (res.sessions || []).map((s) =>
+        dtoToSession({ ...s, taskState: s.taskState as TaskState | undefined })
+      );
+      setSessions(remote);
+    } catch (err: any) {
+      if (err?.response?.status === 401) apiDisabledRef.current = true;
+    }
+  }, [flushPendingSync, scope]);
+
   const chatTitle =
     messages.length === 0 ? '新对话' : titleFromMessages(messages as ChatSessionMessage[]);
 
@@ -1094,6 +1111,7 @@ function useChatSessions(documentId: string | null | undefined) {
     startNewChat,
     openSession,
     deleteSession,
+    refreshSessions,
     formatChatTime,
     newMessageId: chatUid,
     taskState,
@@ -1408,6 +1426,10 @@ export async function rasterizeNodesToPngFile(
  * - multi / group (image+shape etc.) → one export-raster PNG attachment (not split)
  * - single shape / frame → context chip with thumb
  */
+function canvasAttachToken(payload: string | string[]): string {
+  return Array.isArray(payload) ? `arr:${payload.map(String).join('\0')}` : `one:${payload}`;
+}
+
 export async function applyCanvasAttachPayload(opts: {
   document: any;
   payload: string | string[];
@@ -2201,6 +2223,9 @@ export default function AgentDock({
   contextChipsRef.current = contextChips;
   const pinnedContextKeysRef = useRef<Set<string>>(new Set());
   const contextDismissedKeyRef = useRef<string | null>(null);
+  /** Dedup canvas→composer applies (React StrictMode runs effects twice). */
+  const attachToChatLockRef = useRef<string | null>(null);
+  const pendingCanvasAttachLockRef = useRef<string | null>(null);
   const onlyImageInteraction =
     allowedInteractionModes?.length === 1 && allowedInteractionModes[0] === 'image';
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -2255,6 +2280,7 @@ export default function AgentDock({
     startNewChat: resetChatSession,
     openSession: loadChatSession,
     deleteSession: removeChatSession,
+    refreshSessions,
     formatChatTime,
     newMessageId,
     taskState,
@@ -2557,10 +2583,19 @@ export default function AgentDock({
 
   /** Right-click / pick 「添加到 Chat」— shapes → chips; images → attachment strip. */
   useEffect(() => {
-    if (!open || attachToChat == null || !document) return;
+    if (attachToChat == null) {
+      attachToChatLockRef.current = null;
+      return;
+    }
+    if (!open || !document) return;
+    const token = canvasAttachToken(attachToChat);
+    // StrictMode (and any double-delivery) must not upload the same payload twice.
+    if (attachToChatLockRef.current === token) {
+      onAttachConsumed?.();
+      return;
+    }
+    attachToChatLockRef.current = token;
     const payload = attachToChat;
-    // Clear parent flag immediately so the effect does not re-fire. Do NOT abort the
-    // in-flight apply on that clear — cleanup would cancel shape chip inserts.
     onAttachConsumed?.();
     void applyCanvasAttachPayload({
       document,
@@ -2573,9 +2608,9 @@ export default function AgentDock({
         inputRef.current?.insertContextAtCaret(ctx);
       },
     });
-    // handleAttachFiles is stable enough via closure; omit to avoid re-fire loops.
+    // handleAttachFiles / onAttachConsumed omitted — identity churn must not re-fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, attachToChat, document, onAttachConsumed]);
+  }, [open, attachToChat, document]);
 
   /** Composer "Add from canvas" pick result (node composers use pending; agent uses attachToChat). */
   const pendingCanvasAttach = useSelector(
@@ -2583,8 +2618,18 @@ export default function AgentDock({
       s.editor.pendingCanvasAttach as null | { target: string; payload: string | string[] }
   );
   useEffect(() => {
-    if (!open || !document || !pendingCanvasAttach) return;
+    if (!pendingCanvasAttach) {
+      pendingCanvasAttachLockRef.current = null;
+      return;
+    }
+    if (!open || !document) return;
     if (pendingCanvasAttach.target !== 'agent') return;
+    const token = `pending:${pendingCanvasAttach.target}:${canvasAttachToken(pendingCanvasAttach.payload)}`;
+    if (pendingCanvasAttachLockRef.current === token) {
+      dispatch(consumePendingCanvasAttach());
+      return;
+    }
+    pendingCanvasAttachLockRef.current = token;
     const payload = pendingCanvasAttach.payload;
     dispatch(consumePendingCanvasAttach());
     void applyCanvasAttachPayload({
@@ -2783,11 +2828,12 @@ export default function AgentDock({
       0,
       limit - contextChips.filter((c) => c.kind === 'attachment').length
     );
-    let mentionOrdinal = contextChipsRef.current.filter((c) => c.kind === 'attachment').length;
     if (remaining <= 0) {
       message.warning(t('agent.attachMaxReached', { count: limit }));
       return;
     }
+
+    const accepted: File[] = [];
     for (const file of files) {
       if (remaining <= 0) {
         message.warning(t('agent.attachMaxReached', { count: limit }));
@@ -2801,14 +2847,33 @@ export default function AgentDock({
         message.warning(t('agent.attachTooLarge', { name: file.name }));
         continue;
       }
+      accepted.push(file);
+      remaining -= 1;
+    }
+    if (!accepted.length) return;
+
+    const previews = await Promise.all(
+      accepted.map(async (file) => {
+        try {
+          return { file, preview: await readFileAsDataUrl(file), ok: true as const };
+        } catch {
+          message.error(t('agent.attachReadFailed', { name: file.name }));
+          return { file, preview: '', ok: false as const };
+        }
+      })
+    );
+    const readable = previews.filter((p) => p.ok);
+    if (!readable.length) return;
+
+    let mentionOrdinal = contextChipsRef.current.filter((c) => c.kind === 'attachment').length;
+    const batch: Array<{
+      file: File;
+      key: string;
+      preview: string;
+      pending: ComposerContext;
+      mentionCtx: ComposerContext | null;
+    }> = readable.map(({ file, preview }) => {
       const key = `attachment:${file.name}:${file.size}:${file.lastModified}:${Math.random().toString(36).slice(2, 8)}`;
-      let preview = '';
-      try {
-        preview = await readFileAsDataUrl(file);
-      } catch {
-        message.error(t('agent.attachReadFailed', { name: file.name }));
-        continue;
-      }
       const pending: ComposerContext = {
         key,
         label: file.name,
@@ -2819,9 +2884,7 @@ export default function AgentDock({
         uploadStatus: 'uploading',
       };
       pinnedContextKeysRef.current.add(key);
-      remaining -= 1;
       mentionOrdinal += 1;
-
       const n = mentionOrdinal;
       const mentionCtx: ComposerContext | null = opts?.mention
         ? {
@@ -2833,50 +2896,55 @@ export default function AgentDock({
             thumbUrl: preview,
           }
         : null;
-      // Instant local thumb; upload continues in background. Attachment chip + inline
-      // @mention are added in ONE update so a stale-closure onContextsChange from the
-      // input (fired via microtask before commit) can't drop the new attachment.
-      setContextChips((prev) => {
-        const base = prev.filter((c) => c.key !== key);
-        return mentionCtx ? [...base, pending, mentionCtx] : [...base, pending];
-      });
-      if (mentionCtx) {
-        queueMicrotask(() => inputRef.current?.focus());
-      }
+      return { file, key, preview, pending, mentionCtx };
+    });
 
-      try {
-        const uploaded = await uploadComposerAttachment(file, {
-          previewDataUrl: preview,
-        });
-        const imageRef = String(uploaded.imageRef || '').trim();
-        const localPreview = String(uploaded.previewDataUrl || preview).trim();
-        setContextChips((prev) => {
-          if (!prev.some((c) => c.key === key)) {
-            // User removed while uploading — drop orphaned server object.
-            if (uploaded.uploadKey) {
-              void deleteUploadedFile(uploaded.uploadKey).catch(() => {});
-            }
-            return prev;
-          }
-          return prev.map((c) =>
-            c.key === key
-              ? {
-                  ...c,
-                  // Composer thumb stays local (auth-less); bubble prefers https imageRef.
-                  dataUrl: imageRef || localPreview,
-                  thumbUrl: localPreview || imageRef,
-                  uploadKey: uploaded.uploadKey || undefined,
-                  uploadStatus: 'ready' as const,
-                }
-              : c
-          );
-        });
-      } catch {
-        pinnedContextKeysRef.current.delete(key);
-        setContextChips((prev) => prev.filter((c) => c.key !== key));
-        message.error(t('agent.uploadFailed', { name: file.name }));
+    setContextChips((prev) => {
+      const extra: ComposerContext[] = [];
+      for (const item of batch) {
+        extra.push(item.pending);
+        if (item.mentionCtx) extra.push(item.mentionCtx);
       }
+      return [...prev, ...extra];
+    });
+    if (opts?.mention) {
+      queueMicrotask(() => inputRef.current?.focus());
     }
+
+    await Promise.all(
+      batch.map(async ({ file, key, preview }) => {
+        try {
+          const uploaded = await uploadComposerAttachment(file, {
+            previewDataUrl: preview,
+          });
+          const imageRef = String(uploaded.imageRef || '').trim();
+          const localPreview = String(uploaded.previewDataUrl || preview).trim();
+          setContextChips((prev) => {
+            if (!prev.some((c) => c.key === key)) {
+              if (uploaded.uploadKey) {
+                void deleteUploadedFile(uploaded.uploadKey).catch(() => {});
+              }
+              return prev;
+            }
+            return prev.map((c) =>
+              c.key === key
+                ? {
+                    ...c,
+                    dataUrl: imageRef || localPreview,
+                    thumbUrl: localPreview || imageRef,
+                    uploadKey: uploaded.uploadKey || undefined,
+                    uploadStatus: 'ready' as const,
+                  }
+                : c
+            );
+          });
+        } catch {
+          pinnedContextKeysRef.current.delete(key);
+          setContextChips((prev) => prev.filter((c) => c.key !== key));
+          message.error(t('agent.uploadFailed', { name: file.name }));
+        }
+      })
+    );
   };
 
   const selectedModel =
@@ -2946,7 +3014,7 @@ export default function AgentDock({
         dispatch(clearCanvasAttachPick());
         return;
       }
-      // Add current canvas selection first (nodes + artboards), then stay in pick for more.
+      // Add current canvas selection first (nodes + artboards), then one-shot pick for more.
       const doc = document;
       const attachable = selectedNodeIds.filter((id) =>
         canAttachNodeToChat(doc?.deltaSetLike?.[id])
@@ -4026,7 +4094,11 @@ export default function AgentDock({
               onClick={() => {
                 if (onlyImageInteraction) return;
                 closePopovers();
-                setHistoryOpen((v) => !v);
+                setHistoryOpen((v) => {
+                  const next = !v;
+                  if (next) void refreshSessions();
+                  return next;
+                });
               }}
             >
               <BiTimeFive className="h-[18px] w-[18px]" />

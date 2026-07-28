@@ -18,17 +18,18 @@ from services.design.blob_codec import (
 )
 from services.design.catalog import ensure_design_catalog
 
-SCENES = frozenset({"website", "mobile", "image", "poster"})
+SCENES = frozenset({"website", "mobile", "image", "poster", "drawing"})
 GRADES = frozenset({"good", "ok", "bad"})
 EMBED_STATUSES = frozenset({"pending", "ready", "failed", "skipped"})
-# Minimum ready+good samples recommended per scene for pre-draw vision.
+# Minimum ready+good samples recommended per scene for pre-draw aesthetics.
 MIN_GOOD_READY_PER_SCENE = 2
 # When exact scene corpus is empty, borrow from these scenes (order = preference).
 SCENE_FALLBACK: dict[str, tuple[str, ...]] = {
-    "website": ("mobile", "poster", "image"),
-    "mobile": ("website", "poster", "image"),
-    "poster": ("mobile", "website", "image"),
-    "image": ("poster", "mobile", "website"),
+    "website": ("mobile", "poster", "image", "drawing"),
+    "mobile": ("website", "poster", "image", "drawing"),
+    "poster": ("mobile", "website", "image", "drawing"),
+    "image": ("poster", "mobile", "website", "drawing"),
+    "drawing": ("image", "poster", "mobile", "website"),
 }
 
 _CORE_COLS = (
@@ -340,6 +341,34 @@ def upsert_quality_sample(payload: dict[str, Any]) -> dict[str, Any]:
     comment = str(payload.get("comment") or payload.get("comment_text") or "").strip()
     enabled = 1 if payload.get("enabled", True) else 0
     meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        meta = None
+    # Default: auto-extract DESIGN_TOKENS into meta on save (Admin edits in ``meta`` win).
+    extract_tokens = payload.get("extractTokens")
+    if extract_tokens is None:
+        extract_tokens = True
+    if extract_tokens:
+        try:
+            from services.design.aesthetics.token_extract import (
+                extract_design_tokens_meta,
+                merge_design_token_meta,
+            )
+
+            extracted = extract_design_tokens_meta(
+                image_url=image_url,
+                name=name,
+                grade=grade,
+                tags=tags,
+                comment=comment,
+            )
+            meta = merge_design_token_meta(extracted, meta)
+        except Exception as exc:
+            # Keep Admin save alive if PIL/fetch fails — still store user meta.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "quality sample token extract failed: %s", exc
+            )
     meta_json = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else None
     if not name:
         name = f"{scene}-{grade}"

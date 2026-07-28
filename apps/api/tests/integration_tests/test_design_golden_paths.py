@@ -1,16 +1,15 @@
-"""Golden-path design runs — agent_loop with mocked wallet / LLM turns."""
+"""Golden-path: agent permission gate + ReAct P0 (mocked LLM)."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
 from services.design.catalog import ensure_design_catalog
-from tests.design_harness import collect_design_events, events_by_type, last_decision
+from tests.design_harness import collect_design_events, events_by_type
 
 TEST_USER = "user_eval_golden"
 
@@ -38,170 +37,131 @@ def _catalog(tmp_path_factory):
 def _wallet(monkeypatch):
     monkeypatch.setattr(
         "services.design.orchestrator.get_user_tokens",
-        lambda _uid: 10_000,
+        lambda _uid: 200_000,
     )
     monkeypatch.setattr(
-        "services.design.orchestrator.spend_tokens",
+        "services.design.orchestrator.free_daily_remaining",
+        lambda _uid: 0,
+    )
+    monkeypatch.setattr(
+        "services.design.agent_controller.get_user_tokens",
+        lambda _uid: 200_000,
+    )
+    monkeypatch.setattr(
+        "services.design.orchestrator._reserve_design_hold",
+        lambda *_a, **_k: (100, False),
+    )
+    monkeypatch.setattr(
+        "services.design.orchestrator._settle_hold",
+        lambda *_a, **_k: 10,
+    )
+    monkeypatch.setattr(
+        "services.design.orchestrator._refund_hold",
         lambda *_a, **_k: None,
     )
-    monkeypatch.setattr(
-        "services.design.orchestrator.credit_tokens",
-        lambda *_a, **_k: None,
-    )
-    monkeypatch.setattr(
-        "services.design.orchestrator.settle_token_hold",
-        lambda *_a, **_k: 1,
-    )
+
+
+def _mock_stream(content: str):
+    async def _gen(**_kwargs: Any) -> AsyncIterator[tuple[str, Any]]:
+        yield "token", content
+        yield "usage", 42
+
+    return _gen
 
 
 def _run(**kwargs):
-    return asyncio.run(collect_design_events(user_id=TEST_USER, run_mode="agent", **kwargs))
-
-
-async def _fake_chat_turns(**_k) -> AsyncIterator[dict[str, Any]]:
-    yield {
-        "type": "skill_start",
-        "index": 0,
-        "skill_key": "agent_loop",
-        "skill_name": "agent",
-        "category": "agent",
-    }
-    yield {"type": "analysis", "text": "你好呀", "skill_name": "agent", "index": 0}
-    yield {
-        "type": "skill_done",
-        "index": 0,
-        "skill_key": "agent_loop",
-        "skill_name": "agent",
-        "tokens": 12,
-    }
-    yield {
-        "type": "_agent_loop_meta",
-        "total_tokens": 12,
-        "actual_models": [],
-        "applied_ops": [],
-        "tool_ops_applied": False,
-        "summary": "你好呀",
-        "chat_only": True,
-        "scene_nodes": [],
-    }
-
-
-async def _fake_ops_turns(**_k) -> AsyncIterator[dict[str, Any]]:
-    yield {
-        "type": "skill_start",
-        "index": 0,
-        "skill_key": "agent_loop",
-        "skill_name": "agent",
-        "category": "agent",
-    }
-    yield {
-        "type": "tool_ops",
-        "index": 0,
-        "skill_key": "agent_loop",
-        "skill_name": "agent",
-        "ops": [
-            {
-                "name": "update_node",
-                "args": {"id": "node-1", "cornerRadius": 8},
-            }
-        ],
-    }
-    yield {
-        "type": "skill_done",
-        "index": 0,
-        "skill_key": "agent_loop",
-        "skill_name": "agent",
-        "tokens": 40,
-    }
-    yield {
-        "type": "_agent_loop_meta",
-        "total_tokens": 40,
-        "actual_models": [],
-        "applied_ops": [{"name": "update_node"}],
-        "tool_ops_applied": True,
-        "summary": "已更新圆角",
-        "chat_only": False,
-        "scene_nodes": [{"id": "node-1"}],
-    }
+    return asyncio.run(
+        collect_design_events(user_id=TEST_USER, run_mode="agent", **kwargs)
+    )
 
 
 @pytest.mark.integration
-def test_golden_agent_loop_chat():
-    with patch(
-        "services.design.orchestrator.run_agent_turns",
-        side_effect=_fake_chat_turns,
-    ):
-        events = _run(prompt="你好", scene="poster")
+def test_permission_gate_denies_when_broke(monkeypatch):
+    monkeypatch.setattr(
+        "services.design.orchestrator.get_user_tokens",
+        lambda _uid: 0,
+    )
+    monkeypatch.setattr(
+        "services.design.orchestrator.free_daily_remaining",
+        lambda _uid: 0,
+    )
+    events = _run(prompt="你好")
+    perms = [e for e in events if e.get("type") == "permission"]
+    assert perms
+    assert perms[0].get("can_call_llm") is False
+    errs = events_by_type(events, "error")
+    assert errs
+    assert errs[0].get("message") in (
+        "insufficient_credits",
+        "free_daily_exhausted",
+    )
+    assert not events_by_type(events, "skill_start")
 
-    dec = last_decision(events)
-    assert dec is not None
-    assert dec.get("route") in ("agent_loop", "agent_loop_chat")
+
+@pytest.mark.integration
+def test_react_chat_hello(monkeypatch):
+    monkeypatch.setattr(
+        "services.design.agent_controller.stream_skill_step",
+        _mock_stream(
+            '{"thought":"greeting","intent":"chat","reply":"你好！有什么可以帮你的？","tool_ops":[],"done":true}'
+        ),
+    )
+    events = _run(prompt="你好")
+    perms = [e for e in events if e.get("type") == "permission"]
+    assert perms and perms[0].get("can_call_llm") is True
+    assert events_by_type(events, "skill_start")
+    tokens = events_by_type(events, "token")
+    assert tokens and "你好" in (tokens[0].get("text") or "")
     assert events_by_type(events, "chat_done")
-    results = events_by_type(events, "result")
-    assert results
-    assert results[0].get("intent") == "chat"
-    assert results[0].get("tool_ops_applied") is False
-    log = results[0].get("decision_log") or {}
-    assert log.get("route") == "agent_loop_chat"
+    assert events_by_type(events, "result")
+    assert not events_by_type(events, "tool_ops")
 
 
 @pytest.mark.integration
-def test_golden_agent_loop_tool_ops_with_target():
-    with patch(
-        "services.design.orchestrator.run_agent_turns",
-        side_effect=_fake_ops_turns,
-    ):
-        events = _run(
-            prompt="[Target element: node-1]\n修改圆角为8px",
-            scene="poster",
-            scene_nodes=[{"id": "node-1", "kind": "rect", "cornerRadius": 0}],
-            current_svg='<svg width="100" height="100"><rect id="node-1"/></svg>',
-        )
+def test_react_edit_emits_tool_ops(monkeypatch):
+    monkeypatch.setattr(
+        "services.design.agent_controller.stream_skill_step",
+        _mock_stream(
+            '{"thought":"add title","intent":"edit","reply":"已添加标题",'
+            '"tool_ops":[{"op_key":"create_text","args":{"text":"标题","x":40,"y":40,"w":400,"h":80}}],'
+            '"done":true}'
+        ),
+    )
 
-    dec = last_decision(events)
-    assert dec is not None
-    assert dec.get("route") == "agent_loop"
-    assert dec.get("has_target_chip") is True
-    assert dec.get("has_scene_nodes") is True
-    assert events_by_type(events, "tool_ops")
-    statuses = events_by_type(events, "status")
-    assert statuses
-    assert statuses[0].get("status") == "running"
-    results = events_by_type(events, "result")
-    assert results
-    assert results[0].get("tool_ops_applied") is True
-    assert results[0].get("edit_in_place") is True
+    async def _wait(_tid: str, timeout_sec: float = 12.0):
+        del timeout_sec
+        return {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "type": "text",
+                    "text": "标题",
+                    "frameId": "f1",
+                }
+            ],
+            "frames": [{"id": "f1", "name": "Board", "w": 800, "h": 600}],
+        }
 
+    async def _begin(*_a, **_k):
+        return None
 
-@pytest.mark.integration
-def test_golden_memory_injection_flag():
-    medium = {
-        "v": 1,
-        "canvas": {
-            "focus_frame_id": "frame_a",
-            "last_agent_frame_id": "frame_a",
-            "frames": [{"id": "frame_a", "is_empty": True}],
-        },
-        "last_run": {"intent": "edit", "blank_artboard": False},
-    }
-
-    with patch(
-        "services.design.orchestrator.run_agent_turns",
-        side_effect=_fake_ops_turns,
-    ):
-        events = _run(
-            prompt="在上一块空白画布上画一个实心圆，不要新建画板",
-            scene="poster",
-            session_id="sess_eval_1",
-            project_id="proj_eval",
-            memory={"medium": medium, "short": [{"role": "user", "text": "新建画布"}]},
-            scene_nodes=[{"id": "n1", "kind": "rect"}],
-            current_svg='<svg width="200" height="200"><rect id="n1"/></svg>',
-        )
-    dec = last_decision(events)
-    assert dec is not None
-    assert dec.get("route") == "agent_loop"
-    assert dec.get("focus_frame_id") == "frame_a"
-    assert dec.get("memory_injected") is True
-    assert dec.get("memory_blocks_chars", 0) > 0
-    assert dec.get("short_turns", 0) >= 1
+    monkeypatch.setattr(
+        "services.design.agent_controller.begin_wait",
+        _begin,
+    )
+    monkeypatch.setattr(
+        "services.design.agent_controller.wait_for_scene",
+        _wait,
+    )
+    events = _run(
+        prompt="加个标题",
+        canvas_size="800x600",
+        scene_frames=[{"id": "f1", "name": "Board", "w": 800, "h": 600}],
+        scene_nodes=[],
+        focus_frame_id="f1",
+    )
+    ops = events_by_type(events, "tool_ops")
+    assert ops, events
+    assert ops[0].get("ops")
+    assert events_by_type(events, "scene_feedback_request")
+    assert events_by_type(events, "result")

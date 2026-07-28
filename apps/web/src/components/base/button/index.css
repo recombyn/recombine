@@ -41,8 +41,9 @@
   font-weight: 600;
 }
 
+/* Soft rectangle — matches account CTA (rounded-xl / 12px). */
 .btn-shape-default {
-  border-radius: 0.25rem;
+  border-radius: 0.75rem;
 }
 
 .btn-shape-round {

@@ -89,7 +89,9 @@ from services.design.admin_store import (
     dismiss_optimize_patch,
     generate_usage_optimize_patches,
     get_agent_flow,
+    get_agent_flow_version,
     list_agent_flows,
+    list_agent_flow_node_templates,
     list_decision_logs,
     list_canvas_tools_admin,
     list_optimize_patches,
@@ -730,9 +732,13 @@ _RUNTIME_SETTING_KEYS = frozenset(
         "agent.prompt.unsafe_ops_ask",
         "agent.prompt.partial_system",
         "agent.prompt.chat_agent_system",
+        "agent.prompt.need_tools_overlay",
+        "agent.prompt.lc_tools_overlay",
+        "agent.prompt.official_agent_system",
         # 看图契约（流程设计 / 美学相关节点）
         "aesthetics.prompt.vision_structure",
         "aesthetics.vision.structure_schema",
+        "precheck.router_system",
     }
 )
 
@@ -765,14 +771,13 @@ def admin_design_runtime_settings(
     )
     items: list[dict[str, Any]] = []
     for k in keys:
-        db_val = str(rules.get(k) or "").strip()
-        default_val = str(STAGE_RULE_DEFAULTS.get(k) or "")
+        db_val = str(rules.get(k) or "")
         items.append(
             {
                 "key": k,
-                "value": db_val or default_val,
+                "value": db_val,
                 "description": str(STAGE_RULE_DESCRIPTIONS.get(k) or ""),
-                "using_default": bool(default_val) and not bool(db_val),
+                "using_default": not bool(db_val.strip()),
             }
         )
     return {"items": items}
@@ -809,6 +814,14 @@ def admin_list_agent_flows(
     return {"items": list_agent_flows()}
 
 
+@router.get("/design/agent-flow-node-templates")
+def admin_list_agent_flow_node_templates(
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """左侧可拖节点模板（存全局规则，前端勿写死）。"""
+    return {"items": list_agent_flow_node_templates()}
+
+
 @router.post("/design/agent-flows")
 def admin_create_agent_flow(
     body: AgentFlowCreateIn,
@@ -838,11 +851,24 @@ def admin_create_agent_flow(
 @router.get("/design/agent-flows/{flow_id}")
 def admin_get_agent_flow(
     flow_id: str,
+    includePublished: bool = False,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    item = get_agent_flow(flow_id)
+    item = get_agent_flow(flow_id, include_published_graph=includePublished)
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    return {"item": item}
+
+
+@router.get("/design/agent-flows/{flow_id}/versions/{version}")
+def admin_get_agent_flow_version(
+    flow_id: str,
+    version: int,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    item = get_agent_flow_version(flow_id, version)
+    if not item:
+        raise HTTPException(status_code=404, detail="version not found")
     return {"item": item}
 
 
@@ -997,6 +1023,8 @@ def admin_model_usage_list(
     model: str | None = Query(default=None),
     userId: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    via: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
     fromTs: float | None = Query(default=None),
     toTs: float | None = Query(default=None),
     _admin: SessionUser = Depends(require_admin),
@@ -1011,6 +1039,8 @@ def admin_model_usage_list(
         model=model,
         user_id=userId,
         status=status,
+        via=via,
+        kind=kind,
         ts_from=fromTs,
         ts_to=toTs,
     )
@@ -1264,7 +1294,7 @@ class QualitySampleIn(BaseModel):
     originPath: str | None = Field(default=None, max_length=512)
     enabled: bool = True
     meta: dict[str, Any] | None = None
-    # Default true: Host extracts DESIGN_TOKENS into meta on save; Admin meta wins.
+    # Default true: runtime extracts DESIGN_TOKENS into meta on save; Admin meta wins.
     extractTokens: bool = True
 
 
@@ -1311,7 +1341,7 @@ def admin_extract_sample_tokens(
     body: ExtractSampleTokensIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Host PIL extract → DESIGN_TOKENS meta (preview / fill Admin form; no DB write)."""
+    """Runtime PIL extract → DESIGN_TOKENS meta (preview / fill Admin form; no DB write)."""
     from services.design.aesthetics.token_extract import extract_design_tokens_meta
 
     try:

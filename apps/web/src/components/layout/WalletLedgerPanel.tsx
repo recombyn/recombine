@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -13,15 +13,31 @@ import { syncFromServer } from '@/store/modules/wallet';
 import {
   PLAN_CATALOG,
   formatTokens,
+  isTopOfferedPlan,
   planLabelKey,
   type LedgerEntry,
   type PlanId,
 } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
+import ProgressBar from '@/components/base/progress';
+import { SegmentedControl } from '@/components/base';
 
 type Filter = WalletLedgerKindFilter;
 
 const PAGE_SIZE = 15;
+
+function formatPlanExpiry(ts: number, locale?: string) {
+  const ms = ts > 1e12 ? ts : ts * 1000;
+  try {
+    return new Date(ms).toLocaleDateString(locale || undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return new Date(ms).toLocaleDateString();
+  }
+}
 
 function formatTime(ts: number) {
   try {
@@ -56,6 +72,24 @@ function kindLabel(kind: LedgerEntry['kind'], t: (key: string) => string) {
   return t('wallet.typeSpend');
 }
 
+/** Optional subtype label for spend rows (all amounts are 积分). */
+function isImageCreditSpend(row: LedgerEntry) {
+  const d = `${row.detail || ''} ${row.model || ''}`.toLowerCase();
+  return (
+    d.includes('image') ||
+    d.includes('seedream') ||
+    d.includes('生图') ||
+    d.includes('image tool') ||
+    d.includes('removebg') ||
+    d.includes('upscale') ||
+    d.includes('hydrate')
+  );
+}
+
+function amountUnitLabel(_row: LedgerEntry, t: (key: string) => string) {
+  return t('wallet.unitCredits');
+}
+
 function Card({
   children,
   className,
@@ -75,16 +109,31 @@ function Card({
   );
 }
 
+type Props = {
+  /** Rendered inside AccountSettingsDialog — no nested plans/redeem dialogs. */
+  embedded?: boolean;
+  onRequestPlans?: () => void;
+  onRequestRedeem?: () => void;
+};
+
 /**
- * Usage & billing — Free / Plus / Pro / Ultra + card-key redeem,
+ * Usage & billing — Free / Plus / Pro / Ultra + top-up entry,
  * laid out in Cursor billing style (plan card → included credits → redeem → ledger).
  */
-export default function WalletLedgerPanel() {
-  const { t } = useTranslation();
+export default function WalletLedgerPanel({
+  embedded = false,
+  onRequestPlans,
+  onRequestRedeem,
+}: Props = {}) {
+  const { t, i18n } = useTranslation();
   const dispatch = useDispatch();
   const [searchParams, setSearchParams] = useSearchParams();
   const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
   const planId = useSelector((state: any) => state.wallet?.planId ?? 'free') as PlanId;
+  const planLocked = useSelector((state: any) => Boolean(state.wallet?.planLocked));
+  const planExpiresAt = useSelector((state: any) =>
+    state.wallet?.planExpiresAt != null ? Number(state.wallet.planExpiresAt) : null
+  );
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -93,15 +142,25 @@ export default function WalletLedgerPanel() {
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [plansOpen, setPlansOpen] = useState(false);
 
-  /** PlansDialog → /account?tab=usage&redeem=1 opens Redeem card key. */
+  /** Deep-link ?redeem=1 still opens redeem (legacy) — skip when embedded. */
   useEffect(() => {
+    if (embedded) return;
     const flag = (searchParams.get('redeem') || '').trim();
     if (!flag || flag === '0' || flag.toLowerCase() === 'false') return;
     setRedeemOpen(true);
     const next = new URLSearchParams(searchParams);
     next.delete('redeem');
     setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, embedded]);
+
+  const openPlans = () => {
+    if (embedded && onRequestPlans) onRequestPlans();
+    else setPlansOpen(true);
+  };
+  const openRedeem = () => {
+    if (embedded && onRequestRedeem) onRequestRedeem();
+    else setRedeemOpen(true);
+  };
 
   const plan = PLAN_CATALOG[planId] || PLAN_CATALOG.free;
   const planLabel = t(planLabelKey(planId));
@@ -110,13 +169,21 @@ export default function WalletLedgerPanel() {
     plan.priceCny === 0
       ? t('wallet.priceFree')
       : t('wallet.priceMonthly', { price: plan.priceCny });
+  const isFreeDaily = planId === 'free' && (plan.dailyRuns ?? 0) > 0;
+  const quotaLabel = isFreeDaily
+    ? t('wallet.metaDailyRunsValue', { count: plan.dailyRuns ?? 1 })
+    : t('wallet.creditsIncluded', { count: formatTokens(plan.creditsIncluded) });
+  const expiresLabel = useMemo(() => {
+    if (planId === 'free') return null;
+    if (!planExpiresAt || !Number.isFinite(planExpiresAt)) return null;
+    return formatPlanExpiry(planExpiresAt, i18n.language);
+  }, [planId, planExpiresAt, i18n.language]);
   const creditCap = Math.max(1, plan.creditsIncluded);
   const balance = Math.max(0, Number(tokens) || 0);
   /** Against monthly allotment only (extra card-key credits sit above the bar). */
   const planRemaining = Math.min(balance, creditCap);
   const planUsed = Math.max(0, creditCap - planRemaining);
   const usedPct = Math.min(100, Math.round((planUsed / creditCap) * 100));
-  const remainPct = 100 - usedPct;
   const hasExtra = balance > creditCap;
 
   const load = useCallback(
@@ -133,7 +200,14 @@ export default function WalletLedgerPanel() {
         setTotal(Number(res.total) || 0);
         setPage(Number(res.page) || nextPage);
         if (typeof res.tokens === 'number') {
-          dispatch(syncFromServer({ tokens: res.tokens }));
+          dispatch(
+            syncFromServer({
+              tokens: res.tokens,
+              planId: res.planId,
+              planExpiresAt: res.planExpiresAt ?? null,
+              planLocked: Boolean(res.planLocked),
+            })
+          );
         }
       } catch {
         if (signal?.cancelled) return;
@@ -173,9 +247,9 @@ export default function WalletLedgerPanel() {
   };
 
   const ghostBtn =
-    'shrink-0 rounded-lg border border-[var(--line)] bg-[var(--account-card)] px-3 py-1.5 text-[13px] font-medium text-[var(--ink)] transition hover:bg-[var(--accent-soft)]';
+    'shrink-0 rounded-xl border border-[var(--line)] bg-[var(--account-card)] px-3 py-1.5 text-[13px] font-medium text-[var(--ink)] transition hover:bg-[var(--accent-soft)]';
   const primaryBtn =
-    'shrink-0 rounded-lg bg-[var(--ink)] px-3 py-1.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90';
+    'shrink-0 rounded-xl bg-[var(--ink)] px-3 py-1.5 text-[13px] font-medium text-[var(--on-brand)] transition hover:opacity-90';
 
   return (
     <>
@@ -187,12 +261,24 @@ export default function WalletLedgerPanel() {
             <div className="text-[13px] text-[var(--muted)]">
               {priceLabel}
               <span className="mx-1.5 text-[var(--line)]">·</span>
-              {t('wallet.creditsIncluded', { count: formatTokens(plan.creditsIncluded) })}
+              {quotaLabel}
             </div>
             <p className="pt-1 text-[13px] leading-relaxed text-[var(--muted)]">{planBlurb}</p>
+            {expiresLabel ? (
+              <p className="pt-1 text-[12px] font-medium text-[var(--ink)]">
+                {t('wallet.planExpiresOn', { date: expiresLabel })}
+                {planLocked ? (
+                  <span className="ml-1.5 font-normal text-[var(--muted)]">
+                    · {t('wallet.planExpiresLockedHint')}
+                  </span>
+                ) : null}
+              </p>
+            ) : planId !== 'free' ? (
+              <p className="pt-1 text-[12px] text-[var(--muted)]">{t('wallet.planExpiresUnknown')}</p>
+            ) : null}
           </div>
-          <button type="button" onClick={() => setPlansOpen(true)} className={ghostBtn}>
-            {planId === 'ultra' ? t('wallet.adjustPlan') : t('wallet.upgrade')}
+          <button type="button" onClick={openPlans} className={ghostBtn}>
+            {isTopOfferedPlan(planId) ? t('wallet.adjustPlan') : t('wallet.upgrade')}
           </button>
         </Card>
 
@@ -213,48 +299,47 @@ export default function WalletLedgerPanel() {
                 </div>
               </div>
               <div className="text-right text-[12px] text-[var(--muted)]">
-                {t('wallet.creditsIncluded', { count: formatTokens(plan.creditsIncluded) })}
+                {quotaLabel}
               </div>
             </div>
 
-            <div className="mt-4">
-              <div className="mb-1.5 flex items-center justify-between gap-2 text-[12px]">
-                <span className="text-[var(--muted)]">
-                  {t('wallet.creditsUsedLabel', { count: formatTokens(planUsed) })}
-                </span>
-                <span className="font-medium text-[var(--ink)]">
-                  {t('wallet.creditsRemainLabel', { count: formatTokens(planRemaining) })}
-                </span>
-              </div>
-              <div
-                className="flex h-2.5 overflow-hidden rounded-full"
-                role="img"
-                aria-label={t('wallet.creditsBarAria', {
-                  used: formatTokens(planUsed),
-                  remain: formatTokens(planRemaining),
-                  total: formatTokens(creditCap),
-                })}
-              >
-                {/* Used vs remaining of monthly allotment — two explicit colors */}
-                <div
-                  className="h-full bg-[var(--ink)] transition-[width]"
-                  style={{ width: `${usedPct}%` }}
-                />
-                <div
-                  className="h-full bg-[color-mix(in_srgb,var(--ink)_22%,transparent)] transition-[width]"
-                  style={{ width: `${remainPct}%` }}
-                />
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-[var(--muted)]">
-                {hasExtra
-                  ? t('wallet.creditsExtraHint', {
-                      extra: formatTokens(balance - creditCap),
-                    })
-                  : t('wallet.creditsBarHint', {
-                      total: formatTokens(creditCap),
-                    })}
+            {isFreeDaily ? (
+              <p className="mt-4 text-[13px] leading-relaxed text-[var(--muted)]">
+                {t('wallet.freeDailyHint', { count: plan.dailyRuns ?? 1 })}
               </p>
-            </div>
+            ) : (
+              <div className="mt-4">
+                <div
+                  className="mb-1.5 flex items-center justify-between gap-2 text-[12px]"
+                >
+                  <span className="text-[var(--muted)]">
+                    {t('wallet.creditsUsedLabel', { count: formatTokens(planUsed) })}
+                  </span>
+                  <span className="font-medium text-[var(--ink)]">
+                    {t('wallet.creditsRemainLabel', { count: formatTokens(planRemaining) })}
+                  </span>
+                </div>
+                <ProgressBar
+                  percent={usedPct}
+                  active
+                  height={8}
+                  aria-label={t('wallet.creditsBarAria', {
+                    used: formatTokens(planUsed),
+                    remain: formatTokens(planRemaining),
+                    total: formatTokens(creditCap),
+                  })}
+                />
+                <p className="mt-2 text-[11px] leading-relaxed text-[var(--muted)]">
+                  {hasExtra
+                    ? t('wallet.creditsExtraHint', {
+                        extra: formatTokens(balance - creditCap),
+                      })
+                    : t('wallet.creditsBarHint', {
+                        total: formatTokens(creditCap),
+                      })}
+                </p>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -266,7 +351,7 @@ export default function WalletLedgerPanel() {
               {t('wallet.redeemSectionHint')}
             </p>
           </div>
-          <button type="button" onClick={() => setRedeemOpen(true)} className={primaryBtn}>
+          <button type="button" onClick={openRedeem} className={primaryBtn}>
             {t('wallet.redeem')}
           </button>
         </Card>
@@ -277,42 +362,31 @@ export default function WalletLedgerPanel() {
             <h2 className="text-[15px] font-medium text-[var(--ink)]">
               {t('wallet.usageActivityTitle')}
             </h2>
-            <div className="flex flex-wrap gap-1">
-              {filters.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setFilter(id)}
-                  className={cn(
-                    'rounded-md px-2.5 py-1 text-[12px] transition',
-                    filter === id
-                      ? 'bg-[var(--ink)] font-medium text-[var(--on-brand)]'
-                      : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl
+              aria-label={t('wallet.usageActivityTitle')}
+              value={filter}
+              onChange={setFilter}
+              options={filters.map(({ id, label }) => ({ value: id, label }))}
+            />
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[680px] border-collapse text-left">
+            <table className="w-full min-w-[760px] border-collapse text-left">
               <thead>
                 <tr className="border-b border-[var(--line)]">
-                  <th className="px-5 py-2.5 text-[12px] font-medium text-[var(--muted)]">
+                  <th className="whitespace-nowrap px-5 py-2.5 text-[12px] font-medium text-[var(--muted)]">
                     {t('wallet.colTime')}
                   </th>
-                  <th className="px-5 py-2.5 text-[12px] font-medium text-[var(--muted)]">
+                  <th className="min-w-[7.5rem] whitespace-nowrap px-5 py-2.5 text-[12px] font-medium text-[var(--muted)]">
                     {t('wallet.colType')}
                   </th>
-                  <th className="px-5 py-2.5 text-[12px] font-medium text-[var(--muted)]">
+                  <th className="min-w-[12rem] px-5 py-2.5 text-[12px] font-medium text-[var(--muted)]">
                     {t('wallet.colDetail')}
                   </th>
-                  <th className="px-5 py-2.5 text-right text-[12px] font-medium text-[var(--muted)]">
+                  <th className="min-w-[6.5rem] whitespace-nowrap px-5 py-2.5 text-right text-[12px] font-medium text-[var(--muted)]">
                     {t('wallet.colAmount')}
                   </th>
-                  <th className="px-5 py-2.5 text-right text-[12px] font-medium text-[var(--muted)]">
+                  <th className="min-w-[5.5rem] whitespace-nowrap px-5 py-2.5 text-right text-[12px] font-medium text-[var(--muted)]">
                     {t('wallet.colBalance')}
                   </th>
                 </tr>
@@ -324,7 +398,7 @@ export default function WalletLedgerPanel() {
                       colSpan={5}
                       className="px-5 py-12 text-center text-[13px] text-[var(--muted)]"
                     >
-                      …
+                      {t('common.loading')}
                     </td>
                   </tr>
                 ) : rows.length === 0 ? (
@@ -341,13 +415,23 @@ export default function WalletLedgerPanel() {
                     const positive =
                       row.kind === 'redeem' || row.kind === 'recharge' || row.kind === 'plan';
                     const amountText = formatTokens(Math.abs(Number(row.amount) || 0));
+                    const unit = amountUnitLabel(row, t);
                     return (
                       <tr key={row.id} className="border-b border-[var(--line)] last:border-b-0">
                         <td className="whitespace-nowrap px-5 py-3 text-[13px] text-[var(--ink)]">
                           {formatTime(row.createdAt)}
                         </td>
-                        <td className="px-5 py-3 text-[13px] text-[var(--ink)]">
-                          {kindLabel(row.kind, t)}
+                        <td className="min-w-[7.5rem] whitespace-nowrap px-5 py-3 text-[13px] text-[var(--ink)]">
+                          <span className="inline-flex flex-col gap-0.5">
+                            <span>{kindLabel(row.kind, t)}</span>
+                            {row.kind === 'spend' ? (
+                              <span className="text-[11px] text-[var(--muted)]">
+                                {isImageCreditSpend(row)
+                                  ? t('wallet.spendAsCredits')
+                                  : t('wallet.spendAsChat')}
+                              </span>
+                            ) : null}
+                          </span>
                         </td>
                         <td className="max-w-[300px] px-5 py-3">
                           {row.kind === 'redeem' ? (
@@ -357,7 +441,10 @@ export default function WalletLedgerPanel() {
                           ) : (
                             <div className="min-w-0">
                               <div className="truncate text-[13px] text-[var(--ink)]">
-                                {row.model || t('wallet.modelUnknown')}
+                                {row.model ||
+                                  (isImageCreditSpend(row)
+                                    ? t('wallet.imageSpendLabel')
+                                    : t('wallet.modelUnknown'))}
                               </div>
                               <div className="truncate text-[12px] text-[var(--muted)]">
                                 {[
@@ -374,13 +461,14 @@ export default function WalletLedgerPanel() {
                         </td>
                         <td
                           className={cn(
-                            'px-5 py-3 text-right text-[13px] tabular-nums',
+                            'whitespace-nowrap px-5 py-3 text-right text-[13px] tabular-nums',
                             positive ? 'text-[var(--ink)]' : 'text-[var(--muted)]'
                           )}
                         >
                           {positive ? `+${amountText}` : `-${amountText}`}
+                          <span className="ml-1 text-[11px] text-[var(--muted)]">{unit}</span>
                         </td>
-                        <td className="px-5 py-3 text-right text-[13px] tabular-nums text-[var(--ink)]">
+                        <td className="whitespace-nowrap px-5 py-3 text-right text-[13px] tabular-nums text-[var(--ink)]">
                           {formatTokens(row.balanceAfter)}
                         </td>
                       </tr>
@@ -405,7 +493,7 @@ export default function WalletLedgerPanel() {
                   type="button"
                   disabled={!canPrev}
                   onClick={() => goPage(page - 1)}
-                  className="rounded-md border border-[var(--line)] px-3 py-1 text-[12px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+                  className="rounded-xl border border-[var(--line)] px-3 py-1 text-[12px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {t('wallet.ledgerPrev')}
                 </button>
@@ -416,7 +504,7 @@ export default function WalletLedgerPanel() {
                   type="button"
                   disabled={!canNext}
                   onClick={() => goPage(page + 1)}
-                  className="rounded-md border border-[var(--line)] px-3 py-1 text-[12px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+                  className="rounded-xl border border-[var(--line)] px-3 py-1 text-[12px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {t('wallet.ledgerNext')}
                 </button>
@@ -426,12 +514,16 @@ export default function WalletLedgerPanel() {
         </Card>
       </div>
 
-      <RedeemDialog
-        open={redeemOpen}
-        onClose={() => setRedeemOpen(false)}
-        onRedeemed={() => void load(filter, 1)}
-      />
-      <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} />
+      {!embedded ? (
+        <>
+          <RedeemDialog
+            open={redeemOpen}
+            onClose={() => setRedeemOpen(false)}
+            onRedeemed={() => void load(filter, 1)}
+          />
+          <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} />
+        </>
+      ) : null}
     </>
   );
 }

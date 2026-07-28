@@ -1,15 +1,37 @@
-"""System prompt stack + edit/create context for design skills."""
+"""Prompt helpers used by partial tool_ops / memory patch."""
+
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from services.agent_memory.service import memory_service
-from services.design.pipeline_support import _bg_candidate_from_nodes
-from services.design.rules_text import _as_text, _rule_flag_on, _rule_text
-from services.design.stream_face import _is_analysis_skill
+from services.design.rules_text import _as_text, _rule_text
 from services.design.svg_patch import svg_content_digest
+
+
+def _bg_candidate_from_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Largest filled rect-like node — likely artboard background."""
+    best: dict[str, Any] | None = None
+    best_area = 0
+    for n in nodes or []:
+        if not isinstance(n, dict) or not n.get("id"):
+            continue
+        try:
+            w = float(n.get("w") or n.get("width") or 0)
+            h = float(n.get("h") or n.get("height") or 0)
+        except (TypeError, ValueError):
+            continue
+        area = w * h
+        if area <= best_area:
+            continue
+        fill = n.get("fill") or n.get("backgroundColor")
+        if not fill:
+            continue
+        best = n
+        best_area = area
+    return best
+
 
 def _edit_context_block(
     rules: dict[str, str],
@@ -34,14 +56,20 @@ def _edit_context_block(
         parts.append(f"CANVAS_ID: {cid}")
     focus = (focus_frame_id or "").strip()
     if focus:
-        parts.append(f"FOCUS_FRAME_ID: {focus}")
+        parts.append(
+            f"FOCUS_FRAME_ID: {focus}\n"
+            "FOCUS_FRAME_ID 为权威（用户 @ 画板）。"
+            "update_frame / delete_frame 必须使用此精确 id。"
+            "不要按名称挑其他画板——名称可能冲突（如多个「新画板」）。"
+            "绝不要改指向其他 SCENE_FRAMES id。"
+        )
     if scene_frames:
         try:
             raw_frames = json.dumps(scene_frames, ensure_ascii=False)
         except Exception:
             raw_frames = "[]"
         parts.append(
-            "SCENE_FRAMES (artboard ids — delete_frame / create must use these ids only):\n"
+            "SCENE_FRAMES（画板 id — delete_frame / create 只能用这些 id）：\n"
             f"{raw_frames[:8000]}"
         )
     if digest:
@@ -52,7 +80,21 @@ def _edit_context_block(
         except Exception:
             raw = "[]"
         parts.append(f"SCENE_NODES:\n{raw[:16000]}")
-        bg = _bg_candidate_from_nodes(scene_nodes)
+        nodes_for_bg = scene_nodes
+        if focus:
+            focused_nodes = [
+                n
+                for n in scene_nodes
+                if isinstance(n, dict) and str(n.get("frameId") or "") == focus
+            ]
+            nodes_for_bg = focused_nodes
+            if not focused_nodes:
+                parts.append(
+                    f"FOCUS_FRAME_ID {focus} 在 SCENE_NODES 中无节点（空画板）。"
+                    f"改画板背景色请用 update_frame，frameId={focus} 且带 backgroundColor。"
+                    "不要 update_node 其他画板上的 fill。"
+                )
+        bg = _bg_candidate_from_nodes(nodes_for_bg)
         if bg:
             parts.append(
                 "BG_CANDIDATE_NODE_ID: "
@@ -61,102 +103,12 @@ def _edit_context_block(
                 "改底色/背景色时必须 update_node 此 id，禁止 create_shape 叠新底。"
             )
     elif include_full_svg and (svg or "").strip():
-        # Fallback when client did not send scene inventory.
         parts.append(f"CURRENT_SVG:\n{svg[:18000]}")
     return "\n".join(parts) + "\n"
 
-def _create_context_block(
-    rules: dict[str, str],
-    *,
-    w: int,
-    h: int,
-    scene_key: str = "website",
-) -> str:
-    tip = _rule_text(rules, "create.tool_ops").strip()
-    scene = (scene_key or "website").strip().lower() or "website"
-    parts = [f"CREATE_MODE: new_artboard {w}x{h} scene={scene}"]
-    # Admin-owned policy (create.artboard_policy). Supports {scene} / {suggested_name}.
-    policy = _rule_text(rules, "create.artboard_policy").strip()
-    if policy:
-        suggested = _suggested_frame_name(rules, scene)
-        parts.append(
-            policy.replace("{scene}", scene).replace("{suggested_name}", suggested)
-        )
-    if tip:
-        parts.append(tip)
-    return "\n".join(parts) + "\n"
-
-
-def _suggested_frame_name(rules: dict[str, str] | None, scene: str) -> str:
-    """Parse create.frame_name_by_scene: website=官网首页;mobile=App页面;…"""
-    raw = _rule_text(rules, "create.frame_name_by_scene").strip()
-    mapping: dict[str, str] = {}
-    for part in re.split(r"[;\n]+", raw):
-        part = part.strip()
-        if "=" not in part:
-            continue
-        k, v = part.split("=", 1)
-        k, v = k.strip().lower(), v.strip()
-        if k and v:
-            mapping[k] = v
-    return mapping.get((scene or "").strip().lower()) or mapping.get("default") or "画板"
-
-def _resolve_agent_persona(
-    rules: dict[str, str] | None,
-    user_selected_model: str | None,
-) -> str | None:
-    """Chat/design identity from admin global rules. None for image generators."""
-    mid = _as_text(user_selected_model or "auto").strip()
-    low = mid.lower()
-    if low and low != "auto" and re.search(
-        r"seedream|t2i|i2i|dreamina|flux|ideogram|kling|sora|minimax|image",
-        low,
-    ):
-        return None
-    rules = rules or {}
-    if not mid or low == "auto":
-        return _rule_text(rules, "agent.persona.auto") or None
-    label = _model_display_label(mid)
-    tmpl = _rule_text(rules, "agent.persona.locked").strip()
-    if not tmpl:
-        return None
-    # Prefer replace over str.format — admin text may contain stray { } / %.
-    return tmpl.replace("{model_label}", label)
-
-
-def _model_display_label(model_id: str) -> str:
-    """Prefer catalog label (DeepSeek V4 Flash) over raw id."""
-    mid = _as_text(model_id).strip()
-    if not mid:
-        return "unknown"
-    try:
-        from services.llm.catalog_store import get_model
-
-        row = get_model(mid)
-        if isinstance(row, dict):
-            lab = str(row.get("label") or "").strip()
-            if lab:
-                return lab
-    except Exception:
-        pass
-    try:
-        from services.llm import MODEL_CATALOG
-
-        for m in MODEL_CATALOG or []:
-            if str(m.get("id") or "").strip().lower() == mid.lower():
-                lab = str(m.get("label") or "").strip()
-                if lab:
-                    return lab
-    except Exception:
-        pass
-    return mid
 
 def merge_design_rules(raw: dict[str, str], scene: str) -> dict[str, str]:
-    """Merge rule layers: global base, then scene.* overlays (scene wins on same key).
-
-    Scene keys use prefix ``scene.{scene}.`` e.g. ``scene.poster.negative_global``.
-    Style-pack tokens are injected separately into the system prompt (DESIGN.md layer).
-    """
+    """Merge rule layers: global base, then scene.* overlays (scene wins on same key)."""
     out = dict(raw or {})
     scene_key = (scene or "").strip().lower()
     if not scene_key:
@@ -170,199 +122,6 @@ def merge_design_rules(raw: dict[str, str], scene: str) -> dict[str, str]:
             out[base] = v
     return out
 
-def _format_style_contract(meta: dict[str, Any] | None, name: str | None) -> str:
-    """DESIGN.md-like brand contract from library style pack meta."""
-    if not isinstance(meta, dict) or not meta:
-        return ""
-    parts = [f"DESIGN_SYSTEM: {name or 'style_pack'}"]
-    palette = meta.get("palette")
-    if isinstance(palette, list) and palette:
-        parts.append("PALETTE: " + ", ".join(str(x) for x in palette))
-    elif isinstance(palette, str) and palette.strip():
-        parts.append(f"PALETTE: {palette.strip()}")
-    for key, label in (
-        ("type", "TYPE"),
-        ("font", "TYPE"),
-        ("radius", "RADIUS"),
-        ("spacing", "SPACING"),
-        ("stroke", "STROKE"),
-        ("ratio", "RATIO"),
-        ("mood", "MOOD"),
-    ):
-        val = meta.get(key)
-        if val is None or val == "":
-            continue
-        if isinstance(val, list):
-            parts.append(f"{label}: " + ", ".join(str(x) for x in val))
-        else:
-            parts.append(f"{label}: {val}")
-    extra = meta.get("tokens")
-    if isinstance(extra, dict) and extra:
-        parts.append("TOKENS: " + json.dumps(extra, ensure_ascii=False))
-    return "\n".join(parts)
-
-def _format_template_brief(meta: dict[str, Any] | None, name: str | None) -> str:
-    if not isinstance(meta, dict) or not meta:
-        return ""
-    parts = [f"TEMPLATE: {name or 'composition'}"]
-    canvas = meta.get("canvas")
-    if canvas:
-        parts.append(f"TEMPLATE_CANVAS: {canvas}")
-    modules = meta.get("modules")
-    if isinstance(modules, list) and modules:
-        parts.append("MODULES: " + ", ".join(str(x) for x in modules))
-    layout = meta.get("layout")
-    if layout:
-        parts.append(f"LAYOUT: {layout}")
-    return "\n".join(parts)
-
-def _apply_prompt_pattern(prompt: str, meta: dict[str, Any] | None) -> str:
-    if not isinstance(meta, dict):
-        return prompt
-    template = str(meta.get("template") or "").strip()
-    if not template:
-        return prompt
-    if "{prompt}" in template:
-        return template.replace("{prompt}", prompt)
-    if prompt in template:
-        return template
-    return f"{template}\n\nUSER_BRIEF:\n{prompt}"
-
-def _build_system(
-    skill: dict[str, Any],
-    rules: dict[str, str],
-    *,
-    style_contract: str = "",
-    template_brief: str = "",
-    scene: str = "",
-    include_svg_spec: bool | None = None,
-    lean_edit: bool = False,
-) -> str:
-    """Prompt stack: global rules + scene + DESIGN system + template + skill pos/neg.
-
-    ``lean_edit`` (targeted @node / @group only): skip design-token / knowledge dump
-    and DEEP_THINK. Whole-page edit_in_place still uses the full stack.
-    """
-    fmt = str(skill.get("output_format") or "").lower()
-    want_svg = (
-        include_svg_spec
-        if include_svg_spec is not None
-        else fmt in ("svg", "svg_fragment")
-    )
-    parts = [
-        "You are a design skill worker. Follow ONLY this skill. Obey stacked rules.",
-        "PROMPT_STACK: global > scene > design_system > template > skill",
-        f"SCENE: {scene or 'general'}",
-    ]
-    if lean_edit:
-        lean = (rules.get("edit.lean") or "").strip()
-        if lean:
-            parts.append(lean)
-        user_first = (rules.get("design.user_first") or "").strip()
-        if user_first:
-            parts.append(f"USER_FIRST: {user_first}")
-        parts.extend(
-            [
-                f"SKILL: {skill.get('name')}",
-                f"POSITIVE: {skill.get('prompt_positive')}",
-                f"NEGATIVE_SKILL: {skill.get('prompt_negative') or ''}",
-                f"OUTPUT_FORMAT: {skill.get('output_format')}",
-            ]
-        )
-        if _is_analysis_skill(skill):
-            tone = (rules.get("tone.user_facing") or "").strip()
-            if tone:
-                parts.append(f"TONE: {tone}")
-            face = (rules.get("face.analysis") or "").strip()
-            if face:
-                parts.append(f"FACE_ANALYSIS: {face}")
-            classify = (rules.get("intent.classify_hint") or "").strip()
-            if classify:
-                parts.append(f"INTENT_CLASSIFY: {classify}")
-            # Prefer edit.analysis_lean; fall back to edit.speed (legacy key).
-            analysis_lean = (
-                rules.get("edit.analysis_lean") or rules.get("edit.speed") or ""
-            ).strip()
-            if analysis_lean:
-                parts.append(analysis_lean)
-        return "\n".join(parts)
-
-    judgment = (rules.get("agent.judgment_policy") or "").strip()
-    if judgment:
-        parts.append(f"JUDGMENT: {judgment}")
-    user_first = (rules.get("design.user_first") or "").strip()
-    if user_first:
-        parts.append(f"USER_FIRST: {user_first}")
-    rule_tiers = (rules.get("design.rule_tiers") or "").strip()
-    if rule_tiers:
-        parts.append(f"RULE_TIERS: {rule_tiers}")
-    if want_svg:
-        svg_spec = (rules.get("svg_spec") or "").strip()
-        if svg_spec:
-            parts.append(f"SVG_SPEC: {svg_spec}")
-        layer = (rules.get("layer_naming") or "").strip()
-        if layer:
-            parts.append(f"LAYER_NAMING: {layer}")
-        path_close = (rules.get("path_close") or "").strip()
-        if path_close:
-            parts.append(f"PATH_CLOSE: {path_close}")
-    parts.append(f"NEGATIVE: {rules.get('negative_global', '')}")
-    scene_hint = (rules.get("layout_hint") or rules.get("scene_hint") or "").strip()
-    if scene_hint:
-        parts.append(f"SCENE_HINT: {scene_hint}")
-    for extra_key, label in (
-        ("typography_hint", "TYPOGRAPHY"),
-        ("density_hint", "DENSITY"),
-        ("color_hint", "COLOR_HINT"),
-        ("spacing_hint", "SPACING"),
-        ("design.color_terms", "COLOR_TERMS"),
-        ("design.px_baseline", "PX_BASELINE"),
-    ):
-        extra_val = (rules.get(extra_key) or "").strip()
-        if extra_val:
-            parts.append(f"{label}: {extra_val}")
-    # Design tokens (Admin「设计令牌」) intentionally disconnected from the prompt stack.
-    # Design knowledge: optional, by scene + skill category (USER_PROMPT still wins).
-    from services.design.knowledge_store import format_knowledge_block, list_for_injection
-
-    cat = str(skill.get("category") or "").lower()
-    knowledge_block = format_knowledge_block(
-        list_for_injection(scene=scene or "website", skill_category=cat)
-    )
-    if knowledge_block:
-        parts.append(knowledge_block)
-    if style_contract:
-        parts.append(style_contract)
-        obey_ds = (rules.get("prompt.design_system_obey") or "").strip()
-        if obey_ds:
-            parts.append(obey_ds)
-    if template_brief:
-        parts.append(template_brief)
-        obey_tpl = (rules.get("prompt.template_obey") or "").strip()
-        if obey_tpl:
-            parts.append(obey_tpl)
-    parts.extend(
-        [
-            f"SKILL: {skill.get('name')}",
-            f"POSITIVE: {skill.get('prompt_positive')}",
-            f"NEGATIVE_SKILL: {skill.get('prompt_negative') or ''}",
-            f"OUTPUT_FORMAT: {skill.get('output_format')}",
-        ]
-    )
-    if _is_analysis_skill(skill):
-        deep = (rules.get("plan.deep_think") or "").strip()
-        if deep:
-            parts.append(f"DEEP_THINK:\n{deep}")
-        tone = (rules.get("tone.user_facing") or "").strip()
-        if tone:
-            parts.append(f"TONE: {tone}")
-        face = (rules.get("face.analysis") or "").strip()
-        if face:
-            parts.append(f"FACE_ANALYSIS: {face}")
-        classify = (rules.get("intent.classify_hint") or "").strip()
-        if classify:
-            parts.append(f"INTENT_CLASSIFY: {classify}")
-    return "\n".join(parts)
 
 def _finalize_memory_patch(
     *,
@@ -381,13 +140,27 @@ def _finalize_memory_patch(
     canvas_size: str | None,
     canvas_frame_patch: dict[str, Any] | None = None,
     subgoals: list[str] | None = None,
+    subgoals_queue: list[dict[str, Any]] | None = None,
     completed_skill_keys: list[str] | None = None,
+    user_prompt: str = "",
+    assistant_reply: str = "",
+    short_turns: list[dict[str, Any]] | None = None,
+    rules: dict[str, str] | None = None,
+    design_patch: dict[str, Any] | None = None,
+    await_user: bool | None = None,
 ) -> dict[str, Any]:
     working = dict(medium or {})
     if canvas_frame_patch:
         from services.agent_memory.schema import deep_merge
 
         working = deep_merge(working, {"canvas": canvas_frame_patch})
+    merged_design: dict[str, Any] = dict(design_patch) if isinstance(design_patch, dict) else {}
+    if isinstance(subgoals_queue, list) and subgoals_queue:
+        from services.agent_memory.subgoals import design_patch_with_queue
+
+        merged_design.update(design_patch_with_queue(subgoals_queue))
+    if await_user is not None:
+        merged_design["await_user"] = bool(await_user)
     patch = memory_service.build_run_patch(
         working,
         task_id=task_id,
@@ -399,8 +172,13 @@ def _finalize_memory_patch(
         critique_notes=critique_notes,
         scene_key=scene_key,
         canvas_size=canvas_size,
+        design_patch=merged_design or None,
         subgoals=subgoals,
         completed_skill_keys=completed_skill_keys,
+        user_prompt=user_prompt,
+        assistant_reply=assistant_reply or summary,
+        short_turns=short_turns,
+        rules=rules,
     )
     merged = patch["medium"]
     sid = _as_text(session_id).strip()
@@ -408,4 +186,3 @@ def _finalize_memory_patch(
     if sid:
         memory_service.persist_after_run(user_id, sid, pid, merged)
     return patch
-

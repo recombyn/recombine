@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { BiExit } from 'react-icons/bi';
 import { HiOutlineBolt } from 'react-icons/hi2';
 import Slider from '@/components/base/slider';
@@ -6,9 +7,26 @@ import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
 import './imageToolPanel.css';
 
-/** Compact panel actions — match preset chip height (常用角度 h-7). */
+/** Panel actions — soft rect (xl), same family as default SegmentedControl. */
 const panelBtn =
-  'inline-flex h-7 flex-1 items-center justify-center rounded px-2 text-[12px] font-medium leading-none transition-colors';
+  'inline-flex h-7 flex-1 items-center justify-center rounded-xl px-2.5 text-[12px] font-medium leading-none transition-colors';
+
+/**
+ * Image-tool 积分 costs — sync with apps/api/api/v1/image_tools.py `_KIND_CREDIT_COST`.
+ * (Wallet image_credits, not LLM tokens.)
+ */
+export const IMAGE_TOOL_TOKEN_COST = {
+  upscale: 20,
+  removeBg: 10,
+  multiAngle: 30,
+  expand: 30,
+  editText: 20,
+  vector: 20,
+  adjust: 20,
+} as const;
+
+/** Alias — same map as IMAGE_TOOL_TOKEN_COST. */
+export const IMAGE_TOOL_CREDIT_COST = IMAGE_TOOL_TOKEN_COST;
 
 /** Shared chrome for image tool panels docked beside the source image. */
 export default function ImageToolPanelShell({
@@ -32,7 +50,7 @@ export default function ImageToolPanelShell({
   return (
     <div
       className={cn(
-        'flex flex-col overflow-hidden rounded bg-[var(--surface)] text-left shadow-[0_8px_28px_rgba(15,23,42,0.14)] ring-1 ring-[var(--line)]',
+        'flex flex-col overflow-hidden rounded-xl bg-[var(--surface)] text-left shadow-[0_8px_28px_rgba(15,23,42,0.14)] ring-1 ring-[var(--line)]',
         className
       )}
       style={{ width }}
@@ -54,7 +72,7 @@ export default function ImageToolPanelShell({
                 type="button"
                 aria-label={'退出'}
                 onClick={onClose}
-                className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-xl text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
               >
                 <BiExit className="h-[18px] w-[18px]" />
               </button>
@@ -83,7 +101,7 @@ export function PanelIconBtn({
         type="button"
         aria-label={title}
         onClick={onClick}
-        className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-xl text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
       >
         {children}
       </button>
@@ -91,13 +109,29 @@ export function PanelIconBtn({
   );
 }
 
-/** Credit cost chip on confirm (bolt + amount), for LLM-backed tools. */
-export function PanelConfirmCost({ amount }: { amount: number }) {
+/** Cost chip for primary CTAs: amount + bolt after the label; inherits text color. */
+export function PanelConfirmCost({
+  amount,
+  unit = 'credits',
+}: {
+  amount: number;
+  /** credits = 积分 (image tools). */
+  unit?: 'credits' | 'tokens';
+}) {
+  const { t } = useTranslation();
+  const n = Number.isFinite(amount) ? Math.round(amount) : 0;
+  const display = String(n);
+  const tip =
+    unit === 'tokens'
+      ? t('wallet.tokenCostTip', { count: display })
+      : t('wallet.creditCostTip', { count: display });
   return (
-    <span className="inline-flex items-center gap-0.5 text-[11px] text-white/55">
-      <HiOutlineBolt className="h-3 w-3" aria-hidden />
-      <span className="tabular-nums">{amount}</span>
-    </span>
+    <Tooltip title={tip} placement="top">
+      <span className="inline-flex items-center gap-0.5 text-current">
+        <span className="tabular-nums">{display}</span>
+        <HiOutlineBolt className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      </span>
+    </Tooltip>
   );
 }
 
@@ -115,7 +149,7 @@ export function PanelFooterActions({
   confirmLabel: string;
   confirmDisabled?: boolean;
   confirmBusy?: boolean;
-  /** When set, shows bolt + credit cost on the confirm button (LLM tools). */
+  /** When set, shows cost + bolt after the label (inherits button text color). */
   confirmCost?: number;
   confirmExtra?: ReactNode;
 }) {
@@ -201,7 +235,7 @@ export function PanelClickSelect({
   return (
     <button
       type="button"
-      className="inline-flex h-7 min-w-[4.5rem] items-center justify-center rounded border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[12px] text-[var(--ink)] transition-colors hover:bg-[var(--accent-soft)]"
+      className="inline-flex h-7 min-w-[4.5rem] items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[12px] text-[var(--ink)] transition-colors hover:bg-[var(--accent-soft)]"
       onClick={() => {
         const next = options[(idx + 1) % options.length];
         if (next) onChange(next.value);

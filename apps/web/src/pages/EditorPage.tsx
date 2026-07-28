@@ -92,11 +92,13 @@ import {
   setGridMode,
   setSelectedNodeId,
   setSelectedNodeIds,
+  setTemplateThumbnail,
   setWorkspaceMode,
   updateArtboardFrame,
   pushEditorHistory,
 } from '@/store/modules/editor';
 import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
+import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
 import {
   HtmlArtboardFrame,
   FrameDrawFeature,
@@ -569,6 +571,18 @@ async function hydrateCloudProject(
         source: 'user',
       })
     );
+    {
+      const thumbs = normalizeProjectThumbnailUrls(proj.thumbnailUrl, proj.updatedAt);
+      if (thumbs.length) {
+        dispatch(
+          setTemplateThumbnail({
+            id: proj.id,
+            thumbnail: thumbs.length === 1 ? thumbs[0] : thumbs,
+            custom: Boolean(proj.thumbnailCustom),
+          })
+        );
+      }
+    }
     void putProjectDraft({
       projectId: proj.id,
       name: proj.name || t('home.untitled'),
@@ -1932,7 +1946,9 @@ export default function EditorPage() {
       ) : null}
 
       {bootOpen ? <EditorBootOverlay progress={bootProgress} exiting={bootExiting} /> : null}
-      <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
+      {shareOpen ? (
+        <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
+      ) : null}
       <EditorOnboardingTour
         ready={!bootOpen}
         onOpenAgent={() => {

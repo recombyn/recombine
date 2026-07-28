@@ -438,39 +438,21 @@ def _pub(r: Any) -> dict[str, Any]:
 
 
 def ensure_design_knowledge() -> None:
+    """Insert missing seed knowledge rows. Never overwrite Admin edits."""
     # Do not call ensure_design_catalog() here — catalog invokes this while still
     # holding the ensure lock and before _CATALOG_READY, which would recurse forever.
     now = time.time()
     with connect() as conn:
-        existing = {
-            str(r["kind"] or "")
-            for r in conn.execute("SELECT DISTINCT kind FROM design_knowledge").fetchall()
+        existing_keys = {
+            (str(r["kind"] or ""), str(r["title"] or ""))
+            for r in conn.execute("SELECT kind, title FROM design_knowledge").fetchall()
         }
         for item in _SEED:
             kind = str(item["kind"])
             title = str(item["title"])
-            body = str(item["body"])
-            if kind in existing:
-                # Refresh official seed row body when title matches (pack upgrades).
-                conn.execute(
-                    """
-                    UPDATE design_knowledge
-                    SET body = ?, when_to_use = ?, scenes = ?, skill_categories = ?,
-                        sort_order = ?, updated_at = ?
-                    WHERE kind = ? AND title = ?
-                    """,
-                    (
-                        body,
-                        item.get("when_to_use") or "",
-                        item.get("scenes") or "all",
-                        item.get("skill_categories") or "all",
-                        int(item.get("sort_order") or 0),
-                        now,
-                        kind,
-                        title,
-                    ),
-                )
+            if (kind, title) in existing_keys:
                 continue
+            body = str(item["body"])
             conn.execute(
                 """
                 INSERT INTO design_knowledge
@@ -489,7 +471,7 @@ def ensure_design_knowledge() -> None:
                     now,
                 ),
             )
-            existing.add(kind)
+            existing_keys.add((kind, title))
         conn.commit()
 
 
@@ -619,3 +601,91 @@ def format_knowledge_block(rows: list[dict[str, Any]]) -> str:
             head += f"\n适用：{when}"
         parts.append(f"{head}\n{r.get('body') or ''}".strip())
     return "\n\n".join(parts)
+
+
+def format_knowledge_catalog(*, scene: str = "website") -> str:
+    """Short index of enabled knowledge (kinds + titles) for deferred loading."""
+    scene_l = str(scene or "website").strip().lower() or "website"
+    rows = list_knowledge(enabled=True, ensure=True)
+    lines: list[str] = [
+        "设计知识目录（用 need_knowledge: [\"palette\", …] 申请正文）："
+    ]
+    seen_line: set[str] = set()
+    for r in rows:
+        scenes = str(r.get("scenes") or "all")
+        if not (_csv_has(scenes, scene_l) or _csv_has(scenes, "all")):
+            continue
+        kind = str(r.get("kind") or "").strip()
+        if not kind:
+            continue
+        label = KIND_LABELS.get(kind, kind)
+        title = str(r.get("title") or label).strip()
+        line = f"- `{kind}` — {label}·{title}"
+        if line in seen_line:
+            continue
+        seen_line.add(line)
+        lines.append(line)
+        if len(lines) >= 40:
+            break
+    if len(lines) == 1:
+        lines.append("（本场景暂无启用知识）")
+    return "\n".join(lines)
+
+
+def normalize_need_knowledge(raw: Any, *, max_n: int = 8) -> list[str]:
+    """Parse model need_knowledge → kind keys (deduped). True → ['*'] (all for scene)."""
+    if raw is None or raw is False:
+        return []
+    if raw is True:
+        return ["*"]
+    items: list[Any]
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s.lower() in ("1", "true", "yes", "all", "*"):
+            return ["*"]
+        items = [p.strip() for p in s.replace("；", ",").split(",")]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(item or "").strip().lower()
+        if not key or key in seen:
+            continue
+        if key in ("all", "*"):
+            return ["*"]
+        seen.add(key)
+        out.append(key)
+        if len(out) >= max_n:
+            break
+    return out
+
+
+def format_knowledge_details(*, kinds: list[str], scene: str = "website") -> str:
+    """Full knowledge bodies for selected kinds (scene-filtered). kinds=['*'] → all."""
+    scene_l = str(scene or "website").strip().lower() or "website"
+    wanted = [str(k).strip().lower() for k in (kinds or []) if str(k).strip()]
+    if not wanted:
+        return ""
+    load_all = "*" in wanted
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    source = list_knowledge(enabled=True, ensure=True)
+    for r in source:
+        kind = str(r.get("kind") or "").strip().lower()
+        if not load_all and kind not in wanted:
+            continue
+        scenes = str(r.get("scenes") or "all")
+        if not (_csv_has(scenes, scene_l) or _csv_has(scenes, "all")):
+            continue
+        rid = int(r.get("id") or 0)
+        if rid and rid in seen_ids:
+            continue
+        if rid:
+            seen_ids.add(rid)
+        rows.append(r)
+        if load_all and len(rows) >= 12:
+            break
+    return format_knowledge_block(rows)

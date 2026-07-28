@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowPath } from 'react-icons/hi2';
+import { SegmentedControl } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
 import AngleEditorScene, {
@@ -8,6 +9,7 @@ import AngleEditorScene, {
   type AngleEditorMode,
 } from './AngleEditorScene';
 import ImageToolPanelShell, {
+  IMAGE_TOOL_TOKEN_COST,
   PanelFooterActions,
   PanelIconBtn,
   PanelSliderRow,
@@ -110,36 +112,25 @@ export default function MultiAngleToolPanel({
             });
           }}
           confirmLabel={t('editor.imageToolbar.useNow')}
-          confirmCost={2}
+          confirmCost={IMAGE_TOOL_TOKEN_COST.multiAngle}
         />
       }
     >
-      <div className="mb-3 flex rounded bg-[var(--accent-soft)] p-0.5">
-        {(
-          [
-            ['skybox', t('editor.imageToolbar.skybox')],
-            ['camera', t('editor.imageToolbar.camera')],
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            className={cn(
-              'h-7 flex-1 rounded text-[12px] font-medium transition-colors',
-              tab === key
-                ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                : 'text-[var(--muted)] hover:text-[var(--ink)]'
-            )}
-            onClick={() => setTab(key)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        className="mb-3"
+        size="sm"
+        fullWidth
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'skybox', label: t('editor.imageToolbar.skybox') },
+          { value: 'camera', label: t('editor.imageToolbar.camera') },
+        ]}
+      />
 
       <div
         className={cn(
-          'relative mb-3 aspect-square overflow-hidden rounded bg-white ring-1 ring-[var(--line)]'
+          'relative mb-3 aspect-square overflow-hidden rounded bg-[var(--canvas)] ring-1 ring-[var(--line)]'
         )}
       >
         <AngleEditorScene
@@ -170,7 +161,7 @@ export default function MultiAngleToolPanel({
                   aria-label={tip}
                   onClick={() => applyPreset(preset)}
                   className={cn(
-                    'h-7 rounded px-2.5 text-[12px] font-medium transition-colors',
+                    'h-7 rounded-xl px-2.5 text-[12px] font-medium transition-colors',
                     active
                       ? 'bg-[var(--ink)] text-[var(--on-brand)]'
                       : 'bg-[var(--accent-soft)] text-[var(--ink)] hover:bg-[var(--line)]'

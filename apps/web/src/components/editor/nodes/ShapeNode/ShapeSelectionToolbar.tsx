@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useDispatch } from 'react-redux';
+import { useTranslation } from 'react-i18next';
+import { HiOutlineLink, HiOutlineLinkSlash } from 'react-icons/hi2';
 import {
   fillPanelPreview,
   type FillPanelValue,
@@ -53,6 +55,13 @@ import {
 import { TbVectorBezier } from 'react-icons/tb';
 import { message } from '@/components/base';
 
+function readAspectLocked(attrs: Record<string, unknown> | undefined): boolean {
+  const raw = attrs?.lockAspect;
+  if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return false;
+}
+
 type SceneBox = { left: number; top: number; width: number; height: number };
 
 /** Stored before first ratio preset so 「原始」 can restore. */
@@ -73,6 +82,7 @@ export default function ShapeSelectionToolbar({
   hideExport?: boolean;
 }) {
   const dispatch = useDispatch();
+  const { t } = useTranslation();
   const [ratioOpen, setRatioOpen] = useState(false);
   const cornerRadius = supportsCornerRadius(node);
   const canFill = supportsFill(node);
@@ -83,6 +93,7 @@ export default function ShapeSelectionToolbar({
   const sidesLabel = shapeType === 'star' ? '角数' : '边数';
   const sidesPrefix = shapeType === 'star' ? '角' : '边';
   const sides = sidesFromAttrs(node?.attrs);
+  const aspectLocked = readAspectLocked(node?.attrs);
 
   const activeRatioId = useMemo(
     () => matchAspectPresetKey(box.width, box.height, ELEMENT_ASPECT_PRESETS),
@@ -137,6 +148,12 @@ export default function ShapeSelectionToolbar({
   const setSize = (axis: 'w' | 'h', raw: string) => {
     const n = Math.max(1, Math.round(Number(raw) || 0));
     if (!Number.isFinite(n)) return;
+    if (aspectLocked) {
+      const ratio = box.width / Math.max(1, box.height);
+      if (axis === 'w') patchSize(n, Math.max(1, Math.round(n / ratio)));
+      else patchSize(Math.max(1, Math.round(n * ratio)), n);
+      return;
+    }
     if (axis === 'w') patchSize(n, Math.round(box.height));
     else patchSize(Math.round(box.width), n);
   };
@@ -287,6 +304,37 @@ export default function ShapeSelectionToolbar({
           }}
         />
       </label>
+      <Tooltip
+        title={
+          aspectLocked
+            ? t('editor.imageToolbar.unlockAspect')
+            : t('editor.imageToolbar.lockAspect')
+        }
+        placement="top"
+      >
+        <button
+          type="button"
+          aria-label={
+            aspectLocked
+              ? t('editor.imageToolbar.unlockAspect')
+              : t('editor.imageToolbar.lockAspect')
+          }
+          aria-pressed={aspectLocked}
+          className={cn(
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
+            aspectLocked && 'bg-[var(--accent-soft)] text-[var(--ink)]'
+          )}
+          onClick={() =>
+            patchAttrs({ lockAspect: aspectLocked ? 'false' : 'true' })
+          }
+        >
+          {aspectLocked ? (
+            <HiOutlineLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+          ) : (
+            <HiOutlineLinkSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+      </Tooltip>
       <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
         <span className="text-[var(--muted)]">H</span>
         <input

@@ -37,7 +37,7 @@ import {
 } from '@/components/base/colorPanel';
 import Slider from '@/components/base/slider';
 import Tooltip from '@/components/base/tooltip';
-import { DropdownPanel, DropdownPanelItem } from '@/components/base';
+import { DropdownPanel, DropdownPanelItem, SegmentedControl } from '@/components/base';
 import DiffuseMeshEditor from '@/components/editor/panels/DiffuseMeshEditor';
 import { StylePanelShell } from '@/components/editor/panels/StylePanelChrome';
 import { cn } from '@/utils/classnames';
@@ -96,6 +96,41 @@ const IMAGE_ADJUST_ROWS: Array<{ key: keyof FillImageAdjust; label: string }> = 
   { key: 'highlights', label: '高光' },
   { key: 'shadows', label: '阴影' },
 ];
+
+function resolveFillTypePatch(
+  next: FillType,
+  value: FillPanelValue,
+  solid: string,
+  gradient: FillGradient
+): Partial<FillPanelValue> {
+  switch (next) {
+    case 'solid':
+      return { fillType: 'solid', fillColor: solid };
+    case 'image':
+      return {
+        fillType: 'image',
+        fillColor: solid,
+        fillImageSrc: value.fillImageSrc || '',
+        fillImageFit: value.fillImageFit ?? 'fill',
+        fillImageRotate: value.fillImageRotate ?? 0,
+        fillImageAdjust: value.fillImageAdjust ?? DEFAULT_FILL_IMAGE_ADJUST,
+      };
+    default: {
+      const g =
+        parseFillType(value.fillType) === next
+          ? gradient.type === next
+            ? gradient
+            : defaultGradient(next, solid)
+          : defaultGradient(next, solid);
+      g.type = next;
+      return {
+        fillType: next,
+        fillColor: solid,
+        fillGradient: serializeFillGradient(g),
+      };
+    }
+  }
+}
 
 function clampAdjustInput(n: number) {
   return Math.max(-100, Math.min(100, Math.round(n) || 0));
@@ -601,33 +636,7 @@ export function FillPanel({
   );
 
   const setType = (next: FillType) => {
-    if (next === 'solid') {
-      emit({ fillType: 'solid', fillColor: solid });
-      return;
-    }
-    if (next === 'image') {
-      emit({
-        fillType: 'image',
-        fillColor: solid,
-        fillImageSrc: value.fillImageSrc || '',
-        fillImageFit: value.fillImageFit ?? 'fill',
-        fillImageRotate: value.fillImageRotate ?? 0,
-        fillImageAdjust: value.fillImageAdjust ?? DEFAULT_FILL_IMAGE_ADJUST,
-      });
-      return;
-    }
-    const g =
-      parseFillType(value.fillType) === next
-        ? gradient.type === next
-          ? gradient
-          : defaultGradient(next, solid)
-        : defaultGradient(next, solid);
-    g.type = next;
-    emit({
-      fillType: next,
-      fillColor: solid,
-      fillGradient: serializeFillGradient(g),
-    });
+    emit(resolveFillTypePatch(next, value, solid, gradient));
   };
 
   const updateGradient = (g: FillGradient) => {
@@ -710,30 +719,17 @@ export function FillPanel({
       layerVisibleTipShow="显示填充"
       layerVisibleTipHide="隐藏填充"
     >
-        <div className="flex items-center gap-1 rounded bg-[var(--accent-soft)] p-0.5">
-          {FILL_PANEL_TYPES.map((t) => {
-            const active = panelType === t;
-            const tip = FILL_TYPE_TIP[t];
-            return (
-              <Tooltip key={t} title={tip} placement="top" triggerClassName="min-w-0 flex-1">
-                <button
-                  type="button"
-                  aria-label={tip}
-                  aria-pressed={active}
-                  onClick={() => setType(t)}
-                  className={cn(
-                    'inline-flex h-7 w-full items-center justify-center rounded transition-colors',
-                    active
-                      ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                      : 'text-[var(--muted)] hover:text-[var(--ink)]'
-                  )}
-                >
-                  <TypeIcon type={t} active={active} />
-                </button>
-              </Tooltip>
-            );
-          })}
-        </div>
+        <SegmentedControl
+          size="sm"
+          fullWidth
+          value={panelType}
+          onChange={(next) => setType(next)}
+          options={FILL_PANEL_TYPES.map((t) => ({
+            value: t,
+            title: FILL_TYPE_TIP[t],
+            label: <TypeIcon type={t} active={panelType === t} />,
+          }))}
+        />
 
         {isGradient ? (
           <div className="space-y-2">

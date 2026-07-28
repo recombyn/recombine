@@ -1,5 +1,5 @@
 /**
- * User projects API — metadata + document sync.
+ * User projects API — metadata + document sync (camera/selection stay local).
  */
 
 import { request } from '@/utils/request';
@@ -7,7 +7,12 @@ import { request } from '@/utils/request';
 export type ProjectSummaryDto = {
   id: string;
   name: string;
-  thumbnailUrl?: string | null;
+  /** Up to 4 cover tiles for 最近打开 / 我的项目 collage. */
+  thumbnailUrl?: string | string[] | null;
+  /** User-uploaded cover — auto-save must not overwrite. */
+  thumbnailCustom?: boolean;
+  /** Optimistic concurrency token — send as baseRevision / If-Match on PUT. */
+  revision?: number;
   updatedAt: number;
   createdAt: number;
   hasDocument?: boolean;
@@ -25,29 +30,38 @@ export type PaginatedProjects = {
   hasMore: boolean;
 };
 
-export const fetchProjects = (page = 1, pageSize = 24) =>
+export type UpsertProjectBody = {
+  id?: string;
+  name: string;
+  document?: unknown;
+  thumbnailDataUrl?: string | null;
+  thumbnailDataUrls?: string[] | null;
+  thumbnailUrls?: string[] | null;
+  thumbnailCustom?: boolean;
+  baseRevision?: number;
+};
+
+export type PatchProjectBody = {
+  baseRevision: number;
+  name?: string;
+  thumbnailDataUrl?: string | null;
+  thumbnailDataUrls?: string[] | null;
+  thumbnailUrls?: string[] | null;
+  thumbnailCustom?: boolean;
+  upsertNodes?: Record<string, unknown>;
+  removeNodeIds?: string[];
+  pageChildren?: string[];
+  frames?: unknown[];
+  activeFrameId?: string | null;
+  canvas?: Record<string, unknown>;
+};
+
+export const fetchProjects = (params: { page: number; pageSize: number }) =>
   request<PaginatedProjects>({
     url: '/api/v1/projects',
     method: 'get',
-    params: { page, pageSize },
+    params,
   });
-
-/** Paginate through all project summaries (list metadata only). */
-export async function fetchAllProjectSummaries(
-  pageSize = 50,
-  maxPages = 20
-): Promise<ProjectSummaryDto[]> {
-  const all: ProjectSummaryDto[] = [];
-  let page = 1;
-  let hasMore = true;
-  while (hasMore && page <= maxPages) {
-    const res = await fetchProjects(page, pageSize);
-    all.push(...(res.projects || []));
-    hasMore = Boolean(res.hasMore);
-    page += 1;
-  }
-  return all;
-}
 
 export const fetchProject = (id: string) =>
   request<{ project: ProjectDto }>({
@@ -55,16 +69,28 @@ export const fetchProject = (id: string) =>
     method: 'get',
   });
 
-export const upsertProjectApi = (payload: {
-  id?: string;
-  name: string;
-  document?: unknown;
-  thumbnailDataUrl?: string | null;
-}) =>
+export const upsertProjectApi = (
+  data: UpsertProjectBody,
+  headers?: Record<string, string>
+) =>
   request<{ project: ProjectSummaryDto }>({
     url: '/api/v1/projects',
     method: 'put',
-    data: payload,
+    headers,
+    data,
+  });
+
+/** Node-level incremental sync — server merges under the same revision lock. */
+export const patchProjectApi = (
+  id: string,
+  data: PatchProjectBody,
+  headers?: Record<string, string>
+) =>
+  request<{ project: ProjectSummaryDto }>({
+    url: `/api/v1/projects/${encodeURIComponent(id)}`,
+    method: 'patch',
+    headers,
+    data,
   });
 
 export const deleteProjectApi = (id: string) =>

@@ -1,10 +1,8 @@
-"""Fonts catalog + AI font generator (async TTF pipeline via Celery)."""
+"""Fonts catalog (register / upload / list). AI font generation retired."""
 
 from __future__ import annotations
 
-import logging
 import re
-import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,30 +10,11 @@ from typing import Any
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from config.settings import settings
-from services import assets as asset_store
 from services import fonts_store
 from services.auth import get_session
-from services.fontgen import tasks_store
-from services.fontgen.charset import DEFAULT_LATIN_CHARSET
-from services.fontgen.pipeline import run_font_generate_pipeline
 from services.storage import put_bytes
-from services.wallet.db import spend_tokens
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
-
-# Matches Lovart-style UI cost chip on Generate.
-_FONT_TOKEN_COST = 28
-
-_STYLE_SAMPLES = (
-    "Bold geometric sans-serif, high contrast, modern tech, crisp terminals",
-    "Elegant high-contrast Didone serif, fashion editorial, sharp serifs",
-    "Rounded friendly sans, soft terminals, playful but clean",
-    "Condensed industrial gothic, narrow letters, strong verticals",
-    "Brush script with controlled flourish, dynamic but legible",
-    "Monospace technical typewriter, even widths, inked texture",
-)
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -52,53 +31,6 @@ def _require_user(authorization: str | None):
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return user
-
-
-def _charge(user_id: str, amount: int, detail: str) -> None:
-    try:
-        spend_tokens(user_id, amount, detail)
-    except ValueError as err:
-        if str(err) == "insufficient_tokens":
-            raise HTTPException(status_code=402, detail="Insufficient credits") from err
-        raise HTTPException(status_code=400, detail=str(err)) from err
-
-
-class FontGenerateIn(BaseModel):
-    description: str = Field(default="", max_length=2000)
-    reference_image: str | None = Field(
-        default=None,
-        description="Optional style reference (https URL or data URL)",
-    )
-    charset: str | None = Field(
-        default=None,
-        description="Optional target charset; default Latin A-Z a-z 0-9",
-        max_length=512,
-    )
-
-
-def _enqueue_font_task(task_id: str) -> str:
-    """Push to Celery; optionally fall back to a background thread."""
-    try:
-        from worker.tasks import run_font_generate_job
-
-        run_font_generate_job.delay(task_id)
-        return "celery"
-    except Exception as err:  # noqa: BLE001 — broker down
-        logger.warning("Celery enqueue failed for font task %s: %s", task_id, err)
-        if not settings.font_sync_fallback:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Job queue unavailable (start Redis + worker). {err}",
-            ) from err
-
-        def _run() -> None:
-            try:
-                run_font_generate_pipeline(task_id)
-            except Exception:  # noqa: BLE001
-                logger.exception("font sync fallback failed task=%s", task_id)
-
-        threading.Thread(target=_run, name=f"font-{task_id}", daemon=True).start()
-        return "thread"
 
 
 @router.get("")
@@ -307,97 +239,3 @@ def _public_font_url(object_key: str) -> str:
     if _settings.s3_enabled and base:
         return f"{base}/{object_key}"
     return f"/api/v1/uploads/files/{object_key}"
-
-
-@router.get("/generate/cost")
-def font_generate_cost() -> dict[str, Any]:
-    return {
-        "credits": _FONT_TOKEN_COST,
-        "latinOnly": True,
-        "producesTtf": True,
-        "defaultCharset": DEFAULT_LATIN_CHARSET,
-    }
-
-
-@router.get("/mine")
-def list_my_generated_fonts(
-    page: int = 1,
-    pageSize: int = 24,
-    authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
-    user = _require_user(authorization)
-    return asset_store.list_assets(
-        user.id,
-        kind="font",
-        page=page,
-        page_size=pageSize,
-    )
-
-
-@router.get("/style-samples")
-def list_style_samples() -> dict[str, Any]:
-    return {"items": list(_STYLE_SAMPLES)}
-
-
-@router.get("/tasks/{task_id}")
-def get_font_task(
-    task_id: str,
-    authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
-    user = _require_user(authorization)
-    task = tasks_store.get_task(task_id, user_id=user.id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return {"task": task, "credits": _FONT_TOKEN_COST}
-
-
-@router.get("/tasks")
-def list_font_tasks(
-    page: int = 1,
-    pageSize: int = 24,
-    authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
-    user = _require_user(authorization)
-    return tasks_store.list_tasks(user.id, page=page, page_size=pageSize)
-
-
-@router.post("/generate")
-async def generate_font(
-    body: FontGenerateIn,
-    authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
-    """
-    Queue an AI font job:
-
-    1. Write ``font_tasks`` row (MySQL/SQLite)
-    2. Charge credits
-    3. Push Celery worker (OpenCV → inference → potrace → fontTools TTF → MinIO/local)
-    4. Client polls ``GET /fonts/tasks/{id}`` for ``ttfUrl`` / ``previewUrl``
-    """
-    user = _require_user(authorization)
-    desc = (body.description or "").strip()
-    ref = (body.reference_image or "").strip() or None
-    if not desc and not ref:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide a style description and/or a reference image",
-        )
-
-    _charge(user.id, _FONT_TOKEN_COST, "AI font generator")
-
-    task = tasks_store.create_task(
-        user.id,
-        description=desc or None,
-        reference_url=ref,
-        charset=(body.charset or None),
-    )
-    queue = _enqueue_font_task(task["id"])
-    return {
-        "task": task,
-        "taskId": task["id"],
-        "status": task["status"],
-        "credits": _FONT_TOKEN_COST,
-        "latinOnly": True,
-        "producesTtf": True,
-        "queue": queue,
-    }

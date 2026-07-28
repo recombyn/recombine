@@ -128,7 +128,7 @@ export default function FrameSizePresetMenu({
       panelDataAttrs={panelDataAttrs}
       ariaLabel={t('editor.frameToolbar.sizePresets')}
       panel={
-        <DropdownPanel className="w-[min(400px,calc(100vw-24px))] overflow-hidden p-0 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
+        <DropdownPanel className="w-max max-w-[calc(100vw-24px)] overflow-hidden p-0 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
           <SizePresetPanel
             activeKey={activeKey}
             onPick={(preset) => {

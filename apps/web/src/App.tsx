@@ -3,7 +3,9 @@ import { useDispatch } from 'react-redux';
 import { getMe } from '@/apis/auth';
 import { fetchWallet } from '@/apis/wallet';
 import AppRouter from '@/router';
-import { logout, setSession } from '@/store/modules/auth';
+import { logout, setSession, clearSessionCaches } from '@/store/modules/auth';
+import { clearProjectsLibrary } from '@/store/modules/editor';
+import { clearWallet } from '@/store/modules/wallet';
 import type { LedgerEntry } from '@/utils/wallet';
 import { syncFromServer } from '@/store/modules/wallet';
 import { getToken } from '@/utils/token';
@@ -59,6 +61,9 @@ export default function App() {
   useEffect(() => {
     const onUnauthorized = () => {
       dispatch(logout());
+      dispatch(clearWallet());
+      dispatch(clearProjectsLibrary());
+      clearSessionCaches();
     };
     window.addEventListener('recombine:auth-unauthorized', onUnauthorized);
     return () => window.removeEventListener('recombine:auth-unauthorized', onUnauthorized);
@@ -96,6 +101,9 @@ export default function App() {
         dispatch(
           syncFromServer({
             tokens: res.tokens,
+            planId: res.planId,
+            planExpiresAt: res.planExpiresAt ?? null,
+            planLocked: Boolean(res.planLocked),
             ledger: (res.ledger || []) as LedgerEntry[],
           })
         );

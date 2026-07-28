@@ -47,6 +47,11 @@ export type DropdownProps = {
    * @default true
    */
   referenceToggle?: boolean;
+  /**
+   * CSS selector for nested portaled menus (e.g. Popover). Clicks inside matching
+   * nodes do not dismiss this dropdown — needed when level-2 floats outside the tree.
+   */
+  nestedDismissGuard?: string;
   children: ReactNode;
 };
 
@@ -71,6 +76,7 @@ const Dropdown: FC<DropdownProps> = ({
   referenceClassName,
   floatingClassName,
   referenceToggle = true,
+  nestedDismissGuard,
   children,
 }) => {
   const [localOpen, setLocalOpen] = useState(false);
@@ -101,15 +107,19 @@ const Dropdown: FC<DropdownProps> = ({
     middleware: [
       offsetMiddleware(offset),
       flip({
-        padding: 5,
+        padding: 8,
         fallbackPlacements:
           placement.startsWith('top')
             ? ['top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end']
             : placement.startsWith('bottom')
               ? ['bottom-start', 'bottom-end', 'top', 'top-start', 'top-end']
-              : undefined,
+              : placement.startsWith('left')
+                ? ['left-start', 'left-end', 'right-start', 'right-end']
+                : placement.startsWith('right')
+                  ? ['right-start', 'right-end', 'left-start', 'left-end']
+                  : undefined,
       }),
-      shift({ padding: 5, crossAxis: false }),
+      shift({ padding: 8 }),
     ],
   });
 
@@ -126,7 +136,15 @@ const Dropdown: FC<DropdownProps> = ({
     enabled: isClickTrigger && referenceToggle,
   });
 
-  const dismiss = useDismiss(context);
+  const dismiss = useDismiss(context, {
+    outsidePress: nestedDismissGuard
+      ? (event) => {
+          const el = event.target as Element | null;
+          if (el?.closest?.(nestedDismissGuard)) return false;
+          return true;
+        }
+      : true,
+  });
   const role = useRole(context, { role: 'menu' });
 
   const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus, dismiss, role]);

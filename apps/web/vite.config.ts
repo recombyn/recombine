@@ -13,6 +13,11 @@ export default defineConfig(({ mode }) => {
     envRoot.GOOGLE_CLIENT_ID ||
     envRoot.VITE_GOOGLE_CLIENT_ID ||
     '';
+  const docsUrl = (
+    envWeb.VITE_DOCS_URL ||
+    envRoot.VITE_DOCS_URL ||
+    (mode === 'development' ? 'http://localhost:5175' : 'https://docs.recombyn.com')
+  ).replace(/\/$/, '');
 
   return {
     plugins: [
@@ -41,6 +46,7 @@ export default defineConfig(({ mode }) => {
     ],
     define: {
       __GOOGLE_CLIENT_ID__: JSON.stringify(googleClientId),
+      __DOCS_URL__: JSON.stringify(docsUrl),
     },
     resolve: {
       alias: {

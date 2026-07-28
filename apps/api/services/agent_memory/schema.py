@@ -28,6 +28,8 @@ def empty_task_state(
         "design": {},
         "last_run": None,
         "referents": {},
+        # Layered chat context: structured facts + rolling summary (recent turns stay in short).
+        "dialogue": {"summary": "", "facts": [], "updated_at": 0.0},
     }
 
 
@@ -62,6 +64,9 @@ def normalize_task_state(raw: Any, *, session_id: str = "", project_id: str = ""
         for k in ("focus_frame_id", "last_agent_frame_id"):
             if canvas.get(k) == "":
                 canvas[k] = None
+    from services.agent_memory.short_term import normalize_dialogue_state
+
+    merged["dialogue"] = normalize_dialogue_state(merged.get("dialogue"))
     return merged
 
 

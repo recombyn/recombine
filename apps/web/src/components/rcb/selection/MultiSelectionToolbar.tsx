@@ -18,6 +18,7 @@ import {
   createShapeNode,
   groupNodesInDocument,
   removeNodesFromDocument,
+  resolveSelectionNodeIds,
   selectionSharedGroupId,
   supportsAspectPresets,
   supportsCornerRadius,
@@ -30,6 +31,7 @@ import {
   openShapeStylePanel,
   patchDocumentNode,
   setDocument,
+  setMixedSelection,
   setSelectedNodeId,
   setSelectedNodeIds,
 } from '@/store/modules/editor';
@@ -64,6 +66,8 @@ type SceneBox = { left: number; top: number; width: number; height: number };
 type Props = {
   document: any;
   nodeIds: string[];
+  /** Co-selected artboards — group/ungroup expand to content inside them. */
+  frameIds?: string[];
   box: SceneBox;
 };
 
@@ -264,6 +268,7 @@ function IconUngroup({ className }: { className?: string }) {
 export default function MultiSelectionToolbar({
   document,
   nodeIds,
+  frameIds = [],
   box,
 }: Props): ReactNode {
   const dispatch = useDispatch();
@@ -271,7 +276,13 @@ export default function MultiSelectionToolbar({
   const [booleanOpen, setBooleanOpen] = useState(false);
   const [ratioOpen, setRatioOpen] = useState(false);
 
-  const boxes = useMemo(() => readBoxes(document, nodeIds), [document, nodeIds]);
+  /** Explicit nodes ∪ content inside co-selected artboards. */
+  const opNodeIds = useMemo(
+    () => resolveSelectionNodeIds(document, nodeIds, frameIds),
+    [document, nodeIds, frameIds]
+  );
+
+  const boxes = useMemo(() => readBoxes(document, opNodeIds), [document, opNodeIds]);
 
   const shapeBoxes = useMemo(
     () =>
@@ -283,8 +294,8 @@ export default function MultiSelectionToolbar({
   );
 
   const allSupport = (pred: (node: any) => boolean) =>
-    nodeIds.length > 0 &&
-    nodeIds.every((id) => pred(document?.deltaSetLike?.[id]));
+    opNodeIds.length > 0 &&
+    opNodeIds.every((id) => pred(document?.deltaSetLike?.[id]));
 
   const showBoolean = shapeBoxes.length >= 2 && allSupport(supportsBooleanOp);
   const showStroke = allSupport(supportsStroke);
@@ -444,10 +455,10 @@ export default function MultiSelectionToolbar({
   const openStyle = (kind: 'fill' | 'stroke' | 'radius') => {
     const ids =
       kind === 'fill'
-        ? nodeIds.filter((id) => supportsFill(document?.deltaSetLike?.[id]))
+        ? opNodeIds.filter((id) => supportsFill(document?.deltaSetLike?.[id]))
         : kind === 'stroke'
-          ? nodeIds.filter((id) => supportsStroke(document?.deltaSetLike?.[id]))
-          : nodeIds.filter((id) => supportsCornerRadius(document?.deltaSetLike?.[id]));
+          ? opNodeIds.filter((id) => supportsStroke(document?.deltaSetLike?.[id]))
+          : opNodeIds.filter((id) => supportsCornerRadius(document?.deltaSetLike?.[id]));
     if (!ids.length) return;
     dispatch(openShapeStylePanel({ kind, nodeIds: ids }));
   };
@@ -483,7 +494,7 @@ export default function MultiSelectionToolbar({
   if (!boxes.length || !box) return null;
 
   const fillSourceId =
-    nodeIds.find((id) => supportsFill(document?.deltaSetLike?.[id])) || nodeIds[0];
+    opNodeIds.find((id) => supportsFill(document?.deltaSetLike?.[id])) || opNodeIds[0];
   const firstAttrs = document?.deltaSetLike?.[fillSourceId]?.attrs || {};
   const fillSample: FillPanelValue = {
     fillType: parseFillType(firstAttrs['fill-type']),
@@ -493,14 +504,14 @@ export default function MultiSelectionToolbar({
       firstAttrs['fill-gradient'] != null ? String(firstAttrs['fill-gradient']) : undefined,
     ...fillImageFieldsFromAttrs(firstAttrs),
   };
-  const fillVisible = nodeIds
+  const fillVisible = opNodeIds
     .filter((id) => supportsFill(document?.deltaSetLike?.[id]))
     .every((id) => {
       const a = document?.deltaSetLike?.[id]?.attrs || {};
       return boolEffectAttr(a['fill-enabled'], true) && boolEffectAttr(a['fill-visible'], true);
     });
   const fillPreview = fillVisible ? fillPanelPreview(fillSample) : 'transparent';
-  const strokeVisible = nodeIds.every((id) => {
+  const strokeVisible = opNodeIds.every((id) => {
     const a = document?.deltaSetLike?.[id]?.attrs || {};
     return (
       boolEffectAttr(a['stroke-enabled'], true) && boolEffectAttr(a['stroke-visible'], true)
@@ -527,19 +538,19 @@ export default function MultiSelectionToolbar({
     { mode: 'exclude', tip: '排除', Icon: IconBoolExclude },
   ];
 
-  const groupId = selectionSharedGroupId(document, nodeIds);
+  const groupId = selectionSharedGroupId(document, opNodeIds);
 
   const createGroup = () => {
-    if (nodeIds.length < 2) return;
-    const next = groupNodesInDocument(document, nodeIds);
+    if (opNodeIds.length < 2) return;
+    const next = groupNodesInDocument(document, opNodeIds);
     dispatch(setDocument(next));
-    dispatch(setSelectedNodeIds(nodeIds));
+    dispatch(setMixedSelection({ nodeIds: opNodeIds, frameIds }));
   };
 
   const ungroup = () => {
-    const next = ungroupNodesInDocument(document, nodeIds);
+    const next = ungroupNodesInDocument(document, opNodeIds);
     dispatch(setDocument(next));
-    dispatch(setSelectedNodeIds(nodeIds));
+    dispatch(setMixedSelection({ nodeIds: opNodeIds, frameIds }));
   };
 
   // Fig.1 — selected group: 解除编组 | export
@@ -558,7 +569,7 @@ export default function MultiSelectionToolbar({
               </button>
             </Tooltip>
             <span className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />
-            <ExportSelectionPopover nodeIds={nodeIds} />
+            <ExportSelectionPopover nodeIds={opNodeIds} />
       </SelectionToolbarShell>
     );
   }
@@ -794,7 +805,7 @@ export default function MultiSelectionToolbar({
 
   const actionCluster = (
     <>
-      {nodeIds.length >= 2 ? (
+      {opNodeIds.length >= 2 ? (
         <Tooltip title="创建编组" placement="top">
           <button type="button" className={btn} aria-label="创建编组" onClick={createGroup}>
             <IconGroup className="h-3.5 w-3.5" />
@@ -802,7 +813,7 @@ export default function MultiSelectionToolbar({
           </button>
         </Tooltip>
       ) : null}
-      <ExportSelectionPopover nodeIds={nodeIds} />
+      <ExportSelectionPopover nodeIds={opNodeIds} />
     </>
   );
 
@@ -810,14 +821,14 @@ export default function MultiSelectionToolbar({
     <BlendModeControl
       blendMode={firstAttrs.blendMode}
       opacity={firstAttrs.opacity}
-      allowPassThrough={nodeIds.every((id) => document?.deltaSetLike?.[id]?.key === 'frame')}
+      allowPassThrough={opNodeIds.every((id) => document?.deltaSetLike?.[id]?.key === 'frame')}
       onBlendModeChange={(mode) => {
-        for (const id of nodeIds) {
+        for (const id of opNodeIds) {
           dispatch(patchDocumentNode({ nodeId: id, patch: { attrs: { blendMode: mode } } }));
         }
       }}
       onOpacityChange={(opacity) => {
-        for (const id of nodeIds) {
+        for (const id of opNodeIds) {
           dispatch(patchDocumentNode({ nodeId: id, patch: { attrs: { opacity } } }));
         }
       }}

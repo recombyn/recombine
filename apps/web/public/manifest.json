@@ -1,6 +1,7 @@
 {
-  "short_name": "recombyn",
-  "name": "recombyn",
+  "short_name": "Recombyn",
+  "name": "Recombyn - The Agentic Creative",
+  "description": "Design by conversation on an infinite canvas.",
   "icons": [
     {
       "src": "favicon.svg",

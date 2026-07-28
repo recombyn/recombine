@@ -63,7 +63,7 @@ export type AgentToolResult = {
 export type DesignToolContext = {
   dispatch: Dispatch;
   getDocument: () => any;
-  /** Prefer placing new nodes inside this frame. */
+  /** Prefer placing new nodes inside this frame. When set (e.g. user @ artboard), frame ops are pinned to it. */
   targetFrameId?: string | null;
   /**
    * When true, allow delete_nodes / other destructive tools.
@@ -77,6 +77,29 @@ export type DesignToolContext = {
   /** Skip per-tool undo snapshots (e.g. batch SVG → nodes import). */
   skipHistory?: boolean;
 };
+
+/**
+ * Resolve which artboard a frame op should hit.
+ * User @ / FOCUS_FRAME_ID (ctx.targetFrameId) wins over a model-guessed frameId —
+ * duplicate names like "新画板" often make the model pick the wrong SCENE_FRAMES entry.
+ */
+function resolveFrameOpId(
+  args: Record<string, any>,
+  ctx: DesignToolContext
+): string {
+  const focus = String(ctx.targetFrameId || '').trim();
+  const fromArgs = String(args.frameId ?? args.id ?? '').trim();
+  if (focus) {
+    if (fromArgs && fromArgs !== focus) {
+      console.warn(
+        '[designTools] frame op retarget blocked',
+        { fromArgs, focus }
+      );
+    }
+    return focus;
+  }
+  return fromArgs;
+}
 
 /** Optional callbacks from EditorPage / AgentDock for non-document UI. */
 export type CanvasUiBridge = {
@@ -198,6 +221,123 @@ function parseArgs(raw: string): Record<string, unknown> {
 function num(v: unknown, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function resolvePathClosed(opts: {
+  args: Record<string, unknown>;
+  mapped: string;
+  path: string;
+}): boolean {
+  const { args, mapped, path } = opts;
+  const closedExplicit =
+    args.closed === true ||
+    args.closed === 'true' ||
+    args.closed === false ||
+    args.closed === 'false';
+  if (closedExplicit) return args.closed === true || args.closed === 'true';
+  if (mapped === 'path') return /z\s*$/i.test(path.trim());
+  return mapped === 'pen' && path.length > 0;
+}
+
+function resolveCreateShapeBorderWidth(opts: {
+  args: Record<string, unknown>;
+  mapped: string;
+  isFreePath: boolean;
+  needsDefaultStroke: boolean;
+  isStrokeOnly: boolean;
+  strokeIsNone: boolean;
+}): number {
+  const {
+    args,
+    mapped,
+    isFreePath,
+    needsDefaultStroke,
+    isStrokeOnly,
+    strokeIsNone,
+  } = opts;
+  const penLike = isStrokeOnly || mapped === 'pen' || mapped === 'pencil';
+  if (isFreePath) {
+    if (args.borderWidth != null) return Math.max(0, num(args.borderWidth, 0));
+    if (strokeIsNone) return 0;
+    return 1;
+  }
+  if (needsDefaultStroke) {
+    if (args.borderWidth != null) return num(args.borderWidth, penLike ? 2 : 1);
+    return penLike ? 2 : 1;
+  }
+  if (args.borderWidth != null) return num(args.borderWidth, 0);
+  if (args.stroke != null && !strokeIsNone) return 1;
+  return 0;
+}
+
+function resolvePencilBrushStyle(
+  mapped: string,
+  args: Record<string, unknown>
+): string | undefined {
+  if (mapped !== 'pencil') return undefined;
+  if (args.brushStyle != null) return String(args.brushStyle);
+  return 'solid';
+}
+
+function summarizeCreateImage(opts: {
+  id: string;
+  sourceKind: string;
+  genPrompt: string;
+  placed: { width: number; height: number };
+}): string {
+  const wh = `${Math.round(opts.placed.width)}×${Math.round(opts.placed.height)}`;
+  if (opts.sourceKind !== 'placeholder') {
+    return `Created image ${opts.id} from ${opts.sourceKind}`;
+  }
+  if (opts.genPrompt) {
+    return `Created image placeholder ${opts.id} (genPrompt not hydrated) — ${wh}`;
+  }
+  return `Created image placeholder ${opts.id} (${wh}) — user can replace later`;
+}
+
+function normalizeAlignMode(rawMode: string): string {
+  if (rawMode === 'center' || rawMode === 'centerx') return 'centerX';
+  if (rawMode === 'centerY' || rawMode === 'centery') return 'middle';
+  return rawMode;
+}
+
+function normalizeExportFormat(formatRaw: string): 'jpeg' | 'svg' | 'png' {
+  if (formatRaw === 'jpg' || formatRaw === 'jpeg') return 'jpeg';
+  if (formatRaw === 'svg') return 'svg';
+  return 'png';
+}
+
+function resolveExportNodeIds(args: Record<string, unknown>): string[] {
+  if (Array.isArray(args.nodeIds)) {
+    return args.nodeIds.map((x) => String(x)).filter(Boolean);
+  }
+  if (args.nodeId) return [String(args.nodeId)];
+  return [];
+}
+
+/** Normalize AI pathPressure (csv string or number[]) to comma-separated 0.05–1. */
+function normalizePathPressureArg(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const parts: number[] = [];
+  if (Array.isArray(raw)) {
+    for (const v of raw) {
+      const n = Number(v);
+      if (Number.isFinite(n)) parts.push(n);
+    }
+  } else {
+    for (const tok of String(raw).split(/[,;\s]+/)) {
+      if (!tok) continue;
+      const n = Number(tok);
+      if (Number.isFinite(n)) parts.push(n);
+    }
+  }
+  if (!parts.length) return undefined;
+  return parts
+    .map((n) => {
+      const t = n > 1 ? n / 100 : n;
+      return Math.min(1, Math.max(0.05, t)).toFixed(3);
+    })
+    .join(',');
 }
 
 function listFrames(doc: any): ArtboardFrame[] {
@@ -668,6 +808,51 @@ function fitIntoFrame(
   };
 }
 
+/** Place size at frame center (world coords), or a small inset when no frame. */
+function centerInFrame(
+  frame: ArtboardFrame | null | undefined,
+  width: number,
+  height: number
+): { x: number; y: number } {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  if (!frame) return { x: 40, y: 40 };
+  const fx = Number(frame.x) || 0;
+  const fy = Number(frame.y) || 0;
+  const fw = Math.max(1, Number(frame.width) || 1);
+  const fh = Math.max(1, Number(frame.height) || 1);
+  return {
+    x: Math.round(fx + Math.max(0, (fw - w) / 2)),
+    y: Math.round(fy + Math.max(0, (fh - h) / 2)),
+  };
+}
+
+/** Resolve create_* origin: omitted or LLM-default (0,0) → frame center; full-bleed keeps 0,0. */
+function resolveCreateXY(
+  args: Record<string, unknown>,
+  frame: ArtboardFrame | null | undefined,
+  width: number,
+  height: number
+): { x: number; y: number } {
+  const hasX = args.x != null && Number.isFinite(Number(args.x));
+  const hasY = args.y != null && Number.isFinite(Number(args.y));
+  const x = hasX ? num(args.x) : NaN;
+  const y = hasY ? num(args.y) : NaN;
+  const fw = Math.max(1, Number(frame?.width) || 1);
+  const fh = Math.max(1, Number(frame?.height) || 1);
+  const fullBleed =
+    width >= fw * 0.9 && height >= fh * 0.9;
+  // Models often emit x:0,y:0 meaning "default" — center unless this is a full-bleed fill.
+  const looksUnset =
+    (!hasX && !hasY) ||
+    (hasX && hasY && x === 0 && y === 0 && !fullBleed);
+  if (looksUnset) return centerInFrame(frame, width, height);
+  return {
+    x: hasX ? x : centerInFrame(frame, width, height).x,
+    y: hasY ? y : centerInFrame(frame, width, height).y,
+  };
+}
+
 const FRAME_GAP = 80;
 const NODE_GAP = 12;
 
@@ -879,6 +1064,535 @@ export function nextArtboardOrigin(
     maxBottom = Math.max(maxBottom, o.y + o.height);
   }
   return { x: 0, y: Math.round(maxBottom + FRAME_GAP) };
+}
+
+function execCreateShape(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+
+  const shapeType = String(args.shapeType || args.type || 'rect');
+  const mapped =
+    shapeType === 'ellipse' ? 'circle' : shapeType === 'pen' ? 'pen' : shapeType;
+  const width = Math.max(1, num(args.width, 120));
+  const height = Math.max(1, num(args.height, 80));
+  const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+  const svgRaw = args.svg != null ? String(args.svg) : args.iconSvg != null ? String(args.iconSvg) : '';
+  // Icon SVG → native svg node (not image, not path conversion).
+  if (svgRaw.trim() || mapped === 'svg') {
+    if (!svgRaw.trim()) {
+      return {
+        status: 'error',
+        summary: 'create_shape type=svg requires args.svg markup.',
+        next_actions: ['Pass args.svg', 'or use create_svg'],
+      };
+    }
+    const origin = resolveCreateXY(args, target, width, height);
+    const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+    const fill = args.fill != null ? String(args.fill) : undefined;
+    const { id, node } = createSvgNode({
+      x: placed.x,
+      y: placed.y,
+      width: placed.width,
+      height: placed.height,
+      svg: svgRaw,
+      name: String(args.name || 'SVG'),
+      fill,
+    });
+    console.info('[create_shape → svg node]', {
+      id,
+      placed,
+      fill,
+      svgHead: svgRaw.slice(0, 160),
+    });
+    pushHistory();
+    ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
+    return {
+      status: placed.clamped ? 'warning' : 'success',
+      summary: `Created svg ${id}`,
+      artifacts: { nodeId: id, shapeType: 'svg' },
+      next_actions: ['Continue layout or create_text'],
+    };
+  }
+  const path = args.path != null ? String(args.path) : '';
+  // Honor model x/y when provided; otherwise center in the target frame.
+  const origin = resolveCreateXY(args, target, width, height);
+  const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+  if (mapped === 'path' || path) {
+    console.info('[create_shape path diag]', {
+      source: 'model tool_ops path (pass-through)',
+      argsXY: { x: args.x, y: args.y, width: args.width, height: args.height },
+      placed: { x: placed.x, y: placed.y, width: placed.width, height: placed.height },
+      fill: args.fill,
+      pathLen: path.length,
+      pathHead: path.slice(0, 180),
+      fullPath: path,
+    });
+  }
+  const isFreePath = mapped === 'path';
+  const closed = resolvePathClosed({ args, mapped, path });
+  const isStrokeOnly = mapped === 'line' || mapped === 'arrow' || mapped === 'pencil';
+  const fillDefault = String(
+    args.fill ?? (isStrokeOnly || (isFreePath && !closed) ? 'transparent' : '#FFFFFF')
+  );
+  const fillIsNone =
+    !fillDefault ||
+    fillDefault === 'transparent' ||
+    fillDefault === 'none' ||
+    fillDefault === 'rgba(0,0,0,0)';
+  // Free paths (SVG → path): never invent a border/fill — honor args as-is.
+  // Pen/pencil/line still need a visible stroke when the model omits one.
+  const needsDefaultStroke =
+    !isFreePath &&
+    (isStrokeOnly || mapped === 'pen' || mapped === 'pencil' || fillIsNone);
+  const strokeRaw =
+    args.stroke != null ? String(args.stroke) : needsDefaultStroke ? '#333333' : 'transparent';
+  const stroke =
+    !strokeRaw || strokeRaw === 'none' || strokeRaw === 'rgba(0,0,0,0)'
+      ? 'transparent'
+      : strokeRaw;
+  const strokeIsNone = stroke === 'transparent';
+  const borderWidth = resolveCreateShapeBorderWidth({
+    args,
+    mapped,
+    isFreePath,
+    needsDefaultStroke,
+    isStrokeOnly,
+    strokeIsNone,
+  });
+  const opacityRaw = args.opacity != null ? num(args.opacity, 1) : 1;
+  const opacity = opacityRaw > 1 ? Math.min(1, opacityRaw / 100) : Math.min(1, Math.max(0, opacityRaw));
+  const brushStyle = resolvePencilBrushStyle(mapped, args);
+  const pathPressure =
+    mapped === 'pencil' ? normalizePathPressureArg(args.pathPressure) : undefined;
+  const { id, node } = createShapeNode({
+    x: placed.x,
+    y: placed.y,
+    width: placed.width,
+    height: placed.height,
+    shapeType: mapped,
+    fill: fillDefault,
+    stroke,
+    borderWidth,
+    path: path || undefined,
+    closed: mapped === 'pencil' ? false : closed,
+    sides: args.sides != null ? num(args.sides, 5) : undefined,
+    angle: args.rotation != null ? num(args.rotation) : undefined,
+    brushStyle,
+    pathPressure,
+    opacity,
+  });
+  applyShapeFill(node, args, fillDefault);
+  applyStrokeExtras(node, args);
+  applyShadow(node, args);
+  if (borderWidth <= 0 || strokeIsNone) {
+    node.attrs = {
+      ...node.attrs,
+      'stroke-enabled': 'false',
+      'stroke-visible': 'false',
+      'border-width': 0,
+    };
+  }
+  if (fillIsNone) {
+    node.attrs = {
+      ...node.attrs,
+      'fill-enabled': 'false',
+      'fill-visible': 'false',
+    };
+  }
+  if (args.name) {
+    (node.attrs as Record<string, unknown>).name = String(args.name);
+  }
+  applyCornerRadii(node, args);
+  if (closed) node.attrs = { ...node.attrs, closed: 'true' };
+  pushHistory();
+  ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
+  return {
+    status: placed.clamped ? 'warning' : 'success',
+    summary: placed.clamped
+      ? `Created ${mapped} ${id} (clamped into frame at ${Math.round(placed.x)},${Math.round(placed.y)} ${Math.round(placed.width)}×${Math.round(placed.height)})`
+      : `Created ${mapped} ${id}${path ? ' (path)' : ''}`,
+    artifacts: { nodeId: id, shapeType: mapped },
+    next_actions: ['Continue layout or create_text'],
+  };
+}
+
+function execCreateText(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+
+  const text = String(args.text ?? '');
+  const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+  // Fixed width+height = label-in-box (button/chip); do not hug content.
+  const boxMode = args.width != null && args.height != null;
+  const baseStyle = parseNodeTextStyle({});
+  const nextStyle: Record<string, unknown> = { ...baseStyle };
+  if (args.fontSize != null) nextStyle.fontSize = num(args.fontSize, 14);
+  if (args.color != null) nextStyle.fill = String(args.color);
+  if (args.fontWeight != null) nextStyle.fontWeight = String(args.fontWeight);
+  if (args.fontFamily != null) nextStyle.fontFamily = String(args.fontFamily);
+  if (args.fontStyle != null) nextStyle.fontStyle = String(args.fontStyle);
+  if (args.textAlign != null) nextStyle.textAlign = String(args.textAlign);
+  else if (boxMode) nextStyle.textAlign = 'center';
+  // Hug labels use tight leading; fixed boxes keep 1.4 unless caller sets it.
+  if (args.lineHeight != null) nextStyle.lineHeight = num(args.lineHeight, 1.4);
+  else if (!boxMode) nextStyle.lineHeight = 1.15;
+  if (args.letterSpacing != null) nextStyle.letterSpacing = num(args.letterSpacing, 0);
+  if (args.textDecoration != null) {
+    nextStyle.textDecoration = String(args.textDecoration);
+  }
+  const measured = measurePlainTextSize(text || ' ', nextStyle);
+  const wantWrap = args.wrap === true || args.wrap === 'true';
+  const singleLine = !String(text).includes('\n');
+  // Agent often copies full-bleed "width:W-48" for short titles — clamp to ink
+  // unless this is an explicit label-in-box or wrap column.
+  let boxW: number;
+  if (boxMode) {
+    boxW = Math.max(1, num(args.width));
+  } else if (args.width != null) {
+    const asked = Math.max(1, num(args.width));
+    if (
+      !wantWrap &&
+      singleLine &&
+      asked > measured.width * 1.35 &&
+      measured.width > 0
+    ) {
+      boxW = measured.width;
+    } else {
+      boxW = asked;
+    }
+  } else {
+    boxW = measured.width;
+  }
+  let boxH: number;
+  if (args.height != null) {
+    boxH = Math.max(1, num(args.height));
+  } else if (args.width != null && (wantWrap || boxW === Math.max(1, num(args.width)))) {
+    boxH = measureWrappedTextSize(text || ' ', nextStyle, boxW).height;
+  } else {
+    boxH = measured.height;
+  }
+  // Labels must sit on top of buttons — never nudge away from overlapping shapes.
+  const textOrigin = resolveCreateXY(args, target, boxW, boxH);
+  const placed = fitIntoFrame(target, textOrigin.x, textOrigin.y, boxW, boxH);
+  if (placed.scale > 0 && placed.scale < 0.999 && nextStyle.fontSize != null) {
+    nextStyle.fontSize = Math.max(
+      10,
+      Math.round(Number(nextStyle.fontSize) * placed.scale)
+    );
+  }
+  const { id, node } = createTextNode({
+    x: placed.x,
+    y: placed.y,
+    text,
+    width: placed.width,
+    height: placed.height,
+    autoSize: !boxMode,
+  });
+  const shell = {
+    attrs: {
+      ...buildMarkdownTextAttrs(text, nextStyle),
+      autoSize: boxMode ? 'false' : 'true',
+      ...(args.name ? { name: String(args.name) } : {}),
+    } as Record<string, unknown>,
+  };
+  applyShadow(shell, args);
+  if (args.opacity != null) {
+    const o = num(args.opacity, 1);
+    shell.attrs.opacity = o > 1 ? Math.min(1, o / 100) : Math.min(1, Math.max(0, o));
+  }
+  if (args.blendMode != null) shell.attrs.blendMode = String(args.blendMode);
+  // shell.attrs is widened for applyShadow; text nodes still require markdown/DATA fields.
+  node.attrs = shell.attrs as typeof node.attrs;
+  node.width = placed.width;
+  node.height = placed.height;
+  pushHistory();
+  ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
+  return {
+    status: placed.clamped ? 'warning' : 'success',
+    summary: placed.clamped
+      ? `Created text ${id} (clamped ${Math.round(placed.width)}×${Math.round(placed.height)} at ${Math.round(placed.x)},${Math.round(placed.y)})`
+      : `Created text ${id} (${Math.round(placed.width)}×${Math.round(placed.height)})`,
+    artifacts: { nodeId: id },
+  };
+}
+
+function execUpdateNode(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+
+  const nodeId = String(args.nodeId || args.id || '');
+  if (!nodeId) return { status: 'error', summary: 'nodeId required' };
+  const latest = ctx.getDocument()?.deltaSetLike?.[nodeId];
+  if (!latest) return { status: 'error', summary: `Node not found: ${nodeId}` };
+  const patch: Record<string, unknown> = {};
+  // Inventory uses w/h; update_node contract uses width/height.
+  const argWidth = args.width ?? args.w;
+  const argHeight = args.height ?? args.h;
+  // Faithful apply: geometry / style exactly as backend ops say (no FE policy).
+  if (args.x != null && args.y != null) {
+    const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+    const w =
+      argWidth != null
+        ? Math.max(1, num(argWidth))
+        : Math.max(1, Number(latest.width) || 1);
+    const h =
+      argHeight != null
+        ? Math.max(1, num(argHeight))
+        : Math.max(1, Number(latest.height) || 1);
+    const placed = fitIntoFrame(target, num(args.x), num(args.y), w, h);
+    patch.x = placed.x;
+    patch.y = placed.y;
+    if (argWidth != null) patch.width = placed.width;
+    if (argHeight != null) patch.height = placed.height;
+  } else {
+    if (args.x != null) patch.x = num(args.x);
+    if (args.y != null) patch.y = num(args.y);
+    if (argWidth != null) patch.width = Math.max(1, num(argWidth));
+    if (argHeight != null) patch.height = Math.max(1, num(argHeight));
+  }
+
+  const shell = { attrs: { ...(latest.attrs || {}) } as Record<string, unknown> };
+  const fillRaw = args.fill ?? args.fillColor ?? args.backgroundColor;
+  const fillTypeArg =
+    args.fillType != null ? String(args.fillType).toLowerCase() : null;
+  const fillTouched =
+    fillTypeArg != null ||
+    fillRaw != null ||
+    args.fillEnd != null ||
+    args.fillTo != null ||
+    args.gradientAngle != null ||
+    args.meshSize != null ||
+    args.meshPoints != null ||
+    args.fillImageSrc != null ||
+    args.fillOpacity != null;
+
+  if (fillTouched) {
+    applyShapeFill(
+      shell,
+      {
+        ...args,
+        fillType: fillTypeArg || args.fillType || 'solid',
+        fill: fillRaw ?? shell.attrs['fill-color'] ?? '#FFFFFF',
+      },
+      String(fillRaw ?? shell.attrs['fill-color'] ?? '#FFFFFF')
+    );
+  }
+
+  if (args.stroke != null) {
+    shell.attrs['border-color'] = String(args.stroke);
+    shell.attrs['stroke-enabled'] = 'true';
+    shell.attrs['stroke-visible'] = 'true';
+  }
+  if (args.borderWidth != null) {
+    const bw = num(args.borderWidth);
+    shell.attrs['border-width'] = bw;
+    if (bw <= 0) {
+      shell.attrs['stroke-enabled'] = 'false';
+      shell.attrs['stroke-visible'] = 'false';
+    } else {
+      shell.attrs['stroke-enabled'] = 'true';
+      shell.attrs['stroke-visible'] = 'true';
+    }
+  }
+  applyStrokeExtras(shell, args);
+  applyShadow(shell, args);
+  applyCornerRadii(shell, args);
+
+  if (args.opacity != null) {
+    const o = num(args.opacity, 1);
+    shell.attrs.opacity = o > 1 ? Math.min(1, o / 100) : Math.min(1, Math.max(0, o));
+  }
+  if (args.rotation != null) shell.attrs.angle = num(args.rotation);
+  if (args.flipX != null) shell.attrs.flipX = truthy(args.flipX) ? 'true' : 'false';
+  if (args.flipY != null) shell.attrs.flipY = truthy(args.flipY) ? 'true' : 'false';
+  if (args.hidden != null) shell.attrs.hidden = truthy(args.hidden) ? 'true' : 'false';
+  if (args.locked != null) shell.attrs.locked = truthy(args.locked) ? 'true' : 'false';
+  if (args.blendMode != null) shell.attrs.blendMode = String(args.blendMode);
+  if (args.path != null) shell.attrs.path = String(args.path);
+  if (args.closed != null) shell.attrs.closed = truthy(args.closed) ? 'true' : 'false';
+  if (args.name != null) shell.attrs.name = String(args.name);
+  if (latest.key === 'image' && args.src != null) {
+    shell.attrs.src = String(args.src);
+  }
+
+  if (latest.key === 'text') {
+    const stylePatch: Record<string, unknown> = {};
+    if (args.fontSize != null) stylePatch.fontSize = num(args.fontSize);
+    if (args.fontWeight != null) stylePatch.fontWeight = String(args.fontWeight);
+    if (args.fontFamily != null) stylePatch.fontFamily = String(args.fontFamily);
+    if (args.fontStyle != null) stylePatch.fontStyle = String(args.fontStyle);
+    if (args.textAlign != null) stylePatch.textAlign = String(args.textAlign);
+    if (args.lineHeight != null) stylePatch.lineHeight = num(args.lineHeight, 1.4);
+    if (args.letterSpacing != null) stylePatch.letterSpacing = num(args.letterSpacing, 0);
+    if (args.textDecoration != null) stylePatch.textDecoration = String(args.textDecoration);
+    if (args.color != null && fillRaw == null) {
+      shell.attrs['fill-color'] = String(args.color);
+      shell.attrs['fill-type'] = 'solid';
+      stylePatch.fill = String(args.color);
+    }
+    if (args.text != null || Object.keys(stylePatch).length) {
+      const style = {
+        ...parseNodeTextStyle({ ...(latest.attrs || {}), ...shell.attrs }),
+        ...stylePatch,
+      };
+      const nextText =
+        args.text != null ? String(args.text) : String(latest.attrs?.text || '');
+      Object.assign(shell.attrs, buildMarkdownTextAttrs(nextText, style as any));
+      if (argWidth == null || argHeight == null) {
+        const measured = measurePlainTextSize(nextText, style as any);
+        if (argWidth == null) patch.width = measured.width;
+        if (argHeight == null) patch.height = measured.height;
+      }
+    }
+  }
+
+  // Only patch attrs if something style-related changed (diff vs original).
+  const styleArgsTouched =
+    fillTouched ||
+    args.stroke != null ||
+    args.borderWidth != null ||
+    args.strokeStyle != null ||
+    args.strokeAlign != null ||
+    args.strokeLinecap != null ||
+    args.strokeLinejoin != null ||
+    args.strokeOpacity != null ||
+    args.strokeSides != null ||
+    args.strokeTop != null ||
+    args.strokeRight != null ||
+    args.strokeBottom != null ||
+    args.strokeLeft != null ||
+    args.shadowEnabled != null ||
+    args.shadowVisible != null ||
+    args.shadowColor != null ||
+    args.shadowBlur != null ||
+    args.shadowX != null ||
+    args.shadowY != null ||
+    args.cornerRadius != null ||
+    args.radiusTL != null ||
+    args.radiusTR != null ||
+    args.radiusBR != null ||
+    args.radiusBL != null ||
+    args.opacity != null ||
+    args.rotation != null ||
+    args.flipX != null ||
+    args.flipY != null ||
+    args.hidden != null ||
+    args.locked != null ||
+    args.blendMode != null ||
+    args.path != null ||
+    args.closed != null ||
+    args.name != null ||
+    args.text != null ||
+    args.fontSize != null ||
+    args.fontWeight != null ||
+    args.fontFamily != null ||
+    args.fontStyle != null ||
+    args.textAlign != null ||
+    args.lineHeight != null ||
+    args.letterSpacing != null ||
+    args.textDecoration != null ||
+    args.color != null ||
+    (latest.key === 'image' && args.src != null);
+
+  if (styleArgsTouched) patch.attrs = shell.attrs;
+  if (!Object.keys(patch).length) {
+    return {
+      status: 'warning',
+      summary: `No updatable fields for ${nodeId}`,
+      artifacts: { nodeId },
+    };
+  }
+  ctx.dispatch(patchDocumentNode({ nodeId, patch }));
+  return {
+    status: 'success',
+    summary: `Updated ${nodeId}`,
+    artifacts: { nodeId },
+  };
+}
+
+function execCreateFrame(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+
+  const beforeIds = new Set(listFrames(doc).map((f) => f.id));
+  const width = Math.max(40, num(args.width, 390));
+  const height = Math.max(40, num(args.height, 844));
+  const hasExplicitXY = args.x != null || args.y != null;
+  let x = num(args.x, 0);
+  let y = num(args.y, 0);
+  // Default (0,0) on a non-empty doc overlaps the first artboard — shift right.
+  if ((!hasExplicitXY || (x === 0 && y === 0)) && listFrames(doc).length > 0) {
+    const slot = nextArtboardOrigin(doc, width, height);
+    x = slot.x;
+    y = slot.y;
+  } else if (listFrames(doc).length > 0) {
+    const overlaps = listFrames(doc).some((f) =>
+      frameRectsOverlap(
+        x,
+        y,
+        width,
+        height,
+        Number(f.x) || 0,
+        Number(f.y) || 0,
+        Number(f.width) || 0,
+        Number(f.height) || 0
+      )
+    );
+    if (overlaps) {
+      const slot = nextArtboardOrigin(doc, width, height);
+      x = slot.x;
+      y = slot.y;
+    }
+  }
+  // Default white artboard — thematic colors belong in the color phase.
+  const backgroundColor =
+    args.backgroundColor != null ? String(args.backgroundColor) : '#FFFFFF';
+  ctx.dispatch(
+    addArtboardFrame({
+      name: String(args.name || 'Frame'),
+      x,
+      y,
+      width,
+      height,
+      backgroundColor,
+      // Agent tools never auto-select; user must click the artboard.
+      activate: false,
+    })
+  );
+  const frames = listFrames(ctx.getDocument());
+  const created =
+    frames.find((f) => !beforeIds.has(f.id)) || frames[frames.length - 1] || null;
+  if (!created?.id) {
+    return {
+      status: 'error',
+      summary: 'create_frame failed — frame missing from document after dispatch',
+      next_actions: ['Retry create_frame', 'get_scene_summary'],
+    };
+  }
+  return {
+    status: 'success',
+    summary: `Created frame ${created.id} "${created.name}" at (${Math.round(created.x)},${Math.round(created.y)}) ${Math.round(created.width)}×${Math.round(created.height)}`,
+    artifacts: {
+      frameId: created.id,
+      x: created.x,
+      y: created.y,
+      width: created.width,
+      height: created.height,
+    },
+    next_actions: ['create_shape', 'create_text inside this new frame'],
+  };
 }
 
 export function executeDesignTool(
@@ -1201,7 +1915,8 @@ export function executeDesignTool(
           next_actions: ['Pass args.svg with viewBox 0 0 24 24'],
         };
       }
-      const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
+      const origin = resolveCreateXY(args, target, width, height);
+      const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
       const fill = args.fill != null ? String(args.fill) : undefined;
       const { id, node } = createSvgNode({
         x: placed.x,
@@ -1230,176 +1945,17 @@ export function executeDesignTool(
     }
 
     if (name === 'create_shape') {
-      const shapeType = String(args.shapeType || args.type || 'rect');
-      const mapped =
-        shapeType === 'ellipse' ? 'circle' : shapeType === 'pen' ? 'pen' : shapeType;
-      const width = Math.max(1, num(args.width, 120));
-      const height = Math.max(1, num(args.height, 80));
-      const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-      const svgRaw = args.svg != null ? String(args.svg) : args.iconSvg != null ? String(args.iconSvg) : '';
-      // Icon SVG → native svg node (not image, not path conversion).
-      if (svgRaw.trim() || mapped === 'svg') {
-        if (!svgRaw.trim()) {
-          return {
-            status: 'error',
-            summary: 'create_shape type=svg requires args.svg markup.',
-            next_actions: ['Pass args.svg', 'or use create_svg'],
-          };
-        }
-        const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
-        const fill = args.fill != null ? String(args.fill) : undefined;
-        const { id, node } = createSvgNode({
-          x: placed.x,
-          y: placed.y,
-          width: placed.width,
-          height: placed.height,
-          svg: svgRaw,
-          name: String(args.name || 'SVG'),
-          fill,
-        });
-        console.info('[create_shape → svg node]', {
-          id,
-          placed,
-          fill,
-          svgHead: svgRaw.slice(0, 160),
-        });
-        pushHistory();
-        ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
-        return {
-          status: placed.clamped ? 'warning' : 'success',
-          summary: `Created svg ${id}`,
-          artifacts: { nodeId: id, shapeType: 'svg' },
-          next_actions: ['Continue layout or create_text'],
-        };
-      }
-      const path = args.path != null ? String(args.path) : '';
-      // Honor model x/y (incl. inside other shapes). Never nudge away for "overlap".
-      const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
-      if (mapped === 'path' || path) {
-        console.info('[create_shape path diag]', {
-          source: 'model tool_ops path (pass-through)',
-          argsXY: { x: args.x, y: args.y, width: args.width, height: args.height },
-          placed: { x: placed.x, y: placed.y, width: placed.width, height: placed.height },
-          fill: args.fill,
-          pathLen: path.length,
-          pathHead: path.slice(0, 180),
-          fullPath: path,
-        });
-      }
-      const isFreePath = mapped === 'path';
-      const closedExplicit =
-        args.closed === true ||
-        args.closed === 'true' ||
-        args.closed === false ||
-        args.closed === 'false';
-      const closed = closedExplicit
-        ? args.closed === true || args.closed === 'true'
-        : isFreePath
-          ? /z\s*$/i.test(path.trim())
-          : mapped === 'pen' && path.length > 0;
-      const isStrokeOnly = mapped === 'line' || mapped === 'arrow' || mapped === 'pencil';
-      const fillDefault = String(
-        args.fill ?? (isStrokeOnly || (isFreePath && !closed) ? 'transparent' : '#FFFFFF')
-      );
-      const fillIsNone =
-        !fillDefault ||
-        fillDefault === 'transparent' ||
-        fillDefault === 'none' ||
-        fillDefault === 'rgba(0,0,0,0)';
-      // Free paths (SVG → path): never invent a border/fill — honor args as-is.
-      // Pen/pencil/line still need a visible stroke when the model omits one.
-      const needsDefaultStroke =
-        !isFreePath &&
-        (isStrokeOnly || mapped === 'pen' || mapped === 'pencil' || fillIsNone);
-      const strokeRaw =
-        args.stroke != null ? String(args.stroke) : needsDefaultStroke ? '#333333' : 'transparent';
-      const stroke =
-        !strokeRaw || strokeRaw === 'none' || strokeRaw === 'rgba(0,0,0,0)'
-          ? 'transparent'
-          : strokeRaw;
-      const strokeIsNone = stroke === 'transparent';
-      const borderWidth = isFreePath
-        ? args.borderWidth != null
-          ? Math.max(0, num(args.borderWidth, 0))
-          : strokeIsNone
-            ? 0
-            : 1
-        : needsDefaultStroke
-          ? args.borderWidth != null
-            ? num(args.borderWidth, isStrokeOnly || mapped === 'pen' || mapped === 'pencil' ? 2 : 1)
-            : isStrokeOnly || mapped === 'pen' || mapped === 'pencil'
-              ? 2
-              : 1
-          : args.borderWidth != null
-            ? num(args.borderWidth, 0)
-            : args.stroke != null && !strokeIsNone
-              ? 1
-              : 0;
-      const opacityRaw = args.opacity != null ? num(args.opacity, 1) : 1;
-      const opacity = opacityRaw > 1 ? Math.min(1, opacityRaw / 100) : Math.min(1, Math.max(0, opacityRaw));
-      const brushStyle =
-        mapped === 'pencil' && args.brushStyle != null
-          ? String(args.brushStyle)
-          : mapped === 'pencil'
-            ? 'solid'
-            : undefined;
-      const { id, node } = createShapeNode({
-        x: placed.x,
-        y: placed.y,
-        width: placed.width,
-        height: placed.height,
-        shapeType: mapped,
-        fill: fillDefault,
-        stroke,
-        borderWidth,
-        path: path || undefined,
-        closed: mapped === 'pencil' ? false : closed,
-        sides: args.sides != null ? num(args.sides, 5) : undefined,
-        angle: args.rotation != null ? num(args.rotation) : undefined,
-        brushStyle,
-        opacity,
-      });
-      applyShapeFill(node, args, fillDefault);
-      applyStrokeExtras(node, args);
-      applyShadow(node, args);
-      if (borderWidth <= 0 || strokeIsNone) {
-        node.attrs = {
-          ...node.attrs,
-          'stroke-enabled': 'false',
-          'stroke-visible': 'false',
-          'border-width': 0,
-        };
-      }
-      if (fillIsNone) {
-        node.attrs = {
-          ...node.attrs,
-          'fill-enabled': 'false',
-          'fill-visible': 'false',
-        };
-      }
-      if (args.name) {
-        (node.attrs as Record<string, unknown>).name = String(args.name);
-      }
-      applyCornerRadii(node, args);
-      if (closed) node.attrs = { ...node.attrs, closed: 'true' };
-      pushHistory();
-      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
-      return {
-        status: placed.clamped ? 'warning' : 'success',
-        summary: placed.clamped
-          ? `Created ${mapped} ${id} (clamped into frame at ${Math.round(placed.x)},${Math.round(placed.y)} ${Math.round(placed.width)}×${Math.round(placed.height)})`
-          : `Created ${mapped} ${id}${path ? ' (path)' : ''}`,
-        artifacts: { nodeId: id, shapeType: mapped },
-        next_actions: ['Continue layout or create_text'],
-      };
+      return execCreateShape(args, ctx, doc, pushHistory);
     }
 
     if (name === 'create_image') {
       const width = Math.max(8, num(args.width, 240));
       const height = Math.max(8, num(args.height, 180));
       const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-      const placed = fitIntoFrame(target, num(args.x), num(args.y), width, height);
+      const origin = resolveCreateXY(args, target, width, height);
+      const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
       const userImages = Array.isArray(ctx.userImages) ? ctx.userImages : [];
+      const genPrompt = String(args.genPrompt || args.prompt || '').trim();
       let src = '';
       let sourceKind: 'attachment' | 'src' | 'placeholder' = 'placeholder';
       if (args.attachmentIndex != null) {
@@ -1417,12 +1973,21 @@ export function executeDesignTool(
         src = String(args.src).trim();
         sourceKind = 'src';
       } else {
+        // Backend should have hydrated genPrompt → src via Seedream. If we still
+        // land here, show placeholder but keep genPrompt on the node for retry.
         const kind = String(args.placeholder || 'image').toLowerCase();
         src =
           kind === 'avatar'
             ? AVATAR_PLACEHOLDER
             : IMAGE_PLACEHOLDER;
         sourceKind = 'placeholder';
+        if (genPrompt) {
+          console.warn('[create_image] genPrompt without src — hydrate missed?', {
+            genPrompt: genPrompt.slice(0, 120),
+            width: placed.width,
+            height: placed.height,
+          });
+        }
       }
       const { id, node } = createImageNode({
         x: placed.x,
@@ -1433,317 +1998,38 @@ export function executeDesignTool(
         name: String(args.name || (sourceKind === 'placeholder' ? 'Image Placeholder' : 'Image')),
         assetKind: 'image',
       });
+      if (genPrompt && sourceKind === 'placeholder') {
+        node.attrs = { ...(node.attrs || {}), genPrompt };
+      }
       pushHistory();
       ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
       return {
-        status: placed.clamped ? 'warning' : 'success',
-        summary:
-          sourceKind === 'placeholder'
-            ? `Created image placeholder ${id} (${Math.round(placed.width)}×${Math.round(placed.height)}) — user can replace later`
-            : `Created image ${id} from ${sourceKind}`,
+        status: placed.clamped || (sourceKind === 'placeholder' && Boolean(genPrompt))
+          ? 'warning'
+          : 'success',
+        summary: summarizeCreateImage({
+          id,
+          sourceKind,
+          genPrompt,
+          placed,
+        }),
         artifacts: { nodeId: id, sourceKind },
         next_actions: ['Continue layout'],
       };
     }
 
     if (name === 'create_text') {
-      const text = String(args.text ?? '');
-      const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-      // Fixed width+height = label-in-box (button/chip); do not hug content.
-      const boxMode = args.width != null && args.height != null;
-      const baseStyle = parseNodeTextStyle({});
-      const nextStyle = {
-        ...baseStyle,
-        ...(args.fontSize != null ? { fontSize: num(args.fontSize, 14) } : {}),
-        ...(args.color != null ? { fill: String(args.color) } : {}),
-        ...(args.fontWeight != null ? { fontWeight: String(args.fontWeight) } : {}),
-        ...(args.fontFamily != null ? { fontFamily: String(args.fontFamily) } : {}),
-        ...(args.fontStyle != null ? { fontStyle: String(args.fontStyle) } : {}),
-        ...(args.textAlign != null
-          ? { textAlign: String(args.textAlign) }
-          : boxMode
-            ? { textAlign: 'center' }
-            : {}),
-        // Hug labels use tight leading; fixed boxes keep 1.4 unless caller sets it.
-        ...(args.lineHeight != null
-          ? { lineHeight: num(args.lineHeight, 1.4) }
-          : boxMode
-            ? {}
-            : { lineHeight: 1.15 }),
-        ...(args.letterSpacing != null ? { letterSpacing: num(args.letterSpacing, 0) } : {}),
-        ...(args.textDecoration != null ? { textDecoration: String(args.textDecoration) } : {}),
-      };
-      const measured = measurePlainTextSize(text || ' ', nextStyle);
-      const wantWrap = args.wrap === true || args.wrap === 'true';
-      const singleLine = !String(text).includes('\n');
-      // Agent often copies full-bleed "width:W-48" for short titles — clamp to ink
-      // unless this is an explicit label-in-box or wrap column.
-      let boxW: number;
-      if (boxMode) {
-        boxW = Math.max(1, num(args.width));
-      } else if (args.width != null) {
-        const asked = Math.max(1, num(args.width));
-        if (
-          !wantWrap &&
-          singleLine &&
-          asked > measured.width * 1.35 &&
-          measured.width > 0
-        ) {
-          boxW = measured.width;
-        } else {
-          boxW = asked;
-        }
-      } else {
-        boxW = measured.width;
-      }
-      let boxH: number;
-      if (args.height != null) {
-        boxH = Math.max(1, num(args.height));
-      } else if (args.width != null && (wantWrap || boxW === Math.max(1, num(args.width)))) {
-        boxH = measureWrappedTextSize(text || ' ', nextStyle, boxW).height;
-      } else {
-        boxH = measured.height;
-      }
-      // Labels must sit on top of buttons — never nudge away from overlapping shapes.
-      const placed = fitIntoFrame(target, num(args.x), num(args.y), boxW, boxH);
-      if (placed.scale > 0 && placed.scale < 0.999 && nextStyle.fontSize != null) {
-        nextStyle.fontSize = Math.max(
-          10,
-          Math.round(Number(nextStyle.fontSize) * placed.scale)
-        );
-      }
-      const { id, node } = createTextNode({
-        x: placed.x,
-        y: placed.y,
-        text,
-        width: placed.width,
-        height: placed.height,
-        autoSize: !boxMode,
-      });
-      const shell = {
-        attrs: {
-          ...buildMarkdownTextAttrs(text, nextStyle),
-          autoSize: boxMode ? 'false' : 'true',
-          ...(args.name ? { name: String(args.name) } : {}),
-        } as Record<string, unknown>,
-      };
-      applyShadow(shell, args);
-      if (args.opacity != null) {
-        const o = num(args.opacity, 1);
-        shell.attrs.opacity = o > 1 ? Math.min(1, o / 100) : Math.min(1, Math.max(0, o));
-      }
-      if (args.blendMode != null) shell.attrs.blendMode = String(args.blendMode);
-      // shell.attrs is widened for applyShadow; text nodes still require markdown/DATA fields.
-      node.attrs = shell.attrs as typeof node.attrs;
-      node.width = placed.width;
-      node.height = placed.height;
-      pushHistory();
-      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
-      return {
-        status: placed.clamped ? 'warning' : 'success',
-        summary: placed.clamped
-          ? `Created text ${id} (clamped ${Math.round(placed.width)}×${Math.round(placed.height)} at ${Math.round(placed.x)},${Math.round(placed.y)})`
-          : `Created text ${id} (${Math.round(placed.width)}×${Math.round(placed.height)})`,
-        artifacts: { nodeId: id },
-      };
+      return execCreateText(args, ctx, doc, pushHistory);
     }
 
     if (name === 'update_node') {
-      const nodeId = String(args.nodeId || args.id || '');
-      if (!nodeId) return { status: 'error', summary: 'nodeId required' };
-      const latest = ctx.getDocument()?.deltaSetLike?.[nodeId];
-      if (!latest) return { status: 'error', summary: `Node not found: ${nodeId}` };
-      const patch: Record<string, unknown> = {};
-      // Inventory uses w/h; update_node contract uses width/height.
-      const argWidth = args.width ?? args.w;
-      const argHeight = args.height ?? args.h;
-      // Faithful apply: geometry / style exactly as backend ops say (no FE policy).
-      if (args.x != null && args.y != null) {
-        const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-        const w =
-          argWidth != null
-            ? Math.max(1, num(argWidth))
-            : Math.max(1, Number(latest.width) || 1);
-        const h =
-          argHeight != null
-            ? Math.max(1, num(argHeight))
-            : Math.max(1, Number(latest.height) || 1);
-        const placed = fitIntoFrame(target, num(args.x), num(args.y), w, h);
-        patch.x = placed.x;
-        patch.y = placed.y;
-        if (argWidth != null) patch.width = placed.width;
-        if (argHeight != null) patch.height = placed.height;
-      } else {
-        if (args.x != null) patch.x = num(args.x);
-        if (args.y != null) patch.y = num(args.y);
-        if (argWidth != null) patch.width = Math.max(1, num(argWidth));
-        if (argHeight != null) patch.height = Math.max(1, num(argHeight));
-      }
-
-      const shell = { attrs: { ...(latest.attrs || {}) } as Record<string, unknown> };
-      const fillRaw = args.fill ?? args.fillColor ?? args.backgroundColor;
-      const fillTypeArg =
-        args.fillType != null ? String(args.fillType).toLowerCase() : null;
-      const fillTouched =
-        fillTypeArg != null ||
-        fillRaw != null ||
-        args.fillEnd != null ||
-        args.fillTo != null ||
-        args.gradientAngle != null ||
-        args.meshSize != null ||
-        args.meshPoints != null ||
-        args.fillImageSrc != null ||
-        args.fillOpacity != null;
-
-      if (fillTouched) {
-        applyShapeFill(
-          shell,
-          {
-            ...args,
-            fillType: fillTypeArg || args.fillType || 'solid',
-            fill: fillRaw ?? shell.attrs['fill-color'] ?? '#FFFFFF',
-          },
-          String(fillRaw ?? shell.attrs['fill-color'] ?? '#FFFFFF')
-        );
-      }
-
-      if (args.stroke != null) {
-        shell.attrs['border-color'] = String(args.stroke);
-        shell.attrs['stroke-enabled'] = 'true';
-        shell.attrs['stroke-visible'] = 'true';
-      }
-      if (args.borderWidth != null) {
-        const bw = num(args.borderWidth);
-        shell.attrs['border-width'] = bw;
-        if (bw <= 0) {
-          shell.attrs['stroke-enabled'] = 'false';
-          shell.attrs['stroke-visible'] = 'false';
-        } else {
-          shell.attrs['stroke-enabled'] = 'true';
-          shell.attrs['stroke-visible'] = 'true';
-        }
-      }
-      applyStrokeExtras(shell, args);
-      applyShadow(shell, args);
-      applyCornerRadii(shell, args);
-
-      if (args.opacity != null) {
-        const o = num(args.opacity, 1);
-        shell.attrs.opacity = o > 1 ? Math.min(1, o / 100) : Math.min(1, Math.max(0, o));
-      }
-      if (args.rotation != null) shell.attrs.angle = num(args.rotation);
-      if (args.flipX != null) shell.attrs.flipX = truthy(args.flipX) ? 'true' : 'false';
-      if (args.flipY != null) shell.attrs.flipY = truthy(args.flipY) ? 'true' : 'false';
-      if (args.blendMode != null) shell.attrs.blendMode = String(args.blendMode);
-      if (args.path != null) shell.attrs.path = String(args.path);
-      if (args.closed != null) shell.attrs.closed = truthy(args.closed) ? 'true' : 'false';
-      if (args.name != null) shell.attrs.name = String(args.name);
-      if (latest.key === 'image' && args.src != null) {
-        shell.attrs.src = String(args.src);
-      }
-
-      if (latest.key === 'text') {
-        const stylePatch: Record<string, unknown> = {};
-        if (args.fontSize != null) stylePatch.fontSize = num(args.fontSize);
-        if (args.fontWeight != null) stylePatch.fontWeight = String(args.fontWeight);
-        if (args.fontFamily != null) stylePatch.fontFamily = String(args.fontFamily);
-        if (args.fontStyle != null) stylePatch.fontStyle = String(args.fontStyle);
-        if (args.textAlign != null) stylePatch.textAlign = String(args.textAlign);
-        if (args.lineHeight != null) stylePatch.lineHeight = num(args.lineHeight, 1.4);
-        if (args.letterSpacing != null) stylePatch.letterSpacing = num(args.letterSpacing, 0);
-        if (args.textDecoration != null) stylePatch.textDecoration = String(args.textDecoration);
-        if (args.color != null && fillRaw == null) {
-          shell.attrs['fill-color'] = String(args.color);
-          shell.attrs['fill-type'] = 'solid';
-          stylePatch.fill = String(args.color);
-        }
-        if (args.text != null || Object.keys(stylePatch).length) {
-          const style = {
-            ...parseNodeTextStyle({ ...(latest.attrs || {}), ...shell.attrs }),
-            ...stylePatch,
-          };
-          const nextText =
-            args.text != null ? String(args.text) : String(latest.attrs?.text || '');
-          Object.assign(shell.attrs, buildMarkdownTextAttrs(nextText, style as any));
-          if (argWidth == null || argHeight == null) {
-            const measured = measurePlainTextSize(nextText, style as any);
-            if (argWidth == null) patch.width = measured.width;
-            if (argHeight == null) patch.height = measured.height;
-          }
-        }
-      }
-
-      // Only patch attrs if something style-related changed (diff vs original).
-      const styleArgsTouched =
-        fillTouched ||
-        args.stroke != null ||
-        args.borderWidth != null ||
-        args.strokeStyle != null ||
-        args.strokeAlign != null ||
-        args.strokeLinecap != null ||
-        args.strokeLinejoin != null ||
-        args.strokeOpacity != null ||
-        args.strokeSides != null ||
-        args.strokeTop != null ||
-        args.strokeRight != null ||
-        args.strokeBottom != null ||
-        args.strokeLeft != null ||
-        args.shadowEnabled != null ||
-        args.shadowVisible != null ||
-        args.shadowColor != null ||
-        args.shadowBlur != null ||
-        args.shadowX != null ||
-        args.shadowY != null ||
-        args.cornerRadius != null ||
-        args.radiusTL != null ||
-        args.radiusTR != null ||
-        args.radiusBR != null ||
-        args.radiusBL != null ||
-        args.opacity != null ||
-        args.rotation != null ||
-        args.flipX != null ||
-        args.flipY != null ||
-        args.blendMode != null ||
-        args.path != null ||
-        args.closed != null ||
-        args.name != null ||
-        args.text != null ||
-        args.fontSize != null ||
-        args.fontWeight != null ||
-        args.fontFamily != null ||
-        args.fontStyle != null ||
-        args.textAlign != null ||
-        args.lineHeight != null ||
-        args.letterSpacing != null ||
-        args.textDecoration != null ||
-        args.color != null ||
-        (latest.key === 'image' && args.src != null);
-
-      if (styleArgsTouched) patch.attrs = shell.attrs;
-      if (!Object.keys(patch).length) {
-        return {
-          status: 'warning',
-          summary: `No updatable fields for ${nodeId}`,
-          artifacts: { nodeId },
-        };
-      }
-      ctx.dispatch(patchDocumentNode({ nodeId, patch }));
-      return {
-        status: 'success',
-        summary: `Updated ${nodeId}`,
-        artifacts: { nodeId },
-      };
+      return execUpdateNode(args, ctx, doc, pushHistory);
     }
 
     if (name === 'align_nodes') {
       const ids = parseNodeIds(args);
       const rawMode = String(args.mode || args.align || '').trim();
-      const mode =
-        rawMode === 'center' || rawMode === 'centerx'
-          ? 'centerX'
-          : rawMode === 'centerY' || rawMode === 'centery'
-            ? 'middle'
-            : rawMode;
+      const mode = normalizeAlignMode(rawMode);
       const allowedAlign = new Set([
         'left',
         'centerX',
@@ -2072,7 +2358,7 @@ export function executeDesignTool(
           next_actions: ['delete_nodes', 'update_frame'],
         };
       }
-      const fid = String(args.frameId || args.id || ctx.targetFrameId || '').trim();
+      const fid = resolveFrameOpId(args, ctx);
       if (!fid) return { status: 'error', summary: 'frameId required' };
       const docNow = ctx.getDocument();
       if (!listFrames(docNow).some((f) => String(f.id) === fid)) {
@@ -2092,7 +2378,7 @@ export function executeDesignTool(
 
     // Optional: resize target frame
     if (name === 'update_frame') {
-      const id = String(args.frameId || ctx.targetFrameId || '');
+      const id = resolveFrameOpId(args, ctx);
       if (!id) return { status: 'error', summary: 'frameId required' };
       const patch: Partial<ArtboardFrame> = {};
       if (args.width != null) patch.width = Math.max(40, num(args.width));
@@ -2101,78 +2387,13 @@ export function executeDesignTool(
       if (args.backgroundColor != null) {
         patch.backgroundColor = String(args.backgroundColor || 'transparent');
       }
+      if (args.locked != null) patch.locked = truthy(args.locked);
       ctx.dispatch(updateArtboardFrame({ id, patch }));
       return { status: 'success', summary: `Updated frame ${id}`, artifacts: { frameId: id } };
     }
 
     if (name === 'create_frame') {
-      const beforeIds = new Set(listFrames(doc).map((f) => f.id));
-      const width = Math.max(40, num(args.width, 390));
-      const height = Math.max(40, num(args.height, 844));
-      const hasExplicitXY = args.x != null || args.y != null;
-      let x = num(args.x, 0);
-      let y = num(args.y, 0);
-      // Default (0,0) on a non-empty doc overlaps the first artboard — shift right.
-      if ((!hasExplicitXY || (x === 0 && y === 0)) && listFrames(doc).length > 0) {
-        const slot = nextArtboardOrigin(doc, width, height);
-        x = slot.x;
-        y = slot.y;
-      } else if (listFrames(doc).length > 0) {
-        const overlaps = listFrames(doc).some((f) =>
-          frameRectsOverlap(
-            x,
-            y,
-            width,
-            height,
-            Number(f.x) || 0,
-            Number(f.y) || 0,
-            Number(f.width) || 0,
-            Number(f.height) || 0
-          )
-        );
-        if (overlaps) {
-          const slot = nextArtboardOrigin(doc, width, height);
-          x = slot.x;
-          y = slot.y;
-        }
-      }
-      // Default white artboard — thematic colors belong in the color phase.
-      const backgroundColor =
-        args.backgroundColor != null ? String(args.backgroundColor) : '#FFFFFF';
-      ctx.dispatch(
-        addArtboardFrame({
-          name: String(args.name || 'Frame'),
-          x,
-          y,
-          width,
-          height,
-          backgroundColor,
-          // Agent tools never auto-select; user must click the artboard.
-          activate: false,
-        })
-      );
-      const frames = listFrames(ctx.getDocument());
-      const created =
-        frames.find((f) => !beforeIds.has(f.id)) || frames[frames.length - 1] || null;
-      if (!created?.id) {
-        return {
-          status: 'error',
-          summary: 'create_frame failed — frame missing from document after dispatch',
-          next_actions: ['Retry create_frame', 'get_scene_summary'],
-        };
-      }
-      return {
-        status: 'success',
-        summary: `Created frame ${created.id} "${created.name}" at (${Math.round(created.x)},${Math.round(created.y)}) ${Math.round(created.width)}×${Math.round(created.height)}`,
-        artifacts: {
-          frameId: created.id,
-          x: created.x,
-          y: created.y,
-          width: created.width,
-          height: created.height,
-        },
-        next_actions: ['create_shape', 'create_text inside this new frame'],
-      };
+      return execCreateFrame(args, ctx, doc, pushHistory);
     }
 
     if (name === 'image_process') {
@@ -2182,7 +2403,6 @@ export function executeDesignTool(
         'upscale',
         'removeBg',
         'eraser',
-        'editElements',
         'editText',
         'multiAngle',
         'expand',
@@ -2240,17 +2460,8 @@ export function executeDesignTool(
 
     if (name === 'export_canvas') {
       const formatRaw = String(args.format || 'png').toLowerCase();
-      const format =
-        formatRaw === 'jpg' || formatRaw === 'jpeg'
-          ? 'jpeg'
-          : formatRaw === 'svg'
-            ? 'svg'
-            : 'png';
-      const nodeIds = Array.isArray(args.nodeIds)
-        ? args.nodeIds.map((x) => String(x)).filter(Boolean)
-        : args.nodeId
-          ? [String(args.nodeId)]
-          : [];
+      const format = normalizeExportFormat(formatRaw);
+      const nodeIds = resolveExportNodeIds(args);
       const multiplier = Math.max(0.25, Math.min(4, Number(args.multiplier) || 1));
       const filename = String(args.filename || 'export').replace(/[^\w\-]+/g, '_');
       const ok = exportFabricImage({

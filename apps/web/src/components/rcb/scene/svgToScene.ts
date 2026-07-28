@@ -210,63 +210,6 @@ export function svgObjectsToScene(document: any, objects: SvgSceneObject[]) {
   return syncRootChildren(next);
 }
 
-/** Read placed node boxes from the SVG board into a scene document. */
-export function syncSvgBoardToDocument(
-  document: any,
-  nodeEls: Map<string, any>,
-  order: string[]
-) {
-  const objects: SvgSceneObject[] = [];
-  for (const nodeId of order) {
-    const el = nodeEls.get(nodeId) as SVGElement | undefined;
-    if (!el) continue;
-    let bbox = { x: 0, y: 0, width: 1, height: 1 };
-    try {
-      if (typeof (el as SVGGraphicsElement).getBBox === 'function') {
-        const b = (el as SVGGraphicsElement).getBBox();
-        bbox = { x: b.x, y: b.y, width: b.width, height: b.height };
-      }
-    } catch {
-      /* ignore */
-    }
-    const node = document.deltaSetLike?.[nodeId];
-    const anyEl = el as any;
-    const left = Number.isFinite(anyEl.__sceneLeft)
-      ? anyEl.__sceneLeft
-      : num(el.getAttribute('x'), bbox.x);
-    const top = Number.isFinite(anyEl.__sceneTop)
-      ? anyEl.__sceneTop
-      : num(el.getAttribute('y'), bbox.y);
-    objects.push({
-      sceneNodeId: nodeId,
-      sceneNodeKey: anyEl.sceneNodeKey || node?.key || 'shape',
-      sceneShapeType: anyEl.sceneShapeType || node?.attrs?.shapeType,
-      left,
-      top,
-      width: Number.isFinite(anyEl.sceneWidth) ? anyEl.sceneWidth : Math.max(bbox.width, 1),
-      height: Number.isFinite(anyEl.sceneHeight) ? anyEl.sceneHeight : Math.max(bbox.height, 1),
-      angle: num(node?.attrs?.angle, 0),
-      opacity: num(node?.attrs?.opacity, 1),
-      flipX: node?.attrs?.flipX === true || node?.attrs?.flipX === 'true',
-      flipY: node?.attrs?.flipY === true || node?.attrs?.flipY === 'true',
-      text:
-        node?.key === 'text'
-          ? String(anyEl.__scenePlainText ?? node?.attrs?.text ?? el.textContent ?? '')
-          : undefined,
-      src: node?.attrs?.src,
-      fontSize: node?.attrs?.fontSize,
-      fill: node?.attrs?.['fill-color'] || node?.attrs?.fill,
-      fontFamily: node?.attrs?.fontFamily,
-      fontWeight: node?.attrs?.fontWeight,
-      fontStyle: node?.attrs?.fontStyle,
-      textAlign: node?.attrs?.textAlign,
-      lineHeight: node?.attrs?.lineHeight,
-      letterSpacing: node?.attrs?.letterSpacing,
-    });
-  }
-  return svgObjectsToScene(document, objects);
-}
-
 export type TextResizeMode = 'scale' | 'wrap';
 
 export type PatchGeometryOptions = {

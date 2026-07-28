@@ -1,0 +1,132 @@
+{
+  "x": 0,
+  "y": 0,
+  "width": 794,
+  "height": 1123,
+  "backgroundColor": "",
+  "pages": [
+    {
+      "id": "page1",
+      "children": [
+        "bg",
+        "n1",
+        "n2",
+        "n5",
+        "n6"
+      ]
+    }
+  ],
+  "activePageId": "page1",
+  "deltaSetLike": {
+    "ROOT": {
+      "id": "ROOT",
+      "key": "entry",
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "attrs": {},
+      "children": [
+        "bg",
+        "n1",
+        "n2",
+        "n5",
+        "n6"
+      ]
+    },
+    "bg": {
+      "id": "bg",
+      "key": "shape",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "width": 220,
+      "height": 1123,
+      "attrs": {
+        "shapeType": "rect",
+        "fill-color": "#2C3E50",
+        "border-color": "transparent",
+        "border-width": 0,
+        "L": "true",
+        "R": "true",
+        "T": "true",
+        "B": "true",
+        "opacity": 1,
+        "angle": 0,
+        "radiusTL": 0,
+        "radiusTR": 0,
+        "radiusBR": 0,
+        "radiusBL": 0
+      },
+      "children": []
+    },
+    "n1": {
+      "id": "n1",
+      "key": "text",
+      "x": 36,
+      "y": 64,
+      "z": 0,
+      "width": 160,
+      "height": 36,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"李\",\"config\":{\"SIZE\":26,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}},{\"char\":\"明\",\"config\":{\"SIZE\":26,\"COLOR\":\"#FFFFFF\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"李明\",\"bold\":true,\"font-base\":{\"fontSize\":26,\"color\":\"#FFFFFF\"}}]}]"
+      },
+      "children": []
+    },
+    "n2": {
+      "id": "n2",
+      "key": "text",
+      "x": 36,
+      "y": 108,
+      "z": 0,
+      "width": 160,
+      "height": 24,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"产\",\"config\":{\"SIZE\":13,\"COLOR\":\"#BDC3C7\",\"WEIGHT\":\"normal\"}},{\"char\":\"品\",\"config\":{\"SIZE\":13,\"COLOR\":\"#BDC3C7\",\"WEIGHT\":\"normal\"}},{\"char\":\"设\",\"config\":{\"SIZE\":13,\"COLOR\":\"#BDC3C7\",\"WEIGHT\":\"normal\"}},{\"char\":\"计\",\"config\":{\"SIZE\":13,\"COLOR\":\"#BDC3C7\",\"WEIGHT\":\"normal\"}},{\"char\":\"师\",\"config\":{\"SIZE\":13,\"COLOR\":\"#BDC3C7\",\"WEIGHT\":\"normal\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"产品设计师\",\"bold\":false,\"font-base\":{\"fontSize\":13,\"color\":\"#BDC3C7\"}}]}]"
+      },
+      "children": []
+    },
+    "n5": {
+      "id": "n5",
+      "key": "text",
+      "x": 260,
+      "y": 64,
+      "z": 0,
+      "width": 480,
+      "height": 32,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"关\",\"config\":{\"SIZE\":18,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}},{\"char\":\"于\",\"config\":{\"SIZE\":18,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}},{\"char\":\"我\",\"config\":{\"SIZE\":18,\"COLOR\":\"#333333\",\"WEIGHT\":\"bold\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"关于我\",\"bold\":true,\"font-base\":{\"fontSize\":18,\"color\":\"#333333\"}}]}]"
+      },
+      "children": []
+    },
+    "n6": {
+      "id": "n6",
+      "key": "text",
+      "x": 260,
+      "y": 108,
+      "z": 0,
+      "width": 480,
+      "height": 90,
+      "attrs": {
+        "DATA": "[{\"chars\":[{\"char\":\"关\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"注\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"体\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"验\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"与\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"信\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"息\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"架\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"构\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"，\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"擅\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"长\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"落\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"地\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"设\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"计\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"系\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"统\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"与\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"高\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"保\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"真\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"原\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"型\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}},{\"char\":\"。\",\"config\":{\"SIZE\":13,\"COLOR\":\"#333333\",\"WEIGHT\":\"normal\"}}],\"config\":{}}]",
+        "ORIGIN_DATA": "[{\"children\":[{\"text\":\"关注体验与信息架构，擅长落地设计系统与高保真原型。\",\"bold\":false,\"font-base\":{\"fontSize\":13,\"color\":\"#333333\"}}]}]"
+      },
+      "children": []
+    }
+  },
+  "frames": [
+    {
+      "id": "frame1",
+      "name": "Classic sidebar resume",
+      "x": 0,
+      "y": 0,
+      "width": 794,
+      "height": 1123,
+      "backgroundColor": "#ffffff"
+    }
+  ],
+  "activeFrameId": "frame1"
+}

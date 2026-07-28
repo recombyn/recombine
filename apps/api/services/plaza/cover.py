@@ -35,6 +35,20 @@ def list_artboard_frames(document: dict[str, Any] | None) -> list[dict[str, Any]
     return out
 
 
+def _frame_by_id(frames: list[dict[str, Any]], frame_id: str) -> dict[str, Any] | None:
+    for frame in frames:
+        if str(frame.get("id") or "") == frame_id:
+            return frame
+    return None
+
+
+def _frame_by_name(frames: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    for frame in frames:
+        if str(frame.get("name") or "").strip() == name:
+            return frame
+    return None
+
+
 def find_cover_frame(document: dict[str, Any] | None) -> dict[str, Any] | None:
     """
     Frame used for Plaza list cards / publish preview.
@@ -46,14 +60,13 @@ def find_cover_frame(document: dict[str, Any] | None) -> dict[str, Any] | None:
 
     active_id = str(document.get("activeFrameId") or "").strip()
     if active_id:
-        for frame in frames:
-            if str(frame.get("id") or "") == active_id:
-                return frame
+        active = _frame_by_id(frames, active_id)
+        if active:
+            return active
 
-    for frame in frames:
-        name = str(frame.get("name") or "").strip()
-        if name == COVER_FRAME_NAME:
-            return frame
+    named = _frame_by_name(frames, COVER_FRAME_NAME)
+    if named:
+        return named
 
     return frames[0]
 
@@ -75,15 +88,78 @@ def _inside_frame(cx: float, cy: float, frame: dict[str, Any]) -> bool:
 
 
 def validate_cover_for_publish(document: dict[str, Any] | None) -> tuple[bool, str]:
-    """
-    Return (ok, error_code).
-    error_code: artboard_required | '' (legacy cover_required kept as alias).
-    """
-    if not list_artboard_frames(document):
-        return False, "artboard_required"
-    if not extract_cover_document(document):
-        return False, "artboard_required"
+    """Return (ok, error_code). Artboard is optional."""
+    if not isinstance(document, dict):
+        return False, "invalid_document"
     return True, ""
+
+
+def extract_full_document_cover(document: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Fallback cover when there is no artboard — full scene snapshot."""
+    if not isinstance(document, dict):
+        return None
+    dsl = document.get("deltaSetLike")
+    if not isinstance(dsl, dict):
+        dsl = {}
+    children: list[str] = []
+    nodes: dict[str, Any] = {}
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+    for key, node in dsl.items():
+        if key == "ROOT" or not isinstance(node, dict):
+            continue
+        nid = str(node.get("id") or key)
+        cloned = copy.deepcopy(node)
+        cloned["id"] = nid
+        nodes[nid] = cloned
+        children.append(nid)
+        x = _num(cloned.get("x"))
+        y = _num(cloned.get("y"))
+        w = max(1.0, _num(cloned.get("width"), 1.0))
+        h = max(1.0, _num(cloned.get("height"), 1.0))
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        max_x = max(max_x, x + w)
+        max_y = max(max_y, y + h)
+
+    doc_w = max(1.0, _num(document.get("width"), 794.0))
+    doc_h = max(1.0, _num(document.get("height"), 1123.0))
+    if children and min_x < max_x and min_y < max_y:
+        pad = 40.0
+        ox = max(0.0, min_x - pad)
+        oy = max(0.0, min_y - pad)
+        fw = max(1.0, (max_x - min_x) + pad * 2)
+        fh = max(1.0, (max_y - min_y) + pad * 2)
+        for nid in children:
+            n = nodes[nid]
+            n["x"] = _num(n.get("x")) - ox
+            n["y"] = _num(n.get("y")) - oy
+        doc_w, doc_h = fw, fh
+
+    bg = document.get("backgroundColor") or "#ffffff"
+    fid = "frame_full"
+    return {
+        "width": doc_w,
+        "height": doc_h,
+        "backgroundColor": bg,
+        "backgroundFillType": "solid",
+        "frames": [
+            {
+                "id": fid,
+                "name": fid,
+                "x": 0,
+                "y": 0,
+                "width": doc_w,
+                "height": doc_h,
+                "backgroundColor": bg,
+            }
+        ],
+        "activeFrameId": fid,
+        "deltaSetLike": {
+            "ROOT": {"id": "ROOT", "children": children},
+            **nodes,
+        },
+    }
 
 
 def extract_frame_document(
@@ -147,12 +223,15 @@ def extract_frame_document(
 
 
 def extract_cover_document(document: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Plaza list / publish preview: active or first artboard content."""
-    return extract_frame_document(document, find_cover_frame(document))
+    """Plaza list / publish preview: artboard when present, else full document."""
+    framed = extract_frame_document(document, find_cover_frame(document))
+    if framed:
+        return framed
+    return extract_full_document_cover(document)
 
 
 def cover_json_dumps(document: dict[str, Any] | None) -> str | None:
-    """Persist list cover when the project has at least one artboard."""
+    """Persist list cover snapshot (artboard or full document)."""
     ok, _ = validate_cover_for_publish(document)
     if not ok:
         return None

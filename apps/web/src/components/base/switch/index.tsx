@@ -19,7 +19,7 @@ const SwitchBase: React.FC<SwitchProps> = ({ checked, onChange, disabled = false
       className={cn(
         'group relative inline-flex h-5 w-9 cursor-pointer items-center rounded-full p-0.5 transition-colors',
         'focus:outline-none data-[focus]:outline-none',
-        checked ? 'bg-[#35C838]' : 'bg-[var(--color-border-default-base)]',
+        checked ? 'bg-[var(--ink)]' : 'bg-[var(--line)]',
         disabled && 'opacity-60 cursor-not-allowed',
         className
       )}

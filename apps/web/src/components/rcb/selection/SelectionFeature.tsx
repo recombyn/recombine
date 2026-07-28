@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import ImageReplaceCornerButton from '@/components/editor/nodes/ImageNode/ImageReplaceCornerButton';
+import ImageVariantsOverlay from '@/components/editor/nodes/ImageNode/ImageVariantsOverlay';
 import {
   useRcbCamera,
   useRcbOverlayRoot,
@@ -13,17 +14,24 @@ import AlignGuidesOverlay, { type AlignGuide } from './AlignGuidesOverlay';
 import {
   chromeBandGuideBoxes,
   frameGuideBoxes,
+  getDocumentGridSize,
   getSnapThreshold,
   nodeGuideBoxes,
+  nodeGuideBoxesForIds,
+  snapBoxToGrid,
   snapBoxToGuides,
+  snapResizeToGrid,
   snapResizeToGuides,
   type SceneBox,
 } from './alignGuides';
 import SelectionChrome from './SelectionChrome';
 import SelectionContextToolbar from './SelectionContextToolbar';
 import MultiSelectionToolbar from './MultiSelectionToolbar';
+import NodeTitleLabel from './NodeTitleLabel';
 import SpacingInspectOverlay, {
-  computeMoveMarginMeasures,
+  boxesInvolvedInGuides,
+  computeMoveMarginResult,
+  SPACING_MEASURE_COLOR,
   type SpacingMeasure,
 } from './SpacingInspectOverlay';
 import { resizeFromHandle, rotateBoxesAround, scaleBoxesToUnion, unionOfBoxes, type ResizeHandle } from './resizeGeometry';
@@ -32,28 +40,23 @@ import {
   resizeStrokeByEndpoint,
   strokeEndpointsFromBox,
 } from '@/components/rcb/scene/sceneShapes';
-import { supportsFill } from '@/components/rcb/scene/sceneDocument';
+import {
+  expandSelectionWithGroups,
+  isImageGeneratorNode,
+  isNodeHidden,
+  isNodeLocked,
+  listImageVariantUrls,
+  supportsFill,
+} from '@/components/rcb/scene/sceneDocument';
 import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/sceneEffects';
 import { geometryIndicatorPathD, isEditablePathNode } from '@/components/rcb/scene/outlineToPath';
-import { expandSelectionWithGroups } from '@/components/rcb/scene/sceneDocument';
+import { patchDocumentNode, setDevHoverNodeId } from '@/store/modules/editor';
 import {
   measureWrappedTextSize,
   parseNodeText,
   parseNodeTextStyle,
 } from '@/components/rcb/scene/sceneText';
 import type { TextResizeMode } from '@/components/rcb/scene/svgToScene';
-
-/** Segment guide: thin red line + × marks (fig.1). */
-export type { AlignGuide };
-export type { SceneBox, ResizeHandle } from './resizeGeometry';
-export {
-  resizeFromHandle,
-  rotateBoxesAround,
-  scaleBoxesToUnion,
-  unionOfBoxes,
-  matchAspectPresetKey,
-  sizeFromAspectPreset,
-} from './resizeGeometry';
 
 const CORNER_HANDLES = new Set<ResizeHandle>(['nw', 'ne', 'sw', 'se']);
 
@@ -162,7 +165,24 @@ function textResizeModeForHandle(handle: ResizeHandle): TextResizeMode {
   return handle === 'e' || handle === 'w' ? 'wrap' : 'scale';
 }
 
-/** Images + text corners lock aspect by default (Shift unlocks). Else Shift locks. */
+/**
+ * Aspect lock while resizing.
+ * - Multi-select / marquee group: Shift locks (free stretch by default).
+ * - Single text corners: lock by default (Shift unlocks).
+ * - Single image: `attrs.lockAspect` (default on) locks; Shift temporarily inverts.
+ * - Other single nodes: free by default (Shift locks), unless `lockAspect` is set.
+ */
+function nodeAspectLockDefault(key: string | undefined): boolean {
+  return key === 'image';
+}
+
+function readNodeAspectLocked(node: any): boolean {
+  const raw = node?.attrs?.lockAspect;
+  if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return nodeAspectLockDefault(node?.key);
+}
+
 function resolveLockAspect(
   document: any,
   origins: Array<{ nodeId: string }>,
@@ -170,10 +190,11 @@ function resolveLockAspect(
   shiftKey: boolean
 ) {
   if (!handle || origins.length !== 1) return shiftKey;
-  const key = document?.deltaSetLike?.[origins[0].nodeId]?.key;
-  if (key === 'image') return !shiftKey;
+  const node = document?.deltaSetLike?.[origins[0].nodeId];
+  const key = node?.key;
   if (key === 'text' && CORNER_HANDLES.has(handle)) return !shiftKey;
-  return shiftKey;
+  const locked = readNodeAspectLocked(node);
+  return shiftKey ? !locked : locked;
 }
 
 /** Remasure text height for L/R wrap so chrome hugs wrapped lines while dragging. */
@@ -239,8 +260,8 @@ function framesHittingMarquee(doc: any, marquee: SceneBox): Array<{ id: string; 
 }
 
 /** Synthetic selection id so frames share the same union chrome / transform path as nodes. */
-export const FRAME_SEL_PREFIX = '__frame__:';
-export function frameSelId(frameId: string) {
+const FRAME_SEL_PREFIX = '__frame__:';
+function frameSelId(frameId: string) {
   return `${FRAME_SEL_PREFIX}${frameId}`;
 }
 export function parseFrameSelId(selId: string): string | null {
@@ -340,10 +361,11 @@ function nodeHitsMarquee(
   toScene: (clientX: number, clientY: number) => { x: number; y: number }
 ): boolean {
   const node = doc?.deltaSetLike?.[nodeId];
+  if (!node || isNodeHidden(node)) return false;
   const dataBox = getNodeBox(nodeId);
   const domBox = sceneBoxFromMountedNode(nodeId, toScene);
   const box = domBox || dataBox;
-  if (!node || !box) return false;
+  if (!box) return false;
 
   const shapeType = String(node.attrs?.shapeType || '');
   if (shapeType === 'line' || shapeType === 'arrow') {
@@ -441,7 +463,11 @@ type SelectionFeatureProps = {
   ) => string | null;
   getNodeBox: (nodeId: string) => SceneBox | null;
   listNodeIds: () => string[];
-  onDeleteSelected?: () => void;
+  /**
+   * Optional spatial prefilter for marquee (and similar rect queries).
+   * Return candidate ids that may intersect `box`; fine hit still uses nodeHitsMarquee.
+   */
+  queryNodeIdsInRect?: (box: SceneBox) => string[];
   onOpenAgent?: (opts?: { prompt?: string }) => void;
   /** Double-click a text node to edit inline. */
   onEditText?: (nodeId: string) => void;
@@ -451,6 +477,11 @@ type SelectionFeatureProps = {
   suppressChrome?: boolean;
   /** Fires when move / resize / rotate starts or ends (for hiding node titles). */
   onTransformingChange?: (transforming: boolean) => void;
+  /**
+   * Composer "Add from canvas" pick mode — clicks attach via onSelect and must
+   * not start a move (already-selected hits would otherwise skip onSelect).
+   */
+  attachPickActive?: boolean;
 };
 
 /**
@@ -473,6 +504,11 @@ type DragState = {
   aspectRatio?: number;
   center?: { x: number; y: number };
   pointerAngle0?: number;
+  /**
+   * Composer canvas-pick gesture: attach already ran on pointerdown.
+   * Skip pointerup onSelect so one-shot clearPick does not steal node selection.
+   */
+  skipSelectOnUp?: boolean;
 };
 
 function readNodeAngle(document: any, nodeId: string) {
@@ -497,6 +533,37 @@ function siblingGuideBoxes(
 ): SceneBox[] {
   const fromDoc = nodeGuideBoxes(document, { excludeIds });
   return fromDoc.length ? fromDoc : fallback();
+}
+
+/**
+ * Prefer spatial neighbors around `probe` (move / resize / nudge).
+ * Pad covers snap threshold + nearby gap partners without scanning the whole doc.
+ */
+function siblingGuideBoxesNear(
+  document: any,
+  excludeIds: string[],
+  probe: SceneBox,
+  snapThreshold: number,
+  queryNodeIdsInRect: ((box: SceneBox) => string[]) | undefined,
+  fallback: () => SceneBox[]
+): SceneBox[] {
+  if (queryNodeIdsInRect) {
+    const pad = Math.max(
+      snapThreshold * 8,
+      probe.width || 0,
+      probe.height || 0,
+      256
+    );
+    const ids = queryNodeIdsInRect({
+      left: probe.left - pad,
+      top: probe.top - pad,
+      width: probe.width + pad * 2,
+      height: probe.height + pad * 2,
+    });
+    const fromDoc = nodeGuideBoxesForIds(document, ids, { excludeIds });
+    if (fromDoc.length) return fromDoc;
+  }
+  return siblingGuideBoxes(document, excludeIds, fallback);
 }
 
 /** Moving selection's stroke-band faces (single node) or chrome union (multi). */
@@ -534,12 +601,13 @@ export default function SelectionFeature({
   hitTest,
   getNodeBox,
   listNodeIds,
-  onDeleteSelected,
+  queryNodeIdsInRect,
   onOpenAgent,
   onEditText,
   onEditPenPath,
   suppressChrome = false,
   onTransformingChange,
+  attachPickActive = false,
 }: SelectionFeatureProps) {
   const overlayRoot = useRcbOverlayRoot();
   const toScene = useRcbScreenToScene();
@@ -547,6 +615,11 @@ export default function SelectionFeature({
   const zoom = Math.max(0.05, camera.zoom || 1);
   /** ~8px on screen. */
   const snapThreshold = getSnapThreshold(zoom);
+  const isGridMode = useSelector((state: any) => Boolean(state.editor.isGridMode));
+  const workspaceMode = useSelector(
+    (s: any) => (s.editor.workspaceMode || 'design') as 'design' | 'dev'
+  );
+  const gridSize = getDocumentGridSize(document);
   /** Infinite paper is 0×0 — listen on the stage so empty artboard clicks select. */
   const hitEl = stageEl || paperEl;
   const dispatch = useDispatch();
@@ -555,6 +628,8 @@ export default function SelectionFeature({
   );
   /** Radius panel keeps chrome (rounded outline) but hides floating toolbars. */
   const suppressToolbars = suppressChrome || shapeStylePanel?.kind === 'radius';
+  /** Share preview / Dev: spacing badges + no edit chrome. */
+  const inspectDev = workspaceMode === 'dev' || readOnly;
   const dragRef = useRef<DragState | null>(null);
   const liveUnionRef = useRef<SceneBox | null>(null);
   const liveOriginsRef = useRef<Array<{ nodeId: string; box: SceneBox }> | null>(null);
@@ -569,6 +644,7 @@ export default function SelectionFeature({
   const documentRef = useRef(document);
   const getNodeBoxRef = useRef(getNodeBox);
   const listNodeIdsRef = useRef(listNodeIds);
+  const queryNodeIdsInRectRef = useRef(queryNodeIdsInRect);
   const hitTestRef = useRef(hitTest);
   const hitTestFrameRef = useRef(hitTestFrame);
   const onSelectRef = useRef(onSelect);
@@ -583,6 +659,7 @@ export default function SelectionFeature({
   documentRef.current = document;
   getNodeBoxRef.current = getNodeBox;
   listNodeIdsRef.current = listNodeIds;
+  queryNodeIdsInRectRef.current = queryNodeIdsInRect;
   hitTestRef.current = hitTest;
   hitTestFrameRef.current = hitTestFrame;
   onSelectRef.current = onSelect;
@@ -604,11 +681,16 @@ export default function SelectionFeature({
   const [guides, setGuides] = useState<AlignGuide[]>([]);
   /** Margin labels while moving / arrow-nudging (fig.1 pink). */
   const [moveMargins, setMoveMargins] = useState<SpacingMeasure[] | null>(null);
+  /** Neighbor boxes currently driving distance tips — orange outline like MasterGo. */
+  const [moveHighlights, setMoveHighlights] = useState<SceneBox[]>([]);
   /** Hide chrome/toolbars while move / resize / rotate is in progress. */
   const [transforming, setTransforming] = useState(false);
   /** Dev inspect: node under pointer (annotations follow mouse). */
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
   const hoverNodeIdRef = useRef<string | null>(null);
+  /** Preview / Dev: previous single selection — click A then B shows A↔B spacing. */
+  const [inspectPairNodeId, setInspectPairNodeId] = useState<string | null>(null);
+  const prevInspectSelRef = useRef<string | null>(null);
 
   const setTransformingNotify = (next: boolean) => {
     setTransforming(next);
@@ -686,7 +768,28 @@ export default function SelectionFeature({
 
   useEffect(() => {
     setMoveMargins(null);
+    setMoveHighlights([]);
   }, [idsKey, frameIdsKey]);
+
+  // Inspect: keep prior selection as pair target when clicking another element.
+  useEffect(() => {
+    if (!inspectDev) {
+      prevInspectSelRef.current = null;
+      setInspectPairNodeId(null);
+      return;
+    }
+    const next =
+      selectedNodeIds.length === 1 && selectedFrameIds.length === 0
+        ? selectedNodeIds[0]
+        : null;
+    const prev = prevInspectSelRef.current;
+    if (next && prev && prev !== next) {
+      setInspectPairNodeId(prev);
+    } else if (!next) {
+      setInspectPairNodeId(null);
+    }
+    prevInspectSelRef.current = next;
+  }, [inspectDev, selectedNodeIds, selectedFrameIds]);
 
   useEffect(() => {
     if (!enabled || !hitEl) return undefined;
@@ -695,6 +798,10 @@ export default function SelectionFeature({
       if (hoverNodeIdRef.current === id) return;
       hoverNodeIdRef.current = id;
       setHoverNodeId(id);
+      // Dev / share inspect panel reads hover from Redux.
+      if (workspaceMode === 'dev' || readOnly) {
+        dispatch(setDevHoverNodeId(id));
+      }
     };
 
     const onHoverMove = (e: PointerEvent) => {
@@ -713,7 +820,7 @@ export default function SelectionFeature({
       }
       if (
         target?.closest?.(
-          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props]'
         )
       ) {
         applyHover(null);
@@ -742,7 +849,7 @@ export default function SelectionFeature({
       window.removeEventListener('pointermove', onHoverMove);
       window.removeEventListener('blur', onLeave);
     };
-  }, [enabled, hitEl, paperEl, overlayRoot, artboard, hitTest, dispatch, toScene]);
+  }, [enabled, hitEl, paperEl, overlayRoot, artboard, hitTest, dispatch, toScene, workspaceMode, readOnly]);
 
   useEffect(() => {
     if (!enabled || !hitEl) return undefined;
@@ -781,7 +888,7 @@ export default function SelectionFeature({
       const target = e.target as HTMLElement;
       if (
         target.closest(
-          '[data-ctx-menu],[data-sel-toolbar],[data-frame-toolbar],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-frame-toolbar],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator]'
         )
       )
         return;
@@ -791,9 +898,22 @@ export default function SelectionFeature({
       const liveOriginsNow = liveOriginsRef.current;
       const liveAngleNow = liveAngleRef.current;
 
+      const selectionIsLocked = () => {
+        if (!liveOriginsNow?.length) return false;
+        const frames = Array.isArray(document?.frames) ? document.frames : [];
+        return liveOriginsNow.some((o) => {
+          const fid = parseFrameSelId(o.nodeId);
+          if (fid) {
+            const f = frames.find((x: any) => x?.id === fid);
+            return Boolean(f?.locked);
+          }
+          return isNodeLocked(document?.deltaSetLike?.[o.nodeId]);
+        });
+      };
+
       const rotateEl = target.closest('[data-sel-handle="rotate"]') as HTMLElement | null;
       if (rotateEl && liveUnionNow && liveOriginsNow?.length) {
-        if (readOnly) return;
+        if (readOnly || selectionIsLocked()) return;
         e.preventDefault();
         e.stopPropagation();
         const center = {
@@ -829,7 +949,7 @@ export default function SelectionFeature({
 
       const resizeEl = target.closest('[data-sel-handle="resize"]') as HTMLElement | null;
       if (resizeEl && liveUnionNow && liveOriginsNow?.length) {
-        if (readOnly) return;
+        if (readOnly || selectionIsLocked()) return;
         e.preventDefault();
         e.stopPropagation();
         const handle = (resizeEl.getAttribute('data-resize') || 'se') as ResizeHandle;
@@ -856,6 +976,7 @@ export default function SelectionFeature({
 
       const beginMoveSelection = () => {
         if (readOnly || !liveUnionNow || !liveOriginsNow?.length) return false;
+        if (selectionIsLocked()) return false;
         e.preventDefault();
         e.stopPropagation();
         const origins = liveOriginsNow.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } }));
@@ -887,7 +1008,7 @@ export default function SelectionFeature({
 
       // Drag control box (or anywhere on a frame-only / mixed selection chrome).
       const selBoxEl = target.closest('[data-sel-box]') as HTMLElement | null;
-      if (selBoxEl && selectionHasFrame && beginMoveSelection()) return;
+      if (selBoxEl && selectionHasFrame && !attachPickActive && beginMoveSelection()) return;
 
       // Hit-test scene nodes (selection chrome is non-blocking so empty clicks pass through).
       const hitId = hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY });
@@ -899,6 +1020,42 @@ export default function SelectionFeature({
         scene: { x: p.x, y: p.y },
         target: (target as HTMLElement)?.tagName,
       });
+
+      // Composer pick: attach node or artboard; never move / never treat frame as blank cancel.
+      if (attachPickActive) {
+        e.preventDefault();
+        e.stopPropagation();
+        const frameUnder =
+          plateFrameId ||
+          (!hitId ? hitTestFrame?.(p.x, p.y) : null) ||
+          (selectionHasFrame && pointInLiveUnion
+            ? liveOriginsNow
+                ?.map((o) => parseFrameSelId(o.nodeId))
+                .find((fid): fid is string => Boolean(fid))
+            : null);
+        if (hitId && !plateFrameId) {
+          // Do NOT call onSelectFrame(null) here — during pick that clears pick mode.
+          const expandedHit = expandSelectionWithGroups(document, [hitId]);
+          onSelect(expandedHit);
+        } else if (frameUnder) {
+          onSelectFrame?.(frameUnder);
+        } else {
+          // Truly empty canvas — exit pick mode.
+          onSelect([]);
+        }
+        dragRef.current = {
+          mode: 'blank',
+          skipSelectOnUp: true,
+          startX: e.clientX,
+          startY: e.clientY,
+          sceneX0: p.x,
+          sceneY0: p.y,
+          origins: [],
+          union: { left: p.x, top: p.y, width: 1, height: 1 },
+        };
+        capture(e.pointerId);
+        return;
+      }
 
       // Clicking a selected artboard (or its plate) moves the whole selection — like a rect.
       if (
@@ -942,7 +1099,13 @@ export default function SelectionFeature({
       // Shape under pointer — select (if needed) then move. Never start a marquee on a shape.
       if (hitId) {
         if (readOnly) {
+          // Preview / Dev inspect: select only (no move). Select on down so Inspect fills immediately.
           e.preventDefault();
+          e.stopPropagation();
+          const additive = e.shiftKey;
+          const expandedHit = expandSelectionWithGroups(document, [hitId]);
+          onSelectFrame?.(null);
+          onSelect(expandedHit, { additive });
           dragRef.current = {
             mode: 'blank',
             startX: e.clientX,
@@ -1036,6 +1199,29 @@ export default function SelectionFeature({
         if (origins.length === 1 && !parseFrameSelId(origins[0].nodeId)) {
           setLiveAngle(readNodeAngle(document, origins[0].nodeId));
         }
+        // Locked layers stay selectable but cannot start a drag.
+        if (
+          origins.some((o) => {
+            const fid = parseFrameSelId(o.nodeId);
+            if (fid) {
+              const frames = Array.isArray(document?.frames) ? document.frames : [];
+              return Boolean(frames.find((x: any) => x?.id === fid)?.locked);
+            }
+            return isNodeLocked(document?.deltaSetLike?.[o.nodeId]);
+          })
+        ) {
+          dragRef.current = {
+            mode: 'blank',
+            startX: e.clientX,
+            startY: e.clientY,
+            sceneX0: p.x,
+            sceneY0: p.y,
+            origins: [],
+            union: { left: p.x, top: p.y, width: 1, height: 1 },
+          };
+          capture(e.pointerId);
+          return;
+        }
         dragRef.current = {
           mode: 'move',
           startX: e.clientX,
@@ -1064,7 +1250,7 @@ export default function SelectionFeature({
       ) {
         return;
       }
-      if (!e.shiftKey && !readOnly) {
+      if (!e.shiftKey) {
         onSelectFrame?.(null);
         onSelect([]);
       }
@@ -1159,12 +1345,27 @@ export default function SelectionFeature({
           left: drag.union.left + dx,
           top: drag.union.top + dy,
         };
+        // Grid first; align guides may still pull off-grid when nearby.
+        // Ctrl/Cmd temporarily disables grid snap (accel).
+        if (isGridMode && !e.ctrlKey && !e.metaKey) {
+          nextUnion = snapBoxToGrid(nextUnion, gridSize);
+        }
         const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxes(document, excludeIds, () =>
-          listNodeIds()
-            .filter((id) => !excludeIds.includes(id))
-            .map((id) => getNodeBox(id))
-            .filter(Boolean) as SceneBox[]
+        const others = siblingGuideBoxesNear(
+          document,
+          excludeIds,
+          nextUnion,
+          snapThreshold,
+          queryNodeIdsInRect,
+          () =>
+            listNodeIds()
+              .filter(
+                (id) =>
+                  !excludeIds.includes(id) &&
+                  !isNodeHidden(document?.deltaSetLike?.[id])
+              )
+              .map((id) => getNodeBox(id))
+              .filter(Boolean) as SceneBox[]
         );
         const frames = frameGuideBoxes(document);
         const edgeBoxes = movingGuideBoxes(
@@ -1179,7 +1380,22 @@ export default function SelectionFeature({
         // breaks flush align when stroke outset is *.5 (odd border-width).
         nextUnion = { ...snapped.box };
         setGuides(snapped.guides);
-        setMoveMargins(computeMoveMarginMeasures(nextUnion, others, frames));
+        // Distance tips are a kind of guide — show nearest gaps whenever
+        // align/gap guides fire (not only when gap ≤ snap threshold).
+        if (snapped.guides.length) {
+          // Only measure / highlight objects that actually snapped (图1),
+          // not every nearby frame on all four sides (图2 clutter).
+          const related = boxesInvolvedInGuides(snapped.guides, [
+            ...others,
+            ...frames,
+          ]);
+          const margin = computeMoveMarginResult(nextUnion, related, []);
+          setMoveMargins(margin.measures);
+          setMoveHighlights(margin.highlights);
+        } else {
+          setMoveMargins([]);
+          setMoveHighlights([]);
+        }
         const sdx = nextUnion.left - drag.union.left;
         const sdy = nextUnion.top - drag.union.top;
         const nextOrigins = drag.origins.map((o) => ({
@@ -1250,12 +1466,28 @@ export default function SelectionFeature({
           lockAspect,
           aspectRatio: drag.aspectRatio,
         });
+        if (isGridMode && !e.ctrlKey && !e.metaKey) {
+          next = snapResizeToGrid(next, drag.handle, gridSize, 8, {
+            lockAspect,
+            aspectRatio: drag.aspectRatio,
+          });
+        }
         const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxes(document, excludeIds, () =>
-          listNodeIds()
-            .filter((id) => !excludeIds.includes(id))
-            .map((id) => getNodeBox(id))
-            .filter(Boolean) as SceneBox[]
+        const others = siblingGuideBoxesNear(
+          document,
+          excludeIds,
+          next,
+          snapThreshold,
+          queryNodeIdsInRect,
+          () =>
+            listNodeIds()
+              .filter(
+                (id) =>
+                  !excludeIds.includes(id) &&
+                  !isNodeHidden(document?.deltaSetLike?.[id])
+              )
+              .map((id) => getNodeBox(id))
+              .filter(Boolean) as SceneBox[]
         );
         const frames = frameGuideBoxes(document);
         // Snap + spacing labels against every sibling / frame (no type filter).
@@ -1269,7 +1501,18 @@ export default function SelectionFeature({
           height: Math.max(1, snapped.box.height),
         };
         setGuides(snapped.guides);
-        setMoveMargins(computeMoveMarginMeasures(next, others, frames));
+        if (snapped.guides.length) {
+          const related = boxesInvolvedInGuides(snapped.guides, [
+            ...others,
+            ...frames,
+          ]);
+          const margin = computeMoveMarginResult(next, related, []);
+          setMoveMargins(margin.measures);
+          setMoveHighlights(margin.highlights);
+        } else {
+          setMoveMargins([]);
+          setMoveHighlights([]);
+        }
         const textMode =
           drag.origins.length === 1 &&
           document?.deltaSetLike?.[drag.origins[0].nodeId]?.key === 'text'
@@ -1323,6 +1566,7 @@ export default function SelectionFeature({
       if (!drag) return;
       dragRef.current = null;
       setMoveMargins(null);
+      setMoveHighlights([]);
       setGuides([]);
       try {
         hitEl.releasePointerCapture?.(e.pointerId);
@@ -1362,13 +1606,23 @@ export default function SelectionFeature({
           endTransform();
           return;
         }
-        const ids = listNodeIds();
-        const rawHits = ids.filter((id) =>
+        const candidates =
+          queryNodeIdsInRect?.(box) ?? listNodeIds();
+        const rawHits = candidates.filter((id) =>
           nodeHitsMarquee(document, id, box, getNodeBox, toScene)
         );
-        // Prefer real content over the full-bleed background plate.
-        const contentHits = rawHits.filter((id) => !frameForFullBleedPlate(document, id));
         const frameHits = framesHittingMarquee(document, box).map((f) => f.id);
+        const frameHitSet = new Set(frameHits);
+        // Full-bleed background plate: keep when artboard is brushed, or when other
+        // content is also hit (so Select-all / delete clears the overlapping plate).
+        const contentHits = rawHits.filter((id) => {
+          const plateFrame = frameForFullBleedPlate(document, id);
+          if (!plateFrame) return true;
+          if (frameHitSet.has(plateFrame)) return true;
+          return rawHits.some(
+            (other) => other !== id && !frameForFullBleedPlate(document, other)
+          );
+        });
         // Artboards are just another selectable rect — combine with nodes in one selection.
         if (contentHits.length || frameHits.length) {
           marqueeLog('marquee up → mixed', { box, contentHits, frameHits });
@@ -1391,7 +1645,14 @@ export default function SelectionFeature({
       }
 
       if (drag.mode === 'blank') {
-        if (clientDistSq <= DRAG_DISTANCE_SQUARED) {
+        // Attach-pick already applied on pointerdown — do not onSelect on up
+        // (one-shot clearPick flips attachPickActive off before up; selecting
+        // here would steal focus from the host node / double-add chips).
+        if (
+          !drag.skipSelectOnUp &&
+          !attachPickActive &&
+          clientDistSq <= DRAG_DISTANCE_SQUARED
+        ) {
           const id = hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY });
           if (id && tryOpenTextEdit(id)) {
             endTransform();
@@ -1457,6 +1718,7 @@ export default function SelectionFeature({
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) {
           setGuides([]);
           setMoveMargins(null);
+          setMoveHighlights([]);
           setLiveUnion({ ...drag.union });
           setLiveOrigins(drag.origins.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })));
           if (drag.origins.length === 1 && tryOpenTextEdit(drag.origins[0].nodeId)) {
@@ -1471,12 +1733,21 @@ export default function SelectionFeature({
           left: drag.union.left + dx,
           top: drag.union.top + dy,
         };
+        if (isGridMode && !e.ctrlKey && !e.metaKey) {
+          nextUnion = snapBoxToGrid(nextUnion, gridSize);
+        }
         const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxes(document, excludeIds, () =>
-          listNodeIds()
-            .filter((id) => !excludeIds.includes(id))
-            .map((id) => getNodeBox(id))
-            .filter(Boolean) as SceneBox[]
+        const others = siblingGuideBoxesNear(
+          document,
+          excludeIds,
+          nextUnion,
+          snapThreshold,
+          queryNodeIdsInRect,
+          () =>
+            listNodeIds()
+              .filter((id) => !excludeIds.includes(id))
+              .map((id) => getNodeBox(id))
+              .filter(Boolean) as SceneBox[]
         );
         const snapped = snapBoxToGuides(
           nextUnion,
@@ -1497,6 +1768,7 @@ export default function SelectionFeature({
         }));
         setGuides([]);
         setMoveMargins(null);
+        setMoveHighlights([]);
         setLiveUnion(nextUnion);
         setLiveOrigins(patches.map((pt) => ({ nodeId: pt.nodeId, box: pt })));
         if (Math.hypot(sdx, sdy) > 0.01) {
@@ -1511,6 +1783,7 @@ export default function SelectionFeature({
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) {
           setGuides([]);
           setMoveMargins(null);
+          setMoveHighlights([]);
           setLiveUnion({ ...drag.union });
           setLiveOrigins(drag.origins.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })));
           endTransform();
@@ -1560,12 +1833,24 @@ export default function SelectionFeature({
           lockAspect,
           aspectRatio: drag.aspectRatio,
         });
+        if (isGridMode && !e.ctrlKey && !e.metaKey) {
+          next = snapResizeToGrid(next, drag.handle, gridSize, 8, {
+            lockAspect,
+            aspectRatio: drag.aspectRatio,
+          });
+        }
         const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxes(document, excludeIds, () =>
-          listNodeIds()
-            .filter((id) => !excludeIds.includes(id))
-            .map((id) => getNodeBox(id))
-            .filter(Boolean) as SceneBox[]
+        const others = siblingGuideBoxesNear(
+          document,
+          excludeIds,
+          next,
+          snapThreshold,
+          queryNodeIdsInRect,
+          () =>
+            listNodeIds()
+              .filter((id) => !excludeIds.includes(id))
+              .map((id) => getNodeBox(id))
+              .filter(Boolean) as SceneBox[]
         );
         const frames = frameGuideBoxes(document);
         const snapped = snapResizeToGuides(next, drag.handle, others, frames, snapThreshold, 8, {
@@ -1675,6 +1960,7 @@ export default function SelectionFeature({
   }, [
     enabled,
     readOnly,
+    attachPickActive,
     hitEl,
     paperEl,
     overlayRoot,
@@ -1694,11 +1980,15 @@ export default function SelectionFeature({
     onSelectFrame,
     getNodeBox,
     listNodeIds,
+    queryNodeIdsInRect,
     toScene,
     snapThreshold,
+    isGridMode,
+    gridSize,
   ]);
 
-  /** Arrow keys nudge selection 1px (Shift = 10px) and show margin labels. */
+  /** Arrow keys nudge selection 1px (Shift = 10px) and show margin labels.
+   *  Grid mode: step = gridSize (Shift = 5×). */
   useEffect(() => {
     if (!enabled || suppressChrome || readOnly) return undefined;
     let hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1724,27 +2014,59 @@ export default function SelectionFeature({
       const origins = liveOriginsRef.current;
       const union = liveUnionRef.current;
       if (!origins?.length || !union) return;
+      const docFrames = Array.isArray(document?.frames) ? document.frames : [];
+      if (
+        origins.some((o) => {
+          const fid = parseFrameSelId(o.nodeId);
+          if (fid) return Boolean(docFrames.find((x: any) => x?.id === fid)?.locked);
+          return isNodeLocked(document?.deltaSetLike?.[o.nodeId]);
+        })
+      ) {
+        return;
+      }
 
       e.preventDefault();
-      const step = e.shiftKey ? 10 : 1;
+      const step = isGridMode
+        ? e.shiftKey
+          ? gridSize * 5
+          : gridSize
+        : e.shiftKey
+          ? 10
+          : 1;
       const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
       const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-      const nextUnion = { ...union, left: union.left + dx, top: union.top + dy };
+      let nextUnion = { ...union, left: union.left + dx, top: union.top + dy };
+      if (isGridMode) nextUnion = snapBoxToGrid(nextUnion, gridSize);
+      const sdx = nextUnion.left - union.left;
+      const sdy = nextUnion.top - union.top;
       const nextOrigins = origins.map((o) => ({
         nodeId: o.nodeId,
-        box: { ...o.box, left: o.box.left + dx, top: o.box.top + dy },
+        box: { ...o.box, left: o.box.left + sdx, top: o.box.top + sdy },
       }));
       const excludeIds = origins.map((o) => o.nodeId);
-      const others = siblingGuideBoxes(document, excludeIds, () =>
-        listNodeIds()
-          .filter((id) => !excludeIds.includes(id))
-          .map((id) => getNodeBox(id))
-          .filter(Boolean) as SceneBox[]
+      const others = siblingGuideBoxesNear(
+        document,
+        excludeIds,
+        nextUnion,
+        snapThreshold,
+        queryNodeIdsInRect,
+        () =>
+          listNodeIds()
+            .filter(
+              (id) =>
+                !excludeIds.includes(id) &&
+                !isNodeHidden(document?.deltaSetLike?.[id])
+            )
+            .map((id) => getNodeBox(id))
+            .filter(Boolean) as SceneBox[]
       );
       const frames = frameGuideBoxes(document);
       setLiveUnion(nextUnion);
       setLiveOrigins(nextOrigins);
-      setMoveMargins(computeMoveMarginMeasures(nextUnion, others, frames));
+      // Arrow-key nudge: show nearest gaps as measure guides (orange + arrows).
+      const margin = computeMoveMarginResult(nextUnion, others, frames);
+      setMoveMargins(margin.measures);
+      setMoveHighlights(margin.highlights);
       onGeometryCommit(
         nextOrigins.map((o) => ({
           nodeId: o.nodeId,
@@ -1755,7 +2077,10 @@ export default function SelectionFeature({
         }))
       );
       if (hideTimer) clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => setMoveMargins(null), 600);
+      hideTimer = setTimeout(() => {
+        setMoveMargins(null);
+        setMoveHighlights([]);
+      }, 600);
     };
 
     window.addEventListener('keydown', onKey);
@@ -1771,15 +2096,20 @@ export default function SelectionFeature({
     listNodeIds,
     getNodeBox,
     onGeometryCommit,
+    queryNodeIdsInRect,
+    snapThreshold,
+    isGridMode,
+    gridSize,
   ]);
 
   const singleId = singleNode ? selectedNodeIds[0] : null;
-  const singleShapeType = singleId
-    ? String(document?.deltaSetLike?.[singleId]?.attrs?.shapeType || '')
+  const singleNodeData = singleId ? document?.deltaSetLike?.[singleId] : null;
+  const selectedIsImageGen = Boolean(singleNodeData && isImageGeneratorNode(singleNodeData));
+  const singleShapeType = singleNodeData
+    ? String(singleNodeData?.attrs?.shapeType || '')
     : '';
   const lineChrome =
     singleNode && (singleShapeType === 'line' || singleShapeType === 'arrow');
-  const inspectDev = false;
 
   /** While rotating (or free-angle stroke resize), show liveAngle; otherwise trust attrs. */
   const chromeAngle = (() => {
@@ -1862,11 +2192,22 @@ export default function SelectionFeature({
       ? getNodeBox(hoverNodeId)
       : null;
 
+  const clickPairBox =
+    inspectDev &&
+    !hoverBox &&
+    inspectPairNodeId &&
+    inspectPairNodeId !== selectedSingleId
+      ? getNodeBox(inspectPairNodeId)
+      : null;
+
+  const pairBox = hoverBox || clickPairBox;
+
   const hoverImageReplaceId = (() => {
     if (inspectDev || transforming || suppressToolbars) return null;
     if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId)) return null;
     const node = document?.deltaSetLike?.[hoverNodeId];
     if (node?.key !== 'image') return null;
+    if (isImageGeneratorNode(node)) return null;
     if (String(node?.attrs?.processStatus || '') === 'running') return null;
     return hoverNodeId;
   })();
@@ -1875,13 +2216,17 @@ export default function SelectionFeature({
   // Idle spacing: sibling chrome boxes only (not stroke-band faces, not frames).
   // Frames often sit off-screen; measuring to their edge draws a pink gap across
   // empty dotted canvas and looks like a phantom guide. Frame margins still show
-  // while dragging via computeMoveMarginMeasures(containers).
+  // while dragging via computeMoveMarginResult(containers).
+  // Skip hidden layers — same phantom-guide issue when measuring into empty space.
   const spacingOthers =
-    selectedBox && !hoverBox
+    selectedBox && !pairBox
       ? (listNodeIds()
-          .filter((id) =>
-            selectedSingleId ? id !== selectedSingleId : !selectedNodeIds.includes(id)
-          )
+          .filter((id) => {
+            if (selectedSingleId ? id === selectedSingleId : selectedNodeIds.includes(id)) {
+              return false;
+            }
+            return !isNodeHidden(document?.deltaSetLike?.[id]);
+          })
           .map((id) => getNodeBox(id))
           .filter(Boolean) as SceneBox[])
       : [];
@@ -1895,9 +2240,27 @@ export default function SelectionFeature({
       ? hoverBox
       : null;
 
+  const clickPairOutline =
+    inspectDev &&
+    clickPairBox &&
+    inspectPairNodeId &&
+    !selectedNodeIds.includes(inspectPairNodeId) &&
+    !transforming
+      ? clickPairBox
+      : null;
+
   return (
     <>
       <AlignGuidesOverlay guides={guides} space="world" />
+
+      {moveHighlights.map((hb, i) => (
+        <WorldHairlineBox
+          key={`mh-${i}-${Math.round(hb.left)}-${Math.round(hb.top)}`}
+          box={hb}
+          color={SPACING_MEASURE_COLOR}
+          zClass="z-[25]"
+        />
+      ))}
 
       {moveMargins && liveUnion ? (
         <SpacingInspectOverlay
@@ -1905,7 +2268,7 @@ export default function SelectionFeature({
           others={[]}
           measures={moveMargins}
           showSizeBadge={false}
-          color="#E11D8F"
+          color={SPACING_MEASURE_COLOR}
         />
       ) : null}
 
@@ -1918,14 +2281,29 @@ export default function SelectionFeature({
         />
       ) : null}
 
-      {selectedBox && selectedSingleId && !suppressChrome && !transforming && !moveMargins ? (
+      {clickPairOutline ? (
+        <WorldHairlineBox
+          box={clickPairOutline}
+          color="#3388ff"
+          dashed
+          zClass="z-[25]"
+        />
+      ) : null}
+
+      {/* Design mode: spacing only while dragging (moveMargins). Idle gaps are Dev-inspect only. */}
+      {inspectDev &&
+      selectedBox &&
+      selectedSingleId &&
+      !suppressChrome &&
+      !transforming &&
+      !moveMargins ? (
         <SpacingInspectOverlay
           box={selectedBox}
           others={spacingOthers}
-          pairBox={hoverBox}
+          pairBox={pairBox}
           showGaps
-          showSizeBadge={inspectDev}
-          color={inspectDev ? '#FF6A00' : '#E11D8F'}
+          showSizeBadge
+          color="#FF6A00"
         />
       ) : null}
 
@@ -1962,24 +2340,25 @@ export default function SelectionFeature({
       ))}
 
       {/* Gate on selection: after deselect, Redux clears first but liveUnion
-          lags one frame — without this, line chrome briefly falls back to AABB box. */}
+          lags one frame — without this, line chrome briefly falls back to AABB box.
+          Image generator: blue stroke only (same #3388ff as hover), no resize knobs. */}
       {liveUnion && !suppressChrome && selectionCount > 0 ? (
         <SelectionChrome
           box={liveUnion}
           angle={chromeAngle}
-          showHandles={!readOnly}
+          showHandles={!readOnly && !selectedIsImageGen}
           cornerHandlesOnly={!single}
           variant={lineChrome ? 'line' : 'box'}
-          showRotate={!readOnly && !lineChrome && singleNode}
+          showRotate={!readOnly && !lineChrome && singleNode && !selectedIsImageGen}
           showLineStroke={lineChrome}
           showBoxStroke={!lineChrome}
           interactiveBox={selectedFrameIds.length > 0}
           edgeHandles={
-            !lineChrome &&
-            singleNode &&
-            document?.deltaSetLike?.[selectedNodeIds[0]]?.key === 'text'
-              ? 'horizontal'
-              : 'all'
+            selectedIsImageGen
+              ? 'none'
+              : !lineChrome && singleNodeData?.key === 'text'
+                ? 'horizontal'
+                : 'all'
           }
         />
       ) : null}
@@ -1996,16 +2375,57 @@ export default function SelectionFeature({
       {!inspectDev &&
       liveUnion &&
       singleNode &&
+      singleId &&
       !transforming &&
       !suppressToolbars &&
-      document?.deltaSetLike?.[selectedNodeIds[0]]?.key === 'image' &&
-      String(document?.deltaSetLike?.[selectedNodeIds[0]]?.attrs?.processStatus || '') !==
-        'running' ? (
-        <ImageReplaceCornerButton
-          nodeId={selectedNodeIds[0]}
+      singleNodeData?.key === 'image' ? (
+        <NodeTitleLabel
           box={liveUnion}
-          imageHovered={hoverNodeId === selectedNodeIds[0]}
+          angle={chromeAngle}
+          name={String(singleNodeData?.attrs?.name || 'Image')}
+          sizeWidth={liveUnion.width}
+          sizeHeight={liveUnion.height}
+          dataAttr="image-label"
+          icon={selectedIsImageGen ? 'image-generator' : 'image'}
+          dataProps={{ 'data-scene-node-id': singleId }}
+          onRename={(name) =>
+            dispatch(
+              patchDocumentNode({
+                nodeId: singleId,
+                patch: { attrs: { name } },
+              })
+            )
+          }
+          renameAriaLabel="Image name"
         />
+      ) : null}
+
+      {!inspectDev &&
+      liveUnion &&
+      singleNode &&
+      singleId &&
+      !transforming &&
+      !suppressToolbars &&
+      singleNodeData?.key === 'image' &&
+      !selectedIsImageGen &&
+      String(singleNodeData?.attrs?.processStatus || '') !== 'running' ? (
+        listImageVariantUrls(singleNodeData).length > 1 ? (
+          <ImageVariantsOverlay
+            document={document}
+            nodeId={singleId}
+            box={liveUnion}
+            angle={chromeAngle}
+            imageHovered={hoverNodeId === singleId}
+            readOnly={readOnly}
+          />
+        ) : (
+          <ImageReplaceCornerButton
+            nodeId={singleId}
+            box={liveUnion}
+            angle={chromeAngle}
+            imageHovered={hoverNodeId === singleId}
+          />
+        )
       ) : null}
 
       {!inspectDev &&
@@ -2013,23 +2433,37 @@ export default function SelectionFeature({
       hoverImageReplaceBox &&
       !transforming &&
       !suppressToolbars ? (
-        <ImageReplaceCornerButton
-          nodeId={hoverImageReplaceId}
-          box={hoverImageReplaceBox}
-          imageHovered
-        />
+        listImageVariantUrls(document.deltaSetLike[hoverImageReplaceId]).length > 1 ? (
+          <ImageVariantsOverlay
+            document={document}
+            nodeId={hoverImageReplaceId}
+            box={hoverImageReplaceBox}
+            angle={readNodeAngle(document, hoverImageReplaceId)}
+            imageHovered
+            readOnly={readOnly}
+          />
+        ) : (
+          <ImageReplaceCornerButton
+            nodeId={hoverImageReplaceId}
+            box={hoverImageReplaceBox}
+            angle={readNodeAngle(document, hoverImageReplaceId)}
+            imageHovered
+          />
+        )
       ) : null}
 
+      {/* Multi-select bar: show whenever the union has 2+ items and at least one
+          scene node. Do not hide just because an artboard is co-selected. */}
       {!inspectDev &&
       liveUnion &&
       !single &&
-      selectedNodeIds.length > 1 &&
-      selectedFrameIds.length === 0 &&
+      selectedNodeIds.length >= 1 &&
       !transforming &&
       !suppressToolbars ? (
         <MultiSelectionToolbar
           document={document}
           nodeIds={selectedNodeIds}
+          frameIds={selectedFrameIds}
           box={liveUnion}
         />
       ) : null}

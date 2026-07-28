@@ -37,14 +37,20 @@ const checkboxVariants = cva(
         large: 'size-6',
       },
       type: {
-        default: 'rounded-sm border-[0.5px] border-[var(--color-border-default-base)] bg-[var(--color-background-default-secondary)]',
-        filled: 'rounded-sm border-0 bg-[var(--color-background-default-secondary)]',
-        outlined: 'rounded-sm border-[0.5px] border-[var(--color-border-default-base)] bg-transparent',
+        default:
+          'border-[0.5px] border-[var(--color-border-default-base)] bg-[var(--color-background-default-secondary)]',
+        filled: 'border-0 bg-[var(--color-background-default-secondary)]',
+        outlined: 'border-[0.5px] border-[var(--color-border-default-base)] bg-transparent',
+      },
+      shape: {
+        square: 'rounded-sm',
+        circle: 'rounded-full',
       },
     },
     defaultVariants: {
       size: 'medium',
       type: 'default',
+      shape: 'square',
     },
   }
 );
@@ -64,6 +70,8 @@ export interface CheckboxProps {
   size?: CheckboxVariantProps['size'];
   /** @default 'default' */
   type?: CheckboxVariantProps['type'];
+  /** @default 'square' */
+  shape?: CheckboxVariantProps['shape'];
   className?: string;
   style?: React.CSSProperties;
   value?: string | number;
@@ -87,6 +95,7 @@ export const Checkbox = forwardRef<HTMLSpanElement, CheckboxProps>(
     {
       size = 'medium',
       type = 'default',
+      shape = 'square',
       disabled = false,
       indeterminate = false,
       className,
@@ -197,7 +206,7 @@ export const Checkbox = forwardRef<HTMLSpanElement, CheckboxProps>(
           >
             <div
               className={cn(
-                'h-0.5 bg-[#444444]',
+                'h-0.5 bg-current',
                 size === 'small' && 'w-2',
                 size === 'medium' && 'w-2.5',
                 size === 'large' && 'w-3'
@@ -223,7 +232,7 @@ export const Checkbox = forwardRef<HTMLSpanElement, CheckboxProps>(
           >
             <path
               d='M10 24L20 34L40 14'
-              stroke='#444444'
+              stroke='currentColor'
               strokeWidth='4'
               strokeLinecap='round'
               strokeLinejoin='round'
@@ -242,15 +251,24 @@ export const Checkbox = forwardRef<HTMLSpanElement, CheckboxProps>(
         indeterminate={indeterminate}
         name={groupName}
         className={cn(
-          checkboxVariants({ size, type }),
-          'data-checked:border-[var(--color-brand-base)]',
+          checkboxVariants({ size, type, shape }),
+          'text-[var(--color-text-default-secondary)]',
+          shape === 'circle'
+            ? [
+                'data-checked:border-[var(--ink)] data-checked:bg-[var(--ink)] data-checked:text-white',
+                'data-checked:data-hover:border-[var(--ink)] data-checked:data-hover:bg-[var(--ink)]',
+                'data-indeterminate:border-[var(--ink)] data-indeterminate:bg-[var(--ink)] data-indeterminate:text-white',
+              ]
+            : [
+                'data-checked:border-[var(--color-brand-base)] data-checked:bg-[var(--color-brand-base)] data-checked:text-[var(--color-text-on-button-base)]',
+                'data-checked:data-hover:bg-[var(--color-brand-base-hover)] data-checked:data-hover:border-[var(--color-brand-base-hover)]',
+                'data-indeterminate:bg-[var(--color-brand-base)] data-indeterminate:border-[var(--color-brand-base)] data-indeterminate:text-[var(--color-text-on-button-base)]',
+              ],
           'data-focus:outline data-focus:outline-2 data-focus:outline-offset-2 data-focus:outline-[var(--color-brand-base)]',
           'data-hover:border-[var(--color-border-default-base-hover)]',
-          'data-checked:data-hover:bg-[var(--color-brand-base-hover)] data-checked:data-hover:border-[var(--color-brand-base-hover)]',
           'data-disabled:cursor-not-allowed data-disabled:opacity-50',
           'data-disabled:bg-[var(--color-background-neutral-tertiary)]',
           'data-checked:data-disabled:bg-[var(--color-background-neutral-tertiary)] data-checked:data-disabled:border-[var(--color-border-default-base)]',
-          'data-indeterminate:bg-[var(--color-brand-base)] data-indeterminate:border-[var(--color-brand-base)]',
           className
         )}
         style={style}

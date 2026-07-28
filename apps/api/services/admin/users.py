@@ -6,7 +6,15 @@ import time
 from typing import Any
 
 from services.db import connect, init_schema
-from services.wallet.db import credit_tokens, get_user_tokens, list_ledger_page, spend_tokens
+from services.wallet.db import (
+    credit_tokens,
+    get_user_tokens,
+    get_wallet,
+    list_ledger_page,
+    normalize_plan,
+    plan_is_active,
+    spend_tokens,
+)
 
 
 def list_users(
@@ -44,9 +52,11 @@ def list_users(
         total = int(total_row["c"] if total_row else 0)
         rows = conn.execute(
             f"""
-            SELECT u.id, u.email, u.name, u.avatar, u.bio, u.provider,
+            SELECT u.id, u.email, u.name, u.avatar, u.default_avatar, u.bio, u.provider,
                    u.role, u.status, u.created_at, u.updated_at,
-                   COALESCE(b.tokens, 0) AS tokens
+                   COALESCE(b.tokens, 0) AS tokens,
+                   b.plan_id AS plan_id,
+                   b.plan_expires_at AS plan_expires_at
             FROM users u
             LEFT JOIN user_balances b ON b.user_id = u.id
             WHERE {where_sql}
@@ -73,9 +83,11 @@ def get_user(user_id: str) -> dict[str, Any] | None:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT u.id, u.email, u.name, u.avatar, u.bio, u.provider,
+            SELECT u.id, u.email, u.name, u.avatar, u.default_avatar, u.bio, u.provider,
                    u.role, u.status, u.created_at, u.updated_at,
-                   COALESCE(b.tokens, 0) AS tokens
+                   COALESCE(b.tokens, 0) AS tokens,
+                   b.plan_id AS plan_id,
+                   b.plan_expires_at AS plan_expires_at
             FROM users u
             LEFT JOIN user_balances b ON b.user_id = u.id
             WHERE u.id = ?
@@ -152,8 +164,14 @@ def user_ledger(
     page_size: int = 20,
     kind: str = "all",
 ) -> dict[str, Any]:
+    snap = get_wallet(user_id)
+    expires = snap.get("planExpiresAt")
     return {
-        "tokens": get_user_tokens(user_id),
+        "tokens": int(snap.get("tokens") or get_user_tokens(user_id) or 0),
+        "planId": snap.get("planId") or "free",
+        "planStored": snap.get("planStored") or "free",
+        "planExpiresAt": int(float(expires) * 1000) if expires is not None else None,
+        "planLocked": bool(snap.get("planLocked")),
         **list_ledger_page(user_id, page=page, page_size=page_size, kind=kind),
     }
 
@@ -176,16 +194,34 @@ def ensure_super_admin_role() -> None:
 
 
 def _row_to_user(r: Any) -> dict[str, Any]:
+    keys = set(r.keys()) if hasattr(r, "keys") else set()
+    custom = (r["avatar"] or "").strip() if "avatar" in keys else ""
+    default = (r["default_avatar"] or "").strip() if "default_avatar" in keys else ""
+    effective = custom or default or None
+
+    stored = normalize_plan(r["plan_id"] if "plan_id" in keys else "free")
+    expires_raw = r["plan_expires_at"] if "plan_expires_at" in keys else None
+    expires_at = float(expires_raw) if expires_raw is not None else None
+    active = plan_is_active(stored, expires_at)
+    plan_id = stored if (stored == "free" or active) else "free"
+
     return {
         "id": r["id"],
         "email": r["email"],
         "name": r["name"],
-        "avatar": r["avatar"],
+        # Effective display URL (custom upload wins over OAuth default).
+        "avatar": effective,
+        "avatarCustom": custom or None,
+        "defaultAvatar": default or None,
         "bio": r["bio"],
         "provider": r["provider"] or "email",
         "role": (r["role"] or "user"),
         "status": (r["status"] or "active"),
         "tokens": int(r["tokens"] or 0),
+        "planId": plan_id,
+        "planStored": stored,
+        "planExpiresAt": int(expires_at * 1000) if expires_at is not None else None,
+        "planLocked": active,
         "createdAt": int(float(r["created_at"]) * 1000) if r["created_at"] else None,
         "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
     }

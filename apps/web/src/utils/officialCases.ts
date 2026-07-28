@@ -25,9 +25,16 @@ export type OfficialCaseMeta = {
   authorAvatar?: string | null;
   /** Plaza feed coverDocument. */
   coverDocument?: unknown | null;
+  /** Up to 4 cover tiles for list collage. */
+  thumbnailUrls?: string[] | null;
+  /** @deprecated first tile — prefer thumbnailUrls */
+  thumbnail?: string | null;
+  /** HD PNG panel URLs from admin approve — left-rail images. */
+  panelUrls?: Array<{ id: string; name?: string; url: string }> | null;
   /** Stable author id for profile links. */
   authorUserId?: string;
   createdAt?: number;
+  updatedAt?: number;
   likeCount?: number;
   useCount?: number;
 };
@@ -72,10 +79,56 @@ export function caseAuthorLabel(
   return t('home.cases.author');
 }
 
-/** Stable id for public profile links. */
-export function caseAuthorId(meta: OfficialCaseMeta): string {
-  const raw = (meta.authorUserId || '').trim();
-  if (raw) return raw;
-  if (meta.source === 'plaza') return `plaza:${meta.id}`;
-  return 'official:recombyn';
+/**
+ * 「做同款」→ composer skill chip (pill like 「图片 1」), not a full canvas clone
+ * and not plain prompt text alone.
+ */
+export function buildPlazaStyleSkillChip(
+  meta: OfficialCaseMeta,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): {
+  key: string;
+  label: string;
+  kind: 'plaza';
+  payload: string;
+  dataUrl?: string;
+  thumbUrl?: string;
+} {
+  const title = resolveCaseTitle(meta, t as (key: string) => string);
+  const prompt = resolveCasePrompt(meta, t);
+  const panels = Array.isArray(meta.panelUrls)
+    ? meta.panelUrls.map((p) => String(p?.url || '').trim()).filter(Boolean)
+    : [];
+  const thumb = String(
+    (Array.isArray(meta.thumbnailUrls) && meta.thumbnailUrls[0]) ||
+      meta.thumbnail ||
+      panels[0] ||
+      ''
+  ).trim();
+  const vision = panels[0] || thumb || '';
+  const labelBase = t('home.cases.makeSameSkill', { defaultValue: '同款' });
+  const shortTitle =
+    title.length > 12 ? `${title.slice(0, 11)}…` : title;
+  const label = shortTitle ? `${labelBase} · ${shortTitle}` : String(labelBase);
+  const panelLines = panels.length
+    ? ['styleImageUrls:', ...panels.map((u, i) => `  ${i + 1}. ${u}`)].join('\n')
+    : thumb
+      ? `styleImageUrl: ${thumb}`
+      : '';
+  return {
+    key: `plaza:${meta.id}`,
+    label,
+    kind: 'plaza',
+    payload: [
+      '[Plaza style skill — recreate this look on a blank canvas; do not assume the reference is already on the board]',
+      `caseId: ${meta.id}`,
+      `title: ${title}`,
+      `category: ${meta.category || 'website'}`,
+      panelLines,
+      `instruction: ${prompt}`,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    ...(vision ? { dataUrl: vision, thumbUrl: thumb || vision } : {}),
+  };
 }

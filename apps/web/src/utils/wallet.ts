@@ -1,11 +1,14 @@
 /**
  * Wallet display / catalog helpers — not Redux state.
  * Balance mutations live in `@/store/modules/wallet`.
+ *
+ * Unified currency: **积分** (API field `tokens` / `credits` — same balance).
+ * Chat, Agent, and image gen all deduct from one wallet.
  */
 
 export type PayMethod = 'wechat' | 'alipay' | 'card';
 
-/** free → plus → pro → ultra (4 monthly tiers; no annual). */
+/** free → plus → pro (3 monthly tiers; ultra kept for legacy accounts). */
 export type PlanId = 'free' | 'plus' | 'pro' | 'ultra';
 
 export type LedgerKind = 'redeem' | 'spend' | 'recharge' | 'plan';
@@ -13,7 +16,7 @@ export type LedgerKind = 'redeem' | 'spend' | 'recharge' | 'plan';
 export type LedgerEntry = {
   id: string;
   kind: LedgerKind;
-  /** Wallet token units. */
+  /** Wallet 积分. */
   amount: number;
   method?: PayMethod;
   model?: string;
@@ -30,20 +33,77 @@ export type PlanDef = {
   id: PlanId;
   /** Monthly list price in CNY (0 = free). */
   priceCny: number;
-  /** Tokens granted each billing month. */
+  /** Unified 积分 granted each billing month. */
   creditsIncluded: number;
-  /** Highlight on the plans picker. */
+  /**
+   * @deprecated Same as creditsIncluded (unified wallet).
+   */
+  imageCreditsIncluded?: number;
+  /**
+   * Free-tier design runs per calendar day (server-enforced when balance < hold).
+   */
+  dailyRuns?: number;
   recommended?: boolean;
 };
 
+/** Free plan may only use Auto + this image model. */
+export const FREE_IMAGE_MODEL_ID = 'doubao-seedream-5-0-lite';
+
+/** Align with API ``billing.PLUS_*`` — ¥29 → 200 积分 face. */
+export const PLUS_LIST_PRICE_CNY = 29;
+export const PLUS_FACE_CREDITS = 200;
+
+/** How many 积分 equal ¥1 at Plus face value. */
+export function creditsPerCny(): number {
+  return PLUS_FACE_CREDITS / PLUS_LIST_PRICE_CNY;
+}
+
+/** Credit-key face from sell price (no markup). */
+export function creditsFromSellPriceCny(priceCny: number): number {
+  const n = Number(priceCny);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.max(1, Math.round(n * creditsPerCny()));
+}
+
 export const PLAN_CATALOG: Record<PlanId, PlanDef> = {
-  free: { id: 'free', priceCny: 0, creditsIncluded: 30 },
-  plus: { id: 'plus', priceCny: 29, creditsIncluded: 400, recommended: true },
-  pro: { id: 'pro', priceCny: 99, creditsIncluded: 1000 },
-  ultra: { id: 'ultra', priceCny: 199, creditsIncluded: 2200 },
+  free: {
+    id: 'free',
+    priceCny: 0,
+    creditsIncluded: 0,
+    imageCreditsIncluded: 0,
+    dailyRuns: 1,
+  },
+  /** ¥29 — 200 积分 / mo（与扣费锚点一致；约 100 张 Seedream）. */
+  plus: {
+    id: 'plus',
+    priceCny: 29,
+    creditsIncluded: 200,
+    imageCreditsIncluded: 200,
+    recommended: true,
+  },
+  pro: {
+    id: 'pro',
+    priceCny: 99,
+    creditsIncluded: 750,
+    imageCreditsIncluded: 750,
+  },
+  ultra: {
+    id: 'ultra',
+    priceCny: 199,
+    creditsIncluded: 1600,
+    imageCreditsIncluded: 1600,
+  },
 };
 
-export const PLAN_ORDER: PlanId[] = ['free', 'plus', 'pro', 'ultra'];
+/** Plans shown on the membership picker (3 tiers). */
+export const PLAN_ORDER: PlanId[] = ['free', 'plus', 'pro'];
+
+/** Highest plan currently sold in PLAN_ORDER (Pro). Ultra is legacy-only. */
+export function isTopOfferedPlan(id: PlanId | string | null | undefined): boolean {
+  const pid = normalizePlanId(id);
+  const top = PLAN_ORDER[PLAN_ORDER.length - 1] || 'pro';
+  return pid === top || pid === 'ultra';
+}
 
 /** Map legacy ids → current catalog. */
 export function normalizePlanId(raw: unknown): PlanId {
@@ -54,19 +114,37 @@ export function normalizePlanId(raw: unknown): PlanId {
   return 'free';
 }
 
-/** Paid plans that unlock Pro-only settings (custom LLM, etc.). */
-export function planHasProFeatures(id: PlanId): boolean {
-  return id === 'pro' || id === 'ultra';
+/** Paid plans that unlock Pro-only settings (e.g. custom third-party LLM endpoints later). */
+export function planHasProFeatures(id: PlanId | string | null | undefined): boolean {
+  const pid = normalizePlanId(id);
+  return pid === 'pro' || pid === 'ultra';
+}
+
+/** Free: Auto + fixed free image only; paid: any catalog model. */
+export function planAllowsModelPick(planId: PlanId | string | null | undefined): boolean {
+  return normalizePlanId(planId) !== 'free';
+}
+
+/** Any paid membership may add local custom providers (not billed on our wallet). */
+export function planAllowsCustomModels(id: PlanId | string | null | undefined): boolean {
+  return planAllowsModelPick(id);
+}
+
+export function planAllowsModelId(
+  planId: PlanId | string | null | undefined,
+  modelId: string | null | undefined
+): boolean {
+  const mid = String(modelId || '').trim();
+  if (!mid) return false;
+  if (planAllowsModelPick(planId)) return true;
+  return mid === 'auto' || mid === FREE_IMAGE_MODEL_ID;
 }
 
 export function formatTokens(n: number, opts?: { compact?: boolean }) {
-  const v = Number.isFinite(n) ? n : 0;
+  const v = Number.isFinite(n) ? Math.max(0, n) : 0;
   if (opts?.compact && v >= 1000) return `${Math.round(v / 1000)}k`;
   return v.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
-
-/** Alias — PlansDialog / Billing use formatCredits. */
-export const formatCredits = formatTokens;
 
 export function planLabelKey(id: PlanId) {
   return `wallet.plan.${id}` as const;

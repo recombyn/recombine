@@ -3,12 +3,23 @@ import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { store } from '@/store';
 import { buildLoginUrl } from '@/utils/authReturnTo';
+import {
+  openEditorWindowWithBoot,
+  type HomeAgentBoot,
+} from '@/utils/homeAgentBoot';
 
 export type GoEditorOpts = {
   createNew?: boolean;
   fromHomeAgent?: boolean;
   /** Open this project; falls back to Redux currentId when omitted. */
   projectId?: string | null;
+  /** Open editor in a new browser tab/window (home project cards). */
+  newWindow?: boolean;
+  /**
+   * Home → editor handoff payload. Not placed in the URL (URL only has createNew / fromHomeAgent).
+   * Seeded into the new tab's sessionStorage; cleared after the editor consumes it.
+   */
+  homeAgentBoot?: HomeAgentBoot;
 };
 
 /** Build editor path (intent stays in the URL, including after login ?from=). */
@@ -42,11 +53,17 @@ export function useGoEditor() {
   return useCallback(
     (opts?: GoEditorOpts) => {
       const path = buildEditorIntentPath(opts);
-      if (!user) {
-        navigate(buildLoginUrl(path));
+      const dest = user ? path : buildLoginUrl(path);
+      if (opts?.newWindow) {
+        if (opts.homeAgentBoot) {
+          const opened = openEditorWindowWithBoot(dest, opts.homeAgentBoot);
+          if (!opened) navigate(dest);
+          return;
+        }
+        window.open(dest, '_blank', 'noopener,noreferrer');
         return;
       }
-      navigate(path);
+      navigate(dest);
     },
     [user, navigate]
   );

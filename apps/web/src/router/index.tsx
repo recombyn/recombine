@@ -1,47 +1,86 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import AppShell from '@/components/layout/AppShell';
-import AboutPage from '@/pages/AboutPage';
 import AccountSettingsPage from '@/pages/AccountSettingsPage';
 import EditorPage from '@/pages/EditorPage';
 import HomePage from '@/pages/HomePage';
+import LandingPage from '@/pages/LandingPage';
 import GoogleOAuthCallbackPage from '@/pages/GoogleOAuthCallbackPage';
-import LegalPage from '@/pages/LegalPage';
-import LoginPage from '@/pages/LoginPage';
-import PublicProfilePage from '@/pages/PublicProfilePage';
+import LoginRedirectPage from '@/pages/LoginRedirectPage';
 import SharePage from '@/pages/SharePage';
-import { GuestOnly, RequireAuth } from '@/router/AuthGuards';
+import { RequireAuth } from '@/router/AuthGuards';
+import { buildLoginUrl } from '@/utils/authReturnTo';
+import {
+  basenameToI18nLang,
+  getLocaleBasename,
+} from '@/i18n/localePath';
 
-export default function AppRouter() {
+/** Product routes set app title; marketing `/` owns SEO title in LandingPage. */
+function DocumentTitleSync() {
+  const { t, i18n } = useTranslation();
+  const { pathname } = useLocation();
+  useEffect(() => {
+    if (pathname === '/') return;
+    document.title = t('app.documentTitle');
+  }, [t, i18n.language, pathname]);
+  return null;
+}
+
+/** Keep i18n in sync when basename (URL locale prefix) is active. */
+function LocaleSync({ basename }: { basename: string }) {
+  const { i18n } = useTranslation();
+  useEffect(() => {
+    const next = basenameToI18nLang(basename);
+    if (i18n.language !== next) {
+      void i18n.changeLanguage(next);
+    }
+  }, [basename, i18n]);
+  return null;
+}
+
+function AppRoutes() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route element={<GuestOnly />}>
-            <Route path="login" element={<LoginPage initialMode="login" />} />
-            <Route path="register" element={<LoginPage initialMode="register" />} />
-            <Route path="forgot-password" element={<LoginPage initialMode="forgot" />} />
-          </Route>
-          {/* Must stay outside GuestOnly so the OAuth return can finish signing in. */}
-          <Route path="login/google/callback" element={<GoogleOAuthCallbackPage />} />
+    <Routes>
+      {/* Marketing site — scrollable, outside AppShell overflow lock */}
+      <Route path="/" element={<LandingPage />} />
 
-          {/* Public — browse home without signing in */}
-          <Route index element={<Navigate to="/home" replace />} />
-          <Route path="home" element={<HomePage />} />
-          <Route path="about" element={<AboutPage />} />
-          <Route path="terms" element={<LegalPage kind="terms" />} />
-          <Route path="privacy" element={<LegalPage kind="privacy" />} />
-          <Route path="u/:userId" element={<PublicProfilePage />} />
-          <Route path="s/:shareId" element={<SharePage />} />
+      <Route element={<AppShell />}>
+        <Route path="login" element={<LoginRedirectPage />} />
+        <Route path="register" element={<Navigate to={buildLoginUrl()} replace />} />
+        <Route path="forgot-password" element={<Navigate to={buildLoginUrl()} replace />} />
+        {/* OAuth return can finish signing in without the login modal. */}
+        <Route path="login/google/callback" element={<GoogleOAuthCallbackPage />} />
 
-          <Route element={<RequireAuth />}>
-            <Route path="account" element={<AccountSettingsPage />} />
-            {/* One route so /editor → /editor/:id does not remount and drop home-agent draft. */}
-            <Route path="editor/:projectId?" element={<EditorPage />} />
-          </Route>
+        {/* Product workspace */}
+        <Route path="home" element={<HomePage />} />
+        <Route path="s/:shareId" element={<SharePage />} />
 
-          <Route path="*" element={<Navigate to="/home" replace />} />
+        <Route element={<RequireAuth />}>
+          <Route path="account" element={<AccountSettingsPage />} />
+          {/* One route so /editor → /editor/:id does not remount and drop home-agent draft. */}
+          <Route path="editor/:projectId?" element={<EditorPage />} />
         </Route>
-      </Routes>
+
+        <Route path="*" element={<Navigate to="/home" replace />} />
+      </Route>
+    </Routes>
+  );
+}
+
+/**
+ * Locale via URL prefix:
+ * - `/home` → English (default, no prefix)
+ * - `/zh/home`, `/zh-tw/home`, `/ja/home` → basename so Link/navigate stay unchanged
+ */
+export default function AppRouter() {
+  const [basename] = useState(() => getLocaleBasename());
+
+  return (
+    <BrowserRouter basename={basename || undefined} key={basename || 'en'}>
+      <LocaleSync basename={basename} />
+      <DocumentTitleSync />
+      <AppRoutes />
     </BrowserRouter>
   );
 }

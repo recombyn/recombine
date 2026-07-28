@@ -19,6 +19,39 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _frame_right_edge(frames: list[Any], default_bg: str) -> tuple[float, str]:
+    """Max right of existing frames + a background color hint."""
+    max_right = 0.0
+    bg = default_bg
+    for fr in frames:
+        if not isinstance(fr, dict):
+            continue
+        max_right = max(max_right, _num(fr.get("x")) + _num(fr.get("width")))
+        if fr.get("backgroundColor"):
+            bg = str(fr.get("backgroundColor"))
+    return max_right, bg
+
+
+def _ensure_dsl_root(doc: dict[str, Any]) -> tuple[dict[str, Any], list[Any]]:
+    dsl = doc.get("deltaSetLike")
+    if not isinstance(dsl, dict):
+        dsl = {"ROOT": {"id": "ROOT", "children": []}}
+        doc["deltaSetLike"] = dsl
+    root = dsl.get("ROOT")
+    if not isinstance(root, dict):
+        root = {"id": "ROOT", "children": []}
+        dsl["ROOT"] = root
+    children = root.get("children")
+    if not isinstance(children, list):
+        children = []
+        root["children"] = children
+    return dsl, children
+
+
+def _plate_fill_for_bg(bg: str) -> str:
+    return "#18181b" if bg.lower() in ("#ffffff", "#fff", "white", "") else bg
+
+
 def ensure_cover_artboard(
     document: dict[str, Any],
     *,
@@ -39,15 +72,9 @@ def ensure_cover_artboard(
         frames = []
         doc["frames"] = frames
 
-    max_right = 0.0
-    bg = str(doc.get("backgroundColor") or "#ffffff")
-    for fr in frames:
-        if not isinstance(fr, dict):
-            continue
-        max_right = max(max_right, _num(fr.get("x")) + _num(fr.get("width")))
-        if fr.get("backgroundColor"):
-            bg = str(fr.get("backgroundColor"))
-
+    max_right, bg = _frame_right_edge(
+        frames, str(doc.get("backgroundColor") or "#ffffff")
+    )
     cover_x = max_right + 80.0
     cover_id = "frame_cover"
     frames.append(
@@ -62,23 +89,11 @@ def ensure_cover_artboard(
         }
     )
 
-    dsl = doc.get("deltaSetLike")
-    if not isinstance(dsl, dict):
-        dsl = {"ROOT": {"id": "ROOT", "children": []}}
-        doc["deltaSetLike"] = dsl
-    root = dsl.get("ROOT")
-    if not isinstance(root, dict):
-        root = {"id": "ROOT", "children": []}
-        dsl["ROOT"] = root
-    children = root.get("children")
-    if not isinstance(children, list):
-        children = []
-        root["children"] = children
-
+    dsl, children = _ensure_dsl_root(doc)
     plate_id = "cover_plate"
     title_id = "cover_title"
     label = (title or "Design").strip() or "Design"
-    fill = "#18181b" if bg.lower() in ("#ffffff", "#fff", "white", "") else bg
+    fill = _plate_fill_for_bg(bg)
 
     dsl[plate_id] = {
         "id": plate_id,

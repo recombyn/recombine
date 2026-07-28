@@ -6,7 +6,7 @@ import secrets
 import time
 from dataclasses import dataclass
 
-from services.auth.email_store import get_user_by_id, upsert_oauth_user
+from services.auth.email_store import get_user_by_id, heal_avatar_if_data_url, upsert_oauth_user
 from services.db import connect, init_schema
 from services.wallet.db import ensure_user_balance
 
@@ -87,6 +87,7 @@ def get_session(token: str | None) -> SessionUser | None:
     user = get_user_by_id(user_id) if user_id else None
     if not user:
         return None
+    user = heal_avatar_if_data_url(user)
     return SessionUser(
         id=user.id,
         email=user.email,
@@ -106,8 +107,3 @@ def revoke_session(token: str | None) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
 
-
-def purge_expired_sessions() -> None:
-    init_schema()
-    with connect() as conn:
-        conn.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (time.time(),))

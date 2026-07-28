@@ -1,6 +1,6 @@
 import type { ElementType, ReactNode } from 'react';
 import { Dialog as HeadlessDialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react';
-import { Fragment, useCallback } from 'react';
+import { Fragment, useCallback, useLayoutEffect } from 'react';
 import { HiOutlineXMark } from 'react-icons/hi2';
 import { cn } from '@/utils/classnames';
 
@@ -20,6 +20,14 @@ type DialogProps = {
   style?: React.CSSProperties;
 };
 
+/** Headless UI marks the portal aria-hidden/inert while focus may still sit on a child. */
+function blurFocusedDialogDescendant() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return;
+  if (!active.closest('[role="dialog"], [data-headlessui-portal]')) return;
+  active.blur();
+}
+
 const Dialog = ({
   className,
   titleClassName,
@@ -35,7 +43,15 @@ const Dialog = ({
   width,
   style,
 }: DialogProps) => {
-  const close = useCallback(() => onClose?.(), [onClose]);
+  const close = useCallback(() => {
+    blurFocusedDialogDescendant();
+    onClose?.();
+  }, [onClose]);
+
+  // Covers external close paths (e.g. Cancel calling parent setOpen(false) directly).
+  useLayoutEffect(() => {
+    if (!show) blurFocusedDialogDescendant();
+  }, [show]);
 
   return (
     <Transition appear show={show} as={Fragment}>
@@ -63,7 +79,7 @@ const Dialog = ({
             >
               <DialogPanel
                 className={cn(
-                  'relative w-full overflow-hidden rounded-lg border-[0.5px] border-[var(--color-border-default-base)] bg-[var(--color-background-default-base)] p-6 shadow-[0px_4px_4px_-4px_rgba(12,12,13,0.05)] shadow-[0px_16px_32px_-4px_rgba(12,12,13,0.10)] shadow-[0px_0px_4px_-1px_rgba(12,12,13,0.05)]',
+                  'relative w-full overflow-hidden rounded-xl border-[0.5px] border-[var(--color-border-default-base)] bg-[var(--color-background-default-base)] p-6 shadow-[0px_4px_4px_-4px_rgba(12,12,13,0.05)] shadow-[0px_16px_32px_-4px_rgba(12,12,13,0.10)] shadow-[0px_0px_4px_-1px_rgba(12,12,13,0.05)]',
                   !width && 'max-w-[800px]',
                   className
                 )}

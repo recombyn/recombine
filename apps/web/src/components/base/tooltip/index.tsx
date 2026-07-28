@@ -19,6 +19,9 @@ import { cn } from '@/utils/classnames';
 import { tooltipManager } from './TooltipManager';
 
 export type TooltipProps = {
+  /** Preferred content prop (alias of title). */
+  tip?: ReactNode;
+  /** @deprecated Prefer `tip`. */
   title?: ReactNode;
   placement?: Placement;
   trigger?: 'hover' | 'click';
@@ -37,6 +40,7 @@ const Tooltip: FC<TooltipProps> = ({
   placement = 'top',
   trigger = 'hover',
   disabled = false,
+  tip,
   title,
   children,
   triggerClassName,
@@ -46,6 +50,7 @@ const Tooltip: FC<TooltipProps> = ({
   needsDelay = true,
 }) => {
   const [open, setOpen] = React.useState(false);
+  const content = tip ?? title;
 
   const [isHoverPopup, { setTrue: setHoverPopup, setFalse: setNotHoverPopup }] = useBoolean(false);
   const isHoverPopupRef = useRef(isHoverPopup);
@@ -165,7 +170,7 @@ const Tooltip: FC<TooltipProps> = ({
     }
   }, [trigger, handleLeave]);
 
-  if (!title) {
+  if (!content) {
     return <>{children}</>;
   }
 
@@ -198,11 +203,11 @@ const Tooltip: FC<TooltipProps> = ({
           >
             <div
               className={cn(
-                'relative flex h-[26px] w-auto items-center justify-center whitespace-nowrap rounded-[4px] bg-[#2C2C2C] px-2.5 text-[12px] leading-none text-white shadow-[0_2px_8px_rgba(31,35,41,0.16)]',
+                'relative flex h-[26px] w-auto items-center justify-center whitespace-nowrap rounded-xl bg-[#2C2C2C] px-2.5 text-[12px] leading-none text-white shadow-[0_2px_8px_rgba(31,35,41,0.16)]',
                 popupClassName
               )}
             >
-              {title}
+              {content}
             </div>
           </div>
         </FloatingPortal>

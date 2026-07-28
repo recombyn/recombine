@@ -1,42 +1,29 @@
-"""Suggest quality-sample comment / tags from a design screenshot (vision LLM)."""
+"""Suggest quality-sample comment / tags / vision structure from a screenshot."""
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any
 
 from services.design.admin_store import list_global_rules
+from services.design.aesthetics.structure_extract import (
+    build_vision_structure_system,
+    load_structure_schema,
+    normalize_structure,
+    validate_vision_structure,
+)
 from services.design.llm_step import complete_skill_step
 from services.design import models_route as design_models_route
+from services.design.validate import extract_json_object
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM = """你是设计美学标注助手。根据设计截图，为美学样本库写「短评」和「标签」。
-短评会在后续回炉时给生成模型看，必须具体、可执行（留白、层级、对齐、色彩、字体、节奏等），不要空话。
-只输出一个 JSON 对象，不要 markdown 代码块，不要其它解释。
-格式：{"comment":"...","tags":"tag1, tag2, tag3","name":"可选短名"}
-comment 用中文，约 40–180 字；tags 用英文小写逗号分隔，3–8 个；name 可选中文短标题。"""
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    raw = (text or "").strip()
-    if not raw:
-        return {}
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else {}
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{[\s\S]*\}", raw)
-    if not m:
-        return {}
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+_META_HINT = """同时为美学样本库写短评与标签（回炉用，须具体可执行）：
+comment 用中文约 40–180 字；tags 英文小写逗号分隔 3–8 个；name 可选中文短标题。
+输出 JSON 须同时包含：
+{"comment":"...","tags":"...","name":"...","structure":{schemaVersion,page,elements,palette,summary}}
+或把 page/elements/palette 放在根级亦可。"""
 
 
 def _clean_tags(raw: str) -> str:
@@ -74,35 +61,49 @@ async def suggest_sample_meta(
     if not design_models_route.model_supports_vision(family):
         family = design_models_route.resolve_vision_model(rules)
 
+    system = f"{build_vision_structure_system(rules)}\n\n{_META_HINT}"
+    schema = load_structure_schema(rules)
+
     scene_l = (scene or "").strip().lower() or "unknown"
     grade_l = (grade or "").strip().lower() or "good"
     user = (
         f"场景 scene={scene_l}；等级 grade={grade_l}。\n"
-        "请根据附图写出短评与标签 JSON。"
+        "请根据附图写出短评、标签，并抽取 structure JSON。"
     )
 
     content, tokens = await complete_skill_step(
         model_family=family,
-        system=_SYSTEM,
+        system=system,
         user=user,
-        max_tokens=800,
+        max_tokens=2800,
         images=[url],
+        rules=rules,
     )
-    parsed = _extract_json(content)
+    parsed = extract_json_object(content) or {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+
     comment = str(parsed.get("comment") or "").strip()
     tags = _clean_tags(str(parsed.get("tags") or ""))
     name = str(parsed.get("name") or "").strip()[:128]
 
     if not comment:
-        # Fallback: treat whole reply as comment if JSON failed.
         comment = re.sub(r"```[\s\S]*?```", "", content).strip()[:500]
     if not comment:
         raise RuntimeError("模型未返回可用短评")
+
+    structure = normalize_structure(parsed)
+    struct_errors = validate_vision_structure(structure, schema) if structure else [
+        "structure missing"
+    ]
 
     return {
         "comment": comment[:500],
         "tags": tags[:512],
         "name": name,
+        "structure": structure or None,
+        "structureValid": bool(structure) and not struct_errors,
+        "structureErrors": struct_errors,
         "model": family,
         "visionNote": note or None,
         "tokens": tokens,

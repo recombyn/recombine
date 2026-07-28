@@ -1,4 +1,4 @@
-"""Document share API — create / public get / update document."""
+"""Document share API — create / public get / update document / manage ACL."""
 
 from __future__ import annotations
 
@@ -8,7 +8,13 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from services.auth import get_session
-from services.shares import ShareError, create_share, get_share, update_share_document
+from services.shares import (
+    ShareError,
+    create_share,
+    get_share,
+    update_share_document,
+    update_share_meta,
+)
 
 router = APIRouter()
 
@@ -47,6 +53,18 @@ class CreateShareIn(BaseModel):
     permission: str = Field(default="preview", max_length=16)
     document: dict[str, Any]
     sourceProjectId: str | None = Field(default=None, max_length=64)
+    editorUserIds: list[str] = Field(default_factory=list)
+    viewerUserIds: list[str] = Field(default_factory=list)
+    linkPublic: bool | None = None
+
+
+class UpdateShareMetaIn(BaseModel):
+    permission: str | None = Field(default=None, max_length=16)
+    editorUserIds: list[str] | None = None
+    viewerUserIds: list[str] | None = None
+    name: str | None = Field(default=None, max_length=255)
+    linkEnabled: bool | None = None
+    linkPublic: bool | None = None
 
 
 class UpdateShareDocumentIn(BaseModel):
@@ -66,6 +84,9 @@ def shares_create(
             permission=body.permission,
             document=body.document,
             source_project_id=body.sourceProjectId,
+            editor_user_ids=body.editorUserIds,
+            viewer_user_ids=body.viewerUserIds,
+            link_public=body.linkPublic,
         )
     except ShareError as err:
         raise _share_http(err) from err
@@ -73,10 +94,37 @@ def shares_create(
 
 
 @router.get("/{share_id}")
-def shares_get(share_id: str) -> dict[str, Any]:
-    share = get_share(share_id)
+def shares_get(
+    share_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = get_session(_bearer(authorization))
+    share = get_share(share_id, actor_user_id=user.id if user else None)
     if not share:
         raise HTTPException(status_code=404, detail="Not found")
+    return {"share": share}
+
+
+@router.patch("/{share_id}")
+def shares_patch(
+    share_id: str,
+    body: UpdateShareMetaIn,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    try:
+        share = update_share_meta(
+            share_id,
+            actor_user_id=user.id,
+            permission=body.permission,
+            editor_user_ids=body.editorUserIds,
+            viewer_user_ids=body.viewerUserIds,
+            name=body.name,
+            link_enabled=body.linkEnabled,
+            link_public=body.linkPublic,
+        )
+    except ShareError as err:
+        raise _share_http(err) from err
     return {"share": share}
 
 

@@ -15,10 +15,12 @@ from api.v1 import (
     import_jobs,
     import_pdf,
     me,
+    notices,
     plaza,
     projects,
     shares,
     uploads,
+    users,
 )
 
 api_router = APIRouter()
@@ -27,6 +29,8 @@ api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(auth.wallet_router, prefix="/wallet", tags=["wallet"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 api_router.include_router(me.router, prefix="/me", tags=["me"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(notices.router, prefix="/notices", tags=["notices"])
 api_router.include_router(plaza.router, prefix="/plaza", tags=["plaza"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
 api_router.include_router(shares.router, prefix="/shares", tags=["shares"])

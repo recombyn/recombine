@@ -56,8 +56,6 @@ export default function BucketFillFeature({
   useEffect(() => {
     const hitEl = stageEl || paperEl;
     if (!enabled || !hitEl) return undefined;
-    const prev = hitEl.style.cursor;
-    hitEl.style.cursor = 'cell';
 
     const toScene = (clientX: number, clientY: number) => {
       if (stageEl) return rcbScreenToScene(cameraRef.current, stageEl, clientX, clientY);
@@ -84,7 +82,6 @@ export default function BucketFillFeature({
 
     hitEl.addEventListener('pointerdown', onDown, true);
     return () => {
-      hitEl.style.cursor = prev;
       hitEl.removeEventListener('pointerdown', onDown, true);
     };
   }, [enabled, paperEl, stageEl, artboard]);

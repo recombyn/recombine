@@ -1,5 +1,5 @@
 /**
- * Auth API — Google Sign-In + email/password (Tencent SES) + session.
+ * Auth API — Google Sign-In + email verification-code login + session.
  */
 
 import { request } from '@/utils/request';
@@ -13,22 +13,7 @@ export type AuthUserDto = {
   bio?: string | null;
   /** Present when signed in; admin can use main-site training mode. */
   role?: 'user' | 'admin' | string;
-  /** True when the account can sign in with email + password. */
-  hasPassword?: boolean;
 };
-
-export type AuthConfig = {
-  googleEnabled: boolean;
-  googleClientId?: string | null;
-  emailEnabled?: boolean;
-};
-
-/** Whether Google / email login is configured on the API. */
-export const fetchAuthConfig = () =>
-  request<AuthConfig>({
-    url: '/api/v1/auth/config',
-    method: 'get',
-  });
 
 /** Login with Google — full-page redirect auth-code, or GIS ID token. */
 export const loginGoogle = (payload: {
@@ -43,86 +28,24 @@ export const loginGoogle = (payload: {
     data: payload,
   });
 
-/** Send registration verification code via Tencent SES. */
-export const sendEmailCode = (email: string, captchaToken?: string | null) =>
+/** Send email verification code via Tencent SES. */
+export const sendEmailCode = (data: { email: string; captchaToken?: string }) =>
   request<{ ok: boolean; expiresIn: number }>({
     url: '/api/v1/auth/email/send-code',
     method: 'post',
-    data: {
-      email,
-      ...(captchaToken ? { captchaToken } : {}),
-    },
+    data,
   });
 
-/** Send forgot-password verification code (always ok; only emails accounts with a password). */
-export const sendForgotPasswordCode = (email: string, captchaToken?: string | null) =>
-  request<{ ok: boolean; expiresIn: number }>({
-    url: '/api/v1/auth/email/forgot/send-code',
-    method: 'post',
-    data: {
-      email,
-      ...(captchaToken ? { captchaToken } : {}),
-    },
-  });
-
-/** Verify code → short-lived registration ticket. */
-export const verifyEmailCode = (email: string, code: string, captchaToken?: string | null) =>
-  request<{ ticket: string }>({
+/** Verify code → create/find user and return session. */
+export const verifyEmailCode = (data: {
+  email: string;
+  code: string;
+  captchaToken?: string;
+}) =>
+  request<{ user: AuthUserDto; token: string }>({
     url: '/api/v1/auth/email/verify-code',
     method: 'post',
-    data: {
-      email,
-      code,
-      ...(captchaToken ? { captchaToken } : {}),
-    },
-  });
-
-/** Complete email registration after ticket verification. */
-export const completeEmailRegister = (payload: {
-  email: string;
-  ticket: string;
-  password: string;
-  name?: string;
-}) =>
-  request<{ user: AuthUserDto; token: string }>({
-    url: '/api/v1/auth/email/complete',
-    method: 'post',
-    data: payload,
-  });
-
-/** Reset password after forgot-password ticket verification; signs the user in. */
-export const resetEmailPassword = (payload: {
-  email: string;
-  ticket: string;
-  password: string;
-}) =>
-  request<{ user: AuthUserDto; token: string }>({
-    url: '/api/v1/auth/email/reset-password',
-    method: 'post',
-    data: payload,
-  });
-
-/** Change password while signed in (email accounts with an existing password). */
-export const changeEmailPassword = (payload: {
-  currentPassword: string;
-  newPassword: string;
-}) =>
-  request<{ user: AuthUserDto }>({
-    url: '/api/v1/auth/email/change-password',
-    method: 'post',
-    data: payload,
-  });
-
-/** Login with email + password (optional slider captcha token after failed attempts). */
-export const loginEmail = (email: string, password: string, captchaToken?: string | null) =>
-  request<{ user: AuthUserDto; token: string }>({
-    url: '/api/v1/auth/email/login',
-    method: 'post',
-    data: {
-      email,
-      password,
-      ...(captchaToken ? { captchaToken } : {}),
-    },
+    data,
   });
 
 export type SliderCaptchaChallenge = {
@@ -175,20 +98,6 @@ export const updateProfile = (payload: {
     url: '/api/v1/auth/profile',
     method: 'patch',
     data: payload,
-  });
-
-export type PublicUserDto = {
-  id: string;
-  name: string;
-  avatar?: string | null;
-  bio?: string | null;
-};
-
-/** Public creator profile (no email). */
-export const fetchPublicUser = (userId: string) =>
-  request<{ user: PublicUserDto }>({
-    url: `/api/v1/auth/users/${encodeURIComponent(userId)}`,
-    method: 'get',
   });
 
 /** Logout and invalidate the session. */

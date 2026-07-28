@@ -3,7 +3,7 @@ import { useDispatch } from 'react-redux';
 import { HiOutlineArrowUpTray } from 'react-icons/hi2';
 import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
-import { uploadImageFile, readFileAsDataUrl } from '@/apis/upload';
+import { uploadImageFile, readFileAsDataUrl } from '@/utils/uploadImage';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -24,6 +24,8 @@ type Props = {
    * Default `top-right` — 10px inset from the image edges.
    */
   align?: RcbAlign;
+  /** Node rotation (deg) — button sits on the rotated top-right corner. */
+  angle?: number;
   /** True while the pointer is over this image (selection hover). */
   imageHovered?: boolean;
 };
@@ -32,44 +34,32 @@ type Props = {
 const EDGE_PAD = 10;
 
 /**
- * Replace control for selected image nodes — top-right corner, 10px inset.
- * Uploads via backend COS; keeps node width; height follows new image aspect.
+ * Bare replace control (button + file input) for embedding in a shared corner bar.
  */
-export default function ImageReplaceCornerButton({
+export function ImageReplaceUploadControl({
   nodeId,
-  box,
-  align = 'top-right',
-  imageHovered = false,
-}: Props): ReactNode {
+  sceneBox,
+  onLoadingChange,
+}: {
+  nodeId: string;
+  /** Scene-space box — width kept when replacing. */
+  sceneBox: SceneBox;
+  onLoadingChange?: (loading: boolean) => void;
+}): ReactNode {
   const dispatch = useDispatch();
   const inputRef = useRef<HTMLInputElement>(null);
   const nodeIdRef = useRef(nodeId);
-  const boxRef = useRef(box);
+  const boxRef = useRef(sceneBox);
   const aliveRef = useRef(true);
   const [loading, setLoading] = useState(false);
-  /** Keep visible while the pointer is on the button (image hover clears over toolbar). */
-  const [btnHovered, setBtnHovered] = useState(false);
-  const camera = useRcbCamera();
-  const tl = rcbSceneToScreen(camera, box.left, box.top);
-  const br = rcbSceneToScreen(camera, box.left + box.width, box.top + box.height);
-  const stageBox = {
-    left: Math.min(tl.x, br.x),
-    top: Math.min(tl.y, br.y),
-    width: Math.abs(br.x - tl.x),
-    height: Math.abs(br.y - tl.y),
-  };
-  // Matches `h-5 w-5` button below so EDGE_PAD is true screen inset.
-  const BTN = 20;
-  const { x, y } = rcbAlignInBox(stageBox, { width: BTN, height: BTN }, align, EDGE_PAD);
-  const visible = loading || imageHovered || btnHovered;
 
   useEffect(() => {
     nodeIdRef.current = nodeId;
   }, [nodeId]);
 
   useEffect(() => {
-    boxRef.current = box;
-  }, [box]);
+    boxRef.current = sceneBox;
+  }, [sceneBox]);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -78,11 +68,9 @@ export default function ImageReplaceCornerButton({
     };
   }, []);
 
-  const style: CSSProperties = {
-    position: 'absolute',
-    left: x,
-    top: y,
-  };
+  useEffect(() => {
+    onLoadingChange?.(loading);
+  }, [loading, onLoadingChange]);
 
   const onFile = (file: File | null) => {
     if (!file || !file.type.startsWith('image/') || loading) return;
@@ -165,53 +153,120 @@ export default function ImageReplaceCornerButton({
   };
 
   return (
-    <RcbOverlayPortal>
-      <div
-        data-sel-toolbar
-        data-image-replace
-        data-image-node-id={nodeId}
-        className={
-          visible
-            ? 'pointer-events-auto absolute z-[35] opacity-100 transition-opacity duration-150'
-            : 'pointer-events-auto absolute z-[35] opacity-0 transition-opacity duration-150'
-        }
-        style={style}
-        onPointerDown={(e) => e.stopPropagation()}
-        onPointerEnter={() => setBtnHovered(true)}
-        onPointerLeave={() => setBtnHovered(false)}
-      >
-        <Tooltip title={loading ? '上传中…' : '替换图片'} placement="top">
-          <button
-            type="button"
-            disabled={loading}
-            aria-label={loading ? '上传中…' : '替换图片'}
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[3px] bg-[#1a1a1a] text-white shadow-[0_2px_8px_rgba(15,23,42,0.2)] transition hover:bg-[#2a2a2a] disabled:cursor-wait disabled:opacity-80"
-            aria-busy={loading}
-            onClick={() => {
-              if (!loading) inputRef.current?.click();
-            }}
-          >
-            {loading ? (
-              <span
-                className="h-2.5 w-2.5 animate-spin rounded-full border-[1.5px] border-white/30 border-t-white"
-                aria-hidden
-              />
-            ) : (
-              <HiOutlineArrowUpTray className="h-3 w-3" />
-            )}
-          </button>
-        </Tooltip>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
+    <>
+      <Tooltip title={loading ? '上传中…' : '替换图片'} placement="top">
+        <button
+          type="button"
           disabled={loading}
-          onChange={(e) => {
-            onFile(e.target.files?.[0] ?? null);
-            e.target.value = '';
+          aria-label={loading ? '上传中…' : '替换图片'}
+          className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[3px] bg-[#1a1a1a] text-white shadow-[0_2px_8px_rgba(15,23,42,0.2)] transition hover:bg-[#2a2a2a] disabled:cursor-wait disabled:opacity-80"
+          aria-busy={loading}
+          onClick={() => {
+            if (!loading) inputRef.current?.click();
           }}
-        />
+        >
+          {loading ? (
+            <span
+              className="h-2.5 w-2.5 animate-spin rounded-full border-[1.5px] border-white/30 border-t-white"
+              aria-hidden
+            />
+          ) : (
+            <HiOutlineArrowUpTray className="h-3 w-3" />
+          )}
+        </button>
+      </Tooltip>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        disabled={loading}
+        onChange={(e) => {
+          onFile(e.target.files?.[0] ?? null);
+          e.target.value = '';
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * Replace control for selected image nodes — top-right corner, 10px inset.
+ * Uploads via backend COS; keeps node width; height follows new image aspect.
+ */
+export default function ImageReplaceCornerButton({
+  nodeId,
+  box,
+  align = 'top-right',
+  angle = 0,
+  imageHovered = false,
+}: Props): ReactNode {
+  const [loading, setLoading] = useState(false);
+  /** Keep visible while the pointer is on the button (image hover clears over toolbar). */
+  const [btnHovered, setBtnHovered] = useState(false);
+  const camera = useRcbCamera();
+  const tl = rcbSceneToScreen(camera, box.left, box.top);
+  const br = rcbSceneToScreen(camera, box.left + box.width, box.top + box.height);
+  const stageBox = {
+    left: Math.min(tl.x, br.x),
+    top: Math.min(tl.y, br.y),
+    width: Math.abs(br.x - tl.x),
+    height: Math.abs(br.y - tl.y),
+  };
+  const BTN = 20;
+  const { x, y } =
+    align === 'top-right'
+      ? {
+          x: Math.max(0, stageBox.width - EDGE_PAD - BTN),
+          y: EDGE_PAD,
+        }
+      : rcbAlignInBox(
+          { left: 0, top: 0, width: stageBox.width, height: stageBox.height },
+          { width: BTN, height: BTN },
+          align,
+          EDGE_PAD
+        );
+  const visible = loading || imageHovered || btnHovered;
+
+  const frameStyle: CSSProperties = {
+    position: 'absolute',
+    left: stageBox.left,
+    top: stageBox.top,
+    width: stageBox.width,
+    height: stageBox.height,
+    transform: Math.abs(angle) > 0.001 ? `rotate(${angle}deg)` : undefined,
+    transformOrigin: 'center center',
+  };
+
+  const btnWrapStyle: CSSProperties = {
+    position: 'absolute',
+    left: x,
+    top: y,
+  };
+
+  return (
+    <RcbOverlayPortal>
+      <div className="pointer-events-none absolute z-[35]" style={frameStyle}>
+        <div
+          data-sel-toolbar
+          data-image-replace
+          data-image-node-id={nodeId}
+          className={
+            visible
+              ? 'pointer-events-auto absolute opacity-100 transition-opacity duration-150'
+              : 'pointer-events-auto absolute opacity-0 transition-opacity duration-150'
+          }
+          style={btnWrapStyle}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerEnter={() => setBtnHovered(true)}
+          onPointerLeave={() => setBtnHovered(false)}
+        >
+          <ImageReplaceUploadControl
+            nodeId={nodeId}
+            sceneBox={box}
+            onLoadingChange={setLoading}
+          />
+        </div>
       </div>
     </RcbOverlayPortal>
   );

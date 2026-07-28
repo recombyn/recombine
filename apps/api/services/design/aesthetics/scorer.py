@@ -267,42 +267,24 @@ def score_design_image(
     return base
 
 
-def retrieve_aesthetic_refs(
+def _rank_aesthetic_rows(
+    corpus: list[dict[str, Any]],
     *,
     prompt: str,
-    scene: str = "website",
-    top_k: int = 2,
-) -> dict[str, Any]:
-    """
-    Pre-draw RAG: rank grade=good samples by CLIP text↔aesthetic image similarity.
-    Falls back to newest ready samples when CLIP/text encode is unavailable.
-    """
-    from services.design.aesthetics.clip_encoder import encode_text
-
-    sc = (scene or "website").strip().lower() or "website"
-    top_k = max(1, min(int(top_k or 2), 4))
-    out: dict[str, Any] = {
-        "ok": True,
-        "status": "ok",
-        "scene": sc,
-        "refs": [],
-        "imageUrls": [],
-        "guidance": "",
-        "corpusSize": 0,
-    }
-
-    corpus = list_ready_embeddings(scene=sc, grade="good", limit=500, fallback_scenes=True)
-    out["corpusSize"] = len(corpus)
-    out["usedFallback"] = any(bool(r.get("fallbackFrom")) for r in corpus)
-    if not corpus:
-        out["status"] = "skipped"
-        out["reason"] = f"no ready grade=good samples for scene={sc} (incl. fallback)"
-        return out
+    top_k: int,
+    grade: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Rank ready samples by CLIP text↔aesthetic similarity; recency fallback."""
+    top_k = max(0, min(int(top_k or 0), 4))
+    if top_k <= 0 or not corpus:
+        return [], False
 
     ranked: list[dict[str, Any]] = []
     used_clip = False
     if clip_available():
         try:
+            from services.design.aesthetics.clip_encoder import encode_text
+
             q = encode_text(prompt or "")
             for row in corpus:
                 sim = _cosine(q, _bytes_to_vec(row.get("aesthetic_emb")))
@@ -310,7 +292,8 @@ def retrieve_aesthetic_refs(
                     {
                         "id": row["id"],
                         "name": row.get("name") or "",
-                        "scene": row.get("scene") or sc,
+                        "scene": row.get("scene") or "",
+                        "grade": grade,
                         "fallbackFrom": row.get("fallbackFrom") or "",
                         "comment": row.get("comment") or "",
                         "imageUrl": row.get("imageUrl") or "",
@@ -321,17 +304,17 @@ def retrieve_aesthetic_refs(
             ranked.sort(key=lambda x: x["score"], reverse=True)
             used_clip = True
         except Exception as exc:
-            logger.exception("pre-draw aesthetic retrieve failed: %s", exc)
+            logger.exception("aesthetic rank failed grade=%s: %s", grade, exc)
             ranked = []
 
     if not ranked:
-        # Recency fallback (still better than drawing blind).
         for row in corpus[:top_k]:
             ranked.append(
                 {
                     "id": row["id"],
                     "name": row.get("name") or "",
-                    "scene": row.get("scene") or sc,
+                    "scene": row.get("scene") or "",
+                    "grade": grade,
                     "fallbackFrom": row.get("fallbackFrom") or "",
                     "comment": row.get("comment") or "",
                     "imageUrl": row.get("imageUrl") or "",
@@ -339,59 +322,392 @@ def retrieve_aesthetic_refs(
                     "score": 0.0,
                 }
             )
-        out["status"] = "fallback_recency"
+        return ranked[:top_k], False
 
-    refs = ranked[:top_k]
-    out["refs"] = refs
-    out["imageUrls"] = [
-        str(r.get("imageUrl") or "").strip()
-        for r in refs
-        if str(r.get("imageUrl") or "").strip()
-    ]
-    out["guidance"] = format_aesthetic_refs_block(refs, matched_by_clip=used_clip)
-    if used_clip:
+    return ranked[:top_k], used_clip
+
+
+def retrieve_aesthetic_refs(
+    *,
+    prompt: str,
+    scene: str = "website",
+    top_k: int = 2,
+    ok_k: int = 1,
+    bad_k: int = 1,
+    canvas_w: int = 0,
+    canvas_h: int = 0,
+    user_ref_urls: list[str] | None = None,
+    corpus_pool: int = 96,
+    use_user_refs: bool = False,
+) -> dict[str, Any]:
+    """
+    Pre-draw RAG: grade=good (imitate) + grade=ok (baseline) + grade=bad (avoid).
+
+    use_user_refs=True: analyze attached images as PRIMARY style (user_primary).
+    use_user_refs=False: corpus CLIP ladder even if caller passed user_ref_urls
+    (attachments may still be visible to the model for content/placement only).
+
+    Falls back to newest ready samples when CLIP/text encode is unavailable.
+    """
+    import time as _time
+
+    t0 = _time.time()
+    sc = (scene or "website").strip().lower() or "website"
+    user_urls = (
+        [
+            str(u).strip()
+            for u in (user_ref_urls or [])
+            if isinstance(u, str) and str(u).strip()
+        ][:4]
+        if use_user_refs
+        else []
+    )
+    has_user = bool(user_urls)
+    # User refs → skip good/ok corpus; keep at most 1 bad as avoid hint.
+    if has_user:
+        good_k, mid_k, avoid_k = 0, 0, max(0, min(int(bad_k if bad_k is not None else 1), 1))
+        mode = "user_primary"
+    else:
+        good_k = max(1, min(int(top_k or 2), 2))
+        mid_k = max(0, min(int(ok_k if ok_k is not None else 1), 1))
+        avoid_k = max(0, min(int(bad_k if bad_k is not None else 1), 1))
+        mode = "corpus_clip"
+    pool = max(16, min(int(corpus_pool or 96), 128))
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "status": "ok",
+        "scene": sc,
+        "mode": mode,
+        "refs": [],
+        "okRefs": [],
+        "badRefs": [],
+        "imageUrls": [],
+        "guidance": "",
+        "corpusSize": 0,
+        "okCorpusSize": 0,
+        "badCorpusSize": 0,
+        "usedClip": False,
+        "userRefCount": len(user_urls),
+        "corpusIds": [],
+        "ms": 0,
+    }
+
+    good_corpus: list[dict[str, Any]] = []
+    mid_corpus: list[dict[str, Any]] = []
+    bad_corpus: list[dict[str, Any]] = []
+    if good_k > 0:
+        good_corpus = list_ready_embeddings(
+            scene=sc, grade="good", limit=pool, fallback_scenes=True
+        )
+    if mid_k > 0:
+        mid_corpus = list_ready_embeddings(
+            scene=sc, grade="ok", limit=pool, fallback_scenes=True
+        )
+    if avoid_k > 0:
+        # Bad avoid-hints: smaller pool is enough.
+        bad_corpus = list_ready_embeddings(
+            scene=sc, grade="bad", limit=min(48, pool), fallback_scenes=True
+        )
+
+    out["corpusSize"] = len(good_corpus)
+    out["okCorpusSize"] = len(mid_corpus)
+    out["badCorpusSize"] = len(bad_corpus)
+    out["usedFallback"] = any(
+        bool(r.get("fallbackFrom"))
+        for r in (*good_corpus, *mid_corpus, *bad_corpus)
+    )
+
+    # User-primary with no corpus needed for tokens — still OK if user urls exist.
+    if not has_user and not good_corpus and not mid_corpus and not bad_corpus:
+        out["status"] = "skipped"
+        out["reason"] = f"no ready good/ok/bad samples for scene={sc} (incl. fallback)"
+        out["ms"] = int((_time.time() - t0) * 1000)
+        return out
+
+    good_refs: list[dict[str, Any]] = []
+    ok_refs: list[dict[str, Any]] = []
+    bad_refs: list[dict[str, Any]] = []
+    used_clip = False
+    if good_k > 0 and good_corpus:
+        good_refs, good_clip = _rank_aesthetic_rows(
+            good_corpus, prompt=prompt, top_k=good_k, grade="good"
+        )
+        used_clip = used_clip or good_clip
+    if mid_k > 0 and mid_corpus:
+        ok_refs, ok_clip = _rank_aesthetic_rows(
+            mid_corpus, prompt=prompt, top_k=mid_k, grade="ok"
+        )
+        used_clip = used_clip or ok_clip
+    if avoid_k > 0 and bad_corpus:
+        # With user refs: recency-only avoid hint (skip CLIP cost).
+        if has_user:
+            bad_refs = [
+                {
+                    "id": r["id"],
+                    "name": r.get("name") or "",
+                    "scene": r.get("scene") or "",
+                    "grade": "bad",
+                    "fallbackFrom": r.get("fallbackFrom") or "",
+                    "comment": r.get("comment") or "",
+                    "imageUrl": r.get("imageUrl") or "",
+                    "tags": r.get("tags") or "",
+                    "score": 0.0,
+                }
+                for r in bad_corpus[:avoid_k]
+            ]
+        else:
+            bad_refs, bad_clip = _rank_aesthetic_rows(
+                bad_corpus, prompt=prompt, top_k=avoid_k, grade="bad"
+            )
+            used_clip = used_clip or bad_clip
+
+    any_refs = bool(good_refs or ok_refs or bad_refs)
+    out["usedClip"] = bool(used_clip)
+    if has_user:
+        out["status"] = "user_primary"
+    elif any_refs and not used_clip:
+        out["status"] = "fallback_recency"
+    elif used_clip and any_refs:
         out["status"] = "ok"
+
+    # Vision budget: with user refs, do NOT attach corpus sample images
+    # (user attach already in the turn). Without user refs: good → ok → bad.
+    image_urls: list[str] = []
+    if not has_user:
+        for r in good_refs + ok_refs + bad_refs:
+            url = str(r.get("imageUrl") or "").strip()
+            if url and url not in image_urls:
+                image_urls.append(url)
+            if len(image_urls) >= 4:
+                break
+
+    out["refs"] = good_refs
+    out["okRefs"] = ok_refs
+    out["badRefs"] = bad_refs
+    out["imageUrls"] = image_urls
+    out["corpusIds"] = [
+        r.get("id")
+        for r in (*good_refs, *ok_refs, *bad_refs)
+        if isinstance(r, dict) and r.get("id") is not None
+    ][:8]
+
+    # Runtime: extract concrete DESIGN_TOKENS (palette + scene DS).
+    token_guidance = ""
+    analyzed: list[dict[str, Any]] = []
+    try:
+        from services.design.aesthetics.token_extract import (
+            build_aesthetic_token_guidance,
+        )
+
+        token_guidance, analyzed = build_aesthetic_token_guidance(
+            scene=sc,
+            good_refs=good_refs,
+            ok_refs=ok_refs,
+            bad_refs=bad_refs,
+            user_ref_urls=user_urls,
+            canvas_w=canvas_w,
+            canvas_h=canvas_h,
+            slim_corpus=has_user,
+        )
+    except Exception:
+        logger.exception("aesthetic token extract failed")
+    out["analyzedTokens"] = analyzed
+
+    # Slim ladder when user refs dominate: bad-only notes.
+    if has_user:
+        slim_lines = [
+            "AESTHETIC_REFS（用户附件为主 — 请模仿上方用户令牌）：",
+            "已跳过语料优秀/可用样本（存在用户附件）。可选反例规避提示：",
+        ]
+        if bad_refs:
+            for i, r in enumerate(bad_refs, start=1):
+                name = (r.get("name") or f"#{r.get('id')}")[:80]
+                note = (r.get("comment") or "").strip()
+                slim_lines.append(
+                    f"{i}. [bad] {name}" + (f" — {note[:120]}" if note else "")
+                )
+        else:
+            slim_lines.append("（本场景暂无反例样本）")
+        ladder = "\n".join(slim_lines)
+    else:
+        ladder = format_aesthetic_refs_block(
+            good_refs,
+            ok_refs=ok_refs,
+            bad_refs=bad_refs,
+            matched_by_clip=used_clip,
+            include_vision_hint=False,
+        )
+
+    if token_guidance and ladder:
+        out["guidance"] = f"{token_guidance}\n\n{ladder}"
+    else:
+        out["guidance"] = token_guidance or ladder
+
+    if has_user and (token_guidance or user_urls):
+        out["ok"] = True
+        out["status"] = "user_primary"
+    elif not has_user and not any_refs and not token_guidance:
+        out["status"] = "skipped"
+        out["reason"] = "empty ranked refs"
+    out["ms"] = int((_time.time() - t0) * 1000)
     return out
 
 
 def format_aesthetic_refs_block(
     refs: list[dict[str, Any]],
     *,
+    ok_refs: list[dict[str, Any]] | None = None,
+    bad_refs: list[dict[str, Any]] | None = None,
     matched_by_clip: bool = True,
+    include_vision_hint: bool = False,
 ) -> str:
-    """Prompt block: imitate these good samples before drawing."""
-    if not refs:
+    """Prompt block: imitate good, exceed ok baseline, avoid bad.
+
+    Concrete tokens live in AESTHETIC_DESIGN_TOKENS (runtime extract). This ladder
+    is qualitative notes only — do not tell the model to glance at screenshots.
+    """
+    goods = [r for r in (refs or []) if isinstance(r, dict)]
+    mids = [r for r in (ok_refs or []) if isinstance(r, dict)]
+    bads = [r for r in (bad_refs or []) if isinstance(r, dict)]
+    if not goods and not mids and not bads:
         return ""
+
+    def _lines_for(rows: list[dict[str, Any]], *, verb: str) -> list[str]:
+        out_lines: list[str] = []
+        for i, r in enumerate(rows, start=1):
+            name = (r.get("name") or f"#{r.get('id')}")[:80]
+            tags = (r.get("tags") or "").strip()
+            comment = (r.get("comment") or "").strip()
+            score = r.get("score")
+            grade = str(r.get("grade") or "").strip() or "?"
+            bits = [f"{i}. [{grade}] {name}"]
+            sc_from = (r.get("fallbackFrom") or r.get("scene") or "").strip()
+            if sc_from:
+                bits.append(f"scene={sc_from}")
+            if isinstance(score, (int, float)) and float(score) > 0:
+                bits.append(f"sim={float(score):.2f}")
+            if tags:
+                bits.append(f"tags={tags[:80]}")
+            out_lines.append(" | ".join(bits))
+            if comment:
+                out_lines.append(f"   备注：{comment[:200]}")
+            if include_vision_hint:
+                url = (r.get("imageUrl") or "").strip()
+                if url:
+                    out_lines.append(f"   已附视觉参考图 — {verb}")
+        return out_lines
+
     lines = [
-        "AESTHETIC_REFS (grade=good — study BEFORE drawing; do not copy text verbatim):",
-        "Align to these refs on:",
-        "1) 留白：边距与模块间距对齐参考密度，勿贴边/勿挤成一团/勿大片空洞线框。",
-        "2) 层级：标题/副文/正文字号与权重至少两档，勿全页同字号。",
-        "3) 色数：有效强调色通常 ≤6（中性色不计），对齐参考色板纪律。",
+        "AESTHETIC_REFS（质量阶梯说明 — 请服从上方 AESTHETIC_DESIGN_TOKENS）：",
+        "不要逐字抄样本文案。优先用令牌，不要靠猜图。",
     ]
     if not matched_by_clip:
-        lines.append("(ranked by recency; CLIP text match unavailable)")
-    for i, r in enumerate(refs, start=1):
-        name = (r.get("name") or f"#{r.get('id')}")[:80]
-        tags = (r.get("tags") or "").strip()
-        comment = (r.get("comment") or "").strip()
-        score = r.get("score")
-        bits = [f"{i}. {name}"]
-        sc_from = (r.get("fallbackFrom") or r.get("scene") or "").strip()
-        if sc_from:
-            bits.append(f"scene={sc_from}")
-        if isinstance(score, (int, float)) and float(score) > 0:
-            bits.append(f"sim={float(score):.2f}")
-        if tags:
-            bits.append(f"tags={tags[:80]}")
-        lines.append(" | ".join(bits))
-        if comment:
-            lines.append(f"   note: {comment[:200]}")
-        url = (r.get("imageUrl") or "").strip()
-        if url:
-            lines.append("   image attached as vision ref (see multimodal images)")
+        lines.append("（按时间排序；CLIP 文本匹配不可用）")
+
+    if goods:
+        lines.extend(
+            [
+                "",
+                "优秀（grade=good — 模仿；以此为目标水准）：",
+                "1) 留白：边距与模块间距对齐参考密度，勿贴边/勿挤成一团/勿大片空洞线框。",
+                "2) 层级：标题/副文/正文字号与权重至少两档，勿全页同字号。",
+                "3) 色数：有效强调色通常 ≤6（中性色不计），对齐参考色板纪律。",
+            ]
+        )
+        lines.extend(_lines_for(goods, verb="模仿"))
+
+    if mids:
+        lines.extend(
+            [
+                "",
+                "可用（grade=ok — 仅作基线；能用但不算出色 — 请超越）：",
+                "留意平庸之处（节奏弱、层级糊、配色保守发灰），并明显往优秀水准推。",
+            ]
+        )
+        lines.extend(_lines_for(mids, verb="超越"))
+    elif goods or bads:
+        lines.append("（本场景暂无可用 grade=ok 样本）")
+
+    if bads:
+        lines.extend(
+            [
+                "",
+                "反例（grade=bad — 避开这些失败模式；不要复现）：",
+                "观察其弱点（拥挤、层级扁平、配色嘈杂、线框式空盒、对比不足），并做相反处理。",
+            ]
+        )
+        lines.extend(_lines_for(bads, verb="避开"))
+    elif goods or mids:
+        lines.append(
+            "（本场景暂无反例 grade=bad 样本 — 仍请超越「可用」朝「优秀」）"
+        )
+
     lines.append(
-        "Emit tool_ops that match reference spacing / hierarchy / color count — "
-        "not a wireframe or placeholder page."
+        "以优秀质量输出 tool_ops：超越可用基线，避开反例失败模式。"
     )
     return "\n".join(lines)
+
+
+def format_aesthetics_catalog(*, scene: str = "website") -> str:
+    """Short index of ready quality samples (counts only — no CLIP retrieve yet)."""
+    sc = (scene or "website").strip().lower() or "website"
+    counts = {"good": 0, "ok": 0, "bad": 0}
+    try:
+        from services.db import connect
+        from services.design.catalog import ensure_design_catalog
+
+        ensure_design_catalog()
+        with connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT grade, COUNT(*) AS c
+                FROM design_quality_sample
+                WHERE enabled=1 AND embed_status='ready'
+                  AND aesthetic_emb IS NOT NULL AND scene=?
+                GROUP BY grade
+                """,
+                (sc,),
+            ).fetchall()
+        for r in rows:
+            g = str(r["grade"] or "").strip().lower()
+            if g in counts:
+                counts[g] = int(r["c"] or 0)
+    except Exception:
+        logger.exception("aesthetics catalog count failed scene=%s", sc)
+    return (
+        f"美学样本库（场景={sc}）："
+        f"优秀≈{counts['good']}，可用≈{counts['ok']}，反例≈{counts['bad']}。\n"
+        "设 need_aesthetics=true 可获取排序参考与设计令牌"
+        "（模仿优秀 / 超越可用 / 避开反例）。\n"
+        "当用户附带图片时：仅当 USER_PROMPT 要求匹配/模仿该图风格/配色/布局时，"
+        "才设 use_user_refs=true；若附件仅为内容素材、占位，或用户拒绝风格参考"
+        "（如「不要参考这张图」）则 false。"
+    )
+
+
+def normalize_need_aesthetics(raw: Any) -> bool:
+    if raw is True:
+        return True
+    if raw is False or raw is None:
+        return False
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    s = str(raw or "").strip().lower()
+    return s in ("1", "true", "yes", "on")
+
+
+def parse_use_user_refs(raw: Any) -> bool | None:
+    """Model declares whether USER attach is a style reference for aesthetics."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    s = str(raw or "").strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return None

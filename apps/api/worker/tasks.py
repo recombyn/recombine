@@ -1,8 +1,7 @@
-"""Celery tasks for async import + AI font generation + aesthetics embed."""
+"""Celery tasks for async import + aesthetics embed."""
 
 from pathlib import Path
 
-from services.fontgen.pipeline import run_font_generate_pipeline
 from services.job_store import update_job
 from services.pipeline import run_import
 from worker.celery_app import celery
@@ -28,16 +27,6 @@ def run_import_job(self, job_id: str, source_type: str, file_path: str) -> dict:
     except Exception as exc:  # noqa: BLE001 — persist failure for client poll
         update_job(job_id, status="failed", progress=100, error=str(exc))
         return {"job_id": job_id, "status": "failed", "error": str(exc)}
-
-
-@celery.task(name="worker.tasks.run_font_generate_job", bind=True)
-def run_font_generate_job(self, task_id: str) -> dict:
-    """
-    Font pipeline:
-    preprocess (OpenCV) → inference (zi2zi/DG-Font or local) →
-    vectorize (pypotrace/OpenCV) → calibrate → fontTools TTF → storage.
-    """
-    return run_font_generate_pipeline(task_id)
 
 
 @celery.task(name="worker.tasks.embed_quality_sample_job", bind=True)

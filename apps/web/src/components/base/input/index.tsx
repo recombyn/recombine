@@ -97,11 +97,12 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           inputVariants({ size, type }),
           inputType === 'number' &&
             '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
-          inputTypeValue === 'outlined' && 'border-[0.5px] border-[var(--color-border-default-base)] rounded',
+          inputTypeValue === 'outlined' &&
+            'rounded-xl border-[0.5px] border-[var(--color-border-default-base)]',
           inputTypeValue === 'outlined' && 'data-focus:border-[var(--color-brand-base)] data-focus:ring-1 data-focus:ring-[var(--color-brand-base)]',
           inputTypeValue === 'outlined' && 'data-hover:border-[var(--color-border-default-base-hover)]',
-          inputTypeValue === 'filled' && 'border-0 rounded',
-          inputTypeValue === 'borderless' && 'rounded',
+          inputTypeValue === 'filled' && 'border-0 rounded-xl',
+          inputTypeValue === 'borderless' && 'rounded-xl',
           inputTypeValue === 'underlined' && 'rounded-none border-b-[var(--color-border-default-base)] data-focus:border-b-[var(--color-brand-base)]',
           hasPrefix && size === 'small' && 'pl-6',
           hasPrefix && size === 'middle' && 'pl-8',

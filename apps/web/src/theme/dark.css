@@ -12,11 +12,13 @@ html[data-theme='dark'] {
   --accent: #e3e3e3;
   --accent-soft: #2c2c2c;
   --on-brand: #0c0c0d;
+  --preview-overlay: rgba(12, 12, 13, 0.58);
 
   /* Home hero — cool wash + visible dot grid on deep black. */
   --home-hero-glow-strong: rgba(72, 78, 120, 0.42);
   --home-hero-glow-soft: rgba(48, 64, 110, 0.28);
   --home-hero-dot: rgba(255, 255, 255, 0.1);
+  --home-hero-accent-gradient: linear-gradient(90deg, #f2f2f4 0%, #c8c8d0 48%, #8a8a96 100%);
 
   --slider-active: #e3e3e3;
   --slider-inactive: #3a3a3a;

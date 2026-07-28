@@ -44,8 +44,18 @@ def extract_svg(text: str) -> str | None:
 
 
 def extract_json(text: str) -> Any | None:
+    """LangChain ``JsonOutputParser`` first; fence/greedy only if parser fails."""
     if not text:
         return None
+    try:
+        from langchain_core.output_parsers import JsonOutputParser
+
+        parsed = JsonOutputParser().parse(text)
+        if parsed is not None:
+            return parsed
+    except Exception:
+        pass
+    # Rescue truncated / noisy model output (skill SVG paths still need this).
     raw = text.strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
@@ -60,6 +70,36 @@ def extract_json(text: str) -> Any | None:
             return json.loads(m.group(0))
         except Exception:
             return None
+
+
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    """Dict-only: LangChain parse + mid-prose fence / brace / ``intent`` rescue."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    # Prefer shared extract_json (LangChain → rescue), then insist on dict.
+    got = extract_json(raw)
+    if isinstance(got, dict):
+        return got
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL | re.IGNORECASE)
+    if m:
+        raw = m.group(1).strip()
+    if not raw.startswith("{"):
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start >= 0 and end > start:
+            raw = raw[start : end + 1]
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        m2 = re.search(r"\{[^{}]*\"intent\"[^{}]*\}", text or "", re.DOTALL)
+        if not m2:
+            return None
+        try:
+            obj = json.loads(m2.group(0))
+        except json.JSONDecodeError:
+            return None
+    return obj if isinstance(obj, dict) else None
 
 
 def hard_validate(

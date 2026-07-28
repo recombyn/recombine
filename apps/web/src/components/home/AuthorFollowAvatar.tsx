@@ -9,7 +9,7 @@ type CreatorAvatarProps = {
   onOpenProfile?: () => void;
 };
 
-/** Creator avatar — click opens public profile when `onOpenProfile` is set. */
+/** Creator avatar (optional click via `onOpenProfile`). */
 export default function AuthorFollowAvatar({
   name,
   avatar,

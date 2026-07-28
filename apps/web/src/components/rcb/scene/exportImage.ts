@@ -1,7 +1,8 @@
-import { imageSrcToFile } from '@/apis/upload';
+import { imageSrcToFile } from '@/utils/uploadImage';
 import { getSvgBoard, type SvgBoardHandle } from '@/components/rcb/canvas/svgBoardRegistry';
 import { createSvgBoard, loadSceneOntoSvg } from './sceneToSvg';
 import { nodeLeftTop } from './sceneToSvg';
+import { isExportableSceneNode } from './sceneDocument';
 import { getToken } from '@/utils/token';
 
 export type ExportImageFormat = 'png' | 'jpeg' | 'svg';
@@ -230,6 +231,48 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/** Last-resort: draw via HTMLImageElement (works when img already paints on canvas). */
+function rasterizeViaHtmlImage(src: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const absolute = src.startsWith('/')
+      ? `${window.location.origin}${src}`
+      : src;
+    const el = new Image();
+    let settled = false;
+    const finish = (data: string | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(data);
+    };
+    el.onload = () => {
+      try {
+        const w = Math.max(1, el.naturalWidth || el.width || 1);
+        const h = Math.max(1, el.naturalHeight || el.height || 1);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          finish(null);
+          return;
+        }
+        ctx.drawImage(el, 0, 0);
+        finish(canvas.toDataURL('image/png'));
+      } catch {
+        finish(null);
+      }
+    };
+    el.onerror = () => finish(null);
+    // Anonymous first — needed for canvas taint-free export when CDN sends ACAO.
+    try {
+      el.crossOrigin = 'anonymous';
+    } catch {
+      /* ignore */
+    }
+    el.src = absolute;
+  });
+}
+
 /** Fetch any image href (data / our uploads / remote) as a data URL for export. */
 async function fetchHrefAsDataUrl(
   href: string,
@@ -257,10 +300,17 @@ async function fetchHrefAsDataUrl(
       headers.Authorization = `Bearer ${token}`;
     }
     const res = await fetch(absolute, { headers, mode: 'cors', credentials: 'omit' });
-    if (!res.ok) return null;
+    if (!res.ok) throw new Error(`fetch ${res.status}`);
     const blob = await res.blob();
-    if (!blob || blob.size < 8) return null;
+    if (!blob || blob.size < 8) throw new Error('empty body');
     return await blobToDataUrl(blob);
+  } catch {
+    /* fall through to HTMLImageElement */
+  }
+  // Blob-URL SVG→canvas cannot paint external <image> hrefs. If fetch/CORS
+  // failed, still try the same path the editor uses to display the bitmap.
+  try {
+    return await rasterizeViaHtmlImage(src);
   } catch {
     return null;
   }
@@ -269,9 +319,15 @@ async function fetchHrefAsDataUrl(
 /**
  * Blob-URL SVG→canvas cannot load external <image> hrefs (CORS / blob policy).
  * Inline every raster as a data URL before rasterizing.
- * Throws if any non-data image cannot be embedded (fail closed — avoid silent holes).
+ * @param opts.failClosed default true — throw if any non-data image cannot be embedded
+ *   (export). Pass false for list thumbnails (best-effort; keep what inlined).
  */
-async function inlineSvgImages(svgString: string, sceneDocument?: any): Promise<string> {
+export async function inlineSvgImages(
+  svgString: string,
+  sceneDocument?: any,
+  opts?: { failClosed?: boolean }
+): Promise<string> {
+  const failClosed = opts?.failClosed !== false;
   const parser = new DOMParser();
   const doc = parser.parseFromString(svgString, 'image/svg+xml');
   if (doc.querySelector('parsererror')) return svgString;
@@ -327,7 +383,7 @@ async function inlineSvgImages(svgString: string, sceneDocument?: any): Promise<
     })
   );
 
-  if (failures.length) {
+  if (failures.length && failClosed) {
     throw new Error(`export-inline-failed:${failures.length}:${failures[0]}`);
   }
 
@@ -487,7 +543,14 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
         'position:fixed;left:-99999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
       window.document.body.appendChild(ephemeralHost);
       const { root, layer } = createSvgBoard(ephemeralHost, 794, 1123, { infinite: true });
-      const map = await loadSceneOntoSvg(root, layer, document, 1, { loadSeq: 1 }, { infinite: true });
+      const map = await loadSceneOntoSvg(
+        root,
+        layer,
+        document,
+        1,
+        { loadSeq: 1 },
+        { infinite: true, omitNonExportable: true }
+      );
       board = {
         root,
         layer,
@@ -501,7 +564,11 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
     const fmt = format === 'svg' ? 'svg' : format === 'jpeg' ? 'jpeg' : 'png';
     const quality = fmt === 'jpeg' ? (compress ? 0.78 : 0.95) : 1;
     const mime = fmt === 'jpeg' ? 'image/jpeg' : 'image/png';
-    const ids = (nodeIds || []).filter(Boolean);
+    const ids = (nodeIds || []).filter((id) => {
+      if (!id) return false;
+      if (!document?.deltaSetLike?.[id]) return true;
+      return isExportableSceneNode(document.deltaSetLike[id]);
+    });
 
     let crop: SceneBox | null = null;
     if (cropOpt && cropOpt.width > 0 && cropOpt.height > 0) {
@@ -603,6 +670,66 @@ export function exportDocumentJson(document: any, filename = 'document'): boolea
   return true;
 }
 
+/**
+ * Small PNG data-URL for composer / chat chips (single node, group, or artboard).
+ * Best-effort — returns null when the board cannot be rasterized.
+ */
+export async function renderComposerChipThumb(opts: {
+  document: any;
+  nodeIds?: string[];
+  frameId?: string | null;
+  /** Longest edge of the raster preview (device pixels). */
+  maxSide?: number;
+}): Promise<string | null> {
+  const doc = opts.document;
+  if (!doc) return null;
+  const maxSide = Math.max(32, Math.min(160, Number(opts.maxSide) || 96));
+
+  const frameId = String(opts.frameId || '').trim();
+  if (frameId) {
+    const frames: any[] = Array.isArray(doc.frames) ? doc.frames : [];
+    const frame = frames.find((f) => f?.id === frameId);
+    if (!frame) return null;
+    const w = Math.max(1, Number(frame.width) || 1);
+    const h = Math.max(1, Number(frame.height) || 1);
+    const multiplier = Math.min(2, Math.max(0.25, maxSide / Math.max(w, h)));
+    const rendered = await renderExport({
+      document: doc,
+      format: 'png',
+      multiplier,
+      crop: {
+        x: Number(frame.x) || 0,
+        y: Number(frame.y) || 0,
+        width: w,
+        height: h,
+      },
+      backgroundColor: String(frame.backgroundColor || '#FFFFFF'),
+    });
+    return rendered?.kind === 'raster' ? rendered.dataUrl : null;
+  }
+
+  const nodeIds = (opts.nodeIds || []).filter(Boolean);
+  if (!nodeIds.length) return null;
+
+  let maxDim = 1;
+  for (const id of nodeIds) {
+    const node = doc?.deltaSetLike?.[id];
+    if (!node) continue;
+    maxDim = Math.max(maxDim, Number(node.width) || 0, Number(node.height) || 0);
+  }
+  // Groups span a larger AABB than any single member — keep a floor so detail survives.
+  if (nodeIds.length > 1) maxDim = Math.max(maxDim, 240);
+  const multiplier = Math.min(2, Math.max(0.25, maxSide / Math.max(maxDim, 1)));
+  const rendered = await renderExport({
+    document: doc,
+    format: 'png',
+    multiplier,
+    selectionOnly: true,
+    nodeIds,
+  });
+  return rendered?.kind === 'raster' ? rendered.dataUrl : null;
+}
+
 /** Rasterize the SVG board; with selectionOnly, only the given nodes are exported. */
 export function exportFabricImage(options: ExportImageOptions = {}): boolean {
   // Sync API expected by callers — fire-and-forget download; return true if started.
@@ -674,56 +801,3 @@ export async function exportCropSlots(opts: {
   }
   return ok;
 }
-
-/**
- * Fallback: snapshot an in-DOM SVG (inline media → single rasterize).
- * Prefer renderExport / exportOnce when a scene document exists.
- */
-export function exportDomCanvasImage(
-  filename: string,
-  format: ExportImageFormat = 'png',
-  compress = false
-): boolean {
-  const svgEl = window.document.querySelector('.canvas-paper svg') as SVGSVGElement | null;
-  if (!svgEl) return false;
-  const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
-  const quality = format === 'jpeg' ? (compress ? 0.78 : 0.95) : undefined;
-  const vb = svgEl.viewBox?.baseVal;
-  const crop: SceneBox = {
-    x: Number(vb?.x) || 0,
-    y: Number(vb?.y) || 0,
-    width: Math.max(1, vb?.width || svgEl.clientWidth || 794),
-    height: Math.max(1, vb?.height || svgEl.clientHeight || 1123),
-  };
-  const clone = svgEl.cloneNode(true) as SVGSVGElement;
-  clone.querySelectorAll('[data-export-ignore]').forEach((n) => n.remove());
-  prepareExportSvgRoot(clone, crop);
-  if (!clone.getAttribute('xmlns')) {
-    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  }
-  if (!clone.getAttribute('xmlns:xlink')) {
-    clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
-  }
-  const svgString = new XMLSerializer().serializeToString(clone);
-  const m = 2;
-  void inlineSvgImages(svgString)
-    .then((inlined) =>
-      rasterizeSvgString(
-        inlined,
-        crop.width * m,
-        crop.height * m,
-        mime,
-        quality,
-        format === 'png'
-      )
-    )
-    .then((dataUrl) => {
-      const ext = format === 'jpeg' ? 'jpg' : 'png';
-      downloadDataUrl(dataUrl, `${sanitizeFilename(filename)}.${ext}`);
-    })
-    .catch((err) => console.error(err));
-  return true;
-}
-
-/** Preferred name going forward. */
-export const exportSvgImage = exportFabricImage;

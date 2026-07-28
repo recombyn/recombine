@@ -258,7 +258,8 @@ export default function PenStrokeToolbar({
     hydrateCustomPencilBrushes();
     setBrushRev((n) => n + 1);
     let cancelled = false;
-    void fetchDesignBrushes().then((items) => {
+    void fetchDesignBrushes().then((res) => {
+      const items = Array.isArray(res?.items) ? res.items : [];
       if (cancelled || !items.length) return;
       const mapped: PencilBrushDef[] = items.map((b) => ({
         id: b.id,
@@ -279,7 +280,7 @@ export default function PenStrokeToolbar({
       }));
       setOfficialPencilBrushes(mapped);
       setBrushRev((n) => n + 1);
-    });
+    }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -577,7 +578,7 @@ export default function PenStrokeToolbar({
                     : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
                 )}
               >
-                <LuEraser className="h-4 w-4" strokeWidth={1.75} />
+                <LuEraser className="h-4 w-4" strokeWidth={1.5} />
               </button>
             </Tooltip>
           </>

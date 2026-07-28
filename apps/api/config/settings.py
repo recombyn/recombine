@@ -54,6 +54,21 @@ class Settings(BaseSettings):
     # Example: mysql://root:PASSWORD@10.0.0.5:3306/recombyn
     database_url: str = ""
     sqlite_db_path: str = "storage/recombyn.db"
+    # LangGraph short-term memory checkpointer (official BaseCheckpointSaver).
+    # Empty → reuse DATABASE_URL (MySQL) via langgraph-checkpoint-mysql;
+    # local/dev without MySQL → SqliteSaver at this path; last resort InMemorySaver.
+    langgraph_checkpoint_url: str = ""
+    langgraph_checkpoint_sqlite_path: str = "storage/langgraph_checkpoints.db"
+    # LangGraph long-term memory Store (docs). Empty → same MySQL as DATABASE_URL;
+    # else Sqlite at this path; last resort InMemoryStore.
+    langgraph_store_url: str = ""
+    langgraph_store_sqlite_path: str = "storage/langgraph_store.db"
+    # LangChain SummarizationMiddleware (short-term memory docs).
+    agent_summarize_enabled: bool = True
+    agent_summarize_trigger_tokens: int = 4000
+    agent_summarize_keep_messages: int = 20
+    # Empty → LLM_DEFAULT_MODEL (cheaper than the main agent model when possible).
+    agent_summarize_model: str = ""
 
     # Phase 5: table cells + SAM/LaMa models
     expand_table_cells: bool = True
@@ -63,17 +78,21 @@ class Settings(BaseSettings):
     sam_max_regions: int = 8
     lama_use_sam_mask: bool = True
 
-    # LLM — domestic OpenAI-compatible (Doubao / DeepSeek / Qwen / Moonshot)
+    # LLM — OpenAI-compatible (Doubao / DeepSeek / OpenRouter / …)
     llm_provider: str = "deepseek"
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_default_model: str = "deepseek-reasoner"
     image_default_model: str = ""
-    # Optional per-provider keys (used when LLM_API_KEY is empty)
+    # Optional per-provider keys (preferred over LLM_API_KEY when set)
     doubao_api_key: str = ""
     deepseek_api_key: str = ""
+    openrouter_api_key: str = ""
     qwen_api_key: str = ""
     moonshot_api_key: str = ""
+    # Optional OpenRouter attribution headers (https://openrouter.ai/docs)
+    openrouter_http_referer: str = ""
+    openrouter_app_title: str = "recombyn"
     # Doubao Ark chat: model name or inference endpoint id (ep-xxxx).
     # Leave empty to hide that Doubao entry from the catalog.
     doubao_seed_model: str = ""
@@ -84,8 +103,11 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
 
     # Token wallet — card-key redeem (no WeChat/Alipay membership)
-    # SHA256(plaintext + CARD_KEY_SALT); never store plaintext in DB.
+    # HMAC-SHA256(plaintext, CARD_KEY_SALT); never store plaintext in DB.
+    # Must be a strong random string (len>=24); do not use the .env.example placeholder.
     card_key_salt: str = ""
+    # Dedicated password required when generating card keys in admin (not login password).
+    card_key_ops_password: str = ""
     # Purchase channel: Xianyu shop link and/or author contact (WeChat/email).
     xianyu_shop_url: str = ""
     author_contact: str = ""
@@ -101,13 +123,5 @@ class Settings(BaseSettings):
     ses_from_name: str = "recombyn"
     # Template ID from SES console (required for most accounts). Template var: {{code}}
     ses_template_id: int = 0
-
-    # AI font generator — zi2zi / DG-Font inference service (optional)
-    # When empty, worker uses local OpenCV+PIL glyph synthesis fallback.
-    font_inference_url: str = ""
-    font_inference_timeout: int = 300
-    # When Celery/Redis is down, run font jobs in a background thread (dev).
-    font_sync_fallback: bool = True
-
 
 settings = Settings()

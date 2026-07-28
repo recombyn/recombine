@@ -1,124 +1,332 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineCheck } from 'react-icons/hi2';
-import { Button, Dialog } from '@/components/base';
+import {
+  HiOutlineCheck,
+  HiOutlineChevronDown,
+  HiOutlineFire,
+  HiOutlineHandThumbUp,
+} from 'react-icons/hi2';
+import { Dialog, message } from '@/components/base';
 import { PLAN_CATALOG, PLAN_ORDER, type PlanId } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
 
-type Props = {
-  open: boolean;
-  onClose: () => void;
+type PlansPanelProps = {
+  /** When false, skip reset-on-open (always mounted in settings shell). */
+  active?: boolean;
+  /** Compact grid for settings modal. */
+  compact?: boolean;
 };
 
-/** Membership picker — free / plus / pro / ultra (monthly CNY only). */
-export default function PlansDialog({ open, onClose }: Props) {
-  const { t } = useTranslation();
+const FAQ_IDS = ['units', 'chat', 'image', 'how'] as const;
+
+/** Plan cards — usable inside settings modal or standalone dialog. */
+export function PlansPanel({ active = true, compact = false }: PlansPanelProps) {
+  const { t, i18n } = useTranslation();
   const current = useSelector((state: any) => (state.wallet?.planId as PlanId) || 'free');
+  const planLocked = useSelector((state: any) => Boolean(state.wallet?.planLocked));
+  const planExpiresAt = useSelector((state: any) =>
+    state.wallet?.planExpiresAt != null ? Number(state.wallet.planExpiresAt) : null
+  );
   const [picked, setPicked] = useState<PlanId>(current);
+  const [faqOpen, setFaqOpen] = useState<string | null>('units');
 
   useEffect(() => {
-    if (open) setPicked(current);
-  }, [open, current]);
+    if (active) {
+      setPicked(current);
+      setFaqOpen('units');
+    }
+  }, [active, current]);
+
+  const expiresLabel = useMemo(() => {
+    if (!planLocked || !planExpiresAt || !Number.isFinite(planExpiresAt)) return null;
+    const ms = planExpiresAt > 1e12 ? planExpiresAt : planExpiresAt * 1000;
+    try {
+      return new Date(ms).toLocaleDateString(i18n.language || undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return new Date(ms).toLocaleDateString();
+    }
+  }, [planLocked, planExpiresAt, i18n.language]);
 
   const rows = useMemo(
     () =>
       PLAN_ORDER.map((id) => {
         const def = PLAN_CATALOG[id];
+        const featuresRaw = t(`wallet.planFeatures.${id}`, { returnObjects: true });
+        const features = Array.isArray(featuresRaw)
+          ? featuresRaw.map((x) => String(x))
+          : [];
         return {
           id,
           def,
           title: t(`wallet.plan.${id}`),
+          code: t(`wallet.planCode.${id}`),
           blurb: t(`wallet.planBlurb.${id}`),
+          priceNote: t(`wallet.planPriceNote.${id}`),
+          features,
+          featured: id === 'pro',
+          popular: Boolean(def.recommended),
+          bestValue: id === 'pro',
         };
       }),
     [t]
   );
 
-  /** Paid checkout isn't live — open Usage in a new tab and auto-open redeem. */
-  const submit = () => {
-    onClose();
-    window.open('/account?tab=usage&redeem=1', '_blank', 'noopener,noreferrer');
+  const choose = (id: PlanId) => {
+    setPicked(id);
+    if (id === current) return;
+    if (planLocked) {
+      message.warning(
+        expiresLabel
+          ? t('wallet.planSwitchAfterExpiry', { date: expiresLabel })
+          : t('wallet.planSwitchLocked')
+      );
+      return;
+    }
+    message.warning(t('wallet.subscribeOnlineUnavailable'));
   };
 
+  return (
+    <div>
+      {!compact ? (
+        <p className="mb-5 max-w-2xl text-[13px] leading-relaxed text-[var(--muted)]">
+          {t('wallet.plansHint')}
+          {expiresLabel ? (
+            <>
+              {' '}
+              {t('wallet.planActiveUntil', { date: expiresLabel })}
+            </>
+          ) : null}
+        </p>
+      ) : expiresLabel ? (
+        <p className="mb-4 text-[12px] leading-relaxed text-[var(--muted)]">
+          {t('wallet.planActiveUntil', { date: expiresLabel })}
+        </p>
+      ) : null}
+
+      <div
+        className={cn(
+          'mx-auto grid w-full max-w-[820px] grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-3.5',
+          'lg:grid-cols-3 lg:items-stretch',
+          /* 4 aligned bands: header | price | cta | features */
+          'lg:[grid-template-rows:auto_auto_auto_1fr]'
+        )}
+      >
+        {rows.map(
+          (
+            { id, def, title, code, blurb, priceNote, features, featured, popular, bestValue },
+            index
+          ) => {
+            const isCurrent = current === id;
+            const isPicked = picked === id;
+            const switchBlocked = planLocked && !isCurrent;
+            const priceLabel =
+              def.priceCny === 0
+                ? t('wallet.priceFreeDisplay')
+                : t('wallet.priceMonthlyDisplay', { price: def.priceCny });
+
+            let ctaLabel = t('wallet.checkoutSubscribe');
+            if (isCurrent) ctaLabel = t('wallet.currentSubscribe');
+            else if (switchBlocked) ctaLabel = t('wallet.planSwitchLockedShort');
+
+            let cardBorder =
+              'border-[var(--line)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]';
+            if (featured) {
+              cardBorder =
+                'border-[#f07818] shadow-[0_8px_24px_-10px_rgba(240,120,24,0.45)]';
+            } else if (isPicked) {
+              cardBorder =
+                'border-[var(--ink)] shadow-[0_8px_24px_-12px_rgba(0,0,0,0.16)]';
+            }
+
+            return (
+              <article
+                key={id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setPicked(id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setPicked(id);
+                  }
+                }}
+                style={{ animationDelay: `${index * 50}ms` }}
+                className={cn(
+                  'plans-card relative flex min-h-[580px] flex-col rounded-2xl border bg-[var(--surface)] p-4 pb-14 transition duration-200 sm:p-5 sm:pb-16',
+                  'hover:-translate-y-0.5 hover:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.18)]',
+                  'lg:row-span-4 lg:grid lg:min-h-0 lg:grid-rows-subgrid lg:gap-0',
+                  cardBorder
+                )}
+              >
+                {(popular || bestValue) && (
+                  <span className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-md bg-[#f07818] px-2 py-0.5 text-[11px] font-semibold text-white">
+                    {popular ? (
+                      <HiOutlineFire className="h-3.5 w-3.5" strokeWidth={2} />
+                    ) : (
+                      <HiOutlineHandThumbUp className="h-3.5 w-3.5" strokeWidth={2} />
+                    )}
+                    {popular ? t('wallet.planBadgePopular') : t('wallet.planBadgeValue')}
+                  </span>
+                )}
+
+                {/* Band 1 — title */}
+                <header className="pr-16">
+                  <h4 className="text-[15px] font-bold uppercase tracking-[0.08em] text-[var(--ink)]">
+                    {code}
+                  </h4>
+                  <p className="mt-1 min-h-[2rem] text-[12px] leading-snug text-[var(--muted)]">
+                    {blurb}
+                  </p>
+                </header>
+
+                {/* Band 2 — price (tight stack like reference) */}
+                <div className="mt-3">
+                  <p className="text-[28px] font-bold leading-none tracking-tight text-[var(--ink)] tabular-nums">
+                    {priceLabel}
+                    {def.priceCny > 0 ? (
+                      <span className="ml-1 text-[14px] font-semibold text-[var(--muted)]">
+                        {t('wallet.perMonth')}
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="mt-1 min-h-[2rem] text-[12px] leading-snug text-[var(--muted)]">
+                    {priceNote}
+                  </p>
+                </div>
+
+                {/* Band 3 — CTA */}
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      choose(id);
+                    }}
+                    disabled={isCurrent}
+                    className={cn(
+                      'w-full rounded-xl px-3 py-2.5 text-[13px] font-semibold transition',
+                      isCurrent &&
+                        'cursor-default border border-[var(--line)] bg-[var(--accent-soft)] text-[var(--muted)]',
+                      !isCurrent &&
+                        switchBlocked &&
+                        'border border-[var(--line)] bg-[var(--accent-soft)] text-[var(--muted)] hover:opacity-90',
+                      !isCurrent &&
+                        !switchBlocked &&
+                        'bg-[var(--ink)] text-[var(--on-brand)] hover:opacity-90 active:scale-[0.98]'
+                    )}
+                  >
+                    {ctaLabel}
+                  </button>
+                </div>
+
+                {/* Band 4 — features; flex-1 keeps extra white space below the list */}
+                <ul className="mt-4 flex flex-1 flex-col gap-2.5 border-t border-[var(--line)] pt-4 pb-1">
+                  {features.map((line) => (
+                    <li
+                      key={line}
+                      className="flex items-start gap-2 text-[12px] leading-snug text-[var(--ink)]"
+                    >
+                      <HiOutlineCheck
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#f07818]"
+                        strokeWidth={2.5}
+                      />
+                      <span>{line}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="sr-only">
+                  {title}
+                  {isPicked ? ` — ${t('wallet.currentPlan')}` : ''}
+                </p>
+              </article>
+            );
+          }
+        )}
+      </div>
+
+      <section className={cn('mt-12', compact && 'mt-10')}>
+        <h3 className="mb-3 text-[15px] font-semibold text-[var(--ink)]">
+          {t('wallet.plansFaqTitle')}
+        </h3>
+        <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)]">
+          {FAQ_IDS.map((id, index) => {
+            const open = faqOpen === id;
+            return (
+              <div
+                key={id}
+                className={cn(index > 0 && 'border-t border-[var(--line)]')}
+              >
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() => setFaqOpen(open ? null : id)}
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left transition hover:bg-[var(--canvas)]/60"
+                >
+                  <span className="text-[13px] font-medium text-[var(--ink)]">
+                    {t(`wallet.plansFaq.${id}.q`)}
+                  </span>
+                  <HiOutlineChevronDown
+                    className={cn(
+                      'h-4 w-4 shrink-0 text-[var(--muted)] transition-transform duration-200',
+                      open && 'rotate-180'
+                    )}
+                    strokeWidth={2}
+                  />
+                </button>
+                {open ? (
+                  <div className="px-4 pb-4 pt-0">
+                    <p className="text-[12px] leading-relaxed text-[var(--muted)]">
+                      {t(`wallet.plansFaq.${id}.a`)}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <style>{`
+        @keyframes plans-card-in {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .plans-card {
+          animation: plans-card-in 0.35s ease both;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .plans-card { animation: none; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+type DialogProps = {
+  open: boolean;
+  onClose: () => void;
+};
+
+/** Standalone membership dialog. */
+export default function PlansDialog({ open, onClose }: DialogProps) {
+  const { t } = useTranslation();
   return (
     <Dialog
       show={open}
       onClose={onClose}
-      width={520}
+      width={900}
       title={t('wallet.plansTitle')}
-      titleClassName="!text-[16px] !font-semibold"
-      bodyClassName="pt-1"
-      className="!w-full !bg-[var(--surface)] !p-6"
-      footer={
-        <>
-          <Button size="small" type="default" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-          <Button size="small" type="primary" onClick={submit} disabled={picked === current}>
-            {picked === current ? t('wallet.currentPlan') : t('wallet.switchPlan')}
-          </Button>
-        </>
-      }
+      titleClassName="!shrink-0 !px-6 !pb-1 !pt-6 !pr-14 !text-[22px] !font-bold !tracking-tight sm:!px-8 sm:!pt-8"
+      bodyClassName="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-0 sm:px-8 sm:pb-8"
+      className="!flex !h-auto !max-h-[min(92vh,900px)] !w-full !max-w-[min(900px,96vw)] !flex-col !overflow-hidden !rounded-2xl !bg-[var(--account-main)] !p-0"
     >
-      <p className="mb-4 text-[12px] leading-relaxed text-[var(--muted)]">{t('wallet.plansHint')}</p>
-
-      <div className="flex flex-col gap-2">
-        {rows.map(({ id, def, title, blurb }) => {
-          const active = picked === id;
-          const isCurrent = current === id;
-          const priceLabel =
-            def.priceCny === 0
-              ? t('wallet.priceFree')
-              : t('wallet.priceMonthly', { price: def.priceCny });
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setPicked(id)}
-              className={cn(
-                'flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition',
-                active
-                  ? 'border-[var(--ink)] bg-[var(--accent-soft)]'
-                  : 'border-[var(--line)] bg-[var(--canvas)] hover:border-[var(--muted)]'
-              )}
-            >
-              <span
-                className={cn(
-                  'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
-                  active
-                    ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--on-brand)]'
-                    : 'border-[var(--line)]'
-                )}
-              >
-                {active ? <HiOutlineCheck className="h-3.5 w-3.5" strokeWidth={2.5} /> : null}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                  <span className="text-[14px] font-semibold text-[var(--ink)]">{title}</span>
-                  <span className="text-[12px] tabular-nums text-[var(--muted)]">{priceLabel}</span>
-                  {def.recommended ? (
-                    <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--ink)] ring-1 ring-[var(--ink)]/25">
-                      {t('wallet.planRecommended')}
-                    </span>
-                  ) : null}
-                  {isCurrent ? (
-                    <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)] ring-1 ring-[var(--line)]">
-                      {t('wallet.currentPlan')}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="mt-1 block text-[12px] leading-snug text-[var(--muted)]">
-                  {blurb}
-                </span>
-                <span className="mt-1 block text-[11px] text-[var(--ink)]">
-                  {t('wallet.creditsIncluded', { count: def.creditsIncluded })}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      <PlansPanel active={open} />
     </Dialog>
   );
 }

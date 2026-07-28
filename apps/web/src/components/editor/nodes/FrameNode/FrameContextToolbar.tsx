@@ -5,6 +5,8 @@ import {
   HiOutlineArrowsRightLeft,
   HiOutlineEye,
   HiOutlineEyeSlash,
+  HiOutlineLink,
+  HiOutlineLinkSlash,
   HiOutlineLockClosed,
   HiOutlineLockOpen,
 } from 'react-icons/hi2';
@@ -44,6 +46,7 @@ export default function FrameContextToolbar({ frame }: Props) {
   const [presetOpen, setPresetOpen] = useState(false);
   const [ratioOpen, setRatioOpen] = useState(false);
   const canvasLocked = Boolean(frame.locked);
+  const aspectLocked = Boolean(frame.lockAspect);
   const clipContent = Boolean(frame.clipContent);
   const presetKey = matchFramePreset(frame.width, frame.height);
   const presetMeta = findFramePreset(presetKey);
@@ -68,6 +71,15 @@ export default function FrameContextToolbar({ frame }: Props) {
     if (canvasLocked) return;
     const n = Math.max(40, Math.round(Number(raw) || 0));
     if (!Number.isFinite(n)) return;
+    if (aspectLocked) {
+      const ratio = frame.width / Math.max(1, frame.height);
+      if (axis === 'w') {
+        patch({ width: n, height: Math.max(40, Math.round(n / ratio)) });
+      } else {
+        patch({ width: Math.max(40, Math.round(n * ratio)), height: n });
+      }
+      return;
+    }
     if (axis === 'w') patch({ width: n });
     else patch({ height: n });
   };
@@ -229,6 +241,40 @@ export default function FrameContextToolbar({ frame }: Props) {
           onPointerDown={(e) => e.stopPropagation()}
         />
       </label>
+      <Tooltip
+        title={
+          aspectLocked
+            ? t('editor.frameToolbar.unlockAspect')
+            : t('editor.frameToolbar.lockAspect')
+        }
+        placement="top"
+      >
+        <button
+          type="button"
+          aria-label={
+            aspectLocked
+              ? t('editor.frameToolbar.unlockAspect')
+              : t('editor.frameToolbar.lockAspect')
+          }
+          aria-pressed={aspectLocked}
+          disabled={canvasLocked}
+          className={cn(
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
+            aspectLocked && 'bg-[var(--accent-soft)] text-[var(--ink)]',
+            canvasLocked && 'pointer-events-none opacity-50'
+          )}
+          onClick={() => {
+            if (canvasLocked) return;
+            patch({ lockAspect: !aspectLocked });
+          }}
+        >
+          {aspectLocked ? (
+            <HiOutlineLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+          ) : (
+            <HiOutlineLinkSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+      </Tooltip>
       <label className={cn(field, canvasLocked && 'opacity-50')}>
         <span className="text-[var(--muted)]">H</span>
         <input

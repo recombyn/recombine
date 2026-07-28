@@ -47,11 +47,11 @@ const PreviewToolbar: React.FC<PreviewToolbarProps> = ({
       onClick={(e) => e.stopPropagation()}
     >
       {showCounter && total > 1 && (
-        <div className="rounded-full bg-[var(--color-background-default-base)]/80 px-3 py-1 text-sm text-white">
+        <div className="rounded-xl bg-[var(--color-background-default-base)]/80 px-3 py-1 text-sm text-white">
           {current + 1} / {total}
         </div>
       )}
-      <div className="flex h-[42px] items-center rounded-full bg-black/50 px-6 backdrop-blur-sm">
+      <div className="flex h-[42px] items-center rounded-xl bg-black/50 px-6 backdrop-blur-sm">
         {onFlipY && (
           <Button
             onClick={onFlipY}

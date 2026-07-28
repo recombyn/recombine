@@ -427,7 +427,7 @@ async def _run_partial(
         yield {
             "type": "error",
             "message": "invalid_canvas_size",
-            "detail": "Admin default_size_* / canvas chip missing — no Host size inventing",
+            "detail": "Admin default_size_* / canvas chip missing — runtime does not invent size",
         }
         return
     if canvas_id and layer_ids and target_layer_id:
@@ -476,11 +476,7 @@ async def _run_partial(
             has_images=bool(ref_images),
         )
         tools_block = format_canvas_tools_for_model()
-        from services.design.admin_store import STAGE_RULE_DEFAULTS
-
-        partial_system = _rule_text(rules, "agent.prompt.partial_system").strip() or str(
-            STAGE_RULE_DEFAULTS.get("agent.prompt.partial_system") or ""
-        ).strip()
+        partial_system = _rule_text(rules, "agent.prompt.partial_system").strip()
         system = "\n".join(
             p
             for p in [

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useSelector } from 'react-redux';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -6,6 +7,8 @@ import {
 } from '@/components/rcb';
 import AlignGuidesOverlay, { type AlignGuide } from '@/components/rcb/selection/AlignGuidesOverlay';
 import {
+  getDocumentGridSize,
+  snapBoxToGrid,
   snapBoxToGuides,
   getSnapThreshold,
   type SceneBox,
@@ -235,9 +238,10 @@ export function expandFrameForRatio(
   return { w, h, ox: (cw - w) / 2, oy: 0 };
 }
 
-/** System ink — avoid bright brand blues. */
-const ACCENT = '#141414';
-const ACCENT_SOFT = 'rgba(56, 56, 56, 0.35)';
+/** Match selection chrome (`SelectionChrome` SEL_BASELINE) — readable on photos. */
+const ACCENT = '#3388ff';
+const ACCENT_SOFT = 'rgba(51, 136, 255, 0.4)';
+const LABEL = '#ffffff';
 const EXPAND_GRAY = '#e8e8e8';
 /** Dim outside the crop hole (kept region stays clear). */
 const CROP_MASK = 'rgba(0, 0, 0, 0.48)';
@@ -292,6 +296,9 @@ export default function CropExpandOverlay({
 }: Props): ReactNode {
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
+  const isGridMode = useSelector((state: any) => Boolean(state.editor.isGridMode));
+  const document = useSelector((state: any) => state.editor.document);
+  const gridSize = getDocumentGridSize(document);
   const [dragging, setDragging] = useState(false);
   const [guides, setGuides] = useState<AlignGuide[]>([]);
   const dragRef = useRef<DragState | null>(null);
@@ -349,12 +356,15 @@ export default function CropExpandOverlay({
         const orig = drag.crop;
         if (drag.type === 'move') {
           const moved = calcCropMove(orig, dx, dy, cw, ch);
-          const world: SceneBox = {
+          let world: SceneBox = {
             left: img.left + moved.x,
             top: img.top + moved.y,
             width: moved.w,
             height: moved.h,
           };
+          if (isGridMode && !e.ctrlKey && !e.metaKey) {
+            world = snapBoxToGrid(world, gridSize);
+          }
           const threshold = getSnapThreshold(z);
           const snapped = snapBoxToGuides(world, others, frames, threshold);
           const next = calcCropMove(
@@ -370,7 +380,7 @@ export default function CropExpandOverlay({
             width: next.w,
             height: next.h,
           };
-          setGuides(snapBoxToGuides(finalWorld, others, frames, 0).guides);
+          setGuides(snapped.guides.length ? snapBoxToGuides(finalWorld, others, frames, 0).guides : []);
           onCropRef.current(next);
           return;
         }
@@ -388,12 +398,15 @@ export default function CropExpandOverlay({
       const orig = drag.expand;
       if (drag.type === 'move') {
         const moved = calcExpandMove(orig, dx, dy, cw, ch);
-        const world: SceneBox = {
+        let world: SceneBox = {
           left: img.left + moved.ox,
           top: img.top + moved.oy,
           width: moved.w,
           height: moved.h,
         };
+        if (isGridMode && !e.ctrlKey && !e.metaKey) {
+          world = snapBoxToGrid(world, gridSize);
+        }
         const threshold = getSnapThreshold(z);
         const snapped = snapBoxToGuides(world, others, frames, threshold);
         const next = calcExpandMove(
@@ -409,7 +422,7 @@ export default function CropExpandOverlay({
           width: next.w,
           height: next.h,
         };
-        setGuides(snapBoxToGuides(finalWorld, others, frames, 0).guides);
+        setGuides(snapped.guides.length ? snapBoxToGuides(finalWorld, others, frames, 0).guides : []);
         onExpandRef.current(next);
         return;
       }
@@ -435,7 +448,7 @@ export default function CropExpandOverlay({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [mode, z, cw, ch]);
+  }, [mode, z, cw, ch, isGridMode, gridSize]);
 
   const startMove = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -675,13 +688,13 @@ export default function CropExpandOverlay({
 
           <div
             className="pointer-events-none absolute left-2 top-1.5 text-[11px] font-medium"
-            style={{ color: ACCENT }}
+            style={{ color: LABEL, textShadow: '0 1px 2px rgba(0,0,0,0.55)' }}
           >
             {label}
           </div>
           <div
             className="pointer-events-none absolute right-2 top-1.5 text-[11px] font-medium tabular-nums"
-            style={{ color: ACCENT }}
+            style={{ color: LABEL, textShadow: '0 1px 2px rgba(0,0,0,0.55)' }}
           >
             {dimLabel}
           </div>

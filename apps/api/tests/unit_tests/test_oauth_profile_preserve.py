@@ -1,4 +1,4 @@
-"""Returning Google logins must not clobber in-app name / avatar."""
+"""Returning Google logins must not clobber in-app custom avatar / name."""
 
 from __future__ import annotations
 
@@ -21,44 +21,75 @@ def _use_tmp_db(tmp_path: Path, monkeypatch, name: str) -> None:
 def test_upsert_oauth_preserves_custom_profile(tmp_path: Path, monkeypatch):
     _use_tmp_db(tmp_path, monkeypatch, "oauth-profile.db")
 
-    from services.auth.email_store import upsert_oauth_user
+    from services.auth.email_store import update_profile, upsert_oauth_user
     from services.db import init_schema
 
     init_schema()
+
+    # Skip network rehost in unit tests — keep remote URL in default_avatar.
+    monkeypatch.setattr(
+        "services.auth.email_store._rehost_remote_avatar",
+        lambda *a, **k: None,
+    )
 
     first = upsert_oauth_user(
         user_id="google:sub-1",
         email="user@example.com",
         name="Google Name",
-        avatar="https://lh3.googleusercontent.com/a/default",
+        avatar="https://lh3.googleusercontent.com/a/REALPHOTO",
         provider="google",
         google_sub="sub-1",
     )
     assert first.name == "Google Name"
-    assert first.avatar and "googleusercontent" in first.avatar
+    assert first.avatar_custom is None
+    assert first.default_avatar and "googleusercontent" in first.default_avatar
+    assert first.avatar == first.default_avatar
 
-    # User edited profile in-app.
-    from services.auth.email_store import update_profile
-
+    # User uploaded a custom avatar (data URL → local upload path when storage works).
     updated = update_profile(
         first.id,
         name="本地昵称",
-        avatar="data:image/png;base64,aaa",
+        avatar="data:image/png;base64,iVBORw0KGgo=",
     )
     assert updated is not None
     assert updated.name == "本地昵称"
+    assert updated.avatar_custom  # custom field set
+    assert updated.avatar == updated.avatar_custom  # display prefers custom
 
-    # Second Google login brings Google profile again — must keep local edits.
+    # Second Google login — keep custom name/avatar; may refresh default_avatar.
     again = upsert_oauth_user(
         user_id="google:sub-1",
         email="user@example.com",
         name="Google Name",
-        avatar="https://lh3.googleusercontent.com/a/default",
+        avatar="https://lh3.googleusercontent.com/a/REALPHOTO2",
         provider="google",
         google_sub="sub-1",
     )
     assert again.name == "本地昵称"
-    assert again.avatar == "data:image/png;base64,aaa"
+    assert again.avatar_custom == updated.avatar_custom
+    assert again.avatar == updated.avatar_custom
+
+
+def test_oauth_placeholder_not_stored_as_default(tmp_path: Path, monkeypatch):
+    _use_tmp_db(tmp_path, monkeypatch, "oauth-default.db")
+    from services.auth.email_store import upsert_oauth_user
+    from services.db import init_schema
+
+    init_schema()
+    monkeypatch.setattr(
+        "services.auth.email_store._rehost_remote_avatar",
+        lambda *a, **k: None,
+    )
+    u = upsert_oauth_user(
+        user_id="google:sub-def",
+        email="d@example.com",
+        name="No Photo",
+        avatar="https://lh3.googleusercontent.com/a/default",
+        provider="google",
+        google_sub="sub-def",
+    )
+    assert u.default_avatar is None
+    assert u.avatar is None
 
 
 def test_create_session_returns_persisted_profile(tmp_path: Path, monkeypatch):
@@ -69,6 +100,10 @@ def test_create_session_returns_persisted_profile(tmp_path: Path, monkeypatch):
     from services.db import init_schema
 
     init_schema()
+    monkeypatch.setattr(
+        "services.auth.email_store._rehost_remote_avatar",
+        lambda *a, **k: None,
+    )
     upsert_oauth_user(
         user_id="google:sub-2",
         email="b@example.com",
@@ -77,7 +112,7 @@ def test_create_session_returns_persisted_profile(tmp_path: Path, monkeypatch):
         provider="google",
         google_sub="sub-2",
     )
-    update_profile("google:sub-2", name="Edited", avatar="/uploads/me.png")
+    update_profile("google:sub-2", name="Edited", avatar="/api/v1/uploads/files/avatars/x.png")
 
     session, token = create_session(
         SessionUser(
@@ -90,4 +125,4 @@ def test_create_session_returns_persisted_profile(tmp_path: Path, monkeypatch):
     )
     assert token
     assert session.name == "Edited"
-    assert session.avatar == "/uploads/me.png"
+    assert session.avatar == "/api/v1/uploads/files/avatars/x.png"

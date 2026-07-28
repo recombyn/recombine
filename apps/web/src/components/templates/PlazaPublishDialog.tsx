@@ -1,63 +1,257 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { HiCheck, HiOutlineExclamationTriangle, HiOutlineSparkles } from 'react-icons/hi2';
-import { Button, Dialog } from '@/components/base';
-import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
-import { checkPlazaCoverForPublish } from '@/utils/plazaCover';
-import { cn } from '@/utils/classnames';
+import { HiCheck, HiOutlineSparkles } from 'react-icons/hi2';
+import { Button, Dialog, message } from '@/components/base';
+import ProjectCoverCollage from '@/components/home/ProjectCoverCollage';
+import { checkPlazaCoverForPublish, coverDocumentHasContent } from '@/utils/plazaCover';
+import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
+import { buildProjectCoverTiles } from '@/utils/renderProjectThumbnail';
+
+/** `<img src>` cannot send Bearer — skip auth-only upload routes. */
+function canUseAsImgSrc(url: string): boolean {
+  const raw = String(url || '').trim();
+  if (!raw) return false;
+  if (raw.startsWith('data:') || raw.startsWith('blob:')) return true;
+  try {
+    const u = new URL(raw, typeof window !== 'undefined' ? window.location.origin : 'http://local');
+    if (u.pathname.startsWith('/api/v1/uploads/')) return false;
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+type PlazaPublishFormProps = {
+  publishing: boolean;
+  projectId?: string;
+  projectName: string;
+  document?: unknown;
+  /** Saved project cover tiles (拼贴) — preferred when list has no live document. */
+  coverUrls?: string | string[] | null;
+  coverVersion?: number | string | null;
+  onCancel: () => void;
+  onSubmit: () => Promise<void> | void;
+  onSuccessDone?: () => void;
+  onPhaseChange?: (phase: 'confirm' | 'success') => void;
+};
+
+/**
+ * Shared publish-to-plaza body — cover matches 首页 ProjectCoverCollage
+ * (rewrite API/base hosts on tab enter; live-raster tiles when URLs missing).
+ */
+export function PlazaPublishForm({
+  publishing,
+  projectId,
+  projectName,
+  document,
+  coverUrls,
+  coverVersion,
+  onCancel,
+  onSubmit,
+  onSuccessDone,
+  onPhaseChange,
+}: PlazaPublishFormProps): ReactNode {
+  const { t } = useTranslation();
+  const [phase, setPhase] = useState<'confirm' | 'success'>('confirm');
+  const [resolvedUrls, setResolvedUrls] = useState<string[]>([]);
+  const [resolvingCover, setResolvingCover] = useState(false);
+
+  const coverCheck = useMemo(() => checkPlazaCoverForPublish(document), [document]);
+  const propUrls = useMemo(
+    () =>
+      normalizeProjectThumbnailUrls(coverUrls, coverVersion).filter(canUseAsImgSrc),
+    [coverUrls, coverVersion]
+  );
+  const hasThumbCollage = resolvedUrls.length > 0;
+  const canvasEmpty = !hasThumbCollage && !coverDocumentHasContent(document);
+  const canSubmit = (coverCheck.ok || hasThumbCollage) && !canvasEmpty;
+
+  useEffect(() => {
+    setPhase('confirm');
+    onPhaseChange?.('confirm');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Enter Publish tab: use rewritten public collage URLs, else build homepage tiles.
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      if (propUrls.length) {
+        if (!cancelled) {
+          setResolvedUrls(propUrls);
+          setResolvingCover(false);
+        }
+        return;
+      }
+      if (!document) {
+        if (!cancelled) {
+          setResolvedUrls([]);
+          setResolvingCover(false);
+        }
+        return;
+      }
+      if (!cancelled) setResolvingCover(true);
+      try {
+        const tiles = await buildProjectCoverTiles(document);
+        if (cancelled) return;
+        const next = (tiles.dataUrls || tiles.urls || [])
+          .map((u) => String(u || '').trim())
+          .filter(Boolean)
+          .slice(0, 4);
+        setResolvedUrls(next);
+      } catch {
+        if (!cancelled) setResolvedUrls([]);
+      } finally {
+        if (!cancelled) setResolvingCover(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [propUrls, document, projectId]);
+
+  const goPhase = (next: 'confirm' | 'success') => {
+    setPhase(next);
+    onPhaseChange?.(next);
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    if (canvasEmpty) {
+      message.warning(t('plaza.emptyCanvas'));
+      return;
+    }
+    try {
+      await onSubmit();
+      goPhase('success');
+    } catch {
+      /* error toast handled by caller */
+    }
+  };
+
+  if (phase === 'success') {
+    return (
+      <div className="plaza-thanks relative px-1 pb-2 pt-6 text-center">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+          <span className="plaza-thanks-orb plaza-thanks-orb-a" />
+          <span className="plaza-thanks-orb plaza-thanks-orb-b" />
+          <span className="plaza-thanks-orb plaza-thanks-orb-c" />
+        </div>
+
+        <div className="relative mx-auto flex h-[72px] w-[72px] items-center justify-center">
+          <span className="plaza-thanks-ring" aria-hidden />
+          <span className="plaza-thanks-badge inline-flex h-14 w-14 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] shadow-[0_10px_28px_rgba(15,23,42,0.18)]">
+            <HiCheck className="h-7 w-7" strokeWidth={2.25} />
+          </span>
+        </div>
+
+        <div className="plaza-thanks-copy relative mt-5">
+          <div className="mb-1.5 inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--muted)]">
+            <HiOutlineSparkles className="h-3.5 w-3.5" />
+            {t('plaza.thanksEyebrow')}
+          </div>
+          <h3 className="text-[20px] font-semibold tracking-tight text-[var(--ink)]">
+            {t('plaza.thanksTitle')}
+          </h3>
+          <p className="mx-auto mt-2 max-w-[320px] text-[13px] leading-relaxed text-[var(--muted)]">
+            {t('plaza.thanksBody', { name: projectName })}
+          </p>
+        </div>
+
+        <div className="relative mt-6 flex justify-center">
+          <Button
+            size="small"
+            type="primary"
+            className="!min-w-[96px]"
+            onClick={() => (onSuccessDone || onCancel)()}
+          >
+            {t('plaza.thanksDone')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--canvas)]">
+        <div className="aspect-[680/385] w-full overflow-hidden bg-[var(--canvas)]">
+          {resolvingCover && !hasThumbCollage ? (
+            <div className="h-full w-full animate-pulse bg-[var(--accent-soft)]" />
+          ) : hasThumbCollage ? (
+            <ProjectCoverCollage
+              urls={resolvedUrls}
+              version={coverVersion}
+              className="!h-full !rounded-none !border-0 !shadow-none"
+            />
+          ) : (
+            <div className="h-full w-full bg-[var(--accent-soft)]" />
+          )}
+        </div>
+      </div>
+
+      <p className="mt-3.5 text-[13px] font-medium text-[var(--ink)]">{projectName}</p>
+
+      <p className="mt-2.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
+        {t('plaza.publishHint')}
+      </p>
+
+      <div className="mt-5 flex justify-end gap-2">
+        <Button size="small" type="default" disabled={publishing} onClick={onCancel}>
+          {t('common.cancel')}
+        </Button>
+        <Button
+          size="small"
+          type="primary"
+          loading={publishing}
+          disabled={!canSubmit || resolvingCover}
+          onClick={() => void handleSubmit()}
+        >
+          {t('plaza.submit')}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 type PlazaPublishDialogProps = {
   open: boolean;
   publishing: boolean;
+  projectId?: string;
   projectName: string;
   document?: unknown;
+  coverUrls?: string | string[] | null;
+  coverVersion?: number | string | null;
   onClose: () => void;
   onSubmit: () => Promise<void> | void;
 };
 
-/**
- * Publish-to-plaza confirm — requires at least one artboard before submit.
- */
+/** Standalone Publish-to-plaza dialog (Projects grid). */
 export default function PlazaPublishDialog({
   open,
   publishing,
+  projectId,
   projectName,
   document,
+  coverUrls,
+  coverVersion,
   onClose,
   onSubmit,
 }: PlazaPublishDialogProps): ReactNode {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<'confirm' | 'success'>('confirm');
 
-  const coverCheck = useMemo(() => checkPlazaCoverForPublish(document), [document]);
-
   useEffect(() => {
     if (open) setPhase('confirm');
-  }, [open]);
-
-  const handleSubmit = async () => {
-    if (!coverCheck.ok) return;
-    try {
-      await onSubmit();
-      setPhase('success');
-    } catch {
-      /* error toast handled by caller */
-    }
-  };
+  }, [open, projectId]);
 
   const handleClose = () => {
     if (publishing) return;
     onClose();
   };
-
-  const frameHint = (() => {
-    const frame = coverCheck.frame;
-    if (!frame) return null;
-    const w = Math.round(frame.width);
-    const h = Math.round(frame.height);
-    const name = String(frame.name || '').trim() || t('plaza.artboardUntitled');
-    return t('plaza.artboardDetail', { name, w, h });
-  })();
 
   return (
     <Dialog
@@ -66,110 +260,23 @@ export default function PlazaPublishDialog({
       width={440}
       title={phase === 'confirm' ? t('plaza.publish') : undefined}
       titleClassName="!px-5 !text-[16px] !font-semibold !pb-2"
-      className="!overflow-hidden !bg-[var(--surface)] !px-0 !pb-4 !pt-5"
+      className="!overflow-hidden !rounded-2xl !bg-[var(--surface)] !px-0 !pb-4 !pt-5"
       bodyClassName="!px-0 !py-0"
-      footer={
-        phase === 'confirm' ? (
-          <>
-            <Button size="small" type="default" disabled={publishing} onClick={handleClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              size="small"
-              type="primary"
-              loading={publishing}
-              disabled={!coverCheck.ok}
-              onClick={() => void handleSubmit()}
-            >
-              {t('plaza.submit')}
-            </Button>
-          </>
-        ) : (
-          <Button size="small" type="primary" className="!min-w-[96px]" onClick={handleClose}>
-            {t('plaza.thanksDone')}
-          </Button>
-        )
-      }
-      footerClassName={cn('!px-5', phase === 'success' && '!justify-center')}
     >
-      {phase === 'confirm' ? (
-        <div className="px-5 pb-1 pt-1">
-          <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--canvas)]">
-            <div className="aspect-[680/385] w-full">
-              {coverCheck.coverDocument ? (
-                <TemplateThumbnail document={coverCheck.coverDocument} fit="cover" />
-              ) : (
-                <div className="h-full w-full bg-[var(--accent-soft)]" />
-              )}
-            </div>
-          </div>
-
-          <p className="mt-3.5 text-[13px] font-medium text-[var(--ink)]">{projectName}</p>
-
-          <ul className="mt-3 space-y-2 rounded-xl border border-[var(--line)] bg-[var(--canvas)]/60 px-3 py-2.5">
-            <li className="flex items-start gap-2 text-[12.5px] leading-snug">
-              <CheckIcon ok={coverCheck.hasCover} />
-              <span className={coverCheck.hasCover ? 'text-[var(--ink)]' : 'text-[var(--muted)]'}>
-                {t('plaza.artboardCheck')}
-                {frameHint ? (
-                  <span className="mt-0.5 block text-[11.5px] text-[var(--muted)]">{frameHint}</span>
-                ) : null}
-              </span>
-            </li>
-          </ul>
-
-          {!coverCheck.ok ? (
-            <p className="mt-2.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-amber-700">
-              <HiOutlineExclamationTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              {t('plaza.artboardMissingHint')}
-            </p>
-          ) : (
-            <p className="mt-2.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
-              {t('plaza.publishHint')}
-            </p>
-          )}
-        </div>
-      ) : (
-        <div className="plaza-thanks relative px-6 pb-2 pt-8 text-center">
-          <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-            <span className="plaza-thanks-orb plaza-thanks-orb-a" />
-            <span className="plaza-thanks-orb plaza-thanks-orb-b" />
-            <span className="plaza-thanks-orb plaza-thanks-orb-c" />
-          </div>
-
-          <div className="relative mx-auto flex h-[72px] w-[72px] items-center justify-center">
-            <span className="plaza-thanks-ring" aria-hidden />
-            <span className="plaza-thanks-badge inline-flex h-14 w-14 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] shadow-[0_10px_28px_rgba(15,23,42,0.18)]">
-              <HiCheck className="h-7 w-7" strokeWidth={2.25} />
-            </span>
-          </div>
-
-          <div className="plaza-thanks-copy relative mt-5">
-            <div className="mb-1.5 inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--muted)]">
-              <HiOutlineSparkles className="h-3.5 w-3.5" />
-              {t('plaza.thanksEyebrow')}
-            </div>
-            <h3 className="text-[20px] font-semibold tracking-tight text-[var(--ink)]">
-              {t('plaza.thanksTitle')}
-            </h3>
-            <p className="mx-auto mt-2 max-w-[320px] text-[13px] leading-relaxed text-[var(--muted)]">
-              {t('plaza.thanksBody', { name: projectName })}
-            </p>
-          </div>
-        </div>
-      )}
+      <div className="px-5 pb-1 pt-1">
+        <PlazaPublishForm
+          publishing={publishing}
+          projectId={projectId}
+          projectName={projectName}
+          document={document}
+          coverUrls={coverUrls}
+          coverVersion={coverVersion}
+          onCancel={handleClose}
+          onSubmit={onSubmit}
+          onSuccessDone={handleClose}
+          onPhaseChange={setPhase}
+        />
+      </div>
     </Dialog>
-  );
-}
-
-function CheckIcon({ ok }: { ok: boolean }) {
-  return ok ? (
-    <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white">
-      <HiCheck className="h-2.5 w-2.5" strokeWidth={3} />
-    </span>
-  ) : (
-    <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--line)] text-[var(--muted)]">
-      <span className="h-1 w-1 rounded-full bg-current" />
-    </span>
   );
 }

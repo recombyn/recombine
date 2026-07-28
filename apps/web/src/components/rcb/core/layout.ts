@@ -111,6 +111,35 @@ export function rcbCenterInBox(
 }
 
 /**
+ * On-canvas size for an uploaded / pasted image.
+ *
+ * Scene units are zoom-independent, so a fixed pixel cap lands huge when the user
+ * is zoomed out and postage-stamp small when zoomed in. Measure against the visible
+ * viewport instead: keep the natural size while it already reads well, otherwise
+ * scale so the image covers between `minRatio` and `maxRatio` of the screen.
+ *
+ * `viewport` is the on-screen stage size in CSS px; `zoom` the current camera zoom.
+ */
+export function rcbFitImageIntoViewport(
+  natural: { width: number; height: number },
+  viewport: { width: number; height: number },
+  zoom: number,
+  { minRatio = 0.25, maxRatio = 0.6 }: { minRatio?: number; maxRatio?: number } = {}
+): { width: number; height: number } {
+  const nw = Math.max(1, Number(natural.width) || 1);
+  const nh = Math.max(1, Number(natural.height) || 1);
+  const z = Math.max(0.05, Number(zoom) || 1);
+  const vw = Math.max(1, (Number(viewport.width) || 1) / z);
+  const vh = Math.max(1, (Number(viewport.height) || 1) / z);
+  const contain = (ratio: number) => Math.min((vw * ratio) / nw, (vh * ratio) / nh);
+  const scale = Math.min(contain(maxRatio), Math.max(1, contain(minRatio)));
+  return {
+    width: Math.max(1, Math.round(nw * scale)),
+    height: Math.max(1, Math.round(nh * scale)),
+  };
+}
+
+/**
  * Center a node-sized rect on a point (e.g. drop image centered on pointer).
  */
 export function rcbCenterOnPoint(

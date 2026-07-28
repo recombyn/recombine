@@ -31,7 +31,7 @@ function clampBoxAnchored(
   return { left: nl, top: nt, width: nw, height: nh };
 }
 
-function applyAspectToHandle(
+export function applyAspectToHandle(
   handle: ResizeHandle,
   left: number,
   top: number,

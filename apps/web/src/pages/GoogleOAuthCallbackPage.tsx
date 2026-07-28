@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { loginGoogle } from '@/apis/auth';
 import { setSession } from '@/store/modules/auth';
+import { buildLoginUrl } from '@/utils/authReturnTo';
 import {
   consumeGoogleOAuthState,
   getGoogleRedirectUri,
@@ -71,7 +72,7 @@ export default function GoogleOAuthCallbackPage() {
         <>
           <p className="max-w-md text-[14px] text-[var(--danger,#c0392b)]">{error}</p>
           <Link
-            to="/login"
+            to={buildLoginUrl()}
             className="text-[14px] font-medium text-[var(--accent)] underline underline-offset-2"
           >
             {t('auth.backHome')}

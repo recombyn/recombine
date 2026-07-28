@@ -9,20 +9,21 @@ from pydantic import BaseModel, Field
 
 from services.auth import get_session
 from services.llm.image_tools import IMAGE_PROCESS_KINDS, process_image_tool
-from services.wallet.db import spend_tokens
+from services.wallet.billing import DEFAULT_IMAGE_CREDITS, image_model_credit_cost
+from services.wallet.db import spend_image_credits
 
 router = APIRouter()
 
-# Credits per tool (bolt amounts shown on confirm buttons).
+# Wallet 积分 charged per image tool when not tied to a Seedream catalog price.
+# Scale: Standard ¥29 ≈ 200 积分 → tools cost a few 积分 each.
 _KIND_CREDIT_COST: dict[str, int] = {
-    "upscale": 2,
-    "removeBg": 1,
-    "multiAngle": 2,
-    "expand": 8,
-    "editElements": 2,
-    "editText": 2,
-    "vector": 2,
-    "adjust": 2,
+    "upscale": 20,
+    "removeBg": 10,
+    "multiAngle": 30,
+    "expand": 30,
+    "editText": 20,
+    "vector": 20,
+    "adjust": 20,
 }
 
 
@@ -54,22 +55,34 @@ def _require_user(authorization: str | None):
 
 def _charge(user_id: str, amount: int, detail: str) -> None:
     try:
-        spend_tokens(user_id, amount, detail)
+        spend_image_credits(user_id, amount, detail)
     except ValueError as err:
-        if str(err) == "insufficient_tokens":
-            raise HTTPException(status_code=402, detail="Insufficient credits") from err
+        if str(err) == "insufficient_image_credits":
+            raise HTTPException(status_code=402, detail="Insufficient tokens") from err
         raise HTTPException(status_code=400, detail=str(err)) from err
 
 
-def credit_cost_for_kind(kind: str) -> int:
-    return int(_KIND_CREDIT_COST.get((kind or "").strip(), 2))
+def token_cost_for_kind(kind: str, model: str | None = None) -> int:
+    """Wallet credits for an image tool. Prefer catalog 元/张 when model is set."""
+    mid = (model or "").strip()
+    if mid:
+        return image_model_credit_cost(mid)
+    return int(_KIND_CREDIT_COST.get((kind or "").strip(), DEFAULT_IMAGE_CREDITS))
+
+
+# Back-compat alias for older callers.
+credit_cost_for_kind = token_cost_for_kind
 
 
 @router.get("/tools")
 def list_image_tools() -> dict[str, Any]:
+    kinds = sorted(IMAGE_PROCESS_KINDS)
+    costs = {k: token_cost_for_kind(k) for k in kinds}
     return {
-        "kinds": sorted(IMAGE_PROCESS_KINDS),
-        "credits": {k: credit_cost_for_kind(k) for k in sorted(IMAGE_PROCESS_KINDS)},
+        "kinds": kinds,
+        "tokens": costs,
+        # Legacy key — same map as tokens.
+        "credits": costs,
     }
 
 
@@ -80,7 +93,7 @@ async def post_image_process(
 ) -> dict[str, Any]:
     user = _require_user(authorization)
     kind = body.kind.strip()
-    cost = credit_cost_for_kind(kind)
+    cost = token_cost_for_kind(kind, body.model)
     # Charge before the model call so insufficient balance fails fast.
     _charge(user.id, cost, f"AI image tool: {kind}")
 
@@ -103,5 +116,5 @@ async def post_image_process(
         raise HTTPException(status_code=502, detail=msg) from err
 
     if isinstance(result, dict):
-        result = {**result, "credits": cost}
+        result = {**result, "tokens": cost, "credits": cost}
     return result

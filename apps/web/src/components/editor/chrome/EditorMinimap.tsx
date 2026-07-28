@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 import { rcbViewportSceneBounds, type RcbCamera } from '@/components/rcb';
 import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
@@ -9,9 +8,9 @@ import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 
 type Box = { x: number; y: number; width: number; height: number };
 
-const MAP_W = 140;
-const MAP_H = 88;
-const PAD = 8;
+const MAP_W = 200;
+const MAP_H = 128;
+const PAD = 10;
 
 function unionBox(a: Box | null, b: Box): Box {
   if (!a) return { ...b };
@@ -104,7 +103,6 @@ export default function EditorMinimap({
   onCameraChange,
   canvasBg,
 }: Props): ReactNode {
-  const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ pointerId: number } | null>(null);
 
@@ -209,10 +207,10 @@ export default function EditorMinimap({
   const nodes = listSceneNodes(document);
 
   return (
-    <div className="pointer-events-auto mb-2 w-[140px] rounded bg-[var(--surface)] p-2 shadow-[0_8px_24px_rgba(0,0,0,0.18)] ring-1 ring-[var(--line)]">
+    <div className="pointer-events-auto mb-2 w-[200px] rounded-xl bg-[var(--surface)] p-2 shadow-[0_8px_24px_rgba(0,0,0,0.18)] ring-1 ring-[var(--line)]">
       <div
         ref={rootRef}
-        className="relative h-[88px] cursor-crosshair overflow-hidden rounded bg-[var(--canvas)]"
+        className="relative h-[128px] cursor-crosshair overflow-hidden rounded-lg bg-[var(--canvas)]"
         style={canvasBg ? { background: canvasBg } : undefined}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -269,7 +267,6 @@ export default function EditorMinimap({
           style={{ left: vp.x, top: vp.y, width: vpW, height: vpH }}
         />
       </div>
-      <p className="mt-1 text-center text-[10px] text-[var(--muted)]">{t('editor.minimap')}</p>
     </div>
   );
 }

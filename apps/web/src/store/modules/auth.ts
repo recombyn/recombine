@@ -1,7 +1,26 @@
 import { createSlice } from '@reduxjs/toolkit';
+import { clearAllProjectDrafts } from '@/components/editor/projectDraftStore';
+import { clearHomeAgentBoot } from '@/utils/homeAgentBoot';
 import { getToken, setToken as persistToken } from '@/utils/token';
 
 const STORAGE_KEY = 'resume-scene-auth-v1';
+
+/** Account-bound local keys cleared on logout (not device UI prefs like theme). */
+const SESSION_STORAGE_KEYS = [
+  'resume-scene-wallet-v3',
+  'resume-scene-wallet-v2',
+  'resume.agentRoutePrefs.v1',
+  'resume.agentRoutePrefs.v2',
+  'resume.customLlmProviders.v1',
+  'resume.notices.read.v1',
+  'recombyn:custom-project-thumbs',
+  'recombyn-google-oauth-nonce-v1',
+] as const;
+
+const SESSION_KEY_PREFIXES = [
+  'recombyn-liked-cases-v1:',
+  'recombyn-editor-tour-v3',
+] as const;
 
 export type AuthUser = {
   email: string;
@@ -27,6 +46,46 @@ function loadAuth(): { user: AuthUser | null } {
 
 function persist(user: AuthUser | null) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ user }));
+}
+
+function removeStorageKeys(storage: Storage, keys: readonly string[]) {
+  for (const key of keys) {
+    try {
+      storage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function removeStorageByPrefixes(storage: Storage, prefixes: readonly string[]) {
+  const doomed: string[] = [];
+  try {
+    for (let i = 0; i < storage.length; i += 1) {
+      const key = storage.key(i);
+      if (!key) continue;
+      if (prefixes.some((p) => key.startsWith(p))) doomed.push(key);
+    }
+  } catch {
+    return;
+  }
+  removeStorageKeys(storage, doomed);
+}
+
+/**
+ * Clear account-bound caches after logout / 401.
+ * Keeps device prefs (theme, dock widths, language).
+ */
+export function clearSessionCaches() {
+  removeStorageKeys(localStorage, SESSION_STORAGE_KEYS);
+  removeStorageByPrefixes(localStorage, SESSION_KEY_PREFIXES);
+  clearHomeAgentBoot();
+  try {
+    sessionStorage.removeItem('recombyn-google-oauth-nonce-v1');
+  } catch {
+    /* ignore */
+  }
+  void clearAllProjectDrafts();
 }
 
 const initialState = loadAuth();
