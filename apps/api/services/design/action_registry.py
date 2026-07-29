@@ -154,7 +154,11 @@ def ensure_action_registry(*, force_hints: bool = False) -> int:
                 existing_schema = ""
             # Existing row is Admin-owned: only fill empty columns. Never rewrite
             # kind/label/hint/sort_order when already set (unless force_hints).
-            if force_hints:
+            # Seed schema drift (staleSchemaChecks) may refresh args_schema + hint.
+            schema_stale = bool(existing_schema) and _schema_is_stale(
+                key, existing_schema, schema_s
+            )
+            if force_hints or schema_stale:
                 try:
                     conn.execute(
                         """

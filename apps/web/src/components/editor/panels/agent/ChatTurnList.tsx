@@ -66,10 +66,16 @@ export type ChatUiMessage = {
   durationMs?: number;
   /** Quick-reply chips from ask_user (e.g. create canvas). */
   choices?: string[];
-  /** Ask mode: proposed tool_ops waiting for the model-named apply_choice chip. */
+  /** Ask mode: proposed tool_ops waiting for an option with action=apply. */
   proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
-  /** Ask mode: which choices[] label applies proposedOps (from model). */
+  /** Ask mode: label of the apply option (compat). */
   applyChoice?: string;
+  /** Ask interaction UI — mode + options; text = freeform reply. */
+  choiceUi?: {
+    mode: 'confirm' | 'single' | 'multi' | 'buttons' | 'text';
+    options: Array<{ label: string; action: 'apply' | 'reply' | 'dismiss' }>;
+    placeholder?: string;
+  };
   /** Live-draw pipeline progress — kept for training UI; not shown in normal chat. */
   pipeline?: {
     category: string;
@@ -97,8 +103,15 @@ type Props = {
   onBeginEdit: (m: ChatUiMessage) => void;
   onCancelEdit: () => void;
   onRestore: (userId: string) => void;
-  onChoice?: (choice: string) => void;
+  onChoice?: (choice: AskChoicePick) => void;
   className?: string;
+};
+
+export type AskChoicePick = {
+  label: string;
+  action: 'apply' | 'reply' | 'dismiss';
+  /** multi mode: all selected labels when submitting. */
+  selectedLabels?: string[];
 };
 
 function hasFoldableProcess(assistant: ChatUiMessage): boolean {
@@ -439,6 +452,156 @@ function ImageGenGallery({
   );
 }
 
+function resolveAskChoiceUi(assistant: ChatUiMessage): ChatUiMessage['choiceUi'] | null {
+  if (assistant.choiceUi?.mode === 'text') {
+    // Free-text answers use the bottom composer — only keep chip actions if any.
+    const opts = (assistant.choiceUi.options || []).filter(
+      (o) => o.action === 'apply' || o.action === 'dismiss'
+    );
+    if (!opts.length) return null;
+    return { mode: 'buttons', options: opts };
+  }
+  if (assistant.choiceUi?.options?.length) return assistant.choiceUi;
+  const labels = (assistant.choices || []).map((c) => String(c).trim()).filter(Boolean);
+  const apply = String(assistant.applyChoice || '').trim();
+  if (!labels.length && !apply && !assistant.proposedOps?.length) return null;
+  const options: NonNullable<ChatUiMessage['choiceUi']>['options'] = [];
+  if (apply) options.push({ label: apply, action: 'apply' });
+  for (const label of labels) {
+    if (label === apply) continue;
+    options.push({ label, action: 'reply' });
+  }
+  if (assistant.proposedOps?.length && !options.some((o) => o.action === 'apply')) {
+    options.unshift({ label: '', action: 'apply' });
+  }
+  if (!options.length) return null;
+  const mode =
+    options.every((o) => o.action === 'apply' || o.action === 'dismiss')
+      ? 'confirm'
+      : 'buttons';
+  return { mode, options };
+}
+
+function AskChoicePanel({
+  assistant,
+  onChoice,
+  sending,
+}: {
+  assistant: ChatUiMessage;
+  onChoice: (choice: AskChoicePick) => void;
+  sending: boolean;
+}): ReactNode {
+  const { t } = useTranslation();
+  const ui = resolveAskChoiceUi(assistant);
+  const [picked, setPicked] = useState<string[]>([]);
+  if (!ui?.options.length) return null;
+
+  const optionLabel = (opt: { label: string; action: string }) => {
+    if (opt.label) return opt.label;
+    if (opt.action === 'apply') return t('common.confirm');
+    if (opt.action === 'dismiss') return t('common.cancel');
+    return opt.label;
+  };
+
+  const chipClass =
+    'inline-flex h-7 max-w-full items-center rounded-xl border border-[var(--line)] bg-[var(--accent-soft)] px-2.5 text-[11px] text-[var(--ink)] transition-colors hover:bg-[var(--line)] disabled:opacity-40';
+
+  if (ui.mode === 'multi') {
+    const replyOpts = ui.options.filter((o) => o.action === 'reply');
+    const applyOpt = ui.options.find((o) => o.action === 'apply');
+    const dismissOpt = ui.options.find((o) => o.action === 'dismiss');
+    return (
+      <div className="mt-1 flex flex-col items-start gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
+          {replyOpts.map((opt) => {
+            const label = optionLabel(opt);
+            const on = picked.includes(label);
+            return (
+              <button
+                key={`m-${label}`}
+                type="button"
+                disabled={sending}
+                className={cn(chipClass, on && 'border-[var(--ink)] bg-[var(--line)]')}
+                onClick={() =>
+                  setPicked((prev) =>
+                    on ? prev.filter((x) => x !== label) : [...prev, label]
+                  )
+                }
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {applyOpt ? (
+            <button
+              type="button"
+              disabled={sending}
+              className={chipClass}
+              onClick={() =>
+                onChoice({
+                  label: optionLabel(applyOpt),
+                  action: 'apply',
+                  selectedLabels: picked,
+                })
+              }
+            >
+              {optionLabel(applyOpt)}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={sending || picked.length === 0}
+              className={chipClass}
+              onClick={() =>
+                onChoice({
+                  label: picked.join('、'),
+                  action: 'reply',
+                  selectedLabels: picked,
+                })
+              }
+            >
+              {t('common.confirm')}
+            </button>
+          )}
+          {dismissOpt ? (
+            <button
+              type="button"
+              disabled={sending}
+              className={chipClass}
+              onClick={() =>
+                onChoice({ label: optionLabel(dismissOpt), action: 'dismiss' })
+              }
+            >
+              {optionLabel(dismissOpt)}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1 flex flex-col items-start gap-1.5">
+      {ui.options.map((opt, i) => {
+        const label = optionLabel(opt);
+        return (
+          <button
+            key={`${opt.action}-${label}-${i}`}
+            type="button"
+            disabled={sending}
+            className={chipClass}
+            onClick={() => onChoice({ label, action: opt.action })}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AssistantTurn({
   assistant,
   worked,
@@ -447,7 +610,7 @@ function AssistantTurn({
 }: {
   assistant: ChatUiMessage;
   worked: string | null;
-  onChoice?: (choice: string) => void;
+  onChoice?: (choice: AskChoicePick) => void;
   sending: boolean;
 }): ReactNode {
   const { t } = useTranslation();
@@ -486,6 +649,20 @@ function AssistantTurn({
       ) : null}
     </span>
   );
+
+  const showAskChoices =
+    !streaming &&
+    onChoice &&
+    Boolean(
+      (assistant.choiceUi?.mode !== 'text' && assistant.choiceUi?.options?.length) ||
+        (assistant.choiceUi?.mode === 'text' &&
+          assistant.choiceUi.options?.some(
+            (o) => o.action === 'apply' || o.action === 'dismiss'
+          )) ||
+        assistant.choices?.length ||
+        assistant.applyChoice ||
+        assistant.proposedOps?.length
+    );
 
   return (
     <div
@@ -534,26 +711,8 @@ function AssistantTurn({
           <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
         </div>
       ) : null}
-      {/* Only pending Ask proposals — hide chips after apply or once the turn is stale. */}
-      {!streaming &&
-      assistant.proposedOps?.length &&
-      assistant.choices?.length &&
-      onChoice ? (
-        <div className="mt-1 flex flex-col items-start gap-1.5">
-          {assistant.choices
-            .filter((c) => c !== '取消')
-            .map((c) => (
-              <button
-                key={c}
-                type="button"
-                disabled={sending}
-                className="inline-flex h-7 max-w-full items-center rounded-xl border border-[var(--line)] bg-[var(--accent-soft)] px-2.5 text-[11px] text-[var(--ink)] transition-colors hover:bg-[var(--line)] disabled:opacity-40"
-                onClick={() => onChoice(c)}
-              >
-                {c}
-              </button>
-            ))}
-        </div>
+      {showAskChoices && onChoice ? (
+        <AskChoicePanel assistant={assistant} onChoice={onChoice} sending={sending} />
       ) : null}
     </div>
   );

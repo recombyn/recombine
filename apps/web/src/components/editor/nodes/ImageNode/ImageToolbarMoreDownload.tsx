@@ -75,7 +75,7 @@ export default function ImageToolbarMoreDownload({
       floatingClassName="z-[80]"
       referenceClassName="inline-flex"
     >
-      <Tooltip title={t('editor.imageToolbar.more')} placement="top">
+      <Tooltip tip={t('editor.imageToolbar.more')} placement="top">
         <button
           type="button"
           aria-label={t('editor.imageToolbar.more')}

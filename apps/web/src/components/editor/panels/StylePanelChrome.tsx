@@ -214,7 +214,7 @@ export function StylePanelShell({
             </Tooltip>
           ) : null}
           {onClose ? (
-            <Tooltip title={'退出'} placement="bottom">
+            <Tooltip tip={'退出'} placement="bottom">
               <button
                 type="button"
                 aria-label={'退出'}

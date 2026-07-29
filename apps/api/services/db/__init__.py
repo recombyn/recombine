@@ -410,6 +410,14 @@ def init_schema() -> None:
             expires_at DOUBLE NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS email_activate_tokens (
+            token_id VARCHAR(64) PRIMARY KEY,
+            email {email_col},
+            expires_at DOUBLE NOT NULL,
+            created_at DOUBLE NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_email_activate_expires ON email_activate_tokens(expires_at);
+
         CREATE TABLE IF NOT EXISTS card_keys (
             id {pk_int},
             key_hash VARCHAR(128) NOT NULL UNIQUE,
@@ -1411,6 +1419,15 @@ def _init_mysql_schema(conn: ConnectionWrapper) -> None:
             ticket VARCHAR(128) PRIMARY KEY,
             email VARCHAR(320) NOT NULL,
             expires_at DOUBLE NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS email_activate_tokens (
+            token_id VARCHAR(64) PRIMARY KEY,
+            email VARCHAR(320) NOT NULL,
+            expires_at DOUBLE NOT NULL,
+            created_at DOUBLE NOT NULL,
+            KEY idx_email_activate_expires (expires_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """,
         """

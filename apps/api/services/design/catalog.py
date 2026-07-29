@@ -14,6 +14,7 @@ from services.db import dialect
 
 _ENSURE_LOCK = threading.RLock()
 _CATALOG_READY = False
+_BOOTSTRAPPING = False
 
 
 def catalog_ready() -> bool:
@@ -22,28 +23,38 @@ def catalog_ready() -> bool:
 
 def ensure_design_catalog(*, force: bool = False) -> None:
     """Process bootstrap only (startup / admin /catalog). Design-run must only SELECT."""
-    global _CATALOG_READY
+    global _CATALOG_READY, _BOOTSTRAPPING
     if _CATALOG_READY and not force:
         return
     with _ENSURE_LOCK:
         if _CATALOG_READY and not force:
             return
-        init_schema()
-        mysql = dialect() == "mysql"
-        with connect() as conn:
-            ensure_design_tables(conn, mysql=mysql)
-        seed_design_catalog_if_empty()
-        resync_design_content(force=False)
-        # Library brush cover refresh is slow on remote MySQL — only run from
-        # brush/library endpoints via ensure_library_seed(), not on every catalog boot.
-        from services.design.knowledge_store import ensure_design_knowledge
-        from services.design.prompt_pack_store import ensure_design_prompt_packs
-        from services.design.action_registry import ensure_action_registry
+        # Re-entrant call while still bootstrapping (e.g. ensure_stage_rules → catalog):
+        # skip to avoid nested seed / lock storms that hang the API worker.
+        if _BOOTSTRAPPING:
+            return
+        _BOOTSTRAPPING = True
+        try:
+            init_schema()
+            mysql = dialect() == "mysql"
+            with connect() as conn:
+                ensure_design_tables(conn, mysql=mysql)
+            seed_design_catalog_if_empty()
+            resync_design_content(force=False)
+            # Library brush cover refresh is slow on remote MySQL — only run from
+            # brush/library endpoints via ensure_library_seed(), not on every catalog boot.
+            from services.design.knowledge_store import ensure_design_knowledge
+            from services.design.prompt_pack_store import ensure_design_prompt_packs
+            from services.design.action_registry import ensure_action_registry
+            from services.design.system_prompt_store import ensure_system_prompts
 
-        ensure_design_knowledge()
-        ensure_design_prompt_packs()
-        ensure_action_registry()
-        _CATALOG_READY = True
+            ensure_design_knowledge()
+            ensure_design_prompt_packs()
+            ensure_action_registry()
+            ensure_system_prompts()
+            _CATALOG_READY = True
+        finally:
+            _BOOTSTRAPPING = False
 
 def _parse_json_list(raw: Any) -> list[Any]:
     if isinstance(raw, list):
@@ -103,7 +114,12 @@ def get_skill(skill_id: int) -> dict[str, Any] | None:
 
 
 def get_global_rules() -> dict[str, str]:
-    """Runtime rules map — disabled rows are omitted (callers fall back to code defaults)."""
+    """Runtime rules map — disabled rows are omitted (callers fall back to code defaults).
+
+    System prompts live in ``design_prompt_pack`` (merged via ``get_system_prompt_bodies``)
+    so existing ``_prompt_text(rules, key)`` call sites keep working. Flow-node ``promptText``
+    (matched by ``promptKey``) overrides the table — node is source of truth.
+    """
     with connect() as conn:
         try:
             rows = conn.execute(
@@ -116,7 +132,20 @@ def get_global_rules() -> dict[str, str]:
             rows = conn.execute(
                 "SELECT rule_key, rule_value FROM design_global_rule"
             ).fetchall()
-    return {str(r["rule_key"]): str(r["rule_value"]) for r in rows}
+    out = {str(r["rule_key"]): str(r["rule_value"]) for r in rows}
+    try:
+        from services.design.system_prompt_store import get_system_prompt_bodies
+
+        # ensure=False: catalog / stage bootstrap may already be mid-flight.
+        for key, body in get_system_prompt_bodies(ensure=False).items():
+            # Empty body → leave unset so resolve_prompt_body can fall back to pack seed.
+            if str(body or "").strip():
+                out[key] = str(body)
+            else:
+                out.pop(key, None)
+    except Exception:
+        pass
+    return out
 
 
 def get_refine_skill(

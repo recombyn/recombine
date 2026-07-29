@@ -65,7 +65,7 @@ function readAspectLocked(attrs: Record<string, unknown> | undefined): boolean {
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
-/** Stored before first ratio preset so 「原始」 can restore. */
+/** Stored before first ratio preset so 「自由」 can restore. */
 const ASPECT_ORIG_W = 'aspect-original-width';
 const ASPECT_ORIG_H = 'aspect-original-height';
 
@@ -167,6 +167,37 @@ export default function ShapeSelectionToolbar({
     patchAttrs({ sides: clampShapeSides(n, DEFAULT_SHAPE_SIDES) });
   };
 
+  const applyAspectPreset = (preset: (typeof ELEMENT_ASPECT_PRESETS)[number]) => {
+    if (preset.id === 'original') {
+      // 「自由」：保持当前尺寸，取消比例锁定
+      patchAttrs({ lockAspect: 'false' });
+      return;
+    }
+    const shapeType = node?.attrs?.shapeType;
+    const hasOrig =
+      Number(node?.attrs?.[ASPECT_ORIG_W]) > 0 && Number(node?.attrs?.[ASPECT_ORIG_H]) > 0;
+    const next = sizeFromAspectPreset(box, preset.w, preset.h);
+    dispatch(
+      patchDocumentNode({
+        nodeId,
+        patch: {
+          width: Math.max(1, Math.round(next.width)),
+          height: Math.max(1, Math.round(next.height)),
+          attrs: {
+            ...(shapeType != null ? { shapeType } : {}),
+            lockAspect: 'true',
+            ...(!hasOrig
+              ? {
+                  [ASPECT_ORIG_W]: Math.round(box.width),
+                  [ASPECT_ORIG_H]: Math.round(box.height),
+                }
+              : {}),
+          },
+        },
+      })
+    );
+  };
+
   const applyOutline = () => {
     void (async () => {
       const hide = message.loading('轮廓化中…', 0);
@@ -207,7 +238,7 @@ export default function ShapeSelectionToolbar({
   return (
     <>
       {canFill ? (
-        <Tooltip title={'颜色'} placement="top">
+        <Tooltip tip={'颜色'} placement="top">
           <button
             type="button"
             aria-label={'颜色'}
@@ -220,7 +251,7 @@ export default function ShapeSelectionToolbar({
       ) : null}
 
       {canStroke ? (
-        <Tooltip title={'描边'} placement="top">
+        <Tooltip tip={'描边'} placement="top">
           <button
             type="button"
             aria-label={'描边'}
@@ -232,7 +263,7 @@ export default function ShapeSelectionToolbar({
         </Tooltip>
       ) : null}
       {cornerRadius ? (
-        <Tooltip title={'圆角'} placement="top">
+        <Tooltip tip={'圆角'} placement="top">
           <button
             type="button"
             aria-label={'圆角'}
@@ -262,38 +293,7 @@ export default function ShapeSelectionToolbar({
           open={ratioOpen}
           onOpenChange={setRatioOpen}
           activeId={activeRatioId}
-          onPick={(preset) => {
-            if (preset.id === 'original') {
-              const ow = Number(node?.attrs?.[ASPECT_ORIG_W]);
-              const oh = Number(node?.attrs?.[ASPECT_ORIG_H]);
-              if (Number.isFinite(ow) && ow > 0 && Number.isFinite(oh) && oh > 0) {
-                patchSize(ow, oh);
-              }
-              return;
-            }
-            const shapeType = node?.attrs?.shapeType;
-            const hasOrig =
-              Number(node?.attrs?.[ASPECT_ORIG_W]) > 0 && Number(node?.attrs?.[ASPECT_ORIG_H]) > 0;
-            const next = sizeFromAspectPreset(box, preset.w, preset.h);
-            dispatch(
-              patchDocumentNode({
-                nodeId,
-                patch: {
-                  width: Math.max(1, Math.round(next.width)),
-                  height: Math.max(1, Math.round(next.height)),
-                  attrs: {
-                    ...(shapeType != null ? { shapeType } : {}),
-                    ...(!hasOrig
-                      ? {
-                          [ASPECT_ORIG_W]: Math.round(box.width),
-                          [ASPECT_ORIG_H]: Math.round(box.height),
-                        }
-                      : {}),
-                  },
-                },
-              })
-            );
-          }}
+          onPick={applyAspectPreset}
         />
       ) : null}
 
@@ -356,7 +356,7 @@ export default function ShapeSelectionToolbar({
       </label>
 
       {showOutline ? (
-        <Tooltip title="Outline" placement="top">
+        <Tooltip tip="Outline" placement="top">
           <button type="button" aria-label="Outline" className={SEL_ICON_BTN} onClick={applyOutline}>
             <TbVectorBezier className="h-4 w-4" />
           </button>

@@ -29,10 +29,51 @@ type AlignGuidesOverlayProps = {
 };
 
 /** Screen px — sized as px/zoom in page space. */
-const STROKE_PX = 1;
+const STROKE_PX = 1.5;
+/** × at edge corners / centers (MasterGo-style). */
+const CROSS_PX = 10;
+
+function GuideCross({
+  x,
+  y,
+  size,
+  stroke,
+  color,
+}: {
+  x: number;
+  y: number;
+  size: number;
+  stroke: number;
+  color: string;
+}) {
+  const pad = stroke;
+  const outer = size + pad * 2;
+  return (
+    <svg
+      className="absolute overflow-visible"
+      width={outer}
+      height={outer}
+      style={{
+        left: x,
+        top: y,
+        transform: 'translate(-50%, -50%)',
+      }}
+      aria-hidden
+    >
+      <path
+        d={`M${pad} ${pad} L${pad + size} ${pad + size} M${pad + size} ${pad} L${pad} ${pad + size}`}
+        fill="none"
+        stroke={color}
+        strokeWidth={stroke}
+        strokeLinecap="square"
+      />
+    </svg>
+  );
+}
 
 /**
- * Edge/center align guides (solid orange, matching MasterGo).
+ * Edge/center align guides (orange, MasterGo-style):
+ * one continuous segment + × at marks (corners for edges, mids for centers).
  * Gap / size distance labels are drawn once by SpacingInspectOverlay.
  */
 export default function AlignGuidesOverlay({
@@ -48,6 +89,7 @@ export default function AlignGuidesOverlay({
   const inStage = space === 'stage';
   const inv = inStage ? 1 : 1 / zoom;
   const stroke = STROKE_PX * inv;
+  const cross = CROSS_PX * inv;
   const color = SPACING_MEASURE_COLOR;
 
   const mapX = (wx: number) => (inStage ? rcbSceneToScreen(camera, wx, 0).x : wx);
@@ -64,52 +106,83 @@ export default function AlignGuidesOverlay({
       {alignGuides.map((g, i) => {
         const a = Math.min(g.from, g.to);
         const b = Math.max(g.from, g.to);
-        const len = Math.max(stroke, mapLen(b - a));
+        const markVals = (g.marks?.length ? g.marks : [a, b]).map(
+          (n) => Math.round(n * 100) / 100
+        );
+        const crosses = Array.from(new Set(markVals));
+        const len = Math.max(0, mapLen(b - a));
+        const drawSegment = len >= stroke;
 
         if (g.orient === 'v') {
           const x = mapX(g.pos);
           const top = mapY(a);
           return (
-            <svg
-              key={`v-${g.pos}-${i}`}
-              className="absolute overflow-visible"
-              width={Math.max(stroke * 2, 1)}
-              height={len}
-              style={{ left: x, top, transform: 'translateX(-50%)' }}
-              aria-hidden
-            >
-              <line
-                x1="50%"
-                y1={0}
-                x2="50%"
-                y2={len}
-                stroke={color}
-                strokeWidth={stroke}
-              />
-            </svg>
+            <div key={`v-${g.pos}-${i}`}>
+              {drawSegment ? (
+                <svg
+                  className="absolute overflow-visible"
+                  width={Math.max(stroke * 2, 1)}
+                  height={len}
+                  style={{ left: x, top, transform: 'translateX(-50%)' }}
+                  aria-hidden
+                >
+                  <line
+                    x1="50%"
+                    y1={0}
+                    x2="50%"
+                    y2={len}
+                    stroke={color}
+                    strokeWidth={stroke}
+                  />
+                </svg>
+              ) : null}
+              {crosses.map((y) => (
+                <GuideCross
+                  key={`vx-${y}`}
+                  x={x}
+                  y={mapY(y)}
+                  size={cross}
+                  stroke={stroke}
+                  color={color}
+                />
+              ))}
+            </div>
           );
         }
 
         const y = mapY(g.pos);
         const left = mapX(a);
         return (
-          <svg
-            key={`h-${g.pos}-${i}`}
-            className="absolute overflow-visible"
-            width={len}
-            height={Math.max(stroke * 2, 1)}
-            style={{ left, top: y, transform: 'translateY(-50%)' }}
-            aria-hidden
-          >
-            <line
-              x1={0}
-              y1="50%"
-              x2={len}
-              y2="50%"
-              stroke={color}
-              strokeWidth={stroke}
-            />
-          </svg>
+          <div key={`h-${g.pos}-${i}`}>
+            {drawSegment ? (
+              <svg
+                className="absolute overflow-visible"
+                width={len}
+                height={Math.max(stroke * 2, 1)}
+                style={{ left, top: y, transform: 'translateY(-50%)' }}
+                aria-hidden
+              >
+                <line
+                  x1={0}
+                  y1="50%"
+                  x2={len}
+                  y2="50%"
+                  stroke={color}
+                  strokeWidth={stroke}
+                />
+              </svg>
+            ) : null}
+            {crosses.map((x) => (
+              <GuideCross
+                key={`hx-${x}`}
+                x={mapX(x)}
+                y={y}
+                size={cross}
+                stroke={stroke}
+                color={color}
+              />
+            ))}
+          </div>
         );
       })}
     </div>

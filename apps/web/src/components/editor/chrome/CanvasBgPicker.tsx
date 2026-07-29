@@ -44,7 +44,7 @@ export default function CanvasBgPicker({
       onMeshShowGuidesChange={onMeshShowGuidesChange}
     >
       {({ open: isOpen, preview }) => (
-        <Tooltip title={'画布背景'} placement="top">
+        <Tooltip tip={'画布背景'} placement="top">
           <span
             className={cn(
               'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',

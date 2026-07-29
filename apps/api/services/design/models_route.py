@@ -43,6 +43,7 @@ LANE_LABELS_ZH = {
 }
 
 _ROUTER_SYSTEM_KEY = "precheck.router_system"
+_INTENT_SYSTEM_KEY = "agent.prompt.intent_classify"
 
 
 class ModelRouteDecision(BaseModel):
@@ -58,6 +59,23 @@ class ModelRouteDecision(BaseModel):
     rationale: str = Field(
         default="",
         description="Short reason for the lane choice",
+    )
+
+
+class IntentClassifyDecision(BaseModel):
+    """Narrow intent gate before model_route / main thought."""
+
+    intent: Literal["chat", "edit", "create"] = Field(
+        default="chat",
+        description="User intent for this turn (chat ends; edit/create continue)",
+    )
+    reply: str = Field(
+        default="",
+        description="Short Chinese reply when intent=chat; empty otherwise",
+    )
+    rationale: str = Field(
+        default="",
+        description="Short reason for the intent choice",
     )
 
 
@@ -531,6 +549,96 @@ def router_model_id(rules: dict[str, str] | None) -> str:
         return raw
     lanes = parse_model_lanes(rules)
     return lanes.get("fast") or lanes.get("else") or "doubao-seed-2-1-turbo"
+
+
+def _user_request_core(prompt: str) -> str:
+    """Strip FE ``User request:`` wrapper so greetings are not mistaken for tasks."""
+    p = (prompt or "").strip()
+    m = re.search(r"(?is)\buser\s*request\s*:\s*(.*)\Z", p)
+    if m:
+        return (m.group(1) or "").strip()
+    return p
+
+
+def heuristic_user_intent(
+    prompt: str,
+    *,
+    has_images: bool = False,
+) -> IntentClassifyDecision:
+    """Fallback when the intent LLM is unavailable — prefer create over chat for tasks."""
+    p = _user_request_core(prompt)
+    compact = re.sub(r"\s+", "", p)
+    if re.fullmatch(
+        r"(你好|您好|嗨|哈喽|hi+|hello|hey|在吗|在么)[!！.。?？~～]*",
+        compact,
+        flags=re.I,
+    ):
+        return IntentClassifyDecision(
+            intent="chat", reply="", rationale="heuristic_greet"
+        )
+    if has_images or len(compact) >= 4:
+        return IntentClassifyDecision(
+            intent="create", reply="", rationale="heuristic_task"
+        )
+    return IntentClassifyDecision(intent="chat", reply="", rationale="heuristic_short")
+
+
+async def classify_user_intent(
+    *,
+    prompt: str,
+    rules: dict[str, str] | None = None,
+    has_images: bool = False,
+    canvas_node_count: int = 0,
+    scene: str | None = None,
+    interaction_mode: str | None = None,
+) -> IntentClassifyDecision:
+    """Cheap structured intent gate. Falls back to ``heuristic_user_intent`` on error."""
+    fallback = heuristic_user_intent(prompt, has_images=has_images)
+    mode = str(interaction_mode or "").strip().lower()
+    user_blob = (
+        f"scene={scene or 'unknown'}\n"
+        f"has_images={bool(has_images)}\n"
+        f"canvas_node_count={int(canvas_node_count)}\n"
+        f"interaction_mode={mode or 'agent'}\n"
+        f"user_prompt:\n{(prompt or '').strip()[:4000]}"
+    )
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.llm.agent import ainvoke_structured
+
+        system = resolve_prompt_body(_INTENT_SYSTEM_KEY, rules=rules)
+        if not system:
+            return fallback
+        out = await ainvoke_structured(
+            schema=IntentClassifyDecision,
+            messages=[{"role": "user", "content": user_blob}],
+            model=router_model_id(rules),
+            system=system,
+            source="intent_classify",
+        )
+        structured = out.get("structured")
+        if isinstance(structured, IntentClassifyDecision):
+            decision = structured
+        elif isinstance(structured, dict):
+            decision = IntentClassifyDecision.model_validate(structured)
+        else:
+            return fallback
+        intent = str(decision.intent or "").strip().lower()
+        # Legacy / confused models may still emit ask — treat as design continue.
+        if intent == "ask":
+            intent = "create"
+        if intent not in ("chat", "edit", "create"):
+            return fallback
+        reply = (decision.reply or "").strip()
+        if intent != "chat":
+            reply = ""
+        return IntentClassifyDecision(
+            intent=intent,  # type: ignore[arg-type]
+            reply=reply[:500],
+            rationale=(decision.rationale or "").strip() or "llm_intent",
+        )
+    except Exception:
+        return fallback
 
 
 async def classify_model_route(

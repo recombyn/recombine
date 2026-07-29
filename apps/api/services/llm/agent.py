@@ -397,12 +397,15 @@ def _with_system_identity(system: str, *, model: str | None = None) -> str:
 
 
 def _agent_model_id(requested: str | None, endpoint_model: str) -> str:
-    """Prefer a tool-capable chat model; reasoner aliases often lack tool_calls."""
-    mid = (requested or endpoint_model or "").strip()
-    low = mid.lower()
-    if "reasoner" in low:
+    """Use resolved ``api_model`` (Ark dated ids). Reasoner aliases lack tool_calls."""
+    req = (requested or "").strip()
+    api = (endpoint_model or "").strip()
+    # Catalog ids (deepseek-v4-flash, doubao-seed-2-1-turbo) 404 on Ark; endpoint_model
+    # is the real inference id from resolve_provider / get_llm_endpoint.
+    probe = f"{api} {req}".lower()
+    if "reasoner" in probe:
         return "deepseek-chat"
-    return mid or "deepseek-chat"
+    return api or req or "deepseek-chat"
 
 
 def _tool_calls_from_message(msg: Any) -> list[dict[str, Any]]:
@@ -958,9 +961,8 @@ async def stream_official_agent(
         detail = llm_error_detail(err)
         if "InvalidEndpointOrModel" in detail or "404" in detail:
             raise RuntimeError(
-                "Doubao model not found or not activated. "
-                "In Volcengine Ark, create an inference endpoint and set "
-                "DOUBAO_SEED_MODEL=ep-xxxx (or DOUBAO_PRO_MODEL) in apps/api/.env. "
+                "Ark model/endpoint not found. Use the catalog's dated api_model "
+                "(e.g. deepseek-v4-flash-260425), or activate the model in Volcengine Ark. "
                 f"Detail: {detail}"
             ) from err
         raise
@@ -1137,9 +1139,8 @@ async def stream_agent_turn(
         detail = llm_error_detail(err)
         if "InvalidEndpointOrModel" in detail or "404" in detail:
             raise RuntimeError(
-                "Doubao model not found or not activated. "
-                "In Volcengine Ark, create an inference endpoint and set "
-                "DOUBAO_SEED_MODEL=ep-xxxx (or DOUBAO_PRO_MODEL) in apps/api/.env. "
+                "Ark model/endpoint not found. Use the catalog's dated api_model "
+                "(e.g. deepseek-v4-flash-260425), or activate the model in Volcengine Ark. "
                 f"Detail: {detail}"
             ) from err
         raise

@@ -332,7 +332,7 @@ export function ExportSelectionPanel({
           >
             {t('editor.exportCompress')}
           </Checkbox>
-          <Tooltip title={t('editor.exportCompressTip')} placement="top">
+          <Tooltip tip={t('editor.exportCompressTip')} placement="top">
             <button
               type="button"
               id={tipId}

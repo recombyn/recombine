@@ -20,16 +20,17 @@ from services.auth.admin import (
 )
 from services.admin.users import ensure_super_admin_role
 from services.auth.email_store import (
-    can_send_code,
+    can_send_activate_link,
+    consume_activate_token,
     consume_ticket,
+    create_activate_token,
+    display_name_for_email,
     ensure_email_user,
-    generate_code,
-    store_code,
     update_profile,
     verify_and_issue_ticket,
 )
 from services.auth.google import login_with_google_auth_code, login_with_google_credential
-from services.auth.ses_mail import SesError, send_verification_email, ses_configured
+from services.auth.ses_mail import SesError, send_login_link_email, ses_configured
 from services.auth.slider_captcha import (
     captcha_required,
     clear_login_failures,
@@ -221,14 +222,14 @@ def auth_google(body: GoogleAuthIn) -> dict[str, Any]:
 
 @router.post("/email/send-code")
 def email_send_code(body: EmailSendCodeIn, request: Request) -> dict[str, Any]:
+    """Send magic-link login email (SES template {{username}} / {{id}})."""
     email = _normalize_email(body.email)
     ip = _client_ip(request)
 
-    # TEMP local test: fixed code for bootstrap admin (no SES).
+    # TEMP local test: bootstrap admin still uses password login; no SES.
     if email == _SUPER_ADMIN_EMAIL:
-        store_code(email, "888888")
-        logger.warning("TEMP admin login code for %s: 888888", email)
-        return {"ok": True, "expiresIn": 600}
+        logger.warning("TEMP admin login: use password endpoint (no magic link)")
+        return {"ok": True, "expiresIn": 48 * 3600, "mode": "link"}
 
     if not ses_configured():
         raise HTTPException(
@@ -236,12 +237,11 @@ def email_send_code(body: EmailSendCodeIn, request: Request) -> dict[str, Any]:
             detail="Email signup is temporarily unavailable. Try again later or use another sign-in method.",
         )
 
-    # Same risk gate as login — frequent failures / abuse must pass slider first.
     if captcha_required(email, ip):
         if not consume_captcha_token(body.captchaToken, email):
             raise _need_captcha_error()
 
-    allowed, retry_after = can_send_code(email)
+    allowed, retry_after = can_send_activate_link(email)
     if not allowed:
         record_login_failure(email, ip)
         if captcha_required(email, ip) and not body.captchaToken:
@@ -251,18 +251,58 @@ def email_send_code(body: EmailSendCodeIn, request: Request) -> dict[str, Any]:
             detail=f"Please wait {int(retry_after)}s before resending",
             headers={"Retry-After": str(int(retry_after))},
         )
-    code = generate_code()
+
+    token_id = create_activate_token(email)
+    username = display_name_for_email(email)
     try:
-        send_verification_email(to_email=email, code=code)
+        send_login_link_email(
+            to_email=email,
+            username=username,
+            activate_id=token_id,
+        )
     except SesError as err:
         logger.exception("Email send failed for %s", email)
         raise HTTPException(status_code=502, detail=str(err)) from err
-    store_code(email, code)
-    return {"ok": True, "expiresIn": 600}
+    return {"ok": True, "expiresIn": 48 * 3600, "mode": "link"}
+
+
+class EmailActivateIn(BaseModel):
+    id: str = Field(..., min_length=8, max_length=128)
+
+
+@router.post("/email/activate")
+def email_activate(body: EmailActivateIn, request: Request) -> dict[str, Any]:
+    """Consume one-time /activate/{{id}} link → session."""
+    ip = _client_ip(request)
+    try:
+        email = consume_activate_token(body.id)
+    except ValueError as err:
+        key = str(err)
+        messages = {
+            "link_invalid": "Login link is invalid or already used",
+            "link_expired": "Login link expired",
+        }
+        record_login_failure("activate", ip)
+        raise HTTPException(status_code=400, detail=messages.get(key, key)) from err
+
+    clear_login_failures(email, ip)
+    user = ensure_email_user(email=email)
+    session = SessionUser(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        avatar=user.avatar,
+        provider="email",
+        role=getattr(user, "role", None) or "user",
+        status=getattr(user, "status", None) or "active",
+    )
+    session, token = create_session(session)
+    return {"user": _user_payload(session), "token": token}
 
 
 @router.post("/email/verify-code")
 def email_verify_code(body: EmailVerifyCodeIn, request: Request) -> dict[str, Any]:
+    """Legacy 6-digit code login (kept for compatibility). Prefer /email/activate."""
     email = _normalize_email(body.email)
     ip = _client_ip(request)
 
@@ -282,7 +322,6 @@ def email_verify_code(body: EmailVerifyCodeIn, request: Request) -> dict[str, An
             "code_locked": "Too many attempts. Request a new code",
             "code_invalid": "Invalid verification code",
         }
-        # Wrong / locked codes count toward the slider risk gate.
         if key in ("code_invalid", "code_locked", "code_expired", "code_missing"):
             record_login_failure(email, ip)
             if passed_captcha:
@@ -292,7 +331,6 @@ def email_verify_code(body: EmailVerifyCodeIn, request: Request) -> dict[str, An
         raise HTTPException(status_code=400, detail=messages.get(key, key)) from err
 
     clear_login_failures(email, ip)
-    # Ticket proves the code; consume immediately and sign in (no password step).
     if not consume_ticket(email, ticket):
         raise HTTPException(status_code=400, detail="Invalid or expired verification ticket")
     user = ensure_email_user(email=email)

@@ -740,7 +740,7 @@ export function FillPanel({
                 onActiveStopChange={setActiveStop}
                 onStopsChange={applyStops}
               />
-              <Tooltip title="反转" placement="top">
+              <Tooltip tip="反转" placement="top">
                 <button
                   type="button"
                   aria-label="反转"
@@ -843,7 +843,7 @@ export function FillPanel({
                 />
                 %
               </label>
-              <Tooltip title="旋转 90°" placement="top">
+              <Tooltip tip="旋转 90°" placement="top">
                 <button
                   type="button"
                   aria-label="旋转 90°"
@@ -993,7 +993,7 @@ export function FillPanelPopover({
 
   return (
     <>
-      <Tooltip title={title} placement="top" disabled={open || !title}>
+      <Tooltip tip={title} placement="top" disabled={open || !title}>
         <button
           type="button"
           ref={refs.setReference}

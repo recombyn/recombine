@@ -382,6 +382,10 @@ def default_inject_for_node(node: dict[str, Any]) -> dict[str, Any] | None:
             "deferDetails": True,
         },
         "plan": {"mode": "none", "specs": ["agent.prompt.plan_system"]},
+        "intent_classify": {
+            "mode": "none",
+            "specs": ["agent.prompt.intent_classify"],
+        },
         "memory": {"mode": "details", "source": "memory"},
         "need_knowledge": {"mode": "catalog", "source": "knowledge"},
         "knowledge_details": {"mode": "details", "source": "knowledge"},
@@ -429,10 +433,37 @@ def default_inject_for_node(node: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def catalogs_from_need_edge_conditions(conditions: list[str]) -> list[str]:
+    """Outbound need_* edge conditions → inject catalog sources."""
+    out: list[str] = []
+    for raw in conditions:
+        c = str(raw or "")
+        for token, src in (
+            ("need_tools", "canvas_tools"),
+            ("need_prompts", "prompt"),
+            ("need_aesthetics", "aesthetics"),
+            ("need_knowledge", "knowledge"),
+        ):
+            if token in c and src not in out:
+                out.append(src)
+    return out
+
+
 def index_inject_by_phase(graph: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Map phaseKey (and node id) → normalized inject."""
+    """Map phaseKey (and node id) → normalized inject.
+
+    Thought-like catalogs prefer outbound need_* edges over stale node.inject.catalogs.
+    """
     raw = graph if isinstance(graph, dict) else {}
     nodes = [n for n in (raw.get("nodes") or []) if isinstance(n, dict)]
+    edges = [e for e in (raw.get("edges") or []) if isinstance(e, dict)]
+    conditions_by_source: dict[str, list[str]] = {}
+    for e in edges:
+        sid = str(e.get("source") or "").strip()
+        if not sid:
+            continue
+        conditions_by_source.setdefault(sid, []).append(str(e.get("condition") or ""))
+
     out: dict[str, dict[str, Any]] = {}
     for n in nodes:
         inj = normalize_inject(n.get("inject"))
@@ -443,6 +474,13 @@ def index_inject_by_phase(graph: dict[str, Any] | None) -> dict[str, dict[str, A
             continue
         nid = str(n.get("id") or "").strip()
         pk = str(n.get("phaseKey") or "").strip()
+        edge_cats = catalogs_from_need_edge_conditions(conditions_by_source.get(nid, []))
+        if edge_cats and (
+            inj.get("catalogs")
+            or str(inj.get("mode") or "").lower() == "catalog"
+            or bool(inj.get("deferDetails"))
+        ):
+            inj = {**inj, "catalogs": edge_cats, "mode": inj.get("mode") or "catalog"}
         if nid:
             out[nid] = inj
         if pk:
@@ -504,12 +542,6 @@ def build_full_tools_block(rules: dict[str, str] | None) -> str:
 
 
 def load_default_flow_inject_index() -> dict[str, dict[str, Any]]:
-    """Load published Admin default agent flow and index inject by phase."""
-    try:
-        from services.design.admin_store import get_published_agent_flow
+    """Admin flowchart removed — no inject index from published graph."""
+    return {}
 
-        pub = get_published_agent_flow("default")
-        graph = pub.get("graph") if isinstance(pub, dict) else None
-        return index_inject_by_phase(graph if isinstance(graph, dict) else {})
-    except Exception:
-        return index_inject_by_phase(None)

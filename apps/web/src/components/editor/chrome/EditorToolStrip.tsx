@@ -142,7 +142,7 @@ function ToolBtn({
   );
   if (!tip) return btn;
   return (
-    <Tooltip title={tip} placement="top">
+    <Tooltip tip={tip} placement="top">
       {btn}
     </Tooltip>
   );
@@ -481,7 +481,7 @@ export default function EditorToolStrip({
       >
       {/* Select / Move — click selects, hover for 选择/移动 */}
       <SplitToolButton
-        tip={`${L.select} / ${L.pan} (V / H)`}
+        tip={`${L.select} / ${L.pan}`}
         active={selectActive}
         menuOpen={openMenu === 'select'}
         onMenuOpenChange={(open) => {
@@ -527,8 +527,8 @@ export default function EditorToolStrip({
         <>
           {/* 钢笔 — options dock at page top-center while active */}
           <ToolBtn
-            tip={`${L.pen} P`}
-            ariaLabel={`${L.pen} P`}
+            tip={L.pen}
+            ariaLabel={L.pen}
             active={penActive}
             onClick={() => dispatch(setActiveTool('pen'))}
           >
@@ -540,7 +540,7 @@ export default function EditorToolStrip({
           {/* 画笔 — options dock at page top-center while active */}
           <ToolBtn
             tip={L.pencil}
-            ariaLabel={`${L.pencil} Shift+P`}
+            ariaLabel={L.pencil}
             active={pencilActive}
             onClick={() => dispatch(setActiveTool('pencil'))}
           >
@@ -551,8 +551,8 @@ export default function EditorToolStrip({
 
           {/* 油漆桶 — uses pen stroke color as fill */}
           <ToolBtn
-            tip={`${L.bucket} B`}
-            ariaLabel={`${L.bucket} B`}
+            tip={L.bucket}
+            ariaLabel={L.bucket}
             active={bucketActive}
             onClick={() => dispatch(setActiveTool('bucket'))}
           >
@@ -565,7 +565,7 @@ export default function EditorToolStrip({
 
       {/* 文字 */}
       <ToolBtn
-        tip={`${L.text} T`}
+        tip={L.text}
         active={textActive}
         onClick={() => dispatch(setActiveTool('text'))}
       >
@@ -576,7 +576,7 @@ export default function EditorToolStrip({
 
       {/* 智能画板 — free-draw; toolbar appears on the frame after commit */}
       <ToolBtn
-        tip={`${L.frame} F`}
+        tip={L.frame}
         active={frameActive}
         onClick={() => dispatch(setActiveTool('frame'))}
       >
@@ -587,7 +587,7 @@ export default function EditorToolStrip({
 
       {/* 图片上传 */}
       <ToolBtn
-        tip={`${L.uploadImage} I`}
+        tip={L.uploadImage}
         active={imageActive}
         onClick={openImageUpload}
       >
@@ -600,7 +600,7 @@ export default function EditorToolStrip({
 
       {/* 图像生成器 — places a generator node at viewport center */}
       <ToolBtn
-        tip={`${L.imageGenerator} A`}
+        tip={L.imageGenerator}
         onClick={spawnImageGeneratorAtView}
       >
         <ToolIcon>

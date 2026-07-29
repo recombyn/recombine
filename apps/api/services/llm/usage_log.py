@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import threading
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -20,6 +21,7 @@ from services.db import connect, dialect
 _log = logging.getLogger("llm.usage_log")
 
 _TABLE_READY = False
+_USAGE_WRITE_LOCK = threading.Lock()
 
 # OpenRouter ``usage.cost`` is USD; convert for Admin CNY P&L.
 _USD_CNY = 7.2
@@ -425,139 +427,159 @@ def record_model_usage(
     error: str | None = None,
     response: Any = None,
 ) -> None:
-    """Insert one usage row. Safe to call from any path (swallows errors)."""
+    """Insert one usage row. Safe to call from any path (swallows errors).
+
+    DB write runs off the caller thread so LangChain callbacks / Agent stream
+    do not block the ASGI event loop (Admin list timeouts while chatting).
+    """
+    # ContextVar must be read on the request / callback thread.
     try:
-        ensure_model_usage_table()
         ctx = get_usage_context()
-        parsed = parse_usage_fields(usage if isinstance(usage, dict) else {})
-
-        # Prefer explicit args, then usage blob, then context.
-        p_tok = prompt_tokens if prompt_tokens is not None else parsed.get("prompt_tokens")
-        c_tok = (
-            completion_tokens
-            if completion_tokens is not None
-            else parsed.get("completion_tokens")
-        )
-        t_tok = total_tokens if total_tokens is not None else parsed.get("total_tokens")
-        img_n = image_count if image_count is not None else parsed.get("image_count")
-
-        cost = cost_cny
-        if cost is None:
-            cost = parsed.get("cost_cny")
-
-        if cost is None and (img_n or 0) > 0:
-            cost = estimate_image_cost_cny(catalog_model_id, int(img_n or 1))
-
-        req_id = provider_request_id
-        if not req_id and isinstance(response, dict):
-            req_id = str(response.get("id") or response.get("request_id") or "") or None
-
-        meta_out: dict[str, Any] = {}
-        if ctx and ctx.meta:
-            meta_out.update(ctx.meta)
-        if meta:
-            meta_out.update(meta)
-        if parsed.get("_cost_key"):
-            meta_out.setdefault("cost_field", parsed.get("_cost_key"))
-            meta_out.setdefault("cost_raw", parsed.get("_cost_raw"))
-        # Persist vendor cost as CNY; OpenRouter usage.cost is USD.
-        prov_l = (provider or "").strip().lower()
-        if cost is not None and prov_l == "openrouter" and meta_out.get("cost_currency") != "cny":
-            meta_out.setdefault("cost_currency", "usd")
-            meta_out.setdefault("cost_usd", cost)
-            cost = round(float(cost) * _USD_CNY, 6)
-            meta_out["cost_currency"] = "cny"
-            meta_out["usd_cny"] = _USD_CNY
-        elif cost is not None:
-            meta_out.setdefault("cost_currency", "cny")
-
-        # Persist full usage + any leftover top-level response usage-like keys.
-        usage_blob: Any = usage
-        if usage_blob is None and isinstance(response, dict) and isinstance(
-            response.get("usage"), dict
-        ):
-            usage_blob = response.get("usage")
-
-        row = {
-            "created_at": time.time(),
-            "user_id": user_id or (ctx.user_id if ctx else None),
-            "task_id": task_id or (ctx.task_id if ctx else None),
-            "source": (source or (ctx.source if ctx else None) or "unknown")[:32],
-            "provider": (provider or "")[:64] or None,
-            "catalog_model_id": (catalog_model_id or "")[:128] or None,
-            "api_model": (api_model or "")[:256] or None,
-            "status": (status or "ok")[:32],
-            "latency_ms": int(latency_ms) if latency_ms is not None else None,
-            "prompt_tokens": p_tok,
-            "completion_tokens": c_tok,
-            "total_tokens": t_tok,
-            "cached_tokens": parsed.get("cached_tokens"),
-            "reasoning_tokens": parsed.get("reasoning_tokens"),
-            "image_count": img_n,
-            "credits_charged": (
-                credits_charged
-                if credits_charged is not None
-                else (ctx.credits_charged if ctx else None)
-            ),
-            "cost_cny": cost,
-            "provider_request_id": (req_id or "")[:128] or None,
-            "usage_json": (
-                json.dumps(usage_blob, ensure_ascii=False)
-                if usage_blob is not None
-                else None
-            ),
-            "meta_json": (
-                json.dumps(meta_out, ensure_ascii=False) if meta_out else None
-            ),
-            "error": (error or "")[:4000] or None,
-        }
-
-        with connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO model_usage (
-                    created_at, user_id, task_id, source, provider,
-                    catalog_model_id, api_model, status, latency_ms,
-                    prompt_tokens, completion_tokens, total_tokens,
-                    cached_tokens, reasoning_tokens, image_count,
-                    credits_charged, cost_cny, provider_request_id,
-                    usage_json, meta_json, error
-                ) VALUES (
-                    ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?
-                )
-                """,
-                (
-                    row["created_at"],
-                    row["user_id"],
-                    row["task_id"],
-                    row["source"],
-                    row["provider"],
-                    row["catalog_model_id"],
-                    row["api_model"],
-                    row["status"],
-                    row["latency_ms"],
-                    row["prompt_tokens"],
-                    row["completion_tokens"],
-                    row["total_tokens"],
-                    row["cached_tokens"],
-                    row["reasoning_tokens"],
-                    row["image_count"],
-                    row["credits_charged"],
-                    row["cost_cny"],
-                    row["provider_request_id"],
-                    row["usage_json"],
-                    row["meta_json"],
-                    row["error"],
-                ),
-            )
-            conn.commit()
     except Exception:
-        _log.exception("record_model_usage failed")
+        ctx = None
+
+    def _write() -> None:
+        try:
+            ensure_model_usage_table()
+            parsed = parse_usage_fields(usage if isinstance(usage, dict) else {})
+
+            # Prefer explicit args, then usage blob, then context.
+            p_tok = prompt_tokens if prompt_tokens is not None else parsed.get("prompt_tokens")
+            c_tok = (
+                completion_tokens
+                if completion_tokens is not None
+                else parsed.get("completion_tokens")
+            )
+            t_tok = total_tokens if total_tokens is not None else parsed.get("total_tokens")
+            img_n = image_count if image_count is not None else parsed.get("image_count")
+
+            cost = cost_cny
+            if cost is None:
+                cost = parsed.get("cost_cny")
+
+            if cost is None and (img_n or 0) > 0:
+                cost = estimate_image_cost_cny(catalog_model_id, int(img_n or 1))
+
+            req_id = provider_request_id
+            if not req_id and isinstance(response, dict):
+                req_id = str(response.get("id") or response.get("request_id") or "") or None
+
+            meta_out: dict[str, Any] = {}
+            if ctx and ctx.meta:
+                meta_out.update(ctx.meta)
+            if meta:
+                meta_out.update(meta)
+            if parsed.get("_cost_key"):
+                meta_out.setdefault("cost_field", parsed.get("_cost_key"))
+                meta_out.setdefault("cost_raw", parsed.get("_cost_raw"))
+            # Persist vendor cost as CNY; OpenRouter usage.cost is USD.
+            prov_l = (provider or "").strip().lower()
+            if (
+                cost is not None
+                and prov_l == "openrouter"
+                and meta_out.get("cost_currency") != "cny"
+            ):
+                meta_out.setdefault("cost_currency", "usd")
+                meta_out.setdefault("cost_usd", cost)
+                cost = round(float(cost) * _USD_CNY, 6)
+                meta_out["cost_currency"] = "cny"
+                meta_out["usd_cny"] = _USD_CNY
+            elif cost is not None:
+                meta_out.setdefault("cost_currency", "cny")
+
+            # Persist full usage + any leftover top-level response usage-like keys.
+            usage_blob: Any = usage
+            if usage_blob is None and isinstance(response, dict) and isinstance(
+                response.get("usage"), dict
+            ):
+                usage_blob = response.get("usage")
+
+            row = {
+                "created_at": time.time(),
+                "user_id": user_id or (ctx.user_id if ctx else None),
+                "task_id": task_id or (ctx.task_id if ctx else None),
+                "source": (source or (ctx.source if ctx else None) or "unknown")[:32],
+                "provider": (provider or "")[:64] or None,
+                "catalog_model_id": (catalog_model_id or "")[:128] or None,
+                "api_model": (api_model or "")[:256] or None,
+                "status": (status or "ok")[:32],
+                "latency_ms": int(latency_ms) if latency_ms is not None else None,
+                "prompt_tokens": p_tok,
+                "completion_tokens": c_tok,
+                "total_tokens": t_tok,
+                "cached_tokens": parsed.get("cached_tokens"),
+                "reasoning_tokens": parsed.get("reasoning_tokens"),
+                "image_count": img_n,
+                "credits_charged": (
+                    credits_charged
+                    if credits_charged is not None
+                    else (ctx.credits_charged if ctx else None)
+                ),
+                "cost_cny": cost,
+                "provider_request_id": (req_id or "")[:128] or None,
+                "usage_json": (
+                    json.dumps(usage_blob, ensure_ascii=False)
+                    if usage_blob is not None
+                    else None
+                ),
+                "meta_json": (
+                    json.dumps(meta_out, ensure_ascii=False) if meta_out else None
+                ),
+                "error": (error or "")[:4000] or None,
+            }
+
+            with _USAGE_WRITE_LOCK:
+                with connect() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO model_usage (
+                            created_at, user_id, task_id, source, provider,
+                            catalog_model_id, api_model, status, latency_ms,
+                            prompt_tokens, completion_tokens, total_tokens,
+                            cached_tokens, reasoning_tokens, image_count,
+                            credits_charged, cost_cny, provider_request_id,
+                            usage_json, meta_json, error
+                        ) VALUES (
+                            ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?,
+                            ?, ?, ?,
+                            ?, ?, ?,
+                            ?, ?, ?,
+                            ?, ?, ?
+                        )
+                        """,
+                        (
+                            row["created_at"],
+                            row["user_id"],
+                            row["task_id"],
+                            row["source"],
+                            row["provider"],
+                            row["catalog_model_id"],
+                            row["api_model"],
+                            row["status"],
+                            row["latency_ms"],
+                            row["prompt_tokens"],
+                            row["completion_tokens"],
+                            row["total_tokens"],
+                            row["cached_tokens"],
+                            row["reasoning_tokens"],
+                            row["image_count"],
+                            row["credits_charged"],
+                            row["cost_cny"],
+                            row["provider_request_id"],
+                            row["usage_json"],
+                            row["meta_json"],
+                            row["error"],
+                        ),
+                    )
+                    conn.commit()
+        except Exception:
+            _log.exception("record_model_usage failed")
+
+    try:
+        threading.Thread(target=_write, name="model-usage-write", daemon=True).start()
+    except Exception:
+        _write()
 
 
 def _meta_json_path_sql(key: str) -> str:

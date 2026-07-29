@@ -30,6 +30,13 @@ class ToastManager {
   }
 
   add(item: ToastItem): void {
+    // Same type+text already visible → skip (StrictMode remount / double effect).
+    if (typeof item.content === 'string') {
+      const dup = this.messages.some(
+        (m) => m.type === item.type && m.content === item.content
+      );
+      if (dup) return;
+    }
     this.messages.push(item);
     this.notify();
   }

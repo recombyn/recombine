@@ -96,6 +96,8 @@ export type ComposerContext = {
 
 export type AgentComposerHandle = {
   focus: () => void;
+  /** Focus and unconditionally move caret to the end of the editable. */
+  focusEnd: () => void;
   /** Insert a context chip at the caret (or last known caret / end). */
   insertContextAtCaret: (ctx: ComposerContext) => void;
   /** Plain text with U+FFFC where each context chip sits (DOM order). */
@@ -630,6 +632,8 @@ const AgentComposerInput = forwardRef<
   };
 
   // Capture caret before canvas/context-menu steals focus (blur selection is already gone).
+  // Also blur the editor when clicking outside the composer — SVG canvas clicks do not
+  // trigger the browser's default blur on contentEditable elements.
   useLayoutEffect(() => {
     const onPointerDownCapture = (e: PointerEvent) => {
       const el = editorRef.current;
@@ -637,6 +641,12 @@ const AgentComposerInput = forwardRef<
       const t = e.target as Node | null;
       if (!t || el.contains(t)) return;
       rememberCaret();
+      // If the editor is focused and the click target is outside the whole composer
+      // subtree (not just the editable), blur so the cursor disappears.
+      const composerRoot = el.closest('[data-agent-composer-root]') || el.parentElement;
+      if (document.activeElement === el && t instanceof Node && !composerRoot?.contains(t)) {
+        el.blur();
+      }
     };
     document.addEventListener('pointerdown', onPointerDownCapture, true);
     return () => document.removeEventListener('pointerdown', onPointerDownCapture, true);
@@ -660,6 +670,13 @@ const AgentComposerInput = forwardRef<
           savedCaretRef.current = getPlainTextCaretOffset(el);
         }
       }
+    },
+    focusEnd: () => {
+      const el = editorRef.current;
+      if (!el) return;
+      el.focus();
+      placeCaretAtEnd(el);
+      savedCaretRef.current = getPlainTextCaretOffset(el);
     },
     insertContextAtCaret: (ctx: ComposerContext) => {
       const el = editorRef.current;
@@ -868,7 +885,7 @@ const AgentComposerInput = forwardRef<
     empty && !domHasChips && contexts.length === 0 && Boolean(placeholder.trim());
 
   return (
-    <div className={cn('relative w-full min-w-0 flex-1 cursor-text', className)}>
+    <div className={cn('relative w-full min-w-0 flex-1 cursor-text', className)} data-agent-composer-root>
       <div
         ref={editorRef}
         role="textbox"

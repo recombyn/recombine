@@ -2,10 +2,36 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from services.design.rules_text import _as_text, _rule_text
+
+
+def _json_error_message(text: str) -> str | None:
+    """Pull provider ``message`` out of a JSON error body when present."""
+    raw = (text or "").strip()
+    brace = raw.find("{")
+    if brace < 0:
+        return None
+    try:
+        obj = json.loads(raw[brace:])
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    msg = obj.get("message")
+    if isinstance(msg, str) and msg.strip():
+        return msg.strip()
+    err = obj.get("error")
+    if isinstance(err, dict):
+        nested = err.get("message")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    if isinstance(err, str) and err.strip():
+        return err.strip()
+    return None
 
 
 def _normalize_ref_images(
@@ -118,10 +144,22 @@ def _user_facing_run_error(
         )
     if low.startswith("blocked:") or raw.lower().startswith("blocked:"):
         return msg("error.blocked", "请求被安全策略拦截。")
+    # Prefer provider ``message`` over raw JSON / ``LLM HTTP N: {...}``.
+    http_body = reason
+    m_http = re.match(r"^LLM HTTP\s+\d+:\s*(.*)$", reason, re.I | re.S)
+    if m_http:
+        http_body = m_http.group(1).strip()
+    extracted = _json_error_message(http_body) or _json_error_message(reason)
+    if extracted:
+        return extracted[:300]
+    if m_http and http_body and not http_body.startswith("{"):
+        return http_body[:300]
     generic = msg("error.generic", "执行失败，请重试或把需求说得更清楚一些。")
     if raw.lower().startswith("skill_failed:") or re.match(
         r"^[a-z][a-z0-9_]*(:|$)", low
     ):
+        return generic
+    if http_body.startswith("{") or reason.startswith("{"):
         return generic
     return raw[:300] if raw else generic
 

@@ -5,7 +5,7 @@
       "kind": "mutate",
       "label": "更新节点",
       "sort_order": 10,
-      "model_hint": "Patch an existing node by nodeId|id. Geometry: x,y,width,height. Style: fill,stroke,opacity,cornerRadius,rotation,blendMode,name, flipX/flipY, text styles…. Visibility/edit: hidden (boolean — hide from canvas), locked (boolean — block transforms). hidden/locked map to attrs as 'true'|'false'.",
+      "model_hint": "Patch an existing node by nodeId|id (keeps z-order). Geometry: x,y,width,height. Morph shape: shapeType|type=rect|ellipse|circle|triangle|polygon|star|line|arrow|… (rect→circle = update_node shapeType=circle on same id — NEVER delete+create_shape). Style: fill,stroke,opacity,cornerRadius,rotation,blendMode,name, flipX/flipY, text styles…. Visibility/edit: hidden, locked (boolean).",
       "args_schema": {
         "nodeId": "string",
         "id": "string?",
@@ -13,6 +13,9 @@
         "y": "number?",
         "width": "number?",
         "height": "number?",
+        "shapeType": "rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil?",
+        "type": "same as shapeType?",
+        "sides": "number?",
         "fill": "string?",
         "stroke": "string?",
         "opacity": "number?",
@@ -378,7 +381,8 @@
     "update_node": {
       "must_contain": [
         "hidden",
-        "locked"
+        "locked",
+        "shapeType"
       ],
       "stale_if_contains": []
     },

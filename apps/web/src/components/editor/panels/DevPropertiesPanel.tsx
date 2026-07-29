@@ -294,7 +294,7 @@ export default function DevPropertiesPanel({
           {t('editor.devInspect')}
         </h2>
         {onClose ? (
-          <Tooltip title={t('editor.closePanel')} placement="bottom">
+          <Tooltip tip={t('editor.closePanel')} placement="bottom">
             <button
               type="button"
               aria-label={t('editor.closePanel')}

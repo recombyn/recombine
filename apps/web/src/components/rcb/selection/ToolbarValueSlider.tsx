@@ -77,7 +77,7 @@ export default function ToolbarValueSlider({
   return (
     <div ref={rootRef} className="relative inline-flex">
       {title ? (
-        <Tooltip title={title} placement="top">
+        <Tooltip tip={title} placement="top">
           {trigger}
         </Tooltip>
       ) : (

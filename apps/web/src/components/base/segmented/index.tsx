@@ -40,12 +40,13 @@ export type SegmentedControlProps<T extends string = string> = {
 };
 
 const TRACK_RADIUS: Record<SegmentedRadius, string> = {
-  xl: 'rounded-xl',
+  /** Soft rect — fill type / stroke icon tracks (fig.1). */
+  xl: 'rounded-md',
   full: 'rounded-full',
 };
 
 const CHIP_RADIUS: Record<SegmentedRadius, string> = {
-  xl: 'rounded-lg',
+  xl: 'rounded-[4px]',
   full: 'rounded-full',
 };
 
@@ -55,9 +56,9 @@ export const SEGMENTED_TRACK_BASE =
 
 /** Equal inset around chips (same on all sides). */
 const TRACK_PAD: Record<'xs' | 'sm' | 'md', string> = {
-  xs: 'p-[3px]',
-  sm: 'p-1',
-  md: 'p-1',
+  xs: 'p-[2px]',
+  sm: 'p-[3px]',
+  md: 'p-[3px]',
 };
 
 /** @deprecated Prefer `segmentedTrackClass('xl')` — kept for StylePanelChrome default. */
@@ -152,7 +153,7 @@ export function SegmentedControl<T extends string = string>({
         <span
           aria-hidden
           className={cn(
-            'pointer-events-none absolute left-0 top-0 z-0 bg-[var(--surface)] shadow-sm',
+            'pointer-events-none absolute left-0 top-0 z-0 bg-[var(--surface)] shadow-sm ring-1 ring-[var(--line)]',
             CHIP_RADIUS[radius],
             thumbReady &&
               'transition-[transform,width,height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]'
@@ -185,9 +186,9 @@ export function SegmentedControl<T extends string = string>({
             className={cn(
               segmentedChipClass(radius),
               size === 'xs'
-                ? 'h-[22px] px-2.5 text-[11px]'
+                ? 'h-[22px] px-2 text-[11px]'
                 : size === 'sm'
-                  ? 'h-7 px-2.5 text-[12px]'
+                  ? 'h-7 px-1.5 text-[12px]'
                   : 'h-7 px-3 text-[12px]',
               fullWidth && 'w-full min-w-0',
               active ? SEGMENTED_CHIP_ACTIVE : SEGMENTED_CHIP_IDLE,

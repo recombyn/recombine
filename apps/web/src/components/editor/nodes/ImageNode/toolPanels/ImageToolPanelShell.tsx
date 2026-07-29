@@ -67,7 +67,7 @@ export default function ImageToolPanelShell({
         <div className="flex shrink-0 items-center gap-1">
           {headerRight}
           {onClose ? (
-            <Tooltip title={'退出'} placement="top">
+            <Tooltip tip={'退出'} placement="top">
               <button
                 type="button"
                 aria-label={'退出'}
@@ -96,7 +96,7 @@ export function PanelIconBtn({
   children: ReactNode;
 }) {
   return (
-    <Tooltip title={title} placement="top">
+    <Tooltip tip={title} placement="top">
       <button
         type="button"
         aria-label={title}
@@ -126,7 +126,7 @@ export function PanelConfirmCost({
       ? t('wallet.tokenCostTip', { count: display })
       : t('wallet.creditCostTip', { count: display });
   return (
-    <Tooltip title={tip} placement="top">
+    <Tooltip tip={tip} placement="top">
       <span className="inline-flex items-center gap-0.5 text-current">
         <span className="tabular-nums">{display}</span>
         <HiOutlineBolt className="h-3.5 w-3.5 shrink-0" aria-hidden />

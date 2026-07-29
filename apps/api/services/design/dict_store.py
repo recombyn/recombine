@@ -13,8 +13,17 @@ TYPE_CATALOG = "__types__"
 _DICTS_READY = False
 _DICTS_LOCK = threading.RLock()
 # Bump when data/design_dicts_seed.json gains rows (also stored as seed.rev).
-_DICT_SEED_REV = 15
+_DICT_SEED_REV = 26
 _seeded_rev = 0
+# Label lookup cache (resolve_edge_condition is identity — no per-edge DB).
+_EDGE_COND_LABELS: dict[str, str] | None = None
+_EDGE_COND_LABELS_LOCK = threading.Lock()
+
+
+def _invalidate_edge_condition_label_cache() -> None:
+    global _EDGE_COND_LABELS
+    with _EDGE_COND_LABELS_LOCK:
+        _EDGE_COND_LABELS = None
 
 
 def _dicts_data_path():
@@ -95,50 +104,38 @@ DICT_DESCRIPTION_DEFAULTS = _dict_description_defaults()
 def resolve_edge_condition(raw: str) -> str:
     """Normalize edge condition to dict ``code`` / predicate string.
 
-    Only recognizes known ``code`` values (and passes unknown predicates through).
-    Never reverse-maps mutable display ``label`` → code.
+    Identity strip only: never reverse-maps mutable display ``label`` → code,
+    and never hits MySQL (Admin GET / normalize used to N+1 list_dicts per edge).
     """
-    s = str(raw or "").strip()
-    if not s:
-        return ""
-    codes: set[str] = set()
-    try:
-        items = list_dicts(dict_type="flow_edge_condition", enabled=True)
-        codes = {
-            str(i.get("code") or "").strip()
-            for i in items
-            if str(i.get("code") or "").strip()
-        }
-    except Exception:
-        codes = set()
-    if not codes:
-        codes = {
-            str(code).strip()
-            for typ, code, _label, _ord in _dict_item_defaults()
-            if typ == "flow_edge_condition" and str(code).strip()
-        }
-    if s in codes:
-        return s
-    # Custom / compound predicates (e.g. mode=ask&op_failed) keep as-is.
-    return s
+    return str(raw or "").strip()
 
 
 def edge_condition_label(code: str) -> str:
     """Display name for a flow_edge_condition code (empty if unknown)."""
+    global _EDGE_COND_LABELS
     key = str(code or "").strip()
     if not key:
         return ""
-    try:
-        items = list_dicts(dict_type="flow_edge_condition", enabled=True)
-        for i in items:
-            if str(i.get("code") or "").strip() == key:
-                return str(i.get("label") or "").strip()
-    except Exception:
-        pass
-    for typ, c, label, _ord in _dict_item_defaults():
-        if typ == "flow_edge_condition" and str(c).strip() == key:
-            return str(label).strip()
-    return ""
+    labels = _EDGE_COND_LABELS
+    if labels is None:
+        with _EDGE_COND_LABELS_LOCK:
+            labels = _EDGE_COND_LABELS
+            if labels is None:
+                labels = {}
+                try:
+                    items = list_dicts(dict_type="flow_edge_condition", enabled=True)
+                    for i in items:
+                        c = str(i.get("code") or "").strip()
+                        if c:
+                            labels[c] = str(i.get("label") or "").strip()
+                except Exception:
+                    pass
+                if not labels:
+                    for typ, c, label, _ord in _dict_item_defaults():
+                        if typ == "flow_edge_condition" and str(c).strip():
+                            labels[str(c).strip()] = str(label).strip()
+                _EDGE_COND_LABELS = labels
+    return str(labels.get(key) or "")
 
 
 def _norm_type_code(raw: str) -> str:
@@ -174,44 +171,110 @@ def _pub_type(r: Any) -> dict[str, Any]:
 
 
 def _seed_dict_rows(conn: Any, *, now: float) -> None:
-    """Insert missing default dict items / types (idempotent). Never overwrite labels."""
-    # Drop retired dict types.
-    conn.execute("DELETE FROM design_dict WHERE dict_type = ?", ("precheck_signal",))
-    for retired in ("flow_ask_slot", "flow_ask_never"):
+    """Insert missing default dict items / types (idempotent). Never overwrite labels.
+
+    One SELECT of existing rows — avoid per-seed-item roundtrips on remote MySQL.
+    """
+    # Flow-designer / unused dict families — wipe types + items (seed keeps scene only).
+    _retired_types = (
+        "precheck_signal",
+        "flow_ask_slot",
+        "flow_ask_never",
+        "flow_prompt_key",
+        "flow_inject_substitute",
+        "flow_edge_condition",
+        "flow_phase",
+        "flow_config_ref",
+        "flow_capability",
+        "flow_inject_mode",
+        "flow_inject_source",
+        "flow_inject_validate",
+        "flow_action_rule",
+        "flow_assign_rule",
+        "flow_binding_field",
+        "flow_node_kind",
+        "flow_node_block",
+        "skill_category",
+        "output_format",
+        "task_tier",
+        "precheck_block",
+        "library_kind",
+        "button_type",
+    )
+    for retired in _retired_types:
         conn.execute("DELETE FROM design_dict WHERE dict_type = ?", (retired,))
         conn.execute(
             "DELETE FROM design_dict WHERE dict_type = ? AND code = ?",
             (TYPE_CATALOG, retired),
         )
-    # Drop retired flow_phase codes (old model-lane / chat duplicates).
-    _retired_flow_phases = (
-        "dual_sample",
-        "hydrate",
-        "score_case",
-        "model_simple",
-        "model_medium",
-        "model_complex",
-        "model_vision",
-        "model_multimodal",
-        "model_switch",
-        "chat",
-        "prompt_bank",
-        "need_knowledge",
-        "need_aesthetics",
-        "need_tools",
-    )
-    for code in _retired_flow_phases:
+    # Drop retired scene codes (product scenes are website/mobile/image/poster/drawing).
+    for code in ("ui", "illustration", "ecommerce", "detail_page", "banner", "social"):
         conn.execute(
             "DELETE FROM design_dict WHERE dict_type = ? AND code = ?",
-            ("flow_phase", code),
+            ("scene", code),
         )
-    for dict_type, code, label, sort_order in _dict_item_defaults():
-        desc = _dict_description_defaults().get((dict_type, code), "")
-        row = conn.execute(
-            "SELECT id, description FROM design_dict WHERE dict_type = ? AND code = ?",
-            (dict_type, code),
-        ).fetchone()
+    # Heal live scenes wrongly marked「已废弃」/ disabled in Admin.
+    for code, label in (
+        ("all", "全部场景"),
+        ("website", "网站 Website"),
+        ("mobile", "移动应用 Mobile"),
+        ("image", "图像 Image"),
+        ("poster", "海报 Poster"),
+        ("drawing", "手绘 Drawing"),
+    ):
+        conn.execute(
+            """
+            UPDATE design_dict
+            SET label = ?, enabled = 1, updated_at = ?
+            WHERE dict_type = 'scene' AND code = ?
+              AND (
+                enabled = 0
+                OR label LIKE '%废弃%'
+                OR label LIKE '%deprecated%'
+              )
+            """,
+            (label, now, code),
+        )
+
+    # Prefer live seed load so rev bumps apply without process restart races.
+    type_defaults = _dict_type_defaults()
+    item_defaults = _dict_item_defaults()
+    descs = _dict_description_defaults()
+
+    # On seed rev bump: re-sync labels/sort for product enums (Admin display may have
+    # been garbled by encoding; seed is source of truth for these type codes).
+    try:
+        seed_rev = int((_load_dicts_seed().get("rev") or 0))
+    except Exception:
+        seed_rev = 0
+    force_label_sync = seed_rev > _seeded_rev
+
+    existing_rows = conn.execute(
+        "SELECT id, dict_type, code, label, description, sort_order FROM design_dict"
+    ).fetchall()
+    by_key: dict[tuple[str, str], Any] = {}
+    for row in existing_rows:
+        by_key[(str(row["dict_type"]), str(row["code"]))] = row
+
+    for dict_type, code, label, sort_order in item_defaults:
+        desc = descs.get((dict_type, code), "")
+        row = by_key.get((dict_type, code))
         if row:
+            old_label = str(row["label"] or "")
+            try:
+                old_sort = int(row["sort_order"] or 0)
+            except Exception:
+                old_sort = 0
+            # Rev bump: restore seed labels (fixes encoding garble / drift).
+            if force_label_sync and (old_label != label or old_sort != sort_order):
+                conn.execute(
+                    """
+                    UPDATE design_dict
+                    SET label = ?, sort_order = ?, enabled = 1, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (label, sort_order, now, int(row["id"])),
+                )
             # Fill empty description from seed once; never overwrite Admin edits.
             if desc and not str(row["description"] or "").strip():
                 conn.execute(
@@ -223,11 +286,8 @@ def _seed_dict_rows(conn: Any, *, now: float) -> None:
             "INSERT INTO design_dict (dict_type, code, label, description, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
             (dict_type, code, label, desc or None, sort_order, now, now),
         )
-    for code, label, sort_order in _dict_type_defaults():
-        row = conn.execute(
-            "SELECT id, label, sort_order FROM design_dict WHERE dict_type = ? AND code = ?",
-            (TYPE_CATALOG, code),
-        ).fetchone()
+    for code, label, sort_order in type_defaults:
+        row = by_key.get((TYPE_CATALOG, code))
         if row:
             # Keep type catalog names aligned with product UI (seed is source for type labels).
             old_label = str(row["label"] or "")
@@ -244,6 +304,42 @@ def _seed_dict_rows(conn: Any, *, now: float) -> None:
         conn.execute(
             "INSERT INTO design_dict (dict_type, code, label, description, sort_order, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
             (TYPE_CATALOG, code, label, None, sort_order, now, now),
+        )
+
+    # Rev bump: drop obsolete enum codes (e.g. retired prompt_pack_kind scene packs).
+    if force_label_sync:
+        allowed_by_type: dict[str, set[str]] = {}
+        for dict_type, code, _label, _sort in item_defaults:
+            allowed_by_type.setdefault(str(dict_type), set()).add(str(code))
+        for dict_type, allowed in allowed_by_type.items():
+            if not allowed:
+                continue
+            placeholders = ",".join("?" for _ in allowed)
+            conn.execute(
+                f"""
+                DELETE FROM design_dict
+                WHERE dict_type = ? AND code NOT IN ({placeholders})
+                """,
+                (dict_type, *sorted(allowed)),
+            )
+
+    # Drop orphan type-catalog rows not in seed.
+    allowed_types = {str(code) for code, _label, _sort in type_defaults}
+    if allowed_types:
+        placeholders = ",".join("?" for _ in allowed_types)
+        conn.execute(
+            f"DELETE FROM design_dict WHERE dict_type = ? AND code NOT IN ({placeholders})",
+            (TYPE_CATALOG, *sorted(allowed_types)),
+        )
+        # Drop any leftover item rows outside allowed types (manual orphans).
+        conn.execute(
+            f"DELETE FROM design_dict WHERE dict_type <> ? AND dict_type NOT IN ({placeholders})",
+            (TYPE_CATALOG, *sorted(allowed_types)),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM design_dict WHERE dict_type <> ?",
+            (TYPE_CATALOG,),
         )
 
 
@@ -267,6 +363,7 @@ def ensure_design_dicts() -> None:
             rev = _DICT_SEED_REV
         _seeded_rev = max(_DICT_SEED_REV, rev)
         _DICTS_READY = True
+        _invalidate_edge_condition_label_cache()
 
 
 def list_dicts(*, dict_type: str | None = None, enabled: bool | None = True) -> list[dict[str, Any]]:
@@ -428,6 +525,7 @@ def upsert_dict(payload: dict[str, Any]) -> dict[str, Any]:
                 )
                 row = conn.execute("SELECT * FROM design_dict WHERE id = ?", (int(cur.lastrowid),)).fetchone()
         conn.commit()
+    _invalidate_edge_condition_label_cache()
     return _pub_dict(row)
 
 
@@ -442,7 +540,10 @@ def soft_delete_dict(item_id: int) -> bool:
             (time.time(), int(item_id)),
         )
         conn.commit()
-        return (cur.rowcount or 0) > 0
+        ok = (cur.rowcount or 0) > 0
+    if ok:
+        _invalidate_edge_condition_label_cache()
+    return ok
 
 
 def hard_delete_dict(item_id: int) -> bool:
@@ -453,4 +554,7 @@ def hard_delete_dict(item_id: int) -> bool:
             return False
         cur = conn.execute("DELETE FROM design_dict WHERE id = ?", (int(item_id),))
         conn.commit()
-        return (cur.rowcount or 0) > 0
+        ok = (cur.rowcount or 0) > 0
+    if ok:
+        _invalidate_edge_condition_label_cache()
+    return ok

@@ -78,7 +78,7 @@ def test_compose_shows_summary_not_recent_by_default():
     )
     assert "[Dialogue summary]" in blocks
     assert "[Recent dialogue]" not in blocks
-    # Opt-in only (legacy); short-term now uses LangGraph checkpointer.
+    # Design agent load() opts in; compose default stays off for other callers.
     blocks2 = compose_memory_blocks(
         medium=medium,
         short=[{"role": "user", "text": "标题大一点"}],

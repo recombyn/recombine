@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation, Trans } from 'react-i18next';
 import { Button, Checkbox, Input, message, Dialog } from '@/components/base';
@@ -7,11 +7,9 @@ import AppLogo from '@/components/base/AppLogo';
 import {
   createSliderCaptcha,
   sendEmailCode,
-  verifyEmailCode,
   verifySliderCaptcha,
   type SliderCaptchaChallenge,
 } from '@/apis/auth';
-import { setSession } from '@/store/modules/auth';
 import { cn } from '@/utils/classnames';
 import { isLoginOpen, readReturnToParam } from '@/utils/authReturnTo';
 import { docsUrl } from '@/utils/docsUrl';
@@ -417,16 +415,13 @@ type LoginDialogProps = {
 
 export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
   const { t } = useTranslation();
-  const dispatch = useDispatch();
-  const navigate = useNavigate();
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
   const [codeSent, setCodeSent] = useState(false);
   const [resendLeft, setResendLeft] = useState(0);
   const [busy, setBusy] = useState(false);
   const [showCaptcha, setShowCaptcha] = useState(false);
   const [pendingCaptchaToken, setPendingCaptchaToken] = useState<string | null>(null);
-  const [captchaResume, setCaptchaResume] = useState<'send-code' | 'verify-code' | null>(null);
+  const [captchaResume, setCaptchaResume] = useState<'send-code' | null>(null);
   const agreedTermsRef = useRef(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [showAgreeModal, setShowAgreeModal] = useState(false);
@@ -439,7 +434,6 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
   useEffect(() => {
     if (!open) {
       setEmail('');
-      setCode('');
       setCodeSent(false);
       setResendLeft(0);
       setBusy(false);
@@ -484,32 +478,11 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
     queueMicrotask(() => resume?.());
   };
 
-  const finishSession = (payload: {
-    email: string;
-    name: string;
-    provider: 'email' | 'google';
-    avatar?: string | null;
-    id?: string;
-    token: string;
-  }) => {
-    dispatch(
-      setSession({
-        user: {
-          email: payload.email,
-          name: payload.name,
-          provider: payload.provider,
-          avatar: payload.avatar,
-          id: payload.id,
-        },
-        token: payload.token,
-      })
-    );
-    message.success(t('auth.success'));
-    if (onSuccess) onSuccess(returnTo);
-    else navigate(returnTo, { replace: true });
-  };
+  // returnTo / onSuccess used when session is established via magic link on Activate page.
+  void returnTo;
+  void onSuccess;
 
-  const openCaptcha = (resume: 'send-code' | 'verify-code') => {
+  const openCaptcha = (resume: 'send-code') => {
     setCaptchaResume(resume);
     setShowCaptcha(true);
     message.warning(t('auth.captchaNeed'));
@@ -527,26 +500,6 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
     setCodeSent(true);
     startResendCooldown();
     message.success(t('auth.codeSent'));
-  };
-
-  const tryVerifyCode = async (captchaToken?: string | null) => {
-    const body: { email: string; code: string; captchaToken?: string } = {
-      email: email.trim().toLowerCase(),
-      code: code.trim(),
-    };
-    if (captchaToken) body.captchaToken = captchaToken;
-    const res = await verifyEmailCode(body);
-    setPendingCaptchaToken(null);
-    setShowCaptcha(false);
-    setCaptchaResume(null);
-    finishSession({
-      email: res.user.email,
-      name: res.user.name,
-      provider: 'email',
-      avatar: res.user.avatar,
-      id: res.user.id,
-      token: res.token,
-    });
   };
 
   const onGoogleContinue = () => {
@@ -576,23 +529,6 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
     }
   };
 
-  const onLogin = async () => {
-    if (!ensureAgreedTerms(() => void onLogin())) return;
-    if (code.trim().length < 4) {
-      message.error(t('auth.codeInvalid'));
-      return;
-    }
-    setBusy(true);
-    try {
-      await tryVerifyCode(pendingCaptchaToken);
-    } catch (err) {
-      if (isNeedCaptcha(err)) openCaptcha('verify-code');
-      else message.error(apiDetail(err) || t('auth.codeInvalid'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const resendCode = async () => {
     if (resendLeft > 0) return;
     if (!ensureAgreedTerms(() => void resendCode())) return;
@@ -606,7 +542,6 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
       setPendingCaptchaToken(null);
       setShowCaptcha(false);
       setCaptchaResume(null);
-      setCode('');
       startResendCooldown();
       message.success(t('auth.resent'));
     } catch (err) {
@@ -635,14 +570,13 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
             setCaptchaResume(null);
             setBusy(true);
             const runAfterCaptcha = (): Promise<void> => {
-              if (resume === 'verify-code') return tryVerifyCode(token);
               if (codeSent) {
                 return sendEmailCode({
                   email: email.trim().toLowerCase(),
                   captchaToken: token,
                 }).then(() => {
                   setPendingCaptchaToken(null);
-                  setCode('');
+                  startResendCooldown();
                   message.success(t('auth.resent'));
                 });
               }
@@ -650,12 +584,8 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
             };
             void runAfterCaptcha()
               .catch((err: unknown) => {
-                if (isNeedCaptcha(err)) openCaptcha(resume || 'send-code');
-                else {
-                  const fallback =
-                    resume === 'verify-code' ? t('auth.codeInvalid') : t('auth.sendFailed');
-                  message.error(apiDetail(err) || fallback);
-                }
+                if (isNeedCaptcha(err)) openCaptcha('send-code');
+                else message.error(apiDetail(err) || t('auth.sendFailed'));
               })
               .finally(() => setBusy(false));
           }}
@@ -755,43 +685,59 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
                   inputType="email"
                   placeholder={t('auth.emailPlaceholder')}
                   value={email}
+                  disabled={codeSent}
                   onChange={(e) => setEmail(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') void onGetCode();
+                    if (e.key === 'Enter' && !codeSent) void onGetCode();
                   }}
                   className="!h-11 !rounded-lg !border-[#e5e5e5] !bg-white !px-3.5 !text-[#1a1a1a] placeholder:!text-[#aaa]"
                 />
 
-                <div className="flex items-center gap-2">
-                  <Input
-                    size="large"
-                    type="outlined"
-                    placeholder={t('auth.codePlaceholder')}
-                    value={code}
-                    onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void onLogin();
-                    }}
-                    className="!h-11 !min-w-0 !flex-1 !rounded-lg !border-[#e5e5e5] !bg-white !px-3.5 !tracking-[0.15em] !text-[#1a1a1a] placeholder:!text-[#aaa]"
-                  />
-                  <button
-                    type="button"
-                    disabled={busy || resendLeft > 0}
-                    onClick={() => void (codeSent ? resendCode() : onGetCode())}
-                    className={cn(
-                      'shrink-0 whitespace-nowrap text-[13px] font-medium text-[#333] transition hover:text-[#111]',
-                      (busy || resendLeft > 0) && 'cursor-not-allowed opacity-50 hover:text-[#333]'
-                    )}
+                {codeSent ? (
+                  <div className="rounded-lg border border-[#eee] bg-[#fafafa] px-3.5 py-3 text-[13px] leading-relaxed text-[#555]">
+                    <p className="font-medium text-[#1a1a1a]">{t('auth.checkEmailTitle')}</p>
+                    <p className="mt-1.5">
+                      {t('auth.checkEmailHint', { email })}
+                    </p>
+                    <div className="mt-3 flex items-center gap-3">
+                      <button
+                        type="button"
+                        disabled={busy || resendLeft > 0}
+                        onClick={() => void resendCode()}
+                        className={cn(
+                          'text-[13px] font-medium text-[#333] transition hover:text-[#111]',
+                          (busy || resendLeft > 0) &&
+                            'cursor-not-allowed opacity-50 hover:text-[#333]',
+                        )}
+                      >
+                        {busy
+                          ? t('auth.sending')
+                          : resendLeft > 0
+                            ? t('auth.resendIn', { seconds: resendLeft })
+                            : t('auth.resend')}
+                      </button>
+                      <button
+                        type="button"
+                        className="text-[13px] text-[#888] underline-offset-2 hover:underline"
+                        onClick={() => {
+                          setCodeSent(false);
+                          setResendLeft(0);
+                        }}
+                      >
+                        {t('auth.backEmail')}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    type="primary"
+                    className="!h-11 !w-full !rounded-lg !border-none !bg-[#1a1a1a] !text-[14px] !font-medium !text-white hover:!bg-[#333]"
+                    disabled={busy}
+                    onClick={() => void onGetCode()}
                   >
-                    {busy
-                      ? t('auth.sending')
-                      : resendLeft > 0
-                        ? t('auth.resendIn', { seconds: resendLeft })
-                        : codeSent
-                          ? t('auth.resend')
-                          : t('auth.getCode')}
-                  </button>
-                </div>
+                    {busy ? t('auth.sending') : t('auth.getCode')}
+                  </Button>
+                )}
 
                 <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-[#999]">
                   <Checkbox
@@ -829,15 +775,6 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
                     />
                   </span>
                 </label>
-
-                <Button
-                  type="primary"
-                  className="!h-11 !w-full !rounded-lg !border-none !bg-[#1a1a1a] !text-[14px] !font-medium !text-white hover:!bg-[#333]"
-                  disabled={busy}
-                  onClick={() => void onLogin()}
-                >
-                  {t('auth.login')}
-                </Button>
 
                 <div className="flex items-center gap-3 py-1 text-[12px] text-[#bbb]">
                   <span className="h-px flex-1 bg-[#eee]" />

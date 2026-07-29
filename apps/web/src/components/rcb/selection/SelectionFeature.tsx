@@ -167,7 +167,8 @@ function textResizeModeForHandle(handle: ResizeHandle): TextResizeMode {
 
 /**
  * Aspect lock while resizing.
- * - Multi-select / marquee group: Shift locks (free stretch by default).
+ * - Multi-select / group: lock if any image is selected (unless a node was
+ *   explicitly unlocked via the toolbar chain); Shift inverts.
  * - Single text corners: lock by default (Shift unlocks).
  * - Single image: `attrs.lockAspect` (default on) locks; Shift temporarily inverts.
  * - Other single nodes: free by default (Shift locks), unless `lockAspect` is set.
@@ -189,12 +190,27 @@ function resolveLockAspect(
   handle: ResizeHandle | undefined,
   shiftKey: boolean
 ) {
-  if (!handle || origins.length !== 1) return shiftKey;
-  const node = document?.deltaSetLike?.[origins[0].nodeId];
-  const key = node?.key;
-  if (key === 'text' && CORNER_HANDLES.has(handle)) return !shiftKey;
-  const locked = readNodeAspectLocked(node);
-  return shiftKey ? !locked : locked;
+  if (!handle) return shiftKey;
+  if (origins.length === 1) {
+    const node = document?.deltaSetLike?.[origins[0].nodeId];
+    const key = node?.key;
+    if (key === 'text' && CORNER_HANDLES.has(handle)) return !shiftKey;
+    const locked = readNodeAspectLocked(node);
+    return shiftKey ? !locked : locked;
+  }
+  // Multi / group: lock when selection includes images (unless explicitly unlocked).
+  const nodes = origins
+    .map(({ nodeId }) => document?.deltaSetLike?.[nodeId])
+    .filter(Boolean);
+  const hasExplicitUnlock = nodes.some((n) => {
+    const raw = n?.attrs?.lockAspect;
+    return raw === false || raw === 'false' || raw === 0 || raw === '0';
+  });
+  const allLocked =
+    !hasExplicitUnlock && nodes.some((n) => n.key === 'image')
+      ? true
+      : nodes.length > 0 && nodes.every((n) => readNodeAspectLocked(n));
+  return shiftKey ? !allLocked : allLocked;
 }
 
 /** Remasure text height for L/R wrap so chrome hugs wrapped lines while dragging. */
@@ -1494,6 +1510,8 @@ export default function SelectionFeature({
         const edgeBoxes = movingGuideBoxes(next, document, excludeIds);
         const snapped = snapResizeToGuides(next, drag.handle, others, frames, snapThreshold, 8, {
           edgeBoxes,
+          lockAspect,
+          aspectRatio: drag.aspectRatio,
         });
         next = {
           ...snapped.box,
@@ -1855,6 +1873,8 @@ export default function SelectionFeature({
         const frames = frameGuideBoxes(document);
         const snapped = snapResizeToGuides(next, drag.handle, others, frames, snapThreshold, 8, {
           edgeBoxes: movingGuideBoxes(next, document, excludeIds),
+          lockAspect,
+          aspectRatio: drag.aspectRatio,
         });
         next = {
           ...snapped.box,

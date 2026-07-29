@@ -693,12 +693,12 @@ export default function SpacingInspectOverlay({
   const camera = useRcbCamera();
   const zoom = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / zoom;
-  const stroke = 1 * inv;
-  const arrow = 6 * inv;
-  const dashArr = `${4 * inv} ${3 * inv}`;
-  const labelFont = 10 * inv;
-  const badgeFont = 10 * inv;
-  const badgeGap = 6 * inv;
+  const stroke = 1.5 * inv;
+  const arrow = 8 * inv;
+  const dashArr = `${5 * inv} ${4 * inv}`;
+  const labelFont = 12 * inv;
+  const badgeFont = 12 * inv;
+  const badgeGap = 8 * inv;
 
   const measures = useMemo(() => {
     if (measuresProp) return measuresProp;
@@ -826,9 +826,12 @@ export default function SpacingInspectOverlay({
                 left: labelX,
                 top: m.my,
                 fontSize: labelFont,
-                paddingInline: 4 * inv,
-                paddingBlock: 1 * inv,
-                borderRadius: 2 * inv,
+                lineHeight: 1.2,
+                minWidth: 18 * inv,
+                paddingInline: 5 * inv,
+                paddingBlock: 2 * inv,
+                borderRadius: 3 * inv,
+                textAlign: 'center',
                 transform: 'translate(-50%, -50%)',
                 background: color,
                 boxShadow: '0 1px 2px rgba(0,0,0,0.18)',
@@ -847,9 +850,10 @@ export default function SpacingInspectOverlay({
             left: sizePlacement.x,
             top: sizePlacement.y,
             fontSize: badgeFont,
-            paddingInline: 6 * inv,
-            paddingBlock: 2 * inv,
-            borderRadius: 2 * inv,
+            lineHeight: 1.2,
+            paddingInline: 7 * inv,
+            paddingBlock: 3 * inv,
+            borderRadius: 3 * inv,
             transform: sizeTransform,
             background: color,
             boxShadow: '0 1px 2px rgba(0,0,0,0.18)',

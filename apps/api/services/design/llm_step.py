@@ -33,6 +33,33 @@ _PROVIDER_HARD_CAP = 131072
 _log = logging.getLogger("design.llm_step")
 
 
+def _provider_user_message(detail: str, *, status: int | None = None) -> str:
+    """Human-readable provider error for SSE / chat — message only, not raw JSON."""
+    text = (detail or "").strip()
+    brace = text.find("{")
+    if brace >= 0:
+        try:
+            obj = json.loads(text[brace:])
+        except Exception:
+            obj = None
+        if isinstance(obj, dict):
+            msg = obj.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()[:300]
+            err = obj.get("error")
+            if isinstance(err, dict):
+                nested = err.get("message")
+                if isinstance(nested, str) and nested.strip():
+                    return nested.strip()[:300]
+            if isinstance(err, str) and err.strip():
+                return err.strip()[:300]
+    if text and not text.startswith("{"):
+        return text[:300]
+    if status is not None:
+        return f"LLM request failed (HTTP {status})"
+    return "LLM request failed"
+
+
 def _is_image_unsupported_error(detail: str) -> bool:
     """True when the provider rejected multimodal image_url (prefer structured JSON)."""
     text = (detail or "").strip()
@@ -338,7 +365,10 @@ async def complete_skill_step(
                         enable_thinking=False,
                     )
                     continue
-            raise RuntimeError(f"LLM HTTP {status}: {detail}") from err
+            _log.warning("[llm_step] LLM HTTP %s detail=%s", status, detail[:500])
+            raise RuntimeError(
+                _provider_user_message(detail, status=status)
+            ) from err
     if resp is None:
         raise RuntimeError("LLM empty response")
 
@@ -468,7 +498,10 @@ async def stream_skill_step(
             detail = llm_error_detail(err)
             status = _http_status(err) or 400
             if content_len > 0:
-                raise RuntimeError(f"LLM HTTP {status}: {detail}") from err
+                _log.warning("[llm_step] LLM HTTP %s detail=%s", status, detail[:500])
+                raise RuntimeError(
+                    _provider_user_message(detail, status=status)
+                ) from err
             ceiling = _parse_max_tokens_ceiling(detail)
             if status == 400 and ceiling is not None and ceiling < tokens:
                 tokens = ceiling
@@ -532,5 +565,8 @@ async def stream_skill_step(
                     enable_thinking=enable_thinking,
                 )
                 continue
-            raise RuntimeError(f"LLM HTTP {status}: {detail}") from err
+            _log.warning("[llm_step] LLM HTTP %s detail=%s", status, detail[:500])
+            raise RuntimeError(
+                _provider_user_message(detail, status=status)
+            ) from err
     raise RuntimeError("LLM stream failed after retries")

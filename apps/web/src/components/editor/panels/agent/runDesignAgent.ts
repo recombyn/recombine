@@ -57,6 +57,57 @@ const SKIP_TAGS = new Set([
   'symbol',
 ]);
 
+type AskChoiceUi = {
+  mode: 'confirm' | 'single' | 'multi' | 'buttons' | 'text';
+  options: Array<{ label: string; action: 'apply' | 'reply' | 'dismiss' }>;
+  placeholder?: string;
+};
+
+function normalizeChoiceUi(raw: unknown): AskChoiceUi | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as {
+    mode?: string;
+    options?: unknown[];
+    placeholder?: string;
+    hint?: string;
+  };
+  let modeRaw = String(obj.mode || '').trim().toLowerCase();
+  if (
+    modeRaw === 'freeform' ||
+    modeRaw === 'free_text' ||
+    modeRaw === 'input' ||
+    modeRaw === 'textarea'
+  ) {
+    modeRaw = 'text';
+  }
+  const mode: AskChoiceUi['mode'] =
+    modeRaw === 'confirm' ||
+    modeRaw === 'single' ||
+    modeRaw === 'multi' ||
+    modeRaw === 'buttons' ||
+    modeRaw === 'text'
+      ? modeRaw
+      : 'buttons';
+  const options: AskChoiceUi['options'] = [];
+  for (const item of obj.options || []) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as { label?: string; action?: string };
+    let action = String(row.action || 'reply').trim().toLowerCase();
+    if (action === 'cancel' || action === 'close') action = 'dismiss';
+    if (action === 'ok' || action === 'confirm') action = 'apply';
+    if (action !== 'apply' && action !== 'reply' && action !== 'dismiss') {
+      action = 'reply';
+    }
+    const label = String(row.label || '').trim();
+    if (!label && action === 'reply') continue;
+    options.push({ label, action: action as AskChoiceUi['options'][number]['action'] });
+    if (options.length >= 8) break;
+  }
+  const placeholder = String(obj.placeholder || obj.hint || '').trim() || undefined;
+  if (!options.length && mode !== 'text') return undefined;
+  return { mode, options, ...(placeholder ? { placeholder } : {}) };
+}
+
 function parseSize(canvasSize?: string | null): { width: number; height: number } {
   const raw = String(canvasSize || '390x844')
     .toLowerCase()
@@ -1876,6 +1927,7 @@ export type AgentStepEvent =
       choices?: string[];
       proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
       applyChoice?: string;
+      choiceUi?: AskChoiceUi;
     }
   | { type: 'error'; message: string };
 
@@ -2013,6 +2065,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     choices?: string[];
     proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
     applyChoice?: string;
+    choiceUi?: AskChoiceUi;
   } | null = null;
   let resultSummary = '';
   let resultChoices: string[] = [];
@@ -2821,6 +2874,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         .slice(0, 80);
     }
     const applyChoice = String(ev.apply_choice || '').trim() || undefined;
+    const choiceUi = normalizeChoiceUi(ev.choice_ui);
     emitPhase(Math.max(labels.length, 1), ev.scene || params.scene || 'design');
     pendingDone = {
       summary: resultSummary,
@@ -2832,6 +2886,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       choices: resultChoices.length ? resultChoices : undefined,
       proposedOps: resultProposed?.length ? resultProposed : undefined,
       applyChoice,
+      choiceUi,
     };
     emitMemory(
       undefined,
@@ -3018,6 +3073,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           ? pendingDone.proposedOps
           : undefined,
         applyChoice: pendingDone.applyChoice || undefined,
+        choiceUi: pendingDone.choiceUi,
       });
     }
 

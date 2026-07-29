@@ -173,6 +173,8 @@ class MemoryService:
             kg_triples=kg_triples,
             rules=rules,
             dialogue=dialogue_view,
+            # Ask follow-ups are short chips ("随意一段示例"); need verbatim recent turns.
+            include_recent_dialogue=True,
         )
         _mem(
             "DONE",

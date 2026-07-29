@@ -8,13 +8,13 @@
   :root {
     /* fallback before data-theme applies */
     --surface: #ffffff;
-    --canvas: #ffffff;
+    --canvas: #F5F5F5;
     --rail: #f3f3f3;
     --ink: #141414;
     --muted: #767676;
     --line: #d9d9d9;
     --accent: #141414;
-    --accent-soft: #e6e6e6;
+    --accent-soft: #ebebeb;
     --on-brand: #ffffff;
   --home-hero-glow-strong: rgba(232, 226, 255, 0.7);
   --home-hero-glow-soft: rgba(242, 238, 255, 0.45);

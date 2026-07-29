@@ -16,7 +16,7 @@ import { DropdownPanel, DropdownPanelItem } from '@/components/base';
 import { cn } from '@/utils/classnames';
 
 export const ELEMENT_ASPECT_PRESETS: { id: string; label: string; w: number; h: number }[] = [
-  { id: 'original', label: 'Original', w: 0, h: 0 },
+  { id: 'original', label: 'Free', w: 0, h: 0 },
   { id: '1:1', label: '1:1', w: 1, h: 1 },
   { id: '4:3', label: '4:3', w: 4, h: 3 },
   { id: '3:4', label: '3:4', w: 3, h: 4 },
@@ -72,7 +72,7 @@ type Props = {
 };
 
 /**
- * Preset aspect ratio dropdown (fig.2): original + common ratios with shape icons.
+ * Preset aspect ratio dropdown: free (unlocked) + common ratios with shape icons.
  */
 export default function AspectRatioPresetMenu({
   open,

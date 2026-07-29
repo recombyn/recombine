@@ -117,7 +117,7 @@ const AgentMessageList = forwardRef(function AgentMessageList(
                   {t('agent.messageCount', { count: s.messages.length })}
                 </div>
               </button>
-              <Tooltip title={t('agent.delete')} placement="top">
+              <Tooltip tip={t('agent.delete')} placement="top">
                 <button
                   type="button"
                   aria-label={t('agent.delete')}

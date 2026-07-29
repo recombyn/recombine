@@ -144,16 +144,12 @@ def _ses_request(action: str, params: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
-def send_verification_email(*, to_email: str, code: str) -> str:
-    """Send a 6-digit registration code. Returns MessageId.
-
-    Prefer SES template (TemplateID) when configured — required for most new SES accounts.
-    Otherwise fall back to Simple with base64 Html/Text (needs special SES permission).
-    """
+def send_login_link_email(*, to_email: str, username: str, activate_id: str) -> str:
+    """Send magic-link login mail (SES template {{username}} / {{id}}). Returns MessageId."""
     s = _settings()
     from_email = s.ses_from_email.strip()
     from_name = (s.ses_from_name or "recombyn").strip()
-    subject = f"[{from_name}] Your verification code"
+    subject = f"[{from_name}] 登录链接"
     params: dict[str, Any] = {
         "FromEmailAddress": (
             f"{from_name} <{from_email}>" if from_name else from_email
@@ -167,20 +163,29 @@ def send_verification_email(*, to_email: str, code: str) -> str:
     if template_id > 0:
         params["Template"] = {
             "TemplateID": template_id,
-            "TemplateData": json.dumps({"code": code}, ensure_ascii=False),
+            "TemplateData": json.dumps(
+                {
+                    "username": username or "there",
+                    "id": activate_id,
+                },
+                ensure_ascii=False,
+            ),
         }
     else:
+        base = (s.ses_activate_base_url or "https://recombyn.com/activate").rstrip("/")
+        link = f"{base}/{activate_id}"
         text = (
-            f"Your {from_name} verification code is: {code}\n\n"
-            "This code expires in 10 minutes. "
-            "If you did not request it, ignore this email.\n"
+            f"你好 {username}，\n\n"
+            f"请打开以下链接登录 {from_name}（仅可使用一次，48 小时内有效）：\n"
+            f"{link}\n\n"
+            "如非本人操作，请忽略本邮件。\n"
         )
         html = (
-            '<div style="font-family:system-ui,sans-serif;line-height:1.5">'
-            f"<p>Your <strong>{from_name}</strong> verification code is:</p>"
-            f'<p style="font-size:28px;letter-spacing:4px;font-weight:700">{code}</p>'
-            '<p style="color:#666">This code expires in 10 minutes. '
-            "If you did not request it, ignore this email.</p></div>"
+            '<div style="font-family:system-ui,sans-serif;line-height:1.6">'
+            f"<p>你好 <strong>{username}</strong>，</p>"
+            f"<p>请点击登录 <strong>{from_name}</strong>（仅可使用一次，48 小时内有效）：</p>"
+            f'<p><a href="{link}">{link}</a></p>'
+            '<p style="color:#666">如非本人操作，请忽略本邮件。</p></div>'
         )
         params["Simple"] = {
             "Html": _b64(html),
@@ -189,5 +194,15 @@ def send_verification_email(*, to_email: str, code: str) -> str:
 
     result = _ses_request("SendEmail", params)
     message_id = str(result.get("MessageId") or "")
-    logger.info("SendEmail ok to=%s messageId=%s", to_email, message_id)
+    logger.info("SendEmail login-link ok to=%s messageId=%s", to_email, message_id)
     return message_id
+
+
+# Back-compat alias (old verification-code callers).
+def send_verification_email(*, to_email: str, code: str) -> str:
+    """Deprecated: prefer send_login_link_email. Kept for tests / fallbacks."""
+    return send_login_link_email(
+        to_email=to_email,
+        username=to_email.split("@", 1)[0] or "there",
+        activate_id=code,
+    )

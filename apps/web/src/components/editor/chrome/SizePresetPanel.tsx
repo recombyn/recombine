@@ -91,7 +91,7 @@ export const FRAME_SIZE_PRESETS: FrameSizePreset[] = [
   { key: 'tabloid', label: 'Tabloid', category: 'poster', width: 1056, height: 1632, icon: 'doc' },
 
   // Ratio (separate toolbar)
-  { key: 'original', label: '原始', category: 'ratio', icon: 'square' },
+  { key: 'original', label: '自由', category: 'ratio', icon: 'square' },
   { key: '1:1', label: '1:1', category: 'ratio', ratio: 1, icon: 'square' },
   { key: '4:3', label: '4:3', category: 'ratio', ratio: 4 / 3, icon: 'landscape' },
   { key: '3:4', label: '3:4', category: 'ratio', ratio: 3 / 4, icon: 'portrait' },
@@ -533,7 +533,7 @@ export default function SizePresetPanel({
           })}
         </div>
         {showAuto ? (
-          <Tooltip title={t('editor.frameToolbar.auto')} placement="top">
+          <Tooltip tip={t('editor.frameToolbar.auto')} placement="top">
             <label
               className={cn(
                 'mb-2 ml-0.5 inline-flex shrink-0 cursor-pointer items-center pl-1.5',

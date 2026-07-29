@@ -42,7 +42,7 @@ export default function BucketFillToolbar({ className }: { className?: string })
           className="inline-flex"
         >
           {({ open }) => (
-            <Tooltip title="填充颜色" placement="bottom" disabled={open}>
+            <Tooltip tip="填充颜色" placement="bottom" disabled={open}>
               <span
                 className={cn(
                   'inline-flex h-8 w-8 items-center justify-center rounded-[4px] transition-colors',

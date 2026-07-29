@@ -97,8 +97,15 @@ def compose_memory_blocks(
         if sg_block:
             parts.append(sg_block)
 
-    # Optimal chat context: facts + rolling summary (+ optional recent verbatim).
-    # Short-term verbatim history now lives in LangGraph checkpointer + thread_id.
+    # Optimal chat context: recent verbatim first (Ask chip follow-ups), then facts/summary.
+    if include_recent_dialogue and short:
+        dial_lines: list[str] = []
+        for t in short:
+            role = "User" if t.get("role") == "user" else "Assistant"
+            dial_lines.append(f"{role}: {t.get('text', '')}")
+        if dial_lines:
+            parts.append("[Recent dialogue]\n" + "\n".join(dial_lines))
+
     fact_lines: list[str] = []
     facts = dial.get("facts") if isinstance(dial.get("facts"), list) else []
     for f in facts[:16]:
@@ -116,13 +123,6 @@ def compose_memory_blocks(
         if summary:
             dial_parts.append("[Dialogue summary]\n" + summary)
         parts.append("\n\n".join(dial_parts))
-
-    if include_recent_dialogue and short:
-        dial_lines: list[str] = []
-        for t in short:
-            role = "User" if t.get("role") == "user" else "Assistant"
-            dial_lines.append(f"{role}: {t.get('text', '')}")
-        parts.append("[Recent dialogue]\n" + "\n".join(dial_lines))
 
     if long_hits:
         long_lines = []

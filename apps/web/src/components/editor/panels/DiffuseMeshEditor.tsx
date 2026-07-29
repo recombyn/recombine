@@ -219,7 +219,7 @@ export default function DiffuseMeshEditor({
     <div className="space-y-3" data-diffuse-mesh-editor>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-0.5">
-          <Tooltip title={t('editor.undo')} placement="top">
+          <Tooltip tip={t('editor.undo')} placement="top">
             <button
               type="button"
               disabled={!past.length}
@@ -229,7 +229,7 @@ export default function DiffuseMeshEditor({
               <HiOutlineArrowUturnLeft className="h-3.5 w-3.5" />
             </button>
           </Tooltip>
-          <Tooltip title={t('editor.redo')} placement="top">
+          <Tooltip tip={t('editor.redo')} placement="top">
             <button
               type="button"
               disabled={!future.length}
@@ -260,7 +260,7 @@ export default function DiffuseMeshEditor({
               )}
             </button>
           </Tooltip>
-          <Tooltip title={t('editor.fillDiffuse')} placement="top">
+          <Tooltip tip={t('editor.fillDiffuse')} placement="top">
             <button
               type="button"
               onClick={() => {

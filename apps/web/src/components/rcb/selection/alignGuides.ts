@@ -29,6 +29,8 @@ export type AlignGuide = {
   marks: number[];
   /** Equal-spacing gap indicator. */
   kind?: 'align' | 'gap' | 'size';
+  /** Mid↔mid snap — draw × at marks (MasterGo center guides). */
+  center?: boolean;
 };
 
 export type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -158,6 +160,11 @@ type GuideCandidate = {
   face: StrokeBandFace | 'any';
   /** Perpendicular mark for snap-line endpoints (midY for X, midX for Y). */
   mark: number;
+  /** True when this candidate is a box midline (midX / midY). */
+  isMid?: boolean;
+  /** Box extent on the perpendicular axis (left–right for Y, top–bottom for X). */
+  span0: number;
+  span1: number;
 };
 
 function uniqNums(values: number[]) {
@@ -248,14 +255,14 @@ function collectGuideCandidates(others: FacedSceneBox[], containers: FacedSceneB
     const face = asFrame ? 'any' : b.face || 'any';
     // Edge faces keep their tag; midlines match any source face.
     candidatesX.push(
-      { pos: e.left, face, mark: e.midY },
-      { pos: e.midX, face: 'any', mark: e.midY },
-      { pos: e.right, face, mark: e.midY }
+      { pos: e.left, face, mark: e.midY, isMid: false, span0: e.top, span1: e.bottom },
+      { pos: e.midX, face: 'any', mark: e.midY, isMid: true, span0: e.top, span1: e.bottom },
+      { pos: e.right, face, mark: e.midY, isMid: false, span0: e.top, span1: e.bottom }
     );
     candidatesY.push(
-      { pos: e.top, face, mark: e.midX },
-      { pos: e.midY, face: 'any', mark: e.midX },
-      { pos: e.bottom, face, mark: e.midX }
+      { pos: e.top, face, mark: e.midX, isMid: false, span0: e.left, span1: e.right },
+      { pos: e.midY, face: 'any', mark: e.midX, isMid: true, span0: e.left, span1: e.right },
+      { pos: e.bottom, face, mark: e.midX, isMid: false, span0: e.left, span1: e.right }
     );
   };
   containers.forEach((b) => absorbBox(b, true));
@@ -272,44 +279,147 @@ type SnapPair = {
   thisPoint: { x: number; y: number };
   otherPoint: { x: number; y: number };
   nudge: number;
+  /** Mid↔mid — center align (draw × at marks). */
+  center?: boolean;
+  /** Source stroke-band face (prefer outer for display). */
+  face?: StrokeBandFace | 'any';
+  /** Perpendicular span of the moving box on the align line. */
+  thisSpan?: [number, number];
+  /** Perpendicular span of the target box on the align line. */
+  otherSpan?: [number, number];
 };
 
+/** Collapse stroke-band / equal-height duplicate snaps to one MasterGo-style guide per axis. */
+function selectDisplaySnaps(pairs: SnapPair[], axis: 'x' | 'y'): SnapPair[] {
+  if (!pairs.length) return pairs;
+  const getPos = (p: SnapPair) => (axis === 'x' ? p.otherPoint.x : p.otherPoint.y);
+
+  // Prefer edge over center when both win (equal height → top+mid+bottom all d=0).
+  const hasEdge = pairs.some((p) => !p.center);
+  let preferred = hasEdge ? pairs.filter((p) => !p.center) : pairs;
+  if (!preferred.length) preferred = pairs;
+
+  // Prefer outer / any faces so path/inner don't draw a second parallel line.
+  const outerish = preferred.filter(
+    (p) => !p.face || p.face === 'outer' || p.face === 'any'
+  );
+  if (outerish.length) preferred = outerish;
+
+  // Cluster near-duplicate positions (outer vs path tops differ by ~stroke/2).
+  const CLUSTER = 6;
+  type Cluster = { pos: number; pairs: SnapPair[] };
+  const clusters: Cluster[] = [];
+  for (const p of preferred) {
+    const pos = getPos(p);
+    const hit = clusters.find((c) => Math.abs(c.pos - pos) <= CLUSTER);
+    if (hit) {
+      hit.pairs.push(p);
+      continue;
+    }
+    clusters.push({ pos, pairs: [p] });
+  }
+  if (clusters.length <= 1) return preferred;
+
+  // One primary cluster: most pairs wins; tie → first (top/left appear first).
+  clusters.sort((a, b) => b.pairs.length - a.pairs.length);
+  return clusters[0].pairs;
+}
+
 /**
- * : only draw lines for the winning snap pairs (nearest distance),
- * not every incidental alignment on the canvas.
+ * Winning snap pairs → align guides.
+ * Edge: one continuous line spanning box extents, × at corners (MasterGo top-edge style).
+ * Center: line between centers, × at mids. Coincident nested center still emits × only.
  */
 function guidesFromSnapPairs(pairsX: SnapPair[], pairsY: SnapPair[]): AlignGuide[] {
-  const groupsX = new Map<number, number[]>();
-  for (const p of pairsX) {
+  const xPairs = selectDisplaySnaps(pairsX, 'x');
+  const yPairs = selectDisplaySnaps(pairsY, 'y');
+
+  type Group = {
+    marks: number[];
+    spans: number[];
+    center: boolean;
+  };
+  const groupsX = new Map<number, Group>();
+  for (const p of xPairs) {
     const x = roundSnap(p.otherPoint.x);
-    const marks = groupsX.get(x) || [];
-    marks.push(p.thisPoint.y, p.otherPoint.y);
-    groupsX.set(x, marks);
+    const g = groupsX.get(x) || { marks: [], spans: [], center: false };
+    if (p.center) {
+      g.center = true;
+      g.marks.push(p.thisPoint.y, p.otherPoint.y);
+    } else {
+      if (p.thisSpan) g.spans.push(p.thisSpan[0], p.thisSpan[1]);
+      if (p.otherSpan) g.spans.push(p.otherSpan[0], p.otherSpan[1]);
+      // Fallback if spans missing: mid marks.
+      if (!p.thisSpan && !p.otherSpan) g.marks.push(p.thisPoint.y, p.otherPoint.y);
+    }
+    groupsX.set(x, g);
   }
-  const groupsY = new Map<number, number[]>();
-  for (const p of pairsY) {
+  const groupsY = new Map<number, Group>();
+  for (const p of yPairs) {
     const y = roundSnap(p.otherPoint.y);
-    const marks = groupsY.get(y) || [];
-    marks.push(p.thisPoint.x, p.otherPoint.x);
-    groupsY.set(y, marks);
+    const g = groupsY.get(y) || { marks: [], spans: [], center: false };
+    if (p.center) {
+      g.center = true;
+      g.marks.push(p.thisPoint.x, p.otherPoint.x);
+    } else {
+      if (p.thisSpan) g.spans.push(p.thisSpan[0], p.thisSpan[1]);
+      if (p.otherSpan) g.spans.push(p.otherSpan[0], p.otherSpan[1]);
+      if (!p.thisSpan && !p.otherSpan) g.marks.push(p.thisPoint.x, p.otherPoint.x);
+    }
+    groupsY.set(y, g);
   }
+
   const guides: AlignGuide[] = [];
-  groupsX.forEach((marks, pos) => {
-    const uniq = uniqNums(marks);
-    if (uniq.length < 2) return;
-    const from = Math.min(...uniq);
-    const to = Math.max(...uniq);
+  const pushGroup = (orient: 'v' | 'h', pos: number, g: Group) => {
+    if (g.center) {
+      const uniq = uniqNums(g.marks);
+      if (!uniq.length) return;
+      const from = Math.min(...uniq);
+      const to = Math.max(...uniq);
+      if (uniq.length < 2 && to - from < 1) {
+        // Coincident centers — × only.
+        guides.push({
+          orient,
+          pos,
+          from,
+          to,
+          marks: uniq,
+          kind: 'align',
+          center: true,
+        });
+        return;
+      }
+      if (to - from < 1 && uniq.length < 2) return;
+      guides.push({
+        orient,
+        pos,
+        from,
+        to,
+        marks: uniq,
+        kind: 'align',
+        center: true,
+      });
+      return;
+    }
+    // Edge: span full AABB of participants; × at every corner on the line.
+    const corners = uniqNums(g.spans.length ? g.spans : g.marks);
+    if (corners.length < 2) return;
+    const from = Math.min(...corners);
+    const to = Math.max(...corners);
     if (to - from < 1) return;
-    guides.push({ orient: 'v', pos, from, to, marks: uniq, kind: 'align' });
-  });
-  groupsY.forEach((marks, pos) => {
-    const uniq = uniqNums(marks);
-    if (uniq.length < 2) return;
-    const from = Math.min(...uniq);
-    const to = Math.max(...uniq);
-    if (to - from < 1) return;
-    guides.push({ orient: 'h', pos, from, to, marks: uniq, kind: 'align' });
-  });
+    guides.push({
+      orient,
+      pos,
+      from,
+      to,
+      marks: corners,
+      kind: 'align',
+      center: false,
+    });
+  };
+
+  groupsX.forEach((g, pos) => pushGroup('v', pos, g));
+  groupsY.forEach((g, pos) => pushGroup('h', pos, g));
   return guides;
 }
 
@@ -465,6 +575,8 @@ export function snapBoxToGuides(
     sourceX: number,
     sourceY: number,
     sourceFace: StrokeBandFace | 'any' | undefined,
+    sourceIsMid: boolean,
+    sourceSpan: [number, number],
     target: GuideCandidate
   ) => {
     if (!facesCompatible(sourceFace, target.face)) return;
@@ -480,12 +592,18 @@ export function snapBoxToGuides(
       thisPoint: { x: sourceX, y: sourceY },
       otherPoint: { x: target.pos, y: target.mark },
       nudge: d,
+      center: sourceIsMid && !!target.isMid,
+      face: sourceFace,
+      thisSpan: sourceSpan,
+      otherSpan: [target.span0, target.span1],
     });
   };
   const tryY = (
     sourceY: number,
     sourceX: number,
     sourceFace: StrokeBandFace | 'any' | undefined,
+    sourceIsMid: boolean,
+    sourceSpan: [number, number],
     target: GuideCandidate
   ) => {
     if (!facesCompatible(sourceFace, target.face)) return;
@@ -501,6 +619,10 @@ export function snapBoxToGuides(
       thisPoint: { x: sourceX, y: sourceY },
       otherPoint: { x: target.mark, y: target.pos },
       nudge: d,
+      center: sourceIsMid && !!target.isMid,
+      face: sourceFace,
+      thisSpan: sourceSpan,
+      otherSpan: [target.span0, target.span1],
     });
   };
 
@@ -508,18 +630,20 @@ export function snapBoxToGuides(
     edgeBoxes.forEach((b) => {
       const e = guideEdges(b);
       const face = b.face || 'outer';
-      tryX(e.left, e.midY, face, t);
-      tryX(e.midX, e.midY, 'any', t);
-      tryX(e.right, e.midY, face, t);
+      const spanY: [number, number] = [e.top, e.bottom];
+      tryX(e.left, e.midY, face, false, spanY, t);
+      tryX(e.midX, e.midY, 'any', true, spanY, t);
+      tryX(e.right, e.midY, face, false, spanY, t);
     });
   });
   candidatesY.forEach((t) => {
     edgeBoxes.forEach((b) => {
       const e = guideEdges(b);
       const face = b.face || 'outer';
-      tryY(e.top, e.midX, face, t);
-      tryY(e.midY, e.midX, 'any', t);
-      tryY(e.bottom, e.midX, face, t);
+      const spanX: [number, number] = [e.left, e.right];
+      tryY(e.top, e.midX, face, false, spanX, t);
+      tryY(e.midY, e.midX, 'any', true, spanX, t);
+      tryY(e.bottom, e.midX, face, false, spanX, t);
     });
   });
 
@@ -550,14 +674,20 @@ export function snapBoxToGuides(
 
   const box = { ...moving, left: moving.left + dx, top: moving.top + dy };
 
-  // After nudge, shift mover points (2nd pass — exact indicators only).
+  // After nudge, shift mover points + spans (2nd pass — exact indicators only).
   const nudgedX = snapsX.map((p) => ({
     ...p,
     thisPoint: { x: p.thisPoint.x + dx, y: p.thisPoint.y + dy },
+    thisSpan: p.thisSpan
+      ? ([p.thisSpan[0] + dy, p.thisSpan[1] + dy] as [number, number])
+      : undefined,
   }));
   const nudgedY = snapsY.map((p) => ({
     ...p,
     thisPoint: { x: p.thisPoint.x + dx, y: p.thisPoint.y + dy },
+    thisSpan: p.thisSpan
+      ? ([p.thisSpan[0] + dx, p.thisSpan[1] + dx] as [number, number])
+      : undefined,
   }));
 
   const gapGuides: AlignGuide[] = [];
@@ -587,7 +717,11 @@ export function snapResizeToGuides(
   containers: FacedSceneBox[] = [],
   threshold = 5,
   min = 8,
-  opts?: { edgeBoxes?: FacedSceneBox[] }
+  opts?: {
+    edgeBoxes?: FacedSceneBox[];
+    lockAspect?: boolean;
+    aspectRatio?: number;
+  }
 ): { box: SceneBox; guides: AlignGuide[] } {
   const { candidatesX, candidatesY } = collectGuideCandidates(others, containers);
   const edgeBoxes: FacedSceneBox[] = opts?.edgeBoxes?.length
@@ -606,7 +740,14 @@ export function snapResizeToGuides(
   const bottom0 = top + height;
 
   const bestEdgeSnap = (
-    sources: Array<{ pos: number; mark: number; face: StrokeBandFace | 'any' | undefined }>,
+    sources: Array<{
+      pos: number;
+      mark: number;
+      face: StrokeBandFace | 'any' | undefined;
+      isMid?: boolean;
+      span0: number;
+      span1: number;
+    }>,
     candidates: GuideCandidate[],
     axis: 'x' | 'y'
   ) => {
@@ -624,17 +765,28 @@ export function snapResizeToGuides(
           best = ad;
           delta = d;
         }
+        const center = !!source.isMid && !!t.isMid;
+        const thisSpan: [number, number] = [source.span0, source.span1];
+        const otherSpan: [number, number] = [t.span0, t.span1];
         pairs.push(
           axis === 'x'
             ? {
                 thisPoint: { x: source.pos, y: source.mark },
                 otherPoint: { x: t.pos, y: t.mark },
                 nudge: d,
+                center,
+                face: source.face,
+                thisSpan,
+                otherSpan,
               }
             : {
                 thisPoint: { x: source.mark, y: source.pos },
                 otherPoint: { x: t.mark, y: t.pos },
                 nudge: d,
+                center,
+                face: source.face,
+                thisSpan,
+                otherSpan,
               }
         );
       }
@@ -649,7 +801,14 @@ export function snapResizeToGuides(
     const edge = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.left, mark: e.midY, face: b.face || 'outer' };
+        return {
+          pos: e.left,
+          mark: e.midY,
+          face: b.face || 'outer',
+          isMid: false,
+          span0: e.top,
+          span1: e.bottom,
+        };
       }),
       candidatesX,
       'x'
@@ -657,7 +816,14 @@ export function snapResizeToGuides(
     const mid = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.midX, mark: e.midY, face: 'any' as const };
+        return {
+          pos: e.midX,
+          mark: e.midY,
+          face: 'any' as const,
+          isMid: true,
+          span0: e.top,
+          span1: e.bottom,
+        };
       }),
       candidatesX,
       'x'
@@ -675,7 +841,14 @@ export function snapResizeToGuides(
     const edge = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.right, mark: e.midY, face: b.face || 'outer' };
+        return {
+          pos: e.right,
+          mark: e.midY,
+          face: b.face || 'outer',
+          isMid: false,
+          span0: e.top,
+          span1: e.bottom,
+        };
       }),
       candidatesX,
       'x'
@@ -683,7 +856,14 @@ export function snapResizeToGuides(
     const mid = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.midX, mark: e.midY, face: 'any' as const };
+        return {
+          pos: e.midX,
+          mark: e.midY,
+          face: 'any' as const,
+          isMid: true,
+          span0: e.top,
+          span1: e.bottom,
+        };
       }),
       candidatesX,
       'x'
@@ -701,7 +881,14 @@ export function snapResizeToGuides(
     const edge = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.top, mark: e.midX, face: b.face || 'outer' };
+        return {
+          pos: e.top,
+          mark: e.midX,
+          face: b.face || 'outer',
+          isMid: false,
+          span0: e.left,
+          span1: e.right,
+        };
       }),
       candidatesY,
       'y'
@@ -709,7 +896,14 @@ export function snapResizeToGuides(
     const mid = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.midY, mark: e.midX, face: 'any' as const };
+        return {
+          pos: e.midY,
+          mark: e.midX,
+          face: 'any' as const,
+          isMid: true,
+          span0: e.left,
+          span1: e.right,
+        };
       }),
       candidatesY,
       'y'
@@ -727,7 +921,14 @@ export function snapResizeToGuides(
     const edge = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.bottom, mark: e.midX, face: b.face || 'outer' };
+        return {
+          pos: e.bottom,
+          mark: e.midX,
+          face: b.face || 'outer',
+          isMid: false,
+          span0: e.left,
+          span1: e.right,
+        };
       }),
       candidatesY,
       'y'
@@ -735,7 +936,14 @@ export function snapResizeToGuides(
     const mid = bestEdgeSnap(
       edgeBoxes.map((b) => {
         const e = guideEdges(b);
-        return { pos: e.midY, mark: e.midX, face: 'any' as const };
+        return {
+          pos: e.midY,
+          mark: e.midX,
+          face: 'any' as const,
+          isMid: true,
+          span0: e.left,
+          span1: e.right,
+        };
       }),
       candidatesY,
       'y'
@@ -783,16 +991,50 @@ export function snapResizeToGuides(
     height = min;
   }
 
-  const box = { left, top, width, height };
-  const dx = left - resized.left;
-  const dy = top - resized.top;
+  let box: SceneBox = { left, top, width, height };
+  if (opts?.lockAspect) {
+    const ratio =
+      opts.aspectRatio && Number.isFinite(opts.aspectRatio) && opts.aspectRatio > 0
+        ? opts.aspectRatio
+        : resized.width / Math.max(1, resized.height);
+    box = applyAspectToHandle(handle, box.left, box.top, box.width, box.height, ratio);
+    // Re-clamp mins after aspect (same anchors as independent snap).
+    let right = box.left + box.width;
+    let bottom = box.top + box.height;
+    left = box.left;
+    top = box.top;
+    width = box.width;
+    height = box.height;
+    if (width < min) {
+      if (moveL && !moveR) left = right - min;
+      else right = left + min;
+      width = min;
+    }
+    if (height < min) {
+      if (moveT && !moveB) top = bottom - min;
+      else bottom = top + min;
+      height = min;
+    }
+    // Aspect again so min-clamp cannot leave a free-axis stretch.
+    box = applyAspectToHandle(handle, left, top, width, height, ratio);
+  }
+
+  const dx = box.left - resized.left;
+  const dy = box.top - resized.top;
+  const finalE = guideEdges(box);
   const nudgedX = snapsX.map((p) => ({
     ...p,
     thisPoint: { x: p.thisPoint.x + dx, y: p.thisPoint.y + dy },
+    thisSpan: p.center
+      ? p.thisSpan
+      : ([finalE.top, finalE.bottom] as [number, number]),
   }));
   const nudgedY = snapsY.map((p) => ({
     ...p,
     thisPoint: { x: p.thisPoint.x + dx, y: p.thisPoint.y + dy },
+    thisSpan: p.center
+      ? p.thisSpan
+      : ([finalE.left, finalE.right] as [number, number]),
   }));
   return {
     box,

@@ -17,6 +17,8 @@ _PBKDF2_ROUNDS = 260_000
 _CODE_TTL_SECONDS = 10 * 60
 _TICKET_TTL_SECONDS = 15 * 60
 _CODE_COOLDOWN_SECONDS = 55
+_ACTIVATE_TTL_SECONDS = 48 * 60 * 60
+_ACTIVATE_COOLDOWN_SECONDS = 55
 
 
 def init_auth_db() -> None:
@@ -675,3 +677,75 @@ def consume_ticket(email: str, ticket: str) -> bool:
 
 def generate_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def display_name_for_email(email: str) -> str:
+    """Greeting for SES {{username}} — profile name, else local-part."""
+    email_n = email.strip().lower()
+    user = get_user_by_email(email_n)
+    name = (user.name or "").strip() if user else ""
+    if name and "@" not in name:
+        return name
+    local = email_n.split("@", 1)[0].strip()
+    return local or "there"
+
+
+def can_send_activate_link(email: str) -> tuple[bool, float]:
+    init_auth_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT created_at FROM email_activate_tokens
+            WHERE email = ? COLLATE NOCASE
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (email.strip().lower(),),
+        ).fetchone()
+    if not row:
+        return True, 0
+    elapsed = time.time() - float(row["created_at"])
+    if elapsed >= _ACTIVATE_COOLDOWN_SECONDS:
+        return True, 0
+    return False, max(1.0, _ACTIVATE_COOLDOWN_SECONDS - elapsed)
+
+
+def create_activate_token(email: str) -> str:
+    """One-time login token for SES template {{id}} (48h)."""
+    init_auth_db()
+    email_n = email.strip().lower()
+    now = time.time()
+    token_id = secrets.token_urlsafe(24)
+    with connect() as conn:
+        # Drop prior unused links for this email (newest wins).
+        conn.execute(
+            "DELETE FROM email_activate_tokens WHERE email = ? COLLATE NOCASE",
+            (email_n,),
+        )
+        conn.execute(
+            """
+            INSERT INTO email_activate_tokens (token_id, email, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (token_id, email_n, now + _ACTIVATE_TTL_SECONDS, now),
+        )
+    return token_id
+
+
+def consume_activate_token(token_id: str) -> str:
+    """Consume one-time link. Returns email or raises ValueError."""
+    init_auth_db()
+    tid = (token_id or "").strip()
+    if not tid:
+        raise ValueError("link_invalid")
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT email, expires_at FROM email_activate_tokens WHERE token_id = ?",
+            (tid,),
+        ).fetchone()
+        if not row:
+            raise ValueError("link_invalid")
+        conn.execute("DELETE FROM email_activate_tokens WHERE token_id = ?", (tid,))
+        if float(row["expires_at"]) < time.time():
+            raise ValueError("link_expired")
+        return str(row["email"]).strip().lower()

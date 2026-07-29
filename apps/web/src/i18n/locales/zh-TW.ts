@@ -515,6 +515,7 @@ const zhTW = {
     menuFeedback: '使用者回饋',
     menuDocs: '使用說明',
     menuAbout: '關於我們',
+    menuManageAccount: '管理帳戶',
     creditsRemaining: '剩餘 {{count}}',
     menuAdminKeys: '產生卡密',
     menuFaq: '常見問題',
@@ -947,7 +948,7 @@ const zhTW = {
     },
     frameToolbar: {
       custom: 'Custom',
-      original: '原始',
+      original: '自由',
       canvasColor: '畫板顏色',
       sizePresets: '尺寸預設',
       ratioPresets: '比例預設',

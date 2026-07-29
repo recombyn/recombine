@@ -736,7 +736,7 @@ export function AgentRoutePrefsEditor({
           <div className="mx-1 mt-2 border-t border-[var(--line)]" />
 
           <div className="mt-2.5 flex items-center justify-between gap-2 px-1">
-            <Tooltip title={t('agent.routeMultimodalTip')} placement="top">
+            <Tooltip tip={t('agent.routeMultimodalTip')} placement="top">
               <span className="cursor-default text-[13px] font-medium text-[var(--ink)]">
                 {t('agent.routeMultimodal')}
               </span>

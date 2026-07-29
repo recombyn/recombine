@@ -211,11 +211,8 @@ export default function FrameContextToolbar({ frame }: Props) {
         onPick={(preset) => {
           if (canvasLocked) return;
           if (preset.key === 'original') {
-            const ow = Number(frame.aspectOriginalWidth);
-            const oh = Number(frame.aspectOriginalHeight);
-            if (Number.isFinite(ow) && ow > 0 && Number.isFinite(oh) && oh > 0) {
-              patch({ width: ow, height: oh });
-            }
+            // 「自由」：保持当前尺寸，取消比例锁定
+            patch({ lockAspect: false });
             return;
           }
           const next = applyFramePreset(frame, preset);
@@ -223,6 +220,7 @@ export default function FrameContextToolbar({ frame }: Props) {
             Number(frame.aspectOriginalWidth) > 0 && Number(frame.aspectOriginalHeight) > 0;
           patch({
             ...next,
+            lockAspect: true,
             ...(!hasOrig
               ? {
                   aspectOriginalWidth: Math.round(frame.width),

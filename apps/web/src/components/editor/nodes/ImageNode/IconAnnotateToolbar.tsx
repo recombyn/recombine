@@ -79,7 +79,7 @@ export default function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode 
       className="inline-flex items-center gap-0.5 rounded-[12px] bg-[#2c2c2c] px-1.5 py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <Tooltip title={'画笔'} placement="top">
+      <Tooltip tip={'画笔'} placement="top">
         <button
           type="button"
           aria-label={'画笔'}
@@ -90,7 +90,7 @@ export default function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode 
         </button>
       </Tooltip>
 
-      <Tooltip title={'选择'} placement="top">
+      <Tooltip tip={'选择'} placement="top">
         <button
           type="button"
           aria-label={'选择'}
@@ -101,7 +101,7 @@ export default function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode 
         </button>
       </Tooltip>
 
-      <Tooltip title={'文字'} placement="top">
+      <Tooltip tip={'文字'} placement="top">
         <button
           type="button"
           aria-label={'文字'}
@@ -124,7 +124,7 @@ export default function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode 
         className="inline-flex"
       >
         {({ open, hex }) => (
-          <Tooltip title={'颜色'} placement="top">
+          <Tooltip tip={'颜色'} placement="top">
             <span className={cn(BTN, open && BTN_ACTIVE)}>
               <span
                 className="h-4 w-4 rounded-full ring-1 ring-white/30"

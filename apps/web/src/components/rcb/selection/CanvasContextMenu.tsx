@@ -176,14 +176,26 @@ function ExportSubmenu({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement | null>(null);
+  const flyoutRef = useRef<HTMLDivElement | null>(null);
   const [side, setSide] = useState<'right' | 'left'>('right');
+  const [vAlign, setVAlign] = useState<'top' | 'bottom'>('top');
 
   useLayoutEffect(() => {
     if (!open || !rowRef.current) return;
     const rect = rowRef.current.getBoundingClientRect();
     const spaceRight = window.innerWidth - rect.right;
     setSide(spaceRight < 140 ? 'left' : 'right');
+
+    const flyoutH = flyoutRef.current?.offsetHeight || 140;
+    const spaceBelow = window.innerHeight - rect.top - PAD;
+    const spaceAbove = rect.bottom - PAD;
+    // Prefer top-align with the row; flip up when the flyout would go past the viewport.
+    setVAlign(spaceBelow < flyoutH && spaceAbove > spaceBelow ? 'bottom' : 'top');
   }, [open]);
+
+  const sideClass =
+    side === 'right' ? 'left-full ml-1' : 'right-full mr-1';
+  const vClass = vAlign === 'top' ? 'top-0' : 'bottom-0';
 
   return (
     <div
@@ -203,11 +215,8 @@ function ExportSubmenu({
       </button>
       {open && !disabled ? (
         <div
-          className={
-            side === 'right'
-              ? 'absolute left-full top-0 z-[1] ml-1 min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]'
-              : 'absolute right-full top-0 z-[1] mr-1 min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]'
-          }
+          ref={flyoutRef}
+          className={`absolute ${sideClass} ${vClass} z-[1] min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]`}
           onPointerDown={(e) => e.stopPropagation()}
         >
           <button type="button" className={itemClass} onClick={() => onPick('exportPng')}>

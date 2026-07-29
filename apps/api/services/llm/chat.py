@@ -84,9 +84,8 @@ async def stream_chat(
         detail = llm_error_detail(err)
         if "InvalidEndpointOrModel" in detail or "404" in detail:
             raise RuntimeError(
-                "Doubao model not found or not activated. "
-                "In Volcengine Ark, create an inference endpoint and set "
-                "DOUBAO_SEED_MODEL=ep-xxxx (or DOUBAO_PRO_MODEL) in apps/api/.env. "
+                "Ark model/endpoint not found. Use the catalog's dated api_model "
+                "(e.g. deepseek-v4-flash-260425), or activate the model in Volcengine Ark. "
                 f"Detail: {detail}"
             ) from err
         raise

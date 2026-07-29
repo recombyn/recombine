@@ -28,15 +28,23 @@ export const loginGoogle = (payload: {
     data: payload,
   });
 
-/** Send email verification code via Tencent SES. */
+/** Send magic-link login email via Tencent SES. */
 export const sendEmailCode = (data: { email: string; captchaToken?: string }) =>
-  request<{ ok: boolean; expiresIn: number }>({
+  request<{ ok: boolean; expiresIn: number; mode?: string }>({
     url: '/api/v1/auth/email/send-code',
     method: 'post',
     data,
   });
 
-/** Verify code → create/find user and return session. */
+/** Consume /activate/:id one-time link → session. */
+export const activateEmailLink = (data: { id: string }) =>
+  request<{ user: AuthUserDto; token: string }>({
+    url: '/api/v1/auth/email/activate',
+    method: 'post',
+    data,
+  });
+
+/** Legacy: verify 6-digit code → session. Prefer activateEmailLink. */
 export const verifyEmailCode = (data: {
   email: string;
   code: string;

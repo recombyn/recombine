@@ -372,7 +372,7 @@ export default function PenStrokeToolbar({
           className="inline-flex"
         >
           {({ open, hex, opacity: swatchOpacity }) => (
-            <Tooltip title={'颜色'} placement={docked ? 'bottom' : 'top'}>
+            <Tooltip tip={'颜色'} placement={docked ? 'bottom' : 'top'}>
               <span
                 className={cn(
                   'inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
@@ -442,7 +442,7 @@ export default function PenStrokeToolbar({
                   className="flex max-h-[320px] w-full flex-col gap-0.5 overflow-y-auto overflow-x-hidden p-1"
                 >
                   <li className="w-full">
-                    <Tooltip title={'\u4e0a\u4f20\u81ea\u5b9a\u4e49\u7b14\u5237'} placement="right">
+                    <Tooltip tip={'\u4e0a\u4f20\u81ea\u5b9a\u4e49\u7b14\u5237'} placement="right">
                       <button
                         type="button"
                         aria-label={'\u4e0a\u4f20\u81ea\u5b9a\u4e49\u7b14\u5237'}
@@ -468,7 +468,7 @@ export default function PenStrokeToolbar({
                     const active = b.id === brush.id;
                     return (
                       <li key={b.id} className="group relative w-full">
-                        <Tooltip title={b.label} placement="right">
+                        <Tooltip tip={b.label} placement="right">
                           <button
                             type="button"
                             aria-label={b.label}
@@ -493,7 +493,7 @@ export default function PenStrokeToolbar({
                           </button>
                         </Tooltip>
                         {b.custom ? (
-                          <Tooltip title="删除" placement="right">
+                          <Tooltip tip="删除" placement="right">
                             <button
                               type="button"
                               aria-label={`删除 ${b.label}`}
@@ -565,7 +565,7 @@ export default function PenStrokeToolbar({
               </button>
             </Tooltip>
             <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
-            <Tooltip title={'\u64e6\u76ae\u64e6'} placement={docked ? 'bottom' : 'top'}>
+            <Tooltip tip={'\u64e6\u76ae\u64e6'} placement={docked ? 'bottom' : 'top'}>
               <button
                 type="button"
                 aria-label={'\u64e6\u76ae\u64e6'}
@@ -585,7 +585,7 @@ export default function PenStrokeToolbar({
         ) : (
           <>
             <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
-            <Tooltip title={`${t('editor.exitPenEdit')} (Esc)`} placement={docked ? 'bottom' : 'top'}>
+            <Tooltip tip={`${t('editor.exitPenEdit')} (Esc)`} placement={docked ? 'bottom' : 'top'}>
               <button
                 type="button"
                 aria-label={t('editor.exitPenEdit')}

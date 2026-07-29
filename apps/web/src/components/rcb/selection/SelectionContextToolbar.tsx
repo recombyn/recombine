@@ -249,7 +249,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                 inputMax={400}
               />
               {showBoldToggle ? (
-                <Tooltip title={t('editor.imageToolbar.bold')} placement="top">
+                <Tooltip tip={t('editor.imageToolbar.bold')} placement="top">
                   <button
                     type="button"
                     aria-label={t('editor.imageToolbar.bold')}
@@ -287,7 +287,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                   </button>
                 </Tooltip>
               ) : null}
-              <Tooltip title={t('editor.imageToolbar.italic')} placement="top">
+              <Tooltip tip={t('editor.imageToolbar.italic')} placement="top">
                 <button
                   type="button"
                   aria-label={t('editor.imageToolbar.italic')}
@@ -300,7 +300,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                   <HiOutlineItalic className="h-3.5 w-3.5" />
                 </button>
               </Tooltip>
-              <Tooltip title={t('editor.imageToolbar.strike')} placement="top">
+              <Tooltip tip={t('editor.imageToolbar.strike')} placement="top">
                 <button
                   type="button"
                   aria-label={t('editor.imageToolbar.strike')}
@@ -315,7 +315,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                   <HiOutlineStrikethrough className="h-3.5 w-3.5" />
                 </button>
               </Tooltip>
-              <Tooltip title={t('editor.imageToolbar.align')} placement="top">
+              <Tooltip tip={t('editor.imageToolbar.align')} placement="top">
                 <button
                   type="button"
                   aria-label={t('editor.imageToolbar.align')}
@@ -329,7 +329,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                   <AlignIcon align={textAlign} />
                 </button>
               </Tooltip>
-              <Tooltip title={t('editor.openTextEditor')} placement="top">
+              <Tooltip tip={t('editor.openTextEditor')} placement="top">
                 <button
                   type="button"
                   aria-label={t('editor.openTextEditor')}
@@ -340,7 +340,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                 </button>
               </Tooltip>
               {canOutlineNode(node) ? (
-                <Tooltip title="Outline" placement="top">
+                <Tooltip tip="Outline" placement="top">
                   <button
                     type="button"
                     aria-label="Outline"
@@ -465,7 +465,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                       }
                       afterBlendSlot={
                         supportsCornerRadius(node) ? (
-                          <Tooltip title={t('editor.imageToolbar.cornerRadius')} placement="top">
+                          <Tooltip tip={t('editor.imageToolbar.cornerRadius')} placement="top">
                             <button
                               type="button"
                               aria-label={t('editor.imageToolbar.cornerRadius')}

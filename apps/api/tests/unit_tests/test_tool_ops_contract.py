@@ -57,6 +57,53 @@ def test_dedupe_by_op_id():
     assert len(ops) == 1
 
 
-def test_validation_failure_reason_format():
-    reason = validation_failure_reason(["tool_not_allowed:foo", "missing"])
-    assert reason.startswith("tool_ops_invalid:")
+def test_delete_accepts_node_ids_alias():
+    raw_ops = [
+        {"name": "delete_nodes", "args": {"node_ids": ["n1"]}},
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "n1", "type": "rect"}],
+    )
+    assert not errs
+    assert len(ops) == 1
+    assert ops[0]["name"] == "delete_nodes"
+    assert ops[0]["args"]["nodeIds"] == ["n1"]
+
+
+def test_delete_plus_create_rewrites_to_update_shape():
+    """Rect→circle morph must keep id / z-order (not delete+create)."""
+    raw_ops = [
+        {"name": "delete_nodes", "args": {"node_ids": ["green1"]}},
+        {
+            "name": "create_shape",
+            "args": {
+                "type": "ellipse",
+                "x": 10,
+                "y": 20,
+                "width": 100,
+                "height": 100,
+                "fill": "#00FF00",
+            },
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "green1", "type": "rect", "w": 120, "h": 100}],
+    )
+    assert not errs
+    assert len(ops) == 1
+    assert ops[0]["name"] == "update_node"
+    assert ops[0]["args"]["nodeId"] == "green1"
+    assert ops[0]["args"]["shapeType"] == "ellipse"
+    assert ops[0]["args"]["fill"] == "#00FF00"
+
+
+def test_update_node_accepts_shape_type():
+    raw = '{"ops":[{"name":"update_node","args":{"nodeId":"n1","shapeType":"circle"}}]}'
+    ops, errs = extract_and_validate_tool_ops(
+        raw,
+        scene_nodes=[{"id": "n1", "type": "rect", "w": 100, "h": 100}],
+    )
+    assert not errs
+    assert ops[0]["args"]["shapeType"] == "circle"

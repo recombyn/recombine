@@ -520,7 +520,8 @@ const ja = {
     menuBilling: '利用状況と請求',
     menuFeedback: 'フィードバック',
     menuDocs: 'ヘルプ',
-    menuAbout: 'About',
+    menuAbout: '私たちについて',
+    menuManageAccount: 'アカウント管理',
     creditsRemaining: '残り {{count}}',
     menuAdminKeys: 'カードキー発行',
     menuFaq: 'FAQ',
@@ -953,7 +954,7 @@ const ja = {
     },
     frameToolbar: {
       custom: 'カスタム',
-      original: 'オリジナル',
+      original: 'フリー',
       canvasColor: 'アートボードの色',
       sizePresets: 'サイズプリセット',
       ratioPresets: '比率',

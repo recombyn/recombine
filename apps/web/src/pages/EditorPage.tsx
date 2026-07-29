@@ -272,7 +272,7 @@ function HudBtn({
   'data-tour'?: string;
 }) {
   return (
-    <Tooltip title={tip} placement="top">
+    <Tooltip tip={tip} placement="top">
       <button
         type="button"
         disabled={disabled}
@@ -1460,7 +1460,7 @@ export default function EditorPage() {
           {/* Top-left: home + title (no dropdown) */}
           <div className="pointer-events-none absolute left-4 top-3 z-20 hidden md:block">
             <div className="pointer-events-auto flex items-center gap-2">
-              <Tooltip title={t('editor.home', { defaultValue: '首页' })} placement="bottom">
+              <Tooltip tip={t('editor.home', { defaultValue: '首页' })} placement="bottom">
                 <button
                   type="button"
                   aria-label={t('editor.home', { defaultValue: '首页' })}
@@ -1510,7 +1510,7 @@ export default function EditorPage() {
           >
             <div className="pointer-events-auto flex items-center gap-2">
               <EditorTopExportButton />
-              <Tooltip title={t('editor.share')} placement="bottom">
+              <Tooltip tip={t('editor.share')} placement="bottom">
                 <button
                   type="button"
                   aria-label={t('editor.share')}
@@ -1570,7 +1570,24 @@ export default function EditorPage() {
             </div>
           ) : null}
 
-          <div className="relative min-h-0 flex-1">
+          <div
+            className="relative min-h-0 flex-1"
+            onPointerDown={(e) => {
+              // Blur any focused input (e.g. agent composer) when clicking the canvas,
+              // unless the pointer target is itself interactive.
+              const active = window.document.activeElement as HTMLElement | null;
+              if (
+                active &&
+                active !== e.currentTarget &&
+                !e.currentTarget.contains(active) === false &&
+                (active.tagName === 'INPUT' ||
+                  active.tagName === 'TEXTAREA' ||
+                  active.isContentEditable)
+              ) {
+                active.blur();
+              }
+            }}
+          >
             {!isMobileViewport && document ? (
               <RcbCanvas
                 artboard={worldBounds}
@@ -1759,11 +1776,13 @@ export default function EditorPage() {
             </div>
           ) : null}
 
-          {/* Bottom-left HUD — lift only when it would collide with the center toolstrip */}
+          {/* Bottom-left HUD — lift only when it would collide with the center toolstrip.
+              Floating panels (minimap / shortcuts) sit inside the same container but
+              bottomHudRef is pinned on FloatingToolbar only, so panel height does not
+              affect the collision measurement. */}
           <div
-            ref={bottomHudRef}
             className={cn(
-              'pointer-events-none absolute left-4 z-20 flex flex-col items-start',
+              'pointer-events-none absolute left-4 z-20 flex flex-col items-start gap-2',
               stackBottomHud ? 'bottom-[4.75rem]' : 'bottom-4'
             )}
           >
@@ -1783,7 +1802,7 @@ export default function EditorPage() {
             {shortcutsOpen ? (
               <EditorShortcutsPanel onClose={() => setShortcutsOpen(false)} />
             ) : null}
-            <FloatingToolbar className="pointer-events-auto w-fit px-2 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)]">
+            <FloatingToolbar ref={bottomHudRef} className="pointer-events-auto w-fit px-2 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)]">
               {!isDevMode ? (
                 <>
                   {useCompactTooling ? (

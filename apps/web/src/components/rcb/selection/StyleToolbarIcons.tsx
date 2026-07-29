@@ -8,7 +8,7 @@ const CHECKER: CSSProperties = {
   backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
 };
 
-/** 16×16 circular fill swatch (图2). */
+/** 16×16 circular fill swatch — darker ring so white/near-white fills stay visible. */
 export function FillColorSwatch({
   color,
   className,
@@ -19,7 +19,7 @@ export function FillColorSwatch({
   return (
     <span
       className={cn(
-        'relative inline-flex h-4 w-4 shrink-0 overflow-hidden rounded-full ring-1 ring-[var(--line)]',
+        'relative inline-flex h-4 w-4 shrink-0 overflow-hidden rounded-full ring-1 ring-[#b3b3b3]',
         className
       )}
     >
@@ -40,7 +40,7 @@ export function StrokeColorSwatch({
   return (
     <span
       className={cn(
-        'inline-flex h-4 w-4 shrink-0 rounded-full border-[2.5px] bg-transparent',
+        'inline-flex h-4 w-4 shrink-0 rounded-full border-[3.5px] bg-transparent',
         className
       )}
       style={{ borderColor: color }}

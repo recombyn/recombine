@@ -78,7 +78,7 @@ function RailBtn({
   className?: string;
 }) {
   return (
-    <Tooltip title={tip} placement="right" triggerClassName="inline-flex">
+    <Tooltip tip={tip} placement="right" triggerClassName="inline-flex">
       <button
         type="button"
         aria-label={tip}
@@ -230,7 +230,7 @@ export function HomeSidebar({
         aria-label={t('app.name')}
       >
         <div className="pointer-events-auto flex flex-col items-center px-1">
-          <Tooltip title={t('home.newProject')} placement="right" triggerClassName="inline-flex">
+          <Tooltip tip={t('home.newProject')} placement="right" triggerClassName="inline-flex">
             <button
               type="button"
               aria-label={t('home.newProject')}

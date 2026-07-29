@@ -187,6 +187,13 @@ export type DesignJobEvent =
         op_id?: string;
       }>;
       apply_choice?: string;
+      /** Ask interaction format: confirm | single | multi | buttons | text. */
+      choice_ui?: {
+        mode?: string;
+        options?: Array<{ label?: string; action?: string }>;
+        placeholder?: string;
+        hint?: string;
+      };
       scene?: string;
       canvas_width?: number;
       canvas_height?: number;

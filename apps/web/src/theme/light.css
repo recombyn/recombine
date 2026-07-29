@@ -1,6 +1,6 @@
 html[data-theme='light'] {
   --surface: #ffffff;
-  --canvas: #ffffff;
+  --canvas: #F5F5F5;
   --rail: #f3f3f3;
   --account-rail: #f3f3f3;
   --account-main: #f8f8f8;
@@ -9,7 +9,7 @@ html[data-theme='light'] {
   --muted: #767676;
   --line: #e5e5e5;
   --accent: #141414;
-  --accent-soft: #e6e6e6;
+  --accent-soft: #ebebeb;
   --on-brand: #ffffff;
   --preview-overlay: rgba(12, 12, 13, 0.8);
 

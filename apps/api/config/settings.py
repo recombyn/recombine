@@ -121,7 +121,9 @@ class Settings(BaseSettings):
     ses_region: str = "ap-hongkong"
     ses_from_email: str = ""
     ses_from_name: str = "recombyn"
-    # Template ID from SES console (required for most accounts). Template var: {{code}}
+    # Template ID from SES console. Vars: {{username}}, {{id}} → /activate/{{id}}
     ses_template_id: int = 0
+    # Used only when TemplateID is unset (Simple HTML fallback).
+    ses_activate_base_url: str = "https://recombyn.com/activate"
 
 settings = Settings()

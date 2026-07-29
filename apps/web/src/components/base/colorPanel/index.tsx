@@ -28,26 +28,26 @@ import { cn } from '@/utils/classnames';
 export type Rgba = { r: number; g: number; b: number; a: number };
 export type Hsv = { h: number; s: number; v: number };
 
-/** Three rows × 6 square swatches — shared by fill / stroke / artboard / canvas. */
+/** Two rows × 9 square swatches — shared by fill / stroke / artboard / canvas. */
 export const FILL_SOLID_PRESETS = [
   '#FFFFFF',
-  '#F5F5F5',
   '#E5E5E5',
-  '#CCCCCC',
-  '#999999',
-  '#666666',
-  '#EF4444',
-  '#EC4899',
-  '#F472B6',
-  '#EAB308',
-  '#F59E0B',
-  '#F97316',
-  '#84CC16',
-  '#22C55E',
-  '#14B8A6',
-  '#3B82F6',
-  '#6366F1',
-  '#8B5CF6',
+  '#A6A6A6',
+  '#808080',
+  '#383838',
+  '#000000',
+  '#FF5733',
+  '#D43030',
+  '#E33C64',
+  '#FFEB3B',
+  '#FFC300',
+  '#FF8D1A',
+  '#A5D63F',
+  '#43CF7C',
+  '#00BAAD',
+  '#2A82E4',
+  '#7948EA',
+  '#AC33C1',
 ];
 
 /** Same grid + transparent (artboard / alpha-capable pickers). */
@@ -55,8 +55,8 @@ export const FILL_ALPHA_PRESETS = ['transparent', ...FILL_SOLID_PRESETS];
 
 /** Fixed panel width (fig.1 reference). */
 export const COLOR_PANEL_WIDTH = 250;
-/** Preset grid: 6 square swatches per row. */
-export const COLOR_PANEL_PRESET_COLS = 6;
+/** Preset grid: 9 square swatches per row (2×9). */
+export const COLOR_PANEL_PRESET_COLS = 9;
 export const COLOR_PANEL_SWATCH_PX = 20;
 export const COLOR_PANEL_SWATCH_GAP_PX = 4;
 export const COLOR_PANEL_PAD_X_PX = 12; // p-3
@@ -232,7 +232,7 @@ export function ColorPanel({
           <span className="text-[13px] font-medium text-[var(--ink)]">{title}</span>
           <div className="flex items-center gap-0.5">
             {onClose ? (
-              <Tooltip title={'退出'} placement="bottom">
+              <Tooltip tip={'退出'} placement="bottom">
                 <button
                   type="button"
                   aria-label={'退出'}
@@ -326,7 +326,7 @@ export function ColorPanel({
         ) : null}
 
         <div className="flex items-center gap-2">
-          <Tooltip title={'取色'} placement="top">
+          <Tooltip tip={'取色'} placement="top">
             <button
               type="button"
               aria-label={'取色'}
@@ -503,7 +503,7 @@ export function ColorPanelPopover({
 
   return (
     <>
-      <Tooltip title={title} placement="top" disabled={open || !title}>
+      <Tooltip tip={title} placement="top" disabled={open || !title}>
         <button
           type="button"
           ref={refs.setReference}

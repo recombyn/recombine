@@ -219,10 +219,10 @@ export default function SharePage() {
           </div>
         </div>
         <p className="text-[15px] font-medium text-[var(--ink)]">
-          {t('editor.shareMissing', { defaultValue: '分享不存在或已失效' })}
+          {t('editor.shareMissing', { defaultValue: '分享丝存在或已失效' })}
         </p>
         <p className="text-[13px] text-[var(--muted)]">
-          {t('editor.shareMissingHint', { defaultValue: '链接可能已过期，或分享已被删除。' })}
+          {t('editor.shareMissingHint', { defaultValue: '链接坯能已过期，或分享已被删除。' })}
         </p>
       </div>
     );
@@ -377,7 +377,7 @@ export default function SharePage() {
               />
             ) : null}
             <FloatingToolbar className="pointer-events-auto w-fit px-2 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)]">
-              <Tooltip title={t('editor.minimap')} placement="top">
+              <Tooltip tip={t('editor.minimap')} placement="top">
                 <button
                   type="button"
                   aria-label={t('editor.minimap')}

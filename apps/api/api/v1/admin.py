@@ -89,25 +89,15 @@ from services.design.content_pack import resync_design_content
 from services.design.admin_store import (
     apply_optimize_patch,
     clear_decision_logs,
-    create_agent_flow,
-    delete_agent_flow,
     dismiss_optimize_patch,
     generate_usage_optimize_patches,
-    get_agent_flow,
-    get_agent_flow_version,
-    list_agent_flows,
-    list_agent_flow_node_templates,
-    get_agent_flow_action_contracts,
-    upsert_agent_flow_action_contracts,
     list_decision_logs,
+    get_decision_log,
     list_canvas_tools_admin,
     list_optimize_patches,
-    publish_agent_flow,
     skill_metrics_summary,
-    update_agent_flow,
     upsert_canvas_tool,
     upsert_global_rule,
-    test_run_agent_flow,
 )
 from services.design.catalog import get_global_rules
 from services.design.stage_review_store import list_stage_reviews
@@ -662,102 +652,29 @@ class RuntimeSettingIn(BaseModel):
     value: str = Field(default="")
 
 
-class AgentFlowNodeIn(BaseModel):
-    id: str = Field(..., min_length=1, max_length=128)
-    label: str = Field(default="", max_length=128)
-    kind: str = Field(default="node", max_length=32)
-    x: float = 0
-    y: float = 0
-    capability: str = Field(default="", max_length=64)
-    phaseKey: str = Field(default="", max_length=128)
-    promptKey: str = Field(default="", max_length=128)
-    configRef: str = Field(default="", max_length=128)
-    promptText: str = Field(default="")
-    routeConfig: str = Field(default="")
-    description: str = Field(default="")
-    modelId: str = Field(default="", max_length=128)
-
-
-class AgentFlowEdgeIn(BaseModel):
-    id: str = Field(..., min_length=1, max_length=128)
-    source: str = Field(..., min_length=1, max_length=128)
-    target: str = Field(..., min_length=1, max_length=128)
-    label: str = Field(default="", max_length=128)
-
-
-class AgentFlowGraphIn(BaseModel):
-    version: int = 1
-    nodes: list[AgentFlowNodeIn] = Field(default_factory=list)
-    edges: list[AgentFlowEdgeIn] = Field(default_factory=list)
-
-
-class AgentFlowCreateIn(BaseModel):
-    name: str = Field(default="未命名流程", max_length=128)
-    description: str = Field(default="", max_length=500)
-    copyFromId: str | None = Field(default=None, max_length=64)
-
-
-class AgentFlowUpdateIn(BaseModel):
-    name: str | None = Field(default=None, max_length=128)
-    description: str | None = Field(default=None, max_length=500)
-    graph: AgentFlowGraphIn | None = None
-    phaseMap: dict[str, str] | None = None
-
-
-class AgentFlowTestRunIn(BaseModel):
-    prompt: str = Field(default="", max_length=4000)
-
-
+# Non-prompt KV still edited here. Prompt / persona / vision prose → /design/system-prompts.
+# Dropped (LC create_agent path no longer reads): official_agent / short_plan /
+# dual_sample / max_reflect / verify.aesthetics.
 _RUNTIME_SETTING_KEYS = frozenset(
     {
         "billing.token_markup",
         "agent.react.max_rounds",
-        "agent.react.max_reflect",
+        "agent.react.defer_tools",
+        "memory.dialogue.recent_turns",
+        "memory.dialogue.recent_chars",
+        "memory.dialogue.summary_chars",
+        "memory.dialogue.facts_max",
+        "memory.dialogue.per_turn_chars",
         "precheck.model_threshold",
         "precheck.vision_model",
         "precheck.fallback_chain",
-        "assets.image_default_model",
-        # 前端用户档位（经济/均衡/质量）— 覆盖 AgentModelsPanel 写死 fallback
+        "precheck.router_model",
         "precheck.user_preset.economy",
         "precheck.user_preset.balanced",
         "precheck.user_preset.quality",
-        # P2 Agent 增强
-        "agent.react.short_plan",
-        "agent.react.dual_sample",
-        "agent.react.defer_tools",
-        # 对外人设（Auto / 用户锁定模型）
-        "agent.persona.auto",
-        "agent.persona.locked",
-        # Agent 提示词（流程设计节点属性 → runtime settings）
-        "agent.prompt.react_system",
-        "agent.prompt.ask_system",
-        "agent.prompt.ask_blocked_edit",
-        "agent.prompt.plan_system",
-        "agent.prompt.size_auto",
-        "agent.prompt.ask_canvas_size",
-        "agent.prompt.chat_fallback",
-        "agent.prompt.unsafe_ops_ask",
-        "agent.prompt.partial_system",
-        "agent.prompt.chat_agent_system",
-        "agent.prompt.need_tools_overlay",
-        "agent.prompt.lc_tools_overlay",
-        "agent.prompt.official_agent_system",
-        # 看图契约（流程设计 / 美学相关节点）
-        "aesthetics.prompt.vision_structure",
-        "aesthetics.vision.structure_schema",
-        "precheck.router_system",
+        "assets.image_default_model",
     }
 )
-
-
-def _is_prompt_page_key(key: str) -> bool:
-    """Keys editable as node prompt attrs in flow designer (agent prose + aesthetics)."""
-    return (
-        key.startswith("agent.prompt.")
-        or key.startswith("agent.persona.")
-        or key.startswith("aesthetics.prompt.")
-        or key == "aesthetics.vision.structure_schema"
-    )
 
 
 @router.get("/design/runtime-settings")
@@ -765,25 +682,25 @@ def admin_design_runtime_settings(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     from services.design.admin_store import (
-        STAGE_RULE_DEFAULTS,
         STAGE_RULE_DESCRIPTIONS,
         ensure_stage_rules,
     )
+    from services.design.system_prompt_store import ensure_system_prompts
 
     ensure_stage_rules()
+    ensure_system_prompts()
     rules = get_global_rules()
-    keys = sorted(
-        _RUNTIME_SETTING_KEYS
-        | {k for k in STAGE_RULE_DEFAULTS if _is_prompt_page_key(k)}
-    )
+    keys = sorted(_RUNTIME_SETTING_KEYS)
     items: list[dict[str, Any]] = []
     for k in keys:
         db_val = str(rules.get(k) or "")
+        label = str(STAGE_RULE_DESCRIPTIONS.get(k) or "")
         items.append(
             {
                 "key": k,
                 "value": db_val,
-                "description": str(STAGE_RULE_DESCRIPTIONS.get(k) or ""),
+                "label": label,
+                "description": label,
                 "using_default": not bool(db_val.strip()),
             }
         )
@@ -795,13 +712,15 @@ def admin_upsert_design_runtime_setting(
     body: RuntimeSettingIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.admin_store import STAGE_RULE_DEFAULTS
+    from services.design.system_prompt_store import is_system_prompt_key
 
     key = (body.key or "").strip()
-    allowed = key in _RUNTIME_SETTING_KEYS or (
-        _is_prompt_page_key(key) and key in STAGE_RULE_DEFAULTS
-    )
-    if not allowed:
+    if is_system_prompt_key(key):
+        raise HTTPException(
+            status_code=400,
+            detail="prompt keys moved to /admin/design/system-prompts",
+        )
+    if key not in _RUNTIME_SETTING_KEYS:
         raise HTTPException(status_code=400, detail=f"unsupported setting: {key}")
     try:
         item = upsert_global_rule(rule_key=key, rule_value=body.value or "")
@@ -810,180 +729,54 @@ def admin_upsert_design_runtime_setting(
     return {"item": {"key": item.get("ruleKey") or key, "value": item.get("ruleValue") or ""}}
 
 
-@router.get("/design/agent-flows")
-def admin_list_agent_flows(
+class SystemPromptIn(BaseModel):
+    key: str = Field(..., min_length=1, max_length=128)
+    body: str = ""
+    label: str | None = None
+    description: str | None = None
+    group: str | None = None
+    selectable: bool | None = None
+    sortOrder: int | None = None
+    enabled: bool | None = None
+
+
+@router.get("/design/system-prompts")
+def admin_design_system_prompts(
+    group: str | None = None,
+    selectable: bool | None = Query(default=None),
+    enabled: bool | None = Query(default=True),
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    return {"items": list_agent_flows()}
+    from services.design.system_prompt_store import list_system_prompts
 
-
-@router.get("/design/agent-flow-node-templates")
-def admin_list_agent_flow_node_templates(
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    """左侧可拖节点模板（存全局规则，前端勿写死）。"""
-    return {"items": list_agent_flow_node_templates()}
-
-
-@router.get("/design/agent-flow-action-contracts")
-def admin_get_agent_flow_action_contracts(
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    """阶段/节点动作契约（独立全局规则，非边条件字典）。"""
-    return get_agent_flow_action_contracts()
-
-
-class AgentFlowActionContractBindingIn(BaseModel):
-    field: str = Field(..., min_length=1, max_length=64)
-    label: str = Field(default="", max_length=128)
-    required: bool | None = None
-    prefer: str = Field(default="", max_length=256)
-
-
-class AgentFlowActionContractIn(BaseModel):
-    label: str = Field(..., min_length=1, max_length=128)
-    runtime: str = Field(default="", max_length=512)
-    rule: str = Field(..., min_length=1, max_length=64)
-    bindings: list[AgentFlowActionContractBindingIn] = Field(default_factory=list)
-    injectPreset: dict[str, Any] | None = None
-
-
-class AgentFlowActionContractsPutIn(BaseModel):
-    phases: dict[str, AgentFlowActionContractIn] = Field(default_factory=dict)
-    kinds: dict[str, AgentFlowActionContractIn] = Field(default_factory=dict)
-
-
-@router.put("/design/agent-flow-action-contracts")
-def admin_put_agent_flow_action_contracts(
-    body: AgentFlowActionContractsPutIn,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    """整包覆盖动作契约（phases + kinds）。"""
-    try:
-        return upsert_agent_flow_action_contracts(
-            phases={k: v.model_dump(exclude_none=True) for k, v in body.phases.items()},
-            kinds={k: v.model_dump(exclude_none=True) for k, v in body.kinds.items()},
+    return {
+        "items": list_system_prompts(
+            group=group, selectable=selectable, enabled=enabled
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    }
 
 
-@router.post("/design/agent-flows")
-def admin_create_agent_flow(
-    body: AgentFlowCreateIn,
+@router.put("/design/system-prompts")
+def admin_upsert_design_system_prompt(
+    body: SystemPromptIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    graph = None
-    phase_map = None
-    copy_id = (body.copyFromId or "").strip()
-    if copy_id:
-        src = get_agent_flow(copy_id)
-        if not src:
-            raise HTTPException(status_code=404, detail="copy source not found")
-        graph = src.get("graph")
-        phase_map = src.get("phaseMap")
+    from services.design.system_prompt_store import upsert_system_prompt
+
     try:
-        item = create_agent_flow(
-            name=body.name,
+        item = upsert_system_prompt(
+            key=body.key,
+            body=body.body,
+            label=body.label,
             description=body.description,
-            graph=graph if isinstance(graph, dict) else None,
-            phase_map=phase_map if isinstance(phase_map, dict) else None,
+            group=body.group,
+            selectable=body.selectable,
+            sort_order=body.sortOrder,
+            enabled=body.enabled,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"item": item}
-
-
-@router.get("/design/agent-flows/{flow_id}")
-def admin_get_agent_flow(
-    flow_id: str,
-    includePublished: bool = False,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    item = get_agent_flow(flow_id, include_published_graph=includePublished)
-    if not item:
-        raise HTTPException(status_code=404, detail="Not found")
-    return {"item": item}
-
-
-@router.get("/design/agent-flows/{flow_id}/versions/{version}")
-def admin_get_agent_flow_version(
-    flow_id: str,
-    version: int,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    item = get_agent_flow_version(flow_id, version)
-    if not item:
-        raise HTTPException(status_code=404, detail="version not found")
-    return {"item": item}
-
-
-@router.put("/design/agent-flows/{flow_id}")
-def admin_update_agent_flow(
-    flow_id: str,
-    body: AgentFlowUpdateIn,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    try:
-        item = update_agent_flow(
-            flow_id,
-            name=body.name,
-            description=body.description,
-            graph=body.graph.model_dump() if body.graph is not None else None,
-            phase_map=body.phaseMap,
-        )
-    except ValueError as e:
-        msg = str(e)
-        if msg == "flow not found":
-            raise HTTPException(status_code=404, detail=msg) from e
-        raise HTTPException(status_code=400, detail=msg) from e
-    return {"item": item}
-
-
-@router.delete("/design/agent-flows/{flow_id}")
-def admin_delete_agent_flow(
-    flow_id: str,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    try:
-        ok = delete_agent_flow(flow_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    if not ok:
-        raise HTTPException(status_code=404, detail="Not found")
-    return {"ok": True}
-
-
-@router.post("/design/agent-flows/{flow_id}/publish")
-def admin_publish_agent_flow(
-    flow_id: str,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    """Publish draft → runtime version. Live Agent executes this snapshot only."""
-    try:
-        item = publish_agent_flow(flow_id)
-    except ValueError as e:
-        msg = str(e)
-        if msg == "flow not found":
-            raise HTTPException(status_code=404, detail=msg) from e
-        raise HTTPException(status_code=400, detail=msg) from e
-    return {"item": item}
-
-
-@router.post("/design/agent-flows/{flow_id}/test-run")
-def admin_test_run_agent_flow(
-    flow_id: str,
-    body: AgentFlowTestRunIn,
-    _admin: SessionUser = Depends(require_admin),
-) -> dict[str, Any]:
-    """Validate + dry-walk the agent flow graph (no LLM / no canvas side effects)."""
-    try:
-        return test_run_agent_flow(flow_id=flow_id, prompt=body.prompt)
-    except ValueError as e:
-        msg = str(e)
-        if msg == "flow not found":
-            raise HTTPException(status_code=404, detail=msg) from e
-        raise HTTPException(status_code=400, detail=msg) from e
 
 
 @router.post("/design/content/resync")
@@ -1110,6 +903,17 @@ def admin_design_decision_logs(
         status=status,
         q=q,
     )
+
+
+@router.get("/design/decision-logs/{task_id}")
+def admin_design_decision_log_detail(
+    task_id: str,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    row = get_decision_log(task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="decision log not found")
+    return {"item": row}
 
 
 @router.post("/design/decision-logs/clear")
@@ -1305,7 +1109,8 @@ def admin_delete_design_knowledge(
 
 class DesignPromptPackIn(BaseModel):
     id: int | None = None
-    kind: str = Field(..., min_length=1, max_length=32)
+    kind: str = Field(..., min_length=1, max_length=128)
+    type: str | None = Field(default=None, max_length=32)
     title: str = Field(..., min_length=1, max_length=128)
     body: str = Field(..., min_length=1)
     whenToUse: str = ""
@@ -1317,10 +1122,13 @@ class DesignPromptPackIn(BaseModel):
 @router.get("/design/prompt-packs")
 def admin_design_prompt_packs(
     kind: str | None = None,
+    type: str | None = Query(default=None, alias="type"),
     enabled: bool | None = Query(default=None),
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    return {"items": list_prompt_packs(kind=kind, enabled=enabled)}
+    return {
+        "items": list_prompt_packs(kind=kind, pack_type=type, enabled=enabled)
+    }
 
 
 @router.put("/design/prompt-packs")

@@ -344,7 +344,7 @@ export default function LayerPanel({
       <div className="flex h-11 shrink-0 items-center justify-between px-3">
         <span className="text-[14px] font-semibold text-[var(--ink)]">{t('editor.layers')}</span>
         {onClose ? (
-          <Tooltip title={t('editor.closePanel')} placement="bottom">
+          <Tooltip tip={t('editor.closePanel')} placement="bottom">
             <button
               type="button"
               aria-label={t('editor.closePanel')}

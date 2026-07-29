@@ -94,7 +94,7 @@ import {
   type TaskState,
 } from '@/components/editor/panels/agent/agentMemory';
 import AgentMessageList from '@/components/editor/panels/agent/AgentMessageList';
-import { type ChatUiMessage } from '@/components/editor/panels/agent/ChatTurnList';
+import { type AskChoicePick, type ChatUiMessage } from '@/components/editor/panels/agent/ChatTurnList';
 import type { VirtualListHandle } from '@/components/base/VirtualList';
 import AgentComposerShell, {
   type ComposerInteractionMode,
@@ -667,6 +667,7 @@ function patchChatDoneAssistant(
     choices?: string[];
     proposedOps?: ChatUiMessage['proposedOps'];
     applyChoice?: string;
+    choiceUi?: ChatUiMessage['choiceUi'];
   }
 ): ChatUiMessage {
   return opts.finish(m, {
@@ -678,6 +679,7 @@ function patchChatDoneAssistant(
     choices: opts.choices?.length ? opts.choices : undefined,
     proposedOps: opts.proposedOps?.length ? opts.proposedOps : undefined,
     applyChoice: opts.applyChoice || undefined,
+    choiceUi: opts.choiceUi,
     steps: buildChatProcessSteps(opts.t, m),
   });
 }
@@ -693,6 +695,7 @@ function patchDesignDoneAssistant(
     choices?: string[];
     proposedOps?: ChatUiMessage['proposedOps'];
     applyChoice?: string;
+    choiceUi?: ChatUiMessage['choiceUi'];
   }
 ): ChatUiMessage {
   let result = '';
@@ -718,6 +721,7 @@ function patchDesignDoneAssistant(
     choices: opts.choices?.length ? opts.choices : undefined,
     proposedOps: opts.proposedOps?.length ? opts.proposedOps : undefined,
     applyChoice: opts.applyChoice || undefined,
+    choiceUi: opts.choiceUi,
     steps: (m.steps || []).map((s) => ({
       ...s,
       status: s.status === 'error' ? s.status : ('done' as const),
@@ -1553,34 +1557,92 @@ function resolveSendDisplayText(opts: {
   return '';
 }
 
-/** Ask mode: typed text matches the apply chip → re-send with proposed ops. */
+/** Ask mode: typed text matches an apply option → re-send with proposed ops. */
 function findAskApplyConfirm(
   messages: ChatUiMessage[],
   typed: string
 ): { messageId: string; ops: NonNullable<ChatUiMessage['proposedOps']>; label: string } | null {
   const lastAsk = [...messages]
     .reverse()
-    .find((m) => m.role === 'assistant' && m.proposedOps?.length && m.applyChoice);
+    .find((m) => m.role === 'assistant' && m.proposedOps?.length);
   if (!lastAsk?.proposedOps?.length) return null;
-  const applyLabel = String(lastAsk.applyChoice || '').trim();
-  if (!applyLabel) return null;
   const t = typed.trim();
-  const confirms =
-    t === applyLabel ||
-    (t.length >= 2 && t.length <= applyLabel.length && applyLabel.includes(t));
-  if (!confirms) return null;
-  return { messageId: lastAsk.id, ops: lastAsk.proposedOps, label: t };
+  if (!t) return null;
+  const applyLabels = new Set<string>();
+  for (const o of lastAsk.choiceUi?.options || []) {
+    if (o.action === 'apply' && o.label.trim()) applyLabels.add(o.label.trim());
+  }
+  const legacy = String(lastAsk.applyChoice || '').trim();
+  if (legacy) applyLabels.add(legacy);
+  for (const applyLabel of applyLabels) {
+    const confirms =
+      t === applyLabel ||
+      (t.length >= 2 && t.length <= applyLabel.length && applyLabel.includes(t));
+    if (confirms) {
+      return { messageId: lastAsk.id, ops: lastAsk.proposedOps, label: t };
+    }
+  }
+  return null;
 }
 
 function clearAskProposalFields(m: ChatUiMessage): ChatUiMessage {
   if (m.role !== 'assistant') return m;
-  if (!(m.proposedOps?.length || m.choices?.length || m.applyChoice)) return m;
+  if (!(m.proposedOps?.length || m.choices?.length || m.applyChoice || m.choiceUi)) return m;
   return {
     ...m,
     proposedOps: undefined,
     applyChoice: undefined,
     choices: undefined,
+    choiceUi: undefined,
   };
+}
+
+function findLastAskMessage(messages: ChatUiMessage[]): ChatUiMessage | undefined {
+  return [...messages]
+    .reverse()
+    .find(
+      (m) =>
+        m.role === 'assistant' &&
+        Boolean(m.proposedOps?.length || m.choiceUi || m.choices?.length)
+    );
+}
+
+type AskChoiceSend =
+  | { kind: 'noop' }
+  | { kind: 'dismiss'; messageId: string }
+  | {
+      kind: 'apply';
+      messageId: string;
+      text: string;
+      ops: NonNullable<ChatUiMessage['proposedOps']>;
+    }
+  | { kind: 'reply'; text: string };
+
+/** Map chip click → dismiss / apply proposed ops / plain reply (memory carries context). */
+function resolveAskChoiceSend(
+  messages: ChatUiMessage[],
+  pick: AskChoicePick
+): AskChoiceSend {
+  const lastAsk = findLastAskMessage(messages);
+  if (pick.action === 'dismiss') {
+    return lastAsk ? { kind: 'dismiss', messageId: lastAsk.id } : { kind: 'noop' };
+  }
+  if (pick.action === 'apply' && lastAsk?.proposedOps?.length) {
+    const text = pick.selectedLabels?.length
+      ? `${pick.label}：${pick.selectedLabels.join('、')}`
+      : pick.label;
+    return {
+      kind: 'apply',
+      messageId: lastAsk.id,
+      text,
+      ops: lastAsk.proposedOps,
+    };
+  }
+  const text = pick.selectedLabels?.length
+    ? pick.selectedLabels.join('、')
+    : pick.label;
+  if (!text) return { kind: 'noop' };
+  return { kind: 'reply', text };
 }
 
 function splitBubbleContexts(chips: ComposerContext[]) {
@@ -2098,6 +2160,7 @@ function createDesignAgentEventRouter(opts: {
               choices: ev.choices,
               proposedOps: ev.proposedOps,
               applyChoice: ev.applyChoice,
+              choiceUi: ev.choiceUi,
             });
           }
           return patchDesignDoneAssistant(m, {
@@ -2109,6 +2172,7 @@ function createDesignAgentEventRouter(opts: {
             choices: ev.choices,
             proposedOps: ev.proposedOps,
             applyChoice: ev.applyChoice,
+            choiceUi: ev.choiceUi,
           });
         }
         if (
@@ -2606,6 +2670,7 @@ export default function AgentDock({
         pinnedContextKeysRef.current.add(ctx.key);
         contextDismissedKeyRef.current = null;
         inputRef.current?.insertContextAtCaret(ctx);
+        inputRef.current?.focusEnd();
       },
     });
     // handleAttachFiles / onAttachConsumed omitted — identity churn must not re-fire.
@@ -2641,7 +2706,7 @@ export default function AgentDock({
         pinnedContextKeysRef.current.add(ctx.key);
         contextDismissedKeyRef.current = null;
         inputRef.current?.insertContextAtCaret(ctx);
-        inputRef.current?.focus();
+        inputRef.current?.focusEnd();
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2907,9 +2972,7 @@ export default function AgentDock({
       }
       return [...prev, ...extra];
     });
-    if (opts?.mention) {
-      queueMicrotask(() => inputRef.current?.focus());
-    }
+    queueMicrotask(() => inputRef.current?.focusEnd());
 
     await Promise.all(
       batch.map(async ({ file, key, preview }) => {
@@ -3017,7 +3080,9 @@ export default function AgentDock({
             dispatch(clearCanvasAttachPick());
             return;
           }
-          // Add current canvas selection first (nodes + artboards), then one-shot pick for more.
+          // If the canvas already has a selection, attach it immediately without entering pick mode.
+          // Entering pick mode after attaching would cause the user to re-click the same node
+          // and attach it a second time.
           const doc = document;
           const attachable = selectedNodeIds.filter((id) =>
             canAttachNodeToChat(doc?.deltaSetLike?.[id])
@@ -3027,29 +3092,32 @@ export default function AgentDock({
             pinnedContextKeysRef.current.add(ctx.key);
             contextDismissedKeyRef.current = null;
             inputRef.current?.insertContextAtCaret(ctx);
-            inputRef.current?.focus();
+            inputRef.current?.focusEnd();
           };
-          void (async () => {
-            if (attachable.length) {
-              await applyCanvasAttachPayload({
-                document: doc,
-                payload: attachable.length === 1 ? attachable[0]! : attachable,
-                existingChips: contextChipsRef.current,
-                onAttachFiles: handleAttachFiles,
-                insertChip,
-              });
-            }
-            if (frameId) {
-              await applyCanvasAttachPayload({
-                document: doc,
-                payload: `frame:${frameId}`,
-                existingChips: contextChipsRef.current,
-                onAttachFiles: handleAttachFiles,
-                insertChip,
-              });
-            }
-          })();
-          dispatch(startCanvasAttachPick({ target: 'agent' }));
+          if (attachable.length || frameId) {
+            void (async () => {
+              if (attachable.length) {
+                await applyCanvasAttachPayload({
+                  document: doc,
+                  payload: attachable.length === 1 ? attachable[0]! : attachable,
+                  existingChips: contextChipsRef.current,
+                  onAttachFiles: handleAttachFiles,
+                  insertChip,
+                });
+              }
+              if (frameId) {
+                await applyCanvasAttachPayload({
+                  document: doc,
+                  payload: `frame:${frameId}`,
+                  existingChips: contextChipsRef.current,
+                  onAttachFiles: handleAttachFiles,
+                  insertChip,
+                });
+              }
+            })();
+          } else {
+            dispatch(startCanvasAttachPick({ target: 'agent' }));
+          }
         },
     pickingFromCanvas: floating ? false : pickingFromCanvas,
     pickFromCanvasTooltip: pickingFromCanvas
@@ -3061,12 +3129,15 @@ export default function AgentDock({
     // Pass-through only: explicit composer chips + user text. No FE intent routing.
     const parts: string[] = [];
     if (contextChips.length) {
+      let attachIdx = 0;
       parts.push(
-        ...contextChips.map((c) =>
-          c.kind === 'attachment'
-            ? `[Attached image]\nname: ${c.label}`
-            : c.payload
-        )
+        ...contextChips.map((c) => {
+          if (c.kind === 'attachment') {
+            attachIdx += 1;
+            return `[Attached image ${attachIdx}]\nname: ${c.label}`;
+          }
+          return c.payload;
+        })
       );
     }
     parts.push(`User request:\n${text}`);
@@ -3190,10 +3261,6 @@ export default function AgentDock({
     });
     const forceAgent = Boolean(options.forceAgent || options.applyOps?.length);
 
-    if (!options.applyOps?.length) {
-      setMessages((prev) => prev.map(clearAskProposalFields));
-    }
-
     if (
       contextChips.some(
         (c) => c.kind === 'attachment' && c.uploadStatus === 'uploading'
@@ -3272,8 +3339,10 @@ export default function AgentDock({
     });
     clearContextChips();
     setSending(true);
+    // Clear prior Ask chips in the same write — a separate setMessages(clear)
+    // would be overwritten by this replace with stale baseMessages.
     setMessages([
-      ...baseMessages,
+      ...baseMessages.map(clearAskProposalFields),
       userMsg,
       {
         id: assistantId,
@@ -3604,6 +3673,32 @@ export default function AgentDock({
     setSending(false);
   };
 
+  function handleAskChoice(pick: AskChoicePick) {
+    if (sending) return;
+    const next = resolveAskChoiceSend(messages, pick);
+    switch (next.kind) {
+      case 'dismiss':
+        setMessages((prev) =>
+          prev.map((m) => (m.id === next.messageId ? clearAskProposalFields(m) : m))
+        );
+        return;
+      case 'apply':
+        void send({
+          text: next.text,
+          raw: true,
+          displayContent: next.text,
+          applyOps: next.ops,
+          forceAgent: true,
+        });
+        return;
+      case 'reply':
+        void send({ text: next.text, raw: true, displayContent: next.text });
+        return;
+      default:
+        return;
+    }
+  }
+
   /** Flush home-agent auto-submit once model list has settled (ready or error). */
   useEffect(() => {
     if (!open) return;
@@ -3803,7 +3898,7 @@ export default function AgentDock({
       key: `attach-ref:${chipBaseKey(att.key)}`,
       label: t('agent.mentionAttachImageN', { n }),
       kind: 'image',
-      payload: att.payload || `[User attachment ${n}]`,
+      payload: `[Ref: Attached image ${n}]`,
       ...(att.dataUrl ? { dataUrl: att.dataUrl } : {}),
       ...(att.thumbUrl || att.dataUrl
         ? { thumbUrl: String(att.thumbUrl || att.dataUrl) }
@@ -4063,7 +4158,7 @@ export default function AgentDock({
           {historyOpen ? t('agent.history') : chatTitle}
         </span>
         <div className="relative flex items-center gap-0.5">
-          <Tooltip title={t('agent.newChat')} placement="bottom">
+          <Tooltip tip={t('agent.newChat')} placement="bottom">
             <button
               type="button"
               aria-label={t('agent.newChat')}
@@ -4084,7 +4179,7 @@ export default function AgentDock({
               </div>
             </div>
           ) : null}
-          <Tooltip title={t('agent.history')} placement="bottom">
+          <Tooltip tip={t('agent.history')} placement="bottom">
             <button
               type="button"
               aria-label={t('agent.history')}
@@ -4105,7 +4200,7 @@ export default function AgentDock({
             </button>
           </Tooltip>
           {!floating ? (
-            <Tooltip title={t('agent.closePanel')} placement="bottom">
+            <Tooltip tip={t('agent.closePanel')} placement="bottom">
               <button
                 type="button"
                 aria-label={t('agent.closePanel')}
@@ -4140,41 +4235,7 @@ export default function AgentDock({
         onBeginEdit={beginEditUserMessage}
         onCancelEdit={cancelEditUserMessage}
         onRestore={restoreCheckpoint}
-        onChoice={(choice) => {
-          if (sending || choice === '取消') return;
-          const lastAsk = [...messages]
-            .reverse()
-            .find(
-              (m) =>
-                m.role === 'assistant' &&
-                m.proposedOps?.length &&
-                m.applyChoice &&
-                m.applyChoice === choice
-            );
-          if (lastAsk?.proposedOps?.length) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === lastAsk.id
-                  ? {
-                      ...m,
-                      proposedOps: undefined,
-                      applyChoice: undefined,
-                      choices: undefined,
-                    }
-                  : m
-              )
-            );
-            void send({
-              text: choice,
-              raw: true,
-              displayContent: choice,
-              applyOps: lastAsk.proposedOps,
-              forceAgent: true,
-            });
-            return;
-          }
-          void send({ text: choice, raw: true, displayContent: choice });
-        }}
+        onChoice={handleAskChoice}
         onOpenSession={openSession}
         onDeleteSession={deleteSession}
         formatChatTime={formatChatTime}

@@ -51,7 +51,7 @@ export default function FlipRotateToolbar({
 
       <ImageToolSep />
 
-      <Tooltip title={'当前角度'} placement="top">
+      <Tooltip tip={'当前角度'} placement="top">
         <span className="inline-flex h-8 items-center gap-1 px-1.5 text-[12px] tabular-nums text-[var(--ink)]">
           <span className="relative inline-flex h-3.5 w-3.5 items-end justify-start" aria-hidden>
             <span className="absolute bottom-0 left-0 h-[10px] w-[10px] rounded-bl-[1px] border-b-2 border-l-2 border-[var(--ink)]" />
@@ -66,7 +66,7 @@ export default function FlipRotateToolbar({
 
       <ImageToolSep />
 
-      <Tooltip title={'旋转 90°'} placement="top">
+      <Tooltip tip={'旋转 90°'} placement="top">
         <button
           type="button"
           aria-label={'旋转 90°'}
@@ -76,7 +76,7 @@ export default function FlipRotateToolbar({
           <HiOutlineArrowPath className="h-4 w-4" />
         </button>
       </Tooltip>
-      <Tooltip title={'水平翻转'} placement="top">
+      <Tooltip tip={'水平翻转'} placement="top">
         <button
           type="button"
           aria-label={'水平翻转'}
@@ -87,7 +87,7 @@ export default function FlipRotateToolbar({
           <HiOutlineArrowsRightLeft className="h-4 w-4" />
         </button>
       </Tooltip>
-      <Tooltip title={'垂直翻转'} placement="top">
+      <Tooltip tip={'垂直翻转'} placement="top">
         <button
           type="button"
           aria-label={'垂直翻转'}
@@ -105,7 +105,7 @@ export default function FlipRotateToolbar({
 
       <ImageToolSep />
 
-      <Tooltip title={'退出'} placement="top">
+      <Tooltip tip={'退出'} placement="top">
         <button
           type="button"
           aria-label={'退出'}

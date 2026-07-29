@@ -202,11 +202,27 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
         f"""
         CREATE TABLE IF NOT EXISTS design_prompt_pack (
             id {pk},
-            kind VARCHAR(32) NOT NULL,
+            kind VARCHAR(128) NOT NULL,
+            pack_type VARCHAR(32) NOT NULL DEFAULT 'need',
             title VARCHAR(128) NOT NULL,
             body {text} NOT NULL,
             when_to_use {text},
             scenes VARCHAR(128) NOT NULL DEFAULT 'all',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at DOUBLE NOT NULL,
+            updated_at DOUBLE NOT NULL
+        ){engine}
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS design_system_prompt (
+            id {pk},
+            prompt_key VARCHAR(128) NOT NULL UNIQUE,
+            label VARCHAR(128) NOT NULL DEFAULT '',
+            description {text},
+            body {text} NOT NULL,
+            group_key VARCHAR(32) NOT NULL DEFAULT 'agent_prompt',
+            selectable INTEGER NOT NULL DEFAULT 0,
             sort_order INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at DOUBLE NOT NULL,
@@ -319,7 +335,77 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
     _ensure_canvas_tool_args_schema_column(conn, mysql=mysql)
     _ensure_global_rule_meta_columns(conn, mysql=mysql)
     _ensure_design_dict_description_column(conn, mysql=mysql)
+    _ensure_prompt_pack_kind_width(conn, mysql=mysql)
+    _ensure_prompt_pack_type_column(conn, mysql=mysql)
     conn.commit()
+
+
+def _ensure_prompt_pack_kind_width(conn: Any, *, mysql: bool) -> None:
+    """Allow prompt_key-sized kinds (agent.prompt.* / aesthetics.*)."""
+    try:
+        if mysql:
+            conn.execute(
+                "ALTER TABLE design_prompt_pack MODIFY COLUMN kind VARCHAR(128) NOT NULL"
+            )
+        else:
+            # SQLite cannot widen in place; recreate is heavy — new installs use 128.
+            pass
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_prompt_pack_type_column(conn: Any, *, mysql: bool) -> None:
+    """Add pack_type (need|system); backfill from kind when missing."""
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'design_prompt_pack'
+                  AND COLUMN_NAME = 'pack_type'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) <= 0:
+                conn.execute(
+                    "ALTER TABLE design_prompt_pack "
+                    "ADD COLUMN pack_type VARCHAR(32) NOT NULL DEFAULT 'need'"
+                )
+        else:
+            cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(design_prompt_pack)").fetchall()
+            }
+            if "pack_type" not in cols:
+                conn.execute(
+                    "ALTER TABLE design_prompt_pack "
+                    "ADD COLUMN pack_type VARCHAR(32) NOT NULL DEFAULT 'need'"
+                )
+        # Backfill: system keys → system; everything else stays need.
+        conn.execute(
+            """
+            UPDATE design_prompt_pack
+            SET pack_type = 'system'
+            WHERE COALESCE(pack_type, '') IN ('', 'need')
+              AND (
+                kind LIKE 'agent.prompt.%'
+                OR kind LIKE 'agent.persona.%'
+                OR kind LIKE 'aesthetics.prompt.%'
+                OR kind = 'aesthetics.vision.structure_schema'
+                OR kind = 'precheck.router_system'
+              )
+            """
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 def _ensure_design_dict_description_column(conn: Any, *, mysql: bool) -> None:

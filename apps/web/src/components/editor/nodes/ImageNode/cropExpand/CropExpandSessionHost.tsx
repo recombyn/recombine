@@ -407,7 +407,7 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
               )}
             </button>
 
-            <Tooltip title={'退出'} placement="top">
+            <Tooltip tip={'退出'} placement="top">
               <button
                 type="button"
                 aria-label={'退出'}

@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from '@/components/layout/AppShell';
 import AccountSettingsPage from '@/pages/AccountSettingsPage';
 import EditorPage from '@/pages/EditorPage';
 import HomePage from '@/pages/HomePage';
-import LandingPage from '@/pages/LandingPage';
 import GoogleOAuthCallbackPage from '@/pages/GoogleOAuthCallbackPage';
 import LoginRedirectPage from '@/pages/LoginRedirectPage';
+import ActivateEmailPage from '@/pages/ActivateEmailPage';
 import SharePage from '@/pages/SharePage';
 import { RequireAuth } from '@/router/AuthGuards';
 import { buildLoginUrl } from '@/utils/authReturnTo';
@@ -16,14 +16,12 @@ import {
   getLocaleBasename,
 } from '@/i18n/localePath';
 
-/** Product routes set app title; marketing `/` owns SEO title in LandingPage. */
+/** Product routes set app document title. */
 function DocumentTitleSync() {
   const { t, i18n } = useTranslation();
-  const { pathname } = useLocation();
   useEffect(() => {
-    if (pathname === '/') return;
     document.title = t('app.documentTitle');
-  }, [t, i18n.language, pathname]);
+  }, [t, i18n.language]);
   return null;
 }
 
@@ -42,11 +40,11 @@ function LocaleSync({ basename }: { basename: string }) {
 function AppRoutes() {
   return (
     <Routes>
-      {/* Marketing site — scrollable, outside AppShell overflow lock */}
-      <Route path="/" element={<LandingPage />} />
-
       <Route element={<AppShell />}>
+        {/* Product entry: `/` → home (not marketing landing). */}
+        <Route index element={<Navigate to="/home" replace />} />
         <Route path="login" element={<LoginRedirectPage />} />
+        <Route path="activate/:id" element={<ActivateEmailPage />} />
         <Route path="register" element={<Navigate to={buildLoginUrl()} replace />} />
         <Route path="forgot-password" element={<Navigate to={buildLoginUrl()} replace />} />
         {/* OAuth return can finish signing in without the login modal. */}

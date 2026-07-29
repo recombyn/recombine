@@ -185,6 +185,8 @@ export default function ShareDialog({ open, onClose }: Props) {
   const [inviting, setInviting] = useState(false);
   const searchTimer = useRef<number | null>(null);
   const creatingRef = useRef(false);
+  /** StrictMode remounts effects once in dev — avoid duplicate toasts per open. */
+  const noDocWarnedRef = useRef(false);
 
   const url = record && linkEnabled ? shareUrl(record.id) : '';
 
@@ -228,11 +230,15 @@ export default function ShareDialog({ open, onClose }: Props) {
       setSearchHits([]);
       setSelectedInvite(null);
       creatingRef.current = false;
+      noDocWarnedRef.current = false;
       return;
     }
     if (!document) {
       setRecord(null);
-      message.warning(t('editor.shareNoDocument'));
+      if (!noDocWarnedRef.current) {
+        noDocWarnedRef.current = true;
+        message.warning(t('editor.shareNoDocument'));
+      }
       return;
     }
     if (creatingRef.current) return;

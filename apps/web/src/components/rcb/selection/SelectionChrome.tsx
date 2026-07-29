@@ -472,7 +472,7 @@ export default function SelectionChrome({
                   cursor: cursorForRotate(iconDeg, angle),
                 }}
               >
-                <Tooltip title={label} placement="top" triggerClassName="h-full w-full">
+                <Tooltip tip={label} placement="top" triggerClassName="h-full w-full">
                   <div
                     data-sel-handle="rotate"
                     data-rotate-corner={corner}

@@ -92,7 +92,7 @@ export default function StrokeStylePicker({
 
   return (
     <>
-      <Tooltip title={strokeStyleLabel(current, t)} placement="top">
+      <Tooltip tip={strokeStyleLabel(current, t)} placement="top">
         <button
           type="button"
           ref={refs.setReference}

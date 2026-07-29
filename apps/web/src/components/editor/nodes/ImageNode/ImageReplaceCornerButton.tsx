@@ -154,7 +154,7 @@ export function ImageReplaceUploadControl({
 
   return (
     <>
-      <Tooltip title={loading ? '上传中…' : '替换图片'} placement="top">
+      <Tooltip tip={loading ? '上传中…' : '替换图片'} placement="top">
         <button
           type="button"
           disabled={loading}

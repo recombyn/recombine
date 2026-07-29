@@ -1420,6 +1420,15 @@ function execUpdateNode(
   if (args.path != null) shell.attrs.path = String(args.path);
   if (args.closed != null) shell.attrs.closed = truthy(args.closed) ? 'true' : 'false';
   if (args.name != null) shell.attrs.name = String(args.name);
+  // Morph shape in place (rect→circle etc.) — keep id / z-order.
+  const shapeTypeRaw = args.shapeType ?? args.type;
+  if (shapeTypeRaw != null && String(shapeTypeRaw).trim() && latest.key === 'shape') {
+    const st = String(shapeTypeRaw).trim().toLowerCase();
+    shell.attrs.shapeType = st === 'ellipse' ? 'circle' : st;
+  }
+  if (args.sides != null && latest.key === 'shape') {
+    shell.attrs.sides = Math.max(3, Math.round(num(args.sides, 5)));
+  }
   if (latest.key === 'image' && args.src != null) {
     shell.attrs.src = String(args.src);
   }
@@ -1491,6 +1500,8 @@ function execUpdateNode(
     args.path != null ||
     args.closed != null ||
     args.name != null ||
+    shapeTypeRaw != null ||
+    args.sides != null ||
     args.text != null ||
     args.fontSize != null ||
     args.fontWeight != null ||

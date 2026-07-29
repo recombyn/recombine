@@ -193,6 +193,28 @@ def upsert_global_rule(
     key = (rule_key or "").strip()
     if not key:
         raise ValueError("ruleKey required")
+    from services.design.system_prompt_store import (
+        ensure_system_prompts,
+        is_system_prompt_key,
+        upsert_system_prompt,
+    )
+
+    if is_system_prompt_key(key):
+        ensure_system_prompts()
+        item = upsert_system_prompt(
+            key=key,
+            body=rule_value if rule_value is not None else "",
+            description=description,
+            enabled=enabled,
+        )
+        return {
+            "id": 0,
+            "ruleKey": item["key"],
+            "ruleValue": item.get("body") or "",
+            "description": item.get("description") or "",
+            "enabled": bool(item.get("enabled", True)),
+            "updatedAt": int(float(item.get("updatedAt") or 0) * 1000) or None,
+        }
     val = rule_value if rule_value is not None else ""
     now = time.time()
     with connect() as conn:
@@ -259,20 +281,21 @@ def _load_json_seed(name: str, default: Any) -> Any:
 
 
 def _load_default_agent_flow_graph() -> dict[str, Any]:
+    return {"version": 1, "nodes": [], "edges": []}
+
     parsed = _load_json_seed("agent_flow_default_graph.json", {})
     return parsed if isinstance(parsed, dict) else {}
 
 
 def _load_default_agent_phase_map() -> dict[str, str]:
-    parsed = _load_json_seed("agent_flow_phase_map.json", {})
-    if not isinstance(parsed, dict):
-        return {}
+    return {}
+
     return {str(k): str(v) for k, v in parsed.items()}
 
 
 def _load_default_agent_flow_node_templates() -> list[dict[str, Any]]:
-    parsed = _load_json_seed("agent_flow_node_templates.json", [])
-    return [x for x in parsed if isinstance(x, dict)] if isinstance(parsed, list) else []
+    return []
+
 
 
 def _load_stage_rule_defaults() -> dict[str, str]:
@@ -349,8 +372,8 @@ def list_agent_flow_node_templates() -> list[dict[str, Any]]:
 
 
 def _load_default_action_contracts() -> dict[str, Any]:
-    parsed = _load_json_seed("agent_flow_action_contracts.json", {})
-    return parsed if isinstance(parsed, dict) else {"phases": {}, "kinds": {}}
+    return {"phases": {}, "kinds": {}}
+
 
 
 def _normalize_action_contract_item(raw: Any) -> dict[str, Any] | None:
@@ -568,9 +591,15 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
     if not has_start:
         # Prefer linking into existing route entry; else first node without inbound.
         inbound = {str(e.get("target") or "") for e in edges}
-        target = "route" if "route" in ids else next(
-            (str(n.get("id")) for n in nodes if str(n.get("id")) not in inbound),
-            str(nodes[0].get("id")),
+        target = (
+            "memory"
+            if "memory" in ids
+            else "route"
+            if "route" in ids
+            else next(
+                (str(n.get("id")) for n in nodes if str(n.get("id")) not in inbound),
+                str(nodes[0].get("id")),
+            )
         )
         anchor = next((n for n in nodes if str(n.get("id")) == target), nodes[0])
         start_node = {
@@ -840,6 +869,31 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             inj["catalogs"] = [c for c in cats if c != "knowledge"]
             changed = True
 
+        # Remap retired configRef soft-tags → runtime keys / clear.
+        _config_ref_aliases = {
+            "quality_samples": "design_aesthetics",
+        }
+        for n in nodes:
+            ref = str(n.get("configRef") or "").strip()
+            if not ref:
+                continue
+            pk = str(n.get("phaseKey") or "").strip()
+            if ref == "design_knowledge":
+                n["configRef"] = ""
+                changed = True
+                continue
+            if ref == "models+routes":
+                # Soft tag removed; only model_route nodes keep the real runtime key.
+                n["configRef"] = (
+                    "precheck.model_threshold" if pk == "model_route" else ""
+                )
+                changed = True
+                continue
+            nxt = _config_ref_aliases.get(ref)
+            if nxt and nxt != ref:
+                n["configRef"] = nxt
+                changed = True
+
         # Always drop orphan knowledge_details even before parallel expand.
         if any(str(n.get("id") or "") == "knowledge_details" for n in nodes):
             nodes[:] = [n for n in nodes if str(n.get("id") or "") != "knowledge_details"]
@@ -1047,7 +1101,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             edge_ids.add(name)
             changed = True
 
-        # thought / ask → parallel on need_*（不再走 need_knowledge）
+        # thought / ask → parallel on need_*（三条独立：工具 / 提示词 / 美学；提示词不绑美学）
         for eid, cond, pri in (
             ("e6_tools", "need_tools&no_ops", 10),
             ("e6_prompt", "need_prompts&no_ops", 12),
@@ -1061,10 +1115,59 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 ("e_ask_res_aes", "need_aesthetics&no_ops", 10),
             ):
                 _ensure_edge(eid, "ask_thought", "parallel", cond, priority=pri)
+            # Repair drafts that stamped every ask→parallel wire as aesthetics.
+            for e in edges:
+                if str(e.get("source") or "") != "ask_thought":
+                    continue
+                if str(e.get("target") or "") != "parallel":
+                    continue
+                eid = str(e.get("id") or "")
+                cond = str(e.get("condition") or "").strip()
+                if eid in ("e_ask_res_tools", "e_ask_res_prompt", "e_ask_res_aes"):
+                    continue
+                if cond in ("need_aesthetics&no_ops", "need_aesthetics", "需要美学且无操作"):
+                    # Orphan duplicate aesthetics wire — drop (canonical is e_ask_res_aes).
+                    e["_drop"] = True
+                    changed = True
+            if any(e.get("_drop") for e in edges):
+                edges[:] = [e for e in edges if not e.pop("_drop", False)]
+                edge_ids = {str(e.get("id") or "") for e in edges}
+                changed = True
 
-        # parallel → lanes → join (visual / dry-run); live gather jumps to join via phase map.
-        _ensure_edge("e_par_aes", "parallel", "aesthetics_details", "", priority=11, is_default=False)
-        _ensure_edge("e_par_tools", "parallel", "tool_details", "", priority=12, is_default=False)
+        for e in edges:
+            if str(e.get("source") or "") != "thought":
+                continue
+            if str(e.get("target") or "") != "parallel":
+                continue
+            eid = str(e.get("id") or "")
+            cond = str(e.get("condition") or "").strip()
+            if eid in ("e6_tools", "e6_prompt", "e6_aes"):
+                continue
+            if cond in ("need_aesthetics&no_ops", "need_aesthetics", "需要美学且无操作"):
+                e["_drop"] = True
+                changed = True
+        if any(e.get("_drop") for e in edges):
+            edges[:] = [e for e in edges if not e.pop("_drop", False)]
+            edge_ids = {str(e.get("id") or "") for e in edges}
+            changed = True
+
+        # parallel → lanes → join (visual): each lane shows its need_*；live gather still jumps to join.
+        _ensure_edge(
+            "e_par_aes",
+            "parallel",
+            "aesthetics_details",
+            "need_aesthetics",
+            priority=11,
+            is_default=False,
+        )
+        _ensure_edge(
+            "e_par_tools",
+            "parallel",
+            "tool_details",
+            "need_tools",
+            priority=12,
+            is_default=False,
+        )
         _ensure_edge("e_aes_join", "aesthetics_details", "resource_join", "", priority=10, is_default=True)
         _ensure_edge("e_tools_join", "tool_details", "resource_join", "", priority=10, is_default=True)
 
@@ -1084,6 +1187,8 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             pid = str(pn.get("id") or "")
             if not pid:
                 continue
+            # Prompt packs share need_prompts — not need_aesthetics (方法论/看图也可单独申请).
+            lane_cond = "need_prompts"
             has_in = any(
                 str(e.get("source") or "") == "parallel" and str(e.get("target") or "") == pid
                 for e in edges
@@ -1092,7 +1197,14 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 pn["x"] = px + 240
                 pn["y"] = py - 200 + i * 110
                 changed = True
-            _ensure_edge(f"e_par_{pid}", "parallel", pid, "", priority=20 + i, is_default=False)
+            _ensure_edge(
+                f"e_par_{pid}",
+                "parallel",
+                pid,
+                lane_cond,
+                priority=20 + i,
+                is_default=False,
+            )
             _ensure_edge(f"e_{pid}_join", pid, "resource_join", "", priority=10, is_default=True)
 
         # System prompt nodes feed the LLM phases (not edited on the LLM card).
@@ -1216,8 +1328,19 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 changed = True
             if not has_in:
                 _ensure_prompt_edge(
-                    f"e_par_{pid}", "parallel", pid, "", priority=20 + i
+                    f"e_par_{pid}", "parallel", pid, "need_prompts", priority=20 + i
                 )
+            else:
+                # Repair empty/legacy labels so 提示词 lane ≠ 美学.
+                for e in edges:
+                    if (
+                        str(e.get("source") or "") == "parallel"
+                        and str(e.get("target") or "") == pid
+                        and str(e.get("condition") or "").strip()
+                        in ("", "need_aesthetics", "need_aesthetics&no_ops")
+                    ):
+                        e["condition"] = "need_prompts"
+                        changed = True
             if not has_out:
                 _ensure_prompt_edge(
                     f"e_{pid}_join", pid, "resource_join", "", priority=10, is_default=True
@@ -1265,11 +1388,11 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 seeded = default_inject_for_node(n)
                 if seeded:
                     n["inject"] = seeded
-                changed = True
+                    changed = True
     except Exception:
         pass
 
-    # Ask is a skippable step on the shared agent pipeline (not a separate lane).
+    # Ask/Agent share: intent_classify → model_route (lanes) → thought.
     ids = {str(n.get("id")) for n in nodes}
     if "memory" in ids and "model_route" in ids:
         mem_n = next(n for n in nodes if str(n.get("id")) == "memory")
@@ -1304,6 +1427,27 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 }
             )
             ids.add("ask_thought")
+            changed = True
+        if "intent_classify" not in ids:
+            mr_n = next(n for n in nodes if str(n.get("id")) == "model_route")
+            nodes.append(
+                {
+                    "id": "intent_classify",
+                    "label": "意图识别",
+                    "description": "小模型判定意图；闲聊直接结束，设计任务再进模型路由",
+                    "kind": "classifier",
+                    "capability": "control",
+                    "phaseKey": "intent_classify",
+                    "promptKey": "agent.prompt.intent_classify",
+                    "inject": {
+                        "mode": "none",
+                        "specs": ["agent.prompt.intent_classify"],
+                    },
+                    "x": float(mr_n.get("x") or 1440) - 240,
+                    "y": float(mr_n.get("y") or 400),
+                }
+            )
+            ids.add("intent_classify")
             changed = True
 
         def _has_edge(src: str, tgt: str, cond: str = "") -> bool:
@@ -1411,8 +1555,13 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 continue
             tgt = str(e.get("target") or "")
             eid = str(e.get("id") or "")
-            if tgt == "ask_thought" or eid == "e_mode_ask":
-                e["target"] = "ask_thought"
+            # Ask must enter intent_classify (then model_route), never skip to ask_thought.
+            if tgt == "ask_thought" or eid == "e_mode_ask" or (
+                str(e.get("condition") or "") == "mode=ask"
+                and tgt in {"ask_thought", "model_route", "intent_classify"}
+            ):
+                e["id"] = eid or "e_mode_ask"
+                e["target"] = "intent_classify"
                 _fix_mode_fork_edge(
                     e, condition="mode=ask", priority=5, is_default=False
                 )
@@ -1423,8 +1572,11 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                     e, condition="short_plan_on", priority=10, is_default=False
                 )
                 has_mode_plan = True
-            elif tgt == "model_route" or eid == "e_mode_agent":
-                e["target"] = "model_route"
+            elif tgt in {"model_route", "intent_classify"} or eid == "e_mode_agent":
+                # Keep Agent default separate from Ask→lane edge.
+                if str(e.get("condition") or "") == "mode=ask":
+                    continue
+                e["target"] = "intent_classify"
                 _fix_mode_fork_edge(
                     e, condition="mode=agent", priority=20, is_default=True
                 )
@@ -1434,7 +1586,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             _add_edge(
                 "e_mode_ask",
                 "mode_fork",
-                "ask_thought",
+                "intent_classify",
                 condition="mode=ask",
                 priority=5,
             )
@@ -1450,16 +1602,69 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             _add_edge(
                 "e_mode_agent",
                 "mode_fork",
-                "model_route",
+                "intent_classify",
                 condition="mode=agent",
                 priority=20,
                 is_default=True,
             )
-        # Ask → ask_thought; Agent → model_route
+        # Plan → intent_classify (not straight to model_route).
+        for e in edges:
+            if str(e.get("source") or "") != "plan":
+                continue
+            if str(e.get("target") or "") != "model_route":
+                continue
+            e["target"] = "intent_classify"
+            changed = True
+        _add_edge(
+            "e_intent_chat",
+            "intent_classify",
+            "end",
+            condition="intent=chat",
+            priority=5,
+        )
+        _add_edge(
+            "e_intent_continue",
+            "intent_classify",
+            "model_route",
+            condition="",
+            priority=20,
+            is_default=True,
+        )
+        # Drop passthrough「任务分流」— Ask/Agent 分线 already owns branching.
+        if "route" in ids and "memory" in ids:
+            route_outs = [e for e in edges if str(e.get("source") or "") == "route"]
+            only_to_mem = (not route_outs) or all(
+                str(e.get("target") or "") == "memory" for e in route_outs
+            )
+            if only_to_mem:
+                for e in edges:
+                    if str(e.get("target") or "") == "route":
+                        e["target"] = "memory"
+                        changed = True
+                before_r = len(edges)
+                edges[:] = [e for e in edges if str(e.get("source") or "") != "route"]
+                if len(edges) != before_r:
+                    changed = True
+                before_n = len(nodes)
+                nodes[:] = [n for n in nodes if str(n.get("id")) != "route"]
+                if len(nodes) != before_n:
+                    changed = True
+                ids.discard("route")
+        # Ask 兜底续跑 Agent 主思考：勿再进 model_route（mode=ask 会绕回 ask_thought）。
+        for e in edges:
+            if str(e.get("source") or "") != "ask_thought":
+                continue
+            if str(e.get("target") or "") != "model_route":
+                continue
+            cond = str(e.get("condition") or "").strip()
+            if cond and cond not in {"", "default", "else", "*"}:
+                continue
+            e["target"] = "thought"
+            changed = True
         _add_edge(
             "e_ask_enough",
             "ask_thought",
-            "model_route",
+            "thought",
             condition="",
             priority=20,
             is_default=True,
@@ -1489,8 +1694,8 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             _add_edge(
                 "e_ask_propose",
                 "ask_thought",
-                "propose",
-                condition="mode=ask&has_ops",
+                "action",
+                condition="mode=ask&ops_valid",
                 priority=10,
             )
         # Drop legacy hydrate / dual_sample nodes; action owns hydrate.
@@ -1508,6 +1713,74 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             nodes[:] = [n for n in nodes if str(n.get("id") or "") not in _drop_phases]
             ids -= _drop_phases
             changed = True
+        # hydrate→action rewires left action→action self-loops with empty
+        # conditions; unconditional pick then infinite-loops after tool_ops.
+        before_self = len(edges)
+        edges[:] = [
+            e
+            for e in edges
+            if not (
+                str(e.get("source") or "").strip()
+                and str(e.get("source") or "").strip()
+                == str(e.get("target") or "").strip()
+            )
+        ]
+        if len(edges) != before_self:
+            changed = True
+        if "action" in ids and "observe" in ids:
+            _add_edge(
+                "e24",
+                "action",
+                "observe",
+                condition="wait_scene",
+                priority=10,
+                is_default=True,
+            )
+            for e in edges:
+                if str(e.get("source") or "") != "action":
+                    continue
+                if str(e.get("target") or "") != "observe":
+                    continue
+                if (
+                    str(e.get("condition") or "") != "wait_scene"
+                    or not bool(e.get("isDefault"))
+                    or int(e.get("priority") or 0) > 20
+                ):
+                    e["condition"] = "wait_scene"
+                    e["isDefault"] = True
+                    e["priority"] = min(int(e.get("priority") or 10), 10)
+                    changed = True
+        # Drop duplicate observe→verify / observe→reflect wires that lost their
+        # conditions (empty cond becomes unconditional and races scene_ready).
+        if "observe" in ids:
+            cleaned: list[dict[str, Any]] = []
+            seen_obs_targets: set[tuple[str, str]] = set()
+            for e in edges:
+                src = str(e.get("source") or "")
+                tgt = str(e.get("target") or "")
+                cond = str(e.get("condition") or "").strip()
+                if src == "observe" and tgt == "verify" and not cond:
+                    e["condition"] = "scene_ready"
+                    e["priority"] = 5
+                    e["isDefault"] = False
+                    changed = True
+                    cond = "scene_ready"
+                if src == "observe" and tgt == "reflect" and not cond:
+                    e["condition"] = "op_failed"
+                    e["priority"] = 20
+                    e["isDefault"] = False
+                    changed = True
+                    cond = "op_failed"
+                key = (src, tgt + "|" + cond) if src == "observe" else ("", "")
+                if src == "observe" and key in seen_obs_targets:
+                    changed = True
+                    continue
+                if src == "observe":
+                    seen_obs_targets.add(key)
+                cleaned.append(e)
+            if len(cleaned) != len(edges):
+                edges[:] = cleaned
+                changed = True
         # observe → verify; op_failed still clarify/reflect
         if "observe" in ids:
             if "verify" not in ids:
@@ -1536,14 +1809,24 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                     e["isDefault"] = False
                     changed = True
                 if str(e.get("source") or "") == "observe" and str(e.get("target") or "") == "end":
-                    # legacy ok→end becomes scene_ready→verify
-                    e["target"] = "verify"
-                    e["condition"] = "scene_ready"
-                    e["priority"] = 5
-                    e["isDefault"] = False
-                    if not e.get("id"):
-                        e["id"] = "e_obs_verify"
-                    changed = True
+                    cond = str(e.get("condition") or "").strip()
+                    eid = str(e.get("id") or "")
+                    # Ask 确认上屏 / apply_ops：ok → 结束（保留，勿改成校验）
+                    if cond == "ok" or eid == "e_observe_ok":
+                        e["id"] = eid or "e_observe_ok"
+                        e["condition"] = "ok"
+                        e["priority"] = 3
+                        e["isDefault"] = False
+                        changed = True
+                    else:
+                        # 无条件的遗留 observe→end：改走校验门禁
+                        e["target"] = "verify"
+                        e["condition"] = "scene_ready"
+                        e["priority"] = 5
+                        e["isDefault"] = False
+                        if not e.get("id"):
+                            e["id"] = "e_obs_verify"
+                        changed = True
                 if (
                     str(e.get("source") or "") == "observe"
                     and str(e.get("target") or "") == "thought"
@@ -1554,6 +1837,13 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                     if not e.get("id"):
                         e["id"] = "e_verify_retry"
                     changed = True
+            _add_edge(
+                "e_observe_ok",
+                "observe",
+                "end",
+                condition="ok",
+                priority=3,
+            )
             _add_edge(
                 "e_obs_verify",
                 "observe",
@@ -1650,28 +1940,35 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 condition="intent=done",
                 priority=43,
             )
-        if "propose" in ids:
+        if "action" in ids:
             for e in edges:
                 if str(e.get("source") or "") != "ask_thought":
                     continue
-                if str(e.get("target") or "") != "propose":
-                    continue
-                try:
-                    pri = int(e.get("priority", 100))
-                except (TypeError, ValueError):
-                    pri = 100
-                if str(e.get("condition") or "") != "mode=ask&has_ops" or pri >= 20:
-                    e["condition"] = "mode=ask&has_ops"
-                    e["priority"] = 9
-                    e["isDefault"] = False
-                    changed = True
-                break
+                cond = str(e.get("condition") or "")
+                tgt = str(e.get("target") or "")
+                # Legacy Ask: has_ops → propose. Clear edits paint immediately.
+                if cond in ("mode=ask&has_ops", "mode=ask&ops_valid") or (
+                    tgt == "propose" and "ask" in cond and "ops" in cond
+                ):
+                    if tgt != "action" or cond != "mode=ask&ops_valid":
+                        e["target"] = "action"
+                        e["condition"] = "mode=ask&ops_valid"
+                        e["label"] = e.get("label") or "明确需求直接改"
+                        e["isDefault"] = False
+                        try:
+                            pri = int(e.get("priority", 100))
+                        except (TypeError, ValueError):
+                            pri = 100
+                        if pri >= 20:
+                            e["priority"] = 9
+                        changed = True
+                    break
             else:
                 _add_edge(
                     "e_ask_propose",
                     "ask_thought",
-                    "propose",
-                    condition="mode=ask&has_ops",
+                    "action",
+                    condition="mode=ask&ops_valid",
                     priority=9,
                 )
 
@@ -1704,13 +2001,35 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
         ids = {str(n.get("id")) for n in nodes}
         changed = True
 
-    if "model_route" in ids and "thought" in ids:
-        has_direct = any(
+    if "model_route" in ids and "ask_thought" in ids:
+        has_ask_lane = any(
             str(e.get("source") or "") == "model_route"
-            and str(e.get("target") or "") == "thought"
+            and str(e.get("target") or "") == "ask_thought"
+            and str(e.get("condition") or "") == "mode=ask"
             for e in edges
         )
-        if not has_direct:
+        if not has_ask_lane:
+            edges.append(
+                {
+                    "id": "e_route_ask",
+                    "source": "model_route",
+                    "target": "ask_thought",
+                    "label": "",
+                    "condition": "mode=ask",
+                    "priority": 5,
+                    "isDefault": False,
+                }
+            )
+            changed = True
+
+    if "model_route" in ids and "thought" in ids:
+        thought_lane = [
+            e
+            for e in edges
+            if str(e.get("source") or "") == "model_route"
+            and str(e.get("target") or "") == "thought"
+        ]
+        if not thought_lane:
             edges.append(
                 {
                     "id": "e5",
@@ -1723,6 +2042,17 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 }
             )
             changed = True
+        else:
+            # Wire code must be llm_call (not display text). Missing default → settle.
+            for e in thought_lane:
+                if str(e.get("condition") or "").strip() == "llm_call" and bool(
+                    e.get("isDefault")
+                ):
+                    continue
+                e["condition"] = "llm_call"
+                e["isDefault"] = True
+                e["priority"] = 10
+                changed = True
 
     # Collapse duplicate edge ids (legacy normalize could append same eid twice).
     seen_eids: set[str] = set()
@@ -1745,9 +2075,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
 
 
 def _load_flows_catalog() -> list[dict[str, Any]]:
-    ensure_stage_rules()
-    rules = {r["ruleKey"]: r["ruleValue"] for r in list_global_rules()}
-    raw = str(rules.get(_AGENT_FLOWS_CATALOG_KEY) or "").strip()
+    raw = _global_rule_value(_AGENT_FLOWS_CATALOG_KEY)
     items: list[dict[str, Any]] = []
     if raw:
         try:
@@ -1945,43 +2273,21 @@ def get_agent_flow_version(flow_id: str, version: int) -> dict[str, Any] | None:
     return None
 
 
+def prompt_bodies_from_agent_flow_nodes(flow_id: str = "default") -> dict[str, str]:
+    del flow_id
+    return {}
+
+
+def runtime_settings_from_agent_flow_nodes(flow_id: str = "default") -> dict[str, str]:
+    del flow_id
+    return {}
+
+
 def get_published_agent_flow(flow_id: str = "default") -> dict[str, Any] | None:
-    """Runtime source of truth: last published snapshot (not draft)."""
-    fid = (flow_id or "default").strip() or "default"
-    item = get_agent_flow(fid)
-    if not item:
-        return None
-    pub_graph = item.get("publishedGraph")
-    if not isinstance(pub_graph, dict):
-        # get_agent_flow auto-seeds; re-read
-        items = _load_flows_catalog()
-        raw = next((x for x in items if str(x.get("id")) == fid), None)
-        if not raw:
-            return None
-        pub_graph = raw.get("publishedGraph")
-        if not isinstance(pub_graph, dict):
-            return None
-        graph, _ = _normalize_agent_flow_graph(pub_graph)
-        return {
-            "id": fid,
-            "name": str(raw.get("name") or ""),
-            "version": int(raw.get("publishedVersion") or 0),
-            "publishedAt": raw.get("publishedAt"),
-            "graph": graph,
-            "phaseMap": {
-                str(k): str(v)
-                for k, v in (raw.get("publishedPhaseMap") or {}).items()
-            },
-        }
-    graph, _ = _normalize_agent_flow_graph(pub_graph)
-    return {
-        "id": fid,
-        "name": str(item.get("name") or ""),
-        "version": int(item.get("publishedVersion") or 0),
-        "publishedAt": item.get("publishedAt"),
-        "graph": graph,
-        "phaseMap": dict(item.get("publishedPhaseMap") or {}),
-    }
+    """Admin flowchart removed — no published graph."""
+    del flow_id
+    return None
+
 
 
 def publish_agent_flow(flow_id: str, *, note: str = "") -> dict[str, Any] | None:
@@ -2772,8 +3078,11 @@ def list_decision_logs(
     status: str | None = None,
     q: str | None = None,
 ) -> dict[str, Any]:
-    """Admin query for persisted decision_log snapshots in design_task.meta_json."""
-    ensure_design_catalog()
+    """Admin list: light fields only (no full meta_json / LLM IO blobs)."""
+    from services.design.catalog import catalog_ready, ensure_design_catalog
+
+    if not catalog_ready():
+        ensure_design_catalog()
     page = max(1, int(page or 1))
     page_size = max(1, min(100, int(page_size or 50)))
     offset = (page - 1) * page_size
@@ -2797,7 +3106,6 @@ def list_decision_logs(
         params.extend([like, like, like, like, like])
     route_filter = (route or "").strip().lower()
     if route_filter:
-        # Exact or prefix (e.g. agent_graph matches agent_graph:v7 / agent_graph_chat)
         where.append(
             "("
             "lower(coalesce(json_extract(meta_json, '$.decision_log.route'), '')) = ? OR "
@@ -2808,14 +3116,36 @@ def list_decision_logs(
         params.append(route_filter + "%")
     intent_filter = (intent or "").strip().lower()
     if intent_filter:
-        where.append("lower(coalesce(json_extract(meta_json, '$.decision_log.intent'), '')) = ?")
+        where.append(
+            "lower(coalesce(json_extract(meta_json, '$.decision_log.intent'), '')) = ?"
+        )
         params.append(intent_filter)
 
     sql_where = " AND ".join(where)
     with connect() as conn:
+        total_row = conn.execute(
+            f"SELECT COUNT(*) AS c FROM design_task WHERE {sql_where}",
+            tuple(params),
+        ).fetchone()
         rows = conn.execute(
             f"""
-            SELECT id, user_id, scene, status, prompt, error_message, meta_json, created_at, updated_at
+            SELECT
+              id, user_id, scene, status, prompt, error_message, created_at, updated_at,
+              json_extract(meta_json, '$.trace_id') AS trace_id,
+              json_extract(meta_json, '$.control') AS control,
+              json_extract(meta_json, '$.flow_id') AS flow_id,
+              json_extract(meta_json, '$.decision_log.trace_id') AS dl_trace,
+              json_extract(meta_json, '$.decision_log.route') AS dl_route,
+              json_extract(meta_json, '$.decision_log.intent') AS dl_intent,
+              json_extract(meta_json, '$.execution_log.trace_id') AS el_trace,
+              json_extract(meta_json, '$.execution_log.intent') AS el_intent,
+              json_extract(meta_json, '$.execution_log.flow_id') AS el_flow,
+              json_extract(meta_json, '$.execution_log.ops_count') AS ops_count,
+              json_extract(meta_json, '$.execution_log.total_tokens') AS total_tokens,
+              json_extract(meta_json, '$.execution_log.painted') AS painted,
+              json_extract(meta_json, '$.execution_log.task_tier') AS task_tier,
+              json_extract(meta_json, '$.execution_log.vision_used') AS vision_used,
+              json_extract(meta_json, '$.execution_log.model') AS model
             FROM design_task
             WHERE {sql_where}
             ORDER BY created_at DESC
@@ -2823,54 +3153,41 @@ def list_decision_logs(
             """,
             tuple([*params, page_size, offset]),
         ).fetchall()
-        total_row = conn.execute(
-            f"SELECT COUNT(*) AS c FROM design_task WHERE {sql_where}",
-            tuple(params),
-        ).fetchone()
 
     items: list[dict[str, Any]] = []
     for r in rows:
-        meta_raw = r["meta_json"] if "meta_json" in r.keys() else None
-        meta: dict[str, Any] = {}
-        if isinstance(meta_raw, str) and meta_raw.strip():
-            try:
-                parsed = json.loads(meta_raw)
-                if isinstance(parsed, dict):
-                    meta = parsed
-            except Exception:
-                meta = {}
-        decision = meta.get("decision_log")
-        if not isinstance(decision, dict):
-            continue
-        exec_log = meta.get("execution_log")
-        if not isinstance(exec_log, dict):
-            exec_log = {}
+        route_v = _json_scalar(r["dl_route"])
+        control_v = _json_scalar(r["control"])
+        exec_flow = _json_scalar(r["el_flow"])
+        meta_flow = _json_scalar(r["flow_id"])
         items.append(
             {
                 "taskId": r["id"],
-                "traceId": meta.get("trace_id") or decision.get("trace_id") or exec_log.get("trace_id"),
+                "traceId": _json_scalar(r["trace_id"])
+                or _json_scalar(r["dl_trace"])
+                or _json_scalar(r["el_trace"]),
                 "userId": r["user_id"],
                 "scene": r["scene"],
                 "status": r["status"],
-                "route": decision.get("route"),
-                "intent": decision.get("intent") or exec_log.get("intent"),
+                "route": route_v,
+                "intent": _json_scalar(r["dl_intent"]) or _json_scalar(r["el_intent"]),
                 "prompt": r["prompt"],
-                "decisionLog": decision,
-                "executionLog": exec_log or None,
-                "control": meta.get("control"),
-                "flowId": meta.get("flow_id") or exec_log.get("flow_id"),
+                "decisionLog": None,
+                "executionLog": None,
+                "control": control_v,
+                "flowId": meta_flow or exec_flow,
                 "flowVersion": _parse_flow_version(
-                    route=decision.get("route"),
-                    control=meta.get("control"),
-                    exec_log=exec_log,
-                    meta=meta,
+                    route=route_v,
+                    control=control_v,
+                    exec_log={"flow_id": exec_flow} if exec_flow else {},
+                    meta={"flow_id": meta_flow} if meta_flow else {},
                 ),
-                "opsCount": exec_log.get("ops_count"),
-                "totalTokens": exec_log.get("total_tokens"),
-                "painted": exec_log.get("painted"),
-                "taskTier": exec_log.get("task_tier"),
-                "visionUsed": exec_log.get("vision_used"),
-                "model": exec_log.get("model"),
+                "opsCount": _json_int(r["ops_count"]),
+                "totalTokens": _json_int(r["total_tokens"]),
+                "painted": _json_bool(r["painted"]),
+                "taskTier": _json_scalar(r["task_tier"]),
+                "visionUsed": _json_bool(r["vision_used"]),
+                "model": _json_scalar(r["model"]),
                 "error": r["error_message"],
                 "createdAt": int(float(r["created_at"]) * 1000) if r["created_at"] else None,
                 "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
@@ -2885,9 +3202,79 @@ def list_decision_logs(
     }
 
 
+def get_decision_log(task_id: str) -> dict[str, Any] | None:
+    """Full decision/execution payload for one task (detail drawer)."""
+    from services.design.catalog import catalog_ready, ensure_design_catalog
+
+    if not catalog_ready():
+        ensure_design_catalog()
+    tid = str(task_id or "").strip()
+    if not tid:
+        return None
+    with connect() as conn:
+        r = conn.execute(
+            """
+            SELECT id, user_id, scene, status, prompt, error_message, meta_json, created_at, updated_at
+            FROM design_task
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (tid,),
+        ).fetchone()
+    if r is None:
+        return None
+    meta_raw = r["meta_json"] if "meta_json" in r.keys() else None
+    meta: dict[str, Any] = {}
+    if isinstance(meta_raw, str) and meta_raw.strip():
+        try:
+            parsed = json.loads(meta_raw)
+            if isinstance(parsed, dict):
+                meta = parsed
+        except Exception:
+            meta = {}
+    decision = meta.get("decision_log")
+    if not isinstance(decision, dict):
+        return None
+    exec_log = meta.get("execution_log")
+    if not isinstance(exec_log, dict):
+        exec_log = {}
+    return {
+        "taskId": r["id"],
+        "traceId": meta.get("trace_id") or decision.get("trace_id") or exec_log.get("trace_id"),
+        "userId": r["user_id"],
+        "scene": r["scene"],
+        "status": r["status"],
+        "route": decision.get("route"),
+        "intent": decision.get("intent") or exec_log.get("intent"),
+        "prompt": r["prompt"],
+        "decisionLog": decision,
+        "executionLog": exec_log or None,
+        "control": meta.get("control"),
+        "flowId": meta.get("flow_id") or exec_log.get("flow_id"),
+        "flowVersion": _parse_flow_version(
+            route=decision.get("route"),
+            control=meta.get("control"),
+            exec_log=exec_log,
+            meta=meta,
+        ),
+        "opsCount": exec_log.get("ops_count"),
+        "totalTokens": exec_log.get("total_tokens"),
+        "painted": exec_log.get("painted"),
+        "taskTier": exec_log.get("task_tier"),
+        "visionUsed": exec_log.get("vision_used"),
+        "model": exec_log.get("model"),
+        "error": r["error_message"],
+        "createdAt": int(float(r["created_at"]) * 1000) if r["created_at"] else None,
+        "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
+    }
+
+
 def clear_decision_logs() -> dict[str, Any]:
     """Strip decision_log / execution_log from all design_task.meta_json (fresh 运行复盘)."""
-    ensure_design_catalog()
+    from services.design.catalog import catalog_ready, ensure_design_catalog
+
+    if not catalog_ready():
+        ensure_design_catalog()
     cleared = 0
     scanned = 0
     with connect() as conn:
@@ -2921,6 +3308,50 @@ def clear_decision_logs() -> dict[str, Any]:
     return {"ok": True, "scanned": scanned, "cleared": cleared}
 
 
+def _json_scalar(raw: Any) -> Any:
+    if raw is None:
+        return None
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="ignore")
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s.lower() == "null":
+            return None
+        if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+            try:
+                return json.loads(s)
+            except Exception:
+                return s.strip("\"'")
+        return s
+    return raw
+
+
+def _json_int(raw: Any) -> int | None:
+    v = _json_scalar(raw)
+    if v is None or v is False:
+        return None
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+
+def _json_bool(raw: Any) -> bool | None:
+    v = _json_scalar(raw)
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
 STAGE_RULE_DEFAULTS: dict[str, str] = _load_stage_rule_defaults()
 STAGE_RULE_DESCRIPTIONS: dict[str, str] = _load_stage_rule_descriptions()
 
@@ -2931,6 +3362,8 @@ def ensure_stage_rules() -> None:
     if _STAGE_RULES_READY:
         return
     ensure_design_catalog()
+    # system prompts are seeded inside ensure_design_catalog; do not call again here
+    # (avoids import/lock cycles during bootstrap).
     with _STAGE_RULES_LOCK:
         if _STAGE_RULES_READY:
             return
@@ -2952,26 +3385,30 @@ def ensure_stage_rules() -> None:
             now = time.time()
             rows = conn.execute("SELECT rule_key FROM design_global_rule").fetchall()
             existing = {str(r["rule_key"]) for r in rows}
+            from services.design.system_prompt_store import is_system_prompt_key
+
             for key, val in merged_defaults.items():
                 if key in existing:
                     continue
-                    desc = STAGE_RULE_DESCRIPTIONS.get(key, "")
-                    try:
-                        conn.execute(
-                            """
-                            INSERT INTO design_global_rule
-                                (rule_key, rule_value, description, enabled, updated_at)
-                            VALUES (?, ?, ?, 1, ?)
-                            """,
-                            (key, val, desc, now),
-                        )
-                    except Exception:
-                        conn.execute(
-                            "INSERT INTO design_global_rule (rule_key, rule_value, updated_at) VALUES (?, ?, ?)",
-                            (key, val, now),
-                        )
+                # Prompt bodies live in design_system_prompt — do not re-seed into KV.
+                if is_system_prompt_key(key):
+                    continue
+                desc = STAGE_RULE_DESCRIPTIONS.get(key, "")
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO design_global_rule
+                            (rule_key, rule_value, description, enabled, updated_at)
+                        VALUES (?, ?, ?, 1, ?)
+                        """,
+                        (key, val, desc, now),
+                    )
+                except Exception:
+                    conn.execute(
+                        "INSERT INTO design_global_rule (rule_key, rule_value, updated_at) VALUES (?, ?, ?)",
+                        (key, val, now),
+                    )
             _STAGE_RULES_READY = True
-            # Markers only (no force-UPDATE of Admin prompt / route text).
             # Markers only (no force-overwrite of Admin prompt / route text).
             for marker_key, marker_desc in (
                 ("agent.prompt.pe_structure_v1", "提示词结构种子标记（不覆盖已有值）"),

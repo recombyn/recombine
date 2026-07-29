@@ -331,6 +331,7 @@ def _validate_single_op(
             return f"update_node_unknown_id:{nid}"
         return None
     if name == "delete_nodes":
+        args = _normalize_node_id_list_args(args)
         ids = args.get("nodeIds")
         if not isinstance(ids, list) or not [x for x in ids if str(x).strip()]:
             return "delete_nodes_missing_nodeIds"
@@ -400,6 +401,102 @@ def _normalize_update_node_args(args: dict[str, Any]) -> dict[str, Any]:
         out["width"] = out.get("w")
     if out.get("height") is None and out.get("h") is not None:
         out["height"] = out.get("h")
+    if out.get("shapeType") is None and out.get("type") is not None:
+        out["shapeType"] = out.get("type")
+    return out
+
+
+def _normalize_node_id_list_args(args: dict[str, Any]) -> dict[str, Any]:
+    """Accept node_ids / ids aliases → nodeIds (models often emit snake_case)."""
+    out = dict(args)
+    if out.get("nodeIds") is None:
+        for alt in ("node_ids", "ids", "nodeIdList"):
+            raw = out.get(alt)
+            if isinstance(raw, list):
+                out["nodeIds"] = raw
+                break
+            if isinstance(raw, str) and raw.strip():
+                out["nodeIds"] = [raw.strip()]
+                break
+    return out
+
+
+def _collect_delete_node_ids(args: dict[str, Any]) -> list[str]:
+    args = _normalize_node_id_list_args(args)
+    ids = args.get("nodeIds")
+    if not isinstance(ids, list):
+        return []
+    return [str(x).strip() for x in ids if str(x).strip()]
+
+
+def _rewrite_shape_morph_ops(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """delete one node + create_shape → update_node(shapeType) to keep z-order.
+
+    Models often morph via delete+create because older schemas lacked shapeType
+    on update_node; that bumps the new shape to the top of the stack.
+    """
+    if len(ops) < 2:
+        return ops
+    delete_idxs: list[int] = []
+    create_idxs: list[int] = []
+    deleted: list[str] = []
+    for i, raw in enumerate(ops):
+        name = str(raw.get("name") or "").strip()
+        args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
+        if name == "delete_nodes":
+            ids = _collect_delete_node_ids(args)
+            if ids:
+                delete_idxs.append(i)
+                deleted.extend(ids)
+        elif name == "create_shape":
+            create_idxs.append(i)
+    if len(deleted) != 1 or len(create_idxs) != 1 or len(delete_idxs) != 1:
+        return ops
+    create = ops[create_idxs[0]]
+    cargs = dict(create.get("args") or {})
+    shape_type = cargs.get("shapeType")
+    if shape_type is None:
+        shape_type = cargs.get("type")
+    if shape_type is None or not str(shape_type).strip():
+        return ops
+    update_args: dict[str, Any] = {
+        "nodeId": deleted[0],
+        "shapeType": shape_type,
+    }
+    for k in (
+        "x",
+        "y",
+        "width",
+        "height",
+        "w",
+        "h",
+        "fill",
+        "fillColor",
+        "stroke",
+        "borderWidth",
+        "opacity",
+        "rotation",
+        "cornerRadius",
+        "sides",
+        "name",
+    ):
+        if cargs.get(k) is not None:
+            update_args[k] = cargs.get(k)
+    drop = {delete_idxs[0], create_idxs[0]}
+    out: list[dict[str, Any]] = []
+    inserted = False
+    for i, raw in enumerate(ops):
+        if i in drop:
+            if not inserted:
+                out.append(
+                    {
+                        "name": "update_node",
+                        "args": _normalize_update_node_args(update_args),
+                    }
+                )
+                inserted = True
+            continue
+        out.append(raw)
     return out
 
 
@@ -588,10 +685,23 @@ def normalize_agent_tool_ops(
         if name == "create_shape":
             if args.get("shapeType") is None and args.get("type") is not None:
                 args["shapeType"] = args.get("type")
+        if name in (
+            "delete_nodes",
+            "align_nodes",
+            "distribute_nodes",
+            "reorder_nodes",
+            "group_nodes",
+            "ungroup_nodes",
+            "duplicate_nodes",
+            "flip_nodes",
+            "boolean_op",
+        ):
+            args = _normalize_node_id_list_args(args)
         if name == "update_node":
             args = _normalize_update_node_args(args)
         working.append({"name": name, "args": args})
 
+    working = _rewrite_shape_morph_ops(working)
     working = _hygiene_edit_ops(working, scene_nodes)
 
     normalized: list[dict[str, Any]] = []

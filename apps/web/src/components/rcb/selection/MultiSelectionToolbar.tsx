@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
+import { useTranslation } from 'react-i18next';
+import { HiOutlineLink, HiOutlineLinkSlash } from 'react-icons/hi2';
 import { message, DropdownPanel, DropdownPanelItem } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import {
@@ -61,6 +63,26 @@ import { computeShapeBoolean, applyBooleanResultPaint, type BoolMode } from './s
 
 const ASPECT_ORIG_W = 'aspect-original-width';
 const ASPECT_ORIG_H = 'aspect-original-height';
+
+/** Match SelectionFeature: images default locked; others free unless attrs say so. */
+function readNodeAspectLocked(node: any): boolean {
+  const raw = node?.attrs?.lockAspect;
+  if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return node?.key === 'image';
+}
+
+/** Multi-select lock: on when selection includes images (unless any unlocked). */
+function readMultiAspectLocked(document: any, nodeIds: string[]): boolean {
+  const nodes = nodeIds.map((id) => document?.deltaSetLike?.[id]).filter(Boolean);
+  if (!nodes.length) return false;
+  const hasExplicitUnlock = nodes.some((n) => {
+    const raw = n?.attrs?.lockAspect;
+    return raw === false || raw === 'false' || raw === 0 || raw === '0';
+  });
+  if (!hasExplicitUnlock && nodes.some((n) => n.key === 'image')) return true;
+  return nodes.every((n) => readNodeAspectLocked(n));
+}
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -273,6 +295,7 @@ export default function MultiSelectionToolbar({
   box,
 }: Props): ReactNode {
   const dispatch = useDispatch();
+  const { t } = useTranslation();
   const [distributeOpen, setDistributeOpen] = useState(false);
   const [booleanOpen, setBooleanOpen] = useState(false);
   const [ratioOpen, setRatioOpen] = useState(false);
@@ -284,6 +307,10 @@ export default function MultiSelectionToolbar({
   );
 
   const boxes = useMemo(() => readBoxes(document, opNodeIds), [document, opNodeIds]);
+  const aspectLocked = useMemo(
+    () => readMultiAspectLocked(document, opNodeIds),
+    [document, opNodeIds]
+  );
 
   const shapeBoxes = useMemo(
     () =>
@@ -464,6 +491,25 @@ export default function MultiSelectionToolbar({
     dispatch(openShapeStylePanel({ kind, nodeIds: ids }));
   };
 
+  const toggleAspectLock = () => {
+    const next = aspectLocked ? 'false' : 'true';
+    for (const id of opNodeIds) {
+      const node = document?.deltaSetLike?.[id];
+      const shapeType = node?.attrs?.shapeType;
+      dispatch(
+        patchDocumentNode({
+          nodeId: id,
+          patch: {
+            attrs: {
+              ...(shapeType != null ? { shapeType } : {}),
+              lockAspect: next,
+            },
+          },
+        })
+      );
+    }
+  };
+
   const setSize = (axis: 'w' | 'h', raw: string) => {
     if (!box) return;
     const trimmed = String(raw || '').trim();
@@ -478,8 +524,20 @@ export default function MultiSelectionToolbar({
     const oldH = Math.max(1, box.height);
     let newW = oldW;
     let newH = oldH;
-    if (axis === 'w') newW = n;
-    else newH = n;
+    if (aspectLocked) {
+      const ratio = oldW / oldH;
+      if (axis === 'w') {
+        newW = n;
+        newH = Math.max(1, Math.round(n / ratio));
+      } else {
+        newH = n;
+        newW = Math.max(1, Math.round(n * ratio));
+      }
+    } else if (axis === 'w') {
+      newW = n;
+    } else {
+      newH = n;
+    }
     const sx = newW / oldW;
     const sy = newH / oldH;
     const cx = box.left + box.width / 2;
@@ -561,7 +619,7 @@ export default function MultiSelectionToolbar({
   if (groupId) {
     return (
       <SelectionToolbarShell box={box}>
-            <Tooltip title={'解除编组'} placement="top">
+            <Tooltip tip={'解除编组'} placement="top">
               <button
                 type="button"
                 className={btn}
@@ -619,7 +677,7 @@ export default function MultiSelectionToolbar({
           <>
             {canAlign ? <ClusterGap /> : null}
             <div className="relative" data-multi-toolbar-menu>
-              <Tooltip title="分布" placement="top">
+              <Tooltip tip="分布" placement="top">
                 <button
                   type="button"
                   aria-label="分布"
@@ -646,7 +704,7 @@ export default function MultiSelectionToolbar({
 
   const booleanCluster = showBoolean ? (
     <div className="relative" data-multi-toolbar-menu>
-      <Tooltip title="布尔运算" placement="top">
+      <Tooltip tip="布尔运算" placement="top">
         <button
           type="button"
           aria-label="布尔运算"
@@ -681,7 +739,7 @@ export default function MultiSelectionToolbar({
     showFill || showStroke || showCornerRadius ? (
       <>
         {showFill ? (
-          <Tooltip title="填充" placement="top">
+          <Tooltip tip="填充" placement="top">
             <button
               type="button"
               aria-label="填充"
@@ -693,7 +751,7 @@ export default function MultiSelectionToolbar({
           </Tooltip>
         ) : null}
         {showStroke ? (
-          <Tooltip title="描边" placement="top">
+          <Tooltip tip="描边" placement="top">
             <button
               type="button"
               aria-label="描边"
@@ -705,7 +763,7 @@ export default function MultiSelectionToolbar({
           </Tooltip>
         ) : null}
         {showCornerRadius ? (
-          <Tooltip title="圆角" placement="top">
+          <Tooltip tip="圆角" placement="top">
             <button
               type="button"
               aria-label="圆角"
@@ -729,13 +787,21 @@ export default function MultiSelectionToolbar({
           activeId={activeRatioId}
           onPick={(preset) => {
             if (preset.id === 'original') {
+              // 「自由」：保持当前尺寸，取消比例锁定
               for (const b of boxes) {
                 const node = document?.deltaSetLike?.[b.id];
-                const ow = Number(node?.attrs?.[ASPECT_ORIG_W]);
-                const oh = Number(node?.attrs?.[ASPECT_ORIG_H]);
-                if (Number.isFinite(ow) && ow > 0 && Number.isFinite(oh) && oh > 0) {
-                  patchGeom(b.id, { width: ow, height: oh });
-                }
+                const shapeType = node?.attrs?.shapeType;
+                dispatch(
+                  patchDocumentNode({
+                    nodeId: b.id,
+                    patch: {
+                      attrs: {
+                        ...(shapeType != null ? { shapeType } : {}),
+                        lockAspect: 'false',
+                      },
+                    },
+                  })
+                );
               }
               return;
             }
@@ -766,6 +832,7 @@ export default function MultiSelectionToolbar({
                     height: nh,
                     attrs: {
                       ...(shapeType != null ? { shapeType } : {}),
+                      lockAspect: 'true',
                       ...(!hasOrig
                         ? {
                             [ASPECT_ORIG_W]: Math.round(b.width),
@@ -793,6 +860,35 @@ export default function MultiSelectionToolbar({
           }}
         />
       </label>
+      <Tooltip
+        title={
+          aspectLocked
+            ? t('editor.imageToolbar.unlockAspect')
+            : t('editor.imageToolbar.lockAspect')
+        }
+        placement="top"
+      >
+        <button
+          type="button"
+          aria-label={
+            aspectLocked
+              ? t('editor.imageToolbar.unlockAspect')
+              : t('editor.imageToolbar.lockAspect')
+          }
+          aria-pressed={aspectLocked}
+          className={cn(
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
+            aspectLocked && 'bg-[var(--accent-soft)] text-[var(--ink)]'
+          )}
+          onClick={toggleAspectLock}
+        >
+          {aspectLocked ? (
+            <HiOutlineLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+          ) : (
+            <HiOutlineLinkSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+      </Tooltip>
       <label className="inline-flex h-8 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]">
         <span className="text-[var(--muted)]">H</span>
         <input
@@ -812,7 +908,7 @@ export default function MultiSelectionToolbar({
   const actionCluster = (
     <>
       {opNodeIds.length >= 2 ? (
-        <Tooltip title="创建编组" placement="top">
+        <Tooltip tip="创建编组" placement="top">
           <button type="button" className={btn} aria-label="创建编组" onClick={createGroup}>
             <IconGroup className="h-3.5 w-3.5" />
             <span>创建编组</span>

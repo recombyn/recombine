@@ -1,4 +1,4 @@
-"""Scene / vision prompt overlays — prefer flow「提示词」nodes, DB table as fallback."""
+"""Prompt packs — single local seed ``design_prompt_packs_seed.json`` (need_* + system keys)."""
 from __future__ import annotations
 
 import json
@@ -38,6 +38,71 @@ def _load_prompt_packs_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
 
 
 KIND_LABELS, _SEED = _load_prompt_packs_seed()
+
+_SEED_BY_KIND: dict[str, dict[str, Any]] = {
+    str(item.get("kind") or "").strip(): item
+    for item in _SEED
+    if str(item.get("kind") or "").strip()
+}
+
+
+def db_prompt_body(key: str) -> str:
+    """Enabled body from ``design_prompt_pack`` (then legacy ``design_system_prompt``). No seed."""
+    kind = str(key or "").strip()
+    if not kind:
+        return ""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT body FROM design_prompt_pack
+            WHERE kind = ? AND COALESCE(enabled, 1) = 1
+            ORDER BY id ASC LIMIT 1
+            """,
+            (kind,),
+        ).fetchone()
+        body = str((row["body"] if row else "") or "").strip()
+        if body:
+            return body
+        try:
+            from services.design.system_prompt_store import is_system_prompt_key
+
+            if not is_system_prompt_key(kind):
+                return ""
+            row = conn.execute(
+                """
+                SELECT body FROM design_system_prompt
+                WHERE prompt_key = ? AND COALESCE(enabled, 1) = 1
+                """,
+                (kind,),
+            ).fetchone()
+            return str((row["body"] if row else "") or "").strip()
+        except Exception:
+            return ""
+
+
+def seed_prompt_body(key: str) -> str:
+    """Local bootstrap only — use when DB has no non-empty body for this key."""
+    item = _SEED_BY_KIND.get(str(key or "").strip())
+    if not item:
+        return ""
+    return str(item.get("body") or "").strip()
+
+
+def resolve_prompt_body(key: str, *, rules: dict[str, str] | None = None) -> str:
+    """DB / rules first; local seed only if both empty."""
+    k = str(key or "").strip()
+    if not k:
+        return ""
+    if rules is not None:
+        from services.design.rules_text import _rule_text
+
+        got = _rule_text(rules, k).strip()
+        if got:
+            return got
+    got = db_prompt_body(k)
+    if got:
+        return got
+    return seed_prompt_body(k)
 
 
 def _csv_has(csv: str, token: str) -> bool:
@@ -80,17 +145,8 @@ def _scenes_from_node(node: dict[str, Any], kind: str) -> str:
 
 
 def list_prompt_nodes_from_flow(*, graph: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Published / given graph: one bank node (promptPacks) or legacy prompt_* nodes."""
-    raw_graph = graph
-    if raw_graph is None:
-        try:
-            from services.design.admin_store import get_published_agent_flow
-
-            pub = get_published_agent_flow("default") or {}
-            g = pub.get("graph")
-            raw_graph = g if isinstance(g, dict) else {}
-        except Exception:
-            raw_graph = {}
+    """Legacy helper — Admin flowchart removed; only honor an explicit graph arg."""
+    raw_graph = graph if isinstance(graph, dict) else {}
     out: list[dict[str, Any]] = []
     for n in (raw_graph.get("nodes") or []):
         if not isinstance(n, dict):
@@ -124,6 +180,7 @@ def list_prompt_nodes_from_flow(*, graph: dict[str, Any] | None = None) -> list[
                     {
                         "id": 0,
                         "kind": k,
+                        "type": PACK_TYPE_NEED,
                         "title": title,
                         "body": body,
                         "whenToUse": when,
@@ -147,6 +204,7 @@ def list_prompt_nodes_from_flow(*, graph: dict[str, Any] | None = None) -> list[
             {
                 "id": 0,
                 "kind": kind,
+                "type": PACK_TYPE_NEED,
                 "title": title,
                 "body": body,
                 "whenToUse": when,
@@ -161,18 +219,93 @@ def list_prompt_nodes_from_flow(*, graph: dict[str, Any] | None = None) -> list[
     return out
 
 
-# Core packs always seeded into the agent flow. Scene-specific packs are obsolete —
-# the model self-analyzes type + media (vector vs image) via design_spec.
-_CORE_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
+# On-demand packs the model may request via need_prompts / empty-canvas preload.
+_NEED_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
+# Alias used by seed / overlay helpers.
+_CORE_PROMPT_KINDS = _NEED_PROMPT_KINDS
+
+PACK_TYPE_NEED = "need"
+PACK_TYPE_SYSTEM = "system"
+_PACK_TYPES = frozenset({PACK_TYPE_NEED, PACK_TYPE_SYSTEM})
+
+
+def normalize_pack_type(raw: Any, *, kind: str = "") -> str:
+    t = str(raw or "").strip().lower()
+    if t in _PACK_TYPES:
+        return t
+    try:
+        from services.design.system_prompt_store import is_system_prompt_key
+
+        if is_system_prompt_key(kind):
+            return PACK_TYPE_SYSTEM
+    except Exception:
+        pass
+    if str(kind or "").strip().lower() in _NEED_PROMPT_KINDS:
+        return PACK_TYPE_NEED
+    return PACK_TYPE_NEED if not t else PACK_TYPE_NEED
+
+
+# Retired scene-category packs (classification never covers all cases).
+_OBSOLETE_SCENE_KINDS = frozenset(
+    {
+        "website",
+        "mobile",
+        "poster",
+        "image",
+        "drawing",
+        "ecommerce",
+        "detail_page",
+        "rollup",
+        "banner",
+        "social",
+        "leaflet",
+        "card",
+    }
+)
+
+
+def is_need_prompt_kind(kind: str) -> bool:
+    return str(kind or "").strip().lower() in _NEED_PROMPT_KINDS
+
+
+def is_need_pack(row: dict[str, Any]) -> bool:
+    """Prefer pack ``type`` code; fall back to legacy kind allowlist."""
+    t = str(row.get("type") or row.get("pack_type") or "").strip().lower()
+    if t:
+        return t == PACK_TYPE_NEED
+    return is_need_prompt_kind(str(row.get("kind") or ""))
+
+
+def _pub(r: Any) -> dict[str, Any]:
+    kind = str(r["kind"] or "")
+    raw_type = ""
+    try:
+        raw_type = str(r["pack_type"] or "")
+    except Exception:
+        raw_type = ""
+    pack_type = normalize_pack_type(raw_type, kind=kind)
+    return {
+        "id": int(r["id"]),
+        "kind": kind,
+        "type": pack_type,
+        "title": str(r["title"] or ""),
+        "body": str(r["body"] or ""),
+        "whenToUse": str(r["when_to_use"] or ""),
+        "scenes": str(r["scenes"] or "all"),
+        "sortOrder": int(r["sort_order"] or 0),
+        "enabled": bool(int(r["enabled"] or 0)),
+        "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
+    }
 
 
 def seed_prompt_overlay_nodes(*, x0: float = 2280, y0: float = 80, dy: float = 140) -> list[dict[str, Any]]:
-    """Seed only core methodology / vision / aesthetics prompt nodes."""
+    """Seed only need_* methodology / vision / aesthetics prompt nodes."""
     out: list[dict[str, Any]] = []
     i = 0
     for item in _SEED:
         kind = str(item.get("kind") or "").strip()
-        if kind not in _CORE_PROMPT_KINDS:
+        pack_type = normalize_pack_type(item.get("type"), kind=kind)
+        if pack_type != PACK_TYPE_NEED:
             continue
         title = str(item.get("title") or KIND_LABELS.get(kind, kind))
         when = str(item.get("when_to_use") or "")
@@ -206,7 +339,7 @@ def seed_prompt_bank_node(*, x: float = 2280, y: float = 400) -> dict[str, Any]:
     packs: dict[str, Any] = {}
     for item in _SEED:
         kind = str(item.get("kind") or "").strip()
-        if not kind:
+        if normalize_pack_type(item.get("type"), kind=kind) != PACK_TYPE_NEED:
             continue
         packs[kind] = {
             "title": str(item.get("title") or KIND_LABELS.get(kind, kind)),
@@ -230,75 +363,213 @@ def seed_prompt_bank_node(*, x: float = 2280, y: float = 400) -> dict[str, Any]:
     }
 
 
-def _pub(r: Any) -> dict[str, Any]:
-    return {
-        "id": int(r["id"]),
-        "kind": str(r["kind"] or ""),
-        "title": str(r["title"] or ""),
-        "body": str(r["body"] or ""),
-        "whenToUse": str(r["when_to_use"] or ""),
-        "scenes": str(r["scenes"] or "all"),
-        "sortOrder": int(r["sort_order"] or 0),
-        "enabled": bool(int(r["enabled"] or 0)),
-        "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
+def _prune_prompt_packs_to_seed(conn: Any, *, now: float) -> None:
+    """Drop obsolete scene packs; ensure one seed row per need_* kind (no wipe of system keys)."""
+    del now
+    if _OBSOLETE_SCENE_KINDS:
+        ph = ",".join("?" for _ in _OBSOLETE_SCENE_KINDS)
+        conn.execute(
+            f"DELETE FROM design_prompt_pack WHERE kind IN ({ph})",
+            tuple(sorted(_OBSOLETE_SCENE_KINDS)),
+        )
+
+    seed_by_kind = {
+        str(item.get("kind") or "").strip(): item
+        for item in _SEED
+        if str(item.get("kind") or "").strip() in _NEED_PROMPT_KINDS
     }
+    for kind, item in seed_by_kind.items():
+        rows = conn.execute(
+            "SELECT id, title, body FROM design_prompt_pack WHERE kind = ? ORDER BY id ASC",
+            (kind,),
+        ).fetchall()
+        seed_title = str(item.get("title") or KIND_LABELS.get(kind, kind))
+        if not rows:
+            pack_type = normalize_pack_type(item.get("type"), kind=kind)
+            conn.execute(
+                """
+                INSERT INTO design_prompt_pack
+                (kind, pack_type, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    kind,
+                    pack_type,
+                    seed_title,
+                    str(item.get("body") or ""),
+                    str(item.get("when_to_use") or ""),
+                    str(item.get("scenes") or "all"),
+                    int(item.get("sort_order") or 0),
+                    time.time(),
+                    time.time(),
+                ),
+            )
+            continue
+        # Keep one row; ensure pack_type = need for these kinds.
+        keep_id: int | None = None
+        for row in rows:
+            if str(row["title"] or "") == seed_title:
+                keep_id = int(row["id"])
+                break
+        if keep_id is None:
+            keep_id = int(max(rows, key=lambda r: len(str(r["body"] or "")))["id"])
+        for row in rows:
+            rid = int(row["id"])
+            if rid != keep_id:
+                conn.execute("DELETE FROM design_prompt_pack WHERE id = ?", (rid,))
+        conn.execute(
+            "UPDATE design_prompt_pack SET pack_type = ? WHERE id = ?",
+            (PACK_TYPE_NEED, keep_id),
+        )
+
+
+def _sync_system_prompts_into_packs(conn: Any, *, now: float) -> None:
+    """One-way migrate design_system_prompt → packs (kind = prompt_key). Skip existing kinds."""
+    try:
+        rows = conn.execute(
+            """
+            SELECT prompt_key, label, body, description, sort_order, enabled
+            FROM design_system_prompt
+            """
+        ).fetchall()
+    except Exception:
+        return
+    existing = {
+        str(r["kind"] or "")
+        for r in conn.execute("SELECT kind FROM design_prompt_pack").fetchall()
+    }
+    for row in rows:
+        key = str(row["prompt_key"] or "").strip()
+        if not key or key in existing:
+            continue
+        title = str(row["label"] or "").strip() or key
+        body = str(row["body"] or "")
+        when = str(row["description"] or "").strip()
+        sort_order = int(row["sort_order"] or 0)
+        enabled = 1 if int(row["enabled"] or 0) else 0
+        conn.execute(
+            """
+            INSERT INTO design_prompt_pack
+            (kind, pack_type, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'all', ?, ?, ?, ?)
+            """,
+            (key, PACK_TYPE_SYSTEM, title, body, when, sort_order, enabled, now, now),
+        )
+        existing.add(key)
 
 
 def ensure_design_prompt_packs() -> None:
-    """Insert missing seed rows into design_prompt_pack (fallback only)."""
+    """Seed all packs from design_prompt_packs_seed.json; prune scene junk; migrate legacy table."""
     global _PACKS_READY
-    if _PACKS_READY:
-        return
+    now = time.time()
     with _PACKS_LOCK:
-        if _PACKS_READY:
-            return
-        now = time.time()
         with connect() as conn:
-            existing_keys = {
-                (str(r["kind"] or ""), str(r["title"] or ""))
-                for r in conn.execute(
-                    "SELECT kind, title FROM design_prompt_pack"
-                ).fetchall()
+            try:
+                from services.design.schema import (
+                    _ensure_prompt_pack_kind_width,
+                    _ensure_prompt_pack_type_column,
+                )
+                from services.db import dialect
+
+                mysql = dialect() == "mysql"
+                _ensure_prompt_pack_kind_width(conn, mysql=mysql)
+                _ensure_prompt_pack_type_column(conn, mysql=mysql)
+            except Exception:
+                pass
+            _prune_prompt_packs_to_seed(conn, now=now)
+            _sync_system_prompts_into_packs(conn, now=now)
+            existing_kinds = {
+                str(r["kind"] or "").strip()
+                for r in conn.execute("SELECT kind FROM design_prompt_pack").fetchall()
             }
             for item in _SEED:
-                kind = str(item["kind"])
-                title = str(item["title"])
-                if (kind, title) in existing_keys:
+                kind = str(item.get("kind") or "").strip()
+                if not kind or kind in existing_kinds:
                     continue
+                title = str(item.get("title") or KIND_LABELS.get(kind, kind)).strip() or kind
+                pack_type = normalize_pack_type(item.get("type"), kind=kind)
                 conn.execute(
                     """
                     INSERT INTO design_prompt_pack
-                    (kind, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    (kind, pack_type, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         kind,
+                        pack_type,
                         title,
-                        str(item["body"]),
-                        item.get("when_to_use") or "",
-                        item.get("scenes") or "all",
+                        str(item.get("body") or ""),
+                        str(item.get("when_to_use") or ""),
+                        str(item.get("scenes") or "all"),
                         int(item.get("sort_order") or 0),
                         now,
                         now,
                     ),
                 )
-                existing_keys.add((kind, title))
+                existing_kinds.add(kind)
+            # Backfill empty pack_type from seed / kind inference (never overwrite Admin-set values).
+            for row in conn.execute(
+                "SELECT id, kind, pack_type FROM design_prompt_pack"
+            ).fetchall():
+                cur = str(row["pack_type"] or "").strip().lower()
+                if cur in _PACK_TYPES:
+                    continue
+                kind = str(row["kind"] or "")
+                seed_item = _SEED_BY_KIND.get(kind) or {}
+                nxt = normalize_pack_type(seed_item.get("type"), kind=kind)
+                conn.execute(
+                    "UPDATE design_prompt_pack SET pack_type = ? WHERE id = ?",
+                    (nxt, int(row["id"])),
+                )
             conn.commit()
         _PACKS_READY = True
+
+
+def list_prompt_pack_bodies_for_system(*, ensure: bool = True) -> dict[str, str]:
+    """Packs whose kind is a system prompt key → body (Admin 提示词包 is source of truth)."""
+    if ensure:
+        ensure_design_prompt_packs()
+    from services.design.system_prompt_store import is_system_prompt_key
+
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT kind, body FROM design_prompt_pack
+            WHERE COALESCE(enabled, 1) = 1
+            """
+        ).fetchall()
+    out: dict[str, str] = {}
+    for r in rows:
+        kind = str(r["kind"] or "").strip()
+        if not is_system_prompt_key(kind):
+            continue
+        out[kind] = str(r["body"] or "")
+    return out
 
 
 def list_prompt_packs(
     *,
     kind: str | None = None,
+    pack_type: str | None = None,
     enabled: bool | None = True,
     ensure: bool = True,
 ) -> list[dict[str, Any]]:
-    """Prefer flow 提示词节点; else DB table."""
+    """Prefer flow 提示词节点; else DB table. ``pack_type`` filters by code (need|system)."""
+    type_filter = str(pack_type or "").strip().lower() or None
+    if type_filter and type_filter not in _PACK_TYPES:
+        type_filter = None
     flow_rows = list_prompt_nodes_from_flow()
     if flow_rows:
         rows = flow_rows
         if kind:
             rows = [r for r in rows if r["kind"] == kind]
+        if type_filter:
+            rows = [
+                r
+                for r in rows
+                if normalize_pack_type(r.get("type"), kind=str(r.get("kind") or ""))
+                == type_filter
+            ]
         if enabled is False:
             return []
         return rows
@@ -310,6 +581,9 @@ def list_prompt_packs(
     if kind:
         clauses.append("kind = ?")
         params.append(kind)
+    if type_filter:
+        clauses.append("pack_type = ?")
+        params.append(type_filter)
     if enabled is not None:
         clauses.append("enabled = ?")
         params.append(1 if enabled else 0)
@@ -327,7 +601,7 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
     ensure_design_prompt_packs()
     now = time.time()
     kid = payload.get("id")
-    kind = str(payload.get("kind") or "").strip()[:32]
+    kind = str(payload.get("kind") or "").strip()[:128]
     title = str(payload.get("title") or "").strip()[:128]
     body = str(payload.get("body") or "").strip()
     if not kind or not title or not body:
@@ -336,14 +610,29 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
     scenes = str(payload.get("scenes") or "all").strip()[:128] or "all"
     sort_order = int(payload.get("sortOrder") or payload.get("sort_order") or 0)
     enabled = 1 if payload.get("enabled", True) else 0
+    pack_type = normalize_pack_type(
+        payload.get("type") or payload.get("pack_type") or payload.get("packType"),
+        kind=kind,
+    )
     with connect() as conn:
         if kid:
             conn.execute(
                 """
-                UPDATE design_prompt_pack SET kind=?, title=?, body=?, when_to_use=?, scenes=?,
+                UPDATE design_prompt_pack SET kind=?, pack_type=?, title=?, body=?, when_to_use=?, scenes=?,
                 sort_order=?, enabled=?, updated_at=? WHERE id=?
                 """,
-                (kind, title, body, when, scenes, sort_order, enabled, now, int(kid)),
+                (
+                    kind,
+                    pack_type,
+                    title,
+                    body,
+                    when,
+                    scenes,
+                    sort_order,
+                    enabled,
+                    now,
+                    int(kid),
+                ),
             )
             conn.commit()
             row = conn.execute(
@@ -353,10 +642,21 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
             cur = conn.execute(
                 """
                 INSERT INTO design_prompt_pack
-                (kind, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (kind, pack_type, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (kind, title, body, when, scenes, sort_order, enabled, now, now),
+                (
+                    kind,
+                    pack_type,
+                    title,
+                    body,
+                    when,
+                    scenes,
+                    sort_order,
+                    enabled,
+                    now,
+                    now,
+                ),
             )
             conn.commit()
             new_id = int(cur.lastrowid)
@@ -365,16 +665,35 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
             ).fetchone()
     if not row:
         raise ValueError("upsert failed")
+    # Mirror system keys so legacy design_system_prompt readers stay in sync.
+    try:
+        from services.design.system_prompt_store import (
+            is_system_prompt_key,
+            upsert_system_prompt,
+        )
+
+        if is_system_prompt_key(kind) or pack_type == PACK_TYPE_SYSTEM:
+            upsert_system_prompt(
+                key=kind,
+                body=body,
+                label=title,
+                description=when or None,
+                sort_order=sort_order,
+                enabled=bool(enabled),
+            )
+    except Exception:
+        pass
     return _pub(row)
 
 
 def soft_delete_prompt_pack(item_id: int) -> bool:
+    """Hard-delete a prompt pack row (Admin「删除」)."""
     ensure_design_catalog()
     ensure_design_prompt_packs()
     with connect() as conn:
         cur = conn.execute(
-            "UPDATE design_prompt_pack SET enabled=0, updated_at=? WHERE id=?",
-            (time.time(), int(item_id)),
+            "DELETE FROM design_prompt_pack WHERE id=?",
+            (int(item_id),),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -400,10 +719,9 @@ def format_prompt_pack_block(rows: list[dict[str, Any]]) -> str:
 
 def format_prompt_packs_catalog(*, scene: str = "website") -> str:
     scene_l = str(scene or "website").strip().lower() or "website"
-    rows = list_prompt_packs(enabled=True, ensure=True)
+    rows = list_prompt_packs(enabled=True, pack_type=PACK_TYPE_NEED, ensure=True)
     lines: list[str] = [
-        "提示词节点目录（用 need_prompts: [\"design_spec\", \"vision\", …] 申请正文；"
-        "正文来自流程图 kind=prompt 节点）："
+        "提示词包目录（用 need_prompts: [\"design_spec\", \"vision\", \"aesthetics\"] 申请正文）："
     ]
     seen_kind: set[str] = set()
     for r in rows:
@@ -421,10 +739,10 @@ def format_prompt_packs_catalog(*, scene: str = "website") -> str:
         if when:
             line += f"（{when[:64]}）"
         lines.append(line)
-        if len(lines) >= 24:
+        if len(lines) >= 12:
             break
     if len(lines) == 1:
-        lines.append("（本场景暂无提示词节点：请在流程设计里添加 kind=提示词 节点）")
+        lines.append("（暂无按需提示词包：请在 Admin「提示词包」维护 type=need）")
     return "\n".join(lines)
 
 
@@ -475,10 +793,18 @@ def format_prompt_packs_details(*, kinds: list[str], scene: str = "website") -> 
     }
     rows: list[dict[str, Any]] = []
     seen_kinds: set[str] = set()
-    source = list_prompt_packs(enabled=True, ensure=True)
+    source = list_prompt_packs(
+        enabled=True,
+        pack_type=PACK_TYPE_NEED if load_all else None,
+        ensure=True,
+    )
     for r in source:
         kind = str(r.get("kind") or "").strip().lower()
-        if not load_all and kind not in wanted_norm:
+        if not is_need_pack(r):
+            continue
+        if load_all:
+            pass
+        elif kind not in wanted_norm:
             continue
         scenes = str(r.get("scenes") or "all")
         if not (_csv_has(scenes, scene_l) or _csv_has(scenes, "all")):

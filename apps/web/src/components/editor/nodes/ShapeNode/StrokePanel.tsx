@@ -513,7 +513,7 @@ export function StrokePanelPopover({
 
   return (
     <>
-      <Tooltip title={title} placement="top" disabled={open || !title}>
+      <Tooltip tip={title} placement="top" disabled={open || !title}>
         <button
           type="button"
           ref={refs.setReference}

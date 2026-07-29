@@ -34,10 +34,6 @@ apps/api/
 
 | 文件 | 用途 |
 |------|------|
-| `agent_flow_default_graph.json` | 默认 Agent 流程图（节点 / 边） |
-| `agent_flow_phase_map.json` | phase → 节点映射（复盘高亮） |
-| `agent_flow_node_templates.json` | 流程设计器左侧节点调色板 |
-| `agent_flow_action_contracts.json` | 阶段 / 节点动作契约（Inspector 绑定） |
 | `canvas_actions_seed.json` | 画布工具 op（`design_canvas_tool` 冷启动种子） |
 | `stage_rule_defaults.json` | 全局规则默认值与描述（提示词 key、开关等） |
 | `design_knowledge_seed.json` | 设计知识库种子（kind 标签 + 条目） |

@@ -1,7 +1,7 @@
 """Design Agent LangGraph controller.
 
-Published Admin flow is the runtime graph. Host: hold ? bootstrap ? flow nodes
-? settle. Intent chat|ask|done|edit|create drives edges; tools = canvas tool_ops.
+Fixed LangGraph: bootstrap → memory → intent → create_agent → action/propose → settle.
+Canvas tool_ops from LangChain tools; Admin flowchart no longer drives runtime.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from services.design.decision_log import DesignRunDecision
 from services.design.llm_step import stream_skill_step
 from services.design.models_route import (
     clamp_tier,
+    classify_user_intent,
     enabled_tiers,
     estimate_task_tier,
     resolve_model_for_skill,
@@ -93,6 +94,10 @@ class AgentTurnSchema(BaseModel):
     choices: list[Any] = Field(default_factory=list)
     apply_choice: str = ""
     applyChoice: str = ""
+    # Ask interaction format — AI fills labels; runtime only validates shape.
+    choice_ui: Any = None
+    choiceUi: Any = None
+    ask_ui: Any = None
     done: bool | None = None
     needTools: list[Any] = Field(default_factory=list)
     needKnowledge: list[Any] = Field(default_factory=list)
@@ -131,6 +136,7 @@ def _thought_chat_prompt():
             ("system", "{system}"),
             (
                 "human",
+                "{recent_dialogue}"
                 "USER_PROMPT:\n{prompt}\n\n"
                 "CANVAS_SIZE: {canvas_size}\n\n"
                 "SCENE: {scene}\n\n"
@@ -145,19 +151,17 @@ def _thought_chat_prompt():
     )
 
 
-# Fallback only if Admin + seed both empty (normal path: agent.prompt.need_tools_overlay).
-_NEED_TOOLS_OVERLAY_FALLBACK = (
-    "DEFER_RESOURCES：完整工具 schema、提示词包、美学参考不在 system 中。"
-    "短目录只列出你可以申请的内容。按需设置 need_tools / need_prompts / need_aesthetics。"
-)
-
-
 def _prompt_text(rules: dict[str, str] | None, key: str) -> str:
-    """Admin design_global_rule first; STAGE_RULE_DEFAULTS only if DB row empty."""
-    got = _rule_text(rules, key).strip()
-    if got:
-        return got
-    return str(STAGE_RULE_DEFAULTS.get(key) or "").strip()
+    """Prefer Admin/DB (via rules or pack table); local seed only if DB empty."""
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        return resolve_prompt_body(key, rules=rules)
+    except Exception:
+        got = _rule_text(rules, key).strip()
+        if got:
+            return got
+        return str(STAGE_RULE_DEFAULTS.get(key) or "").strip()
 
 
 def _model_display_label(model_id: str) -> str:
@@ -205,10 +209,12 @@ class AgentRunState:
     reply: str = ""
     # Quick-reply chips for ask mode (surfaced in result.choices).
     choices: list[str] = field(default_factory=list)
-    # Ask mode: validated ops held until user picks apply_choice (model-named).
+    # Ask mode: validated ops held until user picks apply action.
     proposed_ops: list[dict[str, Any]] = field(default_factory=list)
-    # Ask mode: which choices[] label applies proposed_ops (from model JSON).
+    # Ask mode: label of the apply option (compat + typed confirm).
     apply_choice: str = ""
+    # Ask interaction UI from model: {mode, options:[{label, action}]}.
+    choice_ui: dict[str, Any] | None = None
     errors: list[str] = field(default_factory=list)
     applied_ops: list[dict[str, Any]] = field(default_factory=list)
     reflect_left: int = 1
@@ -564,6 +570,47 @@ def _ops_payload_nonempty(raw: Any) -> bool:
         inner = raw.get("ops") or raw.get("tool_ops")
         return isinstance(inner, list) and bool(inner)
     return False
+
+
+def _has_pending_resource_details(rt: Any) -> bool:
+    """True when tool/knowledge/prompt/aesthetics details were injected this run."""
+    return bool(
+        str(getattr(rt, "pending_tool_details", "") or "").strip()
+        or str(getattr(rt, "pending_knowledge_details", "") or "").strip()
+        or str(getattr(rt, "pending_prompt_details", "") or "").strip()
+        or str(getattr(rt, "pending_aesthetics_details", "") or "").strip()
+    )
+
+
+def _should_recover_edit_after_resources(
+    *,
+    prior_intent: str,
+    intent: str,
+    has_ops: bool,
+    has_pending_resources: bool,
+) -> bool:
+    """After TOOL_DETAILS etc., model must not drop edit/create into bare chat."""
+    if has_ops or not has_pending_resources:
+        return False
+    if prior_intent not in ("edit", "create"):
+        return False
+    return intent in ("chat", "ask", "done")
+
+
+def _chat_fallback_text(rt: Any) -> str:
+    """Render agent.prompt.chat_fallback with persona + prompt slots filled."""
+    tmpl = str(getattr(rt, "chat_fallback_tmpl", "") or "").strip()
+    if not tmpl:
+        return ""
+    persona = str(getattr(rt, "persona", "") or "").strip() or "设计助手"
+    prompt = str(getattr(rt, "prompt", "") or "")[:80]
+    return render_prompt_template(tmpl, persona=persona, prompt=prompt)
+
+
+def _clear_ask_choice_state(st: AgentRunState) -> None:
+    st.choices = []
+    st.choice_ui = None
+    st.apply_choice = ""
 
 
 async def _stream_llm_text(
@@ -1088,6 +1135,175 @@ async def _gather_deferred_resource_details(
     return out
 
 
+_ASK_CHOICE_MODES = frozenset({"confirm", "single", "multi", "buttons", "text"})
+_ASK_CHOICE_ACTIONS = frozenset({"apply", "reply", "dismiss"})
+
+
+def _normalize_choice_option(raw: Any) -> dict[str, str] | None:
+    """One option: label (AI text) + action (format enum)."""
+    if isinstance(raw, str):
+        label = raw.strip()[:48]
+        if not label:
+            return None
+        return {"label": label, "action": "reply"}
+    if not isinstance(raw, dict):
+        return None
+    label = _as_text(
+        raw.get("label") or raw.get("text") or raw.get("title") or raw.get("id")
+    ).strip()[:48]
+    action = _as_text(raw.get("action") or raw.get("role") or "reply").strip().lower()
+    if action in ("cancel", "close", "reject"):
+        action = "dismiss"
+    if action in ("ok", "confirm", "execute", "paint"):
+        action = "apply"
+    if action not in _ASK_CHOICE_ACTIONS:
+        action = "reply"
+    # apply/dismiss may omit label — FE fills i18n chrome.
+    if not label and action == "reply":
+        return None
+    return {"label": label, "action": action}
+
+
+def _normalize_choice_ui(
+    raw: Any,
+    *,
+    legacy_choices: list[str] | None = None,
+    legacy_apply: str = "",
+) -> dict[str, Any] | None:
+    """Validate Ask choice format. Content labels stay model-authored."""
+    mode = ""
+    options_raw: list[Any] = []
+    placeholder = ""
+    if isinstance(raw, dict):
+        mode = _as_text(raw.get("mode") or raw.get("type") or "").strip().lower()
+        if mode in ("freeform", "free_text", "input", "textarea"):
+            mode = "text"
+        options_raw = list(raw.get("options") or raw.get("items") or raw.get("choices") or [])
+        placeholder = _as_text(
+            raw.get("placeholder") or raw.get("hint") or raw.get("prompt")
+        ).strip()[:120]
+    elif isinstance(raw, list):
+        options_raw = list(raw)
+    if not options_raw and legacy_choices:
+        options_raw = list(legacy_choices)
+    options: list[dict[str, str]] = []
+    for item in options_raw[:8]:
+        opt = _normalize_choice_option(item)
+        if not opt:
+            continue
+        options.append(opt)
+    apply_label = _as_text(legacy_apply).strip()[:48]
+    if apply_label:
+        matched = False
+        for opt in options:
+            if opt["label"] == apply_label:
+                opt["action"] = "apply"
+                matched = True
+                break
+        if not matched:
+            options.insert(0, {"label": apply_label, "action": "apply"})
+    # text mode is valid with zero options (user types freeform).
+    if not options and mode != "text":
+        return None
+    if mode not in _ASK_CHOICE_MODES:
+        # Infer mode from actions — still format, not content keywords.
+        actions = {o["action"] for o in options}
+        if actions <= {"apply", "dismiss"}:
+            mode = "confirm"
+        elif "apply" in actions:
+            mode = "buttons"
+        else:
+            mode = "single"
+    # Dedupe by label+action, keep order.
+    seen: set[tuple[str, str]] = set()
+    uniq: list[dict[str, str]] = []
+    for opt in options:
+        key = (opt["label"], opt["action"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(opt)
+    out: dict[str, Any] = {"mode": mode, "options": uniq[:8]}
+    if placeholder:
+        out["placeholder"] = placeholder
+    return out
+
+
+def _choice_ui_sync_compat(st: AgentRunState) -> None:
+    """Keep choices[] / apply_choice in sync for older SSE clients."""
+    ui = st.choice_ui if isinstance(st.choice_ui, dict) else None
+    if not ui:
+        return
+    opts = [o for o in (ui.get("options") or []) if isinstance(o, dict)]
+    st.choices = [str(o.get("label") or "").strip() for o in opts if str(o.get("label") or "").strip()][:6]
+    apply = next(
+        (
+            str(o.get("label") or "").strip()
+            for o in opts
+            if str(o.get("action") or "") == "apply" and str(o.get("label") or "").strip()
+        ),
+        "",
+    )
+    if apply:
+        st.apply_choice = apply[:48]
+
+
+def _absorb_ask_choices(st: AgentRunState, turn: dict[str, Any]) -> None:
+    """Persist Ask choice_ui from the model turn (create|edit propose included)."""
+    legacy_choices = list(turn.get("choices") or [])[:6]
+    legacy_apply = _as_text(turn.get("apply_choice")).strip()
+    raw_ui = turn.get("choice_ui")
+    ui = _normalize_choice_ui(
+        raw_ui,
+        legacy_choices=legacy_choices,
+        legacy_apply=legacy_apply,
+    )
+    st.choice_ui = ui
+    if ui:
+        _choice_ui_sync_compat(st)
+        return
+    st.choices = legacy_choices
+    if legacy_apply:
+        st.apply_choice = legacy_apply[:48]
+        if legacy_apply not in st.choices:
+            st.choices = [legacy_apply] + [c for c in st.choices if c != legacy_apply]
+            st.choices = st.choices[:6]
+
+
+def _ensure_propose_choice_ui(st: AgentRunState) -> dict[str, Any]:
+    """Propose must expose format-valid choice_ui; do not invent question content."""
+    ui = _normalize_choice_ui(
+        st.choice_ui,
+        legacy_choices=list(st.choices),
+        legacy_apply=st.apply_choice,
+    )
+    if not ui:
+        # Structural chrome only — empty labels → FE i18n for confirm/cancel.
+        ui = {
+            "mode": "confirm",
+            "options": [
+                {"label": "", "action": "apply"},
+                {"label": "", "action": "dismiss"},
+            ],
+        }
+    elif not any(str(o.get("action") or "") == "apply" for o in ui.get("options") or []):
+        # Ops ready but no apply action — keep mode (incl. text); add format slot.
+        opts = list(ui.get("options") or [])
+        opts.insert(0, {"label": "", "action": "apply"})
+        ui = {**ui, "options": opts[:8]}
+    st.choice_ui = ui
+    _choice_ui_sync_compat(st)
+    return ui
+
+
+def _ask_propose_user_text(*, model_reply: str, detail: str) -> str:
+    """User-facing propose copy. Do not append ops-detail lines (looks like already painted)."""
+    reply = (model_reply or "").strip()
+    if reply:
+        return reply
+    return (detail or "").strip()
+
+
 def _parse_agent_turn(content: str) -> dict[str, Any]:
     """LangChain structured parse ? normalized turn dict for graph flags."""
     obj: dict[str, Any] = {}
@@ -1111,12 +1327,35 @@ def _parse_agent_turn(content: str) -> dict[str, Any]:
     raw_choices = obj.get("choices")
     if isinstance(raw_choices, list):
         for c in raw_choices:
-            text = _as_text(c).strip()
+            if isinstance(c, dict):
+                text = _as_text(c.get("label") or c.get("text") or "").strip()
+            else:
+                text = _as_text(c).strip()
             if text and text not in choices:
-                choices.append(text[:24])
+                choices.append(text[:48])
             if len(choices) >= 6:
                 break
-    apply_choice = _as_text(obj.get("apply_choice") or obj.get("applyChoice")).strip()[:24]
+    apply_choice = _as_text(obj.get("apply_choice") or obj.get("applyChoice")).strip()[:48]
+    choice_ui = _normalize_choice_ui(
+        obj.get("choice_ui") or obj.get("choiceUi") or obj.get("ask_ui"),
+        legacy_choices=choices,
+        legacy_apply=apply_choice,
+    )
+    if choice_ui:
+        choices = [
+            str(o.get("label") or "").strip()
+            for o in choice_ui.get("options") or []
+            if str(o.get("label") or "").strip()
+        ][:6]
+        apply_choice = next(
+            (
+                str(o.get("label") or "").strip()
+                for o in choice_ui.get("options") or []
+                if str(o.get("action") or "") == "apply"
+                and str(o.get("label") or "").strip()
+            ),
+            apply_choice,
+        )
     need_tools = normalize_need_tools(
         obj.get("need_tools") or obj.get("needTools") or obj.get("tools_needed")
     )
@@ -1148,6 +1387,7 @@ def _parse_agent_turn(content: str) -> dict[str, Any]:
         "use_user_refs": use_user_refs,
         "choices": choices,
         "apply_choice": apply_choice,
+        "choice_ui": choice_ui,
         "done": bool(done),
         "raw_obj": obj,
     }
@@ -1168,7 +1408,10 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
     pending_parts: list[str] = []
     if rt.pending_tool_details:
         pending_parts.append(rt.pending_tool_details)
-        pending_parts.append("以上 TOOL_DETAILS 为准。现在输出 tool_ops；将 need_tools 设为 []。")
+        pending_parts.append(
+            "以上 TOOL_DETAILS 为准。现在必须输出 tool_ops（intent 保持 edit/create）；"
+            "将 need_tools 设为 []。禁止改回 intent=chat / ask，禁止空 ops 寒暄。"
+        )
     if rt.pending_knowledge_details:
         pending_parts.append(rt.pending_knowledge_details)
         pending_parts.append(
@@ -1195,6 +1438,23 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
             + "\n\n"
         )
     memory_block = f"MEMORY:\n{rt.mem_blocks[:4000]}\n\n" if rt.mem_blocks else ""
+    recent_dialogue = ""
+    if rt.mem_short:
+        dial_lines: list[str] = []
+        for t in list(rt.mem_short)[-8:]:
+            if not isinstance(t, dict):
+                continue
+            role = "User" if str(t.get("role") or "") == "user" else "Assistant"
+            text = _as_text(t.get("text") or t.get("content")).strip()
+            if not text:
+                continue
+            dial_lines.append(f"{role}: {text[:400]}")
+        if dial_lines:
+            recent_dialogue = (
+                "RECENT_DIALOGUE (continue this thread; do not re-greet):\n"
+                + "\n".join(dial_lines)
+                + "\n\n"
+            )
     error_parts: list[str] = []
     if st.errors:
         trail = "\n".join(f"- {e}" for e in st.errors[-5:])
@@ -1222,6 +1482,7 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
         ),
         "pending_blocks": pending_blocks,
         "plan_block": plan_block,
+        "recent_dialogue": recent_dialogue,
         "memory_block": memory_block,
         "error_block": error_block,
         "edit_context": edit_context,
@@ -1379,6 +1640,7 @@ class AgentRuntime:
     size_auto_hint: str = ""
     unsafe_ops_tmpl: str = ""
     chat_fallback_tmpl: str = ""
+    persona: str = ""
     defer_tools: bool = True
     max_rounds: int = _DEFAULT_MAX_ROUNDS
     dual_on: bool = False
@@ -1412,6 +1674,9 @@ class AgentRuntime:
     node_by_id: dict[str, Any] = field(default_factory=dict)
     outgoing: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     phase_to_id: dict[str, str] = field(default_factory=dict)
+    # Upstream intent gate (intent_classify); empty when node absent/skipped.
+    classified_intent: str = ""
+    classified_reply: str = ""
 
 
 class GraphState(TypedDict):
@@ -1423,201 +1688,23 @@ def _bump(rt: AgentRuntime) -> dict[str, Any]:
     return {"rt": rt, "tick": int(rt.run.round) + len(rt.run.log)}
 
 
-def _bind_published_flow(rt: AgentRuntime, published: dict[str, Any] | None) -> None:
-    """Attach published graph topology onto runtime for edge routing."""
-    pub = published or {}
-    graph = pub.get("graph") if isinstance(pub.get("graph"), dict) else {}
-    nodes = [n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")]
-    edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
-    node_by_id = {str(n["id"]): n for n in nodes}
-    outgoing: dict[str, list[dict[str, Any]]] = {}
-    for e in edges:
-        src = str(e.get("source") or "")
-        if src in node_by_id:
-            outgoing.setdefault(src, []).append(e)
-    phase_to_id: dict[str, str] = {}
-    for n in nodes:
-        pk = str(n.get("phaseKey") or "").strip()
-        if pk and pk not in phase_to_id:
-            phase_to_id[pk] = str(n["id"])
-    # Also honor Admin phaseMap (phase ? node id)
-    for pk, nid in (pub.get("phaseMap") or {}).items():
-        k, v = str(pk).strip(), str(nid).strip()
-        if k and v and v in node_by_id:
-            phase_to_id[k] = v
-    rt.flow_id = str(pub.get("id") or "default")
-    rt.flow_version = int(pub.get("version") or 0)
-    rt.node_by_id = node_by_id
-    rt.outgoing = outgoing
-    rt.phase_to_id = phase_to_id
-    rt.run.flow_id = rt.flow_id
-    rt.run.flow_version = rt.flow_version
-
-
-def _route_flags_snapshot(flags: dict[str, Any]) -> dict[str, Any]:
-    """Compact flags that usually decide edges (for 运行复盘)."""
-    keys = (
-        "mode",
-        "intent",
-        "short_plan_on",
-        "need_tools",
-        "need_knowledge",
-        "need_prompts",
-        "need_aesthetics",
-        "has_ops",
-        "ops_valid",
-        "ops_invalid",
-        "await_user",
-        "await_confirm",
-        "llm_call",
-        "plan_done",
-        "ok",
-        "op_failed",
-        "scene_ready",
-        "verify_ok",
-        "verify_fail",
-        "patch_too_broad",
-        "patch_scoped",
-        "slot_missing",
-        "no_ops",
-        "retry",
-        "reflect_left",
-        "no_reflect",
-        "fatal",
-        "ready",
-        "fetched",
-        "wait_scene",
-    )
-    out: dict[str, Any] = {}
-    for k in keys:
-        v = flags.get(k)
-        if v is None or v is False or v == "" or v == 0:
-            continue
-        out[k] = v
-    return out
-
-
-def _route_next_id(rt: AgentRuntime, node_id: str) -> str:
-    from services.design.flow_runtime import choose_outgoing_edges
-
-    nid = str(node_id or "").strip()
-    node = rt.node_by_id.get(nid) or {"id": nid, "kind": ""}
-    outs, edge_detail = choose_outgoing_edges(
-        node=node,
-        edges=list(rt.outgoing.get(nid) or []),
-        ctx=rt.flags,
-    )
-    from_phase = _phase_key(rt, nid) if nid else ""
-    if not outs:
-        next_id = "__settle__"
-        via = "settle"
-        tgt = next_id
-        to_phase = "settle"
-    else:
-        tgt = str(outs[0].get("target") or "").strip()
-        if not tgt:
-            next_id = "__settle__"
-            via = str(edge_detail.get("via") or "settle")
-            to_phase = "settle"
-        else:
-            meta = rt.node_by_id.get(tgt) or {}
-            kind = str(meta.get("kind") or "").lower()
-            phase = str(meta.get("phaseKey") or "").lower()
-            if kind == "end" or phase == "end":
-                # Visit flowchart 终点 node (handler=_node_settle); do not skip to __settle__.
-                next_id = tgt if tgt in rt.node_by_id else "__settle__"
-                via = str(edge_detail.get("via") or "match")
-                to_phase = "end"
-            elif kind == "error" or phase == "error":
-                next_id = tgt if tgt in rt.node_by_id else "__settle__"
-                via = str(edge_detail.get("via") or "match")
-                to_phase = phase or kind or next_id
-            else:
-                next_id = tgt if tgt in rt.node_by_id else "__settle__"
-                via = str(edge_detail.get("via") or "match")
-                to_phase = _phase_key(rt, next_id) if next_id != "__settle__" else "settle"
-
-    cond = edge_detail.get("condition")
-    label = edge_detail.get("label")
-    summary_bits = [from_phase or nid or "?", "->", to_phase or next_id]
-    if via == "match" and cond:
-        summary_bits.append(f"[{cond}]")
-    elif via == "default":
-        summary_bits.append("[default]")
-    elif via == "settle":
-        summary_bits.append("[fallback:settle]")
-    else:
-        summary_bits.append(f"[{via}]")
-    rt.run.push_log(
-        phase="graph_hop",
-        node_id=nid or None,
-        from_phase=from_phase or None,
-        to_node_id=next_id if next_id != "__settle__" else None,
-        to_phase=to_phase or None,
-        edge_id=edge_detail.get("edge_id"),
-        edge_condition=cond,
-        edge_label=label,
-        edge_via=via,
-        edge_priority=edge_detail.get("priority"),
-        edge_is_default=bool(edge_detail.get("is_default")) or None,
-        edge_candidates=edge_detail.get("candidate_count"),
-        flags=_route_flags_snapshot(rt.flags) or None,
-        summary=" ".join(str(x) for x in summary_bits),
-    )
-    return next_id
-
-
 def _commit(rt: AgentRuntime) -> Command:
-    """Compat: update-only (no goto) for graph-first tests."""
+    """Compat: update-only (no goto) for tests."""
     return Command(update=_bump(rt))
 
 
 def _route_cmd(rt: AgentRuntime, node_id: str | None = None) -> Command:
-    nid = node_id or rt.current_node_id
-    rt.run.current_node_id = str(nid or "")
-    return Command(update=_bump(rt), goto=_route_next_id(rt, nid))
-
-
-def _phase_key(rt: AgentRuntime, node_id: str) -> str:
-    n = rt.node_by_id.get(node_id) or {}
-    pk = str(n.get("phaseKey") or "").strip()
-    if pk:
-        return pk
-    return str(n.get("kind") or node_id or "").strip().lower()
-
-
-_AGENT_GRAPH_CACHE: dict[tuple[str, int], Any] = {}
+    """Admin flow hops removed — leftover callers settle."""
+    del node_id
+    return Command(update=_bump(rt), goto="__settle__")
 
 
 def invalidate_agent_graph_cache(flow_id: str | None = None) -> None:
-    if not flow_id:
-        _AGENT_GRAPH_CACHE.clear()
-        return
-    fid = str(flow_id)
-    for key in list(_AGENT_GRAPH_CACHE.keys()):
-        if key[0] == fid:
-            _AGENT_GRAPH_CACHE.pop(key, None)
+    del flow_id
+    global _LC_DESIGN_GRAPH
+    _LC_DESIGN_GRAPH = None
 
 
-def _load_published_flow_bundle(flow_id: str = "default") -> dict[str, Any]:
-    try:
-        from services.design.admin_store import (
-            get_published_agent_flow,
-            _normalize_agent_flow_graph,
-        )
-
-        item = get_published_agent_flow(flow_id)
-        if isinstance(item, dict) and isinstance(item.get("graph"), dict):
-            graph, _ = _normalize_agent_flow_graph(item.get("graph"))
-            return {**item, "graph": graph}
-    except Exception:
-        _log.exception("load published agent flow failed")
-    return {
-        "id": flow_id,
-        "version": 0,
-        "graph": {"version": 1, "nodes": [], "edges": []},
-        "phaseMap": {},
-    }
 
 
 def _canvas_is_empty(rt: Any) -> bool:
@@ -1658,8 +1745,10 @@ def _preload_create_methodology(rt: Any) -> None:
 async def _node_bootstrap(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
-    _preload_create_methodology(rt)
-    _insert_task(
+    # Sync MySQL / catalog must not block the ASGI event loop (Admin lists starve).
+    await asyncio.to_thread(_preload_create_methodology, rt)
+    await asyncio.to_thread(
+        _insert_task,
         {
             "id": st.task_id,
             "user_id": rt.user_id,
@@ -1691,7 +1780,7 @@ async def _node_bootstrap(state: GraphState) -> Command:
             ),
             "created_at": time.time(),
             "updated_at": time.time(),
-        }
+        },
     )
     _emit(
         {
@@ -1715,21 +1804,9 @@ async def _node_bootstrap(state: GraphState) -> Command:
     if rt.apply_ops:
         rt.flags["apply_ops"] = True
         return Command(update=_bump(rt), goto="apply_confirm")
-    start_id = rt.phase_to_id.get("start") or next(
-        (
-            str(n.get("id"))
-            for n in rt.node_by_id.values()
-            if str(n.get("kind") or "").lower() == "start"
-        ),
-        "",
-    )
-    if start_id:
-        rt.current_node_id = start_id
-        rt.flags["mode"] = rt.flags.get("mode") or "agent"
-        return _route_cmd(rt, start_id)
-    # Fallback if published graph empty
-    route_id = rt.phase_to_id.get("route") or "route"
-    return Command(update=_bump(rt), goto=route_id if route_id in rt.node_by_id else "__settle__")
+    rt.flags["mode"] = rt.flags.get("mode") or "agent"
+    _apply_task_route_flags(rt)
+    return Command(update=_bump(rt), goto="memory")
 
 
 async def _node_apply_confirm(state: GraphState) -> Command:
@@ -1821,12 +1898,18 @@ async def _node_apply_confirm(state: GraphState) -> Command:
             "timeout_ms": int(_SCENE_WAIT_SEC * 1000),
         }
     )
-    obs = rt.phase_to_id.get("observe") or "observe"
-    return Command(update=_bump(rt), goto=obs if obs in rt.node_by_id else "__settle__")
+    return Command(update=_bump(rt), goto="__settle__")
 
 
 async def _node_route(state: GraphState) -> Command:
+    """Legacy phase: task-tier / mode init. Prefer folding into memory when graph has no route node."""
     rt = state["rt"]
+    _apply_task_route_flags(rt)
+    return _route_cmd(rt)
+
+
+def _apply_task_route_flags(rt: AgentRuntime) -> None:
+    """Estimate task tier + mode flags (formerly the standalone「任务分流」node)."""
     st = rt.run
     st.task_tier = clamp_tier(
         estimate_task_tier(
@@ -1850,17 +1933,19 @@ async def _node_route(state: GraphState) -> Command:
         llm_user=_clip_llm_raw(rt.prompt, limit=4000),
         summary=f"任务类型 {tier_label}" + (" · 看图" if rt.images else "") + f" · 模式 {rt.mode}",
     )
-    # Preserve FE Ask mode (interaction_mode=ask); default agent otherwise.
     if _as_text(rt.flags.get("mode")).strip().lower() not in ("agent", "ask"):
         rt.flags["mode"] = "agent"
     rt.flags["task_tier"] = st.task_tier
-    return _route_cmd(rt)
 
 
 async def _node_memory(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
-    mem_bundle = memory_service.load(
+    # When graph has no「任务分流」node, do tier/mode init here before Ask/Agent fork.
+    if not (rt.phase_to_id.get("route") or "").strip():
+        _apply_task_route_flags(rt)
+    mem_bundle = await asyncio.to_thread(
+        memory_service.load,
         user_id=rt.user_id,
         session_id=rt.session_id,
         project_id=rt.project_id,
@@ -1894,7 +1979,7 @@ async def _node_memory(state: GraphState) -> Command:
     rt.decision.short_turns = len(rt.mem_short)
     if _wants_short_plan(rt.prompt, rules=rt.rules):
         rt.flags["short_plan_on"] = True
-    return _route_cmd(rt)
+    return Command(update=_bump(rt), goto="intent_classify")
 
 
 async def _node_mode_fork(state: GraphState) -> Command:
@@ -2013,6 +2098,55 @@ async def _node_model_route(state: GraphState) -> Command:
     return _route_cmd(rt)
 
 
+async def _node_intent_classify(state: GraphState) -> Command:
+    """Cheap intent gate: chat → end; edit/create → model_route."""
+    rt = state["rt"]
+    st = rt.run
+    decision = await classify_user_intent(
+        prompt=rt.prompt,
+        rules=rt.rules,
+        has_images=bool(rt.images),
+        canvas_node_count=len(rt.scene_nodes or []),
+        scene=rt.scene_key,
+        interaction_mode=str(rt.flags.get("mode") or rt.mode or ""),
+    )
+    intent = str(decision.intent or "chat").strip().lower()
+    if intent == "ask":
+        intent = "create"
+    if intent not in ("chat", "edit", "create"):
+        intent = "chat"
+    reply = (decision.reply or "").strip()
+    if intent == "chat" and not reply:
+        reply = _chat_fallback_text(rt)
+    rt.classified_intent = intent
+    rt.classified_reply = reply
+    st.intent = intent
+    rt.flags["intent"] = intent
+    st.push_log(
+        phase="intent_classify",
+        intent=intent,
+        reply=(reply[:500] if intent == "chat" else None),
+        summary=f"意图={intent}"
+        + (f" · {(decision.rationale or '')[:80]}" if decision.rationale else ""),
+        model=None,
+    )
+    _emit(
+        {
+            "type": "activity",
+            "id": f"intent-{st.task_id[:8]}",
+            "kind": "thought",
+            "status": "done",
+            "summary": f"意图识别：{intent}",
+        }
+    )
+    if intent == "chat":
+        if reply:
+            st.reply = reply
+            _emit({"type": "token", "text": reply})
+    nxt = "__settle__" if intent == "chat" else "design_agent"
+    return Command(update=_bump(rt), goto=nxt)
+
+
 async def _node_thought(
     state: GraphState,
 ) -> Command:
@@ -2032,45 +2166,92 @@ async def _node_thought(
             "trace_id": st.trace_id,
         }
     )
-    system_msg, user_msg = _format_thought_messages(rt)
-    turn_images = None
-    if rt.pending_aesthetic_images:
-        turn_images = list(rt.pending_aesthetic_images)[:4]
-        st.vision_used = True
-    elif round_i == 0 and rt.images:
-        turn_images = rt.images
 
-    st.family, content, used, llm_ev, llm_think = await _stream_llm_text(
-        model_family=st.family,
-        system=system_msg,
-        user=user_msg,
-        rules=rt.rules,
-        images=turn_images,
-        max_tokens=2048,
-    )
-    _flush_host_events(st, llm_ev)
-    st.total_tokens += used
-    rt.last_used = used
-    rt.last_content = content
-    rt.last_think = llm_think
-    rt.last_user_msg = user_msg
-    rt.last_images = turn_images
+    turn: dict[str, Any] = {}
+    intent = "chat"
+    reply = ""
+    content = ""
+    used = 0
+    llm_think = ""
+    system_msg = ""
+    user_msg = ""
+    turn_images: list[str] | None = None
+    has_ops_payload = False
+    prior_intent = st.intent if st.intent in ("edit", "create", "ask", "chat", "done") else "chat"
 
-    turn = _parse_agent_turn(content)
-    rt.turn = turn
-    intent = turn["intent"]
-    if intent in ("ask", "chat"):
-        st.choices = list(turn.get("choices") or [])[:6]
-        apply_label = _as_text(turn.get("apply_choice")).strip()
-        if apply_label:
-            st.apply_choice = apply_label[:24]
-            if apply_label not in st.choices:
-                st.choices = [apply_label] + [c for c in st.choices if c != apply_label]
-                st.choices = st.choices[:6]
+    # One forced re-think when resources were injected but model dropped to chat.
+    for attempt in range(2):
+        system_msg, user_msg = _format_thought_messages(rt)
+        turn_images = None
+        if rt.pending_aesthetic_images:
+            turn_images = list(rt.pending_aesthetic_images)[:4]
+            st.vision_used = True
+        elif round_i == 0 and rt.images and attempt == 0:
+            turn_images = rt.images
+
+        st.family, content, used, llm_ev, llm_think = await _stream_llm_text(
+            model_family=st.family,
+            system=system_msg,
+            user=user_msg,
+            rules=rt.rules,
+            images=turn_images,
+            max_tokens=2048,
+        )
+        _flush_host_events(st, llm_ev)
+        st.total_tokens += used
+        rt.last_used = used
+        rt.last_content = content
+        rt.last_think = llm_think
+        rt.last_user_msg = user_msg
+        rt.last_images = turn_images
+
+        turn = _parse_agent_turn(content)
+        rt.turn = turn
+        intent = turn["intent"]
+        reply = turn["reply"]
+        has_ops_payload = _ops_payload_nonempty(turn.get("tool_ops_raw"))
+        prior_intent = (
+            st.intent if st.intent in ("edit", "create", "ask", "chat", "done") else "chat"
+        )
+
+        if attempt == 0 and _should_recover_edit_after_resources(
+            prior_intent=prior_intent,
+            intent=intent,
+            has_ops=has_ops_payload,
+            has_pending_resources=_has_pending_resource_details(rt),
+        ):
+            tools_hint = "、".join(st.tools_loaded[-6:]) or "已申请工具"
+            st.note_error(
+                f"资源详情已注入（{tools_hint}）。必须立即输出 tool_ops 完成用户请求；"
+                f"保持 intent={prior_intent}，禁止改回 chat/ask。"
+            )
+            st.intent = prior_intent
+            st.push_log(
+                phase="recover_edit",
+                intent=prior_intent,
+                dropped_intent=intent,
+                summary=f"资源已注入但落到 {intent}，强制重试写出 tool_ops",
+            )
+            _emit(
+                {
+                    "type": "activity",
+                    "id": f"recover-edit-{round_i}",
+                    "kind": "thought",
+                    "status": "done",
+                    "summary": "工具已就绪，继续写出操作",
+                }
+            )
+            continue
+        break
+
+    # Ask: absorb chips only when clarifying / chatting. Clear ops → paint
+    # (no propose), so drop confirm chips that would imply「先确认再改」.
+    ask_mode = str(rt.flags.get("mode") or "") == "ask"
+    if ask_mode or intent in ("ask", "chat"):
+        _absorb_ask_choices(st, turn)
     st.intent = intent
     thought = _short_ui_thought(turn["thought"], intent=intent)
     thought_full = _full_thought_for_log(turn["thought"])
-    reply = turn["reply"]
     st.push_log(
         phase="thought",
         intent=intent,
@@ -2104,7 +2285,6 @@ async def _node_thought(
     need_knowledge = list(turn.get("need_knowledge") or [])
     need_prompts = list(turn.get("need_prompts") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
-    has_ops_payload = _ops_payload_nonempty(turn.get("tool_ops_raw"))
     use_user_refs = turn.get("use_user_refs") is True
     # Fact flags only ? graph edges choose the next hop.
     rt.flags["intent"] = intent
@@ -2129,11 +2309,35 @@ async def _node_thought(
         return _route_cmd(rt)
 
     if intent in ("chat", "ask", "done") and not has_ops_payload:
-        text = reply or (
-            render_prompt_template(rt.chat_fallback_tmpl, prompt=rt.prompt[:80])
-            if rt.chat_fallback_tmpl
-            else ""
-        )
+        # Still dropped after tools: keep design intent → slot_missing, never greet.
+        if _should_recover_edit_after_resources(
+            prior_intent=prior_intent,
+            intent=intent,
+            has_ops=False,
+            has_pending_resources=_has_pending_resource_details(rt),
+        ):
+            intent = prior_intent
+            st.intent = intent
+            rt.flags["intent"] = intent
+            _clear_ask_choice_state(st)
+            if reply:
+                st.reply = reply
+                _emit({"type": "token", "text": reply})
+            rt.flags["slot_missing"] = True
+            rt.flags["has_ops"] = False
+            rt.flags["no_ops"] = True
+            _emit(
+                {
+                    "type": "skill_done",
+                    "index": round_i,
+                    "skill_key": "react",
+                    "skill_name": "Design Agent",
+                    "tokens": used,
+                }
+            )
+            return _route_cmd(rt)
+
+        text = reply or _chat_fallback_text(rt)
         if text:
             st.reply = text
             _emit({"type": "token", "text": text})
@@ -2210,6 +2414,9 @@ async def _node_thought(
         rt.flags["ops_valid"] = False
         rt.flags["reflect_left"] = st.reflect_left > 0 and not turn.get("done")
         rt.flags["no_reflect"] = not rt.flags["reflect_left"]
+    # Ask + valid ops paint immediately — no confirm chips / proposed_ops.
+    if ask_mode and rt.flags.get("ops_valid"):
+        _clear_ask_choice_state(st)
     _emit(
         {
             "type": "skill_done",
@@ -2439,8 +2646,7 @@ async def _node_resource(state: GraphState) -> Command:
     rt.flags["need_knowledge"] = False
     rt.flags["need_prompts"] = False
     rt.flags["need_aesthetics"] = False
-    return _route_cmd(rt)
-
+    return Command(update=_bump(rt))
 
 
 async def _node_propose(state: GraphState) -> Command:
@@ -2451,19 +2657,18 @@ async def _node_propose(state: GraphState) -> Command:
     from services.design.tool_ops_contract import tool_ops_batch_detail
 
     st.proposed_ops = tool_ops_for_sse(step_ops)
-    apply_label = _as_text(st.apply_choice).strip()
-    if not apply_label and st.choices:
-        apply_label = _as_text(st.choices[0]).strip()
-    if apply_label:
-        st.apply_choice = apply_label[:24]
-        rest = [c for c in st.choices if c and c != apply_label]
-        st.choices = ([apply_label] + rest)[:6]
+    ui = _ensure_propose_choice_ui(st)
+    apply_label = st.apply_choice or next(
+        (
+            str(o.get("label") or "")
+            for o in (ui.get("options") or [])
+            if str(o.get("action") or "") == "apply"
+        ),
+        "",
+    )
     detail = (tool_ops_batch_detail(step_ops) or "").strip()
     model_reply = (rt.turn.get("reply") or "").strip()
-    if detail and model_reply and model_reply != detail and len(model_reply) >= 12:
-        text = f"{model_reply}\n{detail}"
-    else:
-        text = detail or model_reply or apply_label or ""
+    text = _ask_propose_user_text(model_reply=model_reply, detail=detail)
     st.reply = text
     st.push_log(
         phase="propose",
@@ -2478,6 +2683,7 @@ async def _node_propose(state: GraphState) -> Command:
         summary=('提议确认：' + (apply_label or f"{len(step_ops)} ops"))[:120],
         **({"choices": list(st.choices)[:6]} if st.choices else {}),
         **({"apply_choice": st.apply_choice} if st.apply_choice else {}),
+        **({"choice_ui": st.choice_ui} if st.choice_ui else {}),
     )
     if text:
         _emit({"type": "token", "text": text})
@@ -2492,7 +2698,7 @@ async def _node_propose(state: GraphState) -> Command:
     )
     rt.terminal = True
     rt.flags["await_confirm"] = True
-    return _route_cmd(rt)
+    return Command(update=_bump(rt), goto="__settle__")
 
 
 async def _node_action(state: GraphState) -> Command:
@@ -2561,18 +2767,10 @@ async def _node_action(state: GraphState) -> Command:
         model=st.family,
         **({"image_model": img_mid, "images_hydrated": int(n_img)} if n_img and img_mid else {}),
     )
-    await begin_wait(st.task_id, round_n=round_i)
-    _emit(
-        {
-            "type": "scene_feedback_request",
-            "task_id": st.task_id,
-            "trace_id": st.trace_id,
-            "round": round_i,
-            "timeout_ms": int(_SCENE_WAIT_SEC * 1000),
-        }
-    )
-    rt.flags["wait_scene"] = True
-    return _route_cmd(rt)
+    # Fixed create_agent graph: paint once and settle (no Admin observe loop).
+    return Command(update=_bump(rt), goto="__settle__")
+
+
 
 
 async def _node_observe(
@@ -2624,11 +2822,14 @@ async def _node_observe(
         )
 
     if rt.skip_loop:
+        # Ask 用户确认后走 apply_confirm→observe：成功应经出边到「结束」，勿硬跳 settle。
         if st.reply:
             _emit({"type": "token", "text": st.reply})
         rt.terminal = True
         rt.flags["ok"] = True
-        return Command(update=_bump(rt), goto="__settle__")
+        rt.flags["scene_ready"] = False
+        rt.flags["op_failed"] = False
+        return _route_cmd(rt)
 
     if op_failures:
         fail_notes = "; ".join(
@@ -2822,7 +3023,8 @@ async def _node_clarify(state: GraphState) -> Command:
 async def _node_settle(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
-    spend = rt.settle_hold_fn(
+    spend = await asyncio.to_thread(
+        rt.settle_hold_fn,
         rt.user_id,
         hold=rt.hold,
         actual_tokens=st.total_tokens,
@@ -2849,8 +3051,9 @@ async def _node_settle(state: GraphState) -> Command:
             )
         ),
     )
-    _persist_task_meta(st.task_id, decision=rt.decision, state=st)
-    _update_task(
+    await asyncio.to_thread(_persist_task_meta, st.task_id, decision=rt.decision, state=st)
+    await asyncio.to_thread(
+        _update_task,
         st.task_id,
         status="success",
         charged_credits=spend,
@@ -2858,6 +3061,7 @@ async def _node_settle(state: GraphState) -> Command:
         result_svg="",
     )
     exec_payload = st.to_execution_log()
+    balance = await asyncio.to_thread(get_user_tokens, rt.user_id)
     _emit({"type": "execution_log", **exec_payload})
     _emit(
         {
@@ -2875,7 +3079,8 @@ async def _node_settle(state: GraphState) -> Command:
             **({"choices": st.choices} if st.choices else {}),
             **({"proposed_ops": st.proposed_ops} if st.proposed_ops else {}),
             **({"apply_choice": st.apply_choice} if st.apply_choice else {}),
-            "balance": get_user_tokens(rt.user_id),
+            **({"choice_ui": st.choice_ui} if st.choice_ui else {}),
+            "balance": balance,
             "decision_log": rt.decision.to_log(),
             "execution_log": exec_payload,
         }
@@ -2884,7 +3089,8 @@ async def _node_settle(state: GraphState) -> Command:
         from services.agent_memory.episodes import maybe_write_episode
 
         failed_attempt = bool(st.errors) and not st.painted
-        maybe_write_episode(
+        await asyncio.to_thread(
+            maybe_write_episode,
             user_id=rt.user_id,
             session_id=rt.session_id,
             project_id=rt.project_id,
@@ -2910,30 +3116,28 @@ async def _node_settle(state: GraphState) -> Command:
         _log.exception("episode write failed task=%s", st.task_id)
 
     if rt.session_id:
-        _emit(
-            {
-                "type": "memory_patch",
-                **_finalize_memory_patch(
-                    user_id=rt.user_id,
-                    session_id=rt.session_id,
-                    project_id=rt.project_id,
-                    medium=rt.mem_medium,
-                    task_id=st.task_id,
-                    intent=st.intent if st.intent in ("edit", "create") else "chat",
-                    edit_in_place=bool(rt.scene_nodes) and st.intent == "edit",
-                    blank_artboard=False,
-                    summary=st.reply[:400],
-                    tool_ops_applied=st.painted,
-                    critique_notes="; ".join(st.errors[-3:]) if st.errors else None,
-                    scene_key=rt.scene_key,
-                    canvas_size=f"{rt.w}x{rt.h}" if rt.w and rt.h else (rt.canvas_size or ""),
-                    user_prompt=rt.prompt,
-                    assistant_reply=st.reply,
-                    short_turns=list(rt.mem_short_all or rt.mem_short or []),
-                    rules=rt.rules,
-                ),
-            }
+        patch = await asyncio.to_thread(
+            _finalize_memory_patch,
+            user_id=rt.user_id,
+            session_id=rt.session_id,
+            project_id=rt.project_id,
+            medium=rt.mem_medium,
+            task_id=st.task_id,
+            intent=st.intent if st.intent in ("edit", "create") else "chat",
+            edit_in_place=bool(rt.scene_nodes) and st.intent == "edit",
+            blank_artboard=False,
+            summary=st.reply[:400],
+            tool_ops_applied=st.painted,
+            critique_notes="; ".join(st.errors[-3:]) if st.errors else None,
+            scene_key=rt.scene_key,
+            canvas_size=f"{rt.w}x{rt.h}" if rt.w and rt.h else (rt.canvas_size or ""),
+            user_prompt=rt.prompt,
+            assistant_reply=st.reply,
+            short_turns=list(rt.mem_short_all or rt.mem_short or []),
+            rules=rt.rules,
+            await_user=bool(rt.flags.get("await_user") or has_proposal),
         )
+        _emit({"type": "memory_patch", **patch})
     if not st.painted and not st.proposed_ops:
         _emit({"type": "chat_done"})
     exec_trace(
@@ -2954,14 +3158,18 @@ async def _node_error(state: GraphState) -> Command:
     st = rt.run
     err = rt.fatal or "agent_error"
     try:
-        rt.refund_hold_fn(rt.user_id, rt.hold, task_id=st.task_id)
+        await asyncio.to_thread(
+            rt.refund_hold_fn, rt.user_id, rt.hold, task_id=st.task_id
+        )
     except Exception:
         pass
     st.note_error(str(err)[:240])
     st.push_log(phase="error", error=str(err)[:240])
     rt.decision.apply(route="error", intent=st.intent)
-    _persist_task_meta(st.task_id, decision=rt.decision, state=st)
-    _update_task(st.task_id, status="error", error_message=str(err)[:800])
+    await asyncio.to_thread(_persist_task_meta, st.task_id, decision=rt.decision, state=st)
+    await asyncio.to_thread(
+        _update_task, st.task_id, status="error", error_message=str(err)[:800]
+    )
     _emit({"type": "execution_log", **st.to_execution_log()})
     _emit(
         {
@@ -3055,79 +3263,214 @@ async def _node_ask_thought(state: GraphState) -> Command:
     return await _node_thought(state)
 
 
-_PHASE_HANDLERS: dict[str, Any] = {
-    "route": "_node_route",
-    "memory": "_node_memory",
-    "mode_fork": "_node_mode_fork",
-    "plan": "_node_plan",
-    "model_route": "_node_model_route",
-    "thought": "_node_thought",
-    "ask_thought": "_node_ask_thought",
-    "resource_fork": "_node_resource_fork",
-    "resource_join": "_node_passthrough",
-    "aesthetics_details": "_node_passthrough",
-    "tool_details": "_node_passthrough",
-    "validate_fail": "_node_validate_fail",
-    "reflect": "_node_reflect",
-    "clarify": "_node_clarify",
-    "propose": "_node_propose",
-    "action": "_node_action",
-    "observe": "_node_observe",
-    "verify": "_node_verify",
-    "error": "_node_error",
-    "end": "_node_settle",
-}
-
-
-def _resolve_handler(phase: str):
-    name = _PHASE_HANDLERS.get(phase) or "_node_passthrough"
-    return globals()[name]
-
-
-def _wrap_flow_node(node_id: str, phase: str):
-    handler = _resolve_handler(phase)
-
-    async def _fn(state: GraphState) -> Command:
-        rt = state["rt"]
-        rt.current_node_id = node_id
-        rt.run.current_node_id = node_id
-        return await handler(state)
-
-    _fn.__name__ = f"flow_{node_id}"
-    return _fn
-
-
-def _build_agent_graph_from_published(published: dict[str, Any]):
-    graph = published.get("graph") if isinstance(published.get("graph"), dict) else {}
-    nodes = [n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")]
-    g = StateGraph(GraphState)
-    all_dest = tuple(
-        [str(n["id"]) for n in nodes]
-        + ["bootstrap", "apply_confirm", "__settle__", END]
+async def _node_design_agent(state: GraphState) -> Command:
+    """Official LangChain create_agent loop (tools → canvas tool_ops / need_*)."""
+    from services.llm.agent import (
+        assemble_turn_from_lc_tools,
+        design_thought_langchain_tools,
+        stream_official_agent,
     )
-    g.add_node("bootstrap", _node_bootstrap, destinations=all_dest)
-    g.add_node("apply_confirm", _node_apply_confirm, destinations=all_dest)
-    g.add_node("__settle__", _node_settle, destinations=(END,))
-    for n in nodes:
-        nid = str(n["id"])
-        if nid in ("bootstrap", "apply_confirm", "__settle__"):
+
+    rt = state["rt"]
+    st = rt.run
+    ask_mode = str(rt.flags.get("mode") or "") == "ask"
+    max_rounds = max(1, int(rt.max_rounds or _DEFAULT_MAX_ROUNDS))
+
+    st.family, reason = _resolve_and_log_model(
+        st,
+        skill={
+            "category": "agent",
+            "default_model": "doubao",
+            "name": "react",
+            "skill_key": "react",
+        },
+        user_selected_model=rt.user_selected_model,
+        run_mode=rt.mode,
+        prompt=rt.prompt,
+        rules=rt.rules,
+        scene=rt.scene_key,
+        attempt=st.round,
+        has_images=bool(rt.images),
+    )
+    rt.last_reason = reason
+
+    tools = design_thought_langchain_tools()
+    lc_system = (
+        _prompt_text(rt.rules, "agent.prompt.lc_tools_overlay")
+        or _prompt_text(rt.rules, "agent.prompt.chat_agent_system")
+        or rt.system
+    )
+    if rt.persona and "IDENTITY:" not in lc_system:
+        lc_system = f"IDENTITY: {rt.persona}\n\n{lc_system}"
+
+    for _round in range(max_rounds):
+        round_i = st.round
+        _emit(
+            {
+                "type": "skill_start",
+                "index": round_i,
+                "skill_id": None,
+                "skill_key": "react",
+                "skill_name": "Design Agent",
+                "category": "agent",
+                "model": st.family,
+                "model_reason": rt.last_reason,
+                "trace_id": st.trace_id,
+            }
+        )
+        _system_unused, user_msg = _format_thought_messages(rt)
+        content_acc = ""
+        tool_calls: list[dict[str, Any]] = []
+        used_hint = 0
+
+        async for kind, payload in stream_official_agent(
+            messages=[{"role": "user", "content": user_msg}],
+            model=st.family,
+            system=lc_system,
+            tools=tools,
+            interrupt_before_tools=True,
+            user_id=rt.user_id,
+            source="design",
+        ):
+            if kind == "thinking":
+                text = str(payload or "")
+                if text:
+                    _emit({"type": "thinking", "text": text})
+            elif kind == "token":
+                text = str(payload or "")
+                if text:
+                    content_acc += text
+                    _emit({"type": "token", "text": text})
+            elif kind == "tool_call" and isinstance(payload, dict):
+                tool_calls.append(payload)
+                name = str(payload.get("name") or "")
+                if name:
+                    _emit(
+                        {
+                            "type": "activity",
+                            "id": f"tool-{round_i}-{name}-{len(tool_calls)}",
+                            "kind": "tool",
+                            "status": "done",
+                            "summary": f"调用工具：{name}",
+                            "index": round_i,
+                        }
+                    )
+            elif kind == "message" and isinstance(payload, dict):
+                if payload.get("content") and not content_acc:
+                    content_acc = str(payload.get("content") or "")
+
+        turn = assemble_turn_from_lc_tools(content=content_acc, tool_calls=tool_calls)
+        rt.turn = turn
+        rt.last_content = content_acc
+        rt.last_user_msg = user_msg
+        rt.last_used = used_hint
+        intent = str(turn.get("intent") or "chat").strip().lower()
+        reply = str(turn.get("reply") or "").strip()
+        st.intent = intent
+        if reply:
+            st.reply = reply
+        st.push_log(
+            phase="design_agent",
+            intent=intent,
+            summary=(turn.get("thought") or intent or "agent")[:120],
+            model=st.family,
+            reply=(reply[:500] if reply else None),
+            ops_count=len(turn.get("tool_ops_raw") or []) or None,
+        )
+        _emit(
+            {
+                "type": "skill_done",
+                "index": round_i,
+                "skill_key": "react",
+                "skill_name": "Design Agent",
+                "tokens": used_hint,
+            }
+        )
+
+        need_any = bool(
+            turn.get("need_tools")
+            or turn.get("need_knowledge")
+            or turn.get("need_prompts")
+            or turn.get("need_aesthetics")
+        )
+        if need_any:
+            await _node_resource(state)
             continue
-        phase = str(n.get("phaseKey") or n.get("kind") or nid).strip()
-        g.add_node(nid, _wrap_flow_node(nid, phase), destinations=all_dest)
+
+        raw_ops = turn.get("tool_ops_raw")
+        if raw_ops:
+            step_ops, op_errors = _validate_ops_payload(
+                raw_ops,
+                nodes=rt.scene_nodes,
+                frames=rt.scene_frames,
+                rules=rt.rules,
+            )
+            rt.step_ops = step_ops
+            rt.op_errors = list(op_errors or [])
+            if step_ops:
+                if ask_mode:
+                    return Command(update=_bump(rt), goto="propose")
+                return Command(update=_bump(rt), goto="action")
+            if op_errors:
+                st.note_error(validation_failure_reason(op_errors) or "ops_invalid")
+                msg = _chat_fallback_text(rt)
+                if rt.unsafe_ops_tmpl:
+                    try:
+                        msg = rt.unsafe_ops_tmpl.format(
+                            error=("：" + (op_errors[0] if op_errors else ""))[:80]
+                        )
+                    except Exception:
+                        pass
+                st.reply = msg
+                _emit({"type": "token", "text": msg})
+
+        if intent == "ask" and reply:
+            st.choices = list(turn.get("choices") or [])[:6]
+            rt.flags["await_user"] = True
+        rt.terminal = True
+        return Command(update=_bump(rt), goto="__settle__")
+
+    rt.terminal = True
+    if not st.reply:
+        st.reply = _chat_fallback_text(rt)
+        _emit({"type": "token", "text": st.reply})
+    return Command(update=_bump(rt), goto="__settle__")
+
+_LC_DESIGN_GRAPH: Any = None
+
+
+def _build_lc_design_graph():
+    """Fixed outer graph: memory → intent → create_agent → action/propose → settle."""
+    g = StateGraph(GraphState)
+    dest = (
+        "bootstrap",
+        "apply_confirm",
+        "memory",
+        "intent_classify",
+        "design_agent",
+        "action",
+        "propose",
+        "__settle__",
+        END,
+    )
+    g.add_node("bootstrap", _node_bootstrap, destinations=dest)
+    g.add_node("apply_confirm", _node_apply_confirm, destinations=dest)
+    g.add_node("memory", _node_memory, destinations=dest)
+    g.add_node("intent_classify", _node_intent_classify, destinations=dest)
+    g.add_node("design_agent", _node_design_agent, destinations=dest)
+    g.add_node("action", _node_action, destinations=dest)
+    g.add_node("propose", _node_propose, destinations=dest)
+    g.add_node("__settle__", _node_settle, destinations=(END,))
     g.add_edge(START, "bootstrap")
     return g.compile()
 
 
-def _agent_graph(flow_id: str = "default"):
-    published = _load_published_flow_bundle(flow_id)
-    ver = int(published.get("version") or 0)
-    key = (str(published.get("id") or flow_id), ver)
-    cached = _AGENT_GRAPH_CACHE.get(key)
-    if cached is not None:
-        return cached, published
-    compiled = _build_agent_graph_from_published(published)
-    _AGENT_GRAPH_CACHE[key] = compiled
-    return compiled, published
+def _lc_design_graph():
+    global _LC_DESIGN_GRAPH
+    if _LC_DESIGN_GRAPH is None:
+        _LC_DESIGN_GRAPH = _build_lc_design_graph()
+    return _LC_DESIGN_GRAPH
+
 
 
 async def run_agent_graph(
@@ -3157,7 +3500,7 @@ async def run_agent_graph(
     apply_ops: list[dict[str, Any]] | None = None,
     interaction_mode: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """LangGraph Design Agent driven by published Admin flow."""
+    """LangGraph Design Agent — fixed outer graph + create_agent."""
     del reserve_hold_fn
     del spatial_summary
 
@@ -3214,37 +3557,31 @@ async def run_agent_graph(
 
     tools_block = format_canvas_tools_for_model(rules)
     tools_catalog = format_canvas_tools_catalog(rules)
-    prompts_catalog = format_prompt_packs_catalog(scene=scene_key or "website")
-    aesthetics_catalog = format_aesthetics_catalog(scene=scene_key or "website")
+    prompts_catalog, aesthetics_catalog = await asyncio.gather(
+        asyncio.to_thread(format_prompt_packs_catalog, scene=scene_key or "website"),
+        asyncio.to_thread(format_aesthetics_catalog, scene=scene_key or "website"),
+    )
     defer_tools = _flag_on(rules, "agent.react.defer_tools", "1")
     persona = _resolve_agent_persona(rules, user_selected_model)
     persona_block = f"IDENTITY: {persona}" if persona else ""
-    react_system = _prompt_text(rules, "agent.prompt.react_system")
     plan_system = _prompt_text(rules, "agent.prompt.plan_system")
     size_auto_hint = _prompt_text(rules, "agent.prompt.size_auto")
     chat_fallback_tmpl = _prompt_text(rules, "agent.prompt.chat_fallback")
     unsafe_ops_tmpl = _prompt_text(rules, "agent.prompt.unsafe_ops_ask")
-    if defer_tools:
-        need_overlay = (
-            _prompt_text(rules, "agent.prompt.need_tools_overlay")
-            or _NEED_TOOLS_OVERLAY_FALLBACK
-        )
-        system = "\n\n".join(
-            p
-            for p in [
-                react_system,
-                need_overlay,
-                persona_block,
-                tools_catalog,
-                prompts_catalog,
-                aesthetics_catalog,
-            ]
-            if p
-        )
-    else:
-        system = "\n\n".join(
-            p for p in [react_system, persona_block, tools_block] if p
-        )
+    lc_overlay = _prompt_text(rules, "agent.prompt.lc_tools_overlay")
+    chat_agent_system = _prompt_text(rules, "agent.prompt.chat_agent_system")
+    react_system = _prompt_text(rules, "agent.prompt.react_system")
+    system = "\n\n".join(
+        p
+        for p in [
+            lc_overlay or chat_agent_system or react_system,
+            persona_block,
+            tools_catalog if defer_tools else tools_block,
+            prompts_catalog,
+            aesthetics_catalog,
+        ]
+        if p
+    )
 
     rt = AgentRuntime(
         user_id=user_id,
@@ -3277,15 +3614,19 @@ async def run_agent_graph(
         size_auto_hint=size_auto_hint,
         unsafe_ops_tmpl=unsafe_ops_tmpl,
         chat_fallback_tmpl=chat_fallback_tmpl,
+        persona=persona,
         defer_tools=defer_tools,
         max_rounds=max_rounds,
         dual_on=_flag_on(rules, "agent.react.dual_sample", "0"),
     )
     rt.flags["mode"] = ui_mode
 
-    graph, published = _agent_graph("default")
-    _bind_published_flow(rt, published)
-    rt.decision.route = f"agent_graph:v{rt.flow_version}"
+    graph = await asyncio.to_thread(_lc_design_graph)
+    rt.decision.route = "langgraph:create_agent"
+    rt.flow_id = "lc_design"
+    rt.flow_version = 1
+    rt.run.flow_id = "lc_design"
+    rt.run.flow_version = 1
     try:
         async for chunk in graph.astream(
             {"rt": rt, "tick": 0},
@@ -3296,14 +3637,16 @@ async def run_agent_graph(
     except Exception as err:  # noqa: BLE001
         rt.fatal = str(err)
         try:
-            refund_hold_fn(user_id, hold, task_id=task_id)
+            await asyncio.to_thread(refund_hold_fn, user_id, hold, task_id=task_id)
         except Exception:
             pass
         run.note_error(str(err)[:240])
         run.push_log(phase="error", error=str(err)[:240])
         decision.apply(route="error", intent=run.intent)
-        _persist_task_meta(task_id, decision=decision, state=run)
-        _update_task(task_id, status="error", error_message=str(err)[:800])
+        await asyncio.to_thread(_persist_task_meta, task_id, decision=decision, state=run)
+        await asyncio.to_thread(
+            _update_task, task_id, status="error", error_message=str(err)[:800]
+        )
         yield {"type": "execution_log", **run.to_execution_log()}
         yield {
             "type": "error",
