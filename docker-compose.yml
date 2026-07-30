@@ -1,6 +1,5 @@
-# Self-host stack (Langfuse-style): MySQL + Redis + api + worker + web.
+# Self-host stack: MySQL + Redis + api + worker + web.
 # Guide: docs/self-hosting.md
-# Optional Agent tracing: infra/langfuse/ (separate compose).
 #
 #   cp apps/api/.env.example apps/api/.env   # LLM keys etc.
 #   docker compose up -d --build
