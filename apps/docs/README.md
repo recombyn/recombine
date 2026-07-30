@@ -1,6 +1,6 @@
 # recombyn 文档站
 
-自建 Vite + React 文档站（不再使用 VitePress）。
+Vite + React 文档站。
 
 - **帮助文档**：白底文档壳（顶栏 / 侧栏 / 面包屑），入口如 `/guide/getting-started`
 - **法律页**：独立深色阅读页，入口如 `/legal/terms`（不嵌套帮助文档框架）
