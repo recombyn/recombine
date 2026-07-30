@@ -31,7 +31,7 @@
 
 | | |
 |---|---|
-| **画布原生** | 画板、形状、图片、文字 — 不只是对话吐一张图 |
+| **可视化编辑** | 画板、形状、图片、文字 — 不只是对话吐一张图 |
 | **会落笔的 Agent** | LangGraph 设计 Agent：工具、技能、确认流 |
 | **自托管优先** | 本地与服务器同一套栈，数据在你这边 |
 | **可组合** | 技能 / 流程 / 字典用种子 JSON — **无需公开运营后台**即可启动 |
@@ -97,3 +97,9 @@ e2e/               Playwright
 [MIT](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
 个人可免费自托管；后续计划提供 **Cloud 托管与企业服务**，核心保持 MIT 开源。
+
+---
+
+<p align="center">
+  <img src="docs/assets/recombyn-lockup-light.svg" alt="recombyn" height="40" />
+</p>

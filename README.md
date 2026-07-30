@@ -32,7 +32,7 @@ Self-host in minutes with Docker Compose (MySQL + Redis + web + API). Optional [
 
 | | |
 |---|---|
-| **Canvas-native** | Frames, shapes, images, text — not just chat that dumps a single image. |
+| **Visual editor** | Frames, shapes, images, text — not just chat that dumps a single image. |
 | **Agent that paints** | LangGraph design agent with tools, skills, and ask/confirm flows. |
 | **Self-host first** | Same stack for local and server; your data stays yours. |
 | **Composable** | Seed JSON for skills / flows / dicts — no private Admin console required to boot. |
@@ -126,5 +126,5 @@ Individuals can self-host for free. We plan to offer **hosted Cloud** and enterp
 ---
 
 <p align="center">
-  <img src="docs/assets/logo-mark.svg" alt="Recombyn" width="48" />
+  <img src="docs/assets/recombyn-lockup-light.svg" alt="recombyn" height="40" />
 </p>
