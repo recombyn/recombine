@@ -84,5 +84,5 @@ apps/api/list_packs.py
 # Cursor IDE local (rules / skills / plans — do not publish)
 .cursor/
 
-# Langfuse local secrets
-infra/langfuse/.env
+# Local infra not published with OSS (keep on disk only)
+infra/langfuse/

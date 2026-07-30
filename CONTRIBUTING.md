@@ -19,7 +19,7 @@ npm run dev:web
 ## Guidelines
 
 - Prefer small, focused PRs.
-- Do not commit secrets (`.env`, API keys, Langfuse keys, passwords).
+- Do not commit secrets (`.env`, API keys, passwords).
 - Keep helpers in the same file unless shared by 3+ call sites.
 - Run relevant tests: `npm run test:web`, `npm run test:api`.
 - Use the PR template checklist.

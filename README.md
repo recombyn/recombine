@@ -24,7 +24,7 @@
 **Recombyn** is an open-source **canvas editor + AI Design Agent**.  
 Create and edit visual designs on an infinite canvas, talk to an agent that can plan and apply canvas operations, and run everything on your own machine.
 
-Self-host in minutes with Docker Compose (MySQL + Redis + web + API). Optional [Langfuse](https://langfuse.com) for Agent tracing. Proudly built as a MIT-licensed monorepo.
+Self-host in minutes with Docker Compose (MySQL + Redis + web + API). MIT-licensed monorepo.
 
 ---
 
@@ -35,7 +35,7 @@ Self-host in minutes with Docker Compose (MySQL + Redis + web + API). Optional [
 | **Visual editor** | Frames, shapes, images, text — not just chat that dumps a single image. |
 | **Agent that paints** | LangGraph design agent with tools, skills, and ask/confirm flows. |
 | **Self-host first** | Same stack for local and server; your data stays yours. |
-| **Composable** | Seed JSON for skills / flows / dicts — no private Admin console required to boot. |
+| **Composable** | Skills, flows, and dicts ship as editable seed JSON under `apps/api/data/`. |
 
 ## Core features
 
@@ -43,7 +43,6 @@ Self-host in minutes with Docker Compose (MySQL + Redis + web + API). Optional [
 - **Design Agent** — create / edit / chat with streaming UI
 - **Import pipeline** — PDF / DOCX / image → Scene JSON
 - **Plaza & projects** — inspiration feed and saved work (API)
-- **Observability** — optional local Langfuse traces (`metadata.task_id`)
 
 ## Quick start (self-host)
 
@@ -60,8 +59,7 @@ docker compose up -d --build
 | API docs | http://localhost:8000/docs |
 | MySQL | `127.0.0.1:3306` · `recombyn` / `recombyn` |
 
-> Change default DB and bootstrap admin passwords before any public deploy.  
-> Full guide: **[docs/self-hosting.md](docs/self-hosting.md)**
+More options (env, LLM keys, production hardening): **[docs/self-hosting.md](docs/self-hosting.md)**
 
 ### Local development
 
@@ -82,7 +80,6 @@ flowchart LR
   API --> MySQL[(MySQL)]
   API --> Redis[(Redis)]
   API --> LLM[LLM providers]
-  API -.-> LF[Langfuse optional]
 ```
 
 ## Repository layout
@@ -94,11 +91,8 @@ apps/docs/         Help / legal site
 packages/          Shared builders & schemas
 docs/              Architecture + self-hosting
 deploy/            Dockerfiles / Nginx
-infra/langfuse/    Optional observability stack
 e2e/               Playwright
 ```
-
-Operator Admin is an **internal private console** (separate repo, **not published**). OSS self-host uses `apps/api/data/*.json` seeds only.
 
 ## Documentation
 
