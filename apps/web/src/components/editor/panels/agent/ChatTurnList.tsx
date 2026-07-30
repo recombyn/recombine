@@ -4,11 +4,13 @@ import { useTranslation } from 'react-i18next';
 import {
   HiOutlineArrowDownTray,
   HiOutlineArrowUturnLeft,
+  HiOutlineCheckCircle,
   HiOutlineChevronRight,
+  HiOutlineComputerDesktop,
+  HiOutlineQuestionMarkCircle,
 } from 'react-icons/hi2';
 import { ChatMarkdown } from '@/components/editor/panels/ChatMarkdown';
 import { ContextChipPill } from '@/components/editor/panels/AgentComposerInput';
-import { ModelBrandIcon } from '@/components/editor/panels/agent/ModelPickerPanel';
 import { Image } from '@/components/base/image';
 import {
   VirtualList,
@@ -42,8 +44,10 @@ export type ChatUiMessage = {
     name: string;
     status: 'running' | 'done' | 'error' | 'pending';
     kind?: 'thought' | 'explored' | 'tool' | 'added' | 'updated' | 'skipped' | 'deleted';
+    /** Timeline tone: confirm / success / info (all plain text rows). */
+    variant?: 'confirm' | 'success' | 'info';
     summary?: string;
-    /** Nested lines under Explored (Cursor: Thought briefly / Read file…). */
+    /** Nested lines under Explored. */
     items?: Array<{ id: string; name: string; summary?: string }>;
     /** Expandable markdown body (diagrams / long notes). */
     body?: string;
@@ -230,23 +234,42 @@ function UserMessageBody({
   );
 }
 
+function stepVariant(
+  step: NonNullable<ChatUiMessage['steps']>[number]
+): 'confirm' | 'success' | 'info' {
+  if (step.variant === 'success' || step.variant === 'confirm' || step.variant === 'info') {
+    return step.variant;
+  }
+  const kind = step.kind || '';
+  if (kind === 'added' || kind === 'updated' || kind === 'deleted') return 'success';
+  if (kind === 'thought' || kind === 'explored' || kind === 'tool' || kind === 'skipped') {
+    return 'confirm';
+  }
+  return 'info';
+}
+
 function AssistantProcessBody({
   assistant,
 }: {
   assistant: ChatUiMessage;
 }): ReactNode {
-  // Cursor-style: Thought / Explored (expandable) / Tool call + ops / Added
   const raw = assistant.steps || [];
-  // Dedupe by id so React keys stay unique even if state briefly raced.
   const seen = new Set<string>();
   const steps = raw.filter((s) => {
     const id = String(s.id || '');
     if (!id || seen.has(id)) return false;
+    // Drop the streaming seed row once real thought/process steps exist.
+    if (
+      s.id === 'thought-0' &&
+      raw.some((x) => x.id !== 'thought-0' && (x.kind === 'thought' || x.kind === 'explored' || x.kind === 'tool' || x.kind === 'added' || x.kind === 'updated'))
+    ) {
+      return false;
+    }
     seen.add(id);
     return true;
   });
   return (
-    <div className="mt-1 flex flex-col gap-1.5 border-l border-[var(--line)] pl-2.5 text-[12px] leading-relaxed text-[var(--muted)]">
+    <div className="flex w-full flex-col items-stretch gap-2">
       {steps.map((step, i) => (
         <ProcessStepRow key={`${step.id}-${i}`} step={step} />
       ))}
@@ -259,9 +282,13 @@ function ProcessStepRow({
 }: {
   step: NonNullable<ChatUiMessage['steps']>[number];
 }): ReactNode {
-  const expandable =
-    step.kind === 'explored' &&
-    Boolean((step.items && step.items.length) || step.body?.trim() || step.summary?.trim());
+  const { t } = useTranslation();
+  const variant = stepVariant(step);
+  const expandable = Boolean(
+    (step.items && step.items.length) ||
+      step.body?.trim() ||
+      (step.summary?.trim() && step.summary.trim() !== step.name.trim())
+  );
   const [open, setOpen] = useState(
     () => step.status === 'running' || Boolean(step.body?.trim())
   );
@@ -270,63 +297,187 @@ function ProcessStepRow({
     if (step.status === 'running') setOpen(true);
   }, [step.status, step.id]);
 
-  if (!expandable) {
-    return (
-      <div className="flex flex-col gap-0.5">
-        <span>
-          {step.name}
-          {step.status === 'running' && !/[.…]$/.test(step.name.trim()) ? '…' : ''}
-        </span>
-        {step.summary?.trim() ? (
-          <span className="whitespace-pre-wrap leading-snug text-[var(--muted)]">
-            {step.summary}
-          </span>
+  const label = (
+    <>
+      {step.name}
+      {step.status === 'running' && !/[.…]$/.test(step.name.trim()) ? '…' : ''}
+    </>
+  );
+
+  const chevron = expandable ? (
+    <HiOutlineChevronRight
+      className={cn(
+        'h-3.5 w-3.5 shrink-0 opacity-45 transition-transform',
+        open && 'rotate-90'
+      )}
+      aria-hidden
+    />
+  ) : null;
+
+  const detail =
+    open && expandable ? (
+      <div className="flex w-full flex-col gap-1 text-[12px] leading-relaxed text-[var(--muted)]">
+        {(step.items || []).map((it) => (
+          <div key={it.id} className="flex flex-col gap-0.5">
+            <span className="inline-flex items-center gap-1.5">
+              <HiOutlineCheckCircle
+                className="h-3 w-3 shrink-0 text-[var(--success,#22a06b)] opacity-80"
+                aria-hidden
+              />
+              {it.name}
+            </span>
+            {it.summary?.trim() ? (
+              <span className="whitespace-pre-wrap text-[11px] leading-snug opacity-80">
+                {it.summary}
+              </span>
+            ) : null}
+          </div>
+        ))}
+        {step.summary?.trim() && step.summary.trim() !== step.name.trim() ? (
+          <span className="w-full whitespace-pre-wrap leading-snug">{step.summary}</span>
+        ) : null}
+        {step.body?.trim() ? (
+          <div className="w-full text-[12px] leading-relaxed text-[var(--ink)]/80">
+            <ChatMarkdown content={step.body} />
+          </div>
         ) : null}
       </div>
+    ) : null;
+
+  const rowClass = cn(
+    'flex w-full items-center gap-1.5 text-left text-[12px] leading-none text-[var(--muted)] transition-colors',
+    step.status === 'error' && 'text-[var(--ink)]',
+    (step.status === 'done' || variant === 'success') && 'text-[var(--ink)]/70'
+  );
+
+  const leadingIcon =
+    step.status === 'error' ? (
+      <HiOutlineQuestionMarkCircle
+        className="h-3.5 w-3.5 shrink-0 text-[var(--danger,#c45)]"
+        aria-hidden
+      />
+    ) : step.status === 'done' || variant === 'success' ? (
+      <HiOutlineCheckCircle
+        className="h-3.5 w-3.5 shrink-0 text-[var(--success,#22a06b)]"
+        aria-hidden
+      />
+    ) : (
+      <span
+        className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--ink)]/35"
+        aria-hidden
+      />
+    );
+
+  if (!expandable) {
+    return (
+      <span className={rowClass}>
+        {leadingIcon}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      </span>
     );
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex w-full flex-col items-stretch gap-1.5">
       <button
         type="button"
-        className="group inline-flex max-w-full items-center gap-0.5 rounded px-0.5 text-left text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+        className={cn(rowClass, 'hover:text-[var(--ink)]')}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
+        title={open ? t('agent.collapseProcess') : t('agent.expandProcess')}
       >
-        <span>
-          {step.name}
-          {step.status === 'running' && !/[.…]$/.test(step.name.trim()) ? '…' : ''}
-        </span>
-        <HiOutlineChevronRight
-          className={cn(
-            'h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform',
-            open && 'rotate-90'
-          )}
-          aria-hidden
-        />
+        {leadingIcon}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {chevron}
       </button>
-      {open ? (
-        <div className="ml-0.5 flex flex-col gap-1 border-l border-[var(--line)] pl-2.5">
-          {(step.items || []).map((it) => (
-            <div key={it.id} className="flex flex-col gap-0.5">
-              <span>{it.name}</span>
-              {it.summary?.trim() ? (
-                <span className="whitespace-pre-wrap text-[11px] leading-snug opacity-80">
-                  {it.summary}
-                </span>
-              ) : null}
-            </div>
-          ))}
-          {step.summary?.trim() && !(step.items || []).length ? (
-            <span className="whitespace-pre-wrap leading-snug">{step.summary}</span>
-          ) : null}
-          {step.body?.trim() ? (
-            <div className="min-w-0 text-[12px] leading-relaxed text-[var(--ink)]">
-              <ChatMarkdown content={step.body} />
-            </div>
+      {detail}
+    </div>
+  );
+}
+
+function AssistantTurn({
+  assistant,
+  onChoice,
+  sending,
+}: {
+  assistant: ChatUiMessage;
+  worked?: string | null;
+  onChoice?: (choice: AskChoicePick) => void;
+  sending: boolean;
+}): ReactNode {
+  const { t } = useTranslation();
+  const foldable = hasFoldableProcess(assistant);
+  const streaming = Boolean(assistant.streaming);
+
+  const showImageGallery =
+    Boolean(assistant.images?.length) ||
+    (Number(assistant.imagePendingCount) || 0) > 0;
+  const doneMilestone =
+    !streaming && (foldable || showImageGallery) && Boolean(assistant.content || showImageGallery);
+
+  const showAskChoices =
+    !streaming &&
+    onChoice &&
+    Boolean(
+      (assistant.choiceUi?.mode !== 'text' && assistant.choiceUi?.options?.length) ||
+        (assistant.choiceUi?.mode === 'text' &&
+          assistant.choiceUi.options?.some(
+            (o) => o.action === 'apply' || o.action === 'dismiss'
+          )) ||
+        assistant.choices?.length ||
+        assistant.applyChoice ||
+        assistant.proposedOps?.length
+    );
+
+  return (
+    <div
+      data-assistant-id={assistant.id}
+      className="flex w-full min-w-0 flex-col items-stretch gap-2.5 px-0.5"
+    >
+      <div className="flex w-full items-center gap-1.5 text-[12px] leading-none text-[var(--ink)]/70">
+        <HiOutlineQuestionMarkCircle className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
+        <span className="min-w-0 flex-1 truncate">
+          {streaming && !assistant.content?.trim()
+            ? t('agent.working')
+            : t('agent.replied', { defaultValue: '已回复' })}
+        </span>
+      </div>
+
+      {/* Process first, then reply — matching product timeline order. */}
+      {foldable ? <AssistantProcessBody assistant={assistant} /> : null}
+
+      {showImageGallery ? (
+        <ImageGenGallery assistant={assistant} sending={sending} />
+      ) : null}
+
+      {assistant.content ? (
+        <div className="w-full min-w-0 overflow-x-hidden text-[13px] leading-[1.7] text-[var(--ink)] [&_.chat-md_p:first-child]:font-semibold">
+          <ChatMarkdown content={assistant.content} />
+          {streaming ? (
+            <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
           ) : null}
         </div>
+      ) : streaming && !foldable && !showImageGallery ? (
+        <div className="w-full text-[12px] text-[var(--muted)]">
+          {t('agent.working')}
+          <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
+        </div>
+      ) : null}
+
+      {doneMilestone ? (
+        <div className="flex w-full items-center gap-1.5 text-[12px] text-[var(--muted)]">
+          <HiOutlineComputerDesktop className="h-3.5 w-3.5 opacity-70" aria-hidden />
+          <span>
+            {t('agent.taskCompleteNamed', {
+              name: t('app.name', { defaultValue: 'Recombyn' }),
+              defaultValue: '{{name}} 已完成任务',
+            })}
+          </span>
+        </div>
+      ) : null}
+
+      {showAskChoices && onChoice ? (
+        <AskChoicePanel assistant={assistant} onChoice={onChoice} sending={sending} />
       ) : null}
     </div>
   );
@@ -504,7 +655,7 @@ function AskChoicePanel({
   };
 
   const chipClass =
-    'inline-flex h-7 max-w-full items-center rounded-xl border border-[var(--line)] bg-[var(--accent-soft)] px-2.5 text-[11px] text-[var(--ink)] transition-colors hover:bg-[var(--line)] disabled:opacity-40';
+    'inline-flex h-8 max-w-full items-center rounded-full border border-[var(--line)] bg-[var(--canvas)] px-3 text-[12px] text-[var(--ink)] transition-colors hover:bg-[var(--accent-soft)] disabled:opacity-40';
 
   if (ui.mode === 'multi') {
     const replyOpts = ui.options.filter((o) => o.action === 'reply');
@@ -602,129 +753,13 @@ function AskChoicePanel({
   );
 }
 
-function AssistantTurn({
-  assistant,
-  worked,
-  onChoice,
-  sending,
-}: {
-  assistant: ChatUiMessage;
-  worked: string | null;
-  onChoice?: (choice: AskChoicePick) => void;
-  sending: boolean;
-}): ReactNode {
-  const { t } = useTranslation();
-  const foldable = hasFoldableProcess(assistant);
-  const streaming = Boolean(assistant.streaming);
-  const [processOpen, setProcessOpen] = useState(streaming);
-
-  useEffect(() => {
-    setProcessOpen(Boolean(assistant.streaming));
-  }, [assistant.streaming, assistant.id]);
-
-  const showProcess = foldable && processOpen;
-  const showImageGallery =
-    Boolean(assistant.images?.length) ||
-    (Number(assistant.imagePendingCount) || 0) > 0;
-  const imageModelLabel = String(assistant.imageModelLabel || '').trim();
-  const imageModelId = String(assistant.imageModelId || '').trim();
-  const showImageModel = Boolean(imageModelLabel || imageModelId);
-
-  const workedMeta = (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[12px] font-normal text-[var(--muted)]">
-      {showImageModel ? (
-        <>
-          <ModelBrandIcon
-            model={{ id: imageModelId || imageModelLabel, label: imageModelLabel }}
-            size={14}
-            className="opacity-55"
-          />
-          <span className="truncate">{imageModelLabel || imageModelId}</span>
-        </>
-      ) : null}
-      {worked ? (
-        <span className={cn('shrink-0', showImageModel && 'whitespace-nowrap')}>
-          {worked}
-        </span>
-      ) : null}
-    </span>
-  );
-
-  const showAskChoices =
-    !streaming &&
-    onChoice &&
-    Boolean(
-      (assistant.choiceUi?.mode !== 'text' && assistant.choiceUi?.options?.length) ||
-        (assistant.choiceUi?.mode === 'text' &&
-          assistant.choiceUi.options?.some(
-            (o) => o.action === 'apply' || o.action === 'dismiss'
-          )) ||
-        assistant.choices?.length ||
-        assistant.applyChoice ||
-        assistant.proposedOps?.length
-    );
-
-  return (
-    <div
-      data-assistant-id={assistant.id}
-      className="flex min-w-0 flex-col gap-1.5 px-0.5"
-    >
-      {worked || showImageModel ? (
-        foldable ? (
-          <button
-            type="button"
-            title={processOpen ? t('agent.collapseProcess') : t('agent.expandProcess')}
-            className="group inline-flex max-w-full cursor-pointer items-center gap-0.5 rounded px-0.5 text-left text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-            onClick={() => setProcessOpen((v) => !v)}
-            aria-expanded={processOpen}
-          >
-            {workedMeta}
-            <HiOutlineChevronRight
-              className={cn(
-                'h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform',
-                processOpen && 'rotate-90'
-              )}
-              aria-hidden
-            />
-          </button>
-        ) : (
-          <div className="min-w-0">{workedMeta}</div>
-        )
-      ) : null}
-
-      {showProcess ? <AssistantProcessBody assistant={assistant} /> : null}
-
-      {showImageGallery ? (
-        <ImageGenGallery assistant={assistant} sending={sending} />
-      ) : null}
-
-      {assistant.content ? (
-        <div className="min-w-0 max-w-full overflow-x-hidden text-[13px] leading-relaxed text-[var(--ink)]">
-          <ChatMarkdown content={assistant.content} />
-          {streaming && !showProcess && !showImageGallery ? (
-            <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
-          ) : null}
-        </div>
-      ) : streaming && !showProcess && !showImageGallery ? (
-        <div className="text-[12px] text-[var(--muted)]">
-          {t('agent.working')}
-          <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
-        </div>
-      ) : null}
-      {showAskChoices && onChoice ? (
-        <AskChoicePanel assistant={assistant} onChoice={onChoice} sending={sending} />
-      ) : null}
-    </div>
-  );
-}
-
 const ChatTurnList = forwardRef(function ChatTurnList(
   {
     turns,
     editingUserId,
     editComposer,
     sending,
-    formatWorked,
+    formatWorked: _formatWorked,
     hasCheckpoint,
     onBeginEdit,
     onCancelEdit,
@@ -758,21 +793,20 @@ const ChatTurnList = forwardRef(function ChatTurnList(
     >
       {({ user: m, assistant }) => {
         const isEditing = Boolean(m && editingUserId === m.id);
-        const worked = formatWorked(assistant);
         const canRestore = Boolean(m && hasCheckpoint(m.id));
         return (
-          <div className="flex w-full min-w-0 flex-col gap-1.5">
+          <div className="flex w-full min-w-0 flex-col gap-3">
             {m ? (
               isEditing ? (
                 <div className="flex min-w-0 flex-col gap-1.5">
-                  <div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--canvas)] shadow-[0_4px_20px_rgba(0,0,0,0.08)]">
+                  <div className="overflow-hidden rounded-[22px] border border-[var(--line)] bg-[var(--canvas)] shadow-[0_4px_20px_rgba(0,0,0,0.06)]">
                     {editComposer}
                   </div>
                   <div className="flex items-center gap-1 px-0.5">
                     {canRestore ? (
                       <button
                         type="button"
-                        className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)]"
+                        className="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)]"
                         onClick={() => onRestore(m.id)}
                       >
                         <HiOutlineArrowUturnLeft className="h-3.5 w-3.5" />
@@ -781,7 +815,7 @@ const ChatTurnList = forwardRef(function ChatTurnList(
                     ) : null}
                     <button
                       type="button"
-                      className="inline-flex h-7 items-center rounded-lg px-2 text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)]"
+                      className="inline-flex h-7 items-center rounded-full px-2.5 text-[12px] text-[var(--muted)] hover:bg-[var(--accent-soft)]"
                       onClick={onCancelEdit}
                     >
                       {t('common.cancel')}
@@ -789,13 +823,13 @@ const ChatTurnList = forwardRef(function ChatTurnList(
                   </div>
                 </div>
               ) : (
-                <div className="group relative min-w-0 rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3 py-2 transition-colors hover:bg-[var(--accent-soft)]">
+                <div className="group relative w-full min-w-0">
                   <div
                     onClick={!sending ? () => onBeginEdit(m) : undefined}
                     className={cn(
-                      'min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-relaxed text-[var(--ink)]',
+                      'w-full rounded-[22px] bg-[var(--canvas)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--ink)] whitespace-pre-wrap break-words [overflow-wrap:anywhere]',
                       !sending ? 'cursor-pointer' : '',
-                      canRestore && !sending ? 'pr-9' : ''
+                      canRestore && !sending ? 'pr-10' : ''
                     )}
                     title={t('agent.clickToEdit')}
                   >
@@ -811,9 +845,8 @@ const ChatTurnList = forwardRef(function ChatTurnList(
                       aria-label={t('agent.restoreCheckpoint')}
                       title={t('agent.restoreCheckpoint')}
                       disabled={sending}
-                      style={{ top: 4, right: 10 }}
                       className={cn(
-                        'absolute z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)] transition-opacity hover:bg-[var(--canvas)] hover:text-[var(--ink)]',
+                        'absolute right-1.5 top-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)] transition-opacity hover:bg-[var(--canvas)] hover:text-[var(--ink)]',
                         sending
                           ? 'pointer-events-none opacity-0'
                           : 'opacity-0 group-hover:opacity-100'
@@ -821,7 +854,6 @@ const ChatTurnList = forwardRef(function ChatTurnList(
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        // Defer unmount past the click event — avoids removeChild NotFoundError.
                         const id = m.id;
                         window.setTimeout(() => onRestore(id), 0);
                       }}
@@ -836,7 +868,6 @@ const ChatTurnList = forwardRef(function ChatTurnList(
             {assistant && !isEditing ? (
               <AssistantTurn
                 assistant={assistant}
-                worked={worked}
                 onChoice={onChoice}
                 sending={sending}
               />

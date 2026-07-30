@@ -356,14 +356,15 @@ function formatActivityLabel(
   t: (key: string, opts?: Record<string, unknown>) => string,
   ev: ActivityStepEvent
 ): string | null {
-  // Classic Cursor-style verbs — op details go under the label (step.summary).
+  const detail = (ev.detail || '').trim();
+  // Prefer backend short `detail` as the row label when compact enough.
+  const preferDetail = detail.length > 0 && detail.length <= 48;
+
   if (ev.kind === 'thought') {
     if (ev.status === 'running') {
-      const detail = (ev.detail || '').trim();
-      // Backend heartbeat / phase copy while waiting on the model.
-      if (detail) return detail;
-      return t('agent.activityThoughtRunning');
+      return preferDetail ? detail : t('agent.activityThoughtRunning');
     }
+    if (preferDetail) return detail;
     if (ev.status === 'done' && ev.durationSec != null) {
       return t('agent.activityThought', { seconds: ev.durationSec });
     }
@@ -371,22 +372,23 @@ function formatActivityLabel(
     return null;
   }
   if (ev.kind === 'added') {
+    if (preferDetail) return detail;
     return ev.count != null && ev.count > 0
       ? t('agent.activityAddedCount', { count: ev.count })
       : t('agent.activityAdded');
   }
   if (ev.kind === 'updated') {
+    if (preferDetail) return detail;
     return ev.count != null && ev.count > 0
       ? t('agent.activityUpdatedCount', { count: ev.count })
       : t('agent.activityUpdated');
   }
   if (ev.kind === 'explored') {
-    if (ev.stage === 'scene' || (ev.detail || '').startsWith('canvas_size:')) {
-      const raw = (ev.detail || '').replace(/^canvas_size:/i, '').trim();
+    if (preferDetail && !detail.startsWith('canvas_size:')) return detail;
+    if (ev.stage === 'scene' || detail.startsWith('canvas_size:')) {
+      const raw = detail.replace(/^canvas_size:/i, '').trim();
       const size =
-        raw && /^\d+x\d+$/i.test(raw)
-          ? raw.replace(/x/i, '×')
-          : (ev.detail || '').trim();
+        raw && /^\d+x\d+$/i.test(raw) ? raw.replace(/x/i, '×') : detail;
       if (ev.status === 'running') {
         return size
           ? t('agent.activityCanvasSizeRunning', { size })
@@ -396,7 +398,7 @@ function formatActivityLabel(
         ? t('agent.activityCanvasSizeDone', { size })
         : t('agent.stageScene');
     }
-    if (ev.stage === 'lookup' || (ev.detail || '').includes('lookup')) {
+    if (ev.stage === 'lookup' || detail.includes('lookup')) {
       if (ev.status === 'running') return t('agent.activityLookupRunning');
       const n = ev.count != null && ev.count > 0 ? ev.count : 0;
       return n > 0
@@ -405,7 +407,7 @@ function formatActivityLabel(
     }
     if (ev.status === 'running') return t('agent.activityExploredRunning');
     const fromCount = ev.count != null && ev.count > 0 ? ev.count : 0;
-    const fromDetail = (ev.detail || '')
+    const fromDetail = detail
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean).length;
@@ -414,13 +416,14 @@ function formatActivityLabel(
       ? t('agent.activityExploredCount', { count: n })
       : t('agent.activityExplored');
   }
-  if (ev.kind === 'skipped') return t('agent.activitySkipped');
+  if (ev.kind === 'skipped') return preferDetail ? detail : t('agent.activitySkipped');
   if (ev.kind === 'deleted') {
+    if (preferDetail) return detail;
     return ev.count != null && ev.count > 0
-      ? t('agent.activityDeletedCount', { count: ev.count, defaultValue: `Deleted ${ev.count}` })
-      : t('agent.activityDeleted', { defaultValue: 'Deleted' });
+      ? t('agent.activityDeletedCount', { count: ev.count })
+      : t('agent.activityDeleted');
   }
-  // Tool call label stays short; op details go in step.summary.
+  if (preferDetail) return detail;
   return ev.status === 'running' ? t('agent.activityToolRunning') : t('agent.activityTool');
 }
 
@@ -580,11 +583,12 @@ function applyActivityEventToSteps(
     status: 'running' | 'done';
     label: string;
     summary?: string;
+    variant?: NonNullable<AssistantStep['variant']>;
     nestItem?: { id: string; name: string; summary?: string } | null;
     bodyMd: string;
   }
 ): AssistantStep[] | null {
-  const { kind, status, label, summary, nestItem, bodyMd } = opts;
+  const { kind, status, label, summary, variant, nestItem, bodyMd } = opts;
   const steps = [...stepsIn];
   let idx =
     kind === 'explored'
@@ -622,6 +626,7 @@ function applyActivityEventToSteps(
       kind: 'explored',
       name: label,
       status,
+      variant: variant || 'confirm',
       summary: summary || prevStep?.summary,
       items,
       body: bodyMd.trim() ? bodyMd : prevStep?.body,
@@ -639,6 +644,7 @@ function applyActivityEventToSteps(
     name: label,
     summary,
     status,
+    variant,
     body: bodyMd.trim() || undefined,
   };
   if (idx >= 0 && steps[idx]?.id !== 'explore-pipeline') {
@@ -2060,14 +2066,25 @@ function createDesignAgentEventRouter(opts: {
       stage: ev.stage,
     });
     if (!label) return;
+    const detailText = (ev.detail || '').trim();
+    const summaryText = String(ev.summary || '').trim();
     const summary =
-      ev.kind === 'tool' ||
+      (summaryText && summaryText !== label ? summaryText : undefined) ||
+      (ev.kind === 'tool' ||
       ev.kind === 'skipped' ||
       ev.kind === 'added' ||
       ev.kind === 'updated' ||
       ev.kind === 'deleted'
-        ? (ev.detail || '').trim() || undefined
-        : undefined;
+        ? detailText && detailText !== label
+          ? detailText
+          : undefined
+        : undefined);
+    const variant =
+      ev.kind === 'added' || ev.kind === 'updated' || ev.kind === 'deleted'
+        ? ('success' as const)
+        : ev.kind === 'thought' || ev.kind === 'explored' || ev.kind === 'tool'
+          ? ('confirm' as const)
+          : undefined;
     const nestItem =
       ev.item && (ev.item.name || ev.item.id)
         ? localizeExploreItem(opts.t, {
@@ -2085,6 +2102,7 @@ function createDesignAgentEventRouter(opts: {
           status: ev.status === 'running' ? 'running' : 'done',
           label,
           summary,
+          variant,
           nestItem,
           bodyMd: ev.body ? String(ev.body) : '',
         });

@@ -1,0 +1,122 @@
+{
+  "items": [
+    {
+      "skill_key": "design_methodology",
+      "name": "设计方法论",
+      "category": "create",
+      "when_to_use": "从零创作：分析任务 → 选矢量/文字/生图 → tool_ops 落层",
+      "scenes": "all",
+      "sort_weight": 100,
+      "preferred_tools": [
+        "create_frame",
+        "create_shape",
+        "create_text",
+        "create_image",
+        "create_svg",
+        "update_node"
+      ],
+      "prompt_positive": "# 设计方法论（社区基础版）\n\n1. 从用户话与画布推断目标、尺寸、必出文案；缺关键信息 → ask。\n2. UI 壳/色块/按钮 → 矢量；可改文案 → create_text；摄影/复杂插画 → create_image+genPrompt。\n3. 无限画布局部加形不必先 create_frame；整页/固定导出尺寸再 create_frame。\n4. 信息够 → tool_ops；读用户附图 → need_skills=[\"vision_extract\"]。\n5. 禁止编造品牌/价格/电话；禁止使用 SCENE 中不存在的节点 id。\n",
+      "prompt_negative": "不要空喊寒暄代替 tool_ops；不要用场景分类清单替代判断。",
+      "triggers": [
+        {
+          "empty_canvas": true,
+          "intent_in": ["create"]
+        },
+        {
+          "intent_in": ["create"],
+          "min_prompt_chars": 24
+        }
+      ],
+      "mutex_group": "methodology",
+      "version": 2
+    },
+    {
+      "skill_key": "vision_extract",
+      "name": "看图抽取",
+      "category": "vision",
+      "when_to_use": "用户附图：简述版式、元素、配色供还原",
+      "scenes": "all",
+      "sort_weight": 90,
+      "preferred_tools": [
+        "create_frame",
+        "create_shape",
+        "create_text",
+        "create_image",
+        "update_node"
+      ],
+      "prompt_positive": "# 看图抽取（社区基础版）\n\n按图如实写：载体与风格、主要分区、关键元素（字/图/色块/按钮）与大致位置、主色 3～5 个。\n图中没有的不要补。\n",
+      "prompt_negative": "禁止脑补图中没有的模块。",
+      "triggers": [
+        {
+          "has_images": true,
+          "intent_in": ["create"]
+        }
+      ],
+      "mutex_group": "vision",
+      "version": 2
+    },
+    {
+      "skill_key": "aesthetics_align",
+      "name": "美学对齐",
+      "category": "aesthetics",
+      "when_to_use": "系统检索到美学样本时参考构图与配色",
+      "scenes": "all",
+      "sort_weight": 80,
+      "preferred_tools": [
+        "create_frame",
+        "create_shape",
+        "create_text",
+        "create_image",
+        "update_node"
+      ],
+      "prompt_positive": "# 美学对齐（社区基础版）\n\n有样本图时：学构图分区、留白、层级、配色；勿抄样本文案/Logo。\n结束后 need_aesthetics=false。\n",
+      "prompt_negative": "不要抄样本文案/Logo/二维码。",
+      "triggers": [
+        {
+          "need_aesthetics": true
+        }
+      ],
+      "mutex_group": "aesthetics",
+      "version": 2
+    },
+    {
+      "skill_key": "canvas_edit",
+      "name": "画布增改",
+      "category": "edit",
+      "when_to_use": "已有画布上加形/改色/改字/挪位",
+      "scenes": "all",
+      "sort_weight": 70,
+      "preferred_tools": [
+        "create_shape",
+        "create_text",
+        "update_node",
+        "delete_nodes",
+        "move_nodes",
+        "resize_nodes"
+      ],
+      "prompt_positive": "# 画布增改（社区基础版）\n\n简单加形/改色/改字 → 直接 tool_ops；缺尺寸颜色用合理默认。\n改形状类型用 update_node（保留 id），不要 delete+create。\n只用 SCENE 里已有的节点 id。\n",
+      "prompt_negative": "禁止为局部加形硬建空画板；禁止用 delete+create 改形状类型。",
+      "triggers": [],
+      "mutex_group": "",
+      "version": 2
+    },
+    {
+      "skill_key": "image_gen",
+      "name": "生图配图",
+      "category": "image",
+      "when_to_use": "需要 create_image + genPrompt 生图",
+      "scenes": "all",
+      "sort_weight": 60,
+      "preferred_tools": [
+        "create_image",
+        "create_frame",
+        "update_node"
+      ],
+      "prompt_positive": "# 生图配图（社区基础版）\n\n复杂摄影/插画/材质 → create_image + genPrompt；UI 壳用矢量。\n可改文案用 create_text，不要烧进 genPrompt。\n用户禁止生图时不要强行生图。\n",
+      "prompt_negative": "用户禁止生图时不得强行 create_image。",
+      "triggers": [],
+      "mutex_group": "image",
+      "version": 2
+    }
+  ]
+}

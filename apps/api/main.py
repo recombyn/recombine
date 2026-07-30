@@ -26,14 +26,24 @@ for _name in (
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Resume Scene API",
-    description="Parse PDF/DOCX/Image into Canvas Scene JSON",
+    title="Recombyn API",
+    description="Canvas Scene API + Design Agent runtime",
     version="0.1.0",
 )
 
 
 @app.on_event("startup")
 def _init_stores() -> None:
+    try:
+        from services.auth.admin import SUPER_ADMIN_BOOTSTRAP_PASSWORD
+
+        if SUPER_ADMIN_BOOTSTRAP_PASSWORD == "Admin@2026":
+            logger.warning(
+                "SUPER_ADMIN_BOOTSTRAP_PASSWORD is still the default — "
+                "set SUPER_ADMIN_BOOTSTRAP_PASSWORD before any public deploy"
+            )
+    except Exception:
+        pass
     init_schema()
     try:
         from services.seed import run_seeds
@@ -48,6 +58,17 @@ def _init_stores() -> None:
         logger.info("design catalog ready")
     except Exception:
         logger.exception("design catalog bootstrap failed")
+    try:
+        from services.llm.agent import configure_langfuse
+
+        lf = configure_langfuse()
+        logger.info(
+            "langfuse: enabled=%s host=%s",
+            lf.get("enabled"),
+            lf.get("host"),
+        )
+    except Exception:
+        logger.exception("langfuse configure failed")
     try:
         from services.design.admin_store import start_usage_optimize_scheduler
         start_usage_optimize_scheduler()
@@ -84,4 +105,4 @@ app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/")
 def root():
-    return {"service": "resume-scene-api", "docs": "/docs"}
+    return {"service": "recombyn-api", "docs": "/docs"}

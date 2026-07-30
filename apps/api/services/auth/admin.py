@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import Header, HTTPException
 
 from services.auth import SessionUser, get_session
 
 # Bootstrap admin (seeded on email login). Prefer users.role = 'admin' going forward.
-SUPER_ADMIN_EMAIL = "admin@recombyn.com"
-SUPER_ADMIN_ID = "user_super_admin"
-# Hardcoded bootstrap login password (auth email login + sensitive admin ops confirm).
-SUPER_ADMIN_BOOTSTRAP_PASSWORD = "Admin@2026"
+# Override via env before public deploy (do not ship real secrets in git).
+SUPER_ADMIN_EMAIL = (
+    os.environ.get("SUPER_ADMIN_EMAIL") or "admin@recombyn.com"
+).strip().lower()
+SUPER_ADMIN_ID = (os.environ.get("SUPER_ADMIN_ID") or "user_super_admin").strip()
+SUPER_ADMIN_BOOTSTRAP_PASSWORD = (
+    os.environ.get("SUPER_ADMIN_BOOTSTRAP_PASSWORD") or "Admin@2026"
+)
 
 
 def bearer_token(authorization: str | None) -> str | None:

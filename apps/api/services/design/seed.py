@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def seed_design_catalog_if_empty() -> None:
-    """Warn if skills are missing; do not insert prompt text from the repo."""
+    """Legacy check — runtime skills are upserted by ``ensure_design_skills``."""
     from services.db import connect
 
     with connect() as conn:
@@ -19,6 +19,6 @@ def seed_design_catalog_if_empty() -> None:
         n = int(row["c"]) if row is not None else 0
     if n <= 0:
         logger.warning(
-            "design_skill is empty — configure skills/rules in Admin; "
-            "content_pack no longer ships prompt text."
+            "design_skill is empty before ensure_design_skills — "
+            "will seed from design_skills_seed.json on catalog boot."
         )

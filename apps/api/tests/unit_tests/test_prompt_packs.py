@@ -1,9 +1,11 @@
 from services.design.prompt_pack_store import (
     format_prompt_pack_block,
+    format_prompt_packs_catalog,
     list_prompt_nodes_from_flow,
     normalize_need_prompts,
     seed_prompt_overlay_nodes,
 )
+from services.design.skill_store import format_skills_details
 
 
 def test_normalize_need_prompts():
@@ -17,27 +19,37 @@ def test_normalize_need_prompts():
     assert normalize_need_prompts(["prompt_mobile"]) == ["mobile"]
 
 
-def test_seed_prompt_overlay_nodes_core_only():
+def test_seed_prompt_overlay_nodes_migrated_to_skills():
+    """Methodology packs moved to design_skills_seed — overlay nodes empty."""
     nodes = seed_prompt_overlay_nodes()
-    ids = {n["id"] for n in nodes}
-    assert ids == {"prompt_design_spec", "prompt_vision", "prompt_aesthetics"}
-    assert all(n["kind"] == "prompt" for n in nodes)
-    assert all(str(n.get("promptText") or "").strip() for n in nodes)
-
-    spec = next(n for n in nodes if n["id"] == "prompt_design_spec")
-    text = spec["promptText"]
-    assert "create_shape" in text and "create_text" in text
-    assert "create_frame" in text
-    assert "need_aesthetics" in text
-
-    vision = next(n for n in nodes if n["id"] == "prompt_vision")
-    assert "xPct" in vision["promptText"] or "layout" in vision["promptText"].lower()
+    assert nodes == []
 
 
-def test_list_prompt_nodes_from_graph():
-    graph = {"nodes": seed_prompt_overlay_nodes(), "edges": []}
+def test_prompt_packs_catalog_points_to_skills():
+    block = format_prompt_packs_catalog(scene="website")
+    assert "need_skills" in block or "Skill" in block
+
+
+def test_methodology_lives_in_skills():
+    details = format_skills_details(keys=["design_methodology"], scene="website")
+    assert "create_shape" in details and "create_text" in details
+    assert "need_aesthetics" in details
+
+
+def test_list_prompt_nodes_from_explicit_graph():
+    graph = {
+        "nodes": [
+            {
+                "id": "prompt_custom",
+                "kind": "prompt",
+                "phaseKey": "prompt_custom",
+                "promptText": "custom body with create_shape",
+                "inject": {"scenes": "all"},
+            }
+        ],
+        "edges": [],
+    }
     rows = list_prompt_nodes_from_flow(graph=graph)
-    assert {r["kind"] for r in rows} >= {"design_spec", "vision", "aesthetics"}
-    block = format_prompt_pack_block([r for r in rows if r["kind"] == "design_spec"])
-    assert "create_shape" in block or "create_text" in block
-    assert "need_prompts" in block or "need_aesthetics" in block
+    assert any(r["kind"] == "custom" for r in rows)
+    block = format_prompt_pack_block(rows)
+    assert "create_shape" in block

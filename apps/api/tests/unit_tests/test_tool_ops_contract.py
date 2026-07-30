@@ -107,3 +107,54 @@ def test_update_node_accepts_shape_type():
     )
     assert not errs
     assert ops[0]["args"]["shapeType"] == "circle"
+
+
+def test_create_shape_next_to_images_is_not_rewritten_to_update():
+    """Large create_shape must not rewrite onto image nodes (looks like no-op)."""
+    raw_ops = [
+        {
+            "name": "create_shape",
+            "args": {
+                "shapeType": "rect",
+                "x": 0,
+                "y": 164,
+                "width": 312,
+                "height": 200,
+                "fill": "#e0e0e0",
+            },
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[
+            {"id": "img1", "type": "image", "w": 148, "h": 148},
+            {"id": "img2", "type": "image", "w": 148, "h": 148},
+        ],
+    )
+    assert not errs
+    assert len(ops) == 1
+    assert ops[0]["name"] == "create_shape"
+    assert ops[0]["args"]["fill"] == "#e0e0e0"
+
+
+def test_create_shape_full_bleed_still_rewrites_onto_shape_plate():
+    raw_ops = [
+        {
+            "name": "create_shape",
+            "args": {
+                "shapeType": "rect",
+                "width": 400,
+                "height": 400,
+                "fill": "#ff0000",
+            },
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "bg", "type": "rect", "w": 400, "h": 400}],
+    )
+    assert not errs
+    assert len(ops) == 1
+    assert ops[0]["name"] == "update_node"
+    assert ops[0]["args"]["nodeId"] == "bg"
+    assert ops[0]["args"]["fill"] == "#ff0000"

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# systemd unit installed by start-for-windows — holds the distro open.
+# (WSL otherwise terminates the distro and kills Postgres mid-login.)
+[Unit]
+Description=Keep WSL distro alive for Langfuse
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sleep infinity
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

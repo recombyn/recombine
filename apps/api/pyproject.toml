@@ -3,9 +3,10 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "resume-scene-api"
+name = "recombyn-api"
 version = "0.1.0"
-description = "Resume scene import API — PDF/DOCX/Image/Design to Canvas JSON"
+description = "Recombyn API — canvas Scene + Design Agent runtime"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115.0",
@@ -35,6 +36,7 @@ dependencies = [
   "langchain-core>=0.3.0",
   "langchain-openai>=1.0.0",
   "langchain-text-splitters>=0.3.0",
+  "langfuse>=3.0.0",
 ]
 
 [project.optional-dependencies]

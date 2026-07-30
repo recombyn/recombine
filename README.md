@@ -1,103 +1,130 @@
-# recombyn
+<p align="center">
+  <img src="docs/assets/readme-hero.png" alt="Recombyn — open source canvas + AI design agent" width="100%" />
+</p>
 
-画布创作 + AI Design Agent — 前后端同仓 monorepo。
+<p align="center">
+  <a href="docs/self-hosting.md"><strong>Self Host</strong></a> ·
+  <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
+  <a href="apps/docs"><strong>Docs</strong></a>
+</p>
 
-- **Web**（`apps/web`）：React 编辑器、首页灵感、Agent 对话
-- **API**（`apps/api`）：FastAPI — Scene 解析、项目 / 广场、Agent 运行时、Admin API
-- **Docs**（`apps/docs`）：用户帮助与法律页（多语言）
-- **Admin**：独立仓库 `recombyn-admin`（流程设计、字典、能力配置）
+<p align="center">
+  <a href="#readme">English</a> ·
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-## 目录结构
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+  <a href="docs/self-hosting.md"><img src="https://img.shields.io/badge/self--host-Docker%20Compose-2496ED?logo=docker&logoColor=white" alt="Self-host" /></a>
+  <a href="apps/web"><img src="https://img.shields.io/badge/web-React%20%2B%20TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /></a>
+  <a href="apps/api"><img src="https://img.shields.io/badge/api-FastAPI%20%2B%20Python-3776AB?logo=python&logoColor=white" alt="Python" /></a>
+  <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-green.svg" alt="Security" /></a>
+</p>
 
-```
-apps/web/          React 前端
-apps/api/          Python API（详见 apps/api/README.md）
-apps/docs/         文档站
-packages/          共享协议与核心库
-docs/              架构 / Scene 规范 / 导入管线
-deploy/            Docker / Nginx
-scripts/           开发脚本
-e2e/               Playwright
-```
+**Recombyn** is an open-source **canvas editor + AI Design Agent**.  
+Create and edit visual designs on an infinite canvas, talk to an agent that can plan and apply canvas operations, and run everything on your own machine.
 
-后端要点：
+Self-host in minutes with Docker Compose (MySQL + Redis + web + API). Optional [Langfuse](https://langfuse.com) for Agent tracing. Proudly built as a MIT-licensed monorepo.
 
-- HTTP：`apps/api/api/v1/`
-- 业务：`apps/api/services/`（`design` / `plaza` / `wallet` / …）
-- 种子：`apps/api/data/*.json`（流程、字典、字体、官方案例）
+---
 
-## 快速开始
+## Why Recombyn?
 
-### 前端
+| | |
+|---|---|
+| **Canvas-native** | Frames, shapes, images, text — not just chat that dumps a single image. |
+| **Agent that paints** | LangGraph design agent with tools, skills, and ask/confirm flows. |
+| **Self-host first** | Same stack for local and server; your data stays yours. |
+| **Composable** | Seed JSON for skills / flows / dicts — no private Admin console required to boot. |
+
+## Core features
+
+- **Visual editor** — selection, layers, fills, export, share
+- **Design Agent** — create / edit / chat with streaming UI
+- **Import pipeline** — PDF / DOCX / image → Scene JSON
+- **Plaza & projects** — inspiration feed and saved work (API)
+- **Observability** — optional local Langfuse traces (`metadata.task_id`)
+
+## Quick start (self-host)
 
 ```bash
+git clone <this-repo-url>
+cd recombyn   # or your local folder name
+cp apps/api/.env.example apps/api/.env   # add LLM_API_KEY / provider keys
+docker compose up -d --build
+```
+
+| Service | URL |
+|---------|-----|
+| Web | http://localhost:3000 |
+| API docs | http://localhost:8000/docs |
+| MySQL | `127.0.0.1:3306` · `recombyn` / `recombyn` |
+
+> Change default DB and bootstrap admin passwords before any public deploy.  
+> Full guide: **[docs/self-hosting.md](docs/self-hosting.md)**
+
+### Local development
+
+```bash
+docker compose up -d redis   # or: mysql redis
 npm install
+cp apps/api/.env.example apps/api/.env
+npm run dev:api              # empty DATABASE_URL → SQLite
 npm run dev:web
 ```
 
-访问 http://localhost:3000
+## Architecture (high level)
 
-### 后端
-
-```bash
-docker compose up -d redis
-
-cd apps/api
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-pip install -e ../../packages/scene-builder-py
-pip install -e .
-# 复制 .env.example → .env
-
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
-# 另开终端（导入异步任务需要）：
-celery -A worker.celery_app.celery worker -l info --pool=solo
+```mermaid
+flowchart LR
+  User[Browser] --> Web[apps/web]
+  Web --> API[apps/api]
+  API --> MySQL[(MySQL)]
+  API --> Redis[(Redis)]
+  API --> LLM[LLM providers]
+  API -.-> LF[Langfuse optional]
 ```
 
-或仓库根：`npm run dev:api`
+## Repository layout
 
-访问 http://127.0.0.1:8000/docs  
-详情见 [apps/api/README.md](apps/api/README.md)
-
-### 文档站
-
-```bash
-npm run dev:docs
+```
+apps/web/          React canvas + Agent UI
+apps/api/          FastAPI — Scene, Agent, plaza, wallet
+apps/docs/         Help / legal site
+packages/          Shared builders & schemas
+docs/              Architecture + self-hosting
+deploy/            Dockerfiles / Nginx
+infra/langfuse/    Optional observability stack
+e2e/               Playwright
 ```
 
-### 管理后台
+Operator Admin is an **internal private console** (separate repo, **not published**). OSS self-host uses `apps/api/data/*.json` seeds only.
 
-见独立仓库 `recombyn-admin`（对接本仓 API 的 `/api/v1/admin`）。
+## Documentation
 
-## 解析链路
+| Doc | Link |
+|-----|------|
+| Self-hosting | [docs/self-hosting.md](docs/self-hosting.md) |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Security | [SECURITY.md](SECURITY.md) |
+| Code of Conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
+| Architecture | [docs/architecture.md](docs/architecture.md) |
+| Maintainer OSS checklist | [docs/open-source-checklist.md](docs/open-source-checklist.md) |
 
-| 来源 | 流程 |
-|------|------|
-| PDF | 转页图 →（可选）OCR/布局 + 色板；失败回退 pdfplumber → Scene |
-| DOCX | LibreOffice→PDF → 同上 |
-| 图片 | 页图 → OpenCV + OCR/布局 → Scene |
+## Community
 
-异步：`POST /api/v1/import/jobs` → `GET /api/v1/import/jobs/{id}`
+- **Issues** — bug & feature templates under `.github/ISSUE_TEMPLATE/`
+- **PRs** — see [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Security** — report privately per [SECURITY.md](SECURITY.md)
 
-## 自动化测试
+## License & model
 
-| 层级 | 工具 | 目录 |
-|------|------|------|
-| React 单元 | Vitest + RTL | `apps/web/src/**/*.{test,spec}.tsx` |
-| API | pytest | `apps/api/tests/{unit,integration}_tests/` |
-| E2E | Playwright | `e2e/tests/` |
+[MIT](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-```bash
-npm run test:web
-npm run test:api
-npm run test:e2e
-```
+Individuals can self-host for free. We plan to offer **hosted Cloud** and enterprise support later — the MIT core stays open (same shape as many OSS + Cloud products).
 
-## 文档
+---
 
-- [API 后端说明](apps/api/README.md)（目录、种子、运行）
-- [架构说明](docs/architecture.md)
-- [导入管线](docs/import-pipeline.md)
-- [Scene JSON 规范](docs/scene-json-spec.md)
-- [API 文档](docs/api.md)
-- 用户帮助站：`apps/docs`（`npm run dev:docs`）
+<p align="center">
+  <img src="docs/assets/logo-mark.svg" alt="Recombyn" width="48" />
+</p>

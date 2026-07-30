@@ -21,6 +21,16 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             category VARCHAR(32) NOT NULL,
             prompt_positive {text} NOT NULL,
             prompt_negative {text},
+            when_to_use {text},
+            preferred_tools {text},
+            triggers {text},
+            mutex_group VARCHAR(64) NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            pack_version VARCHAR(32) NULL,
+            description {text},
+            logo {text},
+            locales {text},
+            source VARCHAR(16) NOT NULL DEFAULT 'admin',
             sort_weight INTEGER NOT NULL DEFAULT 0,
             scenes VARCHAR(128) NOT NULL DEFAULT 'all',
             default_model VARCHAR(32) NOT NULL DEFAULT 'doubao',
@@ -331,6 +341,7 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
         pass
     _ensure_quality_sample_media_columns(conn, mysql=mysql)
     _ensure_design_skill_key_column(conn, mysql=mysql)
+    _ensure_design_skill_runtime_columns(conn, mysql=mysql)
     _ensure_canvas_tool_kind_column(conn, mysql=mysql)
     _ensure_canvas_tool_args_schema_column(conn, mysql=mysql)
     _ensure_global_rule_meta_columns(conn, mysql=mysql)
@@ -523,6 +534,41 @@ def _ensure_design_skill_key_column(conn: Any, *, mysql: bool) -> None:
             conn.rollback()
         except Exception:
             pass
+
+
+def _ensure_design_skill_runtime_columns(conn: Any, *, mysql: bool) -> None:
+    """Pluggable skill columns: when/tools/triggers/mutex/version/source/pack meta."""
+    text = "LONGTEXT" if mysql else "TEXT"
+    varchar16 = "VARCHAR(16)"
+    varchar32 = "VARCHAR(32)"
+    varchar64 = "VARCHAR(64)"
+    for col, col_def in (
+        ("when_to_use", text),
+        ("preferred_tools", text),
+        ("triggers", text),
+        ("mutex_group", f"{varchar64} NULL"),
+        ("version", "INTEGER DEFAULT 1"),
+        ("pack_version", f"{varchar32} NULL"),
+        ("description", text),
+        ("logo", text),
+        ("locales", text),
+        ("source", f"{varchar16} DEFAULT 'admin'"),
+    ):
+        try:
+            if mysql:
+                conn.execute(
+                    f"ALTER TABLE design_skill ADD COLUMN {col} {col_def}"
+                )
+            else:
+                conn.execute(
+                    f"ALTER TABLE design_skill ADD COLUMN {col} {col_def}"
+                )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
 
 def _ensure_quality_sample_media_columns(conn: Any, *, mysql: bool) -> None:

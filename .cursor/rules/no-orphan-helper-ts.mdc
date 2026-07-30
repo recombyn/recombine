@@ -1,0 +1,82 @@
+---
+description: Keep logic in-file with named helpers; do not split orphan modules; flatten nesting (TS + Python)
+alwaysApply: true
+---
+
+# In-file structure (no orphan helpers)
+
+When refactoring for readability, **improve structure inside the same file**. Do not “clean up” by creating new helper modules.
+
+This rule exists because agents repeatedly:
+- extracted `agentDockWidth.ts` / `agentDockModels.ts` / `*Utils.ts` / `plaza_*_helpers.py` against explicit user preference
+- left deep nested `if` chains instead of named methods
+- mistook “不要 page / 不需要 page” as pagination UI when the user meant **page/file code structure**
+
+Applies to **frontend (TS/TSX)** and **backend (Python under `apps/api`)**.
+
+## Hard rules
+
+1. **Do not create new helper modules** for one consumer. No `fooUtils.ts`, `fooHelpers.ts`, `agentDock*.ts`, `*_helpers.py`, or dumping one-off logic into `src/utils/` / ad-hoc `services/*/util.py`.
+2. **Named helpers in the same file.** Pull nested branches into top-of-file `function`s / `_private` helpers (or clearly named locals like `handleUiToken`). Prefer `switch` / early return over long `if/else` ladders.
+3. **Flatten nesting.** Early returns, extract predicates (`shouldRunImageGenPath`, `_build_feed_where`), and named finish/patch helpers. Target shallow control flow.
+4. **Same pattern across related files.** When the user says “所有文件都看看 / 不要漏了”, apply this **in-file** structure pass to related pages/panels/services — still without splitting files.
+5. **Shared module only when genuinely shared.** Extract only if **3+** call sites need the same API, or it is a real domain library (e.g. existing `services/plaza/cover.py`). Prefer keeping helpers next to the owning store/route.
+6. **Hooks (frontend):** `useX.ts` is OK when large **and** reused. Single consumer → keep `function useX` in that component file.
+7. **`src/utils/` / generic util dumps** are for cross-app primitives only. Not editor/chat/canvas/plaza one-offs.
+
+## Do
+
+```ts
+// ✅ Top of AgentDock.tsx / HomeAgentComposer.tsx
+function shouldRunImageGenPath(opts: { ... }): boolean { ... }
+
+switch (ev.type) {
+  case 'token': return handleUiToken(ev);
+  case 'done': return handleUiDone(ev);
+}
+```
+
+```python
+# ✅ Top of services/plaza/store.py (same module)
+def _clamp_title(title: str) -> str: ...
+def _build_feed_where(...) -> tuple[str, list[Any]] | None: ...
+def _fetch_row_or_raise(conn, submission_id): ...
+```
+
+## Don't
+
+```ts
+// ❌ New satellite files
+// agentDockWidth.ts / fillPanelHelpers.ts
+```
+
+```python
+# ❌ New satellite files for one store
+# services/plaza/store_helpers.py / feed_utils.py
+```
+
+```ts
+// ❌ Deep nesting left as-is
+if (a) {
+  if (b) {
+    if (c) { /* 80 lines */ }
+  }
+}
+```
+
+## Scope notes
+
+- **Behavior must stay the same** unless the user asked for a product change.
+- Large engines (`SvgCanvas`, `agent_controller.py`, `services/db`) are optional for structure sweeps unless the user explicitly includes them.
+- When an orphan helper with a **single** consumer already exists, fold it back into that consumer and delete the file — do not relocate it into a generic `utils` dump.
+- Existing domain packages that are already shared (`cover.py`, `panel_png.py`, `db.py`) stay; do not merge everything into one megafile, and do not add *more* thin wrapper modules.
+
+## Phrase mapping (user Chinese)
+
+| User says | Means |
+|-----------|--------|
+| 不要拆 ts / 不要拆文件 / 不要拆 py | Keep helpers in the same file; no new modules |
+| 封装方法 / 命名方法 / 少嵌套 | Named functions + early return / switch |
+| 不需要 page / 不要 page（在谈结构时） | Code structure of the page/file — **not** pagination UI |
+| 所有文件都看看，不要漏了 | Same in-file pass on related files in scope |
+| 后端也看看结构 | Apply the same rules under `apps/api` |

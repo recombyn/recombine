@@ -219,10 +219,11 @@ def list_prompt_nodes_from_flow(*, graph: dict[str, Any] | None = None) -> list[
     return out
 
 
-# On-demand packs the model may request via need_prompts / empty-canvas preload.
-_NEED_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
-# Alias used by seed / overlay helpers.
-_CORE_PROMPT_KINDS = _NEED_PROMPT_KINDS
+# Methodology packs migrated to design_skill (need_skills). Keep empty allowlist
+# so format/catalog no longer advertise them; bridge lives in skill_store.
+_NEED_PROMPT_KINDS = frozenset()
+# Alias used by seed / overlay helpers (legacy kinds still recognized for disable).
+_CORE_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
 
 PACK_TYPE_NEED = "need"
 PACK_TYPE_SYSTEM = "system"
@@ -507,6 +508,33 @@ def ensure_design_prompt_packs() -> None:
                     ),
                 )
                 existing_kinds.add(kind)
+            # Keep protocol overlays in sync with seed (skill migration).
+            _FORCE_SYNC_KINDS = frozenset(
+                {
+                    "agent.prompt.need_tools_overlay",
+                    "agent.prompt.lc_tools_overlay",
+                    "agent.prompt.react_system",
+                }
+            )
+            for kind in _FORCE_SYNC_KINDS:
+                item = _SEED_BY_KIND.get(kind)
+                if not item:
+                    continue
+                conn.execute(
+                    """
+                    UPDATE design_prompt_pack
+                    SET body = ?, when_to_use = ?, title = COALESCE(NULLIF(title, ''), ?),
+                        updated_at = ?
+                    WHERE kind = ?
+                    """,
+                    (
+                        str(item.get("body") or ""),
+                        str(item.get("when_to_use") or ""),
+                        str(item.get("title") or kind),
+                        now,
+                        kind,
+                    ),
+                )
             # Backfill empty pack_type from seed / kind inference (never overwrite Admin-set values).
             for row in conn.execute(
                 "SELECT id, kind, pack_type FROM design_prompt_pack"
@@ -721,7 +749,7 @@ def format_prompt_packs_catalog(*, scene: str = "website") -> str:
     scene_l = str(scene or "website").strip().lower() or "website"
     rows = list_prompt_packs(enabled=True, pack_type=PACK_TYPE_NEED, ensure=True)
     lines: list[str] = [
-        "提示词包目录（用 need_prompts: [\"design_spec\", \"vision\", \"aesthetics\"] 申请正文）："
+        "提示词包目录（legacy need_prompts；方法论请用 need_skills）："
     ]
     seen_kind: set[str] = set()
     for r in rows:
@@ -730,6 +758,8 @@ def format_prompt_packs_catalog(*, scene: str = "website") -> str:
             continue
         kind = str(r.get("kind") or "").strip()
         if not kind or kind in seen_kind:
+            continue
+        if kind in _CORE_PROMPT_KINDS:
             continue
         seen_kind.add(kind)
         label = KIND_LABELS.get(kind, kind)
@@ -742,7 +772,10 @@ def format_prompt_packs_catalog(*, scene: str = "website") -> str:
         if len(lines) >= 12:
             break
     if len(lines) == 1:
-        lines.append("（暂无按需提示词包：请在 Admin「提示词包」维护 type=need）")
+        return (
+            "提示词包：方法论/看图/美学已迁至 Skill 目录（need_skills）。"
+            "系统协议仍由 type=system 提示词包提供。"
+        )
     return "\n".join(lines)
 
 

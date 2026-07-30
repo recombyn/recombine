@@ -1914,6 +1914,8 @@ export type AgentStepEvent =
       skillName?: string;
       /** Human-readable what happened (e.g. 添加文字「中秋」). */
       detail?: string;
+      /** Expandable secondary copy (kept out of the capsule/row label). */
+      summary?: string;
       stage?: string;
       item?: { id?: string; name?: string; summary?: string };
       body?: string;
@@ -2561,7 +2563,15 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       return;
     }
     const stage = ev.stage ? String(ev.stage) : '';
-    const detail = ev.detail ? String(ev.detail) : '';
+    const detailRaw = String(ev.detail || '').trim();
+    const summaryRaw = String(ev.summary || '').trim();
+    // Product capsule/row label from `detail`; long `summary` becomes expandable body.
+    const detail =
+      detailRaw ||
+      (summaryRaw.length > 0 && summaryRaw.length <= 48 ? summaryRaw : '');
+    const bodyFromSummary =
+      !detailRaw && summaryRaw.length > 48 ? summaryRaw : '';
+    const activityBody = String(ev.body || bodyFromSummary || '').trim();
     // Bind an existing @ / focus board for shimmer — never spawn an empty artboard.
     // Free-canvas create/edit does not need a frame; only model create_frame opens one.
     if (
@@ -2608,6 +2618,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       status: ev.status === 'running' ? 'running' : 'done',
       count: typeof ev.count === 'number' ? ev.count : undefined,
       detail: detail || undefined,
+      summary: summaryRaw && summaryRaw !== detail ? summaryRaw : undefined,
       skillName: ev.skillName || ev.skill_name || undefined,
       durationSec: typeof ev.durationSec === 'number' ? ev.durationSec : undefined,
       stage: stage || undefined,
@@ -2618,7 +2629,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
             summary: ev.item.summary ? String(ev.item.summary) : undefined,
           }
         : undefined,
-      body: ev.body ? String(ev.body) : undefined,
+      body: activityBody || undefined,
     });
     const pillFrame = shimmerFrameId || live.frameId;
     if (pillFrame && ev.status !== 'done') {

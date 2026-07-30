@@ -885,6 +885,16 @@ def admin_model_usage_list(
     )
 
 
+@router.get("/design/observability")
+def admin_design_observability(
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Langfuse status for Admin 运行复盘."""
+    from services.llm.agent import configure_langfuse
+
+    return configure_langfuse()
+
+
 @router.get("/design/decision-logs")
 def admin_design_decision_logs(
     page: int = Query(default=1, ge=1),
@@ -1152,6 +1162,84 @@ def admin_delete_design_prompt_pack(
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+
+class DesignSkillIn(BaseModel):
+    id: int | None = None
+    skillKey: str | None = Field(default=None, max_length=64)
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str = ""
+    category: str = Field(default="agent", max_length=32)
+    whenToUse: str = ""
+    promptPositive: str = ""
+    promptNegative: str = ""
+    preferredTools: list[str] | str | None = None
+    triggers: list[Any] | dict[str, Any] | str | None = None
+    mutexGroup: str = Field(default="", max_length=64)
+    version: int = 0
+    packVersion: str | None = Field(default=None, max_length=32)
+    logo: str | None = None
+    locales: dict[str, Any] | str | None = None
+    scenes: str = Field(default="all", max_length=128)
+    sortWeight: int = 0
+    enabled: bool = True
+    defaultModel: str = "doubao"
+    maxRetries: int = 2
+    outputFormat: str = "json"
+    allowUserModelOverride: bool = False
+
+
+@router.get("/design/skills")
+def admin_design_skills(
+    q: str | None = Query(default=None),
+    enabled: bool | None = Query(default=None),
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from services.design.admin_store import list_admin_skills
+    from services.design.skill_store import ensure_design_skills
+
+    ensure_design_skills()
+    return {"items": list_admin_skills(q=q, enabled=enabled)}
+
+
+@router.put("/design/skills")
+def admin_upsert_design_skill(
+    body: DesignSkillIn,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from services.design.admin_store import upsert_skill
+
+    try:
+        item = upsert_skill(body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"item": item}
+
+
+@router.delete("/design/skills/{skill_id}")
+def admin_delete_design_skill(
+    skill_id: int,
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    from services.design.admin_store import soft_delete_skill
+    from services.design.skill_store import invalidate_skill_key_cache
+
+    ok = soft_delete_skill(skill_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Not found")
+    invalidate_skill_key_cache()
+    return {"ok": True}
+
+
+@router.post("/design/skills/resync")
+def admin_resync_design_skills(
+    _admin: SessionUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Re-run seed + file skill sync (never overwrites source=admin)."""
+    from services.design.skill_store import ensure_design_skills, list_runtime_skills
+
+    ensure_design_skills(force=True)
+    return {"ok": True, "runtimeCount": len(list_runtime_skills())}
 
 
 @router.get("/design/kg-triples")

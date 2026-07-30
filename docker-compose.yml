@@ -1,4 +1,37 @@
+# Self-host stack (Langfuse-style): MySQL + Redis + api + worker + web.
+# Guide: docs/self-hosting.md
+# Optional Agent tracing: infra/langfuse/ (separate compose).
+#
+#   cp apps/api/.env.example apps/api/.env   # LLM keys etc.
+#   docker compose up -d --build
+#
+# Defaults: MySQL user/password/db = recombyn / recombyn / recombyn
+# Override: MYSQL_PASSWORD=...  DATABASE_URL=mysql://...
+# Local npm/uvicorn without this MySQL → leave DATABASE_URL empty (SQLite).
+
 services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-recombyn-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-recombyn}
+      MYSQL_USER: ${MYSQL_USER:-recombyn}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-recombyn}
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 25s
+
   redis:
     image: redis:7-alpine
     ports:
@@ -28,6 +61,9 @@ services:
         INSTALL_OCR: "${INSTALL_OCR:-false}"
     ports:
       - "8000:8000"
+    env_file:
+      - path: apps/api/.env
+        required: false
     volumes:
       - ./apps/api/storage/uploads:/app/apps/api/storage/uploads
       - ./apps/api/storage/results:/app/apps/api/storage/results
@@ -38,8 +74,12 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - USE_VISION=${USE_VISION:-true}
       - IMPORT_DPI=${IMPORT_DPI:-200}
+      # Prefer compose MySQL; host .env DATABASE_URL=localhost will not work inside containers.
+      - DATABASE_URL=${DATABASE_URL:-mysql://recombyn:recombyn@mysql:3306/recombyn}
     depends_on:
       redis:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
 
   worker:
@@ -49,6 +89,9 @@ services:
       args:
         INSTALL_OCR: "${INSTALL_OCR:-false}"
     command: celery -A worker.celery_app.celery worker -l info --concurrency=1
+    env_file:
+      - path: apps/api/.env
+        required: false
     volumes:
       - ./apps/api/storage/uploads:/app/apps/api/storage/uploads
       - ./apps/api/storage/results:/app/apps/api/storage/results
@@ -59,11 +102,15 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - USE_VISION=${USE_VISION:-true}
       - IMPORT_DPI=${IMPORT_DPI:-200}
+      - DATABASE_URL=${DATABASE_URL:-mysql://recombyn:recombyn@mysql:3306/recombyn}
     depends_on:
       redis:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
       api:
         condition: service_started
 
 volumes:
   redis_data:
+  mysql_data:

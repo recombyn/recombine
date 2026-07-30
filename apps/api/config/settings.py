@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     # Empty → LLM_DEFAULT_MODEL (cheaper than the main agent model when possible).
     agent_summarize_model: str = ""
 
+    # Langfuse — Design Agent / LangGraph observability (replaces custom 运行复盘 steps).
+    # Set LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY. Off when either key is empty.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://cloud.langfuse.com"  # or https://us.cloud.langfuse.com / self-host
+    langfuse_tracing: bool = True
+    langfuse_project_id: str = ""  # optional; for console deep links
+
     # Phase 5: table cells + SAM/LaMa models
     expand_table_cells: bool = True
     sam_checkpoint: str | None = None

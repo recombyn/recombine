@@ -22,6 +22,7 @@ venv/
 apps/api/storage/uploads/*
 apps/api/storage/results/*
 apps/api/storage/*.db
+apps/api/storage/langgraph_*.db
 !apps/api/storage/uploads/.gitkeep
 !apps/api/storage/results/.gitkeep
 
@@ -33,13 +34,21 @@ e2e/blob-report/
 apps/api/.coverage
 apps/api/htmlcov/
 
-# misc
+# secrets / local env (keep *.example)
 .DS_Store
 .env
+.env.*
+!.env.example
+!**/.env.example
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+*.pem
+*.p12
+id_rsa*
+secrets/
+.credentials/
 
 # Local design-agent skills (MD guides — do not publish)
 apps/web/agent-skills/
@@ -64,3 +73,16 @@ yarn-debug.log*
 yarn-error.log*
 
 apps/docs/dist/
+
+# Local agent tooling / scratch
+.agents/
+apps/api/.agents/
+apps/api/skills-lock.json
+apps/api/_tmp_*
+apps/api/list_packs.py
+
+# Cursor local skill dumps (keep team rules if added explicitly)
+.cursor/skills/
+
+# Langfuse local secrets
+infra/langfuse/.env

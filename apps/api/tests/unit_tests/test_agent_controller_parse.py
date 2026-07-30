@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from services.design.agent_controller import (
     AgentRunState,
+    AgentTurnSchema,
     _ask_propose_user_text,
     _chat_fallback_text,
     _ensure_propose_choice_ui,
     _has_pending_resource_details,
+    _lc_design_needs_canvas_ops,
     _normalize_choice_ui,
     _normalize_ops_payload,
     _parse_agent_turn,
     _should_recover_edit_after_resources,
+    _turn_from_structured,
 )
 
 
@@ -123,6 +126,45 @@ def test_should_recover_edit_after_tools_drop_to_chat():
     )
 
 
+def test_lc_design_needs_canvas_ops_blocks_narrate_only():
+    assert _lc_design_needs_canvas_ops(
+        classified="create", turn_intent="chat", has_ops=False
+    )
+    assert _lc_design_needs_canvas_ops(
+        classified="edit", turn_intent="done", has_ops=False
+    )
+    assert not _lc_design_needs_canvas_ops(
+        classified="create", turn_intent="ask", has_ops=False
+    )
+    assert not _lc_design_needs_canvas_ops(
+        classified="create", turn_intent="chat", has_ops=True
+    )
+    assert not _lc_design_needs_canvas_ops(
+        classified="chat", turn_intent="chat", has_ops=False
+    )
+
+
+def test_turn_from_structured_keeps_reply_and_ops():
+    turn = _turn_from_structured(
+        AgentTurnSchema(
+            thought="加矩形",
+            intent="create",
+            reply="好的，我在狗旁边加一个矩形。",
+            tool_ops=[
+                {
+                    "op_key": "create_shape",
+                    "args": {"shapeType": "rect", "x": 100, "y": 250, "width": 200, "height": 150},
+                }
+            ],
+            done=True,
+        )
+    )
+    assert turn["intent"] == "create"
+    assert "矩形" in turn["reply"]
+    assert turn["tool_ops_raw"]
+    assert turn["thought"] == "加矩形"
+
+
 def test_chat_fallback_fills_persona():
     class _RT:
         chat_fallback_tmpl = "你好，{persona}。可以说说你想改画布的什么。"
@@ -139,12 +181,32 @@ def test_has_pending_resource_details():
         pending_tool_details = "TOOL_DETAILS:\n..."
         pending_knowledge_details = ""
         pending_prompt_details = ""
+        pending_skill_details = ""
         pending_aesthetics_details = ""
 
     assert _has_pending_resource_details(_RT())
     empty = _RT()
     empty.pending_tool_details = ""
     assert not _has_pending_resource_details(empty)
+    skills = _RT()
+    skills.pending_tool_details = ""
+    skills.pending_skill_details = "SKILL_DETAILS:\n..."
+    assert _has_pending_resource_details(skills)
+
+
+def test_turn_bridges_need_prompts_to_skills():
+    turn = _turn_from_structured(
+        AgentTurnSchema(
+            thought="做海报",
+            intent="create",
+            need_prompts=["design_spec", "vision"],
+            tool_ops=[],
+            done=False,
+        )
+    )
+    assert "design_methodology" in turn["need_skills"]
+    assert "vision_extract" in turn["need_skills"]
+    assert turn["need_prompts"] == []
 
 
 def test_heuristic_user_intent_gate():

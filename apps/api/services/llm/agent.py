@@ -459,6 +459,170 @@ def agent_thread_config(thread_id: str | None) -> dict[str, Any] | None:
     return {"configurable": {"thread_id": tid}}
 
 
+def langfuse_enabled() -> bool:
+    from config.settings import settings
+
+    return bool(
+        settings.langfuse_tracing
+        and (settings.langfuse_public_key or "").strip()
+        and (settings.langfuse_secret_key or "").strip()
+    )
+
+
+def configure_langfuse() -> dict[str, Any]:
+    """Apply Langfuse env from settings. Returns status for Admin / logs."""
+    import os
+
+    from config.settings import settings
+
+    pk = (settings.langfuse_public_key or "").strip()
+    sk = (settings.langfuse_secret_key or "").strip()
+    base = (settings.langfuse_base_url or "https://cloud.langfuse.com").strip().rstrip("/")
+    enabled = bool(settings.langfuse_tracing) and bool(pk) and bool(sk)
+    # Prefer Langfuse over LangSmith auto-tracing.
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    os.environ.pop("LANGSMITH_TRACING", None)
+    if enabled:
+        os.environ["LANGFUSE_PUBLIC_KEY"] = pk
+        os.environ["LANGFUSE_SECRET_KEY"] = sk
+        os.environ["LANGFUSE_BASE_URL"] = base
+        os.environ["LANGFUSE_HOST"] = base  # legacy alias
+        try:
+            from langfuse import get_client
+
+            get_client()
+        except Exception:
+            _log = __import__("logging").getLogger("services.llm.agent")
+            _log.exception("langfuse get_client failed")
+    else:
+        for k in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL", "LANGFUSE_HOST"):
+            os.environ.pop(k, None)
+    return {
+        "enabled": enabled,
+        "host": base,
+        "projectId": (settings.langfuse_project_id or "").strip() or None,
+        "consoleUrl": langfuse_console_url(),
+    }
+
+
+def langfuse_console_url(
+    *,
+    task_id: str | None = None,
+    trace_id: str | None = None,
+) -> str:
+    """Best-effort Langfuse console URL (trace deep-link when possible)."""
+    from config.settings import settings
+
+    base = (settings.langfuse_base_url or "https://cloud.langfuse.com").strip().rstrip("/")
+    tid = (trace_id or "").strip()
+    if tid:
+        try:
+            from langfuse import get_client
+
+            url = get_client().get_trace_url(trace_id=tid)
+            if url:
+                return str(url)
+        except Exception:
+            pass
+        proj = (settings.langfuse_project_id or "").strip()
+        if proj:
+            return f"{base}/project/{proj}/traces/{tid}"
+    proj = (settings.langfuse_project_id or "").strip()
+    task = (task_id or "").strip()
+    if proj:
+        # Traces list; filter in UI with metadata.task_id
+        url = f"{base}/project/{proj}/traces"
+        if task:
+            from urllib.parse import quote
+
+            url = f"{url}?search={quote(task)}"
+        return url
+    return base
+
+
+def langfuse_callback_handler() -> Any | None:
+    """Fresh Langfuse LangChain CallbackHandler, or None if tracing off."""
+    if not langfuse_enabled():
+        return None
+    try:
+        from langfuse.langchain import CallbackHandler
+
+        return CallbackHandler()
+    except Exception:
+        return None
+
+
+def merge_tracing_config(
+    config: dict[str, Any] | None,
+    *,
+    run_name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
+    callbacks: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Attach Langfuse callbacks + run name / metadata / tags onto LangGraph config."""
+    out: dict[str, Any] = dict(config or {})
+    if run_name:
+        out["run_name"] = str(run_name)[:128]
+    merged_tags: list[str] = []
+    prev = out.get("tags")
+    if isinstance(prev, list):
+        merged_tags.extend(str(t) for t in prev if str(t or "").strip())
+    if tags:
+        for t in tags:
+            s = str(t or "").strip()
+            if s and s not in merged_tags:
+                merged_tags.append(s)
+    if merged_tags:
+        out["tags"] = merged_tags
+
+    prev_m = out.get("metadata")
+    base_m: dict[str, Any] = dict(prev_m) if isinstance(prev_m, dict) else {}
+    if metadata:
+        for k, v in metadata.items():
+            if v is None:
+                continue
+            # Langfuse prefers string metadata values.
+            base_m[str(k)] = v if isinstance(v, (str, int, float, bool)) else str(v)
+    # Map common fields → Langfuse special metadata keys.
+    uid = str(base_m.get("langfuse_user_id") or base_m.get("user_id") or "").strip()
+    if uid:
+        base_m["langfuse_user_id"] = uid
+    session = str(
+        base_m.get("langfuse_session_id") or base_m.get("task_id") or base_m.get("trace_id") or ""
+    ).strip()
+    if session:
+        base_m["langfuse_session_id"] = session
+    if merged_tags:
+        base_m["langfuse_tags"] = list(merged_tags)
+    # Ensure task_id is a plain string for UI filter metadata.task_id
+    if base_m.get("task_id") is not None:
+        base_m["task_id"] = str(base_m["task_id"])
+    if base_m:
+        out["metadata"] = base_m
+
+    cbs: list[Any] = []
+    prev_cbs = out.get("callbacks")
+    if isinstance(prev_cbs, list):
+        cbs.extend(prev_cbs)
+    if callbacks:
+        for cb in callbacks:
+            if cb is not None and cb not in cbs:
+                cbs.append(cb)
+
+    def _is_langfuse_handler(cb: Any) -> bool:
+        mod = getattr(type(cb), "__module__", "") or ""
+        return type(cb).__name__ == "CallbackHandler" and "langfuse" in mod
+
+    if not any(_is_langfuse_handler(cb) for cb in cbs):
+        lf = langfuse_callback_handler()
+        if lf is not None:
+            cbs.append(lf)
+    if cbs:
+        out["callbacks"] = cbs
+    return out
+
+
 def _checkpoint_mysql_url() -> str:
     from config.settings import settings
 
@@ -733,6 +897,9 @@ async def ainvoke_structured(
     model: str | None = None,
     system: str | None = None,
     source: str = "design",
+    run_name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     LangChain structured output via ``create_agent(..., response_format=Schema)``.
@@ -752,6 +919,12 @@ async def ainvoke_structured(
     lc_messages = to_lc_messages(
         _prepare_agent_messages(messages, system=sys_text, model=model)
     )
+    cfg = merge_tracing_config(
+        None,
+        run_name=run_name or f"structured:{source}",
+        metadata=metadata,
+        tags=tags or [source, "structured"],
+    )
 
     try:
         # One-shot structured calls: ephemeral checkpointer (don't pollute session threads).
@@ -767,7 +940,7 @@ async def ainvoke_structured(
             summarize=False,
             with_long_term_store=False,
         )
-        result = await agent.ainvoke({"messages": lc_messages})
+        result = await agent.ainvoke({"messages": lc_messages}, config=cfg)
         structured = None
         out_msgs: list[Any] = []
         if isinstance(result, dict):
@@ -795,7 +968,7 @@ async def ainvoke_structured(
             catalog_model_id=model or model_id,
         )
         structured_llm = llm.with_structured_output(schema)
-        got = await structured_llm.ainvoke(lc_messages)
+        got = await structured_llm.ainvoke(lc_messages, config=cfg)
         return {"structured": got, "text": "", "messages": lc_messages}
 
 
@@ -845,6 +1018,9 @@ async def stream_official_agent(
     user_id: str | None = None,
     interrupt_before_tools: bool = False,
     source: str = "agent",
+    run_name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
     """
     Stream an official ``create_agent`` run.
@@ -854,10 +1030,23 @@ async def stream_official_agent(
 
     ``interrupt_before_tools=True`` — canvas tools deferred to FE; Store tools
     still run server-side when finalizing the interrupt.
+
+    Langfuse: set ``LANGFUSE_PUBLIC_KEY`` + ``LANGFUSE_SECRET_KEY``; pass
+    ``metadata``/``tags`` so Admin can find the run by ``metadata.task_id``.
     """
     from services.agent_memory.long_term import AgentMemoryContext
 
-    config = agent_thread_config(thread_id)
+    meta = dict(metadata or {})
+    if user_id and not meta.get("user_id"):
+        meta["user_id"] = user_id
+    if thread_id and not meta.get("langfuse_session_id"):
+        meta.setdefault("task_id", thread_id)
+    config = merge_tracing_config(
+        agent_thread_config(thread_id),
+        run_name=run_name or f"official_agent:{source}",
+        metadata=meta,
+        tags=tags or [source, "create_agent"],
+    )
     interrupt_before = ["tools"] if interrupt_before_tools else None
     agent = build_official_agent(
         model=model,
@@ -871,7 +1060,7 @@ async def stream_official_agent(
             messages,
             system=system,
             model=model,
-            for_thread=bool(config),
+            for_thread=bool(config.get("configurable")),
         )
     )
     content_acc = ""
@@ -882,11 +1071,7 @@ async def stream_official_agent(
     run_kwargs: dict[str, Any] = {"context": ctx, "stream_mode": "messages"}
 
     try:
-        astream = (
-            agent.astream({"messages": lc_messages}, config, **run_kwargs)
-            if config
-            else agent.astream({"messages": lc_messages}, **run_kwargs)
-        )
+        astream = agent.astream({"messages": lc_messages}, config, **run_kwargs)
         async for item in astream:
             msg = item[0] if isinstance(item, tuple) and item else item
             if msg is None:

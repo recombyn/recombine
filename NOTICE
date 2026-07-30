@@ -1,0 +1,15 @@
+# Notices
+
+Recombyn is licensed under the MIT License — see [LICENSE](./LICENSE).
+
+This product may bundle or depend on third-party software. Notable runtime
+stacks used in self-hosting docs (each retains its own license):
+
+| Component | Typical use | License (upstream) |
+|-----------|-------------|--------------------|
+| Langfuse | Optional Agent observability | MIT core (+ optional EE) |
+| MySQL | Compose database image | GPL-2.0 with FOSS exception (Oracle MySQL) / or swap to MariaDB |
+| Redis | Queue / broker | RSALv2 / SSPLv1 (Redis) or use Valkey |
+| FastAPI / React / and other libs | App stack | See each package’s license |
+
+Run your own license scan before redistribution if your compliance process requires it.

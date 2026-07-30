@@ -15,8 +15,9 @@ export default defineConfig({
     __APP_URL__: JSON.stringify(APP_URL),
   },
   server: {
+    host: '127.0.0.1',
     port: 5175,
-    strictPort: false,
+    strictPort: true,
   },
   build: {
     outDir: 'dist',

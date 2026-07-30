@@ -543,17 +543,21 @@ def _hygiene_edit_ops(
 ) -> list[dict[str, Any]]:
     """Edit-run hygiene (formerly FE sanitizeEditToolOps). Backend owns this.
 
-    - near full-bleed create_shape → update_node on largest plate
+    - near full-bleed create_shape → update_node on largest **shape** plate
+      (never rewrite onto image/svg — that swallows "add a rect next to photos")
     - create_text matching SCENE_NODES → update_node
     - unmatched create_text on populated UI (no deletes) → drop
     - update_node missing nodeId + fill → bind largest plate
     """
+    # Images/SVGs are content, not background plates — rewriting create_shape onto
+    # them makes "add a rectangle next to photos" look like a no-op update.
+    _non_plate = frozenset({"text", "image", "svg"})
     plates = [
         n
         for n in (scene_nodes or [])
         if isinstance(n, dict)
         and n.get("id")
-        and str(n.get("type") or "").lower() != "text"
+        and str(n.get("type") or "").lower() not in _non_plate
     ]
     existing_texts = [
         n
@@ -915,14 +919,15 @@ def tool_ops_activity_events(
     totals: dict[str, int],
     skill_index: int,
 ) -> list[dict[str, Any]]:
-    """Backend-authored activity rows (Tool call + counts). FE must not invent these."""
+    """Backend-authored activity rows for product timeline capsules/rows."""
     created, updated, deleted = tool_ops_activity_counts(batch)
     totals["created"] = int(totals.get("created") or 0) + created
     totals["updated"] = int(totals.get("updated") or 0) + updated
     totals["deleted"] = int(totals.get("deleted") or 0) + deleted
     evs: list[dict[str, Any]] = []
     detail = tool_ops_batch_detail(batch)
-    if detail:
+    # Confirm row only when there is no success capsule for this batch.
+    if detail and not created and not updated and not deleted:
         seq = (
             int(totals["created"])
             + int(totals["updated"])
@@ -934,7 +939,8 @@ def tool_ops_activity_events(
                 "id": f"ops-tool-{skill_index}-{seq}",
                 "kind": "tool",
                 "status": "done",
-                "detail": detail,
+                "detail": "已确认画布操作",
+                "summary": detail,
                 "index": skill_index,
             }
         )
@@ -947,11 +953,12 @@ def tool_ops_activity_events(
                 "kind": "added",
                 "status": "done",
                 "count": n,
-                "detail": f"已添加 {n} 个元素",
+                "detail": "画布内容已生成",
+                "summary": detail or f"已添加 {n} 个元素",
                 "index": skill_index,
             }
         )
-    if totals["updated"] > 0:
+    if totals["updated"] > 0 and totals["created"] <= 0:
         n = totals["updated"]
         evs.append(
             {
@@ -960,11 +967,12 @@ def tool_ops_activity_events(
                 "kind": "updated",
                 "status": "done",
                 "count": n,
-                "detail": f"已更新 {n} 个元素",
+                "detail": "画布已更新",
+                "summary": detail or f"已更新 {n} 个元素",
                 "index": skill_index,
             }
         )
-    if totals["deleted"] > 0:
+    if totals["deleted"] > 0 and totals["created"] <= 0 and totals["updated"] <= 0:
         n = totals["deleted"]
         evs.append(
             {
@@ -973,7 +981,8 @@ def tool_ops_activity_events(
                 "kind": "deleted",
                 "status": "done",
                 "count": n,
-                "detail": f"已删除 {n} 个元素",
+                "detail": "已删除画布内容",
+                "summary": detail or f"已删除 {n} 个元素",
                 "index": skill_index,
             }
         )

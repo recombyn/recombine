@@ -47,11 +47,13 @@ def ensure_design_catalog(*, force: bool = False) -> None:
             from services.design.prompt_pack_store import ensure_design_prompt_packs
             from services.design.action_registry import ensure_action_registry
             from services.design.system_prompt_store import ensure_system_prompts
+            from services.design.skill_store import ensure_design_skills
 
             ensure_design_knowledge()
             ensure_design_prompt_packs()
             ensure_action_registry()
             ensure_system_prompts()
+            ensure_design_skills()
             _CATALOG_READY = True
         finally:
             _BOOTSTRAPPING = False

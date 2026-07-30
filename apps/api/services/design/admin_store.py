@@ -24,13 +24,97 @@ _STAGE_RULES_READY = False
 
 
 def _pub_skill(r: Any) -> dict[str, Any]:
+    when = ""
+    preferred_raw = ""
+    triggers_raw = ""
+    source = "admin"
+    try:
+        when = str(r["when_to_use"] or "") if "when_to_use" in r.keys() else ""
+    except Exception:
+        when = ""
+    try:
+        preferred_raw = str(r["preferred_tools"] or "") if "preferred_tools" in r.keys() else ""
+    except Exception:
+        preferred_raw = ""
+    try:
+        triggers_raw = str(r["triggers"] or "") if "triggers" in r.keys() else ""
+    except Exception:
+        triggers_raw = ""
+    try:
+        source = str(r["source"] or "admin") if "source" in r.keys() else "admin"
+    except Exception:
+        source = "admin"
+    preferred: list[str] = []
+    if preferred_raw:
+        try:
+            val = json.loads(preferred_raw)
+            if isinstance(val, list):
+                preferred = [str(x).strip() for x in val if str(x).strip()]
+        except Exception:
+            preferred = [p.strip() for p in preferred_raw.split(",") if p.strip()]
+    triggers: list[Any] = []
+    if triggers_raw:
+        try:
+            val = json.loads(triggers_raw)
+            if isinstance(val, list):
+                triggers = val
+            elif isinstance(val, dict):
+                triggers = [val]
+        except Exception:
+            triggers = []
+    mutex = ""
+    version = 1
+    try:
+        mutex = str(r["mutex_group"] or "") if "mutex_group" in r.keys() else ""
+    except Exception:
+        mutex = ""
+    try:
+        version = int(r["version"] or 1) if "version" in r.keys() else 1
+    except Exception:
+        version = 1
+    description = ""
+    logo = ""
+    pack_version = ""
+    locales: dict[str, Any] = {}
+    try:
+        description = str(r["description"] or "") if "description" in r.keys() else ""
+    except Exception:
+        description = ""
+    try:
+        logo = str(r["logo"] or "") if "logo" in r.keys() else ""
+    except Exception:
+        logo = ""
+    try:
+        pack_version = str(r["pack_version"] or "") if "pack_version" in r.keys() else ""
+    except Exception:
+        pack_version = ""
+    try:
+        locales_raw = r["locales"] if "locales" in r.keys() else ""
+        if isinstance(locales_raw, dict):
+            locales = locales_raw
+        elif locales_raw:
+            val = json.loads(str(locales_raw))
+            if isinstance(val, dict):
+                locales = val
+    except Exception:
+        locales = {}
     return {
         "id": int(r["id"]),
         "skillKey": (r["skill_key"] if "skill_key" in r.keys() else None) or None,
         "name": r["name"],
+        "description": description,
         "category": r["category"],
+        "whenToUse": when,
         "promptPositive": r["prompt_positive"],
         "promptNegative": r["prompt_negative"],
+        "preferredTools": preferred,
+        "triggers": triggers,
+        "mutexGroup": mutex or None,
+        "version": version,
+        "packVersion": pack_version or None,
+        "logo": logo or None,
+        "locales": locales,
+        "source": (source or "admin").strip().lower() or "admin",
         "sortWeight": int(r["sort_weight"] or 0),
         "scenes": r["scenes"] or "all",
         "defaultModel": r["default_model"] or "doubao",
@@ -76,6 +160,31 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
     category = str(payload.get("category") or "layout").strip() or "layout"
     prompt_positive = str(payload.get("promptPositive") or payload.get("prompt_positive") or "")
     prompt_negative = payload.get("promptNegative") or payload.get("prompt_negative")
+    when_to_use = str(payload.get("whenToUse") or payload.get("when_to_use") or "").strip()
+    preferred_raw = payload.get("preferredTools") or payload.get("preferred_tools")
+    if isinstance(preferred_raw, list):
+        preferred_tools = json.dumps(
+            [str(x).strip() for x in preferred_raw if str(x).strip()],
+            ensure_ascii=False,
+        )
+    elif preferred_raw is not None:
+        preferred_tools = str(preferred_raw).strip()
+    else:
+        preferred_tools = None
+    triggers_raw = payload.get("triggers")
+    if isinstance(triggers_raw, (list, dict)):
+        triggers_json = json.dumps(triggers_raw, ensure_ascii=False)
+    elif triggers_raw is not None:
+        triggers_json = str(triggers_raw).strip()
+    else:
+        triggers_json = None
+    mutex_group = str(payload.get("mutexGroup") or payload.get("mutex_group") or "").strip()
+    try:
+        version = int(payload.get("version") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    # Admin writes always become source=admin (seed/file will not overwrite).
+    source = "admin"
     sort_weight = int(payload.get("sortWeight") or payload.get("sort_weight") or 0)
     scenes = str(payload.get("scenes") or "all").strip() or "all"
     default_model = str(payload.get("defaultModel") or payload.get("default_model") or "doubao")
@@ -83,19 +192,55 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
     enabled = 1 if payload.get("enabled", True) else 0
     output_format = str(payload.get("outputFormat") or payload.get("output_format") or "json")
     allow_override = 1 if payload.get("allowUserModelOverride") or payload.get("allow_user_model_override") else 0
+    description = str(payload.get("description") or "").strip()
+    logo = str(payload.get("logo") or "").strip() or None
+    pack_version = str(
+        payload.get("packVersion") or payload.get("pack_version") or ""
+    ).strip() or None
+    locales_raw = payload.get("locales")
+    if isinstance(locales_raw, dict):
+        locales_json = json.dumps(locales_raw, ensure_ascii=False)
+    elif isinstance(locales_raw, str) and locales_raw.strip():
+        locales_json = locales_raw.strip()
+    else:
+        locales_json = None
 
     with connect() as conn:
         if sid:
+            # Bump version on admin edit unless explicitly set higher.
+            cur = conn.execute(
+                "SELECT version FROM design_skill WHERE id = ?",
+                (int(sid),),
+            ).fetchone()
+            try:
+                cur_ver = int((cur["version"] if cur else 0) or 0)
+            except Exception:
+                cur_ver = 0
+            next_ver = version if version > cur_ver else cur_ver + 1
             conn.execute(
                 """
                 UPDATE design_skill SET
                   skill_key=COALESCE(?, skill_key), name=?, category=?, prompt_positive=?, prompt_negative=?,
+                  when_to_use=COALESCE(?, when_to_use),
+                  preferred_tools=COALESCE(?, preferred_tools),
+                  triggers=COALESCE(?, triggers),
+                  mutex_group=COALESCE(?, mutex_group),
+                  version=?,
+                  pack_version=COALESCE(?, pack_version),
+                  description=COALESCE(?, description),
+                  logo=COALESCE(?, logo),
+                  locales=COALESCE(?, locales),
+                  source=?,
                   sort_weight=?, scenes=?, default_model=?, max_retries=?,
                   enabled=?, output_format=?, allow_user_model_override=?, updated_at=?
                 WHERE id=?
                 """,
                 (
                     skill_key, name, category, prompt_positive, prompt_negative,
+                    when_to_use or None, preferred_tools, triggers_json,
+                    mutex_group or None, next_ver,
+                    pack_version, description or None, logo, locales_json,
+                    source,
                     sort_weight, scenes, default_model, max_retries,
                     enabled, output_format, allow_override, now, int(sid),
                 ),
@@ -107,22 +252,33 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
                 """
                 INSERT INTO design_skill (
                     skill_key, name, category, prompt_positive, prompt_negative,
+                    when_to_use, preferred_tools, triggers, mutex_group, version, source,
+                    pack_version, description, logo, locales,
                     sort_weight, scenes, default_model, max_retries,
                     enabled, output_format, allow_user_model_override,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     skill_key, name, category, prompt_positive, prompt_negative,
+                    when_to_use, preferred_tools or "[]", triggers_json or "[]",
+                    mutex_group, max(version, 1), source,
+                    pack_version, description, logo, locales_json or "{}",
                     sort_weight, scenes, default_model, max_retries,
                     enabled, output_format, allow_override, now, now,
                 ),
             )
             conn.commit()
             item = get_skill(int(cur.lastrowid))
-    if not item:
-        raise RuntimeError("upsert skill failed")
-    return _pub_skill(item)
+        try:
+            from services.design.skill_store import invalidate_skill_key_cache
+
+            invalidate_skill_key_cache()
+        except Exception:
+            pass
+        if not item:
+            raise RuntimeError("upsert skill failed")
+        return _pub_skill(item)
 
 
 def soft_delete_skill(skill_id: int) -> bool:
@@ -2925,8 +3081,28 @@ def _parse_task_meta(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def _skills_from_meta(decision: dict[str, Any], exec_log: dict[str, Any]) -> list[str]:
+    raw = exec_log.get("skills_loaded") or decision.get("skills_loaded") or []
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for sk in raw:
+        key = str(sk or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 def skill_metrics_summary() -> dict[str, Any]:
-    """Aggregate design_task for Design Agent runtime dashboard (last 500 + global totals)."""
+    """Aggregate design_task: all-time totals + last-500 window breakdowns."""
     ensure_design_catalog()
     with connect() as conn:
         total = conn.execute("SELECT COUNT(*) AS c FROM design_task").fetchone()
@@ -2955,7 +3131,11 @@ def skill_metrics_summary() -> dict[str, Any]:
     scene_stats: dict[str, dict[str, int]] = {}
     route_stats: dict[str, dict[str, int]] = {}
     intent_stats: dict[str, dict[str, int]] = {}
+    skill_stats: dict[str, dict[str, int]] = {}
     painted_n = 0
+    window_failed = 0
+    window_ok = 0
+    window_tokens = 0
     rounds_sum = 0
     rounds_n = 0
     ops_sum = 0
@@ -2969,8 +3149,13 @@ def skill_metrics_summary() -> dict[str, Any]:
         sc = str(r["scene"] or "unknown").strip().lower() or "unknown"
         st = str(r["status"] or "")
         tok = int(r["total_tokens"] or 0)
+        window_tokens += tok
         failed_b = _is_fail_status(st)
         ok_b = _is_ok_status(st)
+        if failed_b:
+            window_failed += 1
+        elif ok_b:
+            window_ok += 1
         _bucket_inc(scene_stats, sc, failed=failed_b, ok=ok_b, tokens=tok)
 
         meta = _parse_task_meta(r["meta_json"] if "meta_json" in r.keys() else None)
@@ -2991,6 +3176,7 @@ def skill_metrics_summary() -> dict[str, Any]:
         painted = bool(exec_log.get("painted") or decision.get("tool_ops_applied"))
         ops_count = int(exec_log.get("ops_count") or 0)
         round_i = int(exec_log.get("round") or 0)
+        skills_used = _skills_from_meta(decision, exec_log)
         if meta:
             with_meta_n += 1
         if painted:
@@ -3005,6 +3191,8 @@ def skill_metrics_summary() -> dict[str, Any]:
             dual_n += 1
         if decision.get("memory_injected"):
             memory_n += 1
+        for sk_key in skills_used:
+            _bucket_inc(skill_stats, sk_key, failed=failed_b, ok=ok_b, tokens=tok)
 
         if len(recent) < 50:
             recent.append(
@@ -3016,6 +3204,7 @@ def skill_metrics_summary() -> dict[str, Any]:
                     "intent": intent if intent != "unknown" else None,
                     "painted": painted,
                     "opsCount": ops_count,
+                    "skills": skills_used[:8],
                     "tokens": tok,
                     "credits": int(r["charged_credits"] or 0),
                     "error": r["error_message"],
@@ -3023,7 +3212,8 @@ def skill_metrics_summary() -> dict[str, Any]:
                 }
             )
 
-    window_n = max(1, len(rows))
+    window_n = len(rows)
+    window_den = max(1, window_n)
     meta_n = max(1, with_meta_n)
     return {
         "totals": {
@@ -3032,23 +3222,28 @@ def skill_metrics_summary() -> dict[str, Any]:
             "succeeded": int((ok or {}).get("c") or 0),
             "tokens": int((tokens or {}).get("s") or 0),
             "credits": int((credits or {}).get("s") or 0),
+        },
+        "window": {
+            "size": window_n,
+            "failed": window_failed,
+            "succeeded": window_ok,
+            "tokens": window_tokens,
             "painted": painted_n,
-            "paintedRate": round(painted_n / window_n, 4),
+            "paintedRate": round(painted_n / window_den, 4) if window_n else 0,
+            "failRate": round(window_failed / window_den, 4) if window_n else 0,
         },
         "quality": {
-            "window": len(rows),
+            "window": window_n,
             "avgRounds": round(rounds_sum / max(1, rounds_n), 2) if rounds_n else 0,
             "avgOps": round(ops_sum / max(1, ops_n), 2) if ops_n else 0,
-            "avgTokens": round(
-                sum(int(x["total_tokens"] or 0) for x in rows) / window_n, 1
-            ),
+            "avgTokens": round(window_tokens / window_den, 1) if window_n else 0,
             "dualPickedRate": round(dual_n / meta_n, 4) if with_meta_n else 0,
             "memoryInjectedRate": round(memory_n / meta_n, 4) if with_meta_n else 0,
         },
         "byRoute": _bucket_rows(route_stats, key_name="route"),
         "byIntent": _bucket_rows(intent_stats, key_name="intent"),
         "byScene": _bucket_rows(scene_stats, key_name="scene"),
-        "bySkill": [],
+        "bySkill": _bucket_rows(skill_stats, key_name="skill"),
         "recent": recent,
     }
 
@@ -3145,7 +3340,9 @@ def list_decision_logs(
               json_extract(meta_json, '$.execution_log.painted') AS painted,
               json_extract(meta_json, '$.execution_log.task_tier') AS task_tier,
               json_extract(meta_json, '$.execution_log.vision_used') AS vision_used,
-              json_extract(meta_json, '$.execution_log.model') AS model
+              json_extract(meta_json, '$.execution_log.model') AS model,
+              json_extract(meta_json, '$.execution_log.skills_loaded') AS el_skills,
+              json_extract(meta_json, '$.decision_log.skills_loaded') AS dl_skills
             FROM design_task
             WHERE {sql_where}
             ORDER BY created_at DESC
@@ -3160,6 +3357,10 @@ def list_decision_logs(
         control_v = _json_scalar(r["control"])
         exec_flow = _json_scalar(r["el_flow"])
         meta_flow = _json_scalar(r["flow_id"])
+        skills = _skills_from_meta(
+            {"skills_loaded": _json_scalar(r["dl_skills"])},
+            {"skills_loaded": _json_scalar(r["el_skills"])},
+        )
         items.append(
             {
                 "taskId": r["id"],
@@ -3188,6 +3389,7 @@ def list_decision_logs(
                 "taskTier": _json_scalar(r["task_tier"]),
                 "visionUsed": _json_bool(r["vision_used"]),
                 "model": _json_scalar(r["model"]),
+                "skills": skills,
                 "error": r["error_message"],
                 "createdAt": int(float(r["created_at"]) * 1000) if r["created_at"] else None,
                 "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
@@ -3238,6 +3440,32 @@ def get_decision_log(task_id: str) -> dict[str, Any] | None:
     exec_log = meta.get("execution_log")
     if not isinstance(exec_log, dict):
         exec_log = {}
+    langfuse = meta.get("langfuse") if isinstance(meta.get("langfuse"), dict) else {}
+    try:
+        from config.settings import settings
+        from services.llm.agent import langfuse_console_url, langfuse_enabled
+
+        key_on = langfuse_enabled()
+        host = (settings.langfuse_base_url or "https://cloud.langfuse.com").strip().rstrip("/")
+        lf_tid = str(langfuse.get("traceId") or "").strip()
+        if not langfuse.get("consoleUrl"):
+            langfuse = {
+                "enabled": key_on,
+                "host": host,
+                "projectId": (settings.langfuse_project_id or "").strip() or None,
+                "consoleUrl": langfuse_console_url(task_id=tid, trace_id=lf_tid or None),
+                "taskId": tid,
+                "traceId": lf_tid or None,
+                "hint": "在 Langfuse 用 metadata.task_id 搜索本任务",
+            }
+        else:
+            langfuse = {
+                **langfuse,
+                "enabled": bool(langfuse.get("enabled", key_on)),
+                "host": langfuse.get("host") or host,
+            }
+    except Exception:
+        pass
     return {
         "taskId": r["id"],
         "traceId": meta.get("trace_id") or decision.get("trace_id") or exec_log.get("trace_id"),
@@ -3249,6 +3477,7 @@ def get_decision_log(task_id: str) -> dict[str, Any] | None:
         "prompt": r["prompt"],
         "decisionLog": decision,
         "executionLog": exec_log or None,
+        "langfuse": langfuse or None,
         "control": meta.get("control"),
         "flowId": meta.get("flow_id") or exec_log.get("flow_id"),
         "flowVersion": _parse_flow_version(
@@ -3263,6 +3492,7 @@ def get_decision_log(task_id: str) -> dict[str, Any] | None:
         "taskTier": exec_log.get("task_tier"),
         "visionUsed": exec_log.get("vision_used"),
         "model": exec_log.get("model"),
+        "skills": _skills_from_meta(decision, exec_log),
         "error": r["error_message"],
         "createdAt": int(float(r["created_at"]) * 1000) if r["created_at"] else None,
         "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
@@ -3710,22 +3940,26 @@ def generate_usage_optimize_patches(*, source: str = "manual") -> dict[str, Any]
             else:
                 skipped += 1
 
-    # 2) Per-skill: only skills with enough samples AND elevated failRate
-    skill_lookup = {int(s["id"]): s for s in list_admin_skills()}
+    # 2) Per-skill (runtime skill_key): only skills with enough samples AND elevated failRate
+    skill_lookup = {
+        str(s.get("skillKey") or "").strip(): s
+        for s in list_admin_skills()
+        if str(s.get("skillKey") or "").strip()
+    }
     for row in by_skill:
-        sid = int(row.get("skillId") or 0)
-        sk = skill_lookup.get(sid)
+        sk_key = str(row.get("skill") or row.get("skillKey") or "").strip()
+        sk = skill_lookup.get(sk_key)
         if not sk or not sk.get("enabled"):
             continue
+        sid = int(sk.get("id") or 0)
         sk_tasks = int(row.get("tasks") or 0)
         sk_fail = float(row.get("failRate") or 0)
-        if sk_tasks < 3 or sk_fail < 0.25:
+        if sk_tasks < 3 or sk_fail < 0.25 or sid <= 0:
             continue
         cat = str(sk.get("category") or "")
         sug = suggest_skill_optimize(sid)
         patch = {k: v for k, v in (sug.get("patch") or {}).items() if k in ("defaultModel", "maxRetries", "sortWeight", "scenes")}
         if not patch:
-            # minimal safe bump for this skill alone
             retries = int(sk.get("maxRetries") or 2)
             if retries < 3:
                 patch = {"maxRetries": retries + 1}
@@ -3736,7 +3970,7 @@ def generate_usage_optimize_patches(*, source: str = "manual") -> dict[str, Any]
             target_key=str(sid),
             patch=patch,
             rationale=(
-                f"[{source}] skill={sk.get('name')} fail_rate={sk_fail:.0%} "
+                f"[{source}] skill={sk_key}/{sk.get('name')} fail_rate={sk_fail:.0%} "
                 f"({int(row.get('failed') or 0)}/{sk_tasks}); {sug.get('rationale') or 'per-skill'}"
             ),
             flags=list(sug.get("flags") or []) + [f"skill:{cat}", "per_skill", source],
@@ -3753,7 +3987,8 @@ def generate_usage_optimize_patches(*, source: str = "manual") -> dict[str, Any]
         rate = float(row.get("failRate") or 0)
         if n < 5 or sc in ("unknown", "") or rate < 0.35:
             continue
-        cur = (rules.get(key) or "").strip()
+        rule_key = "negative_global"
+        cur = (rules.get(rule_key) or "").strip()
         addon = "Avoid overcrowded composition; keep hierarchy clear; respect safe margins."
         if addon in cur:
             skipped += 1
@@ -3761,8 +3996,8 @@ def generate_usage_optimize_patches(*, source: str = "manual") -> dict[str, Any]
         new_val = (cur + " " + addon).strip() if cur else addon
         item = _insert_pending_patch(
             kind="rule",
-            target_key=key,
-            patch={"ruleKey": key, "ruleValue": new_val},
+            target_key=rule_key,
+            patch={"ruleKey": rule_key, "ruleValue": new_val},
             rationale=f"[{source}] scene={sc} fail_rate={rate:.0%} ({int(row.get('failed') or 0)}/{n}); tighten negative_global",
             flags=["scene_fail", sc, "per_scene", source],
         )
