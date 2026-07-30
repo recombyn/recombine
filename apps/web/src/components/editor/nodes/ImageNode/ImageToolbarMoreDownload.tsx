@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineAdjustmentsHorizontal,
@@ -20,7 +20,7 @@ export type ImageMoreAction =
   | 'flipRotate';
 
 /** Image toolbar “More” menu: expand · adjust · crop · flip & rotate. */
-export default function ImageToolbarMoreDownload({
+function ImageToolbarMoreDownload({
   onAction,
 }: {
   onAction: (key: ImageMoreAction) => void;
@@ -87,3 +87,5 @@ export default function ImageToolbarMoreDownload({
     </Dropdown>
   );
 }
+
+export default memo(ImageToolbarMoreDownload);

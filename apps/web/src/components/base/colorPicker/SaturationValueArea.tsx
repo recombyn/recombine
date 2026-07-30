@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, memo } from 'react';
 import type { HsvColor, RgbaColor } from './index';
 
 /**
@@ -69,7 +69,7 @@ interface SaturationValueAreaProps {
 /**
  * 2D pad for saturation (x) and value/brightness (y).
  */
-export const SaturationValueArea = ({
+export const SaturationValueArea = memo(({
   hsv,
   onChange,
   disabled,
@@ -135,5 +135,5 @@ export const SaturationValueArea = ({
       />
     </div>
   );
-};
+});
 

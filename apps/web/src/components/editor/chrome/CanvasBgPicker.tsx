@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Tooltip } from '@/components/base';
 import {
   FillPanelPopover,
@@ -18,7 +19,7 @@ type Props = {
 };
 
 /** Bottom-HUD canvas background — full fill panel (type tabs + solid / gradient / image). */
-export default function CanvasBgPicker({
+function CanvasBgPicker({
   value,
   onChange,
   open,
@@ -61,3 +62,5 @@ export default function CanvasBgPicker({
     </FillPanelPopover>
   );
 }
+
+export default memo(CanvasBgPicker);

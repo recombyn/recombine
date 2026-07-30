@@ -3,7 +3,7 @@
  * Content from admin-managed API; read state stays local.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineCheck, HiOutlineMegaphone } from 'react-icons/hi2';
 import { fetchNotices, type NoticeDto } from '@/apis/notices';
@@ -57,7 +57,7 @@ function toMs(ts: number) {
 }
 
 /** Notifications & announcements panel for AccountSettingsDialog. */
-export default function AccountNotificationsPanel(): ReactNode {
+function AccountNotificationsPanel(): ReactNode {
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<NoticeTab>('announcement');
   const [readIds, setReadIds] = useState<Set<string>>(() => loadReadIds());
@@ -208,3 +208,5 @@ export default function AccountNotificationsPanel(): ReactNode {
     </div>
   );
 }
+
+export default memo(AccountNotificationsPanel);

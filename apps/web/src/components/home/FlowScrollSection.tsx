@@ -1,8 +1,4 @@
-import {
-  Children,
-  isValidElement,
-  type ReactNode,
-} from 'react';
+import { Children, isValidElement, type ReactNode, memo } from 'react';
 import { cn } from '@/utils/classnames';
 import {
   ScrollLoadFooter,
@@ -43,7 +39,7 @@ type FlowScrollSectionProps = {
  * Scroll-load shell with CSS multi-column flow layout.
  * Same loading / empty / sentinel pattern as {@link InfiniteScrollSection}.
  */
-export function FlowScrollSection({
+function FlowScrollSection({
   loading,
   loadingMore = false,
   hasMore,
@@ -97,7 +93,7 @@ export function FlowScrollSection({
 }
 
 /** Varied-aspect skeleton cards for plaza / liked flow feeds. */
-export function FlowFeedSkeleton({ count = FLOW_SKELETON_COUNT }: { count?: number }) {
+function FlowFeedSkeleton({ count = FLOW_SKELETON_COUNT }: { count?: number }) {
   return (
     <>
       {Array.from({ length: count }, (_, i) => (
@@ -147,3 +143,8 @@ export function plazaCoverAspectStyle(document: unknown): { aspectRatio?: string
   if (w > 0 && h > 0) return { aspectRatio: `${w} / ${h}` };
   return { aspectRatio: '3 / 4' };
 }
+
+const MemoizedFlowScrollSection = memo(FlowScrollSection);
+export { MemoizedFlowScrollSection as FlowScrollSection };
+const MemoizedFlowFeedSkeleton = memo(FlowFeedSkeleton);
+export { MemoizedFlowFeedSkeleton as FlowFeedSkeleton };

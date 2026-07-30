@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineCheck, HiOutlineChevronDown } from 'react-icons/hi2';
 import { Dropdown } from '@/components/base';
@@ -122,7 +122,7 @@ type Props = {
   className?: string;
 };
 
-export default function BlendModeControl({
+function BlendModeControl({
   blendMode,
   opacity,
   allowPassThrough = false,
@@ -223,3 +223,5 @@ export default function BlendModeControl({
     </div>
   );
 }
+
+export default memo(BlendModeControl);

@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  type ReactNode,
-  type RefObject,
-} from 'react';
+import { useEffect, useRef, type ReactNode, type RefObject, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/utils/classnames';
 
@@ -70,7 +65,7 @@ type ScrollLoadFooterProps = {
 };
 
 /** Bottom sentinel — shows「加载中…」while the next page is fetching. */
-export function ScrollLoadFooter({
+function ScrollLoadFooter({
   sentinelRef,
   hasMore,
   loadingMore = false,
@@ -110,7 +105,7 @@ type InfiniteScrollSectionProps = {
  * Shared list shell: initial skeleton → empty → grid + scroll-load footer.
  * Used by Home plaza, Projects, and Me.
  */
-export function InfiniteScrollSection({
+function InfiniteScrollSection({
   loading,
   loadingMore = false,
   hasMore,
@@ -160,7 +155,7 @@ type SkeletonGridProps = {
 };
 
 /** Renders `count` skeleton placeholders inside an optional grid class. */
-export function SkeletonGrid({ count, className, children }: SkeletonGridProps) {
+function SkeletonGrid({ count, className, children }: SkeletonGridProps) {
   return (
     <div className={cn(className)} aria-busy="true">
       {Array.from({ length: count }, (_, i) => children(i))}
@@ -170,3 +165,10 @@ export function SkeletonGrid({ count, className, children }: SkeletonGridProps) 
 
 /** Default skeleton card count — ~2 rows on a 5-column home grid. */
 export const GRID_SKELETON_COUNT = 10;
+
+const MemoizedScrollLoadFooter = memo(ScrollLoadFooter);
+export { MemoizedScrollLoadFooter as ScrollLoadFooter };
+const MemoizedInfiniteScrollSection = memo(InfiniteScrollSection);
+export { MemoizedInfiniteScrollSection as InfiniteScrollSection };
+const MemoizedSkeletonGrid = memo(SkeletonGrid);
+export { MemoizedSkeletonGrid as SkeletonGrid };

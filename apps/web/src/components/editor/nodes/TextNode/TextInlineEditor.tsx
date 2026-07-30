@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -46,7 +46,7 @@ const HANDLE_HIT = 16;
  * Inline text caret editor (screen-space).
  * Control box matches selection chrome (TEXT_SELECTION_PAD — flush with glyphs).
  */
-export default function TextInlineEditor({
+function TextInlineEditor({
   document,
   nodeId,
   onCommit,
@@ -372,3 +372,5 @@ export default function TextInlineEditor({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(TextInlineEditor);

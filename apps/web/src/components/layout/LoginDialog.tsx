@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation, Trans } from 'react-i18next';
@@ -415,7 +415,7 @@ type LoginDialogProps = {
   onSuccess?: (returnTo: string) => void;
 };
 
-export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
+function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const [email, setEmail] = useState('');
@@ -842,7 +842,7 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
 }
 
 /** Global host: opens when URL has `?login=1`. */
-export function LoginDialogHost() {
+function LoginDialogHost() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -879,3 +879,8 @@ export function LoginDialogHost() {
     <LoginDialog open={open} onClose={closeLogin} returnTo={returnTo} onSuccess={onSuccess} />
   );
 }
+
+const MemoizedLoginDialog = memo(LoginDialog);
+export { MemoizedLoginDialog as LoginDialog };
+const MemoizedLoginDialogHost = memo(LoginDialogHost);
+export { MemoizedLoginDialogHost as LoginDialogHost };

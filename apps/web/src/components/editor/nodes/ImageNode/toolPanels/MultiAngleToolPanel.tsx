@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowPath } from 'react-icons/hi2';
 import { SegmentedControl } from '@/components/base';
@@ -36,7 +36,7 @@ const clampInt = (v: number, min: number, max: number) =>
   Math.round(Math.max(min, Math.min(max, v)));
 
 /** Multi-angle: skybox / camera — scene ported AngleEditorV3. */
-export default function MultiAngleToolPanel({
+function MultiAngleToolPanel({
   imageSrc,
   onCancel,
   onConfirm,
@@ -207,3 +207,5 @@ export default function MultiAngleToolPanel({
     </ImageToolPanelShell>
   );
 }
+
+export default memo(MultiAngleToolPanel);

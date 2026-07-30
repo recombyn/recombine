@@ -1,8 +1,9 @@
+import { memo } from 'react';
 /**
  * Optional shared SVG defs for the host app (markers / patterns).
  * Pass as `defs={<RcbSvgDefs />}` or your own defs node.
  */
-export default function RcbSvgDefs() {
+function RcbSvgDefs() {
   return (
     <svg className="pointer-events-none absolute left-0 top-0 h-0 w-0 overflow-hidden" aria-hidden>
       <defs>
@@ -27,3 +28,5 @@ export default function RcbSvgDefs() {
     </svg>
   );
 }
+
+export default memo(RcbSvgDefs);

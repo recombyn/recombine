@@ -1,6 +1,6 @@
 import React, { forwardRef } from 'react';
 import { Button as HeadlessButton } from '@headlessui/react';
-import type { ButtonHTMLAttributes } from 'react';
+import { memo, type ButtonHTMLAttributes } from 'react';
 import type { VariantProps } from 'class-variance-authority';
 import { cva } from 'class-variance-authority';
 import { Icon } from '@/components/base/icon';
@@ -154,6 +154,6 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 
 Button.displayName = 'Button';
 
-export default Button;
+export default memo(Button);
 export { Button, buttonVariants };
 export type { ButtonProps };

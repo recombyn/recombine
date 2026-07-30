@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { cn } from '@/utils/classnames';
 
 type CreatorAvatarProps = {
@@ -10,7 +10,7 @@ type CreatorAvatarProps = {
 };
 
 /** Creator avatar (optional click via `onOpenProfile`). */
-export default function AuthorFollowAvatar({
+function AuthorFollowAvatar({
   name,
   avatar,
   size = 32,
@@ -57,3 +57,5 @@ export default function AuthorFollowAvatar({
     </button>
   );
 }
+
+export default memo(AuthorFollowAvatar);

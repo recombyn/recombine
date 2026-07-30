@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -174,7 +174,7 @@ function mapPublishedSubmission(x: {
 }
 
 /** 「我的」页：资料区 + 已发布 / 我的喜欢 — 卡片与预览同广场。 */
-export default function MePage({ onOpenCase }: Props): ReactNode {
+function MePage({ onOpenCase }: Props): ReactNode {
   const { t } = useTranslation();
   const user = useSelector((s: any) => s.auth.user);
   const navigate = useNavigate();
@@ -614,3 +614,5 @@ export default function MePage({ onOpenCase }: Props): ReactNode {
     </main>
   );
 }
+
+export default memo(MePage);

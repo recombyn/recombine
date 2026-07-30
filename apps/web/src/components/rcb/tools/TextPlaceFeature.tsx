@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useRcbCamera, useRcbScreenToScene } from '../camera/context';
 
 /** `dragDistanceSquared` default = 16 → 4px; fixed-width needs ~6× that. */
@@ -28,7 +28,7 @@ type TextPlaceFeatureProps = {
  * - click → autoSize text + edit
  * - drag horizontally past threshold → fixed-width text + edit
  */
-export default function TextPlaceFeature({
+function TextPlaceFeature({
   enabled,
   paperEl,
   stageEl = null,
@@ -173,3 +173,5 @@ export default function TextPlaceFeature({
     />
   );
 }
+
+export default memo(TextPlaceFeature);

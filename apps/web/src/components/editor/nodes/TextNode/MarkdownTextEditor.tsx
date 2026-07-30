@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import MDEditor, { commands } from '@uiw/react-md-editor';
 import '@uiw/react-md-editor/markdown-editor.css';
@@ -20,7 +20,7 @@ function readColorMode(): 'light' | 'dark' {
 /**
  * Markdown editor via @uiw/react-md-editor (toolbar + live preview).
  */
-export default function MarkdownTextEditor({ value, onChange, className, fill }: Props) {
+function MarkdownTextEditor({ value, onChange, className, fill }: Props) {
   const { t } = useTranslation();
   const [colorMode, setColorMode] = useState<'light' | 'dark'>(readColorMode);
 
@@ -62,3 +62,5 @@ export default function MarkdownTextEditor({ value, onChange, className, fill }:
     </div>
   );
 }
+
+export default memo(MarkdownTextEditor);

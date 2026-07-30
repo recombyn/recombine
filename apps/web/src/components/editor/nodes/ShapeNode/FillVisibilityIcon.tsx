@@ -1,7 +1,8 @@
+import { memo } from 'react';
 import { HiOutlineEye, HiOutlineEyeSlash } from 'react-icons/hi2';
 
 /** Eye / eye-slash for fill layer visibility. */
-export function FillVisibilityIcon({
+function FillVisibilityIcon({
   visible,
   className,
 }: {
@@ -11,3 +12,6 @@ export function FillVisibilityIcon({
   const Icon = visible ? HiOutlineEye : HiOutlineEyeSlash;
   return <Icon className={className} strokeWidth={1.5} aria-hidden />;
 }
+
+const MemoizedFillVisibilityIcon = memo(FillVisibilityIcon);
+export { MemoizedFillVisibilityIcon as FillVisibilityIcon };

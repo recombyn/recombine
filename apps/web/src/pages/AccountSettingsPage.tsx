@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
@@ -91,7 +91,7 @@ function readAvatarDataUrl(file: File): Promise<string | null> {
 }
 
 /** Account hub — left nav + centered profile / usage & billing. */
-export default function AccountSettingsPage(): ReactNode {
+function AccountSettingsPage(): ReactNode {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -484,3 +484,5 @@ export default function AccountSettingsPage(): ReactNode {
     </div>
   );
 }
+
+export default memo(AccountSettingsPage);

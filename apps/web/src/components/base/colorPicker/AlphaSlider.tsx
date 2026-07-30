@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, memo } from 'react';
 import type { RgbaColor } from './index';
 
 interface AlphaSliderProps {
@@ -11,7 +11,7 @@ interface AlphaSliderProps {
 /**
  * Opacity slider over a solid + checkerboard track.
  */
-export const AlphaSlider = ({ value, color, onChange, disabled }: AlphaSliderProps) => {
+export const AlphaSlider = memo(({ value, color, onChange, disabled }: AlphaSliderProps) => {
   const sliderRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const rgb = `rgb(${color.r}, ${color.g}, ${color.b})`;
@@ -68,5 +68,5 @@ export const AlphaSlider = ({ value, color, onChange, disabled }: AlphaSliderPro
       />
     </div>
   );
-};
+});
 

@@ -1,6 +1,6 @@
 import React, { forwardRef, useRef, useEffect, useCallback } from 'react';
 import { Textarea as HeadlessTextarea } from '@headlessui/react';
-import type { TextareaHTMLAttributes } from 'react';
+import { memo, type TextareaHTMLAttributes } from 'react';
 import type { VariantProps } from 'class-variance-authority';
 import { cva } from 'class-variance-authority';
 import { cn } from '@/utils/classnames';
@@ -152,5 +152,4 @@ const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
 
 TextArea.displayName = 'TextArea';
 
-export default TextArea;
-
+export default memo(TextArea);

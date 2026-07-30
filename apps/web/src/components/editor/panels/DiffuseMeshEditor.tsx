@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineArrowPath,
@@ -88,7 +88,7 @@ function applyPresetColors(points: MeshPoint[], colors: string[]): MeshPoint[] {
 /**
  * Diffuse mesh settings panel — anchors are edited on-canvas (MeshHandlesOverlay).
  */
-export default function DiffuseMeshEditor({
+function DiffuseMeshEditor({
   value,
   baseColor = '#CCCCCC',
   onChange,
@@ -358,3 +358,5 @@ export default function DiffuseMeshEditor({
     </div>
   );
 }
+
+export default memo(DiffuseMeshEditor);

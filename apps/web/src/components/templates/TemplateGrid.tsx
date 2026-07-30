@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -159,7 +159,7 @@ function ProjectBatchBottomBar(props: ProjectBatchControlsProps) {
   );
 }
 
-export default function TemplateGrid({
+function TemplateGrid({
   templates,
   title,
   fileCountLabel,
@@ -461,3 +461,5 @@ export default function TemplateGrid({
     </div>
   );
 }
+
+export default memo(TemplateGrid);

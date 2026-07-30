@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { message } from '@/components/base';
 import {
@@ -53,7 +53,7 @@ function nodeBox(
 }
 
 /** Host for image tool panels positioned relative to the source image. */
-export default function ImageToolPanelHost({ document }: { document: any }): ReactNode {
+function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   const dispatch = useDispatch();
   const camera = useRcbCamera();
   const panel = useSelector((s: any) => s.editor.imageToolPanel as null | {
@@ -322,3 +322,5 @@ export default function ImageToolPanelHost({ document }: { document: any }): Rea
     </>
   );
 }
+
+export default memo(ImageToolPanelHost);

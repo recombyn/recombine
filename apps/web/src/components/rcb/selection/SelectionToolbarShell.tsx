@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode } from 'react';
+import { type CSSProperties, type ReactNode, memo } from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -94,7 +94,7 @@ type ShellProps = {
  * Portal + screen-fixed placement + chrome for selection toolbars.
  * Keeps Frame / Image / Shape bars aligned so titles are never covered.
  */
-export function SelectionToolbarShell({
+function SelectionToolbarShell({
   box,
   hasTitleLabel = false,
   children,
@@ -125,3 +125,6 @@ export function SelectionToolbarShell({
     </RcbOverlayPortal>
   );
 }
+
+const MemoizedSelectionToolbarShell = memo(SelectionToolbarShell);
+export { MemoizedSelectionToolbarShell as SelectionToolbarShell };

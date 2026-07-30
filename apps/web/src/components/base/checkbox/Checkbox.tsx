@@ -1,4 +1,4 @@
-import React, { forwardRef, useContext, useState, useImperativeHandle, useRef } from 'react';
+import React, { forwardRef, memo, useContext, useState, useImperativeHandle, useRef } from 'react';
 import { Checkbox as HeadlessCheckbox } from '@headlessui/react';
 import type { VariantProps } from 'class-variance-authority';
 import { cva } from 'class-variance-authority';
@@ -90,7 +90,7 @@ export interface CheckboxProps {
  * <Checkbox checked={checked} onChange={(e) => setChecked(e.target.checked)} />
  * ```
  */
-export const Checkbox = forwardRef<HTMLSpanElement, CheckboxProps>(
+export const Checkbox = memo(forwardRef<HTMLSpanElement, CheckboxProps>(
   (
     {
       size = 'medium',
@@ -295,7 +295,7 @@ export const Checkbox = forwardRef<HTMLSpanElement, CheckboxProps>(
 
     return checkboxElement;
   }
-);
+));
 
 Checkbox.displayName = 'Checkbox';
 

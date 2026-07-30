@@ -1,6 +1,6 @@
 import type { ElementType, ReactNode } from 'react';
 import { Dialog as HeadlessDialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react';
-import { Fragment, useCallback, useLayoutEffect } from 'react';
+import { Fragment, useCallback, useLayoutEffect, memo } from 'react';
 import { HiOutlineXMark } from 'react-icons/hi2';
 import { cn } from '@/utils/classnames';
 
@@ -123,5 +123,5 @@ const Dialog = ({
 
 Dialog.displayName = 'Dialog';
 
-export default Dialog;
+export default memo(Dialog);
 export type { DialogProps };

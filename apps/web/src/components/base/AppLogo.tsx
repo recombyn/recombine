@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/utils/classnames';
 
@@ -23,7 +23,7 @@ function readResolvedScheme(): LogoScheme {
  * Brand mark — raster PNG via `<img src>` (`/logo-mark.png`, `/logo-mark-light.png`).
  * Used by: HomeBody, LoginDialog, EditorBootOverlay.
  */
-export default function AppLogo({
+function AppLogo({
   size = 36,
   className,
   bordered = false,
@@ -78,3 +78,5 @@ export default function AppLogo({
     />
   );
 }
+
+export default memo(AppLogo);

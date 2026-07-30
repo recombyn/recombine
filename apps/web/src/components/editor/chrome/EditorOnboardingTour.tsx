@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineXMark } from 'react-icons/hi2';
@@ -186,7 +186,7 @@ function Arrow({ placement }: { placement: Placement }) {
  * Roaming product tour: welcome modal → spotlight popovers on tools / Agent / help.
  * Completion is stored per user in localStorage.
  */
-export default function EditorOnboardingTour({
+function EditorOnboardingTour({
   ready,
   forceOpen = false,
   onForceOpenConsumed,
@@ -383,3 +383,5 @@ export default function EditorOnboardingTour({
     </div>
   );
 }
+
+export default memo(EditorOnboardingTour);

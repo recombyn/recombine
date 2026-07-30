@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject, memo } from 'react';
 import { cn } from '@/utils/classnames';
 import {
   RcbCameraContext,
@@ -76,7 +76,7 @@ export type RcbCanvasProps = {
  * Camera never mutates scene coordinate origin. Shapes SVG grows with content
  * bounds (no fixed ±N plane) — unbounded page space.
  */
-export default function RcbCanvas({
+function RcbCanvas({
   artboard,
   camera,
   onCameraChange,
@@ -440,3 +440,5 @@ export default function RcbCanvas({
     </RcbCameraContext.Provider>
   );
 }
+
+export default memo(RcbCanvas);

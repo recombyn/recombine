@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -166,7 +160,7 @@ export type ColorPanelProps = {
 /**
  * Encapsulated color editor panel (SV pad + hue + optional alpha + presets + hex).
  */
-export function ColorPanel({
+function ColorPanel({
   value,
   onChange,
   opacity = 100,
@@ -421,7 +415,7 @@ export type ColorPanelPopoverProps = {
 /**
  * Floating portal wrapper around {@link ColorPanel}. Click outside to dismiss.
  */
-export function ColorPanelPopover({
+function ColorPanelPopover({
   value,
   onChange,
   opacity = 100,
@@ -549,4 +543,8 @@ export function ColorPanelPopover({
   );
 }
 
-export default ColorPanel;
+export default memo(ColorPanel);
+const MemoizedColorPanel = memo(ColorPanel);
+export { MemoizedColorPanel as ColorPanel };
+const MemoizedColorPanelPopover = memo(ColorPanelPopover);
+export { MemoizedColorPanelPopover as ColorPanelPopover };

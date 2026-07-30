@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import {
   useRcbCamera,
 } from '../camera/context';
@@ -76,7 +77,7 @@ function GuideCross({
  * one continuous segment + × at marks (corners for edges, mids for centers).
  * Gap / size distance labels are drawn once by SpacingInspectOverlay.
  */
-export default function AlignGuidesOverlay({
+function AlignGuidesOverlay({
   guides,
   space = 'world',
   className,
@@ -188,3 +189,5 @@ export default function AlignGuidesOverlay({
     </div>
   );
 }
+
+export default memo(AlignGuidesOverlay);

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineScissors } from 'react-icons/hi2';
 import { LuCrop } from 'react-icons/lu';
@@ -41,7 +41,7 @@ function Tool({
 /**
  * Video selection toolbar — trim / crop / flip & rotate / fullscreen / download.
  */
-export default function VideoToolbarEditTools({
+function VideoToolbarEditTools({
   onTrim,
   onCrop,
   onFlipRotate,
@@ -79,3 +79,5 @@ export default function VideoToolbarEditTools({
     </>
   );
 }
+
+export default memo(VideoToolbarEditTools);

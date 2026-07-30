@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { HiOutlineArrowPath } from 'react-icons/hi2';
 import { useTranslation } from 'react-i18next';
 import Slider from '@/components/base/slider';
@@ -7,7 +8,7 @@ import ImageToolPanelShell, {
 } from './ImageToolPanelShell';
 
 /** Eraser: brush-size slider + cancel / use-now (paints on-image). */
-export default function EraserToolPanel({
+function EraserToolPanel({
   brushSize,
   onBrushSizeChange,
   hasStrokes,
@@ -57,3 +58,5 @@ export default function EraserToolPanel({
     </ImageToolPanelShell>
   );
 }
+
+export default memo(EraserToolPanel);

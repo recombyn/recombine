@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { LlmModel } from '@/apis/chat';
 import {
@@ -121,7 +121,7 @@ function resolveModelIconSrc(model?: ModelIconRef | null): string | null {
   return deepseek;
 }
 
-export function ModelBrandIcon({
+function ModelBrandIcon({
   model,
   className,
   size = 16,
@@ -210,7 +210,7 @@ export function modelPriceLevel(
 }
 
 /** Orange-dot cost tag (title row, top-right) — same pattern as video model picker. */
-export function ModelPriceTag({
+function ModelPriceTag({
   level,
   label,
 }: {
@@ -236,7 +236,7 @@ export function ModelPriceTag({
 }
 
 /** Soft pill for meta labels (自定义 / 多模态) — matches saved-provider kind tags. */
-export function ModelMetaBadge({ label }: { label: string }) {
+function ModelMetaBadge({ label }: { label: string }) {
   return (
     <span className="shrink-0 rounded-lg bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] leading-none text-[var(--muted)]">
       {label}
@@ -317,7 +317,7 @@ type Props = {
  * Shared model picker — model list only (Agent / Ask / Image live in the composer mode menu).
  * Used by AgentDock and HomeAgentComposer.
  */
-export default function ModelPickerPanel({
+function ModelPickerPanel({
   tab,
   models,
   selectedId,
@@ -439,3 +439,12 @@ export default function ModelPickerPanel({
     </div>
   );
 }
+
+export default memo(ModelPickerPanel);
+
+const MemoizedModelBrandIcon = memo(ModelBrandIcon);
+export { MemoizedModelBrandIcon as ModelBrandIcon };
+const MemoizedModelPriceTag = memo(ModelPriceTag);
+export { MemoizedModelPriceTag as ModelPriceTag };
+const MemoizedModelMetaBadge = memo(ModelMetaBadge);
+export { MemoizedModelMetaBadge as ModelMetaBadge };

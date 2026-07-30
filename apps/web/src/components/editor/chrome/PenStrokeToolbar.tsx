@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineCheck, HiOutlineTrash } from 'react-icons/hi2';
@@ -217,7 +217,7 @@ type PenStrokeToolbarProps = {
 /**
  * Pen / pencil stroke bar: color + inline width slider (+ brush / eraser for pencil).
  */
-export default function PenStrokeToolbar({
+function PenStrokeToolbar({
   mode,
   placement = 'anchor',
   className,
@@ -602,3 +602,5 @@ export default function PenStrokeToolbar({
     </div>
   );
 }
+
+export default memo(PenStrokeToolbar);

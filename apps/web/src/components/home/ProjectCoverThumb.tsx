@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import ProjectCoverCollage from '@/components/home/ProjectCoverCollage';
 
 type Props = {
@@ -14,7 +14,7 @@ type Props = {
 /**
  * Project card cover for 最近打开 / 我的项目 — multi-element collage (max 4).
  */
-export default function ProjectCoverThumb({
+function ProjectCoverThumb({
   thumbnail,
   version,
   document,
@@ -32,3 +32,5 @@ export default function ProjectCoverThumb({
     </ProjectCoverCollage>
   );
 }
+
+export default memo(ProjectCoverThumb);

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 import {
   brushPad,
   brushSize,
@@ -137,7 +137,7 @@ function eraseTargetsNearStroke(
 }
 
 /** Freehand pencil → baseline centerline; ink is SVG stroke along that path. */
-export default function PencilDrawFeature({
+function PencilDrawFeature({
   enabled,
   artboard,
   paperEl,
@@ -468,3 +468,5 @@ export default function PencilDrawFeature({
     </RcbSceneOverlaySvg>
   );
 }
+
+export default memo(PencilDrawFeature);

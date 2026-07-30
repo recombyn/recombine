@@ -1,4 +1,4 @@
-import { forwardRef, type ReactNode, type Ref } from 'react';
+import { forwardRef, type ReactNode, type Ref, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineTrash } from 'react-icons/hi2';
 import { Tooltip } from '@/components/base';
@@ -155,4 +155,4 @@ const AgentMessageList = forwardRef(function AgentMessageList(
   );
 });
 
-export default AgentMessageList;
+export default memo(AgentMessageList);

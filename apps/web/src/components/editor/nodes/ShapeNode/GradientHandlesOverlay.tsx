@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -91,7 +91,7 @@ function projectOffset(
  * On-canvas gradient editors (fig.2 linear · fig.3 radial · fig.4 angular).
  * World-space geometry; rendered in stage overlay so handles stay sharp.
  */
-export default function GradientHandlesOverlay({
+function GradientHandlesOverlay({
   box,
   angle = 0,
   gradient,
@@ -463,3 +463,5 @@ export default function GradientHandlesOverlay({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(GradientHandlesOverlay);

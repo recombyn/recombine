@@ -1,13 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch, useSelector } from 'react-redux';
 import {
@@ -383,7 +374,7 @@ function VideoSettingsPanel({
   );
 }
 
-export default function VideoGeneratorCard({
+function VideoGeneratorCard({
   nodeId,
   plateStyle,
   sceneBox,
@@ -1162,3 +1153,5 @@ export default function VideoGeneratorCard({
     </>
   );
 }
+
+export default memo(VideoGeneratorCard);

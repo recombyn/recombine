@@ -1,13 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch, useSelector } from 'react-redux';
 import {
@@ -311,7 +302,7 @@ function attachSelectionToImageComposer(opts: {
   return true;
 }
 
-export default function ImageGeneratorCard({
+function ImageGeneratorCard({
   nodeId,
   plateStyle,
   sceneBox,
@@ -1027,3 +1018,5 @@ export default function ImageGeneratorCard({
     </>
   );
 }
+
+export default memo(ImageGeneratorCard);

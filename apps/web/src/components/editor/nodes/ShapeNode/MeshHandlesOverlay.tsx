@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -59,7 +59,7 @@ function unrotateLocal(
 /**
  * On-canvas diffuse mesh anchors + guide grid (replaces the in-panel preview).
  */
-export default function MeshHandlesOverlay({
+function MeshHandlesOverlay({
   box,
   angle = 0,
   gradient,
@@ -242,3 +242,5 @@ export default function MeshHandlesOverlay({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(MeshHandlesOverlay);

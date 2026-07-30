@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   addNodeToDocument,
@@ -489,7 +489,7 @@ type SvgCanvasProps = {
 /**
  * SVG.js editor shell ? mounts the board and composes feature components.
  */
-export default function SvgCanvas({
+function SvgCanvas({
   document,
   readOnly = false,
   reloadToken = 0,
@@ -3578,3 +3578,5 @@ export default function SvgCanvas({
     </div>
   );
 }
+
+export default memo(SvgCanvas);

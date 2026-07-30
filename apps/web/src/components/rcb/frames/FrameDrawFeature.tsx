@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import type { RcbCamera } from '../core/types';
 
 
@@ -31,7 +31,7 @@ function clientToWorld(
 }
 
 /** Drag on empty world to create an HTML Frame (智能画板). */
-export default function FrameDrawFeature({
+function FrameDrawFeature({
   enabled,
   camera,
   stageEl,
@@ -116,3 +116,5 @@ export default function FrameDrawFeature({
     </div>
   );
 }
+
+export default memo(FrameDrawFeature);

@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, memo } from 'react';
 import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
 
@@ -89,7 +83,7 @@ type ThumbBox = { left: number; top: number; width: number; height: number };
  * Unified segmented tabs — notices / wallet / multi-angle / fill / adjust / home.
  * Active pill slides with a short transform transition.
  */
-export function SegmentedControl<T extends string = string>({
+function SegmentedControl<T extends string = string>({
   options,
   value,
   onChange,
@@ -227,4 +221,6 @@ export function SegmentedControl<T extends string = string>({
   );
 }
 
-export default SegmentedControl;
+export default memo(SegmentedControl);
+const MemoizedSegmentedControl = memo(SegmentedControl);
+export { MemoizedSegmentedControl as SegmentedControl };

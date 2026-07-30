@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   type ButtonHTMLAttributes,
   type CSSProperties,
   type HTMLAttributes,
@@ -14,8 +15,11 @@ type DropdownPanelProps = HTMLAttributes<HTMLDivElement> & {
 /**
  * Shared floating menu shell — xl radius (size / agent popovers), opaque fill + shadow.
  */
-export const DropdownPanel = forwardRef<HTMLDivElement, DropdownPanelProps>(
-  function DropdownPanel({ className, children, style, ...rest }, ref) {
+export const DropdownPanel = memo(
+  forwardRef<HTMLDivElement, DropdownPanelProps>(function DropdownPanel(
+    { className, children, style, ...rest },
+    ref
+  ) {
     return (
       <div
         ref={ref}
@@ -32,7 +36,7 @@ export const DropdownPanel = forwardRef<HTMLDivElement, DropdownPanelProps>(
         {children}
       </div>
     );
-  }
+  })
 );
 
 type DropdownPanelItemProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -43,8 +47,8 @@ type DropdownPanelItemProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 /**
  * Menu row — full-width soft selected fill (fig. aspect “原始”), fixed height.
  */
-export const DropdownPanelItem = forwardRef<HTMLButtonElement, DropdownPanelItemProps>(
-  function DropdownPanelItem(
+export const DropdownPanelItem = memo(
+  forwardRef<HTMLButtonElement, DropdownPanelItemProps>(function DropdownPanelItem(
     { selected = false, className, children, type = 'button', disabled, ...rest },
     ref
   ) {
@@ -65,5 +69,5 @@ export const DropdownPanelItem = forwardRef<HTMLButtonElement, DropdownPanelItem
         {children}
       </button>
     );
-  }
+  })
 );

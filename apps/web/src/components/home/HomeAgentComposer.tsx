@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   FloatingPortal,
@@ -275,7 +275,7 @@ function useTypewriterCycle(phrases: string[], enabled = true): string {
 }
 
 /** Home-page agent composer — same shell + model popover as editor AgentDock. */
-export default function HomeAgentComposer({
+function HomeAgentComposer({
   onSubmit,
   className,
   category = 'poster',
@@ -917,3 +917,5 @@ export default function HomeAgentComposer({
     </>
   );
 }
+
+export default memo(HomeAgentComposer);

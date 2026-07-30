@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, Button } from '@/components/base';
 import MarkdownTextEditor from './MarkdownTextEditor';
@@ -11,7 +11,7 @@ type Props = {
 };
 
 /** Modal Markdown editor for a selected text node. */
-export default function TextEditDialog({ open, initialMarkdown, onClose, onSave }: Props) {
+function TextEditDialog({ open, initialMarkdown, onClose, onSave }: Props) {
   const { t } = useTranslation();
   const [value, setValue] = useState(initialMarkdown);
   const [fullscreen, setFullscreen] = useState(false);
@@ -67,3 +67,5 @@ export default function TextEditDialog({ open, initialMarkdown, onClose, onSave 
     </Dialog>
   );
 }
+
+export default memo(TextEditDialog);

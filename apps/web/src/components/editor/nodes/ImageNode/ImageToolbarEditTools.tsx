@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineCube } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
@@ -33,7 +33,7 @@ function Tool({
 }
 
 /** Image selection toolbar edit actions (AI tools + optional trailing slots). */
-export default function ImageToolbarEditTools({
+function ImageToolbarEditTools({
   onUpscale,
   onRemoveBg,
   onEraser,
@@ -70,3 +70,5 @@ export default function ImageToolbarEditTools({
     </>
   );
 }
+
+export default memo(ImageToolbarEditTools);

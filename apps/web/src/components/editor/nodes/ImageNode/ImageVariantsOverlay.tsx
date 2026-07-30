@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch } from 'react-redux';
 import {
@@ -12,7 +12,7 @@ import {
 } from '@/components/rcb/scene/sceneDocument';
 import { detachImageVariant, patchDocumentNode } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
-import { ImageReplaceUploadControl } from './ImageReplaceCornerButton';
+import ImageReplaceUploadControl from './ImageReplaceUploadControl';
 
 const EDGE_PAD = 10;
 const EXPAND_GAP = 12;
@@ -66,7 +66,7 @@ function expandedAltLayout(
  * Multi-gen stack: one top-right corner bar (replace + “N张图”) + expand tiles.
  * Positioned from the same scene box as selection chrome so controls never overlap.
  */
-export default function ImageVariantsOverlay({
+function ImageVariantsOverlay({
   document,
   nodeId,
   box,
@@ -267,3 +267,5 @@ export default function ImageVariantsOverlay({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(ImageVariantsOverlay);

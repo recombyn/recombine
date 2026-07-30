@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
 import {
   projectThumbFrameClass,
@@ -20,7 +20,7 @@ type Props = {
  * Mount TemplateThumbnail only when near viewport — avoids dozens of boards
  * rasterizing on the main thread at once for large project grids.
  */
-export default function LazyTemplateThumb({
+function LazyTemplateThumb({
   document,
   fit = 'cover',
   className,
@@ -67,3 +67,5 @@ export default function LazyTemplateThumb({
     </div>
   );
 }
+
+export default memo(LazyTemplateThumb);

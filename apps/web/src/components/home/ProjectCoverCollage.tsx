@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode, memo } from 'react';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
 import LazyTemplateThumb from '@/components/home/LazyTemplateThumb';
 import {
@@ -54,7 +54,7 @@ type Mode = 'urls' | 'docs' | 'doc-full' | 'empty';
  * Project card cover for 最近打开 / 我的项目 — multi `<img>` collage (max 4).
  * Layout: 1 full · 2 side-by-side · 3 tall-left · 4 = 2×2 flex columns.
  */
-export default function ProjectCoverCollage({
+function ProjectCoverCollage({
   urls,
   version,
   document,
@@ -291,3 +291,5 @@ function DocCollage({ tiles }: { tiles: DocTile[] }) {
     </div>
   );
 }
+
+export default memo(ProjectCoverCollage);

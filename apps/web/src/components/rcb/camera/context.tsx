@@ -1,11 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { createContext, useCallback, useContext, useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { rcbSceneToScreen } from '../core/math';
 import { RCB_DEFAULT_CAMERA, type RcbCamera, type RcbVec } from '../core/types';
@@ -89,8 +82,11 @@ export function useRcbScreenToolbarStyle(opts: {
 }
 
 /** Portal children into the unscaled overlay layer. */
-export function RcbOverlayPortal({ children }: { children: ReactNode }) {
+function RcbOverlayPortal({ children }: { children: ReactNode }) {
   const root = useRcbOverlayRoot();
   if (!root) return null;
   return createPortal(children, root);
 }
+
+const MemoizedRcbOverlayPortal = memo(RcbOverlayPortal);
+export { MemoizedRcbOverlayPortal as RcbOverlayPortal };

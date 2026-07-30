@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -14,7 +14,7 @@ import {
  * Handles return from Google full-page OAuth redirect.
  * Exchanges ?code= for a session, then navigates into the app.
  */
-export default function GoogleOAuthCallbackPage() {
+function GoogleOAuthCallbackPage() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -86,3 +86,5 @@ export default function GoogleOAuthCallbackPage() {
     </div>
   );
 }
+
+export default memo(GoogleOAuthCallbackPage);

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowsPointingOut } from 'react-icons/hi2';
 import { Image } from '@/components/base/image';
@@ -6,7 +6,7 @@ import Tooltip from '@/components/base/tooltip';
 import { imageToolBtn } from './imageToolbarShared';
 
 /** Icon-only fullscreen lightbox for the selected image (before download). */
-export default function ImageFullscreenPreviewButton({
+function ImageFullscreenPreviewButton({
   src,
 }: {
   src?: string | null;
@@ -43,3 +43,5 @@ export default function ImageFullscreenPreviewButton({
     </>
   );
 }
+
+export default memo(ImageFullscreenPreviewButton);

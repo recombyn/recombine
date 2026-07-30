@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useRcbCamera } from '@/components/rcb';
 import { isVideoGeneratorNode, isVideoNode } from '@/components/rcb/scene/sceneDocument';
@@ -31,7 +31,7 @@ function plateTransform(angle: number) {
  * World-layer video plates (under selection chrome — same stacking as images).
  * Counter-scale cancels camera zoom so <video> is not blacked out.
  */
-export default function VideoNodeOverlay({
+function VideoNodeOverlay({
   document,
   hidden,
   readOnly,
@@ -119,3 +119,5 @@ export default function VideoNodeOverlay({
     </>
   );
 }
+
+export default memo(VideoNodeOverlay);

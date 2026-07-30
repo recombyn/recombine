@@ -1,4 +1,4 @@
-import React, { forwardRef, useState } from 'react';
+import React, { forwardRef, useState, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -254,4 +254,4 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
 
 Select.displayName = 'Select';
 
-export default Select;
+export default memo(Select);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { LuPanelRight } from 'react-icons/lu';
@@ -155,7 +155,7 @@ function readStoredInspectDockWidth(): number {
 }
 
 /** Dev-mode inspect panel: geometry, style, CSS, export (replaces chat). */
-export default function DevPropertiesPanel({
+function DevPropertiesPanel({
   className,
   onClose,
 }: {
@@ -436,3 +436,5 @@ export default function DevPropertiesPanel({
     </aside>
   );
 }
+
+export default memo(DevPropertiesPanel);

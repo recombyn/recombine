@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import AppLogo from '@/components/base/AppLogo';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/utils/classnames';
@@ -8,7 +9,7 @@ type Props = {
 };
 
 /** Boot loader only — no skeleton chrome. */
-export default function EditorBootOverlay({ progress, exiting = false }: Props) {
+function EditorBootOverlay({ progress, exiting = false }: Props) {
   const { t } = useTranslation();
   const pct = Math.max(0, Math.min(100, Math.round(progress)));
 
@@ -34,3 +35,5 @@ export default function EditorBootOverlay({ progress, exiting = false }: Props) 
     </div>
   );
 }
+
+export default memo(EditorBootOverlay);

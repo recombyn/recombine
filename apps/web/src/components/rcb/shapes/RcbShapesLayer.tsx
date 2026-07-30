@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, memo } from 'react';
 import { useRcbCamera, useRcbCameraMotion, useRcbViewportEl } from '../camera/context';
 import { rcbViewportSceneBounds } from '../core/math';
 import { boxesIntersect, nodeSceneAabb } from '../core/spatialIndex';
@@ -31,7 +31,7 @@ const EFFICIENT_ZOOM_SHAPE_THRESHOLD = 80;
  * Off-viewport nodes are not mounted (lazy paint); selected/editing stay alive.
  * z-index comes from document.stackOrder so shapes can interleave with artboards.
  */
-export default function RcbShapesLayer({
+function RcbShapesLayer({
   document,
   reloadToken = 0,
   documentPatchToken = 0,
@@ -142,3 +142,5 @@ export default function RcbShapesLayer({
     </div>
   );
 }
+
+export default memo(RcbShapesLayer);

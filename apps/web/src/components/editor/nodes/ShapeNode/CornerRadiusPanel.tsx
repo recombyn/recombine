@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { COLOR_PANEL_WIDTH, INPUT_NO_SPIN } from '@/components/base/colorPanel';
 import Slider from '@/components/base/slider';
 import { StylePanelShell } from '@/components/editor/panels/StylePanelChrome';
@@ -58,7 +59,7 @@ function IconUnlink({ className }: { className?: string }) {
  * Dedicated corner-radius panel (not nested under stroke).
  * Uniform slider when linked; 4 independent inputs when unlinked.
  */
-export function CornerRadiusPanel({
+function CornerRadiusPanel({
   value,
   onChange,
   title = '圆角',
@@ -187,4 +188,6 @@ export function CornerRadiusPanel({
   );
 }
 
-export default CornerRadiusPanel;
+export default memo(CornerRadiusPanel);
+const MemoizedCornerRadiusPanel = memo(CornerRadiusPanel);
+export { MemoizedCornerRadiusPanel as CornerRadiusPanel };

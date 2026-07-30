@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineXMark } from 'react-icons/hi2';
 import { cn } from '@/utils/classnames';
@@ -60,7 +60,7 @@ type Props = {
 /**
  * Bottom-left HUD shortcuts cheatsheet — only lists bindings that exist in-app.
  */
-export default function EditorShortcutsPanel({ onClose }: Props): ReactNode {
+function EditorShortcutsPanel({ onClose }: Props): ReactNode {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const mod =
@@ -286,3 +286,5 @@ export default function EditorShortcutsPanel({ onClose }: Props): ReactNode {
     </div>
   );
 }
+
+export default memo(EditorShortcutsPanel);

@@ -1,7 +1,8 @@
+import { memo } from 'react';
 import { Outlet } from 'react-router-dom';
 import { LoginDialogHost } from '@/components/layout/LoginDialog';
 
-export default function AppShell() {
+function AppShell() {
   return (
     <div className="h-screen overflow-hidden bg-[var(--canvas)]">
       <Outlet />
@@ -9,3 +10,5 @@ export default function AppShell() {
     </div>
   );
 }
+
+export default memo(AppShell);

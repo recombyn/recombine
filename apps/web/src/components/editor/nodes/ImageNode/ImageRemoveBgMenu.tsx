@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   autoUpdate,
@@ -20,7 +20,7 @@ const TOOL_ICON_SIZE = 16;
 export type RemoveBgMode = 'hair' | 'product';
 
 /** Remove-bg mode menu: hair/portrait (default) vs product hard edge. */
-export default function ImageRemoveBgMenu({
+function ImageRemoveBgMenu({
   onPick,
 }: {
   onPick: (mode: RemoveBgMode) => void;
@@ -101,3 +101,5 @@ export default function ImageRemoveBgMenu({
     </>
   );
 }
+
+export default memo(ImageRemoveBgMenu);

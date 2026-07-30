@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Switch } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
@@ -241,7 +241,7 @@ const TAB_I18N: Record<SizePresetCategory, string> = {
  * (e.g. A0 vs A6 within the paper tab).
  * `equalArea` keeps similar ink weight across extreme ratios (21:9 vs 1:1 vs 9:16).
  */
-export function SizeAspectGlyph({
+function SizeAspectGlyph({
   width,
   height,
   box = 20,
@@ -344,7 +344,7 @@ function resolveTabForKey(key: string, autoActive?: boolean): SizePresetCategory
  * Shared size preset UI — underline category tabs + Smart switch + device list.
  * Used by frame toolbar and chat design canvas size picker.
  */
-export default function SizePresetPanel({
+function SizePresetPanel({
   activeKey,
   activeWidth,
   activeHeight,
@@ -670,3 +670,8 @@ export default function SizePresetPanel({
     </div>
   );
 }
+
+export default memo(SizePresetPanel);
+
+const MemoizedSizeAspectGlyph = memo(SizeAspectGlyph);
+export { MemoizedSizeAspectGlyph as SizeAspectGlyph };

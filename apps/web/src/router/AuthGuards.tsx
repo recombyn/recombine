@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Navigate, Outlet, useLocation, useSearchParams } from 'react-router-dom';
 import { logout, clearSessionCaches } from '@/store/modules/auth';
@@ -6,7 +6,7 @@ import { buildLoginUrl, readReturnToParam } from '@/utils/authReturnTo';
 import { getToken } from '@/utils/token';
 
 /** Protects editor (and any other auth-only routes). Guests → login?from=… */
-export function RequireAuth() {
+function RequireAuth() {
   const user = useSelector((state: any) => state.auth.user);
   const location = useLocation();
   const hasToken = Boolean(getToken());
@@ -24,7 +24,7 @@ export function RequireAuth() {
 }
 
 /** Login / register only. Signed-in users follow ?from= or /home. */
-export function GuestOnly() {
+function GuestOnly() {
   const user = useSelector((state: any) => state.auth.user);
   const dispatch = useDispatch();
   const [params] = useSearchParams();
@@ -44,3 +44,8 @@ export function GuestOnly() {
 
   return <Outlet />;
 }
+
+const MemoizedRequireAuth = memo(RequireAuth);
+export { MemoizedRequireAuth as RequireAuth };
+const MemoizedGuestOnly = memo(GuestOnly);
+export { MemoizedGuestOnly as GuestOnly };

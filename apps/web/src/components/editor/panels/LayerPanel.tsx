@@ -1,12 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-} from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
@@ -276,7 +268,7 @@ function lockedAttrPatch(nextLocked: boolean) {
 }
 
 /** Left layers dock — history + frames/nodes from unified stackOrder. */
-export default function LayerPanel({
+function LayerPanel({
   onClose,
   onSelectNode,
   onSelectFrame,
@@ -729,3 +721,5 @@ export default function LayerPanel({
     </aside>
   );
 }
+
+export default memo(LayerPanel);

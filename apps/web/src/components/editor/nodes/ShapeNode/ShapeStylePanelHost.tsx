@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   closeShapeStylePanel,
@@ -210,7 +210,7 @@ function readStrokeValue(attrs: Record<string, unknown> | undefined): StrokePane
  * Fill / stroke editor docked to the right of the selection.
  * Top selection toolbar is suppressed while this is open (see SvgCanvas suppressChrome).
  */
-export default function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
+function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
   const dispatch = useDispatch();
   const camera = useRcbCamera();
   const panel = useSelector(
@@ -563,3 +563,5 @@ export default function ShapeStylePanelHost({ document }: { document: any }): Re
     </>
   );
 }
+
+export default memo(ShapeStylePanelHost);

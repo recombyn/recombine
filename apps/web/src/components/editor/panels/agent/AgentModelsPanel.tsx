@@ -2,7 +2,7 @@
  * Account Agent tab: Auto routing prefs + custom OpenAI-compatible providers (Pro).
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiChevronLeft, HiChevronRight, HiOutlineTrash } from 'react-icons/hi2';
@@ -299,7 +299,7 @@ type CompactSubmenu =
  * Auto routing prefs editor — shared by Account settings and Agent/Ask model popover.
  * Same storage + presets as account.agentRoute* (platform / economy / balanced / quality / custom).
  */
-export function AgentRoutePrefsEditor({
+function AgentRoutePrefsEditor({
   compact = false,
   modeLabel,
   className,
@@ -928,7 +928,7 @@ export function AgentRoutePrefsEditor({
   );
 }
 
-export default function AgentModelsPanel({
+function AgentModelsPanel({
   onProvidersChange,
   onRequestUpgrade,
 }: Props): ReactNode {
@@ -1177,3 +1177,8 @@ export default function AgentModelsPanel({
     </>
   );
 }
+
+export default memo(AgentModelsPanel);
+
+const MemoizedAgentRoutePrefsEditor = memo(AgentRoutePrefsEditor);
+export { MemoizedAgentRoutePrefsEditor as AgentRoutePrefsEditor };

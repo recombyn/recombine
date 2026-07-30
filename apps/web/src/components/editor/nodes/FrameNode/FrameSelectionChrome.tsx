@@ -1,8 +1,9 @@
+import { memo } from 'react';
 import SelectionChrome from '@/components/rcb/selection/SelectionChrome';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 
 /** Artboard selection control box: border + resize handles (no rotate; box is non-blocking). */
-export default function FrameSelectionChrome({
+function FrameSelectionChrome({
   frame,
   showHandles = true,
 }: {
@@ -27,3 +28,5 @@ export default function FrameSelectionChrome({
     />
   );
 }
+
+export default memo(FrameSelectionChrome);

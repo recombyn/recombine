@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
 import {
   projectThumbFrameClass,
@@ -33,7 +33,7 @@ type Props = {
  * Plaza card cover — prefer remote raster thumbnail; else rasterize coverDocument to `<img>`.
  * Media zooms on parent `.group` hover; overlays (`children`) stay unscaled.
  */
-export default function PlazaCoverThumb({
+function PlazaCoverThumb({
   coverDocument,
   thumbnail,
   version,
@@ -112,3 +112,5 @@ export default function PlazaCoverThumb({
     </div>
   );
 }
+
+export default memo(PlazaCoverThumb);

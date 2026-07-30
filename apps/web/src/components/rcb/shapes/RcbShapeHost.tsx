@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef, type CSSProperties, memo } from 'react';
 import { applyFrameContentClip } from '@/components/rcb/frames/frameContentClip';
 import {
   createSvgBoard,
@@ -44,7 +44,7 @@ function setHostPaintOpacity(el: SVGElement | null | undefined, hidden: boolean)
  * Only mounted while in (or near) the viewport — see RcbShapesLayer culling.
  * Patch / drag-preview stay in SvgCanvas via shapeHostRegistry.
  */
-export default function RcbShapeHost({
+function RcbShapeHost({
   nodeId,
   document,
   zIndex,
@@ -179,3 +179,5 @@ export default function RcbShapeHost({
     </div>
   );
 }
+
+export default memo(RcbShapeHost);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -120,7 +120,7 @@ type Props = {
  * Usage & billing — Free / Plus / Pro / Ultra + top-up entry,
  * laid out in Cursor billing style (plan card → included credits → redeem → ledger).
  */
-export default function WalletLedgerPanel({
+function WalletLedgerPanel({
   embedded = false,
   onRequestPlans,
   onRequestRedeem,
@@ -527,3 +527,5 @@ export default function WalletLedgerPanel({
     </>
   );
 }
+
+export default memo(WalletLedgerPanel);

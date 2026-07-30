@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { HiOutlineClock } from 'react-icons/hi2';
 import { cn } from '@/utils/classnames';
 
@@ -10,7 +10,7 @@ type EmptyStateProps = {
 };
 
 /** Borderless empty hint: icon + text only (no dashed box / fill). */
-export default function EmptyState({ hint, icon, className }: EmptyStateProps) {
+function EmptyState({ hint, icon, className }: EmptyStateProps) {
   return (
     <div
       className={cn(
@@ -23,3 +23,5 @@ export default function EmptyState({ hint, icon, className }: EmptyStateProps) {
     </div>
   );
 }
+
+export default memo(EmptyState);

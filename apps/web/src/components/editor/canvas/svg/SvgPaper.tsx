@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode, Ref } from 'react';
+import { memo, type CSSProperties, ReactNode, Ref } from 'react';
 
 type SvgPaperProps = {
   paperRef: Ref<HTMLDivElement>;
@@ -19,7 +19,7 @@ type SvgPaperProps = {
 /**
  * Scene shapes host. Visual zoom/pan is owned by RcbCanvas world transform.
  */
-export default function SvgPaper({
+function SvgPaper({
   paperRef,
   hostRef,
   width,
@@ -77,3 +77,5 @@ export default function SvgPaper({
     </div>
   );
 }
+
+export default memo(SvgPaper);

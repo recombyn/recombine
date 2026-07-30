@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -113,7 +113,7 @@ function ProcessNodeChrome({
  * The SVG plate stays in world space; shimmer/label are portaled so zoom
  * does not enlarge the sweep animation typography — but they rotate with the node.
  */
-export default function ImageProcessOverlay({
+function ImageProcessOverlay({
   document,
   hidden,
 }: {
@@ -143,3 +143,5 @@ export default function ImageProcessOverlay({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(ImageProcessOverlay);

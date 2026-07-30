@@ -1,4 +1,4 @@
-import type { ReactNode, SVGProps } from 'react';
+import { memo, type ReactNode, SVGProps } from 'react';
 
 type Props = {
   children?: ReactNode;
@@ -12,7 +12,7 @@ type Props = {
  * from world origin; overflow paints outside the 1×1 host (Chrome paints this,
  * unlike a true 0×0 root).
  */
-export default function RcbSceneOverlaySvg({ children, className, style, ...rest }: Props) {
+function RcbSceneOverlaySvg({ children, className, style, ...rest }: Props) {
   return (
     <svg
       className={
@@ -29,3 +29,5 @@ export default function RcbSceneOverlaySvg({ children, className, style, ...rest
     </svg>
   );
 }
+
+export default memo(RcbSceneOverlaySvg);

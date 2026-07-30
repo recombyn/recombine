@@ -1,6 +1,6 @@
 import React, { forwardRef } from 'react';
 import { Input as HeadlessInput } from '@headlessui/react';
-import type { InputHTMLAttributes } from 'react';
+import { memo, type InputHTMLAttributes } from 'react';
 import type { VariantProps } from 'class-variance-authority';
 import { cva } from 'class-variance-authority';
 import { cn } from '@/utils/classnames';
@@ -191,5 +191,4 @@ Input.displayName = 'Input';
 export type InputRef = React.RefObject<HTMLInputElement>;
 
 export { Input };
-export default Input;
-
+export default memo(Input);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlinePencil } from 'react-icons/hi2';
@@ -49,7 +49,7 @@ function avatarFileRejectReason(file: File): 'type' | 'size' | null {
   return null;
 }
 
-export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
+function EditProfileDialog({ open, onClose }: Props): ReactNode {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const user = useSelector((s: any) => s.auth.user as AuthUser | null);
@@ -222,3 +222,5 @@ export default function EditProfileDialog({ open, onClose }: Props): ReactNode {
     </Dialog>
   );
 }
+
+export default memo(EditProfileDialog);

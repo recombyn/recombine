@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -278,7 +278,7 @@ function SideFlyout({ children }: { children: ReactNode }) {
   );
 }
 
-export default function UserAccountPanel({ open, onOpenChange, children }: Props) {
+function UserAccountPanel({ open, onOpenChange, children }: Props) {
   const { t, i18n } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);
   const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
@@ -644,3 +644,5 @@ export default function UserAccountPanel({ open, onOpenChange, children }: Props
 }
 
 export { userInitial, UserAvatar };
+
+export default memo(UserAccountPanel);

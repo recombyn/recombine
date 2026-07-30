@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineChevronDown } from 'react-icons/hi2';
 import {
@@ -36,7 +36,7 @@ function presetGlyphSize(preset: { id: string; w: number; h: number }, box = 12)
 }
 
 /** Original = dashed free frame; locked ratios = solid proportional box. */
-export function AspectPresetGlyph({
+function AspectPresetGlyph({
   preset,
   className,
   box = 12,
@@ -74,7 +74,7 @@ type Props = {
 /**
  * Preset aspect ratio dropdown: free (unlocked) + common ratios with shape icons.
  */
-export default function AspectRatioPresetMenu({
+function AspectRatioPresetMenu({
   open,
   onOpenChange,
   activeId,
@@ -171,3 +171,8 @@ export default function AspectRatioPresetMenu({
     </>
   );
 }
+
+export default memo(AspectRatioPresetMenu);
+
+const MemoizedAspectPresetGlyph = memo(AspectPresetGlyph);
+export { MemoizedAspectPresetGlyph as AspectPresetGlyph };

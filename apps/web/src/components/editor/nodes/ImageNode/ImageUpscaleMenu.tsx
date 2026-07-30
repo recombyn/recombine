@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   autoUpdate,
@@ -30,7 +30,7 @@ export const UPSCALE_PRESETS: UpscalePreset[] = [
 ];
 
 /** Upscale preset menu under the image toolbar. */
-export default function ImageUpscaleMenu({
+function ImageUpscaleMenu({
   onPick,
 }: {
   onPick: (preset: UpscalePreset) => void;
@@ -88,3 +88,5 @@ export default function ImageUpscaleMenu({
     </>
   );
 }
+
+export default memo(ImageUpscaleMenu);

@@ -1,5 +1,5 @@
 import { cn } from '@/utils/classnames';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import type { CSSProperties } from 'react';
 import './style.css';
 
@@ -170,4 +170,4 @@ const Slider = ({
   );
 };
 
-export default Slider;
+export default memo(Slider);

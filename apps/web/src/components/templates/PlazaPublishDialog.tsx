@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiCheck, HiOutlineSparkles } from 'react-icons/hi2';
 import { Button, Dialog, message } from '@/components/base';
@@ -39,7 +39,7 @@ type PlazaPublishFormProps = {
  * Shared publish-to-plaza body — cover matches 首页 ProjectCoverCollage
  * (rewrite API/base hosts on tab enter; live-raster tiles when URLs missing).
  */
-export function PlazaPublishForm({
+function PlazaPublishForm({
   publishing,
   projectId,
   projectName,
@@ -230,7 +230,7 @@ type PlazaPublishDialogProps = {
 };
 
 /** Standalone Publish-to-plaza dialog (Projects grid). */
-export default function PlazaPublishDialog({
+function PlazaPublishDialog({
   open,
   publishing,
   projectId,
@@ -280,3 +280,8 @@ export default function PlazaPublishDialog({
     </Dialog>
   );
 }
+
+export default memo(PlazaPublishDialog);
+
+const MemoizedPlazaPublishForm = memo(PlazaPublishForm);
+export { MemoizedPlazaPublishForm as PlazaPublishForm };

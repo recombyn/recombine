@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import {
   HiOutlineArrowUturnLeft,
   HiOutlineArrowUturnRight,
@@ -119,4 +119,4 @@ const PreviewToolbar: React.FC<PreviewToolbarProps> = ({
   );
 };
 
-export default PreviewToolbar;
+export default memo(PreviewToolbar);

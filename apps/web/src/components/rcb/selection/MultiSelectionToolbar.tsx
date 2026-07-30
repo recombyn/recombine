@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineLink, HiOutlineLinkSlash } from 'react-icons/hi2';
@@ -288,7 +288,7 @@ function IconUngroup({ className }: { className?: string }) {
 }
 
 /** Multi-select floating bar with inline align, distribute, and boolean ops. */
-export default function MultiSelectionToolbar({
+function MultiSelectionToolbar({
   document,
   nodeIds,
   frameIds = [],
@@ -966,3 +966,5 @@ export default function MultiSelectionToolbar({
     </SelectionToolbarShell>
   );
 }
+
+export default memo(MultiSelectionToolbar);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import {
   FloatingPortal,
   autoUpdate,
@@ -44,7 +44,7 @@ export function strokeStyleLabel(
   return t(keys[style]);
 }
 
-export function StrokeStyleIcon({
+function StrokeStyleIcon({
   style,
   active,
 }: {
@@ -68,7 +68,7 @@ export function StrokeStyleIcon({
 }
 
 /** Compact stroke style picker: solid / dashed / dotted / … */
-export default function StrokeStylePicker({
+function StrokeStylePicker({
   value,
   onChange,
 }: {
@@ -137,3 +137,5 @@ export default function StrokeStylePicker({
     </>
   );
 }
+
+export default memo(StrokeStylePicker);

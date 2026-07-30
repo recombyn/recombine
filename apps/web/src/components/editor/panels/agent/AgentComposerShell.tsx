@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode, type Ref } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode, type Ref, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   FloatingPortal,
@@ -515,7 +515,7 @@ export const COMPOSER_ATTACH_ACTION_ACTIVE =
  * hover preview. Exported so other composers (e.g. the image generator node)
  * get identical chips.
  */
-export function ComposerAttachmentChip({
+function ComposerAttachmentChip({
   attachment: a,
   disabled,
   removable = true,
@@ -853,7 +853,7 @@ function buildPickFromCanvasButton(opts: {
  * Shared agent composer card — input + toolbar (attach / model / send).
  * Used for both the dock footer and in-place message edit (Cursor-style).
  */
-export default function AgentComposerShell({
+function AgentComposerShell({
   inputRef,
   contexts,
   onContextsChange,
@@ -1447,3 +1447,8 @@ export default function AgentComposerShell({
     </div>
   );
 }
+
+export default memo(AgentComposerShell);
+
+const MemoizedComposerAttachmentChip = memo(ComposerAttachmentChip);
+export { MemoizedComposerAttachmentChip as ComposerAttachmentChip };

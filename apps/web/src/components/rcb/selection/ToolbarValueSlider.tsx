@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import Slider from '@/components/base/slider';
 import Tooltip from '@/components/base/tooltip';
 import { cn } from '@/utils/classnames';
@@ -33,7 +33,7 @@ type Props = {
 /**
  * Compact toolbar control: click label → floating slider (not a dropdown list).
  */
-export default function ToolbarValueSlider({
+function ToolbarValueSlider({
   prefix,
   value,
   min = 0,
@@ -105,3 +105,5 @@ export default function ToolbarValueSlider({
     </div>
   );
 }
+
+export default memo(ToolbarValueSlider);

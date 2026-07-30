@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineBell,
@@ -128,7 +128,7 @@ function SettingsMobileNavBar({
 }
 
 /** Settings modal — left rail; plans & top-up open standalone dialogs. */
-export default function AccountSettingsDialog({
+function AccountSettingsDialog({
   open,
   onClose,
   initialTab = 'profile',
@@ -326,3 +326,5 @@ export default function AccountSettingsDialog({
     </>
   );
 }
+
+export default memo(AccountSettingsDialog);

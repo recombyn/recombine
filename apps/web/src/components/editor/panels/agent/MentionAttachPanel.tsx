@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/utils/classnames';
 
@@ -19,7 +19,7 @@ type Props = {
 /**
  * `@` mention picker — uploaded composer attachments → insert chip in input.
  */
-export default function MentionAttachPanel({
+function MentionAttachPanel({
   items,
   query,
   onPick,
@@ -90,3 +90,5 @@ export default function MentionAttachPanel({
     </div>
   );
 }
+
+export default memo(MentionAttachPanel);

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
@@ -255,7 +255,7 @@ function showImportWarningsIfAny(
   }
 }
 
-export default function HomePage() {
+function HomePage() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const goEditor = useGoEditor();
@@ -437,3 +437,5 @@ export default function HomePage() {
     </div>
   );
 }
+
+export default memo(HomePage);

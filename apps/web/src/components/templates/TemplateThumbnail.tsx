@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, memo } from 'react';
 import {
   PREVIEW_PNG_MAX_EDGE,
   renderDocumentThumbnail,
@@ -23,7 +23,7 @@ function paperBackground(document: any): string {
  * List-card preview — always a raster `<img>`, never a live SVG in the DOM.
  * (SVG is only used off-screen while rasterizing.)
  */
-export default function TemplateThumbnail({
+function TemplateThumbnail({
   document,
   fit = 'contain',
   /** Prefer remote HD PNG URLs (after plaza approve) over client raster. */
@@ -95,3 +95,5 @@ export default function TemplateThumbnail({
     </div>
   );
 }
+
+export default memo(TemplateThumbnail);

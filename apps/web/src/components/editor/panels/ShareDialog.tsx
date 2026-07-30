@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiChevronDown, HiOutlineInformationCircle } from 'react-icons/hi2';
@@ -138,7 +138,7 @@ function assertCanPublishToPlaza(opts: {
   return 'ok';
 }
 
-export default function ShareDialog({ open, onClose }: Props) {
+function ShareDialog({ open, onClose }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const dispatch = useDispatch();
@@ -723,3 +723,5 @@ export default function ShareDialog({ open, onClose }: Props) {
     </Dialog>
   );
 }
+
+export default memo(ShareDialog);

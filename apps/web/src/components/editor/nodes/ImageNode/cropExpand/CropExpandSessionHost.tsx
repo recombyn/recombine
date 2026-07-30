@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   HiOutlineArrowsPointingOut,
@@ -190,7 +190,7 @@ export const CROP_EXPAND_RATIOS: { id: string; label: string; w: number; h: numb
 /**
  * On-canvas crop / expand: control frame + compact bar under the frame.
  */
-export default function CropExpandSessionHost({ document }: { document: any }): ReactNode {
+function CropExpandSessionHost({ document }: { document: any }): ReactNode {
   const dispatch = useDispatch();
   const camera = useRcbCamera();
   const panel = useSelector((s: any) => s.editor.imageToolPanel as null | {
@@ -521,3 +521,5 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
     </>
   );
 }
+
+export default memo(CropExpandSessionHost);

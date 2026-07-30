@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { BiExit } from 'react-icons/bi';
 import Tooltip from '@/components/base/tooltip';
 import {
@@ -33,7 +33,7 @@ export const PANEL_ICON_BTN_ACTIVE =
  * Equal-sized icon toggle group — one active selection (align / cap / join).
  * Slots share width evenly (3 → 1/3, 5 → 1/5).
  */
-export function PanelSegmentedIcons<T extends string>({
+function PanelSegmentedIcons<T extends string>({
   value,
   options,
   onChange,
@@ -80,7 +80,7 @@ export function PanelSegmentedIcons<T extends string>({
  * Multi-select icon toggles (e.g. stroke T/R/B/L) — each can be on independently.
  * Same equal-width slots as PanelSegmentedIcons (5 with「全部」→ 1/5 each).
  */
-export function PanelToggleIcons<T extends string>({
+function PanelToggleIcons<T extends string>({
   value,
   options,
   onChange,
@@ -155,7 +155,7 @@ export function PanelToggleIcons<T extends string>({
 }
 
 /** Shared floating style panel chrome (fill / stroke / radius). */
-export function StylePanelShell({
+function StylePanelShell({
   title,
   onClose,
   children,
@@ -231,3 +231,10 @@ export function StylePanelShell({
     </div>
   );
 }
+
+const MemoizedPanelSegmentedIcons = memo(PanelSegmentedIcons);
+export { MemoizedPanelSegmentedIcons as PanelSegmentedIcons };
+const MemoizedPanelToggleIcons = memo(PanelToggleIcons);
+export { MemoizedPanelToggleIcons as PanelToggleIcons };
+const MemoizedStylePanelShell = memo(StylePanelShell);
+export { MemoizedStylePanelShell as StylePanelShell };

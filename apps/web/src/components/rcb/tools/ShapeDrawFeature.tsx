@@ -1,7 +1,7 @@
 import {
   useRcbScreenToScene,
 } from '../camera/context';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { ARROW_HEAD, ptsAttr, shapeVertexPoints } from '@/components/rcb/scene/sceneShapes';
 
 function normalizeBox(x0: number, y0: number, x1: number, y1: number) {
@@ -72,7 +72,7 @@ type ShapeDrawFeatureProps = {
 };
 
 /** Drag-to-create shapes ? preview matches committed geometry. */
-export default function ShapeDrawFeature({
+function ShapeDrawFeature({
   enabled,
   shapeKind,
   artboard,
@@ -352,3 +352,5 @@ export default function ShapeDrawFeature({
     </div>
   );
 }
+
+export default memo(ShapeDrawFeature);

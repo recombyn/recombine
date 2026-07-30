@@ -1,9 +1,4 @@
-import {
-  useCallback,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useCallback, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import {
   FloatingPortal,
   autoUpdate,
@@ -26,10 +21,10 @@ import {
 import Tooltip from '@/components/base/tooltip';
 import {
   type StrokeStyle,
-  StrokeStyleIcon,
   STROKE_STYLES,
   strokeStyleLabel,
 } from '@/components/editor/nodes/ShapeNode/StrokeStylePicker';
+import { strokeDashPreview } from '@/components/rcb/scene/sceneStrokeStyle';
 import type {
   StrokeAlign,
   StrokeLinecap,
@@ -45,6 +40,29 @@ import {
   SEL_ICON_BTN_ACTIVE,
 } from '@/components/rcb/selection/ToolbarValueSlider';
 import { cn } from '@/utils/classnames';
+
+function StrokeStyleIcon({
+  style,
+  active,
+}: {
+  style: StrokeStyle;
+  active?: boolean;
+}) {
+  return (
+    <svg viewBox="0 0 28 8" className="h-3.5 w-7 shrink-0" aria-hidden>
+      <line
+        x1="1"
+        y1="4"
+        x2="27"
+        y2="4"
+        stroke="currentColor"
+        strokeWidth={active ? 1.8 : 1.5}
+        strokeLinecap="round"
+        strokeDasharray={strokeDashPreview(style)}
+      />
+    </svg>
+  );
+}
 
 export type StrokeSides = { T: boolean; R: boolean; B: boolean; L: boolean };
 
@@ -286,7 +304,7 @@ function StrokeStyleField({
  * Stroke editor panel: width · style · sides · align/cap/join · color.
  * Corner radius lives in CornerRadiusPanel (opened from the R toolbar control).
  */
-export function StrokePanel({
+function StrokePanel({
   value,
   onChange,
   title = '描边',
@@ -444,7 +462,7 @@ export type StrokePanelPopoverProps = {
 };
 
 /** Toolbar trigger → stroke panel (width / style / align / cap / join / color). */
-export function StrokePanelPopover({
+function StrokePanelPopover({
   value,
   onChange,
   title = '描边',
@@ -550,4 +568,8 @@ export function StrokePanelPopover({
   );
 }
 
-export default StrokePanel;
+export default memo(StrokePanel);
+const MemoizedStrokePanel = memo(StrokePanel);
+export { MemoizedStrokePanel as StrokePanel };
+const MemoizedStrokePanelPopover = memo(StrokePanelPopover);
+export { MemoizedStrokePanelPopover as StrokePanelPopover };

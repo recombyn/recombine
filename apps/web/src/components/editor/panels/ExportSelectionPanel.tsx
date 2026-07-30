@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useId,
-  useMemo,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useCallback, useId, useMemo, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import {
   FloatingPortal,
   autoUpdate,
@@ -177,7 +170,7 @@ function contentCropFallback(document: any, name: string): NamedExportCrop | nul
   return null;
 }
 
-export function ExportSelectionPanel({
+function ExportSelectionPanel({
   nodeIds,
   crop,
   crops,
@@ -371,7 +364,7 @@ export type ExportSelectionPopoverProps = {
 };
 
 /** Download trigger: scale / format / compress panel. */
-export function ExportSelectionPopover({
+function ExportSelectionPopover({
   nodeIds,
   crop,
   baseName,
@@ -463,7 +456,7 @@ export function ExportSelectionPopover({
 type ExportMode = 'all' | 'selected';
 
 /** Top-bar Export: All Pages / Selected (PNG·JPG·SVG) + JSON. */
-export function EditorTopExportButton({ className }: { className?: string }) {
+function EditorTopExportButton({ className }: { className?: string }) {
   const { t } = useTranslation();
   const document = useSelector((s: any) => s.editor.document);
   const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds || []) as string[];
@@ -659,4 +652,10 @@ export function EditorTopExportButton({ className }: { className?: string }) {
   );
 }
 
-export default ExportSelectionPanel;
+export default memo(ExportSelectionPanel);
+const MemoizedExportSelectionPanel = memo(ExportSelectionPanel);
+export { MemoizedExportSelectionPanel as ExportSelectionPanel };
+const MemoizedExportSelectionPopover = memo(ExportSelectionPopover);
+export { MemoizedExportSelectionPopover as ExportSelectionPopover };
+const MemoizedEditorTopExportButton = memo(EditorTopExportButton);
+export { MemoizedEditorTopExportButton as EditorTopExportButton };

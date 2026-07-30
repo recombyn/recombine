@@ -1,13 +1,4 @@
-import {
-  forwardRef,
-  useImperativeHandle,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ClipboardEvent as ReactClipboardEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-} from 'react';
+import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, memo } from 'react';
 import { cn } from '@/utils/classnames';
 
 function editorHasComposerChips(el: HTMLElement | null | undefined): boolean {
@@ -25,7 +16,7 @@ const CONTEXT_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>';
 
 /** Read-only / history chip matching the composer pill (optional × when `onRemove`). */
-export function ContextChipPill({
+function ContextChipPill({
   label,
   thumbUrl,
   onRemove,
@@ -920,4 +911,6 @@ const AgentComposerInput = forwardRef<
   );
 });
 
-export default AgentComposerInput;
+export default memo(AgentComposerInput);
+const MemoizedContextChipPill = memo(ContextChipPill);
+export { MemoizedContextChipPill as ContextChipPill };

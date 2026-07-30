@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlinePencil } from 'react-icons/hi2';
@@ -13,7 +13,7 @@ const MAX_BIO = 200;
 const MAX_AVATAR_MB = 2;
 
 /** Profile + password for AccountSettingsDialog. */
-export default function AccountProfilePanel() {
+function AccountProfilePanel() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const user = useSelector((s: any) => s.auth.user as AuthUser | null);
@@ -180,3 +180,5 @@ export default function AccountProfilePanel() {
     </div>
   );
 }
+
+export default memo(AccountProfilePanel);
