@@ -67,14 +67,30 @@ def ensure_design_knowledge() -> None:
     """Insert missing seed knowledge rows. Never overwrite Admin edits."""
     global _KNOWLEDGE_READY
     if _KNOWLEDGE_READY:
-        return
+        # Catalog-ready flag can outlive a switched SQLITE_DB_PATH in tests.
+        try:
+            with connect() as conn:
+                conn.execute("SELECT 1 FROM design_knowledge LIMIT 1").fetchone()
+            return
+        except Exception:
+            _KNOWLEDGE_READY = False
     # Do not call ensure_design_catalog() here — catalog invokes this while still
     # holding the ensure lock and before _CATALOG_READY, which would recurse forever.
     with _KNOWLEDGE_LOCK:
         if _KNOWLEDGE_READY:
-            return
+            try:
+                with connect() as conn:
+                    conn.execute("SELECT 1 FROM design_knowledge LIMIT 1").fetchone()
+                return
+            except Exception:
+                _KNOWLEDGE_READY = False
         now = time.time()
+        from services.db import dialect, init_schema
+        from services.design.schema import ensure_design_tables
+
+        init_schema()
         with connect() as conn:
+            ensure_design_tables(conn, mysql=dialect() == "mysql")
             existing_keys = {
                 (str(r["kind"] or ""), str(r["title"] or ""))
                 for r in conn.execute("SELECT kind, title FROM design_knowledge").fetchall()
