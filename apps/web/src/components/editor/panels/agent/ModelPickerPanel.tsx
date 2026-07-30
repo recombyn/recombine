@@ -164,11 +164,11 @@ export function ModelBrandIcon({
   );
 }
 
-export type ModelPickerTab = 'design' | 'image';
+export type ModelPickerTab = 'design' | 'image' | 'video';
 
 /** Shared chrome for model / size popovers (editor + home). */
 export const AGENT_POPOVER_PANEL =
-  'w-[min(380px,calc(100vw-24px))] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
+  'w-[min(420px,calc(100vw-24px))] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
 
 /** Route-prefs primary panel — fixed 250px (opened via Dropdown). */
 export const AGENT_ROUTE_POPOVER_PANEL =
@@ -269,7 +269,14 @@ export function isImageKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined)
   return Boolean(m.id && /seedream|image|i2i|t2i/i.test(m.id));
 }
 
+export function isVideoKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): boolean {
+  if (!m) return false;
+  if (m.kind === 'video') return true;
+  return Boolean(m.id && /seedance|kling|runway|luma|minimax.*video|sora/i.test(m.id));
+}
+
 export function modelTabOf(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): ModelPickerTab {
+  if (isVideoKind(m)) return 'video';
   return isImageKind(m) ? 'image' : 'design';
 }
 
@@ -328,7 +335,11 @@ export default function ModelPickerPanel({
             id: '_loading',
             label: 'Loading...',
             provider: '',
-            kind: (tab === 'image' ? 'image' : 'text') as LlmModel['kind'],
+            kind: (tab === 'image'
+              ? 'image'
+              : tab === 'video'
+                ? 'video'
+                : 'text') as LlmModel['kind'],
           } satisfies LlmModel,
         ]
       : models;
@@ -337,17 +348,21 @@ export default function ModelPickerPanel({
     const raw =
       tab === 'image'
         ? pool.filter((m) => isImageKind(m) || m.id === '_loading')
-        : (() => {
-            const design = pool.filter(
-              (m) => (!isImageKind(m) && m.id !== 'auto') || m.id === '_loading'
-            );
-            if (design.some((m) => m.id === '_loading')) return design;
-            const autoRow = pool.find((m) => m.id === 'auto') || {
-              ...AUTO_MODEL,
-              label: t('agent.autoToggle'),
-            };
-            return [autoRow, ...design];
-          })();
+        : tab === 'video'
+          ? pool.filter((m) => isVideoKind(m) || m.id === '_loading')
+          : (() => {
+              const design = pool.filter(
+                (m) =>
+                  (!isImageKind(m) && !isVideoKind(m) && m.id !== 'auto') ||
+                  m.id === '_loading'
+              );
+              if (design.some((m) => m.id === '_loading')) return design;
+              const autoRow = pool.find((m) => m.id === 'auto') || {
+                ...AUTO_MODEL,
+                label: t('agent.autoToggle'),
+              };
+              return [autoRow, ...design];
+            })();
     const seen = new Set<string>();
     return raw.filter((m) => {
       if (!m?.id || seen.has(m.id)) return false;
@@ -412,7 +427,7 @@ export default function ModelPickerPanel({
                         <ModelMetaBadge label={t('agent.modelBadgeCustom')} />
                       ) : null}
                     </span>
-                    <span className="mt-0.5 line-clamp-2 text-[11px] leading-[1.35] text-[var(--muted)]">
+                    <span className="mt-0.5 block truncate whitespace-nowrap text-[11px] leading-[1.35] text-[var(--muted)]">
                       {descLine}
                     </span>
                   </span>

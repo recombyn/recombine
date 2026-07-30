@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { LuFrame, LuImage, LuImagePlus } from 'react-icons/lu';
+import { LuFrame, LuImage, LuImagePlus, LuVideo } from 'react-icons/lu';
+import { RiVideoAiLine } from 'react-icons/ri';
 import { RcbOverlayPortal, useRcbCamera, rcbSceneToScreen } from '@/components/rcb';
 import {
   NODE_TITLE_LABEL_GAP_PX,
@@ -13,7 +14,7 @@ type NodeTitleLabelBox = {
   height: number;
 };
 
-type NodeTitleIcon = 'frame' | 'image' | 'image-generator';
+type NodeTitleIcon = 'frame' | 'image' | 'image-generator' | 'video' | 'video-generator';
 
 type Props = {
   /** Scene-space AABB of the node / frame. */
@@ -48,6 +49,10 @@ function TitleIcon({ kind }: { kind: NodeTitleIcon }) {
   const cls = 'h-3 w-3 shrink-0 text-[var(--muted)]';
   if (kind === 'frame') return <LuFrame className={cls} strokeWidth={2} aria-hidden />;
   if (kind === 'image-generator') return <LuImagePlus className={cls} strokeWidth={2} aria-hidden />;
+  if (kind === 'video-generator') {
+    return <RiVideoAiLine className={cls} aria-hidden />;
+  }
+  if (kind === 'video') return <LuVideo className={cls} strokeWidth={2} aria-hidden />;
   return <LuImage className={cls} strokeWidth={2} aria-hidden />;
 }
 

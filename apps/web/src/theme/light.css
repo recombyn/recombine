@@ -13,11 +13,6 @@ html[data-theme='light'] {
   --on-brand: #ffffff;
   --preview-overlay: rgba(12, 12, 13, 0.8);
 
-  --home-hero-glow-strong: rgba(232, 226, 255, 0.7);
-  --home-hero-glow-soft: rgba(242, 238, 255, 0.45);
-  --home-hero-dot: #d8d8de;
-  --home-hero-accent-gradient: linear-gradient(90deg, #141418 0%, #3a3a48 48%, #7a7a8c 100%);
-
   /* Slider: filled track vs remainder */
   --slider-active: #141414;
   --slider-inactive: #e8e8e8;

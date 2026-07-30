@@ -253,8 +253,8 @@ const Image: React.FC<ImageProps> = ({
                     onClick={(e) => e.stopPropagation()}
                     style={{
                       display: 'block',
-                      maxWidth: '800px',
-                      maxHeight: '800px',
+                      maxWidth: '700px',
+                      maxHeight: '700px',
                       transform: `rotate(${transform.rotate}deg) scale(${transform.scale}) scaleX(${transform.flipX ? -1 : 1}) scaleY(${transform.flipY ? -1 : 1})`,
                       transformOrigin: 'center center',
                     }}

@@ -11,11 +11,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from services.auth import get_session
-from services.llm import get_llm_endpoint, list_image_models, list_llm_models
+from services.llm import get_llm_endpoint, list_image_models, list_llm_models, list_video_models
 from services.llm.agent import stream_agent_turn, stream_official_agent
 from services.llm.chat import stream_chat
 from services.llm.design_tools import design_tool_definitions
 from services.llm.image import generate_image
+from services.llm.video import generate_video
 from services.llm.usage_log import bind_usage_context, usage_context
 from services.wallet.db import (
     consume_free_daily_quota,
@@ -65,6 +66,15 @@ class ImageGenerateIn(BaseModel):
     quality: str | None = None
     resolution: str | None = None
     n: int | None = None
+    images: list[str] | None = None
+
+
+class VideoGenerateIn(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    model: str | None = None
+    aspect_ratio: str | None = None
+    resolution: str | None = None
+    duration: int | None = None
     images: list[str] | None = None
 
 
@@ -153,6 +163,7 @@ def get_models() -> dict[str, Any]:
         "models": items,
         "available": available,
         "imageModels": list_image_models(),
+        "videoModels": list_video_models(),
     }
 
 
@@ -333,6 +344,66 @@ async def post_image(
             assets_out.append(asset)
         except Exception as err:  # noqa: BLE001 — keep raw CDN url when rehost fails
             logger.warning("image rehost failed (%s): %s", type(err).__name__, err)
+            continue
+    if assets_out:
+        result = {**result, "assets": assets_out}
+    return result
+
+
+@router.post("/video")
+async def post_video(
+    body: VideoGenerateIn,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    if not body.prompt.strip():
+        raise HTTPException(status_code=400, detail="empty prompt")
+
+    requested = (body.model or "").strip() or None
+    # Flat video charge from 积分 (reuse image-credit balance for now).
+    cost = image_model_credit_cost(requested, count=1, resolution=body.resolution) if requested else DEFAULT_IMAGE_CREDITS
+    cost = max(DEFAULT_IMAGE_CREDITS, int(cost or DEFAULT_IMAGE_CREDITS))
+    _charge_image_credits(user.id, cost, "AI video generation")
+    model_id = requested
+    credits_charged = cost
+
+    try:
+        with usage_context(
+            user_id=user.id,
+            source="video",
+            credits_charged=credits_charged,
+        ):
+            result = await generate_video(
+                prompt=body.prompt.strip(),
+                model=model_id,
+                aspect_ratio=body.aspect_ratio,
+                resolution=body.resolution,
+                duration=body.duration,
+                images=body.images,
+            )
+    except RuntimeError as err:
+        msg = str(err)
+        if "No LLM API key" in msg or "No OpenRouter" in msg:
+            raise HTTPException(status_code=503, detail=msg) from err
+        raise HTTPException(status_code=502, detail=msg) from err
+
+    from services.assets import create_asset_from_url
+
+    assets_out: list[dict[str, Any]] = []
+    for vid_url in result.get("videos") or []:
+        if not isinstance(vid_url, str) or not vid_url.strip():
+            continue
+        try:
+            asset = create_asset_from_url(
+                user.id,
+                vid_url.strip(),
+                kind="video",
+                source="ai_video",
+                prompt=body.prompt.strip(),
+            )
+            assets_out.append(asset)
+        except Exception as err:  # noqa: BLE001
+            logger.warning("video rehost failed (%s): %s", type(err).__name__, err)
             continue
     if assets_out:
         result = {**result, "assets": assets_out}

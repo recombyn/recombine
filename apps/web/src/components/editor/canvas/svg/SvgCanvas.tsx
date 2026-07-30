@@ -137,6 +137,8 @@ import {
 import { parseFrameSelId } from '@/components/rcb/selection/SelectionFeature';
 import ImageProcessOverlay from '@/components/editor/nodes/ImageNode/ImageProcessOverlay';
 import ImageGeneratorOverlay from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorOverlay';
+import VideoGeneratorOverlay from '@/components/editor/nodes/VideoGeneratorNode/VideoGeneratorOverlay';
+import VideoNodeOverlay from '@/components/editor/nodes/VideoNode/VideoNodeOverlay';
 import type { PencilEraseStroke } from '@/components/rcb';
 import { erasePencilNode } from '@/components/rcb';
 import TextInlineEditor from '@/components/editor/nodes/TextNode/TextInlineEditor';
@@ -403,10 +405,14 @@ function frameForFullBleedPlate(doc: any, nodeId: string): { id: string } | null
   return null;
 }
 
-/** Drop image-generator plates + process-shimmer nodes from Chat attach targets. */
-function filterChatAttachNodeIds(doc: any, ids: string[]): string[] {
+/** Drop generator plates + process-shimmer (+ videos when images-only) from attach targets. */
+function filterChatAttachNodeIds(
+  doc: any,
+  ids: string[],
+  opts?: { imagesOnly?: boolean }
+): string[] {
   const delta = doc?.deltaSetLike || {};
-  return ids.filter((id) => canAttachNodeToChat(delta[id]));
+  return ids.filter((id) => canAttachNodeToChat(delta[id], opts));
 }
 
 /** Prefer live selection; fall back to the node under the context menu. */
@@ -423,14 +429,17 @@ function ctxMenuSeedFrameIds(selectedFrameIds: string[], menuFrameId?: string | 
   return [];
 }
 
+type AttachPickOpts = { imagesOnly?: boolean };
+
 /** Resolve a pick click into an attach payload, or null if empty / only blocked nodes. */
 function resolveAttachPickPayload(
   doc: any,
   nodeIds: string[],
-  frameId?: string | null
+  frameId?: string | null,
+  opts?: AttachPickOpts
 ): { payload: string | string[]; blockedOnly: boolean } | null {
   const seed = expandSelectionWithGroups(doc, nodeIds || []);
-  const attachable = filterChatAttachNodeIds(doc, seed);
+  const attachable = filterChatAttachNodeIds(doc, seed, opts);
   if (attachable.length) {
     return {
       payload: attachable.length === 1 ? attachable[0]! : attachable,
@@ -441,6 +450,12 @@ function resolveAttachPickPayload(
   const fid = String(frameId || '').trim();
   if (fid) return { payload: `frame:${fid}`, blockedOnly: false };
   return null;
+}
+
+function attachPickFilterOpts(
+  pick: null | { target: string; accept?: 'image' | 'media' }
+): AttachPickOpts | undefined {
+  return pick?.accept === 'image' ? { imagesOnly: true } : undefined;
 }
 
 type SvgCanvasProps = {
@@ -522,7 +537,8 @@ export default function SvgCanvas({
     (s: any) => (s.editor.workspaceMode || 'design') as 'design' | 'dev'
   );
   const canvasAttachPick = useSelector(
-    (s: any) => s.editor.canvasAttachPick as null | { target: string }
+    (s: any) =>
+      s.editor.canvasAttachPick as null | { target: string; accept?: 'image' | 'media' }
   );
   const canvasAttachPickRef = useRef(canvasAttachPick);
   canvasAttachPickRef.current = canvasAttachPick;
@@ -540,6 +556,10 @@ export default function SvgCanvas({
   const shapeStylePanelOpen = Boolean(shapeStylePanel);
   const cropExpandOpen = imageToolPanelKind === 'crop' || imageToolPanelKind === 'expand';
   const eraserOpen = imageToolPanelKind === 'eraser';
+  const videoToolPanelKind = useSelector(
+    (s: any) => s.editor.videoToolPanel?.kind as string | undefined
+  );
+  const videoToolOpen = videoToolPanelKind === 'trim';
   const activeFrameId = useSelector(
     (s: any) => (s.editor.document?.activeFrameId as string | null) ?? null
   );
@@ -949,7 +969,11 @@ export default function SvgCanvas({
       }
       const doc = documentRef.current;
       const seed = expandSelectionWithGroups(doc, [id]);
-      const attachable = filterChatAttachNodeIds(doc, seed);
+      const attachable = filterChatAttachNodeIds(
+        doc,
+        seed,
+        attachPickFilterOpts(canvasAttachPickRef.current)
+      );
       dispatch(setCanvasAttachPickBlocked(seed.length > 0 && attachable.length === 0));
     };
     stageEl.addEventListener('pointermove', onMove);
@@ -1028,7 +1052,8 @@ export default function SvgCanvas({
         const resolved = resolveAttachPickPayload(
           documentRef.current,
           nodeIds || [],
-          (frameIds || [])[0]
+          (frameIds || [])[0],
+          attachPickFilterOpts(pick)
         );
         if (!resolved) {
           dispatch(clearCanvasAttachPick());
@@ -1081,7 +1106,12 @@ export default function SvgCanvas({
             return;
           }
         }
-        const resolved = resolveAttachPickPayload(doc, ids);
+        const resolved = resolveAttachPickPayload(
+          doc,
+          ids,
+          undefined,
+          attachPickFilterOpts(pick)
+        );
         if (!resolved) {
           dispatch(clearCanvasAttachPick());
           return;
@@ -2226,7 +2256,7 @@ export default function SvgCanvas({
     if (readOnly || !hitEl) return undefined;
 
     const skipSel =
-      '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor]';
+      '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar]';
 
     const onCtx = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
@@ -2896,7 +2926,7 @@ export default function SvgCanvas({
     const isComposerTarget = (t: HTMLElement | null) =>
       Boolean(
         t?.closest?.(
-          '[data-agent-composer], [data-image-generator], [data-image-quick-edit]'
+          '[data-agent-composer], [data-image-generator], [data-video-generator], [data-image-quick-edit]'
         )
       );
 
@@ -2904,7 +2934,7 @@ export default function SvgCanvas({
       const el =
         (t?.closest?.('[data-agent-composer]') as HTMLElement | null) ||
         (t
-          ?.closest?.('[data-image-generator], [data-image-quick-edit]')
+          ?.closest?.('[data-image-generator], [data-video-generator], [data-image-quick-edit]')
           ?.querySelector?.('[data-agent-composer]') as HTMLElement | null);
       return (el?.innerText || '').replace(/\u200b/g, '').trim();
     };
@@ -3336,6 +3366,7 @@ export default function SvgCanvas({
               Boolean(editingPenId) ||
               cropExpandOpen ||
               eraserOpen ||
+              videoToolOpen ||
               // Keep chrome while editing radius so the outline can follow rounded corners.
               (shapeStylePanelOpen && shapeStylePanel?.kind !== 'radius')
             }
@@ -3343,6 +3374,16 @@ export default function SvgCanvas({
           />
           <ImageProcessOverlay document={document} hidden={geometryTransforming} />
           <ImageGeneratorOverlay
+            document={document}
+            hidden={geometryTransforming}
+            readOnly={readOnly}
+          />
+          <VideoGeneratorOverlay
+            document={document}
+            hidden={geometryTransforming}
+            readOnly={readOnly}
+          />
+          <VideoNodeOverlay
             document={document}
             hidden={geometryTransforming}
             readOnly={readOnly}

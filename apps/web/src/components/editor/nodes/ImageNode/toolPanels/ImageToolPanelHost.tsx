@@ -78,6 +78,10 @@ export default function ImageToolPanelHost({ document }: { document: any }): Rea
 
   useEffect(() => {
     if (!panel) return;
+    // Crop / expand / flipRotate are owned by session hosts (image + video).
+    if (panel.kind === 'crop' || panel.kind === 'expand' || panel.kind === 'flipRotate') {
+      return;
+    }
     const node = document?.deltaSetLike?.[panel.nodeId];
     if (!node || node.key !== 'image') dispatch(closeImageToolPanel());
   }, [document, panel, dispatch]);

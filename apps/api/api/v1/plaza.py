@@ -129,7 +129,7 @@ def plaza_feed(
     """
     Public plaza feed.
     tab=recommended|latest (following deprecated — use authorIds to filter by creator)
-    category=optional category filter (website|mobile|image|poster)
+    category=optional category filter (website|mobile|image|poster|video)
     authorIds=comma-separated user ids to filter works by creator.
     """
     return list_feed(

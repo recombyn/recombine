@@ -332,8 +332,43 @@ def list_image_models() -> list[dict]:
     return models
 
 
+def list_video_models() -> list[dict]:
+    """OpenRouter Seedance / video catalog (DB-backed)."""
+    try:
+        from services.llm.catalog_store import list_catalog
+
+        catalog = list_catalog(kind="video", enabled_only=True)
+    except Exception:
+        catalog = []
+
+    models: list[dict] = []
+    for m in catalog:
+        provider = str(m.get("provider") or "openrouter")
+        if provider == "openrouter" and not _has_openrouter_key():
+            continue
+        mid = m["id"]
+        api_model = m.get("api_model") or m.get("apiModel") or mid
+        models.append(
+            {
+                "id": mid,
+                "label": m["label"],
+                "description": m.get("description"),
+                "provider": provider,
+                "kind": "video",
+                "api_model": api_model,
+                "iconKey": m.get("iconKey"),
+                "iconUrl": m.get("iconUrl"),
+                "price": m.get("price"),
+                "max_attachments": int(
+                    m.get("max_attachments") or m.get("maxAttachments") or 4
+                ),
+            }
+        )
+    return models
+
+
 def list_all_models() -> list[dict]:
-    return [*list_llm_models(), *list_image_models()]
+    return [*list_llm_models(), *list_image_models(), *list_video_models()]
 
 
 def _base_url_for(provider: str) -> str:

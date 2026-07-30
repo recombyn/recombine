@@ -41,7 +41,7 @@ export type LlmModel = {
   label: string;
   provider: string;
   description?: string | null;
-  kind?: 'text' | 'image' | 'svg';
+  kind?: 'text' | 'image' | 'svg' | 'video';
   referenceTypes?: ModelReferenceType[];
   reference_types?: ModelReferenceType[];
   thinking?: boolean;
@@ -63,6 +63,7 @@ export type ChatModelsResponse = {
   models: LlmModel[];
   available: boolean;
   imageModels?: LlmModel[];
+  videoModels?: LlmModel[];
 };
 
 export type GenerateImageInput = {
@@ -118,4 +119,34 @@ export const generateImage = (
     method: 'post',
     data,
     signal: opts?.signal,
+  });
+
+export type GenerateVideoInput = {
+  prompt: string;
+  model?: string;
+  aspect_ratio?: string;
+  resolution?: string;
+  duration?: number;
+  /** First-frame / style reference images (data URLs or http URLs). */
+  images?: string[];
+};
+
+export type GenerateVideoResult = {
+  videos: string[];
+  text?: string | null;
+  model: string;
+  assets?: Array<{ url?: string | null; id?: string | null }> | null;
+};
+
+/** POST /api/v1/chat/video — generation may take minutes (submit + poll on the API side). */
+export const generateVideo = (
+  data: GenerateVideoInput,
+  opts?: { signal?: AbortSignal }
+) =>
+  request<GenerateVideoResult>({
+    url: '/api/v1/chat/video',
+    method: 'post',
+    data,
+    signal: opts?.signal,
+    timeout: 600000,
   });

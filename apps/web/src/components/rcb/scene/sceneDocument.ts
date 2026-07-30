@@ -552,6 +552,89 @@ export function measureImageNaturalSize(src: string): Promise<{ width: number; h
   });
 }
 
+/** Read video metadata (size + duration) from a blob/object/http URL. */
+export function measureVideoNaturalSize(
+  src: string
+): Promise<{ width: number; height: number; duration: number }> {
+  return new Promise((resolve, reject) => {
+    if (!src) {
+      reject(new Error('empty video src'));
+      return;
+    }
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    const cleanup = () => {
+      video.removeAttribute('src');
+      video.load();
+    };
+    video.onloadedmetadata = () => {
+      const width = Math.max(1, video.videoWidth || 1);
+      const height = Math.max(1, video.videoHeight || 1);
+      const duration = Number.isFinite(video.duration) ? Math.max(0, video.duration) : 0;
+      cleanup();
+      resolve({ width, height, duration });
+    };
+    video.onerror = () => {
+      cleanup();
+      reject(new Error('video load failed'));
+    };
+    video.src = src;
+  });
+}
+
+/** Capture a poster frame (JPEG data URL) from a video src. */
+export function captureVideoPosterFrame(
+  src: string,
+  atSeconds = 0.1
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!src) {
+      reject(new Error('empty video src'));
+      return;
+    }
+    const video = document.createElement('video');
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    const fail = () => reject(new Error('video poster capture failed'));
+    video.onerror = fail;
+    video.onloadeddata = () => {
+      try {
+        const seekTo = Math.min(
+          Math.max(0, atSeconds),
+          Math.max(0, (video.duration || 1) - 0.05)
+        );
+        const draw = () => {
+          const w = Math.max(1, video.videoWidth || 1);
+          const h = Math.max(1, video.videoHeight || 1);
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            fail();
+            return;
+          }
+          ctx.drawImage(video, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        if (seekTo <= 0.01) {
+          draw();
+          return;
+        }
+        video.onseeked = () => draw();
+        video.currentTime = seekTo;
+      } catch {
+        fail();
+      }
+    };
+    video.src = src;
+  });
+}
+
 /** Fit natural size into a max box while keeping aspect ratio. */
 export function fitImageSize(
   naturalWidth: number,
@@ -624,6 +707,15 @@ export function isImageGeneratorNode(node: any): boolean {
   return Boolean(node) && node.key === 'image' && attrFlagTrue(node.attrs?.imageGenerator);
 }
 
+/** Canvas video-generator plate (empty video + generator overlay until promote). */
+export function isVideoGeneratorNode(node: any): boolean {
+  return Boolean(node) && node.key === 'video' && attrFlagTrue(node.attrs?.videoGenerator);
+}
+
+export function isVideoNode(node: any): boolean {
+  return Boolean(node) && node.key === 'video' && !isVideoGeneratorNode(node);
+}
+
 /** Layer hidden — skipped in SVG render + hit-test. */
 export function isNodeHidden(node: any): boolean {
   return Boolean(node) && attrFlagTrue(node.attrs?.hidden);
@@ -631,11 +723,11 @@ export function isNodeHidden(node: any): boolean {
 
 /**
  * Nodes that belong in export / cover / thumbnail output.
- * Skip editor-only chrome: image-generator plates and in-progress process shimmer.
+ * Skip editor-only chrome: image/video-generator plates and in-progress process shimmer.
  */
 export function isExportableSceneNode(node: any): boolean {
   if (!node || isNodeHidden(node)) return false;
-  if (isImageGeneratorNode(node)) return false;
+  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return false;
   if (String(node?.attrs?.processStatus || '') === 'running') return false;
   return true;
 }
@@ -647,12 +739,17 @@ export function isImageProcessRunning(node: any): boolean {
 
 /**
  * Nodes that may be pinned into Chat (右键 / 快捷键 / composer).
- * Image-generator plates and process-shimmer nodes stay out.
+ * Generator plates and process-shimmer nodes stay out.
+ * `imagesOnly` — image-generator / quick-edit pick: reject video nodes.
  */
-export function canAttachNodeToChat(node: any): boolean {
+export function canAttachNodeToChat(
+  node: any,
+  opts?: { imagesOnly?: boolean }
+): boolean {
   if (!node) return false;
-  if (isImageGeneratorNode(node)) return false;
+  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return false;
   if (isImageProcessRunning(node)) return false;
+  if (opts?.imagesOnly && node.key === 'video') return false;
   return true;
 }
 
@@ -813,6 +910,204 @@ export function promoteImageGeneratorToImage(
   if (x != null) node.x = Math.round(x);
   if (y != null) node.y = Math.round(y);
   return next;
+}
+
+/**
+ * Spawn a Video Generator plate. Same `video` key so hit-test / select
+ * keep working; `attrs.videoGenerator` flips on the HTML composer overlay.
+ * After generate, call `promoteVideoGeneratorToVideo` to become a normal video.
+ */
+export function createVideoGeneratorNode({
+  x = 40,
+  y = 40,
+  width = 640,
+  height = 360,
+  name = 'Video Generator',
+}: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+} = {}) {
+  const id = nanoid(10);
+  const iw = Math.max(160, Math.round(Number(width) || 640));
+  const ih = Math.max(120, Math.round(Number(height) || 360));
+  return {
+    id,
+    node: {
+      id,
+      key: 'video',
+      x: Math.round(Number(x) || 0),
+      y: Math.round(Number(y) || 0),
+      z: 0,
+      width: iw,
+      height: ih,
+      attrs: {
+        src: '',
+        poster: '',
+        name: name || 'Video Generator',
+        assetKind: 'video',
+        videoGenerator: true,
+        videoGenAspect: '16:9',
+        videoGenResolution: '720p',
+        videoGenDuration: 5,
+        mode: 'FIT',
+        lockAspect: 'true',
+        radiusTL: 0,
+        radiusTR: 0,
+        radiusBR: 0,
+        radiusBL: 0,
+        radiusLinked: 'true',
+      } as Record<string, unknown>,
+      children: [],
+    },
+  };
+}
+
+export function createVideoNode({
+  x = 40,
+  y = 40,
+  width = 640,
+  height = 360,
+  src = '',
+  poster = '',
+  name = 'Video',
+}: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  src?: string;
+  poster?: string;
+  name?: string;
+} = {}) {
+  const id = nanoid(10);
+  return {
+    id,
+    node: {
+      id,
+      key: 'video',
+      x: Math.round(Number(x) || 0),
+      y: Math.round(Number(y) || 0),
+      z: 0,
+      width: Math.max(80, Math.round(Number(width) || 640)),
+      height: Math.max(60, Math.round(Number(height) || 360)),
+      attrs: {
+        src,
+        poster: poster || '',
+        name: name || 'Video',
+        assetKind: 'video',
+        mode: 'FIT',
+        lockAspect: 'true',
+        radiusTL: 0,
+        radiusTR: 0,
+        radiusBR: 0,
+        radiusBL: 0,
+        radiusLinked: 'true',
+      } as Record<string, unknown>,
+      children: [],
+    },
+  };
+}
+
+/** Turn a video-generator plate into a normal video node (same id / selection). */
+export function promoteVideoGeneratorToVideo(
+  doc: any,
+  nodeId: string,
+  {
+    src,
+    poster,
+    width,
+    height,
+    x,
+    y,
+    name,
+    genPrompt,
+  }: {
+    src: string;
+    poster?: string;
+    width?: number;
+    height?: number;
+    x?: number;
+    y?: number;
+    name?: string;
+    genPrompt?: string;
+  }
+) {
+  if (!doc || !nodeId || !src) return doc;
+  const next = normalizeDocument(doc);
+  const node = next.deltaSetLike?.[nodeId];
+  if (!node || node.key !== 'video') return doc;
+  const attrs = { ...(node.attrs || {}) };
+  delete attrs.videoGenerator;
+  delete attrs.videoGenAspect;
+  delete attrs.videoGenResolution;
+  delete attrs.videoGenDuration;
+  delete attrs.videoGenModel;
+  delete attrs.processStatus;
+  delete attrs.processKind;
+  delete attrs.processLabel;
+  delete attrs.processSourceId;
+  delete attrs.processTargetWidth;
+  delete attrs.processTargetHeight;
+  delete attrs.processMeta;
+  attrs.src = src;
+  if (poster) attrs.poster = poster;
+  attrs.assetKind = 'video';
+  if (name) attrs.name = name;
+  const prompt = String(genPrompt || '').trim();
+  if (prompt) attrs.genPrompt = prompt;
+  else delete attrs.genPrompt;
+  node.attrs = attrs;
+  if (width != null) node.width = Math.max(1, Math.round(width));
+  if (height != null) node.height = Math.max(1, Math.round(height));
+  if (x != null) node.x = Math.round(x);
+  if (y != null) node.y = Math.round(y);
+  return next;
+}
+
+/** Spawn video node with local preview while remote upload runs. */
+export function spawnVideoUploadPlaceholderNode(
+  doc: any,
+  {
+    src,
+    poster,
+    width,
+    height,
+    label = '上传中',
+    x,
+    y,
+    name,
+  }: {
+    src: string;
+    poster?: string;
+    width: number;
+    height: number;
+    label?: string;
+    x?: number;
+    y?: number;
+    name?: string;
+  }
+) {
+  if (!doc || !src) return { document: doc, id: null as string | null };
+  const next = normalizeDocument(doc);
+  const { id, node } = createVideoNode({
+    x: x ?? 40,
+    y: y ?? 40,
+    width,
+    height,
+    src,
+    poster: poster || '',
+    name: name || 'Video',
+  });
+  node.attrs = {
+    ...(node.attrs || {}),
+    processStatus: 'running',
+    processKind: 'upload',
+    processLabel: label,
+  };
+  return { document: addNodeToDocument(next, id, node), id };
 }
 
 /**
@@ -1388,7 +1683,7 @@ export function supportsSideStroke(node: any) {
 /** Nodes that expose corner-radius toolbar + on-canvas handles. */
 export function supportsCornerRadius(node: any) {
   if (!node) return false;
-  if (node.key === 'rect' || node.key === 'image') return true;
+  if (node.key === 'rect' || node.key === 'image' || node.key === 'video') return true;
   if (node.key === 'path') {
     return isClosedPathAttrs(node.attrs);
   }
@@ -1428,7 +1723,7 @@ export function supportsShapeSides(node: any) {
  */
 export function supportsAspectPresets(node: any) {
   if (!node) return false;
-  if (node.key === 'image' || node.key === 'frame' || node.key === 'svg') return true;
+  if (node.key === 'image' || node.key === 'video' || node.key === 'frame' || node.key === 'svg') return true;
   if (node.key === 'rect' || node.key === 'ellipse') return true;
   if (node.key !== 'shape' && node.key !== 'path') return false;
   const t = String(node.attrs?.shapeType || (node.key === 'path' ? 'path' : 'rect'));
@@ -1444,7 +1739,7 @@ export function supportsAspectPresets(node: any) {
  */
 export function supportsFill(node: any) {
   if (!node) return false;
-  if (node.key === 'rect' || node.key === 'ellipse' || node.key === 'image' || node.key === 'svg') return true;
+  if (node.key === 'rect' || node.key === 'ellipse' || node.key === 'image' || node.key === 'video' || node.key === 'svg') return true;
   if (node.key === 'path') {
     const d = String(node.attrs?.path || node.attrs?.d || '');
     if (node.attrs?.closed === false || node.attrs?.closed === 'false') return false;
@@ -1474,7 +1769,7 @@ export function supportsFill(node: any) {
  */
 export function supportsStroke(node: any) {
   if (!node) return false;
-  if (node.key === 'image' || node.key === 'text' || node.key === 'frame' || node.key === 'svg') return false;
+  if (node.key === 'image' || node.key === 'video' || node.key === 'text' || node.key === 'frame' || node.key === 'svg') return false;
   if (node.key === 'rect' || node.key === 'ellipse' || node.key === 'path') return true;
   return node.key === 'shape';
 }

@@ -18,13 +18,14 @@ export type UploadFilesResult = {
   items: UploadedFileItem[];
 };
 
-/** Upload one or more images. Form field name: `files`. */
-export const uploadFiles = (data: FormData) =>
+/** Upload one or more images/videos. Form field name: `files`. */
+export const uploadFiles = (data: FormData, opts?: { timeout?: number }) =>
   request<UploadFilesResult>({
     url: '/api/v1/uploads',
     method: 'post',
     data,
-    timeout: 120000,
+    // Videos can be large — default 10 minutes.
+    timeout: opts?.timeout ?? 600000,
   });
 
 /** DELETE /api/v1/uploads/files/{encodedKeyPath} */

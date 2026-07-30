@@ -146,11 +146,12 @@ function ToastLoadingMark() {
       className="block animate-spin"
       style={{ transformOrigin: 'center' }}
     >
+      {/* White arc on the green disk — green-on-green looked like a solid dot. */}
       <circle
         cx="6"
         cy="6"
         r="4.25"
-        stroke={SUCCESS_MARK}
+        stroke="#ffffff"
         strokeWidth="2.2"
         strokeLinecap="round"
         strokeDasharray="18 40"
@@ -189,7 +190,7 @@ const ToastItemRow: React.FC<{ item: ToastItem }> = ({ item }) => {
   return (
     <div
       className={cn(
-        'inline-flex items-center gap-2.5 rounded-full text-sm leading-none shadow-lg shadow-black/15 transition-all duration-200',
+        'rcb-message inline-flex items-center gap-2.5 rounded-full text-sm leading-none shadow-lg shadow-black/15 transition-all duration-200',
         TOAST_BG[item.type],
         isVisible && !isExiting
           ? 'opacity-100 translate-y-0'
@@ -226,7 +227,7 @@ export const MessageContainer: React.FC = () => {
   if (messages.length === 0) return null;
 
   return createPortal(
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[11000] flex flex-col gap-3 items-center pointer-events-none">
+    <div className="rcb-message-host fixed top-4 left-1/2 z-[11000] flex -translate-x-1/2 flex-col items-center gap-3 pointer-events-none">
       {messages.map((m) => (
         <div key={m.key} className="pointer-events-auto">
           <ToastItemRow item={m} />

@@ -15,7 +15,7 @@
         "create_svg",
         "update_node"
       ],
-      "prompt_positive": "# 设计方法论（社区基础版）\n\n1. 从用户话与画布推断目标、尺寸、必出文案；缺关键信息 → ask。\n2. UI 壳/色块/按钮 → 矢量；可改文案 → create_text；摄影/复杂插画 → create_image+genPrompt。\n3. 无限画布局部加形不必先 create_frame；整页/固定导出尺寸再 create_frame。\n4. 信息够 → tool_ops；读用户附图 → need_skills=[\"vision_extract\"]。\n5. 禁止编造品牌/价格/电话；禁止使用 SCENE 中不存在的节点 id。\n",
+      "prompt_positive": "# 设计方法论（社区基础版）\n\n1. 从用户话、附图与画布推断目标、尺寸、必出文案；缺关键信息 → ask。\n2. 整页/固定导出尺寸：先 create_frame（宽高自选或跟 CANVAS_SIZE / 参考图比例），再在画板内落层；局部加形不必先建 frame。\n3. UI 壳/色块/按钮 → 矢量；可改文案 → create_text；摄影/复杂插画 → create_image+genPrompt。\n4. 信息够 → tool_ops；读用户附图 → need_skills=[\"vision_extract\"]。\n5. 禁止编造品牌/价格/电话；禁止使用 SCENE 中不存在的节点 id。\n",
       "prompt_negative": "不要空喊寒暄代替 tool_ops；不要用场景分类清单替代判断。",
       "triggers": [
         {
@@ -44,7 +44,7 @@
         "create_image",
         "update_node"
       ],
-      "prompt_positive": "# 看图抽取（社区基础版）\n\n按图如实写：载体与风格、主要分区、关键元素（字/图/色块/按钮）与大致位置、主色 3～5 个。\n图中没有的不要补。\n",
+      "prompt_positive": "# 看图抽取（社区基础版）\n\n按图如实写：载体与风格、主要分区、关键元素（字/图/色块/按钮）与大致位置、主色 3～5 个、建议画板比例或尺寸。\n图中没有的不要补。\n",
       "prompt_negative": "禁止脑补图中没有的模块。",
       "triggers": [
         {

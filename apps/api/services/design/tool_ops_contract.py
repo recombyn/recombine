@@ -113,6 +113,19 @@ def allowed_canvas_tool_keys() -> frozenset[str]:
     )
 
 
+# Models often invent singular / snake variants; map to registry keys.
+_OP_NAME_ALIASES: dict[str, str] = {
+    "delete_node": "delete_nodes",
+    "remove_node": "delete_nodes",
+    "remove_nodes": "delete_nodes",
+}
+
+
+def _canonicalize_op_name(name: str) -> str:
+    key = str(name or "").strip()
+    return _OP_NAME_ALIASES.get(key, key)
+
+
 def format_canvas_tools_for_model(rules: dict[str, str] | None = None) -> str:
     """Capability block for LLM prompts — Action registry (+ schema + hint)."""
     del rules  # allowlist = design_canvas_tool.enabled only
@@ -289,13 +302,13 @@ def _parse_raw_ops(content: str | dict[str, Any] | list[Any] | None) -> list[dic
     for item in ops_raw:
         if not isinstance(item, dict):
             continue
-        name = str(
+        name = _canonicalize_op_name(
             item.get("name")
             or item.get("tool")
             or item.get("type")
             or item.get("op")
             or ""
-        ).strip()
+        )
         if not name:
             continue
         args = item.get("args")

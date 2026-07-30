@@ -8,7 +8,13 @@ export type PlazaStatus = 'pending' | 'approved' | 'rejected';
 
 export type PlazaFeedTab = 'recommended' | 'latest' | 'following';
 
-export type PlazaCategoryFilter = 'all' | 'website' | 'mobile' | 'image' | 'poster';
+export type PlazaCategoryFilter =
+  | 'all'
+  | 'website'
+  | 'mobile'
+  | 'image'
+  | 'poster'
+  | 'video';
 
 export type PlazaSubmissionDto = {
   id: string;

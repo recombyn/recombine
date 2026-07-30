@@ -657,7 +657,7 @@ export function AgentRoutePrefsEditor({
                       ) : null}
                     </span>
                     {opt.desc ? (
-                      <span className="mt-0.5 line-clamp-2 text-[11px] leading-[1.35] text-[var(--muted)]">
+                      <span className="mt-0.5 truncate whitespace-nowrap text-[11px] leading-[1.35] text-[var(--muted)]">
                         {opt.desc}
                       </span>
                     ) : null}
@@ -907,7 +907,7 @@ export function AgentRoutePrefsEditor({
                             ) : null}
                           </span>
                           {desc ? (
-                            <span className="mt-0.5 line-clamp-2 block text-[11px] leading-[1.35] text-[var(--muted)]">
+                            <span className="mt-0.5 block truncate whitespace-nowrap text-[11px] leading-[1.35] text-[var(--muted)]">
                               {desc}
                             </span>
                           ) : null}

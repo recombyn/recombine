@@ -2,16 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { GoHome, GoHomeFill } from 'react-icons/go';
 import {
+  HiFolder,
   HiOutlineBell,
   HiOutlineBookOpen,
   HiOutlineChatBubbleLeftRight,
   HiOutlineFolder,
-  HiOutlineHome,
-  HiOutlineQuestionMarkCircle,
   HiOutlineUser,
+  HiUser,
 } from 'react-icons/hi2';
-import { Dropdown, Tooltip } from '@/components/base';
+import { Dropdown } from '@/components/base';
 import AppLogo from '@/components/base/AppLogo';
 import { fetchProjects } from '@/apis/projects';
 import HomeHero from '@/components/home/HomeHero';
@@ -33,7 +34,6 @@ import { docsUrl } from '@/utils/docsUrl';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import { cn } from '@/utils/classnames';
 
-const RECENT_LIMIT = 20;
 const PROJECT_PAGE_SIZE = 20;
 
 type Props = {
@@ -47,56 +47,74 @@ type Props = {
   onOpenCase: (meta: OfficialCaseMeta) => void;
 };
 
-/** Rail hit target — matches fig1 capsule icons. */
-const RAIL_HIT = 'h-10 w-10';
 const RAIL_STROKE = 1.5;
-
-const SZ = {
-  plus: 'h-5 w-5 shrink-0',
-  home: 'h-[22px] w-[22px] shrink-0',
-  folder: 'h-5 w-5 shrink-0',
-  user: 'h-[22px] w-[22px] shrink-0',
-  help: 'h-[22px] w-[22px] shrink-0',
-} as const;
 
 const RAIL_HELP_WIKI =
   'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink';
 
-function RailBtn({
-  tip,
+/** Circled + — matches home rail add reference. */
+function RailPlusIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle
+        cx="12"
+        cy="12"
+        r="8.25"
+        stroke="currentColor"
+        strokeWidth={RAIL_STROKE}
+      />
+      <path
+        d="M12 8.5v7M8.5 12h7"
+        stroke="currentColor"
+        strokeWidth={RAIL_STROKE}
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function RailItem({
+  label,
   active,
   disabled,
   onClick,
-  children,
-  className,
+  icon,
+  activeIcon,
 }: {
-  tip: string;
+  label: string;
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
-  children: ReactNode;
-  className?: string;
+  icon: ReactNode;
+  activeIcon?: ReactNode;
 }) {
   return (
-    <Tooltip tip={tip} placement="right" triggerClassName="inline-flex">
-      <button
-        type="button"
-        aria-label={tip}
-        aria-current={active ? 'page' : undefined}
-        disabled={disabled}
-        onClick={onClick}
-        className={cn(
-          'flex items-center justify-center rounded-full transition-colors disabled:opacity-50',
-          RAIL_HIT,
-          active
-            ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-            : 'text-[var(--ink)]/70 hover:bg-[var(--canvas)] hover:text-[var(--ink)]',
-          className
-        )}
-      >
-        {children}
-      </button>
-    </Tooltip>
+    <button
+      type="button"
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'flex w-full flex-col items-center gap-1 rounded-xl px-1 py-2 transition-colors disabled:opacity-50',
+        active
+          ? 'text-[var(--ink)]'
+          : 'text-[var(--ink)]/55 hover:text-[var(--ink)]'
+      )}
+    >
+      <span className="flex h-10 w-10 items-center justify-center">
+        {active && activeIcon ? activeIcon : icon}
+      </span>
+      <span className="text-[11px] font-medium leading-none tracking-tight">{label}</span>
+    </button>
+  );
+}
+
+function RailLogo() {
+  return (
+    <div className="mx-auto flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden>
+      <AppLogo size={22} />
+    </div>
   );
 }
 
@@ -138,7 +156,7 @@ function RailHelpMenu() {
 
   return (
     <Dropdown
-      trigger="click"
+      trigger="hover"
       placement="right-end"
       offset={12}
       floatingClassName="z-[600]"
@@ -158,19 +176,24 @@ function RailHelpMenu() {
       <button
         type="button"
         aria-label={t('home.railHelp')}
-        className={cn(
-          'flex items-center justify-center rounded-full',
-          RAIL_HIT,
-          'text-[var(--ink)]/70 transition-colors hover:bg-[var(--canvas)] hover:text-[var(--ink)]'
-        )}
+        className="mx-auto flex h-10 w-10 items-center justify-center text-[var(--ink)]/55 transition-colors hover:text-[var(--ink)]"
       >
-        <HiOutlineQuestionMarkCircle className={SZ.help} strokeWidth={RAIL_STROKE} aria-hidden />
+        <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth={1.5} />
+          <path
+            d="M9.75 9.4a2.4 2.4 0 0 1 4.55.85c0 1.35-1.2 1.95-2.05 2.45-.55.35-.75.6-.75 1.15"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          />
+          <circle cx="12" cy="16.75" r="0.9" fill="currentColor" />
+        </svg>
       </button>
     </Dropdown>
   );
 }
 
-/** Left rail — desktop: logo + capsule; mobile: hamburger menu (fig.2). */
+/** Left rail — logo top, nav vertically centered, help bottom. */
 export function HomeSidebar({
   nav,
   setNav,
@@ -192,105 +215,68 @@ export function HomeSidebar({
       navigate(buildLoginUrl('/home'));
       return;
     }
-    if (id === 'mine') setNav('mine');
-    else setNav(id);
+    setNav(id);
   };
 
   return (
     <>
       {/* Mobile top bar — brand only; nav menu lives after avatar in HomeTopBar. */}
-      <div className="pointer-events-none fixed inset-x-0 top-0 z-30 flex h-20 items-start pt-4 px-4 [background:linear-gradient(to_bottom,var(--canvas)_60%,transparent)] md:hidden">
+      <div className="pointer-events-none fixed inset-x-0 top-0 z-30 flex h-20 items-start bg-gradient-to-b from-[var(--surface)] from-60% to-transparent pt-4 px-4 md:hidden">
         <div className="pointer-events-auto inline-flex min-w-0 items-center gap-2 leading-none">
           <AppLogo size={22} />
           <span
             className="-translate-y-px truncate text-[15px] font-medium leading-none tracking-tight text-[var(--ink)] [font-family:var(--font-hero)]"
             aria-hidden
           >
-            {t('app.name').toLowerCase()}
+            {t('app.name')}
           </span>
         </div>
       </div>
 
-      {/* Desktop logo — top-left. */}
-      <div className="pointer-events-none fixed left-0 top-0 z-30 hidden items-center p-5 pl-6 md:flex">
-        <div className="pointer-events-auto inline-flex items-center gap-2 leading-none">
-          <AppLogo size={22} />
-          <span
-            className="-translate-y-px text-[15px] font-medium leading-none tracking-tight text-[var(--ink)] [font-family:var(--font-hero)]"
-            aria-hidden
-          >
-            {t('app.name').toLowerCase()}
-          </span>
-        </div>
-      </div>
-
-      {/* Desktop rail — + / nav capsule (inset from screen edge). */}
+      {/* Desktop rail — logo top, nav centered, help bottom. */}
       <aside
-        className="pointer-events-none fixed inset-y-0 left-4 z-30 hidden w-[72px] flex-col items-center justify-center md:flex"
+        className="pointer-events-none fixed inset-y-0 left-0 z-30 hidden w-[76px] flex-col overflow-visible md:flex"
         aria-label={t('app.name')}
       >
-        <div className="pointer-events-auto flex flex-col items-center px-1">
-          <Tooltip tip={t('home.newProject')} placement="right" triggerClassName="inline-flex">
-            <button
-              type="button"
-              aria-label={t('home.newProject')}
-              disabled={importing}
-              onClick={onCreate}
-              className={cn(
-                'group relative flex items-center justify-center rounded-full',
-                RAIL_HIT,
-                'bg-[var(--ink)] text-[var(--on-brand)]',
-                'shadow-[0_0_0_3px_var(--surface),0_0_0_4px_#c8c8c8]',
-                'transition-opacity duration-300 ease-out hover:opacity-90 disabled:opacity-50'
-              )}
-            >
-              <svg
-                className={cn(
-                  SZ.plus,
-                  'transition-transform duration-300 ease-out group-hover:rotate-90'
-                )}
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden
-              >
-                <path
-                  d="M12 6.5v11M6.5 12h11"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
-          </Tooltip>
-
+        <div className="pointer-events-auto flex h-full flex-col items-stretch overflow-visible bg-transparent px-1.5 pb-5 pt-4">
+          <div className="flex shrink-0 justify-center overflow-visible pb-3">
+            <RailLogo />
+          </div>
           <nav
-            className="mt-5 flex flex-col items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--surface)]/95 px-1.5 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.03)] backdrop-blur-sm"
+            className="flex min-h-0 flex-1 flex-col items-stretch justify-center gap-1"
             aria-label={t('app.name')}
           >
-            {(['home', 'mine', 'account'] as const).map((id) => {
-              const active = nav === id || (id === 'mine' && nav === 'recent');
-              const tip =
-                id === 'home'
-                  ? t('home.navHome')
-                  : id === 'mine'
-                    ? t('home.mine')
-                    : t('home.account');
-              const Icon =
-                id === 'home' ? HiOutlineHome : id === 'mine' ? HiOutlineFolder : HiOutlineUser;
-              const sz = id === 'mine' ? SZ.folder : id === 'home' ? SZ.home : SZ.user;
-              return (
-                <RailBtn
-                  key={id}
-                  tip={tip}
-                  active={active}
-                  onClick={() => goNav(id)}
-                >
-                  <Icon className={sz} strokeWidth={RAIL_STROKE} aria-hidden />
-                </RailBtn>
-              );
-            })}
-            <RailHelpMenu />
+            <RailItem
+              label={t('home.railAdd')}
+              disabled={importing}
+              onClick={onCreate}
+              icon={<RailPlusIcon className="h-[22px] w-[22px]" />}
+            />
+            <RailItem
+              label={t('home.navHome')}
+              active={nav === 'home'}
+              onClick={() => goNav('home')}
+              icon={<GoHome className="h-[22px] w-[22px]" aria-hidden />}
+              activeIcon={<GoHomeFill className="h-[22px] w-[22px]" aria-hidden />}
+            />
+            <RailItem
+              label={t('home.mine')}
+              active={nav === 'mine'}
+              onClick={() => goNav('mine')}
+              icon={<HiOutlineFolder className="h-5 w-5" strokeWidth={RAIL_STROKE} aria-hidden />}
+              activeIcon={<HiFolder className="h-5 w-5" aria-hidden />}
+            />
+            <RailItem
+              label={t('home.account')}
+              active={nav === 'account'}
+              onClick={() => goNav('account')}
+              icon={<HiOutlineUser className="h-[22px] w-[22px]" strokeWidth={RAIL_STROKE} aria-hidden />}
+              activeIcon={<HiUser className="h-[22px] w-[22px]" aria-hidden />}
+            />
           </nav>
+          <div className="mt-auto flex shrink-0 justify-center pt-3">
+            <RailHelpMenu />
+          </div>
         </div>
       </aside>
     </>
@@ -324,8 +310,12 @@ export function HomeTemplateList({
 
   /** Guest must not stay on Projects / Me — bounce home + open login. */
   useEffect(() => {
+    if (nav === 'recent') {
+      setNav('home');
+      return;
+    }
     if (authed) return;
-    if (nav !== 'mine' && nav !== 'account' && nav !== 'recent') return;
+    if (nav !== 'mine' && nav !== 'account') return;
     setNav('home');
     navigate(buildLoginUrl('/home'));
   }, [authed, nav, navigate, setNav]);
@@ -409,32 +399,19 @@ export function HomeTemplateList({
 
   const listForGrid = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list = templates as any[];
-    if (nav === 'recent') {
-      list = [...list]
-        .filter((item) => Number(item.openedAt || item.updatedAt || 0) > 0)
-        .sort(
-          (a, b) =>
-            (Number(b.openedAt) || Number(b.updatedAt) || 0) -
-            (Number(a.openedAt) || Number(a.updatedAt) || 0)
-        )
-        .slice(0, RECENT_LIMIT);
-      // Projects (mine): only owned works — not case/scratch open sessions.
-    } else {
-      list = list.filter((item) => isOwnedTemplate(item));
-    }
+    const list = (templates as any[]).filter((item) => isOwnedTemplate(item));
     if (!q) return list;
     return list.filter((item) => (item.name || '').toLowerCase().includes(q));
-  }, [templates, nav, query]);
+  }, [templates, query]);
 
   const showAccount = nav === 'account' && Boolean(authed);
-  const showMine = nav !== 'home' && Boolean(authed) && !showAccount;
+  const showMine = nav === 'mine' && Boolean(authed);
   const showHome = !showAccount && !showMine;
 
   const homeProjectsLoading = Boolean(authed) && !projectsReady;
-  const mineTitle = nav === 'recent' ? t('home.recentOpened') : t('home.mine');
+  const mineTitle = t('home.mine');
   const mineSkeleton = Boolean(authed) && !projectsReady;
-  const mineScrollLoad = nav === 'mine' && !query.trim();
+  const mineScrollLoad = !query.trim();
   const mineDisplayCount = mineScrollLoad
     ? projectsTotal + (importing ? 1 : 0)
     : listForGrid.length + (importing ? 1 : 0);

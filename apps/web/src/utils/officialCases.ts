@@ -1,10 +1,18 @@
-export type OfficialCaseCategory = 'website' | 'mobile' | 'image' | 'poster';
+export type OfficialCaseCategory = 'website' | 'mobile' | 'image' | 'poster' | 'video';
 
 /** Normalize plaza category to the home hero set. */
 export function normalizeCaseCategory(raw: string | undefined | null): OfficialCaseCategory {
   const c = (raw || '').trim().toLowerCase();
-  if (c === 'website' || c === 'mobile' || c === 'image' || c === 'poster') return c;
-  return 'website';
+  if (
+    c === 'website' ||
+    c === 'mobile' ||
+    c === 'image' ||
+    c === 'poster' ||
+    c === 'video'
+  ) {
+    return c;
+  }
+  return 'poster';
 }
 
 /**

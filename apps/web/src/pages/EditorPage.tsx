@@ -49,6 +49,7 @@ import ImageProcessWatcher from '@/components/editor/nodes/ImageNode/ImageProces
 import CropExpandSessionHost from '@/components/editor/nodes/ImageNode/cropExpand/CropExpandSessionHost';
 import ImageToolPanelHost from '@/components/editor/nodes/ImageNode/toolPanels/ImageToolPanelHost';
 import ShapeStylePanelHost from '@/components/editor/nodes/ShapeNode/ShapeStylePanelHost';
+import VideoTrimSessionHost from '@/components/editor/nodes/VideoNode/VideoTrimSessionHost';
 import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesOverlay';
 import SvgCanvas from '@/components/editor/canvas/svg/SvgCanvas';
 import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
@@ -382,8 +383,9 @@ function zoomModShortcutLabel() {
 
 function resolveHomeAgentInteractionMode(
   mode: unknown
-): 'agent' | 'ask' | 'image' | null {
+): 'agent' | 'ask' | 'image' | 'video' | null {
   if (mode === 'image') return 'image';
+  if (mode === 'video') return 'video';
   if (mode === 'ask') return 'ask';
   if (mode === 'agent') return 'agent';
   return null;
@@ -628,13 +630,14 @@ export default function EditorPage() {
   const [agentDraftContexts, setAgentDraftContexts] = useState<ComposerContext[]>([]);
   const [agentDraftModelId, setAgentDraftModelId] = useState<string | null>(null);
   const [agentDraftInteractionMode, setAgentDraftInteractionMode] = useState<
-    'agent' | 'ask' | 'image' | null
+    'agent' | 'ask' | 'image' | 'video' | null
   >(null);
   const [agentDraftImageAspect, setAgentDraftImageAspect] = useState<string | null>(null);
   const [agentDraftScene, setAgentDraftScene] = useState<
     'website' | 'mobile' | 'image' | 'poster' | 'drawing' | null
   >(null);
   const [attachToChat, setAttachToChat] = useState<string | string[] | null>(null);
+  // Layers dock stays closed by default (open only via HUD toggle).
   const [layersOpen, setLayersOpen] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [canvasBgOpen, setCanvasBgOpen] = useState(false);
@@ -1649,6 +1652,7 @@ export default function EditorPage() {
                 <ImageToolPanelHost document={document} />
                 <ShapeStylePanelHost document={document} />
                 <CropExpandSessionHost document={document} />
+                <VideoTrimSessionHost document={document} />
 
                 {canvasBgOpen && canvasFillValue.fillType === 'diffuse' ? (
                   <MeshHandlesOverlay

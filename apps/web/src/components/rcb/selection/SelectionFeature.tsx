@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import ImageReplaceCornerButton from '@/components/editor/nodes/ImageNode/ImageReplaceCornerButton';
 import ImageVariantsOverlay from '@/components/editor/nodes/ImageNode/ImageVariantsOverlay';
+import VideoReplaceCornerButton from '@/components/editor/nodes/VideoNode/VideoReplaceCornerButton';
 import {
   useRcbCamera,
   useRcbOverlayRoot,
@@ -43,6 +44,7 @@ import {
 import {
   expandSelectionWithGroups,
   isImageGeneratorNode,
+  isVideoGeneratorNode,
   isNodeHidden,
   isNodeLocked,
   listImageVariantUrls,
@@ -170,11 +172,11 @@ function textResizeModeForHandle(handle: ResizeHandle): TextResizeMode {
  * - Multi-select / group: lock if any image is selected (unless a node was
  *   explicitly unlocked via the toolbar chain); Shift inverts.
  * - Single text corners: lock by default (Shift unlocks).
- * - Single image: `attrs.lockAspect` (default on) locks; Shift temporarily inverts.
+ * - Single image/video: `attrs.lockAspect` (default on) locks; Shift temporarily inverts.
  * - Other single nodes: free by default (Shift locks), unless `lockAspect` is set.
  */
 function nodeAspectLockDefault(key: string | undefined): boolean {
-  return key === 'image';
+  return key === 'image' || key === 'video';
 }
 
 function readNodeAspectLocked(node: any): boolean {
@@ -198,7 +200,7 @@ function resolveLockAspect(
     const locked = readNodeAspectLocked(node);
     return shiftKey ? !locked : locked;
   }
-  // Multi / group: lock when selection includes images (unless explicitly unlocked).
+  // Multi / group: lock when selection includes images/videos (unless explicitly unlocked).
   const nodes = origins
     .map(({ nodeId }) => document?.deltaSetLike?.[nodeId])
     .filter(Boolean);
@@ -207,7 +209,7 @@ function resolveLockAspect(
     return raw === false || raw === 'false' || raw === 0 || raw === '0';
   });
   const allLocked =
-    !hasExplicitUnlock && nodes.some((n) => n.key === 'image')
+    !hasExplicitUnlock && nodes.some((n) => n.key === 'image' || n.key === 'video')
       ? true
       : nodes.length > 0 && nodes.every((n) => readNodeAspectLocked(n));
   return shiftKey ? !allLocked : allLocked;
@@ -826,9 +828,13 @@ export default function SelectionFeature({
         return;
       }
       const target = e.target as HTMLElement | null;
-      const replaceHost = target?.closest?.('[data-image-replace]') as HTMLElement | null;
+      const replaceHost = target?.closest?.(
+        '[data-image-replace],[data-video-replace]'
+      ) as HTMLElement | null;
       if (replaceHost) {
-        const pinned = replaceHost.getAttribute('data-image-node-id');
+        const pinned =
+          replaceHost.getAttribute('data-image-node-id') ||
+          replaceHost.getAttribute('data-video-node-id');
         if (pinned) {
           applyHover(pinned);
           return;
@@ -836,7 +842,7 @@ export default function SelectionFeature({
       }
       if (
         target?.closest?.(
-          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props],[data-video-playback-bar],[data-video-trim-toolbar]'
         )
       ) {
         applyHover(null);
@@ -904,7 +910,7 @@ export default function SelectionFeature({
       const target = e.target as HTMLElement;
       if (
         target.closest(
-          '[data-ctx-menu],[data-sel-toolbar],[data-frame-toolbar],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-frame-toolbar],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar]'
         )
       )
         return;
@@ -2125,6 +2131,8 @@ export default function SelectionFeature({
   const singleId = singleNode ? selectedNodeIds[0] : null;
   const singleNodeData = singleId ? document?.deltaSetLike?.[singleId] : null;
   const selectedIsImageGen = Boolean(singleNodeData && isImageGeneratorNode(singleNodeData));
+  const selectedIsVideoGen = Boolean(singleNodeData && isVideoGeneratorNode(singleNodeData));
+  const selectedIsVideo = Boolean(singleNodeData && singleNodeData.key === 'video' && !selectedIsVideoGen);
   const singleShapeType = singleNodeData
     ? String(singleNodeData?.attrs?.shapeType || '')
     : '';
@@ -2227,11 +2235,22 @@ export default function SelectionFeature({
     if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId)) return null;
     const node = document?.deltaSetLike?.[hoverNodeId];
     if (node?.key !== 'image') return null;
-    if (isImageGeneratorNode(node)) return null;
+    if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return null;
     if (String(node?.attrs?.processStatus || '') === 'running') return null;
     return hoverNodeId;
   })();
   const hoverImageReplaceBox = hoverImageReplaceId ? getNodeBox(hoverImageReplaceId) : null;
+
+  const hoverVideoReplaceId = (() => {
+    if (inspectDev || transforming || suppressToolbars || readOnly) return null;
+    if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId)) return null;
+    const node = document?.deltaSetLike?.[hoverNodeId];
+    if (node?.key !== 'video') return null;
+    if (isVideoGeneratorNode(node)) return null;
+    if (String(node?.attrs?.processStatus || '') === 'running') return null;
+    return hoverNodeId;
+  })();
+  const hoverVideoReplaceBox = hoverVideoReplaceId ? getNodeBox(hoverVideoReplaceId) : null;
 
   // Idle spacing: sibling chrome boxes only (not stroke-band faces, not frames).
   // Frames often sit off-screen; measuring to their edge draws a pink gap across
@@ -2361,20 +2380,20 @@ export default function SelectionFeature({
 
       {/* Gate on selection: after deselect, Redux clears first but liveUnion
           lags one frame — without this, line chrome briefly falls back to AABB box.
-          Image generator: blue stroke only (same #3388ff as hover), no resize knobs. */}
+          Image/video generator: blue stroke only (same #3388ff as hover), no resize knobs. */}
       {liveUnion && !suppressChrome && selectionCount > 0 ? (
         <SelectionChrome
           box={liveUnion}
           angle={chromeAngle}
-          showHandles={!readOnly && !selectedIsImageGen}
+          showHandles={!readOnly && !selectedIsImageGen && !selectedIsVideoGen}
           cornerHandlesOnly={!single}
           variant={lineChrome ? 'line' : 'box'}
-          showRotate={!readOnly && !lineChrome && singleNode && !selectedIsImageGen}
+          showRotate={!readOnly && !lineChrome && singleNode && !selectedIsImageGen && !selectedIsVideoGen}
           showLineStroke={lineChrome}
           showBoxStroke={!lineChrome}
           interactiveBox={selectedFrameIds.length > 0}
           edgeHandles={
-            selectedIsImageGen
+            selectedIsImageGen || selectedIsVideoGen
               ? 'none'
               : !lineChrome && singleNodeData?.key === 'text'
                 ? 'horizontal'
@@ -2398,15 +2417,26 @@ export default function SelectionFeature({
       singleId &&
       !transforming &&
       !suppressToolbars &&
-      singleNodeData?.key === 'image' ? (
+      (singleNodeData?.key === 'image' || singleNodeData?.key === 'video') ? (
         <NodeTitleLabel
           box={liveUnion}
           angle={chromeAngle}
-          name={String(singleNodeData?.attrs?.name || 'Image')}
+          name={String(
+            singleNodeData?.attrs?.name ||
+              (singleNodeData?.key === 'video' ? 'Video' : 'Image')
+          )}
           sizeWidth={liveUnion.width}
           sizeHeight={liveUnion.height}
           dataAttr="image-label"
-          icon={selectedIsImageGen ? 'image-generator' : 'image'}
+          icon={
+            selectedIsVideoGen
+              ? 'video-generator'
+              : selectedIsVideo
+                ? 'video'
+                : selectedIsImageGen
+                  ? 'image-generator'
+                  : 'image'
+          }
           dataProps={{ 'data-scene-node-id': singleId }}
           onRename={(name) =>
             dispatch(
@@ -2416,7 +2446,7 @@ export default function SelectionFeature({
               })
             )
           }
-          renameAriaLabel="Image name"
+          renameAriaLabel={singleNodeData?.key === 'video' ? 'Video name' : 'Image name'}
         />
       ) : null}
 
@@ -2448,6 +2478,21 @@ export default function SelectionFeature({
         )
       ) : null}
 
+      {singleId &&
+      liveUnion &&
+      !readOnly &&
+      !transforming &&
+      !suppressToolbars &&
+      selectedIsVideo &&
+      String(singleNodeData?.attrs?.processStatus || '') !== 'running' ? (
+        <VideoReplaceCornerButton
+          nodeId={singleId}
+          box={liveUnion}
+          angle={chromeAngle}
+          videoHovered={hoverNodeId === singleId}
+        />
+      ) : null}
+
       {!inspectDev &&
       hoverImageReplaceId &&
       hoverImageReplaceBox &&
@@ -2470,6 +2515,19 @@ export default function SelectionFeature({
             imageHovered
           />
         )
+      ) : null}
+
+      {!inspectDev &&
+      hoverVideoReplaceId &&
+      hoverVideoReplaceBox &&
+      !transforming &&
+      !suppressToolbars ? (
+        <VideoReplaceCornerButton
+          nodeId={hoverVideoReplaceId}
+          box={hoverVideoReplaceBox}
+          angle={readNodeAngle(document, hoverVideoReplaceId)}
+          videoHovered
+        />
       ) : null}
 
       {/* Multi-select bar: show whenever the union has 2+ items and at least one

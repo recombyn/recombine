@@ -12,7 +12,7 @@ from services.db import connect, init_schema
 # - text: simple / medium / complex
 # - vision: multimodal slot; also allowed in text slots ("usable anywhere" except image)
 # - image: image-gen slot only
-REFERENCE_TYPES = ('text', 'vision', 'image')
+REFERENCE_TYPES = ('text', 'vision', 'image', 'video')
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _SEED_PATH = _DATA_DIR / "llm_models_seed.json"
@@ -76,8 +76,11 @@ def _normalize_reference_types(raw: Any, *, kind: str = 'text') -> list[str]:
     if items:
         return items
     # Defaults when unset
-    if (kind or 'text').strip().lower() == 'image':
+    kind_n = (kind or 'text').strip().lower()
+    if kind_n == 'image':
         return ['image']
+    if kind_n == 'video':
+        return ['video']
     return ['text']
 
 
@@ -536,6 +539,8 @@ def _ensure_reference_types_column(conn: Any, *, mysql: bool) -> None:
             types = _default_reference_types_for_seed(seed)
         elif kind == 'image':
             types = ['image']
+        elif kind == 'video':
+            types = ['video']
         elif _heuristic_vision_id(mid):
             types = ['text', 'vision']
         else:
@@ -749,7 +754,7 @@ def list_catalog(*, kind: str | None = None, enabled_only: bool = True) -> list[
     where = ['1=1']
     params: list[Any] = []
     k = (kind or '').strip().lower()
-    if k in ('text', 'image'):
+    if k in ('text', 'image', 'video'):
         where.append('kind = ?')
         params.append(k)
     if enabled_only:
@@ -769,7 +774,7 @@ def list_admin_models(*, kind: str | None = None, q: str | None = None) -> list[
     where = ['1=1']
     params: list[Any] = []
     k = (kind or '').strip().lower()
-    if k in ('text', 'image'):
+    if k in ('text', 'image', 'video'):
         where.append('kind = ?')
         params.append(k)
     if q and q.strip():
@@ -803,8 +808,8 @@ def upsert_model(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError('id required')
     label = str(payload.get('label') or mid).strip()
     kind = str(payload.get('kind') or 'text').strip().lower()
-    if kind not in ('text', 'image'):
-        raise ValueError('kind must be text|image')
+    if kind not in ('text', 'image', 'video'):
+        raise ValueError('kind must be text|image|video')
     ref_types = _normalize_reference_types(
         payload.get('referenceTypes')
         if payload.get('referenceTypes') is not None
@@ -814,6 +819,8 @@ def upsert_model(payload: dict[str, Any]) -> dict[str, Any]:
     if kind == 'image' and 'image' not in ref_types:
         # Image-catalog models must be selectable for the image slot.
         ref_types = ['image', *[t for t in ref_types if t != 'image']]
+    if kind == 'video' and 'video' not in ref_types:
+        ref_types = ['video', *[t for t in ref_types if t != 'video']]
     if kind == 'text' and ref_types == ['image']:
         raise ValueError('text models cannot be image-only; add text and/or vision')
     ref_types_json = _serialize_reference_types(ref_types)

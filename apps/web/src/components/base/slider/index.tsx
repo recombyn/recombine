@@ -129,21 +129,24 @@ const Slider = ({
 
   return (
     <div
-      className={cn('h-full w-full slider-container', !vertical && 'flex items-center')}
+      className={cn('rcb-slider h-full w-full', !vertical && 'flex items-center')}
       ref={containerRef}
     >
       {showValueTooltipOnDrag && dragging && !disabled && !vertical && (
         <div
           ref={tooltipRef}
-          className='slider-value-tooltip'
+          className="rcb-slider__tooltip"
           style={tooltipLayout ? { left: `${tooltipLayout.left}px`, transform: 'translateX(0)' } : undefined}
         >
           {tooltipText}
-          <span className='slider-value-tooltip-arrow' style={tooltipLayout ? { left: `${tooltipLayout.arrowLeft}px` } : undefined} />
+          <span
+            className="rcb-slider__tooltip-arrow"
+            style={tooltipLayout ? { left: `${tooltipLayout.arrowLeft}px` } : undefined}
+          />
         </div>
       )}
       <input
-        type='range'
+        type="range"
         min={min}
         max={max}
         step={step}
@@ -156,7 +159,11 @@ const Slider = ({
         onTouchStart={() => setDragging(true)}
         onTouchEnd={() => setDragging(false)}
         onBlur={() => setDragging(false)}
-        className={cn('custom-slider', vertical && 'custom-slider-vertical', className)}
+        className={cn(
+          'rcb-slider__input',
+          vertical && 'rcb-slider__input--vertical',
+          className
+        )}
         style={sliderStyle}
       />
     </div>

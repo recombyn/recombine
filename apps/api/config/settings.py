@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     upload_dir: str = "storage/uploads"
     result_dir: str = "storage/results"
     max_upload_mb: int = 20
+    max_video_upload_mb: int = 100
 
     # Phase 1: Celery + Redis + preprocess
     redis_url: str = "redis://localhost:6379/0"
@@ -108,6 +109,9 @@ class Settings(BaseSettings):
     # Google OAuth — Client ID on web + API; secret only for popup auth-code exchange
     google_client_id: str = ""
     google_client_secret: str = ""
+
+    # Local-only admin OTP (apps/api/.env). Empty = disabled. Never set in production.
+    super_admin_test_code: str = ""
 
     # Token wallet — card-key redeem (no WeChat/Alipay membership)
     # HMAC-SHA256(plaintext, CARD_KEY_SALT); never store plaintext in DB.

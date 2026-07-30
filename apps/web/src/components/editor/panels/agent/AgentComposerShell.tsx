@@ -32,6 +32,7 @@ import AgentComposerInput, {
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
+import VideoJsPlayer from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
 import ImageAspectRatioPicker, {
   AspectRatioGlyph,
 } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
@@ -41,11 +42,11 @@ import {
 } from '@/components/editor/chrome/SizePresetPanel';
 import { cn } from '@/utils/classnames';
 
-/** Run mode — Auto toggle = agent; image models still use composerMode for gen UI. */
-export type ComposerRunMode = 'agent' | 'image';
+/** Run mode — Auto toggle = agent; image/video models still use composerMode for gen UI. */
+export type ComposerRunMode = 'agent' | 'image' | 'video';
 
-/** Agent = edit canvas; Ask = propose / clarify first; Image = Seedream-style chat image gen. */
-export type ComposerInteractionMode = 'agent' | 'ask' | 'image';
+/** Agent = edit canvas; Ask = propose / clarify first; Image / Video = direct gen in chat. */
+export type ComposerInteractionMode = 'agent' | 'ask' | 'image' | 'video';
 
 /** Controls shown when `interactionMode === 'image'` (mirrors ImageGeneratorCard footer). */
 export type ImageModeComposerControls = {
@@ -65,6 +66,147 @@ export type ImageModeComposerControls = {
   modelOpen: boolean;
   onModelOpenChange: (open: boolean) => void;
 };
+
+/** Controls shown when `interactionMode === 'video'` (mirrors VideoGeneratorCard footer). */
+export type VideoModeComposerControls = {
+  resolution: string;
+  aspectRatio: string;
+  duration: number;
+  onResolutionChange: (resolution: string) => void;
+  onAspectRatioChange: (ratio: string) => void;
+  onDurationChange: (duration: number) => void;
+  creditCost: number;
+  modelLabel: string;
+  modelIcon?: ReactNode;
+  modelPanel: ReactNode;
+  modelOpen: boolean;
+  onModelOpenChange: (open: boolean) => void;
+};
+
+const VIDEO_COMPOSER_ASPECTS = ['16:9', '9:16', '1:1', '4:3', '3:4'] as const;
+const VIDEO_COMPOSER_RESOLUTIONS = ['480p', '720p', '1080p'] as const;
+const VIDEO_COMPOSER_DURATIONS = [4, 5, 6, 7, 8, 10, 12, 15] as const;
+
+function VideoComposerSegmentPill({
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        'flex min-w-[2.75rem] flex-1 items-center justify-center rounded-lg px-2 py-2 text-[12px] font-medium tabular-nums transition disabled:opacity-40',
+        active
+          ? 'bg-[var(--surface)] text-[var(--ink)] shadow-[0_1px_3px_rgba(15,23,42,0.12)]'
+          : 'bg-transparent text-[var(--muted)] hover:text-[var(--ink)]'
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Aspect / resolution / duration — same layout as VideoGeneratorCard settings. */
+function VideoComposerSettingsPanel({
+  aspectRatio,
+  resolution,
+  duration,
+  onAspectRatioChange,
+  onResolutionChange,
+  onDurationChange,
+  disabled,
+}: {
+  aspectRatio: string;
+  resolution: string;
+  duration: number;
+  onAspectRatioChange: (ratio: string) => void;
+  onResolutionChange: (resolution: string) => void;
+  onDurationChange: (duration: number) => void;
+  disabled?: boolean;
+}): ReactNode {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="mb-2 text-[12px] font-medium text-[var(--muted)]">{t('agent.chooseRatio')}</p>
+        <div className="flex items-start justify-between gap-0.5 rounded-xl bg-[var(--rail)] p-1">
+          {VIDEO_COMPOSER_ASPECTS.map((ratio) => {
+            const active = aspectRatio === ratio;
+            return (
+              <button
+                key={ratio}
+                type="button"
+                disabled={disabled}
+                title={ratio}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAspectRatioChange(ratio);
+                }}
+                className={cn(
+                  'flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-0.5 py-1.5 transition-colors disabled:opacity-40',
+                  active
+                    ? 'bg-[var(--surface)] text-[var(--ink)] shadow-[0_1px_3px_rgba(15,23,42,0.12)]'
+                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                )}
+              >
+                <AspectRatioGlyph ratio={ratio} size={20} />
+                <span className="max-w-full truncate text-[10px] font-medium tabular-nums">
+                  {ratio}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <p className="mb-2 text-[12px] font-medium text-[var(--muted)]">
+          {t('agent.chooseResolution')}
+        </p>
+        <div className="flex flex-wrap gap-1 rounded-xl bg-[var(--rail)] p-1">
+          {VIDEO_COMPOSER_RESOLUTIONS.map((r) => (
+            <VideoComposerSegmentPill
+              key={r}
+              active={resolution === r}
+              disabled={disabled}
+              onClick={() => onResolutionChange(r)}
+            >
+              {r}
+            </VideoComposerSegmentPill>
+          ))}
+        </div>
+      </div>
+      <div>
+        <p className="mb-2 text-[12px] font-medium text-[var(--muted)]">
+          {t('editor.tools.videoDuration')}
+        </p>
+        <div className="flex flex-wrap gap-1 rounded-xl bg-[var(--rail)] p-1">
+          {VIDEO_COMPOSER_DURATIONS.map((n) => (
+            <VideoComposerSegmentPill
+              key={n}
+              active={duration === n}
+              disabled={disabled}
+              onClick={() => onDurationChange(n)}
+            >
+              {t('editor.tools.videoDurationNs', { n })}
+            </VideoComposerSegmentPill>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Ghost toolbar controls — icon only, no border / fill. */
 const TOOL_ICON_BTN =
@@ -116,12 +258,14 @@ type Props = {
    * Home hero: `bottom-start` (open downward). Agent dock footer: `top-start`.
    */
   aspectMenuPlacement?: Placement;
-  /** When both are set, show the Agent / Ask / Image switch in the toolbar. */
+  /** When both are set, show the Agent / Ask / Image / Video switch in the toolbar. */
   interactionMode?: ComposerInteractionMode;
   onInteractionModeChange?: (mode: ComposerInteractionMode) => void;
   allowedInteractionModes?: ComposerInteractionMode[];
   /** Image-mode settings / model / credit send (Image Generator–style chrome). */
   imageModeControls?: ImageModeComposerControls | null;
+  /** Video-mode settings / model / credit send (Video Generator–style chrome). */
+  videoModeControls?: VideoModeComposerControls | null;
   modelButtonProps: {
     /** @deprecated Unused — model chip no longer shows a hover tip. */
     title?: string;
@@ -157,23 +301,72 @@ function formatAudioTime(sec: number) {
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
-function attachmentPreviewKind(src?: string): 'image' | 'audio' | null {
-  const s = String(src || '').trim();
-  if (!s) return null;
-  if (s.startsWith('data:image/')) return 'image';
-  if (s.startsWith('data:audio/')) return 'audio';
-  if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/')) return 'image';
+function attachmentPreviewKind(a: ComposerContext): 'image' | 'audio' | 'video' | null {
+  const data = String(a.dataUrl || '').trim();
+  const thumb = String(a.thumbUrl || '').trim();
+  const payload = String(a.payload || '');
+  const blob = `${data} ${thumb} ${payload}`;
+  if (data.startsWith('data:video/') || thumb.startsWith('data:video/')) return 'video';
+  if (/\[Canvas video\]/i.test(payload)) return 'video';
+  if (/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(blob)) return 'video';
+  if (data.startsWith('data:audio/') || thumb.startsWith('data:audio/')) return 'audio';
+  if (data.startsWith('data:image/') || thumb.startsWith('data:image/')) return 'image';
+  if (
+    data.startsWith('http://') ||
+    data.startsWith('https://') ||
+    data.startsWith('/') ||
+    thumb.startsWith('http://') ||
+    thumb.startsWith('https://') ||
+    thumb.startsWith('/')
+  ) {
+    return 'image';
+  }
   return null;
 }
 
+/** Prefer a still poster for the chip; fall back to image/http refs. */
 function attachmentThumbSrc(a: ComposerContext): string {
   const thumb = String(a.thumbUrl || '').trim();
   if (thumb.startsWith('data:image/')) return thumb;
-  const ref = String(a.dataUrl || '').trim();
-  if (ref.startsWith('data:image/') || ref.startsWith('http://') || ref.startsWith('https://')) {
-    return ref;
+  if (thumb.startsWith('http://') || thumb.startsWith('https://') || thumb.startsWith('/')) {
+    if (!/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(thumb)) return thumb;
   }
-  return thumb || ref;
+  const ref = String(a.dataUrl || '').trim();
+  if (ref.startsWith('data:image/')) return ref;
+  if (ref.startsWith('http://') || ref.startsWith('https://') || ref.startsWith('/')) {
+    if (!/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(ref) && !ref.startsWith('data:video/')) return ref;
+  }
+  return '';
+}
+
+function attachmentMediaSrc(a: ComposerContext): string {
+  const data = String(a.dataUrl || '').trim();
+  if (data) return data;
+  return String(a.thumbUrl || '').trim();
+}
+
+function attachmentCanPreview(opts: {
+  uploading: boolean;
+  previewKind: 'image' | 'audio' | 'video' | null;
+  thumbSrc: string;
+  mediaSrc: string;
+}): boolean {
+  const { uploading, previewKind, thumbSrc, mediaSrc } = opts;
+  if (uploading || !previewKind) return false;
+  if (previewKind === 'video') return Boolean(mediaSrc);
+  return Boolean(thumbSrc || mediaSrc);
+}
+
+function attachmentChipTip(opts: {
+  uploading: boolean;
+  canPreview: boolean;
+  label: string;
+  uploadingLabel: string;
+}): string {
+  const { uploading, canPreview, label, uploadingLabel } = opts;
+  if (uploading) return uploadingLabel;
+  if (canPreview) return `预览 ${label}`;
+  return label;
 }
 
 function AttachmentImagePreview({ src, label }: { src: string; label: string }): ReactNode {
@@ -211,6 +404,25 @@ function AttachmentImagePreview({ src, label }: { src: string; label: string }):
       onPointerDown={(e) => e.stopPropagation()}
     >
       <img src={src} alt={label} className="h-full w-full object-cover" draggable={false} />
+    </div>
+  );
+}
+
+function AttachmentVideoPreview({ src, poster }: { src: string; poster?: string }): ReactNode {
+  return (
+    <div
+      className="relative overflow-hidden rounded-xl bg-black shadow-[0_8px_24px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]"
+      style={{ width: ATTACH_PREVIEW_WIDTH, maxHeight: ATTACH_PREVIEW_MAX_HEIGHT }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <VideoJsPlayer
+        src={src}
+        poster={poster}
+        layout="fluid"
+        controlsMode="always"
+        muted
+        className="max-h-[min(280px,40vh)] w-full"
+      />
     </div>
   );
 }
@@ -316,15 +528,55 @@ export function ComposerAttachmentChip({
   onRemove: (key: string) => void;
 }): ReactNode {
   const { t } = useTranslation();
+  const previewKind = attachmentPreviewKind(a);
   const thumbSrc = attachmentThumbSrc(a);
-  const previewKind = attachmentPreviewKind(thumbSrc);
+  const mediaSrc = attachmentMediaSrc(a);
   const uploading = a.uploadStatus === 'uploading';
-  const canPreview = !uploading && (previewKind === 'image' || previewKind === 'audio');
-  const tip = uploading
-    ? t('agent.attachUploading', { name: a.label })
-    : canPreview
-      ? `预览 ${a.label}`
-      : a.label;
+  const canPreview = attachmentCanPreview({ uploading, previewKind, thumbSrc, mediaSrc });
+  const tip = attachmentChipTip({
+    uploading,
+    canPreview,
+    label: a.label,
+    uploadingLabel: t('agent.attachUploading', { name: a.label }),
+  });
+  const chipVisual =
+    previewKind === 'video' && thumbSrc ? (
+      <span className="relative block h-full w-full">
+        <img
+          src={thumbSrc}
+          alt={a.label}
+          className={cn('h-full w-full object-cover', uploading && 'opacity-70')}
+        />
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25">
+          <HiOutlinePlay className="h-3.5 w-3.5 text-white drop-shadow" />
+        </span>
+      </span>
+    ) : previewKind === 'image' && thumbSrc ? (
+      <img
+        src={thumbSrc}
+        alt={a.label}
+        className={cn('h-full w-full object-cover', uploading && 'opacity-70')}
+      />
+    ) : previewKind === 'video' && mediaSrc ? (
+      <span className="relative block h-full w-full bg-black">
+        <video
+          src={mediaSrc}
+          muted
+          playsInline
+          preload="metadata"
+          className={cn('h-full w-full object-cover', uploading && 'opacity-70')}
+        />
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25">
+          <HiOutlinePlay className="h-3.5 w-3.5 text-white drop-shadow" />
+        </span>
+      </span>
+    ) : (
+      <span className="flex h-full w-full flex-col items-center justify-center gap-0.5 px-0.5 text-[var(--muted)]">
+        <HiOutlineDocument className="h-3.5 w-3.5" />
+        <span className="w-full truncate text-center text-[8px] leading-tight">{a.label}</span>
+      </span>
+    );
+
   const thumb = (
     <div className={cn('group relative', COMPOSER_ATTACHMENT_CHIP_CLASS)}>
       <button
@@ -339,20 +591,7 @@ export function ComposerAttachmentChip({
           (uploading || !canPreview) && 'cursor-default'
         )}
       >
-        {previewKind === 'image' && thumbSrc ? (
-          <img
-            src={thumbSrc}
-            alt={a.label}
-            className={cn('h-full w-full object-cover', uploading && 'opacity-70')}
-          />
-        ) : (
-          <span className="flex h-full w-full flex-col items-center justify-center gap-0.5 px-0.5 text-[var(--muted)]">
-            <HiOutlineDocument className="h-3.5 w-3.5" />
-            <span className="w-full truncate text-center text-[8px] leading-tight">
-              {a.label}
-            </span>
-          </span>
-        )}
+        {chipVisual}
         {uploading ? <AttachmentUploadSpinner /> : null}
       </button>
       {removable ? (
@@ -372,7 +611,7 @@ export function ComposerAttachmentChip({
     </div>
   );
 
-  if (!canPreview || !thumbSrc) return thumb;
+  if (!canPreview) return thumb;
 
   return (
     <Dropdown
@@ -385,9 +624,11 @@ export function ComposerAttachmentChip({
       referenceClassName="inline-flex outline-none ring-0 focus:outline-none focus-visible:outline-none"
       popupRender={() =>
         previewKind === 'audio' ? (
-          <AttachmentAudioPreview src={thumbSrc} />
+          <AttachmentAudioPreview src={mediaSrc} />
+        ) : previewKind === 'video' ? (
+          <AttachmentVideoPreview src={mediaSrc} poster={thumbSrc || undefined} />
         ) : (
-          <AttachmentImagePreview src={thumbSrc} label={a.label} />
+          <AttachmentImagePreview src={thumbSrc || mediaSrc} label={a.label} />
         )
       }
     >
@@ -424,12 +665,16 @@ function interactionModeLabel(
   mode: ComposerInteractionMode,
   t: (key: string) => string
 ): string {
+  if (mode === 'video') return t('agent.interactionVideo');
   if (mode === 'image') return t('agent.interactionImage');
   if (mode === 'ask') return t('agent.interactionAsk');
   return t('agent.interactionAgent');
 }
 
 function interactionModeIcon(mode: ComposerInteractionMode): ReactNode {
+  if (mode === 'video') {
+    return <HiOutlinePlay className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
+  }
   if (mode === 'image') {
     return <HiOutlinePhoto className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
   }
@@ -458,6 +703,11 @@ function buildInteractionModeOptions(
       key: 'image',
       label: t('agent.interactionImage'),
       icon: <HiOutlinePhoto className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
+    },
+    {
+      key: 'video',
+      label: t('agent.interactionVideo'),
+      icon: <HiOutlinePlay className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
     },
   ];
   return all.map((item) => ({ ...item, disabledItem: !allowedModes.includes(item.key) }));
@@ -545,7 +795,7 @@ function ComposerInteractionModePicker({
 }
 
 function buildAttachPlusButton(opts: {
-  isImageMode: boolean;
+  genMediaMode: boolean;
   disabled?: boolean;
   sending?: boolean;
   onAttachFiles?: (files: File[], opts?: { mention?: boolean }) => void;
@@ -560,7 +810,7 @@ function buildAttachPlusButton(opts: {
       aria-label={opts.attachTooltip || opts.t('agent.uploadImage')}
       onClick={opts.onClick}
       className={
-        opts.isImageMode
+        opts.genMediaMode
           ? cn(COMPOSER_ATTACH_ACTION_CLASS, COMPOSER_ATTACH_ACTION_IDLE)
           : TOOL_ICON_BTN
       }
@@ -571,7 +821,7 @@ function buildAttachPlusButton(opts: {
 }
 
 function buildPickFromCanvasButton(opts: {
-  isImageMode: boolean;
+  genMediaMode: boolean;
   disabled?: boolean;
   sending?: boolean;
   active?: boolean;
@@ -586,7 +836,7 @@ function buildPickFromCanvasButton(opts: {
       aria-pressed={opts.active || false}
       onClick={opts.onClick}
       className={
-        opts.isImageMode
+        opts.genMediaMode
           ? cn(
               COMPOSER_ATTACH_ACTION_CLASS,
               opts.active ? COMPOSER_ATTACH_ACTION_ACTIVE : COMPOSER_ATTACH_ACTION_IDLE
@@ -632,6 +882,7 @@ export default function AgentComposerShell({
   onInteractionModeChange,
   allowedInteractionModes,
   imageModeControls = null,
+  videoModeControls = null,
   modelButtonProps,
   className,
   submitLabel,
@@ -641,19 +892,22 @@ export default function AgentComposerShell({
   const [aspectOpen, setAspectOpen] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [imageSettingsOpen, setImageSettingsOpen] = useState(false);
+  const [videoSettingsOpen, setVideoSettingsOpen] = useState(false);
   const allowedModes =
     allowedInteractionModes && allowedInteractionModes.length
       ? allowedInteractionModes
-      : (['agent', 'ask', 'image'] as ComposerInteractionMode[]);
+      : (['agent', 'ask', 'image', 'video'] as ComposerInteractionMode[]);
 
   const attachments = contexts.filter((c) => c.kind === 'attachment');
   const inlineContexts = contexts.filter((c) => c.kind !== 'attachment');
   const isImageMode = interactionMode === 'image' && Boolean(imageModeControls);
-  // Top attach strip (image mode always, or agent/ask after upload) must not steal typing height.
-  const hasTopAttachRow = isImageMode || attachments.length > 0;
+  const isVideoMode = interactionMode === 'video' && Boolean(videoModeControls);
+  const isGenMediaMode = isImageMode || isVideoMode;
+  // Top attach strip (image/video mode always, or agent/ask after upload) must not steal typing height.
+  const hasTopAttachRow = isGenMediaMode || attachments.length > 0;
   const inputMinClass = hasTopAttachRow ? 'min-h-[72px]' : 'min-h-[26px]';
   const showAspectBtn =
-    !isImageMode &&
+    !isGenMediaMode &&
     showDesignSizePicker &&
     typeof imageAspectRatio === 'string' &&
     typeof onImageAspectRatioChange === 'function';
@@ -664,6 +918,10 @@ export default function AgentComposerShell({
           ? t('agent.ratioSmart')
           : imageModeControls.aspectRatio
       } · ${t('agent.genCountN', { count: imageModeControls.imageCount })}`
+    : '';
+
+  const videoSettingsSummary = videoModeControls
+    ? `${videoModeControls.resolution} · ${videoModeControls.aspectRatio} · ${videoModeControls.duration}s`
     : '';
 
   const aspectFloating = useFloating({
@@ -697,6 +955,11 @@ export default function AgentComposerShell({
     if (allowedModes.length <= 1) setModeMenuOpen(false);
   }, [allowedModes]);
 
+  useEffect(() => {
+    if (!isImageMode) setImageSettingsOpen(false);
+    if (!isVideoMode) setVideoSettingsOpen(false);
+  }, [isImageMode, isVideoMode]);
+
   const removeAttachment = (key: string) => {
     onContextsChange(contexts.filter((c) => c.key !== key));
   };
@@ -713,7 +976,7 @@ export default function AgentComposerShell({
   };
 
   const attachPlusBtn = buildAttachPlusButton({
-    isImageMode,
+    genMediaMode: isGenMediaMode,
     disabled,
     sending,
     onAttachFiles,
@@ -726,7 +989,7 @@ export default function AgentComposerShell({
     pickFromCanvasTooltip || t('agent.pickFromCanvas');
   const pickFromCanvasBtn = onPickFromCanvas
     ? buildPickFromCanvasButton({
-        isImageMode,
+        genMediaMode: isGenMediaMode,
         disabled,
         sending,
         active: pickingFromCanvas,
@@ -744,8 +1007,8 @@ export default function AgentComposerShell({
         hasTopAttachRow && 'min-h-[180px]'
       )}
     >
-      {isImageMode ? (
-        // Same top attach row as the canvas Image Generator card.
+      {isGenMediaMode ? (
+        // Same top attach row as the canvas Image / Video Generator card.
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5 pb-0.5">
           {attachments.map((a) => (
             <ComposerAttachmentChip
@@ -755,7 +1018,13 @@ export default function AgentComposerShell({
               onRemove={removeAttachment}
             />
           ))}
-          <Tooltip tip={attachTooltip || t('agent.uploadImage')} placement="top">
+          <Tooltip
+            tip={
+              attachTooltip ||
+              (isVideoMode ? t('editor.tools.videoGenRef') : t('agent.uploadImage'))
+            }
+            placement="top"
+          >
             {attachPlusBtn}
           </Tooltip>
           {pickFromCanvasBtn ? (
@@ -861,7 +1130,55 @@ export default function AgentComposerShell({
           </Dropdown>
         ) : null}
 
-        {!isImageMode && modelButtonProps.panel != null && modelButtonProps.onOpenChange ? (
+        {isVideoMode && videoModeControls ? (
+          <Dropdown
+            trigger="click"
+            placement="top-start"
+            strategy="fixed"
+            offset={8}
+            open={videoSettingsOpen}
+            onOpenChange={setVideoSettingsOpen}
+            items={[]}
+            floatingClassName="z-[90]"
+            referenceClassName="inline-flex min-w-0"
+            popupRender={() => (
+              <DropdownPanel
+                className="w-[min(26rem,calc(100vw-2rem))] p-3"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <p className="mb-2.5 text-[13px] font-semibold text-[var(--ink)]">
+                  {t('editor.tools.videoSettings')}
+                </p>
+                <VideoComposerSettingsPanel
+                  aspectRatio={videoModeControls.aspectRatio}
+                  resolution={videoModeControls.resolution}
+                  duration={videoModeControls.duration}
+                  onAspectRatioChange={videoModeControls.onAspectRatioChange}
+                  onResolutionChange={videoModeControls.onResolutionChange}
+                  onDurationChange={videoModeControls.onDurationChange}
+                  disabled={disabled || sending}
+                />
+              </DropdownPanel>
+            )}
+          >
+            <button
+              type="button"
+              disabled={disabled || sending}
+              aria-label={t('editor.tools.videoSettings')}
+              aria-expanded={videoSettingsOpen}
+              className={cn(
+                'inline-flex h-7 max-w-[min(100%,12rem)] shrink-0 items-center gap-1 truncate rounded-xl px-2 text-[12px] font-medium tabular-nums transition-colors disabled:opacity-40',
+                videoSettingsOpen
+                  ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+                  : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
+              )}
+            >
+              <span className="truncate">{videoSettingsSummary}</span>
+            </button>
+          </Dropdown>
+        ) : null}
+
+        {!isGenMediaMode && modelButtonProps.panel != null && modelButtonProps.onOpenChange ? (
           <Dropdown
             trigger="click"
             placement={modelButtonProps.panelPlacement ?? 'top-start'}
@@ -888,7 +1205,7 @@ export default function AgentComposerShell({
               )}
             </button>
           </Dropdown>
-        ) : !isImageMode ? (
+        ) : !isGenMediaMode ? (
           <button
             type="button"
             ref={modelButtonProps.ref}
@@ -933,7 +1250,7 @@ export default function AgentComposerShell({
         ) : null}
 
         <div className="ml-auto flex items-center gap-1.5">
-          {!isImageMode ? (
+          {!isGenMediaMode ? (
             <>
               <Tooltip tip={attachTooltip || t('agent.uploadImage')} placement="top">
                 {attachPlusBtn}
@@ -948,7 +1265,11 @@ export default function AgentComposerShell({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,.png,.jpg,.jpeg,.webp,.gif,.svg"
+            accept={
+              isVideoMode
+                ? 'image/*,video/*,.mp4,.webm,.mov,.m4v'
+                : 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,.png,.jpg,.jpeg,.webp,.gif,.svg'
+            }
             multiple
             className="hidden"
             onChange={onFileChange}
@@ -1004,6 +1325,60 @@ export default function AgentComposerShell({
                 >
                   <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
                   <span className="tabular-nums">{imageModeControls.creditCost}</span>
+                </button>
+              )}
+            </>
+          ) : isVideoMode && videoModeControls ? (
+            <>
+              <Dropdown
+                trigger="click"
+                placement="top-end"
+                strategy="fixed"
+                offset={8}
+                open={videoModeControls.modelOpen}
+                onOpenChange={videoModeControls.onModelOpenChange}
+                items={[]}
+                floatingClassName="z-[90]"
+                referenceClassName="inline-flex"
+                popupRender={() => (
+                  <div onPointerDown={(e) => e.stopPropagation()}>
+                    {videoModeControls.modelPanel}
+                  </div>
+                )}
+              >
+                <button
+                  type="button"
+                  disabled={disabled || sending}
+                  title={videoModeControls.modelLabel}
+                  aria-label={videoModeControls.modelLabel}
+                  className={cn(TOOL_ICON_BTN, 'disabled:opacity-40')}
+                >
+                  {videoModeControls.modelIcon}
+                </button>
+              </Dropdown>
+              {sending ? (
+                <button
+                  type="button"
+                  aria-label={t('agent.stop')}
+                  title={t('agent.stop')}
+                  onClick={() => onStop?.()}
+                  className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--ink)] px-2.5 text-[11px] font-semibold text-[var(--on-brand)]"
+                >
+                  <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  aria-label={t('agent.send')}
+                  disabled={!canSend}
+                  onClick={onSubmit}
+                  title={t('wallet.creditCostTip', {
+                    count: videoModeControls.creditCost,
+                  })}
+                  className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--ink)] px-2.5 text-[11px] font-semibold text-[var(--on-brand)] transition disabled:opacity-40"
+                >
+                  <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
+                  <span className="tabular-nums">{videoModeControls.creditCost}</span>
                 </button>
               )}
             </>

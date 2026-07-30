@@ -28,6 +28,7 @@ def test_build_lc_design_graph_nodes():
         "memory",
         "intent_classify",
         "design_agent",
+        "paint_ops",
         "action",
         "propose",
         "__settle__",

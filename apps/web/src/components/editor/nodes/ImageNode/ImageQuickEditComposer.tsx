@@ -415,7 +415,7 @@ export default function ImageQuickEditComposer({
                   dispatch(clearCanvasAttachPick());
                   return;
                 }
-                dispatch(startCanvasAttachPick({ target: pickTarget }));
+                dispatch(startCanvasAttachPick({ target: pickTarget, accept: 'image' }));
               }}
               className={cn(
                 COMPOSER_ATTACH_ACTION_CLASS,

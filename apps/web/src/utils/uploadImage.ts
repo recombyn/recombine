@@ -10,11 +10,12 @@ import {
 } from '@/apis/upload';
 import { getToken } from '@/utils/token';
 
-/** Upload a single image and return its public/display URL. */
+/** Upload a single image/video and return its public/display URL. */
 export async function uploadImageFile(file: File): Promise<UploadedFileItem> {
   const form = new FormData();
   form.append('files', file, file.name);
-  const res = await uploadFiles(form);
+  const isVideo = String(file.type || '').startsWith('video/');
+  const res = await uploadFiles(form, { timeout: isVideo ? 600000 : 120000 });
   const item = res?.items?.[0];
   if (!item?.url) throw new Error('upload returned no url');
   return item;
@@ -122,6 +123,8 @@ function extForMime(mime: string): string {
   if (m.includes('webp')) return 'webp';
   if (m.includes('gif')) return 'gif';
   if (m.includes('svg')) return 'svg';
+  if (m.includes('mp4') || m.includes('quicktime')) return 'mp4';
+  if (m.includes('webm')) return 'webm';
   return 'png';
 }
 

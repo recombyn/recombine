@@ -133,14 +133,33 @@ def test_lc_design_needs_canvas_ops_blocks_narrate_only():
     assert _lc_design_needs_canvas_ops(
         classified="edit", turn_intent="done", has_ops=False
     )
+    # Bare ask without chips is still narrate escape when classified create.
+    assert _lc_design_needs_canvas_ops(
+        classified="create", turn_intent="ask", has_ops=False, has_clarify=False
+    )
+    # Real clarify may settle without paint.
     assert not _lc_design_needs_canvas_ops(
-        classified="create", turn_intent="ask", has_ops=False
+        classified="create", turn_intent="ask", has_ops=False, has_clarify=True
     )
     assert not _lc_design_needs_canvas_ops(
         classified="create", turn_intent="chat", has_ops=True
     )
     assert not _lc_design_needs_canvas_ops(
         classified="chat", turn_intent="chat", has_ops=False
+    )
+
+
+def test_should_route_to_paint():
+    from services.design.agent_controller import _should_route_to_paint
+
+    assert _should_route_to_paint(
+        classified="create", turn_intent="chat", has_clarify=False
+    )
+    assert not _should_route_to_paint(
+        classified="create", turn_intent="ask", has_clarify=True
+    )
+    assert not _should_route_to_paint(
+        classified="chat", turn_intent="chat", has_clarify=False
     )
 
 
