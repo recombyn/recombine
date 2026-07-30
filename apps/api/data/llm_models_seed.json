@@ -563,6 +563,60 @@
       "thinking": 0,
       "enabled": 1,
       "sort_order": 300
+    },
+    {
+      "id": "or-seedance-2-0-fast",
+      "label": "Seedance 2.0 Fast",
+      "description": "OpenRouter 视频生成：更快更省的 Seedance 2.0 Fast",
+      "provider": "openrouter",
+      "kind": "video",
+      "reference_types": [
+        "video",
+        "image"
+      ],
+      "api_model": "bytedance/seedance-2.0-fast",
+      "icon_key": "doubao",
+      "price": "8",
+      "max_attachments": 4,
+      "thinking": 0,
+      "enabled": 1,
+      "sort_order": 410
+    },
+    {
+      "id": "or-seedance-2-0",
+      "label": "Seedance 2.0",
+      "description": "OpenRouter 视频生成：Seedance 2.0 高质量文生视频 / 图生视频",
+      "provider": "openrouter",
+      "kind": "video",
+      "reference_types": [
+        "video",
+        "image"
+      ],
+      "api_model": "bytedance/seedance-2.0",
+      "icon_key": "doubao",
+      "price": "12",
+      "max_attachments": 4,
+      "thinking": 0,
+      "enabled": 1,
+      "sort_order": 420
+    },
+    {
+      "id": "or-seedance-1-5-pro",
+      "label": "Seedance 1.5 Pro",
+      "description": "OpenRouter 视频生成：Seedance 1.5 Pro",
+      "provider": "openrouter",
+      "kind": "video",
+      "reference_types": [
+        "video",
+        "image"
+      ],
+      "api_model": "bytedance/seedance-1-5-pro",
+      "icon_key": "doubao",
+      "price": "10",
+      "max_attachments": 4,
+      "thinking": 0,
+      "enabled": 1,
+      "sort_order": 430
     }
   ],
   "droppedSeedModelIds": [

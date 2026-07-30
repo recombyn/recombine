@@ -20,17 +20,17 @@ from services.auth.admin import (
 )
 from services.admin.users import ensure_super_admin_role
 from services.auth.email_store import (
-    can_send_activate_link,
+    can_send_code,
     consume_activate_token,
     consume_ticket,
-    create_activate_token,
-    display_name_for_email,
     ensure_email_user,
+    generate_code,
+    store_code,
     update_profile,
     verify_and_issue_ticket,
 )
 from services.auth.google import login_with_google_auth_code, login_with_google_credential
-from services.auth.ses_mail import SesError, send_login_link_email, ses_configured
+from services.auth.ses_mail import SesError, send_verification_email, ses_configured
 from services.auth.slider_captcha import (
     captcha_required,
     clear_login_failures,
@@ -68,6 +68,11 @@ _SUPER_ADMIN_ID = SUPER_ADMIN_ID
 _SUPER_ADMIN_NAME = "Super Admin"
 
 
+def _super_admin_test_code() -> str:
+    """Local .env SUPER_ADMIN_TEST_CODE via settings (not bare os.environ)."""
+    return (getattr(settings, "super_admin_test_code", None) or "").strip()
+
+
 def _normalize_email(raw: str) -> str:
     email = (raw or "").strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
@@ -75,15 +80,8 @@ def _normalize_email(raw: str) -> str:
     return email
 
 
-def _try_super_admin(email: str, password: str) -> SessionUser | None:
-    if email != _SUPER_ADMIN_EMAIL:
-        return None
-    # Strip so trailing spaces from paste don't fail the check.
-    pw = (password or "").strip()
-    if not hmac.compare_digest(pw, _SUPER_ADMIN_PASSWORD):
-        return None
+def _super_admin_session() -> SessionUser:
     try:
-        # Ensure wallet row exists; do not gift free-plan credits.
         ensure_user_balance(_SUPER_ADMIN_ID, starting_tokens=0)
         ensure_super_admin_role()
     except Exception:
@@ -97,6 +95,16 @@ def _try_super_admin(email: str, password: str) -> SessionUser | None:
         role="admin",
         status="active",
     )
+
+
+def _try_super_admin(email: str, password: str) -> SessionUser | None:
+    if email != _SUPER_ADMIN_EMAIL:
+        return None
+    # Strip so trailing spaces from paste don't fail the check.
+    pw = (password or "").strip()
+    if not hmac.compare_digest(pw, _SUPER_ADMIN_PASSWORD):
+        return None
+    return _super_admin_session()
 
 
 class RedeemIn(BaseModel):
@@ -222,26 +230,25 @@ def auth_google(body: GoogleAuthIn) -> dict[str, Any]:
 
 @router.post("/email/send-code")
 def email_send_code(body: EmailSendCodeIn, request: Request) -> dict[str, Any]:
-    """Send magic-link login email (SES template {{username}} / {{id}})."""
+    """Send 6-digit email verification code for login."""
     email = _normalize_email(body.email)
     ip = _client_ip(request)
 
-    # TEMP local test: bootstrap admin still uses password login; no SES.
-    if email == _SUPER_ADMIN_EMAIL:
-        logger.warning("TEMP admin login: use password endpoint (no magic link)")
-        return {"ok": True, "expiresIn": 48 * 3600, "mode": "link"}
-
-    if not ses_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Email signup is temporarily unavailable. Try again later or use another sign-in method.",
+    # Local-only test OTP when SUPER_ADMIN_TEST_CODE is set in .env (gitignored).
+    test_code = _super_admin_test_code()
+    if email == _SUPER_ADMIN_EMAIL and test_code:
+        store_code(email, test_code)
+        logger.warning(
+            "TEMP admin login: SUPER_ADMIN_TEST_CODE enabled for %s",
+            email,
         )
+        return {"ok": True, "expiresIn": 300, "mode": "code"}
 
     if captcha_required(email, ip):
         if not consume_captcha_token(body.captchaToken, email):
             raise _need_captcha_error()
 
-    allowed, retry_after = can_send_activate_link(email)
+    allowed, retry_after = can_send_code(email)
     if not allowed:
         record_login_failure(email, ip)
         if captcha_required(email, ip) and not body.captchaToken:
@@ -252,18 +259,20 @@ def email_send_code(body: EmailSendCodeIn, request: Request) -> dict[str, Any]:
             headers={"Retry-After": str(int(retry_after))},
         )
 
-    token_id = create_activate_token(email)
-    username = display_name_for_email(email)
-    try:
-        send_login_link_email(
-            to_email=email,
-            username=username,
-            activate_id=token_id,
+    if not ses_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email signup is temporarily unavailable. Try again later or use another sign-in method.",
         )
+
+    code = generate_code()
+    store_code(email, code)
+    try:
+        send_verification_email(to_email=email, code=code)
     except SesError as err:
         logger.exception("Email send failed for %s", email)
         raise HTTPException(status_code=502, detail=str(err)) from err
-    return {"ok": True, "expiresIn": 48 * 3600, "mode": "link"}
+    return {"ok": True, "expiresIn": 300, "mode": "code"}
 
 
 class EmailActivateIn(BaseModel):
@@ -272,7 +281,7 @@ class EmailActivateIn(BaseModel):
 
 @router.post("/email/activate")
 def email_activate(body: EmailActivateIn, request: Request) -> dict[str, Any]:
-    """Consume one-time /activate/{{id}} link → session."""
+    """Consume one-time /activate/{{id}} link → session (legacy magic-link mails)."""
     ip = _client_ip(request)
     try:
         email = consume_activate_token(body.id)
@@ -302,9 +311,21 @@ def email_activate(body: EmailActivateIn, request: Request) -> dict[str, Any]:
 
 @router.post("/email/verify-code")
 def email_verify_code(body: EmailVerifyCodeIn, request: Request) -> dict[str, Any]:
-    """Legacy 6-digit code login (kept for compatibility). Prefer /email/activate."""
+    """Verify 6-digit email code → session."""
     email = _normalize_email(body.email)
     ip = _client_ip(request)
+    code = body.code.strip()
+
+    # Local-only test OTP when SUPER_ADMIN_TEST_CODE is set in .env (gitignored).
+    test_code = _super_admin_test_code()
+    if (
+        email == _SUPER_ADMIN_EMAIL
+        and test_code
+        and hmac.compare_digest(code, test_code)
+    ):
+        clear_login_failures(email, ip)
+        session, token = create_session(_super_admin_session())
+        return {"user": _user_payload(session), "token": token}
 
     passed_captcha = False
     if captcha_required(email, ip):
@@ -313,7 +334,7 @@ def email_verify_code(body: EmailVerifyCodeIn, request: Request) -> dict[str, An
         passed_captcha = True
 
     try:
-        ticket = verify_and_issue_ticket(email, body.code.strip())
+        ticket = verify_and_issue_ticket(email, code)
     except ValueError as err:
         key = str(err)
         messages = {
@@ -345,11 +366,6 @@ def email_verify_code(body: EmailVerifyCodeIn, request: Request) -> dict[str, An
     )
     session, token = create_session(session)
     return {"user": _user_payload(session), "token": token}
-
-
-
-
-
 
 
 @router.post("/captcha/create")

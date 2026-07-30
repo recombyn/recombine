@@ -125,8 +125,8 @@ export default function ImageProcessOverlay({
     const children: string[] = document?.deltaSetLike?.ROOT?.children || [];
     return children.filter((id) => {
       const node = document?.deltaSetLike?.[id];
-      if (node?.key !== 'image') return false;
-      // Include image-generator plates while generating (same sweep as process jobs).
+      if (node?.key !== 'image' && node?.key !== 'video') return false;
+      // Include generator plates while generating (same sweep as process jobs).
       return String(node?.attrs?.processStatus || '') === 'running';
     });
   }, [document]);

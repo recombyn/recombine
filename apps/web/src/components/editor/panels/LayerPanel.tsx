@@ -5,11 +5,13 @@ import {
   useState,
   type ComponentType,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuFrame, LuPanelLeft, LuPencil } from 'react-icons/lu';
+import { LuFrame, LuPanelLeft, LuPencil, LuVideo } from 'react-icons/lu';
+import { RiVideoAiLine } from 'react-icons/ri';
 import { RxText } from 'react-icons/rx';
 import {
   HiOutlineChevronDown,
@@ -27,6 +29,7 @@ import { TbArrowUpRight, TbCircle, TbPolygon, TbStar, TbTriangle } from 'react-i
 import Tooltip from '@/components/base/tooltip';
 import {
   isImageGeneratorNode,
+  isVideoGeneratorNode,
   isNodeHidden,
   isNodeLocked,
   listSceneNodes,
@@ -72,7 +75,7 @@ function readStoredLayerDockWidth(): number {
 type LayerIconComponent = ComponentType<{ className?: string }>;
 
 const LAYER_ICON_SLOT =
-  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)]';
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)]';
 
 const layerIconByKind: Record<string, LayerIconComponent> = {
   text: RxText,
@@ -109,20 +112,107 @@ function resolveLayerIconKind(node: { key: string; attrs?: { shapeType?: string 
   return node.key;
 }
 
+function readLayerMediaSrc(attrs: Record<string, unknown> | undefined) {
+  return String(attrs?.src || '').trim();
+}
+
+function readLayerPoster(attrs: Record<string, unknown> | undefined) {
+  return String(attrs?.poster || '').trim();
+}
+
+function LayerMediaThumb({
+  src,
+  poster,
+  kind,
+}: {
+  src?: string;
+  poster?: string;
+  kind: 'image' | 'video';
+}) {
+  const imageSrc = kind === 'video' ? poster || '' : src || '';
+  if (imageSrc) {
+    return (
+      <span className={LAYER_ICON_SLOT}>
+        <img src={imageSrc} alt="" className="h-full w-full object-cover" draggable={false} />
+      </span>
+    );
+  }
+  if (kind === 'video' && src) {
+    return (
+      <span className={LAYER_ICON_SLOT}>
+        <video
+          src={src}
+          muted
+          playsInline
+          preload="metadata"
+          className="h-full w-full object-cover"
+        />
+      </span>
+    );
+  }
+  return null;
+}
+
+function LayerGlyphFallback({ children }: { children: ReactNode }) {
+  return <span className={LAYER_ICON_SLOT}>{children}</span>;
+}
+
 function LayerIcon({
   node,
   filled,
 }: {
-  node: { key: string; attrs?: { shapeType?: string; ['fill-color']?: string; imageGenerator?: unknown } };
+  node: {
+    key: string;
+    attrs?: {
+      shapeType?: string;
+      ['fill-color']?: string;
+      imageGenerator?: unknown;
+      videoGenerator?: unknown;
+      src?: unknown;
+      poster?: unknown;
+      name?: unknown;
+    };
+  };
   filled?: boolean;
 }) {
+  const src = readLayerMediaSrc(node.attrs as Record<string, unknown> | undefined);
+  const poster = readLayerPoster(node.attrs as Record<string, unknown> | undefined);
+
   if (isImageGeneratorNode(node)) {
+    const thumb = src ? <LayerMediaThumb kind="image" src={src} /> : null;
+    if (thumb) return thumb;
     return (
-      <span className={LAYER_ICON_SLOT}>
+      <LayerGlyphFallback>
         <HiOutlineSparkles className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
-      </span>
+      </LayerGlyphFallback>
     );
   }
+
+  if (isVideoGeneratorNode(node)) {
+    const thumb = <LayerMediaThumb kind="video" src={src} poster={poster} />;
+    if (thumb) return thumb;
+    return (
+      <LayerGlyphFallback>
+        <RiVideoAiLine className="block h-[13px] w-[13px] shrink-0" />
+      </LayerGlyphFallback>
+    );
+  }
+
+  if (node.key === 'video') {
+    const thumb = <LayerMediaThumb kind="video" src={src} poster={poster} />;
+    if (thumb) return thumb;
+    return (
+      <LayerGlyphFallback>
+        <LuVideo className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+      </LayerGlyphFallback>
+    );
+  }
+
+  if (node.key === 'image' && src) {
+    const thumb = <LayerMediaThumb kind="image" src={src} />;
+    if (thumb) return thumb;
+  }
+
   const kind = resolveLayerIconKind(node);
   const Icon = layerIconByKind[kind] || HiOutlineStop;
   const sizeClass = layerIconSizeByKind[kind] || layerIconSizeByKind.rect;
@@ -151,10 +241,13 @@ function LayerIcon({
 }
 
 function layerLabel(
-  node: { key: string; attrs?: { shapeType?: string; imageGenerator?: unknown } },
-  imageGeneratorLabel: string
+  node: { key: string; attrs?: { shapeType?: string; imageGenerator?: unknown; videoGenerator?: unknown; name?: unknown } },
+  imageGeneratorLabel: string,
+  videoGeneratorLabel?: string
 ) {
   if (isImageGeneratorNode(node)) return imageGeneratorLabel;
+  if (isVideoGeneratorNode(node)) return videoGeneratorLabel || 'Video Generator';
+  if (node.key === 'video') return String(node.attrs?.name || 'Video');
   const kind = resolveLayerIconKind(node);
   const map: Record<string, string> = {
     text: '文字',
@@ -241,7 +334,7 @@ export default function LayerPanel({
     for (const { id } of [...nodes].reverse()) rows.push({ kind: 'node', id });
     return rows;
   }, [document?.stackOrder, frameById, nodeById, frames, nodes]);
-  const [historyOpen, setHistoryOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [dockWidth, setDockWidth] = useState(LAYER_DOCK_DEFAULT_W);
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
 
@@ -543,7 +636,11 @@ export default function LayerPanel({
                     >
                       <LayerIcon node={node} />
                       <span className="min-w-0 flex-1 truncate">
-                        {layerLabel(node, t('editor.tools.imageGenerator'))}
+                        {layerLabel(
+                          node,
+                          t('editor.tools.imageGenerator'),
+                          t('editor.tools.videoGenerator')
+                        )}
                       </span>
                     </button>
                     <Tooltip

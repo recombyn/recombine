@@ -45,7 +45,7 @@ type Props = {
 
 type PlazaTab = PlazaCategoryFilter;
 
-const TABS: PlazaTab[] = ['all', 'poster', 'mobile', 'website', 'image'];
+const TABS: PlazaTab[] = ['all', 'poster', 'mobile', 'image', 'video'];
 const PAGE_SIZE = 12;
 
 /** Use-menu trigger — tilted cards + sparkle (design ref SVG). */

@@ -6,11 +6,11 @@ import {
   HiOutlineBars3BottomLeft,
   HiOutlineBars3BottomRight,
   HiOutlineBold,
-  HiOutlineChatBubbleLeftRight,
   HiOutlineCodeBracket,
   HiOutlineItalic,
   HiOutlineLink,
   HiOutlineLinkSlash,
+  HiOutlineSparkles,
   HiOutlineStrikethrough,
 } from 'react-icons/hi2';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
@@ -20,6 +20,7 @@ import {
   patchDocumentNode,
   startImageProcess,
   openImageToolPanel,
+  openVideoToolPanel,
 } from '@/store/modules/editor';
 import FlipRotateToolbar from '@/components/editor/nodes/ImageNode/FlipRotateToolbar';
 import ImageQuickEditComposer from '@/components/editor/nodes/ImageNode/ImageQuickEditComposer';
@@ -36,7 +37,7 @@ import {
   parseNodeTextStyle,
 } from '@/components/rcb/scene/sceneText';
 import { markdownToPlain } from '@/components/rcb/scene/sceneMarkdown';
-import { isIconImageNode, isImageGeneratorNode, type ImageProcessKind } from '@/components/rcb/scene/sceneDocument';
+import { isIconImageNode, isImageGeneratorNode, isVideoGeneratorNode, type ImageProcessKind } from '@/components/rcb/scene/sceneDocument';
 import ToolbarMenuSelect from './ToolbarMenuSelect';
 import BlendModeControl from './BlendModeControl';
 import {
@@ -51,6 +52,11 @@ import IconAnnotateToolbar from '@/components/editor/nodes/ImageNode/IconAnnotat
 import ImageToolbarEditTools from '@/components/editor/nodes/ImageNode/ImageToolbarEditTools';
 import ImageToolbarMoreDownload from '@/components/editor/nodes/ImageNode/ImageToolbarMoreDownload';
 import ImageFullscreenPreviewButton from '@/components/editor/nodes/ImageNode/ImageFullscreenPreviewButton';
+import {
+  VideoDownloadButton,
+  VideoFullscreenPreviewButton,
+  VideoToolbarEditTools,
+} from '@/components/editor/nodes/VideoNode';
 import ShapeSelectionToolbar from '@/components/editor/nodes/ShapeNode/ShapeSelectionToolbar';
 import { SelectionToolbarShell } from '@/components/rcb/selection/SelectionToolbarShell';
 import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
@@ -109,7 +115,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
   const node = document?.deltaSetLike?.[nodeId];
   const kind = node?.key || 'shape';
   const flipRotateOpen =
-    kind === 'image' &&
+    (kind === 'image' || kind === 'video') &&
     imageToolPanel?.kind === 'flipRotate' &&
     imageToolPanel?.nodeId === nodeId;
   const quickEditOpen =
@@ -135,7 +141,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
 
   if (!node || !box) return null;
   // Generator plate uses its own composer overlay — hide photo AI selection chrome.
-  if (isImageGeneratorNode(node)) return null;
+  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return null;
 
   const patchTextStyle = (partial: Record<string, unknown>) => {
     const next = buildTextAttrsPreservingMarkdown(node.attrs || {}, {
@@ -181,7 +187,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
     const raw = node?.attrs?.lockAspect;
     if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
     if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
-    return kind === 'image';
+    return kind === 'image' || kind === 'video';
   })();
   const blendControl = showBlend ? (
     <BlendModeControl
@@ -205,7 +211,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
     <>
       <SelectionToolbarShell
         box={box}
-        hasTitleLabel={kind === 'image'}
+        hasTitleLabel={kind === 'image' || kind === 'video'}
         bare={kind === 'image' && isIconImageNode(node)}
       >
           {/* Order: Style/Edit → Geometry → Blend/Opacity → Actions */}
@@ -423,7 +429,7 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                     dispatch(openImageToolPanel({ nodeId, kind: 'quickEdit' }))
                   }
                 >
-                  <HiOutlineChatBubbleLeftRight className="h-4 w-4" strokeWidth={2} />
+                  <HiOutlineSparkles className="h-4 w-4" strokeWidth={2} />
                   <span>{t('editor.imageToolbar.chat')}</span>
                 </button>
                 <ImageToolSep />
@@ -552,6 +558,98 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
                   triggerClassName={imageToolBtn}
                 />
               </>
+            )
+          ) : null}
+
+          {kind === 'video' ? (
+            flipRotateOpen ? (
+              <FlipRotateToolbar
+                nodeId={nodeId}
+                angle={Number(node?.attrs?.angle) || 0}
+                flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
+                flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
+                hideRotate
+                downloadSlot={
+                  <>
+                    <VideoFullscreenPreviewButton
+                      src={String(node?.attrs?.src || '')}
+                      poster={String(node?.attrs?.poster || '').trim() || null}
+                      uploadKey={
+                        String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null
+                      }
+                      aspectWidth={Number(node?.width) || undefined}
+                      aspectHeight={Number(node?.height) || undefined}
+                      cropX={Number(node?.attrs?.cropX)}
+                      cropY={Number(node?.attrs?.cropY)}
+                      cropW={Number(node?.attrs?.cropW)}
+                      cropH={Number(node?.attrs?.cropH)}
+                      trimStart={Number(node?.attrs?.trimStart)}
+                      trimEnd={Number(node?.attrs?.trimEnd)}
+                      flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
+                      flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
+                    />
+                    <VideoDownloadButton
+                      src={String(node?.attrs?.src || '')}
+                      name={String(node?.attrs?.name || 'video')}
+                      uploadKey={
+                        String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null
+                      }
+                      cropX={Number(node?.attrs?.cropX)}
+                      cropY={Number(node?.attrs?.cropY)}
+                      cropW={Number(node?.attrs?.cropW)}
+                      cropH={Number(node?.attrs?.cropH)}
+                      trimStart={Number(node?.attrs?.trimStart)}
+                      trimEnd={Number(node?.attrs?.trimEnd)}
+                      flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
+                      flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
+                    />
+                  </>
+                }
+              />
+            ) : (
+              <VideoToolbarEditTools
+                onTrim={() => dispatch(openVideoToolPanel({ nodeId, kind: 'trim' }))}
+                onCrop={() => dispatch(openImageToolPanel({ nodeId, kind: 'crop' }))}
+                onFlipRotate={() =>
+                  dispatch(openImageToolPanel({ nodeId, kind: 'flipRotate' }))
+                }
+                downloadSlot={
+                  <VideoDownloadButton
+                    src={String(node?.attrs?.src || '')}
+                    name={String(node?.attrs?.name || 'video')}
+                    uploadKey={
+                      String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null
+                    }
+                    cropX={Number(node?.attrs?.cropX)}
+                    cropY={Number(node?.attrs?.cropY)}
+                    cropW={Number(node?.attrs?.cropW)}
+                    cropH={Number(node?.attrs?.cropH)}
+                    trimStart={Number(node?.attrs?.trimStart)}
+                    trimEnd={Number(node?.attrs?.trimEnd)}
+                    flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
+                    flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
+                  />
+                }
+                fullscreenSlot={
+                  <VideoFullscreenPreviewButton
+                    src={String(node?.attrs?.src || '')}
+                    poster={String(node?.attrs?.poster || '').trim() || null}
+                    uploadKey={
+                      String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null
+                    }
+                    aspectWidth={Number(node?.width) || undefined}
+                    aspectHeight={Number(node?.height) || undefined}
+                    cropX={Number(node?.attrs?.cropX)}
+                    cropY={Number(node?.attrs?.cropY)}
+                    cropW={Number(node?.attrs?.cropW)}
+                    cropH={Number(node?.attrs?.cropH)}
+                    trimStart={Number(node?.attrs?.trimStart)}
+                    trimEnd={Number(node?.attrs?.trimEnd)}
+                    flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
+                    flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
+                  />
+                }
+              />
             )
           ) : null}
 

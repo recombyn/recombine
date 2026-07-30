@@ -24,6 +24,13 @@ _IMAGE_MIME = {
     ".avif": "image/avif",
 }
 
+_VIDEO_MIME = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".m4v": "video/mp4",
+}
+
 
 def _ext_mime(filename: str | None, content_type: str | None) -> tuple[str, str]:
     ctype = (content_type or "").split(";")[0].strip().lower()
@@ -33,10 +40,15 @@ def _ext_mime(filename: str | None, content_type: str | None) -> tuple[str, str]
         ext = "." + name.rsplit(".", 1)[-1]
     if ext in _IMAGE_MIME:
         return ext.lstrip("."), _IMAGE_MIME[ext]
+    if ext in _VIDEO_MIME:
+        return ext.lstrip("."), _VIDEO_MIME[ext]
     if ctype.startswith("image/"):
         guessed = mimetypes.guess_extension(ctype) or ".bin"
         if guessed == ".jpe":
             guessed = ".jpg"
+        return guessed.lstrip("."), ctype
+    if ctype.startswith("video/"):
+        guessed = mimetypes.guess_extension(ctype) or ".mp4"
         return guessed.lstrip("."), ctype
     if ext:
         mime = mimetypes.guess_type(f"x{ext}")[0] or "application/octet-stream"
@@ -79,13 +91,18 @@ def upload_user_file(
     """
     if not data:
         raise ValueError("empty file")
-    max_bytes = max(1, int(settings.max_upload_mb or 20)) * 1024 * 1024
-    if len(data) > max_bytes:
-        raise ValueError(f"file too large (max {settings.max_upload_mb}MB)")
 
     ext, mime = _ext_mime(filename, content_type)
-    if not mime.startswith("image/"):
-        raise ValueError("only image uploads are supported")
+    if not (mime.startswith("image/") or mime.startswith("video/")):
+        raise ValueError("only image or video uploads are supported")
+
+    max_mb = max(1, int(settings.max_upload_mb or 20))
+    # Videos need a higher ceiling than stills (default 100MB unless configured higher).
+    if mime.startswith("video/"):
+        max_mb = max(max_mb, int(getattr(settings, "max_video_upload_mb", None) or 100))
+    max_bytes = max_mb * 1024 * 1024
+    if len(data) > max_bytes:
+        raise ValueError(f"file too large (max {max_mb}MB)")
 
     now = time.gmtime()
     file_id = uuid.uuid4().hex
@@ -100,20 +117,22 @@ def upload_user_file(
 
     width, height = _probe_image_size(data, mime)
     thumb_b64 = ""
-    try:
-        from services.design.blob_codec import make_webp_thumb
-        import base64
-
-        thumb = make_webp_thumb(data, max_edge=512, quality=70)
-        # Also keep a small sibling object for CDN/cache (optional).
-        thumb_key = f"{object_key.rsplit('.', 1)[0]}.thumb.webp"
+    thumb_key = ""
+    if mime.startswith("image/"):
         try:
-            put_bytes(thumb_key, thumb, content_type="image/webp")
+            from services.design.blob_codec import make_webp_thumb
+            import base64
+
+            thumb = make_webp_thumb(data, max_edge=512, quality=70)
+            # Also keep a small sibling object for CDN/cache (optional).
+            thumb_key = f"{object_key.rsplit('.', 1)[0]}.thumb.webp"
+            try:
+                put_bytes(thumb_key, thumb, content_type="image/webp")
+            except Exception:
+                thumb_key = ""
+            thumb_b64 = base64.b64encode(thumb).decode("ascii")
         except Exception:
             thumb_key = ""
-        thumb_b64 = base64.b64encode(thumb).decode("ascii")
-    except Exception:
-        thumb_key = ""
 
     return {
         "url": url,

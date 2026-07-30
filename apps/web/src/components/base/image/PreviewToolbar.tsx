@@ -20,6 +20,8 @@ export interface PreviewToolbarProps {
   onRotateRight?: () => void;
   onZoomOut?: () => void;
   onZoomIn?: () => void;
+  /** Override default `fixed bottom-5 …` positioning (e.g. video lightbox). */
+  className?: string;
 }
 
 const iconCls = 'h-4 w-4 text-white';
@@ -36,6 +38,7 @@ const PreviewToolbar: React.FC<PreviewToolbarProps> = ({
   onRotateRight,
   onZoomOut,
   onZoomIn,
+  className,
 }) => {
   const minScale = 0.5;
   const maxScale = 5;
@@ -43,7 +46,10 @@ const PreviewToolbar: React.FC<PreviewToolbarProps> = ({
   const isZoomInDisabled = scale >= maxScale;
   return (
     <div
-      className="fixed bottom-5 left-1/2 z-10 flex -translate-x-1/2 flex-col items-center gap-2"
+      className={
+        className ??
+        'fixed bottom-5 left-1/2 z-10 flex -translate-x-1/2 flex-col items-center gap-2'
+      }
       onClick={(e) => e.stopPropagation()}
     >
       {showCounter && total > 1 && (

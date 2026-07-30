@@ -11,8 +11,8 @@ from services.plaza.cover import cover_json_dumps, validate_cover_for_publish
 from services.plaza.db import connect, init_plaza_db
 
 _MAX_DOC_BYTES = 12 * 1024 * 1024  # ~12MB JSON
-# Align with home hero: website | mobile | image | poster
-_CATEGORIES = frozenset({"website", "mobile", "image", "poster"})
+# Align with home hero: website | mobile | image | poster | video
+_CATEGORIES = frozenset({"website", "mobile", "image", "poster", "video"})
 
 
 class PlazaError(Exception):
@@ -879,7 +879,7 @@ def list_feed(
     Paginated approved feed.
     tab: recommended | latest | following
     following requires author_ids (from Me follows API or client).
-    category: optional plaza category filter (website|mobile|image|poster).
+    category: optional plaza category filter (website|mobile|image|poster|video).
     """
     init_plaza_db()
     page_n, page_size_n, offset = _feed_page_args(limit=limit, page=page, page_size=page_size)

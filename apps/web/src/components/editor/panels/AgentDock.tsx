@@ -22,6 +22,7 @@ import { Icon } from '@/components/base/icon';
 import {
   listModels,
   generateImage,
+  generateVideo,
   type LlmModel,
 } from '@/apis/chat';
 import {
@@ -100,6 +101,7 @@ import AgentComposerShell, {
   type ComposerInteractionMode,
   type ComposerRunMode,
   type ImageModeComposerControls,
+  type VideoModeComposerControls,
 } from '@/components/editor/panels/agent/AgentComposerShell';
 import { normalizeCanvasSizeChip } from '@/components/editor/chrome/SizePresetPanel';
 import {
@@ -125,10 +127,11 @@ import ModelPickerPanel, {
   AUTO_MODEL,
   ModelBrandIcon,
   isImageKind,
+  isVideoKind,
   modelDescription,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
 import { cn } from '@/utils/classnames';
-import { estimateImageCredits } from '@/utils/imageCredits';
+import { estimateImageCredits, parsePriceAmount } from '@/utils/imageCredits';
 import { FREE_IMAGE_MODEL_ID, planAllowsModelId, planAllowsModelPick, type PlanId } from '@/utils/wallet';
 
 type ChatSessionMessage = {
@@ -142,6 +145,7 @@ type ChatSessionMessage = {
   intent?: string;
   steps?: ChatUiMessage['steps'];
   images?: string[];
+  videos?: string[];
   imageModelId?: string;
   imageModelLabel?: string;
   imageAspectRatio?: string;
@@ -288,8 +292,14 @@ async function resolveVisionImageUrl(src: string): Promise<string | null> {
 
 function resolveComposerPlaceholder(
   t: (key: string, opts?: Record<string, unknown>) => string,
-  opts: { isImageModel: boolean; isImageMode?: boolean; hasContextChips: boolean }
+  opts: {
+    isImageModel: boolean;
+    isImageMode?: boolean;
+    isVideoMode?: boolean;
+    hasContextChips: boolean;
+  }
 ): string {
+  if (opts.isVideoMode) return t('editor.tools.videoGenPlaceholder');
   if (opts.isImageMode) return t('editor.tools.imageGenPlaceholder');
   if (opts.isImageModel) return t('agent.placeholderImage');
   if (opts.hasContextChips) return t('agent.placeholderSkill');
@@ -514,6 +524,15 @@ function applyThinkingBodyToSteps(
   replace: boolean,
   t: TFn
 ): AssistantStep[] {
+  // Chat fold shows a short progress label only — never accumulate raw CoT / protocol text.
+  const brief = String(piece || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  if (!brief) return stepsIn;
+  // Ignore streaming crumbs unless replace (backend short thought).
+  if (!replace && brief.length > 48) return stepsIn;
+
   const steps = [...stepsIn];
   let idx = steps.findIndex((s) => s.id === 'explore-pipeline');
   if (idx < 0) {
@@ -527,28 +546,26 @@ function applyThinkingBodyToSteps(
       kind: 'explored',
       name: t('agent.activityExplored'),
       status: replace ? 'done' : 'running',
-      items: [{ id: 'thought-brief', name: t('agent.activityThoughtBrief') }],
-      body: replace ? piece : piece.slice(-4000),
+      items: [{ id: 'thought-brief', name: brief || t('agent.activityThoughtBrief') }],
     });
     return collapseExplorePipelineSteps(steps);
   }
   const prevStep = steps[idx];
   const items = [...(prevStep.items || [])];
-  if (replace) {
-    const ti = items.findIndex((x) => x.id === 'thought-brief');
-    const thoughtLine = {
-      id: 'thought-brief',
-      name: t('agent.activityThoughtBrief'),
-    };
-    if (ti >= 0) items[ti] = thoughtLine;
-    else items.push(thoughtLine);
-  }
+  const thoughtLine = {
+    id: 'thought-brief',
+    name: brief || t('agent.activityThoughtBrief'),
+  };
+  const ti = items.findIndex((x) => x.id === 'thought-brief');
+  if (ti >= 0) items[ti] = thoughtLine;
+  else items.push(thoughtLine);
   steps[idx] = {
     ...prevStep,
     id: 'explore-pipeline',
     kind: 'explored',
     items,
-    body: replace ? piece : `${prevStep.body || ''}${piece}`.slice(-6000),
+    // Drop any prior CoT dump from older builds.
+    body: undefined,
     status: prevStep.status,
   };
   return collapseExplorePipelineSteps(steps);
@@ -791,6 +808,7 @@ function toUiMessages(session: ChatSession): ChatUiMessage[] {
     ...(m.intent ? { intent: m.intent } : {}),
     ...(m.steps?.length ? { steps: m.steps } : {}),
     ...(m.images?.length ? { images: m.images } : {}),
+    ...(m.videos?.length ? { videos: m.videos } : {}),
     ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
     ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
     ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
@@ -813,6 +831,7 @@ function dtoToSession(dto: {
     intent?: string | null;
     steps?: ChatUiMessage['steps'] | null;
     images?: string[] | null;
+    videos?: string[] | null;
     imageModelId?: string | null;
     imageModelLabel?: string | null;
     imageAspectRatio?: string | null;
@@ -834,6 +853,7 @@ function dtoToSession(dto: {
       ...(m.intent ? { intent: m.intent } : {}),
       ...(m.steps?.length ? { steps: m.steps } : {}),
       ...(m.images?.length ? { images: m.images } : {}),
+      ...(m.videos?.length ? { videos: m.videos } : {}),
       ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
       ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
       ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
@@ -850,7 +870,8 @@ function messagesToPersisted(messages: ChatUiMessage[]): ChatSessionMessage[] {
         m.intent ||
         (m.contexts && m.contexts.length) ||
         (m.steps && m.steps.length) ||
-        (m.images && m.images.length)
+        (m.images && m.images.length) ||
+        (m.videos && m.videos.length)
     )
     .map((m) => ({
       id: m.id,
@@ -870,6 +891,7 @@ function messagesToPersisted(messages: ChatUiMessage[]): ChatSessionMessage[] {
           }
         : {}),
       ...(m.images?.length ? { images: m.images } : {}),
+      ...(m.videos?.length ? { videos: m.videos } : {}),
       ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
       ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
       ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
@@ -1164,10 +1186,16 @@ type AgentDockProps = {
   onGoHome?: () => void;
 };
 
-/** Merge catalog + imageModels; normalize kind so Seedream is always image. */
+const DEFAULT_VIDEO_ASPECT_RATIO = '16:9';
+const DEFAULT_VIDEO_RESOLUTION = '720p';
+const DEFAULT_VIDEO_DURATION = 5;
+const DEFAULT_VIDEO_MODEL_ID = 'or-seedance-2-0-fast';
+
+/** Merge catalog + imageModels + videoModels; normalize kind. */
 function normalizeModelList(
   models: LlmModel[] | undefined,
-  imageModels?: LlmModel[] | null
+  imageModels?: LlmModel[] | null,
+  videoModels?: LlmModel[] | null
 ): LlmModel[] {
   const byId = new Map<string, LlmModel>();
   for (const m of models || []) {
@@ -1178,6 +1206,10 @@ function normalizeModelList(
     if (!m?.id) continue;
     byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
   }
+  for (const m of videoModels || []) {
+    if (!m?.id) continue;
+    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'video' });
+  }
   // Pro custom providers (local list) — selectable in design / Agent tab.
   for (const m of customProvidersAsModels()) {
     byId.set(m.id, m);
@@ -1187,6 +1219,9 @@ function normalizeModelList(
     .map((m) => {
     const maxAttachments = maxAttachmentsFor(m);
     const base = { ...m, maxAttachments };
+    if (isVideoKind(m)) {
+      return { ...base, kind: 'video' as const };
+    }
     if (isImageKind(m)) {
       return { ...base, kind: 'image' as const };
     }
@@ -1446,8 +1481,17 @@ export async function applyCanvasAttachPayload(opts: {
   existingChips: ComposerContext[];
   onAttachFiles: (files: File[], opts?: { mention?: boolean }) => void | Promise<void>;
   insertChip: (ctx: ComposerContext) => void;
+  /** Image chat mode — reject video nodes (same as image generator pick). */
+  imagesOnly?: boolean;
 }) {
-  const { document: doc, payload, existingChips, onAttachFiles, insertChip } = opts;
+  const {
+    document: doc,
+    payload,
+    existingChips,
+    onAttachFiles,
+    insertChip,
+    imagesOnly = false,
+  } = opts;
   let ids: string[] = [];
   let frameId: string | null = null;
   if (Array.isArray(payload)) {
@@ -1465,7 +1509,9 @@ export async function applyCanvasAttachPayload(opts: {
     return;
   }
 
-  const attachable = ids.filter((id) => canAttachNodeToChat(doc?.deltaSetLike?.[id]));
+  const attachable = ids.filter((id) =>
+    canAttachNodeToChat(doc?.deltaSetLike?.[id], { imagesOnly })
+  );
   if (!attachable.length) return;
 
   // Group / multi-select — one flattened PNG (same raster path as export), never split.
@@ -1484,6 +1530,7 @@ export async function applyCanvasAttachPayload(opts: {
 
   const id = attachable[0]!;
   const node = doc?.deltaSetLike?.[id];
+  if (imagesOnly && node?.key === 'video') return;
   const src = String(node?.attrs?.src || '').trim();
   if (node?.key === 'image' && src) {
     try {
@@ -1667,6 +1714,34 @@ function shouldRunImageGenPath(opts: {
   hasApplyOps: boolean;
 }): boolean {
   return opts.isImageModelSelected && !opts.forceAgent && !opts.hasApplyOps;
+}
+
+function estimateVideoCredits(model?: LlmModel | null): number {
+  const price = parsePriceAmount(model?.price);
+  if (price == null || price <= 0) return 8;
+  return Math.max(1, Math.ceil(price * (200 / 29) * 1.2));
+}
+
+function shouldRunVideoGenPath(opts: {
+  isVideoModelSelected: boolean;
+  forceAgent: boolean;
+  hasApplyOps: boolean;
+}): boolean {
+  return opts.isVideoModelSelected && !opts.forceAgent && !opts.hasApplyOps;
+}
+
+function firstGeneratedVideoUrl(res: {
+  videos?: unknown[];
+  assets?: Array<{ url?: string } | null> | null;
+}): string {
+  for (const u of res.videos || []) {
+    if (typeof u === 'string' && u.trim()) return u.trim();
+  }
+  for (const a of res.assets || []) {
+    const u = typeof a?.url === 'string' ? a.url.trim() : '';
+    if (u) return u;
+  }
+  return '';
 }
 
 function firstGeneratedImageUrl(res: {
@@ -1903,6 +1978,29 @@ function buildStreamingAssistantSeed(opts: {
         status: 'running' as const,
       },
     ],
+  };
+}
+
+function buildVideoAssistantSeed(opts: {
+  videoGenAspect?: string;
+  videoGenAspectRatio: string;
+  canPickModel: boolean;
+  model: string;
+  selectedModel?: LlmModel | null;
+}): Pick<
+  ChatUiMessage,
+  'videoPendingCount' | 'imageAspectRatio' | 'imageModelId' | 'imageModelLabel' | 'steps'
+> {
+  return {
+    videoPendingCount: 1,
+    imageAspectRatio: opts.videoGenAspect || opts.videoGenAspectRatio,
+    imageModelId: !opts.canPickModel
+      ? DEFAULT_VIDEO_MODEL_ID
+      : String(opts.model || opts.selectedModel?.id || DEFAULT_VIDEO_MODEL_ID),
+    imageModelLabel: String(
+      opts.selectedModel?.label || opts.model || DEFAULT_VIDEO_MODEL_ID
+    ),
+    steps: [],
   };
 }
 
@@ -2323,6 +2421,10 @@ export default function AgentDock({
   const [imageGenAspectRatio, setImageGenAspectRatio] = useState(DEFAULT_IMAGE_ASPECT_RATIO);
   const [imageGenCountSetting, setImageGenCountSetting] = useState(DEFAULT_IMAGE_COUNT);
   const [imageModelPanelOpen, setImageModelPanelOpen] = useState(false);
+  const [videoResolution, setVideoResolution] = useState(DEFAULT_VIDEO_RESOLUTION);
+  const [videoGenAspectRatio, setVideoGenAspectRatio] = useState(DEFAULT_VIDEO_ASPECT_RATIO);
+  const [videoGenDuration, setVideoGenDuration] = useState(DEFAULT_VIDEO_DURATION);
+  const [videoModelPanelOpen, setVideoModelPanelOpen] = useState(false);
   const [styleGroupId, setStyleGroupId] = useState<number | null>(null);
   const [designScene, setDesignScene] = useState<DesignScene | null>(null);
   const designSceneRef = useRef<DesignScene | null>(null);
@@ -2387,7 +2489,7 @@ export default function AgentDock({
     () =>
       allowedInteractionModes && allowedInteractionModes.length
         ? allowedInteractionModes
-        : (['agent', 'ask', 'image'] as ComposerInteractionMode[]),
+        : (['agent', 'ask', 'image', 'video'] as ComposerInteractionMode[]),
     [allowedInteractionModes]
   );
 
@@ -2485,7 +2587,7 @@ export default function AgentDock({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const list = normalizeModelList(res?.models, res?.imageModels);
+        const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
         setModels(list);
         setModelsStatus('ready');
         setAvailable(Boolean(res?.available));
@@ -2576,6 +2678,12 @@ export default function AgentDock({
       if (!draftModelId || !planAllowsModelId(canPickModel ? planId : 'free', draftModelId)) {
         setModel(FREE_IMAGE_MODEL_ID);
       }
+    } else if (draftInteractionMode === 'video') {
+      setInteractionMode('video');
+      setComposerMode('video');
+      if (!draftModelId || !planAllowsModelId(canPickModel ? planId : 'free', draftModelId)) {
+        setModel(DEFAULT_VIDEO_MODEL_ID);
+      }
     } else if (draftInteractionMode === 'ask') {
       setInteractionMode('ask');
       setComposerMode('agent');
@@ -2588,6 +2696,9 @@ export default function AgentDock({
       // Home Image chat passes gen aspect here — seed the image-mode picker too.
       if (draftInteractionMode === 'image') {
         setImageGenAspectRatio(draftImageAspectRatio as typeof imageGenAspectRatio);
+      }
+      if (draftInteractionMode === 'video') {
+        setVideoGenAspectRatio(draftImageAspectRatio);
       }
     }
     if (draftScene) {
@@ -2636,7 +2747,8 @@ export default function AgentDock({
     if (boot.modelId) {
       setModel(boot.modelId);
       const image = isImageKind({ id: boot.modelId });
-      setComposerMode(image ? 'image' : 'agent');
+      const video = isVideoKind({ id: boot.modelId });
+      setComposerMode(image ? 'image' : video ? 'video' : 'agent');
     }
     if (boot.interactionMode === 'agent') {
       setInteractionMode('agent');
@@ -2647,6 +2759,9 @@ export default function AgentDock({
     } else if (boot.interactionMode === 'image') {
       setInteractionMode('image');
       setComposerMode('image');
+    } else if (boot.interactionMode === 'video') {
+      setInteractionMode('video');
+      setComposerMode('video');
     }
     if (boot.imageAspectRatio) setImageAspectRatio(boot.imageAspectRatio);
     if (boot.scene) {
@@ -2690,10 +2805,14 @@ export default function AgentDock({
         inputRef.current?.insertContextAtCaret(ctx);
         inputRef.current?.focusEnd();
       },
+      imagesOnly:
+        interactionMode === 'image' ||
+        (composerMode === 'image' && interactionMode !== 'video') ||
+        (isImageKind(models.find((m) => m.id === model)) && interactionMode !== 'video'),
     });
     // handleAttachFiles / onAttachConsumed omitted — identity churn must not re-fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, attachToChat, document]);
+  }, [open, attachToChat, document, interactionMode, composerMode, model, models]);
 
   /** Composer "Add from canvas" pick result (node composers use pending; agent uses attachToChat). */
   const pendingCanvasAttach = useSelector(
@@ -2726,9 +2845,13 @@ export default function AgentDock({
         inputRef.current?.insertContextAtCaret(ctx);
         inputRef.current?.focusEnd();
       },
+      imagesOnly:
+        interactionMode === 'image' ||
+        (composerMode === 'image' && interactionMode !== 'video') ||
+        (isImageKind(models.find((m) => m.id === model)) && interactionMode !== 'video'),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, pendingCanvasAttach, document, dispatch]);
+  }, [open, pendingCanvasAttach, document, dispatch, interactionMode, composerMode, model, models]);
 
   useEffect(() => {
     listRef.current?.scrollToBottom();
@@ -2896,12 +3019,20 @@ export default function AgentDock({
 
   const handleAttachFiles = async (files: File[], opts?: { mention?: boolean }) => {
     const MAX = 10 * 1024 * 1024;
+    const pickedModel = models.find((m) => m.id === model);
+    const isVideoMode =
+      interactionMode === 'video' ||
+      composerMode === 'video' ||
+      isVideoKind(pickedModel);
     const isImageMode =
-      interactionMode === 'image' || composerMode === 'image' || isImageKind(models.find((m) => m.id === model));
+      !isVideoMode &&
+      (interactionMode === 'image' ||
+        composerMode === 'image' ||
+        isImageKind(pickedModel));
     const limit = agentAttachmentLimit({
       models,
       modelId: model,
-      isImageMode,
+      isImageMode: isImageMode || isVideoMode,
       rules: designCatalog?.global_rules,
       routedImageId: routeOverridesForApi(loadAgentRoutePrefs(designCatalog?.global_rules))?.image,
       freeImageId: FREE_IMAGE_MODEL_ID,
@@ -2922,7 +3053,12 @@ export default function AgentDock({
         message.warning(t('agent.attachMaxReached', { count: limit }));
         break;
       }
-      if (!file.type.startsWith('image/')) {
+      if (isVideoMode) {
+        if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+          message.warning(t('agent.attachImageOnly', { name: file.name }));
+          continue;
+        }
+      } else if (!file.type.startsWith('image/')) {
         message.warning(t('agent.attachImageOnly', { name: file.name }));
         continue;
       }
@@ -3031,14 +3167,20 @@ export default function AgentDock({
   const selectedModel =
     model === 'auto' ? AUTO_MODEL : models.find((m) => m.id === model);
   const selectedModelLabel = selectedModel?.label || (models[0]?.label ?? 'Agent');
+  const isVideoInteraction = interactionMode === 'video';
+  const isVideoModelSelected =
+    isVideoInteraction ||
+    composerMode === 'video' ||
+    isVideoKind(selectedModel);
   const isImageInteraction = interactionMode === 'image';
   const isImageModelSelected =
-    isImageInteraction || composerMode === 'image' || isImageKind(selectedModel);
+    !isVideoInteraction &&
+    (isImageInteraction || composerMode === 'image' || isImageKind(selectedModel));
   const rules = designCatalog?.global_rules;
   const attachmentLimit = agentAttachmentLimit({
     models,
     modelId: model,
-    isImageMode: isImageModelSelected,
+    isImageMode: isImageModelSelected || isVideoModelSelected,
     rules,
     routedImageId: routeOverridesForApi(loadAgentRoutePrefs(rules))?.image,
     freeImageId: FREE_IMAGE_MODEL_ID,
@@ -3051,7 +3193,7 @@ export default function AgentDock({
   const attachFull = attachmentCount >= attachmentLimit;
 
   const imageAspectProps = {
-    showDesignSizePicker: !isImageModelSelected,
+    showDesignSizePicker: !isImageModelSelected && !isVideoInteraction,
     imageAspectRatio,
     onImageAspectRatioChange: setImageAspectRatio,
     designSceneCategory: (designScene === 'drawing' ? 'image' : designScene) as
@@ -3098,12 +3240,14 @@ export default function AgentDock({
             dispatch(clearCanvasAttachPick());
             return;
           }
+          // Image chat mode — stills only; video chat mode allows media.
+          const imagesOnly = isImageModelSelected && !isVideoModelSelected;
           // If the canvas already has a selection, attach it immediately without entering pick mode.
           // Entering pick mode after attaching would cause the user to re-click the same node
           // and attach it a second time.
           const doc = document;
           const attachable = selectedNodeIds.filter((id) =>
-            canAttachNodeToChat(doc?.deltaSetLike?.[id])
+            canAttachNodeToChat(doc?.deltaSetLike?.[id], { imagesOnly })
           );
           const frameId = selectedFrameIds.find(Boolean) || null;
           const insertChip = (ctx: ComposerContext) => {
@@ -3121,6 +3265,7 @@ export default function AgentDock({
                   existingChips: contextChipsRef.current,
                   onAttachFiles: handleAttachFiles,
                   insertChip,
+                  imagesOnly,
                 });
               }
               if (frameId) {
@@ -3130,11 +3275,17 @@ export default function AgentDock({
                   existingChips: contextChipsRef.current,
                   onAttachFiles: handleAttachFiles,
                   insertChip,
+                  imagesOnly,
                 });
               }
             })();
           } else {
-            dispatch(startCanvasAttachPick({ target: 'agent' }));
+            dispatch(
+              startCanvasAttachPick({
+                target: 'agent',
+                accept: imagesOnly ? 'image' : 'media',
+              })
+            );
           }
         },
     pickingFromCanvas: floating ? false : pickingFromCanvas,
@@ -3355,6 +3506,15 @@ export default function AgentDock({
       mentionNodeIds,
       docForFill,
     });
+    const runVideoGen = shouldRunVideoGenPath({
+      isVideoModelSelected,
+      forceAgent,
+      hasApplyOps: Boolean(options.applyOps?.length),
+    });
+    const videoGenAspect =
+      String(videoGenAspectRatio).trim() !== 'smart'
+        ? String(videoGenAspectRatio).trim() || undefined
+        : undefined;
     clearContextChips();
     setSending(true);
     // Clear prior Ask chips in the same write — a separate setMessages(clear)
@@ -3366,16 +3526,24 @@ export default function AgentDock({
         id: assistantId,
         role: 'assistant',
         content: '',
-        ...buildStreamingAssistantSeed({
-          imageGenCount,
-          imageGenAspect,
-          imageGenAspectRatio,
-          canPickModel,
-          model,
-          selectedModel,
-          models,
-          t,
-        }),
+        ...(runVideoGen
+          ? buildVideoAssistantSeed({
+              videoGenAspect,
+              videoGenAspectRatio,
+              canPickModel,
+              model,
+              selectedModel,
+            })
+          : buildStreamingAssistantSeed({
+              imageGenCount,
+              imageGenAspect,
+              imageGenAspectRatio,
+              canPickModel,
+              model,
+              selectedModel,
+              models,
+              t,
+            })),
         streaming: true,
         startedAt: Date.now(),
       },
@@ -3384,6 +3552,76 @@ export default function AgentDock({
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+
+    // Video model → gallery in chat; takes precedence over image gen.
+    if (runVideoGen) {
+      dispatch(setAgentBusy(true));
+      const aspect = videoGenAspect;
+      const resolution = videoResolution;
+      const duration = videoGenDuration;
+      const videoModel = !canPickModel ? DEFAULT_VIDEO_MODEL_ID : model || DEFAULT_VIDEO_MODEL_ID;
+      const refImages = attachedImages.filter((u) => Boolean(u) && !u.startsWith('data:video/'));
+      const patchAssistant = (
+        pred: (m: ChatUiMessage) => boolean,
+        patch: (m: ChatUiMessage) => ChatUiMessage
+      ) => {
+        setMessages((prev) => prev.map((m) => (pred(m) ? patch(m) : m)));
+      };
+      try {
+        const body: Parameters<typeof generateVideo>[0] = {
+          prompt: text,
+          model: videoModel,
+          aspect_ratio: aspect,
+          resolution,
+          duration,
+        };
+        if (refImages.length) body.images = refImages;
+        const res = await generateVideo(body, { signal: ac.signal });
+        const url = firstGeneratedVideoUrl(res);
+        if (ac.signal.aborted) return;
+        if (!url) {
+          patchAssistant(
+            (m) => m.id === assistantId,
+            (m) =>
+              finishAssistantPatch(m, {
+                content: t('agent.requestFailed'),
+                videoPendingCount: undefined,
+                imageAspectRatio: aspect || videoGenAspectRatio,
+                steps: [],
+              })
+          );
+          return;
+        }
+        patchAssistant(
+          (m) => m.id === assistantId,
+          (m) =>
+            finishAssistantPatch(m, {
+              content: '',
+              videos: [url],
+              videoPendingCount: undefined,
+              imageAspectRatio: aspect || videoGenAspectRatio,
+              steps: [],
+            })
+        );
+      } catch (err) {
+        if (ac.signal.aborted) return;
+        const msg =
+          err instanceof Error && err.message ? err.message : t('agent.requestFailed');
+        patchAssistant(
+          (m) => m.id === assistantId,
+          (m) =>
+            finishAssistantPatch(m, {
+              content: humanizeDesignError(t, msg),
+              videoPendingCount: undefined,
+              steps: [],
+            })
+        );
+      } finally {
+        dispatch(setAgentBusy(false));
+        setSending(false);
+      }
+      return;
+    }
 
     // Image model → Seedream gallery; Ask / forceAgent stay on design agent.
     if (
@@ -3947,7 +4185,22 @@ export default function AgentDock({
   const applyInteractionMode = (mode: ComposerInteractionMode) => {
     setInteractionMode(mode);
     setImageModelPanelOpen(false);
+    setVideoModelPanelOpen(false);
     setModelPanelOpen(false);
+    if (mode === 'video') {
+      setComposerMode('video');
+      if (!canPickModel) {
+        setModel(DEFAULT_VIDEO_MODEL_ID);
+        return;
+      }
+      const videos = models.filter((m) => isVideoKind(m));
+      const preferred =
+        videos.find((m) => m.id === model) ||
+        videos.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID) ||
+        videos[0];
+      setModel(preferred?.id || DEFAULT_VIDEO_MODEL_ID);
+      return;
+    }
     if (mode === 'image') {
       setComposerMode('image');
       if (!canPickModel) {
@@ -3976,6 +4229,7 @@ export default function AgentDock({
     setModelPanelOpen(false);
     setMentionPanelOpen(false);
     setImageModelPanelOpen(false);
+    setVideoModelPanelOpen(false);
   }, [onlyImageInteraction]);
 
   const mentionFloating = useFloating({
@@ -4024,10 +4278,12 @@ export default function AgentDock({
   const composerPlaceholder = resolveComposerPlaceholder(t, {
     isImageModel: isImageModelSelected,
     isImageMode: isImageInteraction,
+    isVideoMode: isVideoInteraction,
     hasContextChips: contextChips.length > 0,
   });
 
   const imageModels = models.filter((m) => isImageKind(m));
+  const videoModels = models.filter((m) => isVideoKind(m));
   const imageModeSelectedModel =
     imageModels.find((m) => m.id === model) ||
     imageModels.find((m) => m.id === FREE_IMAGE_MODEL_ID) ||
@@ -4076,6 +4332,47 @@ export default function AgentDock({
       }
     : null;
 
+  const videoModeSelectedModel =
+    videoModels.find((m) => m.id === model) ||
+    videoModels.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID) ||
+    videoModels[0];
+  const videoModeControls: VideoModeComposerControls | null = isVideoInteraction
+    ? {
+        resolution: videoResolution,
+        aspectRatio: videoGenAspectRatio,
+        duration: videoGenDuration,
+        onResolutionChange: (r) => setVideoResolution(r),
+        onAspectRatioChange: (r) => setVideoGenAspectRatio(r),
+        onDurationChange: (d) =>
+          setVideoGenDuration(Math.max(1, Math.round(d) || DEFAULT_VIDEO_DURATION)),
+        creditCost: estimateVideoCredits(videoModeSelectedModel),
+        modelLabel: String(
+          videoModeSelectedModel?.label || model || DEFAULT_VIDEO_MODEL_ID
+        ),
+        modelIcon: (
+          <ModelBrandIcon
+            model={videoModeSelectedModel || { id: model || DEFAULT_VIDEO_MODEL_ID }}
+            className="h-3.5 w-3.5 shrink-0"
+          />
+        ),
+        modelOpen: videoModelPanelOpen,
+        onModelOpenChange: setVideoModelPanelOpen,
+        modelPanel: (
+          <ModelPickerPanel
+            tab="video"
+            models={models}
+            selectedId={model}
+            status={modelsStatus}
+            onPick={(id) => {
+              setModel(id);
+              setComposerMode('video');
+              setVideoModelPanelOpen(false);
+            }}
+          />
+        ),
+      }
+    : null;
+
   const modelButtonProps = {
     title:
       model === 'auto'
@@ -4104,7 +4401,9 @@ export default function AgentDock({
         modeLabel={
           interactionMode === 'image'
             ? t('agent.interactionImage')
-            : t('agent.interactionAgent')
+            : interactionMode === 'video'
+              ? t('agent.interactionVideo')
+              : t('agent.interactionAgent')
         }
       />
     ),
@@ -4359,6 +4658,7 @@ export default function AgentDock({
                 onInteractionModeChange={applyInteractionMode}
         allowedInteractionModes={enabledInteractionModes}
                 imageModeControls={imageModeControls}
+                videoModeControls={videoModeControls}
                 modelButtonProps={modelButtonProps}
                 {...imageAspectProps}
               />

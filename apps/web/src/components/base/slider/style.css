@@ -1,10 +1,10 @@
-.slider-container {
+.rcb-slider {
   position: relative;
   /* Room for thumb larger than the track */
   min-height: var(--slider-thumb-height, 16px);
 }
 
-.slider-value-tooltip {
+.rcb-slider__tooltip {
   position: absolute;
   top: -42px;
   background: var(--color-background-neutral-base);
@@ -19,7 +19,7 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
-.slider-value-tooltip-arrow {
+.rcb-slider__tooltip-arrow {
   position: absolute;
   left: 50%;
   bottom: -4px;
@@ -34,7 +34,7 @@
  * colors stay black / gray — not accent blue).
  * Input height = thumb; track is painted as a centered pill via background-size.
  */
-.custom-slider {
+.rcb-slider__input {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
@@ -50,24 +50,24 @@
   background-size: 100% var(--slider-track-height, 12px);
 }
 
-.custom-slider:focus,
-.custom-slider:focus-visible {
+.rcb-slider__input:focus,
+.rcb-slider__input:focus-visible {
   outline: none;
 }
 
-.custom-slider:disabled {
+.rcb-slider__input:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
-.custom-slider::-webkit-slider-runnable-track {
+.rcb-slider__input::-webkit-slider-runnable-track {
   height: var(--slider-track-height, 12px);
   border-radius: 9999px;
   background: transparent;
   border: none;
 }
 
-.custom-slider::-webkit-slider-thumb {
+.rcb-slider__input::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: var(--slider-thumb-width, 16px);
@@ -83,18 +83,18 @@
     0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
-.custom-slider:disabled::-webkit-slider-thumb {
+.rcb-slider__input:disabled::-webkit-slider-thumb {
   cursor: default;
 }
 
-.custom-slider::-moz-range-track {
+.rcb-slider__input::-moz-range-track {
   height: var(--slider-track-height, 12px);
   border-radius: 9999px;
   background: transparent;
   border: none;
 }
 
-.custom-slider::-moz-range-thumb {
+.rcb-slider__input::-moz-range-thumb {
   width: var(--slider-thumb-width, 16px);
   height: var(--slider-thumb-height, 16px);
   border-radius: 50%;
@@ -107,12 +107,12 @@
     0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
-.custom-slider:disabled::-moz-range-thumb {
+.rcb-slider__input:disabled::-moz-range-thumb {
   cursor: default;
 }
 
 /* vertical */
-.custom-slider-vertical {
+.rcb-slider__input--vertical {
   writing-mode: vertical-lr;
   direction: rtl;
   height: 100%;

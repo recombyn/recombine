@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
+import { useTranslation } from 'react-i18next';
 import {
   HiOutlineArrowPath,
   HiOutlineArrowsRightLeft,
@@ -17,6 +18,8 @@ type Props = {
   angle: number;
   flipX: boolean;
   flipY: boolean;
+  /** Video: flip only — hide angle readout + 90° rotate. */
+  hideRotate?: boolean;
   downloadSlot?: ReactNode;
 };
 
@@ -33,8 +36,10 @@ export default function FlipRotateToolbar({
   angle,
   flipX,
   flipY,
+  hideRotate = false,
   downloadSlot,
 }: Props): ReactNode {
+  const { t } = useTranslation();
   const dispatch = useDispatch();
   const displayAngle = Math.round(normAngle(angle));
 
@@ -42,44 +47,57 @@ export default function FlipRotateToolbar({
     dispatch(patchDocumentNode({ nodeId, patch: { attrs } }));
   };
 
+  const title = hideRotate
+    ? t('editor.imageToolbar.flip')
+    : t('editor.imageToolbar.flipRotate');
+  const exitLabel = t('editor.exit');
+  const flipH = t('editor.imageToolbar.flipHorizontal');
+  const flipV = t('editor.imageToolbar.flipVertical');
+  const rotate90 = t('editor.imageToolbar.rotate90');
+  const currentAngle = t('editor.imageToolbar.currentAngle');
+
   return (
     <>
       <span className="inline-flex h-8 items-center gap-1.5 px-1.5 text-[12px] font-medium text-[var(--ink)]">
         <MdOutlineFlip className="h-4 w-4 shrink-0" aria-hidden />
-        <span>{'翻转与旋转'}</span>
+        <span>{title}</span>
       </span>
 
       <ImageToolSep />
 
-      <Tooltip tip={'当前角度'} placement="top">
-        <span className="inline-flex h-8 items-center gap-1 px-1.5 text-[12px] tabular-nums text-[var(--ink)]">
-          <span className="relative inline-flex h-3.5 w-3.5 items-end justify-start" aria-hidden>
-            <span className="absolute bottom-0 left-0 h-[10px] w-[10px] rounded-bl-[1px] border-b-2 border-l-2 border-[var(--ink)]" />
-            <span className="absolute bottom-[1px] left-[1px] h-2 w-2 rounded-bl-full border-b border-l border-[var(--ink)] opacity-70" />
-          </span>
-          <span>
-            {displayAngle}
-            {' °'}
-          </span>
-        </span>
-      </Tooltip>
+      {hideRotate ? null : (
+        <>
+          <Tooltip tip={currentAngle} placement="top">
+            <span className="inline-flex h-8 items-center gap-1 px-1.5 text-[12px] tabular-nums text-[var(--ink)]">
+              <span className="relative inline-flex h-3.5 w-3.5 items-end justify-start" aria-hidden>
+                <span className="absolute bottom-0 left-0 h-[10px] w-[10px] rounded-bl-[1px] border-b-2 border-l-2 border-[var(--ink)]" />
+                <span className="absolute bottom-[1px] left-[1px] h-2 w-2 rounded-bl-full border-b border-l border-[var(--ink)] opacity-70" />
+              </span>
+              <span>
+                {displayAngle}
+                {' °'}
+              </span>
+            </span>
+          </Tooltip>
 
-      <ImageToolSep />
+          <ImageToolSep />
 
-      <Tooltip tip={'旋转 90°'} placement="top">
+          <Tooltip tip={rotate90} placement="top">
+            <button
+              type="button"
+              aria-label={rotate90}
+              className={imageToolBtn}
+              onClick={() => patch({ angle: normAngle(angle + 90) })}
+            >
+              <HiOutlineArrowPath className="h-4 w-4" />
+            </button>
+          </Tooltip>
+        </>
+      )}
+      <Tooltip tip={flipH} placement="top">
         <button
           type="button"
-          aria-label={'旋转 90°'}
-          className={imageToolBtn}
-          onClick={() => patch({ angle: normAngle(angle + 90) })}
-        >
-          <HiOutlineArrowPath className="h-4 w-4" />
-        </button>
-      </Tooltip>
-      <Tooltip tip={'水平翻转'} placement="top">
-        <button
-          type="button"
-          aria-label={'水平翻转'}
+          aria-label={flipH}
           className={cn(imageToolBtn, flipX && 'bg-[var(--accent-soft)]')}
           aria-pressed={flipX}
           onClick={() => patch({ flipX: flipX ? 'false' : 'true' })}
@@ -87,10 +105,10 @@ export default function FlipRotateToolbar({
           <HiOutlineArrowsRightLeft className="h-4 w-4" />
         </button>
       </Tooltip>
-      <Tooltip tip={'垂直翻转'} placement="top">
+      <Tooltip tip={flipV} placement="top">
         <button
           type="button"
-          aria-label={'垂直翻转'}
+          aria-label={flipV}
           className={cn(imageToolBtn, flipY && 'bg-[var(--accent-soft)]')}
           aria-pressed={flipY}
           onClick={() => patch({ flipY: flipY ? 'false' : 'true' })}
@@ -105,10 +123,10 @@ export default function FlipRotateToolbar({
 
       <ImageToolSep />
 
-      <Tooltip tip={'退出'} placement="top">
+      <Tooltip tip={exitLabel} placement="top">
         <button
           type="button"
-          aria-label={'退出'}
+          aria-label={exitLabel}
           className={imageToolBtn}
           onClick={() => dispatch(closeImageToolPanel())}
         >

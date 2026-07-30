@@ -25,7 +25,7 @@ import {
   startImageProcess,
   type ImageToolPanelKind,
 } from '@/store/modules/editor';
-import { addNodeToDocument } from '@/components/rcb/scene/sceneDocument';
+import { addNodeToDocument, isVideoGeneratorNode } from '@/components/rcb/scene/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import { imageSrcToFile } from '@/utils/uploadImage';
 import { cn } from '@/utils/classnames';
@@ -132,6 +132,52 @@ function nodeBox(document: any, node: any) {
   };
 }
 
+function isCroppableNode(node: any) {
+  if (!node) return false;
+  if (node.key === 'image') return true;
+  if (node.key === 'video' && !isVideoGeneratorNode(node)) return true;
+  return false;
+}
+
+/** Read normalized video crop fractions from attrs (full frame when unset). */
+function readVideoCropFractions(attrs: Record<string, unknown> | undefined) {
+  const fx = Number(attrs?.cropX);
+  const fy = Number(attrs?.cropY);
+  const fw = Number(attrs?.cropW);
+  const fh = Number(attrs?.cropH);
+  if (
+    Number.isFinite(fx) &&
+    Number.isFinite(fy) &&
+    Number.isFinite(fw) &&
+    Number.isFinite(fh) &&
+    fw > 0 &&
+    fh > 0
+  ) {
+    return { x: fx, y: fy, w: fw, h: fh };
+  }
+  return { x: 0, y: 0, w: 1, h: 1 };
+}
+
+/** Compose on-canvas crop rect with any existing source-space crop fractions. */
+function composeVideoCropFractions(
+  attrs: Record<string, unknown> | undefined,
+  boxW: number,
+  boxH: number,
+  rect: CropRect
+) {
+  const base = readVideoCropFractions(attrs);
+  const rx = rect.x / Math.max(1, boxW);
+  const ry = rect.y / Math.max(1, boxH);
+  const rw = rect.w / Math.max(1, boxW);
+  const rh = rect.h / Math.max(1, boxH);
+  return {
+    cropX: Number((base.x + rx * base.w).toFixed(5)),
+    cropY: Number((base.y + ry * base.h).toFixed(5)),
+    cropW: Number((rw * base.w).toFixed(5)),
+    cropH: Number((rh * base.h).toFixed(5)),
+  };
+}
+
 export const CROP_EXPAND_RATIOS: { id: string; label: string; w: number; h: number }[] = [
   { id: 'original', label: '原始', w: 0, h: 0 },
   { id: '1:1', label: '1:1', w: 1, h: 1 },
@@ -170,11 +216,13 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
       setExpandFrame(null);
       return;
     }
+    // Video siblings already show the prior crop; re-enter with a full-plate frame.
     setCropRect(initialCropRect(box.width, box.height));
     setExpandFrame(initialExpandFrame(box.width, box.height));
     setRatio('original');
     setRatioMenuOpen(false);
     setBusy(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, nodeId, box?.width, box?.height]);
 
   useEffect(() => {
@@ -186,7 +234,14 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
 
   useEffect(() => {
     if (!mode || !nodeId) return;
-    if (!node || node.key !== 'image') dispatch(closeImageToolPanel());
+    if (!isCroppableNode(node)) {
+      dispatch(closeImageToolPanel());
+      return;
+    }
+    // Expand is image-only (outpaint).
+    if (mode === 'expand' && node.key !== 'image') {
+      dispatch(closeImageToolPanel());
+    }
   }, [document, mode, nodeId, node, dispatch]);
 
   // Hooks must run unconditionally — never after the early return below.
@@ -247,11 +302,22 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
     }
   };
 
-  const label = String(node?.attrs?.name || node?.attrs?.title || 'Image');
+  const label = String(
+    node?.attrs?.name || node?.attrs?.title || (node?.key === 'video' ? 'Video' : 'Image')
+  );
   const ratioLabel =
     CROP_EXPAND_RATIOS.find((r) => r.id === ratio)?.label || '原始';
 
-  const spawnSiblingImage = (nextSrc: string, outW: number, outH: number) => {
+  const clearProcessAttrs = (attrs: Record<string, unknown>) => {
+    delete attrs.processStatus;
+    delete attrs.processKind;
+    delete attrs.processLabel;
+    delete attrs.processSourceId;
+    delete attrs.processTargetWidth;
+    delete attrs.processTargetHeight;
+  };
+
+  const spawnSiblingAtCrop = (attrPatch: Record<string, unknown>, outW: number, outH: number) => {
     const gap = 16;
     const id = nanoid(10);
     const clone = JSON.parse(JSON.stringify(node));
@@ -260,13 +326,8 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
     clone.y = Math.round(box.top);
     clone.width = Math.max(1, outW);
     clone.height = Math.max(1, outH);
-    clone.attrs = { ...(clone.attrs || {}), src: nextSrc };
-    delete clone.attrs.processStatus;
-    delete clone.attrs.processKind;
-    delete clone.attrs.processLabel;
-    delete clone.attrs.processSourceId;
-    delete clone.attrs.processTargetWidth;
-    delete clone.attrs.processTargetHeight;
+    clone.attrs = { ...(clone.attrs || {}), ...attrPatch };
+    clearProcessAttrs(clone.attrs);
     return { id, document: addNodeToDocument(document, id, clone) };
   };
 
@@ -274,7 +335,7 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
     if (busy || !nodeId || !box) return;
     const src = String(node?.attrs?.src || '');
     if (!src) {
-      message.error('图片不可用');
+      message.error(node?.key === 'video' ? '视频不可用' : '图片不可用');
       return;
     }
 
@@ -298,6 +359,25 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
     }
 
     if (!cropRect) return;
+
+    // Video: spawn sibling like image crop (display crop, no re-encode).
+    if (node.key === 'video') {
+      const outW = Math.max(1, Math.round(cropRect.w));
+      const outH = Math.max(1, Math.round(cropRect.h));
+      const cropAttrs = composeVideoCropFractions(
+        node.attrs,
+        box.width,
+        box.height,
+        cropRect
+      );
+      const { id, document: next } = spawnSiblingAtCrop(cropAttrs, outW, outH);
+      dispatch(setDocument(next));
+      dispatch(setSelectedNodeIds([id]));
+      dispatch(setSelectedNodeId(id));
+      close();
+      return;
+    }
+
     setBusy(true);
     void (async () => {
       try {
@@ -311,7 +391,7 @@ export default function CropExpandSessionHost({ document }: { document: any }): 
         );
         const outW = Math.max(1, Math.round(cropRect.w));
         const outH = Math.max(1, Math.round(cropRect.h));
-        const { id, document: next } = spawnSiblingImage(nextSrc, outW, outH);
+        const { id, document: next } = spawnSiblingAtCrop({ src: nextSrc }, outW, outH);
         dispatch(setDocument(next));
         dispatch(setSelectedNodeIds([id]));
         dispatch(setSelectedNodeId(id));

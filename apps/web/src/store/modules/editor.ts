@@ -12,8 +12,11 @@ import {
   spawnImageProcessNode,
   spawnImportPlaceholderNode,
   spawnImageUploadPlaceholderNode,
+  spawnVideoUploadPlaceholderNode,
   createImageGeneratorNode,
+  createVideoGeneratorNode,
   promoteImageGeneratorToImage,
+  promoteVideoGeneratorToVideo,
   addNodeToDocument,
   removeNodesFromDocument,
   applyImageDecomposeLayers,
@@ -43,6 +46,9 @@ export type ImageToolPanelKind =
   | 'adjust'
   | 'flipRotate'
   | 'quickEdit';
+
+/** On-canvas video tool sessions (trim timeline). Spatial crop reuses image crop panel. */
+export type VideoToolPanelKind = 'trim';
 
 function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
   const width = Math.max(40, Math.round(partial?.width || 794));
@@ -109,6 +115,7 @@ const initialState = {
   pendingImportPlaceholderId: null as string | null,
   /** Interactive image tool panel docked to the right of the source image (figs 2-5). */
   imageToolPanel: null as null | { nodeId: string; kind: ImageToolPanelKind },
+  videoToolPanel: null as null | { nodeId: string; kind: VideoToolPanelKind },
   /** Fill / stroke panel docked to the right of the selection (hides top chrome while open). */
   shapeStylePanel: null as null | { kind: 'fill' | 'stroke' | 'radius'; nodeIds: string[] },
   /** Shared stroke settings for pen / pencil tools. */
@@ -137,8 +144,9 @@ const initialState = {
   /**
    * Composer canvas pick — next click attaches (group-expanded) to the target.
    * `target`: `'agent'` | `` `node:${nodeId}` ``
+   * `accept`: `'image'` = stills only (image generator / quick-edit); omit/`'media'` allows video.
    */
-  canvasAttachPick: null as null | { target: string },
+  canvasAttachPick: null as null | { target: string; accept?: 'image' | 'media' },
   /** Hover is over a node that cannot be added (generator / shimmer). */
   canvasAttachPickBlocked: false,
   /** Delivered once after a successful pick; composers consume and clear. */
@@ -188,6 +196,7 @@ function clearSelection(state: typeof initialState) {
   state.selectedNodeIds = [];
   state.selectedFrameIds = [];
   state.imageToolPanel = null;
+  state.videoToolPanel = null;
   state.shapeStylePanel = null;
 }
 
@@ -281,6 +290,9 @@ const editorSlice = createSlice({
       if (!action.payload || state.imageToolPanel?.nodeId !== action.payload) {
         state.imageToolPanel = null;
       }
+      if (!action.payload || state.videoToolPanel?.nodeId !== action.payload) {
+        state.videoToolPanel = null;
+      }
       if (
         !action.payload ||
         !state.shapeStylePanel?.nodeIds?.length ||
@@ -298,6 +310,9 @@ const editorSlice = createSlice({
       // Callers that want nodes-only should also dispatch setSelectedFrameIds([]).
       if (!ids[0] || state.imageToolPanel?.nodeId !== ids[0]) {
         state.imageToolPanel = null;
+      }
+      if (!ids[0] || state.videoToolPanel?.nodeId !== ids[0]) {
+        state.videoToolPanel = null;
       }
       const panelIds = state.shapeStylePanel?.nodeIds || [];
       const same =
@@ -383,6 +398,9 @@ const editorSlice = createSlice({
       state.selectedFrameIds = frameIds;
       if (!nodeIds[0] || state.imageToolPanel?.nodeId !== nodeIds[0]) {
         state.imageToolPanel = null;
+      }
+      if (!nodeIds[0] || state.videoToolPanel?.nodeId !== nodeIds[0]) {
+        state.videoToolPanel = null;
       }
       const panelIds = state.shapeStylePanel?.nodeIds || [];
       const same =
@@ -939,6 +957,25 @@ const editorSlice = createSlice({
       state.pendingImageSrc = null;
       state.activeTool = 'select';
     },
+    /** Spawn canvas Video Generator plate at given document coords. */
+    spawnVideoGenerator(state, action) {
+      if (!state.document) return;
+      pushHistory(state);
+      const { id, node } = createVideoGeneratorNode({
+        x: action.payload?.x,
+        y: action.payload?.y,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        name: action.payload?.name,
+      });
+      state.document = addNodeToDocument(state.document, id, node);
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+    },
     /** Convert Image Generator plate → normal image node (same id). */
     /** Pull one multi-gen variant out into a sibling image node (undoable). */
     detachImageVariant(state, action) {
@@ -986,6 +1023,29 @@ const editorSlice = createSlice({
       if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
       syncLibraryOnEdit(state);
     },
+    /** Convert Video Generator plate → normal video node (same id). */
+    finishVideoGenerator(state, action) {
+      const nodeId = String(action.payload?.nodeId || '');
+      const src = String(action.payload?.src || '').trim();
+      if (!state.document || !nodeId || !src) return;
+      pushHistory(state);
+      state.document = promoteVideoGeneratorToVideo(state.document, nodeId, {
+        src,
+        poster: action.payload?.poster,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        x: action.payload?.x,
+        y: action.payload?.y,
+        name: action.payload?.name,
+        genPrompt: action.payload?.genPrompt,
+      });
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = nodeId;
+      state.selectedNodeIds = [nodeId];
+      if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+      syncLibraryOnEdit(state);
+    },
     /** Spawn image node with local preview while remote upload runs. */
     startImageUploadPlaceholder(state, action) {
       if (!state.document) return;
@@ -996,6 +1056,32 @@ const editorSlice = createSlice({
         src,
         width: Number(action.payload?.width) || 200,
         height: Number(action.payload?.height) || 200,
+        label: action.payload?.label || '上传中',
+        x: action.payload?.x,
+        y: action.payload?.y,
+        name: action.payload?.name,
+      });
+      if (!id) return;
+      state.document = next;
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.pendingImageProcessId = id;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+    },
+    /** Spawn video node with local preview while remote upload runs. */
+    startVideoUploadPlaceholder(state, action) {
+      if (!state.document) return;
+      const src = String(action.payload?.src || '');
+      if (!src) return;
+      pushHistory(state);
+      const { document: next, id } = spawnVideoUploadPlaceholderNode(state.document, {
+        src,
+        poster: action.payload?.poster,
+        width: Number(action.payload?.width) || 640,
+        height: Number(action.payload?.height) || 360,
         label: action.payload?.label || '上传中',
         x: action.payload?.x,
         y: action.payload?.y,
@@ -1110,10 +1196,21 @@ const editorSlice = createSlice({
       const { nodeId, kind } = action.payload || {};
       if (!nodeId || !kind) return;
       state.imageToolPanel = { nodeId, kind };
+      state.videoToolPanel = null;
       state.shapeStylePanel = null;
     },
     closeImageToolPanel(state) {
       state.imageToolPanel = null;
+    },
+    openVideoToolPanel(state, action) {
+      const { nodeId, kind } = action.payload || {};
+      if (!nodeId || kind !== 'trim') return;
+      state.videoToolPanel = { nodeId, kind };
+      state.imageToolPanel = null;
+      state.shapeStylePanel = null;
+    },
+    closeVideoToolPanel(state) {
+      state.videoToolPanel = null;
     },
     openShapeStylePanel(state, action) {
       const kind = action.payload?.kind;
@@ -1123,6 +1220,7 @@ const editorSlice = createSlice({
       if ((kind !== 'fill' && kind !== 'stroke' && kind !== 'radius') || !nodeIds.length) return;
       state.shapeStylePanel = { kind, nodeIds };
       state.imageToolPanel = null;
+      state.videoToolPanel = null;
     },
     closeShapeStylePanel(state) {
       state.shapeStylePanel = null;
@@ -1178,14 +1276,18 @@ const editorSlice = createSlice({
     setAgentBusy(state, action) {
       state.agentBusy = Boolean(action.payload);
     },
-    startCanvasAttachPick(state, action: PayloadAction<{ target: string }>) {
+    startCanvasAttachPick(
+      state,
+      action: PayloadAction<{ target: string; accept?: 'image' | 'media' }>
+    ) {
       const target = String(action.payload?.target || '').trim();
       if (!target) {
         state.canvasAttachPick = null;
         state.canvasAttachPickBlocked = false;
         return;
       }
-      state.canvasAttachPick = { target };
+      const accept = action.payload?.accept === 'image' ? 'image' : 'media';
+      state.canvasAttachPick = { target, accept };
       state.canvasAttachPickBlocked = false;
       state.pendingCanvasAttach = null;
     },
@@ -1261,14 +1363,19 @@ export const {
   setCanvasSize,
   setCanvasMeta,
   startImageUploadPlaceholder,
+  startVideoUploadPlaceholder,
   spawnImageGenerator,
+  spawnVideoGenerator,
   finishImageGenerator,
+  finishVideoGenerator,
   detachImageVariant,
   startImageProcess,
   finishImageProcess,
   failImageProcess,
   openImageToolPanel,
   closeImageToolPanel,
+  openVideoToolPanel,
+  closeVideoToolPanel,
   openShapeStylePanel,
   closeShapeStylePanel,
   setPenStrokeColor,

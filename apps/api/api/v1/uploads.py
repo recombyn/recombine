@@ -54,6 +54,10 @@ def _mime_for_key(key: str) -> str:
         (".otf", "font/otf"),
         (".woff", "font/woff"),
         (".woff2", "font/woff2"),
+        (".mp4", "video/mp4"),
+        (".webm", "video/webm"),
+        (".mov", "video/quicktime"),
+        (".m4v", "video/mp4"),
     ):
         if lower.endswith(ext):
             return ctype

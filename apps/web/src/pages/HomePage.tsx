@@ -402,8 +402,8 @@ export default function HomePage() {
         importing={importing}
         onCreate={handleCreate}
       />
-      <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
-        <HomeTopBar setNav={setNav} />
+      <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden md:pl-[76px]">
+        <HomeTopBar setNav={setNav} onCreate={handleCreate} />
         <HomeTemplateList
           nav={nav}
           setNav={setNav}

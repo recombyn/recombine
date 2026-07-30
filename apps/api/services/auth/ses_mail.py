@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
@@ -39,10 +38,6 @@ def ses_configured() -> bool:
         and s.tencent_secret_key.strip()
         and s.ses_from_email.strip()
     )
-
-
-def _b64(text: str) -> str:
-    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 def _sign(key: bytes, msg: str) -> bytes:
@@ -150,6 +145,49 @@ def send_login_link_email(*, to_email: str, username: str, activate_id: str) -> 
     from_email = s.ses_from_email.strip()
     from_name = (s.ses_from_name or "recombyn").strip()
     subject = f"[{from_name}] 登录链接"
+    template_id = int(s.ses_template_id or 0)
+    if template_id <= 0:
+        raise SesError(
+            "SES_TEMPLATE_ID is required (Tencent SES rejects Simple send without permission)"
+        )
+
+    params: dict[str, Any] = {
+        "FromEmailAddress": (
+            f"{from_name} <{from_email}>" if from_name else from_email
+        ),
+        "Destination": [to_email.strip().lower()],
+        "Subject": subject,
+        "TriggerType": 1,
+        "Template": {
+            "TemplateID": template_id,
+            "TemplateData": json.dumps(
+                {
+                    "username": username or "there",
+                    "id": activate_id,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    }
+
+    result = _ses_request("SendEmail", params)
+    message_id = str(result.get("MessageId") or "")
+    logger.info(
+        "SendEmail login-link ok to=%s templateId=%s messageId=%s",
+        to_email,
+        template_id,
+        message_id,
+    )
+    return message_id
+
+
+def send_verification_email(*, to_email: str, code: str) -> str:
+    """Send 6-digit login code via SES template {{username}} / {{id}} (id = code)."""
+    s = _settings()
+    from_email = s.ses_from_email.strip()
+    from_name = (s.ses_from_name or "recombyn").strip()
+    username = (to_email.split("@", 1)[0] or "there").strip()
+    subject = f"[{from_name}] 登录验证码"
     params: dict[str, Any] = {
         "FromEmailAddress": (
             f"{from_name} <{from_email}>" if from_name else from_email
@@ -160,49 +198,29 @@ def send_login_link_email(*, to_email: str, username: str, activate_id: str) -> 
     }
 
     template_id = int(s.ses_template_id or 0)
-    if template_id > 0:
-        params["Template"] = {
-            "TemplateID": template_id,
-            "TemplateData": json.dumps(
-                {
-                    "username": username or "there",
-                    "id": activate_id,
-                },
-                ensure_ascii=False,
-            ),
-        }
-    else:
-        base = (s.ses_activate_base_url or "https://recombyn.com/activate").rstrip("/")
-        link = f"{base}/{activate_id}"
-        text = (
-            f"你好 {username}，\n\n"
-            f"请打开以下链接登录 {from_name}（仅可使用一次，48 小时内有效）：\n"
-            f"{link}\n\n"
-            "如非本人操作，请忽略本邮件。\n"
+    if template_id <= 0:
+        raise SesError(
+            "SES_TEMPLATE_ID is required (Tencent SES rejects Simple send without permission)"
         )
-        html = (
-            '<div style="font-family:system-ui,sans-serif;line-height:1.6">'
-            f"<p>你好 <strong>{username}</strong>，</p>"
-            f"<p>请点击登录 <strong>{from_name}</strong>（仅可使用一次，48 小时内有效）：</p>"
-            f'<p><a href="{link}">{link}</a></p>'
-            '<p style="color:#666">如非本人操作，请忽略本邮件。</p></div>'
-        )
-        params["Simple"] = {
-            "Html": _b64(html),
-            "Text": _b64(text),
-        }
+
+    # Template 210471 vars: {{username}}, {{id}} — for OTP we pass the 6-digit code as id.
+    params["Template"] = {
+        "TemplateID": template_id,
+        "TemplateData": json.dumps(
+            {
+                "username": username,
+                "id": code,
+            },
+            ensure_ascii=False,
+        ),
+    }
 
     result = _ses_request("SendEmail", params)
     message_id = str(result.get("MessageId") or "")
-    logger.info("SendEmail login-link ok to=%s messageId=%s", to_email, message_id)
-    return message_id
-
-
-# Back-compat alias (old verification-code callers).
-def send_verification_email(*, to_email: str, code: str) -> str:
-    """Deprecated: prefer send_login_link_email. Kept for tests / fallbacks."""
-    return send_login_link_email(
-        to_email=to_email,
-        username=to_email.split("@", 1)[0] or "there",
-        activate_id=code,
+    logger.info(
+        "SendEmail login-code ok to=%s templateId=%s messageId=%s",
+        to_email,
+        template_id,
+        message_id,
     )
+    return message_id

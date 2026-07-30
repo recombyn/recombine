@@ -19,6 +19,7 @@ import {
 import { cn } from '@/utils/classnames';
 import { setChatImageDragData } from '@/utils/chatImageDrag';
 import { imageSrcToFile } from '@/utils/uploadImage';
+import VideoJsPlayer from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
 
 export type ChatUiMessage = {
   id: string;
@@ -54,8 +55,12 @@ export type ChatUiMessage = {
   }>;
   /** Seedream / Image-mode results shown as a gallery (not SVG). */
   images?: string[];
+  /** Video-mode results shown as a gallery. */
+  videos?: string[];
   /** While image-gen is running: expected card count for shimmer placeholders. */
   imagePendingCount?: number;
+  /** While video-gen is running: expected card count for shimmer placeholders. */
+  videoPendingCount?: number;
   /** Image-gen aspect (e.g. 9:16) — sizes shimmer / gallery cards. */
   imageAspectRatio?: string;
   /** Image-gen model id — brand icon in the worked-for row. */
@@ -268,10 +273,15 @@ function AssistantProcessBody({
     seen.add(id);
     return true;
   });
+  const turnActive = Boolean(assistant.streaming);
   return (
     <div className="flex w-full flex-col items-stretch gap-2">
       {steps.map((step, i) => (
-        <ProcessStepRow key={`${step.id}-${i}`} step={step} />
+        <ProcessStepRow
+          key={`${step.id}-${i}`}
+          step={step}
+          turnActive={turnActive}
+        />
       ))}
     </div>
   );
@@ -279,8 +289,11 @@ function AssistantProcessBody({
 
 function ProcessStepRow({
   step,
+  turnActive,
 }: {
   step: NonNullable<ChatUiMessage['steps']>[number];
+  /** True while this assistant turn is still streaming — keep process expanded. */
+  turnActive: boolean;
 }): ReactNode {
   const { t } = useTranslation();
   const variant = stepVariant(step);
@@ -289,13 +302,19 @@ function ProcessStepRow({
       step.body?.trim() ||
       (step.summary?.trim() && step.summary.trim() !== step.name.trim())
   );
-  const [open, setOpen] = useState(
-    () => step.status === 'running' || Boolean(step.body?.trim())
-  );
+  // Live turn: expand. Finished turn: collapse (click to re-open).
+  const [open, setOpen] = useState(() => turnActive);
+  const userToggledRef = useRef(false);
 
   useEffect(() => {
-    if (step.status === 'running') setOpen(true);
-  }, [step.status, step.id]);
+    userToggledRef.current = false;
+    setOpen(turnActive);
+  }, [step.id]);
+
+  useEffect(() => {
+    if (userToggledRef.current) return;
+    setOpen(turnActive);
+  }, [turnActive]);
 
   const label = (
     <>
@@ -382,7 +401,10 @@ function ProcessStepRow({
       <button
         type="button"
         className={cn(rowClass, 'hover:text-[var(--ink)]')}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          userToggledRef.current = true;
+          setOpen((v) => !v);
+        }}
         aria-expanded={open}
         title={open ? t('agent.collapseProcess') : t('agent.expandProcess')}
       >
@@ -412,8 +434,14 @@ function AssistantTurn({
   const showImageGallery =
     Boolean(assistant.images?.length) ||
     (Number(assistant.imagePendingCount) || 0) > 0;
+  const showVideoGallery =
+    Boolean(assistant.videos?.length) ||
+    (Number(assistant.videoPendingCount) || 0) > 0;
+  const showMediaGallery = showImageGallery || showVideoGallery;
   const doneMilestone =
-    !streaming && (foldable || showImageGallery) && Boolean(assistant.content || showImageGallery);
+    !streaming &&
+    (foldable || showMediaGallery) &&
+    Boolean(assistant.content || showMediaGallery);
 
   const showAskChoices =
     !streaming &&
@@ -450,6 +478,10 @@ function AssistantTurn({
         <ImageGenGallery assistant={assistant} sending={sending} />
       ) : null}
 
+      {showVideoGallery ? (
+        <VideoGenGallery assistant={assistant} sending={sending} />
+      ) : null}
+
       {assistant.content ? (
         <div className="w-full min-w-0 overflow-x-hidden text-[13px] leading-[1.7] text-[var(--ink)] [&_.chat-md_p:first-child]:font-semibold">
           <ChatMarkdown content={assistant.content} />
@@ -457,7 +489,7 @@ function AssistantTurn({
             <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
           ) : null}
         </div>
-      ) : streaming && !foldable && !showImageGallery ? (
+      ) : streaming && !foldable && !showMediaGallery ? (
         <div className="w-full text-[12px] text-[var(--muted)]">
           {t('agent.working')}
           <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
@@ -561,6 +593,52 @@ function ChatResultImageCard({
         className="pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0"
         imgClassName="!hidden"
       />
+    </div>
+  );
+}
+
+function VideoGenGallery({
+  assistant,
+}: {
+  assistant: ChatUiMessage;
+  sending?: boolean;
+}): ReactNode {
+  const videos = assistant.videos || [];
+  const pending = Math.max(0, Number(assistant.videoPendingCount) || 0);
+  const slots = Math.max(videos.length, pending);
+  if (slots <= 0) return null;
+  const box = cardBoxFromAspect(assistant.imageAspectRatio);
+
+  return (
+    <div className="mt-1 flex max-w-full gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:thin]">
+      {Array.from({ length: slots }, (_, i) => {
+        const src = videos[i];
+        if (src) {
+          return (
+            <div
+              key={`${assistant.id}-vid-${i}`}
+              className="group relative shrink-0 overflow-hidden rounded-lg border border-[var(--line)] bg-black"
+              style={{ width: box.width, height: box.height }}
+            >
+              <VideoJsPlayer
+                src={src}
+                layout="fill"
+                controlsMode="always"
+                muted
+                className="h-full w-full"
+              />
+            </div>
+          );
+        }
+        return (
+          <div
+            key={`${assistant.id}-vshimmer-${i}`}
+            className="chat-image-gen-shimmer shrink-0 rounded-lg border border-[var(--line)]"
+            style={{ width: box.width, height: box.height }}
+            aria-hidden
+          />
+        );
+      })}
     </div>
   );
 }

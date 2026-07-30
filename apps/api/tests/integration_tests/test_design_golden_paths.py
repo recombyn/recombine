@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from services.design.agent_controller import AgentTurnSchema
+from services.design.agent_controller import PaintOpsSchema
 from services.design.catalog import ensure_design_catalog
 from services.design.models_route import IntentClassifyDecision
 from tests.design_harness import collect_design_events, events_by_type
@@ -119,15 +119,32 @@ def test_react_chat_hello(monkeypatch):
 
 @pytest.mark.integration
 def test_react_edit_emits_tool_ops(monkeypatch):
-    """edit/create → design_agent structured turn → action tool_ops SSE."""
+    """edit → decide → paint_ops structured tool_ops → action SSE."""
 
     async def _classify(**_kwargs: Any) -> IntentClassifyDecision:
         return IntentClassifyDecision(intent="edit", reply="", rationale="edit title")
 
+    async def _stream(
+        *,
+        model_family: str,
+        system: str,
+        user: str,
+        rules: dict[str, str],
+        images: list[str] | None = None,
+        max_tokens: int = 1024,
+        enable_thinking: bool = False,
+        live_emit: bool = False,
+    ) -> tuple[str, str, int, list[dict[str, Any]], str]:
+        del system, user, rules, images, max_tokens, enable_thinking, live_emit
+        content = (
+            '{"thought":"加标题","intent":"edit","reply":"好",'
+            '"need_tools":[],"need_skills":[],"tool_ops":[]}'
+        )
+        return model_family, content, 12, [], ""
+
     async def _structured(**_kwargs: Any) -> dict[str, Any]:
         return {
-            "structured": AgentTurnSchema(
-                thought="add title",
+            "structured": PaintOpsSchema(
                 intent="edit",
                 reply="已添加标题",
                 tool_ops=[
@@ -142,13 +159,16 @@ def test_react_edit_emits_tool_ops(monkeypatch):
                         },
                     }
                 ],
-                done=True,
             )
         }
 
     monkeypatch.setattr(
         "services.design.agent_controller.classify_user_intent",
         _classify,
+    )
+    monkeypatch.setattr(
+        "services.design.agent_controller._stream_llm_text",
+        _stream,
     )
     monkeypatch.setattr(
         "services.llm.agent.ainvoke_structured",

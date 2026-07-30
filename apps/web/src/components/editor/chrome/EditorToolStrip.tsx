@@ -20,6 +20,7 @@ import {
   LuTriangle,
   LuType,
 } from 'react-icons/lu';
+import { RiVideoAiLine } from 'react-icons/ri';
 import { Dropdown, Tooltip, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
@@ -28,13 +29,17 @@ import {
   setActiveTool,
   setShapeKind,
   startImageUploadPlaceholder,
+  startVideoUploadPlaceholder,
   spawnImageGenerator,
+  spawnVideoGenerator,
   finishImageProcess,
   failImageProcess,
 } from '@/store/modules/editor';
 import {
+  captureVideoPosterFrame,
   fitImageSize,
   measureImageNaturalSize,
+  measureVideoNaturalSize,
 } from '@/components/rcb/scene/sceneDocument';
 import { sceneToDocumentCoords } from '@/components/rcb/scene/svgToScene';
 import {
@@ -239,6 +244,7 @@ export default function EditorToolStrip({
   const shapeKind = useSelector((state: any) => state.editor.shapeKind);
   const document = useSelector((state: any) => state.editor.document);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
 
   const L = useMemo(
@@ -258,7 +264,9 @@ export default function EditorToolStrip({
       polygon: t('editor.tools.polygon'),
       star: t('editor.tools.star'),
       uploadImage: t('editor.tools.uploadImage'),
+      uploadMedia: t('editor.tools.uploadMedia', { defaultValue: '上传图片/视频' }),
       imageGenerator: t('editor.tools.imageGenerator'),
+      videoGenerator: t('editor.tools.videoGenerator'),
       uploading: t('editor.tools.uploading'),
       uploadFail: t('editor.tools.uploadFail'),
     }),
@@ -341,6 +349,46 @@ export default function EditorToolStrip({
     );
   };
 
+  const spawnVideoGeneratorAtView = () => {
+    if (!document) return;
+    let width = 640;
+    let height = 360;
+    let x = 40;
+    let y = 40;
+    if (camera && stageEl) {
+      const view = stageEl.getBoundingClientRect();
+      if (view.width > 0 && view.height > 0) {
+        const sized = rcbFitImageIntoViewport(
+          { width: 1280, height: 720 },
+          view,
+          camera.zoom,
+          { minRatio: 0.28, maxRatio: 0.48 }
+        );
+        width = sized.width;
+        height = sized.height;
+        const center = rcbScreenToScene(
+          camera,
+          stageEl,
+          view.left + view.width / 2,
+          view.top + view.height / 2
+        );
+        const placed = rcbCenterOnPoint(center, { width, height });
+        const origin = sceneToDocumentCoords(document, placed.left, placed.top);
+        x = origin.x;
+        y = origin.y;
+      }
+    }
+    dispatch(
+      spawnVideoGenerator({
+        x,
+        y,
+        width,
+        height,
+        name: L.videoGenerator,
+      })
+    );
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -348,7 +396,7 @@ export default function EditorToolStrip({
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         target?.isContentEditable ||
-        target?.closest?.('[contenteditable="true"],[data-agent-composer],[data-image-generator]')
+        target?.closest?.('[contenteditable="true"],[data-agent-composer],[data-image-generator],[data-video-generator]')
       ) {
         return;
       }
@@ -368,10 +416,13 @@ export default function EditorToolStrip({
       if (key === 'l' && e.shiftKey) dispatch(setShapeKind('arrow'));
       if (key === 'o' && !e.shiftKey) dispatch(setShapeKind('circle'));
       if (key === 'i' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        imageInputRef.current?.click();
+        mediaInputRef.current?.click();
       }
       if (key === 'a' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
         spawnImageGeneratorAtView();
+      }
+      if (key === 'a' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        spawnVideoGeneratorAtView();
       }
       if (key === 'p' && !e.shiftKey) dispatch(setActiveTool('pen'));
       if (key === 'p' && e.shiftKey) dispatch(setActiveTool('pencil'));
@@ -384,7 +435,35 @@ export default function EditorToolStrip({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // Intentionally stable: always call latest spawn via closure from this render's effect re-run when deps change.
-  }, [camera, dispatch, document, L.imageGenerator, stageEl]);
+  }, [camera, dispatch, document, L.imageGenerator, L.videoGenerator, stageEl]);
+
+  const placeAtViewportCenter = (
+    natural: { width: number; height: number }
+  ): { width: number; height: number; x?: number; y?: number } => {
+    const view = stageEl?.getBoundingClientRect() || null;
+    const placeable =
+      camera && stageEl && document && view && view.width > 0 && view.height > 0
+        ? { camera, stageEl, document, view }
+        : null;
+    const { width, height } = placeable
+      ? rcbFitImageIntoViewport(natural, placeable.view, placeable.camera.zoom)
+      : fitImageSize(natural.width, natural.height, 2400);
+    let x: number | undefined;
+    let y: number | undefined;
+    if (placeable) {
+      const center = rcbScreenToScene(
+        placeable.camera,
+        placeable.stageEl,
+        placeable.view.left + placeable.view.width / 2,
+        placeable.view.top + placeable.view.height / 2
+      );
+      const placed = rcbCenterOnPoint(center, { width, height });
+      const origin = sceneToDocumentCoords(placeable.document, placed.left, placed.top);
+      x = origin.x;
+      y = origin.y;
+    }
+    return { width, height, x, y };
+  };
 
   const onPickImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -393,31 +472,7 @@ export default function EditorToolStrip({
     try {
       const preview = await readFileAsDataUrl(file);
       const natural = await measureImageNaturalSize(preview);
-      const view = stageEl?.getBoundingClientRect() || null;
-      const placeable =
-        camera && stageEl && document && view && view.width > 0 && view.height > 0
-          ? { camera, stageEl, document, view }
-          : null;
-      // Size against the visible viewport so an upload reads the same at any zoom;
-      // soft-cap the long edge only when the stage is not measurable yet.
-      const { width, height } = placeable
-        ? rcbFitImageIntoViewport(natural, placeable.view, placeable.camera.zoom)
-        : fitImageSize(natural.width, natural.height, 2400);
-      let x: number | undefined;
-      let y: number | undefined;
-      // Place at the current visible viewport center (not artboard / world origin).
-      if (placeable) {
-        const center = rcbScreenToScene(
-          placeable.camera,
-          placeable.stageEl,
-          placeable.view.left + placeable.view.width / 2,
-          placeable.view.top + placeable.view.height / 2
-        );
-        const placed = rcbCenterOnPoint(center, { width, height });
-        const origin = sceneToDocumentCoords(placeable.document, placed.left, placed.top);
-        x = origin.x;
-        y = origin.y;
-      }
+      const { width, height, x, y } = placeAtViewportCenter(natural);
       dispatch(
         startImageUploadPlaceholder({
           src: preview,
@@ -443,8 +498,63 @@ export default function EditorToolStrip({
     }
   };
 
+  const onPickMedia = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.type.startsWith('video/')) {
+      try {
+        const preview = await readFileAsDataUrl(file);
+        const natural = await measureVideoNaturalSize(preview);
+        const { width, height, x, y } = placeAtViewportCenter({
+          width: natural.width,
+          height: natural.height,
+        });
+        let poster = '';
+        try {
+          poster = await captureVideoPosterFrame(preview);
+        } catch {
+          /* optional */
+        }
+        dispatch(
+          startVideoUploadPlaceholder({
+            src: preview,
+            poster,
+            width,
+            height,
+            x,
+            y,
+            label: L.uploading,
+            name: file.name?.replace(/\.[^.]+$/, '') || 'Video',
+          })
+        );
+        const uploaded = await uploadImageFile(file);
+        dispatch(
+          finishImageProcess({
+            src: uploaded.url,
+            attrs: {
+              ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
+              ...(poster ? { poster } : {}),
+              assetKind: 'video',
+            },
+          })
+        );
+      } catch (err: any) {
+        dispatch(failImageProcess({}));
+        const detail = err?.response?.data?.detail || err?.message || L.uploadFail;
+        message.error(typeof detail === 'string' ? detail : L.uploadFail);
+      }
+      return;
+    }
+    // Image (or unknown → treat as image upload path).
+    const synthetic = {
+      target: { files: [file], value: '' },
+    } as unknown as React.ChangeEvent<HTMLInputElement>;
+    await onPickImage(synthetic);
+  };
+
   const openImageUpload = () => {
-    imageInputRef.current?.click();
+    mediaInputRef.current?.click();
   };
 
   const pickSelect = (key: string) => {
@@ -585,9 +695,9 @@ export default function EditorToolStrip({
         </ToolIcon>
       </ToolBtn>
 
-      {/* 图片上传 */}
+      {/* 图片/视频上传 */}
       <ToolBtn
-        tip={L.uploadImage}
+        tip={L.uploadMedia}
         active={imageActive}
         onClick={openImageUpload}
       >
@@ -608,12 +718,26 @@ export default function EditorToolStrip({
         </ToolIcon>
       </ToolBtn>
 
+      {/* 视频生成器 — Remix fill reads heavier than Lucide strokes; soften to match. */}
+      <ToolBtn tip={L.videoGenerator} onClick={spawnVideoGeneratorAtView}>
+        <ToolIcon className="h-[18px] w-[18px]">
+          <RiVideoAiLine className="opacity-[0.72]" />
+        </ToolIcon>
+      </ToolBtn>
+
       <input
         ref={imageInputRef}
         type="file"
         accept="image/*"
         className="hidden"
         onChange={onPickImage}
+      />
+      <input
+        ref={mediaInputRef}
+        type="file"
+        accept="image/*,video/*"
+        className="hidden"
+        onChange={onPickMedia}
       />
       </FloatingToolbar>
     </div>

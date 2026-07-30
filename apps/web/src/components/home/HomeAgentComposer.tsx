@@ -19,6 +19,7 @@ import { Icon } from '@/components/base/icon';
 import AgentComposerShell, {
   type ComposerInteractionMode,
   type ImageModeComposerControls,
+  type VideoModeComposerControls,
 } from '@/components/editor/panels/agent/AgentComposerShell';
 import {
   chipBaseKey,
@@ -36,6 +37,7 @@ import {
 } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
 import ModelPickerPanel, {
   isImageKind,
+  isVideoKind,
   modelDescription,
   modelTabOf,
   ModelBrandIcon,
@@ -56,9 +58,15 @@ import {
 } from '@/utils/uploadImage';
 import { message } from '@/components/base';
 import { useSelector } from 'react-redux';
-import { estimateImageCredits } from '@/utils/imageCredits';
+import { estimateImageCredits, parsePriceAmount } from '@/utils/imageCredits';
 
-export type HomeAgentCategory = 'website' | 'mobile' | 'image' | 'poster' | 'drawing';
+export type HomeAgentCategory =
+  | 'website'
+  | 'mobile'
+  | 'image'
+  | 'poster'
+  | 'drawing'
+  | 'video';
 
 export type HomeAgentSubmitPayload = {
   prompt: string;
@@ -78,10 +86,11 @@ type Props = {
   onCategoryChange?: (category: HomeAgentCategory) => void;
 };
 
-/** Merge catalog + imageModels; normalize kind (same as AgentDock). */
+/** Merge catalog + imageModels + videoModels; normalize kind (same as AgentDock). */
 function normalizeModelList(
   models: LlmModel[] | undefined,
-  imageModels?: LlmModel[] | null
+  imageModels?: LlmModel[] | null,
+  videoModels?: LlmModel[] | null
 ): LlmModel[] {
   const byId = new Map<string, LlmModel>();
   for (const m of models || []) {
@@ -92,15 +101,42 @@ function normalizeModelList(
     if (!m?.id) continue;
     byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
   }
+  for (const m of videoModels || []) {
+    if (!m?.id) continue;
+    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'video' });
+  }
   return [...byId.values()]
     .filter((m) => isVolcanoCatalogModel(m))
     .map((m) => {
+      if (isVideoKind(m)) {
+        return { ...m, kind: 'video' as const };
+      }
       if (isImageKind(m)) {
         return { ...m, kind: 'image' as const };
       }
       if (m.kind === 'svg') return { ...m, kind: 'text' as const };
       return { ...m, kind: (m.kind || 'text') as LlmModel['kind'] };
     });
+}
+
+const DEFAULT_VIDEO_ASPECT_RATIO = '16:9';
+const DEFAULT_VIDEO_RESOLUTION = '720p';
+const DEFAULT_VIDEO_DURATION = 5;
+const DEFAULT_VIDEO_MODEL_ID = 'or-seedance-2-0-fast';
+
+function estimateVideoCredits(model?: LlmModel | null): number {
+  const price = parsePriceAmount(model?.price);
+  if (price == null || price <= 0) return 8;
+  return Math.max(1, Math.ceil(price * (200 / 29) * 1.2));
+}
+
+function pickPreferredVideoModelId(models: LlmModel[]): string {
+  const videos = models.filter((m) => isVideoKind(m));
+  return (
+    videos.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID)?.id ||
+    videos[0]?.id ||
+    DEFAULT_VIDEO_MODEL_ID
+  );
 }
 
 function aspectRatioForCategory(category: HomeAgentCategory): string {
@@ -113,6 +149,8 @@ function aspectRatioForCategory(category: HomeAgentCategory): string {
       return '1080x1080';
     case 'image':
       return DEFAULT_IMAGE_ASPECT_RATIO as string;
+    case 'video':
+      return DEFAULT_VIDEO_ASPECT_RATIO;
     case 'website':
     default:
       return '1440x900';
@@ -122,7 +160,8 @@ function aspectRatioForCategory(category: HomeAgentCategory): string {
 function designSceneCategoryOf(
   category: HomeAgentCategory
 ): 'website' | 'mobile' | 'image' | 'poster' {
-  return category === 'drawing' ? 'image' : category;
+  if (category === 'drawing' || category === 'video') return 'image';
+  return category;
 }
 
 function pickPreferredImageModelId(models: LlmModel[]): string {
@@ -239,7 +278,7 @@ function useTypewriterCycle(phrases: string[], enabled = true): string {
 export default function HomeAgentComposer({
   onSubmit,
   className,
-  category = 'website',
+  category = 'poster',
   onCategoryChange,
 }: Props): ReactNode {
   const { t, i18n } = useTranslation();
@@ -251,24 +290,42 @@ export default function HomeAgentComposer({
   const [models, setModels] = useState<LlmModel[]>([]);
   const [modelId, setModelId] = useState('auto');
   const [modelTab, setModelTab] = useState<ModelPickerTab>(
-    category === 'image' ? 'image' : 'design'
+    category === 'image' ? 'image' : category === 'video' ? 'video' : 'design'
   );
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [modelOpen, setModelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [interactionMode, setInteractionMode] = useState<ComposerInteractionMode>(
-    category === 'image' ? 'image' : 'agent'
+    category === 'image' ? 'image' : category === 'video' ? 'video' : 'agent'
   );
   const [imageModelPanelOpen, setImageModelPanelOpen] = useState(false);
+  const [videoModelPanelOpen, setVideoModelPanelOpen] = useState(false);
   const [imageResolution, setImageResolution] = useState(DEFAULT_IMAGE_RESOLUTION);
   const [imageGenAspectRatio, setImageGenAspectRatio] = useState(DEFAULT_IMAGE_ASPECT_RATIO);
   const [imageGenCount, setImageGenCount] = useState(DEFAULT_IMAGE_COUNT);
+  const [videoResolution, setVideoResolution] = useState(DEFAULT_VIDEO_RESOLUTION);
+  const [videoGenAspectRatio, setVideoGenAspectRatio] = useState(DEFAULT_VIDEO_ASPECT_RATIO);
+  const [videoGenDuration, setVideoGenDuration] = useState(DEFAULT_VIDEO_DURATION);
   const contextsRef = useRef(contexts);
   contextsRef.current = contexts;
   const [imageAspectRatio, setImageAspectRatio] = useState(() =>
     aspectRatioForCategory(category)
   );
+
+  const enterVideoMode = (nextModels: LlmModel[] = models) => {
+    setInteractionMode('video');
+    setModelTab('video');
+    setModelOpen(false);
+    setModelId(canPickModel ? pickPreferredVideoModelId(nextModels) : DEFAULT_VIDEO_MODEL_ID);
+  };
+
+  const leaveVideoMode = () => {
+    setInteractionMode((m) => (m === 'video' ? 'agent' : m));
+    setModelTab('design');
+    setModelId('auto');
+    setVideoModelPanelOpen(false);
+  };
 
   const enterImageMode = (nextModels: LlmModel[] = models) => {
     setInteractionMode('image');
@@ -286,9 +343,17 @@ export default function HomeAgentComposer({
 
   useEffect(() => {
     setImageAspectRatio(aspectRatioForCategory(category));
-    // Hero Image tab ↔ editor Chat Image mode (same AgentComposerShell chrome).
-    if (category === 'image') enterImageMode();
-    else leaveImageMode();
+    // Hero Image / Video tabs ↔ composer interaction chrome.
+    if (category === 'image') {
+      leaveVideoMode();
+      enterImageMode();
+    } else if (category === 'video') {
+      leaveImageMode();
+      enterVideoMode();
+    } else {
+      leaveImageMode();
+      leaveVideoMode();
+    }
     // Only react to category — models list is read at switch time.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [category, canPickModel]);
@@ -335,7 +400,7 @@ export default function HomeAgentComposer({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const list = normalizeModelList(res?.models, res?.imageModels);
+        const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
         setModels(list);
         setModelsStatus('ready');
         setModelId((prev) => resolveModelIdAfterCatalogLoad(prev, list, canPickModel));
@@ -356,9 +421,13 @@ export default function HomeAgentComposer({
     modelId === 'auto'
       ? ({ id: 'auto', label: 'Auto', provider: 'system', kind: 'text' } as LlmModel)
       : models.find((x) => x.id === modelId);
+  const isVideoInteraction = interactionMode === 'video';
+  const isVideoModelSelected =
+    isVideoInteraction || modelTab === 'video' || modelTabOf(selectedModel) === 'video';
   const isImageInteraction = interactionMode === 'image';
   const isImageModelSelected =
-    isImageInteraction || modelTab === 'image' || modelTabOf(selectedModel) === 'image';
+    !isVideoInteraction &&
+    (isImageInteraction || modelTab === 'image' || modelTabOf(selectedModel) === 'image');
   const modelTitle = useMemo(() => {
     if (modelId === 'auto') {
       return modelDescription(
@@ -380,7 +449,7 @@ export default function HomeAgentComposer({
   const attachmentLimit = agentAttachmentLimit({
     models,
     modelId,
-    isImageMode: isImageModelSelected,
+    isImageMode: isImageModelSelected || isVideoModelSelected,
     routedImageId: routeOverridesForApi(loadAgentRoutePrefs())?.image,
     freeImageId: FREE_IMAGE_MODEL_ID,
   });
@@ -432,9 +501,52 @@ export default function HomeAgentComposer({
       }
     : null;
 
+  const videoModels = models.filter((m) => isVideoKind(m));
+  const videoModeSelectedModel =
+    videoModels.find((m) => m.id === modelId) ||
+    videoModels.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID) ||
+    videoModels[0];
+  const videoModeControls: VideoModeComposerControls | null = isVideoInteraction
+    ? {
+        resolution: videoResolution,
+        aspectRatio: videoGenAspectRatio,
+        duration: videoGenDuration,
+        onResolutionChange: (r) => setVideoResolution(r),
+        onAspectRatioChange: (r) => setVideoGenAspectRatio(r),
+        onDurationChange: (d) =>
+          setVideoGenDuration(Math.max(1, Math.round(d) || DEFAULT_VIDEO_DURATION)),
+        creditCost: estimateVideoCredits(videoModeSelectedModel),
+        modelLabel: String(
+          videoModeSelectedModel?.label || modelId || DEFAULT_VIDEO_MODEL_ID
+        ),
+        modelIcon: (
+          <ModelBrandIcon
+            model={videoModeSelectedModel || { id: modelId || DEFAULT_VIDEO_MODEL_ID }}
+            className="h-3.5 w-3.5 shrink-0"
+          />
+        ),
+        modelOpen: videoModelPanelOpen,
+        onModelOpenChange: setVideoModelPanelOpen,
+        modelPanel: (
+          <ModelPickerPanel
+            tab="video"
+            models={models}
+            selectedId={modelId}
+            status={modelsStatus}
+            autoOnly={!canPickModel}
+            onPick={(id) => {
+              setModelId(id);
+              setModelTab('video');
+              setVideoModelPanelOpen(false);
+            }}
+          />
+        ),
+      }
+    : null;
+
   const imageAspectProps = {
-    // Design canvas size chip — hidden in Image chat mode (settings chip takes over).
-    showDesignSizePicker: !isImageInteraction,
+    // Design canvas size chip — hidden in Image / Video chat mode.
+    showDesignSizePicker: !isImageInteraction && !isVideoInteraction,
     imageAspectRatio,
     onImageAspectRatioChange: setImageAspectRatio,
     aspectMenuPlacement: 'bottom-start' as const,
@@ -464,7 +576,7 @@ export default function HomeAgentComposer({
       isImageModelSelected,
       modelId,
     });
-    const isImage = resolveHomeIsImageSubmit({
+    const isImage = !isVideoInteraction && resolveHomeIsImageSubmit({
       isImageInteraction,
       canPickModel,
       category,
@@ -476,11 +588,15 @@ export default function HomeAgentComposer({
       prompt,
       attachments: contexts.filter((c) => c.kind === 'attachment'),
       modelId: resolvedModelId === 'auto' ? undefined : resolvedModelId || undefined,
-      interactionMode: isImage ? 'image' : interactionMode,
+      interactionMode: isVideoInteraction ? 'video' : isImage ? 'image' : interactionMode,
       category,
-      scene: isImage ? 'image' : category,
+      scene: isVideoInteraction ? null : isImage ? 'image' : category === 'video' ? null : category,
       // Design canvas size for agent scenes; image-gen ratio for Image chat mode.
-      imageAspectRatio: isImage ? String(imageGenAspectRatio) : imageAspectRatio,
+      imageAspectRatio: isImage
+        ? String(imageGenAspectRatio)
+        : isVideoInteraction
+          ? String(videoGenAspectRatio)
+          : imageAspectRatio,
     });
   };
 
@@ -494,7 +610,11 @@ export default function HomeAgentComposer({
 
     const accepted: File[] = [];
     for (const file of files.slice(0, slots)) {
-      if (!file.type.startsWith('image/')) continue;
+      if (isVideoInteraction) {
+        if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) continue;
+      } else if (!file.type.startsWith('image/')) {
+        continue;
+      }
       if (file.size > MAX) {
         message.warning(t('agent.attachTooLarge', { name: file.name }));
         continue;
@@ -722,16 +842,24 @@ export default function HomeAgentComposer({
             enterImageMode();
             return;
           }
-          if (category === 'image') {
-            // Leave Image tab when leaving Image mode (restore last design category in parent).
+          if (mode === 'video') {
+            onCategoryChange?.('video');
+            enterVideoMode();
+            return;
+          }
+          if (category === 'image' || category === 'video') {
+            // Leave Image/Video tab when leaving that mode (restore last design category in parent).
             onCategoryChange?.('poster');
           }
+          leaveVideoMode();
+          leaveImageMode();
           setInteractionMode(mode);
           setImageModelPanelOpen(false);
           setModelId('auto');
           setModelTab('design');
         }}
         imageModeControls={imageModeControls}
+        videoModeControls={videoModeControls}
         {...imageAspectProps}
         modelButtonProps={{
           title: modelTitle,

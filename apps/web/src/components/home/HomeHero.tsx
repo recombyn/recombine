@@ -2,11 +2,12 @@ import type { ReactNode } from 'react';
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  HiOutlineComputerDesktop,
   HiOutlineDevicePhoneMobile,
   HiOutlinePhoto,
   HiOutlineRectangleStack,
+  HiOutlineVideoCamera,
 } from 'react-icons/hi2';
+import AppLogo from '@/components/base/AppLogo';
 import { SegmentedControl } from '@/components/base/segmented';
 import HomeAgentComposer, {
   type HomeAgentCategory,
@@ -20,42 +21,56 @@ type Props = {
 
 const CATEGORIES: Array<{
   id: HomeAgentCategory;
-  icon: typeof HiOutlineComputerDesktop;
+  icon: typeof HiOutlinePhoto;
   labelKey: string;
 }> = [
   { id: 'poster', icon: HiOutlineRectangleStack, labelKey: 'homeCategories.poster' },
   { id: 'mobile', icon: HiOutlineDevicePhoneMobile, labelKey: 'homeCategories.mobile' },
-  { id: 'website', icon: HiOutlineComputerDesktop, labelKey: 'homeCategories.website' },
   { id: 'image', icon: HiOutlinePhoto, labelKey: 'homeCategories.image' },
+  { id: 'video', icon: HiOutlineVideoCamera, labelKey: 'homeCategories.video' },
 ];
 
 function resolveHeroLang(langRaw: string) {
   const lang = langRaw || '';
   const isZh = lang === 'zh-CN' || lang === 'zh-TW' || lang.startsWith('zh');
   const isJa = lang === 'ja' || lang.startsWith('ja');
-  return { isZh, isJa, isLatinHero: !isZh && !isJa };
+  return { isZh, isJa };
+}
+
+/** Logo + brand name — same line weight as tagline (Lovart-style). */
+function HeroBrandMark({ size }: { size: number }) {
+  const { t } = useTranslation();
+  return (
+    <span className="inline-flex items-center gap-[0.22em] align-middle">
+      {/* Decorative; brand name follows for screen readers. */}
+      <span aria-hidden className="inline-flex">
+        <AppLogo size={size} className="translate-y-[0.02em]" />
+      </span>
+      <span>{t('app.name').toLowerCase()}</span>
+    </span>
+  );
 }
 
 /**
- * Home hero — fig2: brand + tagline title, one-click lead, category pills, composer.
+ * Home hero — EN: "{tagline} with [logo] Brand"; other locales: "[logo] Brand {tagline}".
  */
 export default function HomeHero({ onSubmit }: Props): ReactNode {
   const { t, i18n } = useTranslation();
   const [category, setCategory] = useState<HomeAgentCategory>('poster');
   const lastDesignCategoryRef = useRef<HomeAgentCategory>('poster');
-  const { isZh, isJa, isLatinHero } = resolveHeroLang(
+  const { isZh, isJa } = resolveHeroLang(
     i18n.resolvedLanguage || i18n.language || ''
   );
 
   const setCategorySafe = (next: HomeAgentCategory) => {
-    if (next !== 'image') lastDesignCategoryRef.current = next;
+    if (next !== 'image' && next !== 'video') lastDesignCategoryRef.current = next;
     setCategory(next);
   };
 
-  /** Composer Image mode ↔ hero tabs. */
+  /** Composer Image / Video mode ↔ hero tabs. */
   const onComposerCategoryChange = (next: HomeAgentCategory) => {
-    if (next === 'image') {
-      setCategory('image');
+    if (next === 'image' || next === 'video') {
+      setCategory(next);
       return;
     }
     setCategorySafe(lastDesignCategoryRef.current || 'poster');
@@ -80,30 +95,24 @@ export default function HomeHero({ onSubmit }: Props): ReactNode {
     [t, category]
   );
 
+  const logoPx = 24;
+  const prefix = t('app.heroLinePrefix');
+  const suffix = t('app.heroLineSuffix');
+
   return (
     <section className="relative mx-auto mb-8 flex w-full max-w-[760px] shrink-0 flex-col items-center self-center px-1 pb-2 pt-[190px] text-center sm:mb-12 md:mb-[65px]">
       <div className="mb-6 flex w-full flex-col items-center">
         <h1
           className={cn(
-            'flex flex-col items-center font-bold text-[var(--ink)] sm:block',
-            isLatinHero
-              ? 'text-[48px] leading-[1.12] tracking-[-0.02em] sm:text-[56px]'
-              : 'text-[40px] leading-[1.2] tracking-[0.02em] sm:text-[48px]'
+            'inline-flex flex-wrap items-center justify-center gap-x-[0.35em] gap-y-1 font-medium text-[var(--ink)]',
+            'text-[26px] leading-[1.3] tracking-[-0.01em] sm:text-[28px] sm:leading-[1.25]',
+            (isZh || isJa) && 'tracking-[0.01em]'
           )}
+          style={{ fontFamily: 'var(--font-hero)' }}
         >
-          <span
-            className="tracking-[-0.02em] sm:inline"
-            style={{ fontFamily: 'var(--font-hero-en)' }}
-          >
-            {t('app.name')}
-          </span>
-          <span className="hidden sm:inline"> </span>
-          <span
-            className="sm:inline"
-            style={{ fontFamily: isLatinHero ? 'var(--font-hero-en)' : 'var(--font-hero)' }}
-          >
-            {t('app.tagline')}
-          </span>
+          {prefix ? <span>{prefix}</span> : null}
+          <HeroBrandMark size={logoPx} />
+          {suffix ? <span>{suffix}</span> : null}
         </h1>
         <p
           className={cn(

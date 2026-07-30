@@ -14,7 +14,7 @@ from config.settings import settings
 from services.db import connect, dialect, init_schema
 
 _PBKDF2_ROUNDS = 260_000
-_CODE_TTL_SECONDS = 10 * 60
+_CODE_TTL_SECONDS = 5 * 60
 _TICKET_TTL_SECONDS = 15 * 60
 _CODE_COOLDOWN_SECONDS = 55
 _ACTIVATE_TTL_SECONDS = 48 * 60 * 60

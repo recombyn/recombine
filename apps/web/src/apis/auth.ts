@@ -28,7 +28,7 @@ export const loginGoogle = (payload: {
     data: payload,
   });
 
-/** Send magic-link login email via Tencent SES. */
+/** Send 6-digit email verification code via Tencent SES. */
 export const sendEmailCode = (data: { email: string; captchaToken?: string }) =>
   request<{ ok: boolean; expiresIn: number; mode?: string }>({
     url: '/api/v1/auth/email/send-code',
@@ -36,7 +36,7 @@ export const sendEmailCode = (data: { email: string; captchaToken?: string }) =>
     data,
   });
 
-/** Consume /activate/:id one-time link → session. */
+/** Consume /activate/:id one-time link → session (legacy magic-link mails). */
 export const activateEmailLink = (data: { id: string }) =>
   request<{ user: AuthUserDto; token: string }>({
     url: '/api/v1/auth/email/activate',
@@ -44,7 +44,7 @@ export const activateEmailLink = (data: { id: string }) =>
     data,
   });
 
-/** Legacy: verify 6-digit code → session. Prefer activateEmailLink. */
+/** Verify 6-digit code → session. */
 export const verifyEmailCode = (data: {
   email: string;
   code: string;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation, Trans } from 'react-i18next';
 import { Button, Checkbox, Input, message, Dialog } from '@/components/base';
@@ -7,9 +7,11 @@ import AppLogo from '@/components/base/AppLogo';
 import {
   createSliderCaptcha,
   sendEmailCode,
+  verifyEmailCode,
   verifySliderCaptcha,
   type SliderCaptchaChallenge,
 } from '@/apis/auth';
+import { setSession } from '@/store/modules/auth';
 import { cn } from '@/utils/classnames';
 import { isLoginOpen, readReturnToParam } from '@/utils/authReturnTo';
 import { docsUrl } from '@/utils/docsUrl';
@@ -415,7 +417,9 @@ type LoginDialogProps = {
 
 export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
   const { t } = useTranslation();
+  const dispatch = useDispatch();
   const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
   const [codeSent, setCodeSent] = useState(false);
   const [resendLeft, setResendLeft] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -434,6 +438,7 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
   useEffect(() => {
     if (!open) {
       setEmail('');
+      setCode('');
       setCodeSent(false);
       setResendLeft(0);
       setBusy(false);
@@ -478,9 +483,31 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
     queueMicrotask(() => resume?.());
   };
 
-  // returnTo / onSuccess used when session is established via magic link on Activate page.
-  void returnTo;
-  void onSuccess;
+  const finishLogin = (user: {
+    email: string;
+    name: string;
+    provider: 'email' | 'google';
+    avatar?: string | null;
+    id?: string;
+    role?: string;
+  }, token: string) => {
+    dispatch(
+      setSession({
+        user: {
+          email: user.email,
+          name: user.name,
+          provider: user.provider,
+          avatar: user.avatar,
+          id: user.id,
+          role: user.role,
+        },
+        token,
+      })
+    );
+    message.success(t('auth.success'));
+    onSuccess?.(returnTo);
+    onClose();
+  };
 
   const openCaptcha = (resume: 'send-code') => {
     setCaptchaResume(resume);
@@ -518,6 +545,7 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
       message.error(t('auth.invalidEmail'));
       return;
     }
+    if (resendLeft > 0) return;
     setBusy(true);
     try {
       await trySendCode(pendingCaptchaToken);
@@ -529,24 +557,41 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
     }
   };
 
-  const resendCode = async () => {
-    if (resendLeft > 0) return;
-    if (!ensureAgreedTerms(() => void resendCode())) return;
+  const onLogin = async () => {
+    if (!ensureAgreedTerms(() => void onLogin())) return;
+    const trimmed = email.trim().toLowerCase();
+    const codeTrim = code.trim();
+    if (!trimmed || !trimmed.includes('@')) {
+      message.error(t('auth.invalidEmail'));
+      return;
+    }
+    if (!/^\d{6}$/.test(codeTrim)) {
+      message.error(t('auth.codeNeedSix'));
+      return;
+    }
     setBusy(true);
     try {
-      const body: { email: string; captchaToken?: string } = {
-        email: email.trim().toLowerCase(),
+      const body: { email: string; code: string; captchaToken?: string } = {
+        email: trimmed,
+        code: codeTrim,
       };
       if (pendingCaptchaToken) body.captchaToken = pendingCaptchaToken;
-      await sendEmailCode(body);
+      const res = await verifyEmailCode(body);
       setPendingCaptchaToken(null);
-      setShowCaptcha(false);
-      setCaptchaResume(null);
-      startResendCooldown();
-      message.success(t('auth.resent'));
+      finishLogin(
+        {
+          email: res.user.email,
+          name: res.user.name,
+          provider: 'email',
+          avatar: res.user.avatar,
+          id: res.user.id,
+          role: res.user.role,
+        },
+        res.token
+      );
     } catch (err) {
       if (isNeedCaptcha(err)) openCaptcha('send-code');
-      else message.error(apiDetail(err) || t('auth.sendFailed'));
+      else message.error(apiDetail(err) || t('auth.codeInvalid'));
     } finally {
       setBusy(false);
     }
@@ -566,23 +611,9 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
           onVerified={(token) => {
             setPendingCaptchaToken(token);
             setShowCaptcha(false);
-            const resume = captchaResume;
             setCaptchaResume(null);
             setBusy(true);
-            const runAfterCaptcha = (): Promise<void> => {
-              if (codeSent) {
-                return sendEmailCode({
-                  email: email.trim().toLowerCase(),
-                  captchaToken: token,
-                }).then(() => {
-                  setPendingCaptchaToken(null);
-                  startResendCooldown();
-                  message.success(t('auth.resent'));
-                });
-              }
-              return trySendCode(token);
-            };
-            void runAfterCaptcha()
+            void trySendCode(token)
               .catch((err: unknown) => {
                 if (isNeedCaptcha(err)) openCaptcha('send-code');
                 else message.error(apiDetail(err) || t('auth.sendFailed'));
@@ -685,59 +716,47 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
                   inputType="email"
                   placeholder={t('auth.emailPlaceholder')}
                   value={email}
-                  disabled={codeSent}
                   onChange={(e) => setEmail(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !codeSent) void onGetCode();
+                    if (e.key === 'Enter') void onGetCode();
                   }}
                   className="!h-11 !rounded-lg !border-[#e5e5e5] !bg-white !px-3.5 !text-[#1a1a1a] placeholder:!text-[#aaa]"
                 />
 
-                {codeSent ? (
-                  <div className="rounded-lg border border-[#eee] bg-[#fafafa] px-3.5 py-3 text-[13px] leading-relaxed text-[#555]">
-                    <p className="font-medium text-[#1a1a1a]">{t('auth.checkEmailTitle')}</p>
-                    <p className="mt-1.5">
-                      {t('auth.checkEmailHint', { email })}
-                    </p>
-                    <div className="mt-3 flex items-center gap-3">
-                      <button
-                        type="button"
-                        disabled={busy || resendLeft > 0}
-                        onClick={() => void resendCode()}
-                        className={cn(
-                          'text-[13px] font-medium text-[#333] transition hover:text-[#111]',
-                          (busy || resendLeft > 0) &&
-                            'cursor-not-allowed opacity-50 hover:text-[#333]',
-                        )}
-                      >
-                        {busy
-                          ? t('auth.sending')
-                          : resendLeft > 0
-                            ? t('auth.resendIn', { seconds: resendLeft })
-                            : t('auth.resend')}
-                      </button>
-                      <button
-                        type="button"
-                        className="text-[13px] text-[#888] underline-offset-2 hover:underline"
-                        onClick={() => {
-                          setCodeSent(false);
-                          setResendLeft(0);
-                        }}
-                      >
-                        {t('auth.backEmail')}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <Button
-                    type="primary"
-                    className="!h-11 !w-full !rounded-lg !border-none !bg-[#1a1a1a] !text-[14px] !font-medium !text-white hover:!bg-[#333]"
-                    disabled={busy}
+                <div className="relative">
+                  <Input
+                    size="large"
+                    type="outlined"
+                    inputType="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder={t('auth.codePlaceholder')}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void onLogin();
+                    }}
+                    className="!h-11 !rounded-lg !border-[#e5e5e5] !bg-white !px-3.5 !pr-24 !text-[#1a1a1a] placeholder:!text-[#aaa]"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || resendLeft > 0}
                     onClick={() => void onGetCode()}
+                    className={cn(
+                      'absolute right-3 top-1/2 -translate-y-1/2 text-[13px] font-medium text-[#333] transition hover:text-[#111]',
+                      (busy || resendLeft > 0) && 'cursor-not-allowed opacity-50 hover:text-[#333]',
+                    )}
                   >
-                    {busy ? t('auth.sending') : t('auth.getCode')}
-                  </Button>
-                )}
+                    {busy
+                      ? t('auth.sending')
+                      : resendLeft > 0
+                        ? t('auth.resendIn', { seconds: resendLeft })
+                        : codeSent
+                          ? t('auth.resend')
+                          : t('auth.getCode')}
+                  </button>
+                </div>
 
                 <label className="flex items-start gap-2.5 text-[12px] leading-relaxed text-[#999]">
                   <Checkbox
@@ -775,6 +794,15 @@ export function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogP
                     />
                   </span>
                 </label>
+
+                <Button
+                  type="primary"
+                  className="!h-11 !w-full !rounded-lg !border-none !bg-[#1a1a1a] !text-[14px] !font-medium !text-white hover:!bg-[#333]"
+                  disabled={busy}
+                  onClick={() => void onLogin()}
+                >
+                  {busy ? t('auth.sending') : t('auth.login')}
+                </Button>
 
                 <div className="flex items-center gap-3 py-1 text-[12px] text-[#bbb]">
                   <span className="h-px flex-1 bg-[#eee]" />

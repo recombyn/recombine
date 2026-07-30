@@ -58,6 +58,7 @@ import ModelPickerPanel, {
 import { modelIsImageGenerator } from '@/components/editor/panels/agent/llmModelMeta';
 import {
   canAttachNodeToChat,
+  captureVideoPosterFrame,
   clearImageProcessAttrs,
   expandSelectionWithGroups,
   fitImageSize,
@@ -157,8 +158,17 @@ export async function applyCanvasPickToImageComposer(opts: {
   existing: ComposerContext[];
   setContexts: (next: ComposerContext[]) => void;
   insertChip: (ctx: ComposerContext) => void;
+  /** Image generator / quick-edit: reject video nodes (default true). Video gen passes false. */
+  imagesOnly?: boolean;
 }) {
-  const { document: doc, payload, existing, setContexts, insertChip } = opts;
+  const {
+    document: doc,
+    payload,
+    existing,
+    setContexts,
+    insertChip,
+    imagesOnly = true,
+  } = opts;
   let ids: string[] = [];
   let frameId: string | null = null;
   if (Array.isArray(payload)) {
@@ -167,6 +177,14 @@ export async function applyCanvasPickToImageComposer(opts: {
     frameId = String(payload).slice('frame:'.length);
   } else {
     ids = [String(payload)];
+  }
+
+  if (imagesOnly) {
+    ids = ids.filter((id) => {
+      const node = doc?.deltaSetLike?.[id];
+      return node?.key !== 'video';
+    });
+    if (!ids.length && !frameId) return;
   }
 
   const pushAttachment = (att: ComposerContext) => {
@@ -210,6 +228,7 @@ export async function applyCanvasPickToImageComposer(opts: {
   const id = ids[0];
   if (!id) return;
   const node = doc?.deltaSetLike?.[id];
+  if (imagesOnly && node?.key === 'video') return;
   const src = String(node?.attrs?.src || '').trim();
   if (node?.key === 'image' && src) {
     const labeled = buildComposerContext(doc, [id], null, existing);
@@ -220,6 +239,29 @@ export async function applyCanvasPickToImageComposer(opts: {
       payload: labeled?.payload || `[Canvas image]\nid: ${id}`,
       dataUrl: src,
       thumbUrl: src,
+    });
+    return;
+  }
+
+  // Video generator (imagesOnly=false): canvas video → attachment strip + @ list
+  // (same as file upload), not an inline input chip.
+  if (!imagesOnly && node?.key === 'video' && src) {
+    const labeled = buildComposerContext(doc, [id], null, existing);
+    let thumb = String(node?.attrs?.poster || '').trim();
+    if (!thumb) {
+      try {
+        thumb = await captureVideoPosterFrame(src);
+      } catch {
+        /* thumb optional — chip can fall back to label */
+      }
+    }
+    pushAttachment({
+      key: `attach:canvas:${id}:${Date.now()}`,
+      label: labeled?.label || id,
+      kind: 'attachment',
+      payload: labeled?.payload || `[Canvas video]\nid: ${id}`,
+      dataUrl: src,
+      thumbUrl: thumb || undefined,
     });
     return;
   }
@@ -252,7 +294,9 @@ function attachSelectionToImageComposer(opts: {
     doc,
     (selectedNodeIds || []).filter((id) => id && id !== hostNodeId)
   );
-  const attachable = seed.filter((id) => canAttachNodeToChat(doc?.deltaSetLike?.[id]));
+  const attachable = seed.filter((id) =>
+    canAttachNodeToChat(doc?.deltaSetLike?.[id], { imagesOnly: true })
+  );
   const frameId = (selectedFrameIds || []).find(Boolean) || null;
   if (!attachable.length && !frameId) return false;
   const payload =
@@ -791,7 +835,7 @@ export default function ImageGeneratorCard({
                     setContexts,
                     insertChip,
                   });
-                  dispatch(startCanvasAttachPick({ target: pickTarget }));
+                  dispatch(startCanvasAttachPick({ target: pickTarget, accept: 'image' }));
                 }}
                 className={cn(
                   COMPOSER_ATTACH_ACTION_CLASS,

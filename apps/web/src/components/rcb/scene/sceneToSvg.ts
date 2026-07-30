@@ -32,7 +32,7 @@ import {
 } from './sceneEffects';
 import type { StrokeAlign, StrokeLinecap, StrokeLinejoin } from './sceneEffects';
 import { isTransparentFill, resolveDocumentBackground, resolveFill } from './sceneFill';
-import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isNodeHidden } from './sceneDocument';
+import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isNodeHidden, isVideoGeneratorNode } from './sceneDocument';
 import {
   filletPathD,
   polygonRadiiFromCorners,
@@ -1100,6 +1100,148 @@ export async function nodeToSvgElement(
     return g;
   }
 
+  if (node.key === 'video') {
+    const src = String(node.attrs?.src || '').trim();
+    const poster = String(node.attrs?.poster || '').trim();
+    const processing = String(node.attrs?.processStatus || '') === 'running';
+    const { left, top } = nodeLeftTop(document, node);
+    const boxW = Math.max(1, Number(node.width) || 100);
+    const boxH = Math.max(1, Number(node.height) || 100);
+    const meta = objectMeta(node);
+    const isGen = isVideoGeneratorNode(node);
+    const cornerR = isGen
+      ? { tl: 0, tr: 0, br: 0, bl: 0 }
+      : radiiFromAttrs(node.attrs);
+    const clipD = roundedRectPath(boxW, boxH, cornerR);
+
+    if (!src && !processing) {
+      const g = appendChild(parent, svgEl('g'));
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, isGen ? '#E8EAED' : '#E5E7EB');
+      setStroke(plate, {
+        color: isGen ? 'rgba(0,0,0,0.06)' : '#9CA3AF',
+        width: isGen ? 1 : 1.5,
+        dasharray: isGen ? undefined : '6 4',
+      });
+      setAttrs(plate, { 'data-radius-body': '1' });
+      if (isGen) {
+        // Soft play triangle only (图2) — no frame / plus.
+        const iconSize = Math.max(72, Math.min(boxW, boxH) * 0.34);
+        const ix = (boxW - iconSize) / 2;
+        const iy = (boxH - iconSize) / 2;
+        const s = iconSize / 24;
+        const icon = appendChild(
+          g,
+          svgEl('g', {
+            transform: `translate(${ix},${iy}) scale(${s})`,
+            'pointer-events': 'none',
+          })
+        );
+        const play = appendChild(
+          icon,
+          svgEl('path', {
+            d: 'M9 7.2 L9 16.8 L17.4 12 Z',
+            'stroke-linejoin': 'round',
+            'stroke-linecap': 'round',
+          })
+        );
+        setFill(play, '#C4C4C4');
+        setStroke(play, { color: '#C4C4C4', width: 2.75 });
+      }
+      tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
+      if (isGen || processing) setAttrs(g, { 'data-export-ignore': '1' });
+      applyMeta(g, left, top, meta, boxW, boxH);
+      return g;
+    }
+
+    if (processing) {
+      const g = appendChild(parent, svgEl('g'));
+      const preview = poster || (src && !String(src).startsWith('blob:') ? '' : poster);
+      if (preview) {
+        const img = appendChild(
+          g,
+          svgEl('image', {
+            width: boxW,
+            height: boxH,
+            x: 0,
+            y: 0,
+            preserveAspectRatio: 'none',
+          })
+        );
+        setSvgImageHref(img, preview);
+      } else {
+        const plate = appendChild(g, svgEl('path', { d: clipD }));
+        setFill(plate, '#B9CBDA');
+        setStroke(plate, { color: '#A8C5E4', width: 1.5 });
+        setAttrs(plate, { 'data-radius-body': '1' });
+      }
+      tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
+      setAttrs(g, { 'data-export-ignore': '1' });
+      applyMeta(g, left, top, meta, boxW, boxH);
+      applyNodeShadow(root, g, node);
+      (g as any).__sceneCornerRadii = { ...cornerR };
+      return g;
+    }
+
+    const g = appendChild(parent, svgEl('g'));
+    const visual = poster || src;
+    const crop = (() => {
+      const fx = Number(node.attrs?.cropX);
+      const fy = Number(node.attrs?.cropY);
+      const fw = Number(node.attrs?.cropW);
+      const fh = Number(node.attrs?.cropH);
+      if (
+        Number.isFinite(fx) &&
+        Number.isFinite(fy) &&
+        Number.isFinite(fw) &&
+        Number.isFinite(fh) &&
+        fw > 0 &&
+        fh > 0 &&
+        (fx !== 0 || fy !== 0 || fw !== 1 || fh !== 1)
+      ) {
+        return { x: fx, y: fy, w: fw, h: fh };
+      }
+      return null;
+    })();
+    if (poster) {
+      const imgW = crop ? boxW / crop.w : boxW;
+      const imgH = crop ? boxH / crop.h : boxH;
+      const imgX = crop ? (-crop.x / crop.w) * boxW : 0;
+      const imgY = crop ? (-crop.y / crop.h) * boxH : 0;
+      const img = appendChild(
+        g,
+        svgEl('image', {
+          width: imgW,
+          height: imgH,
+          x: imgX,
+          y: imgY,
+          preserveAspectRatio: 'none',
+        })
+      );
+      setSvgImageHref(img, poster);
+      const clipId = nextClipId('vid-clip');
+      const defs = ensureDefs(root);
+      const clip = svgEl('clipPath', { id: clipId });
+      clip.appendChild(svgEl('path', { d: clipD, 'data-radius-clip': '1' }));
+      defs.appendChild(clip);
+      setAttrs(img, { 'clip-path': urlRef(clipId) });
+      setAttrs(g, { 'data-radius-clip-id': clipId });
+    } else {
+      // No poster yet — dark plate; HTML VideoNodeOverlay paints the frame.
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, '#111827');
+      setStroke(plate, 'none');
+      setAttrs(plate, { 'data-radius-body': '1' });
+    }
+    void visual;
+    (g as any).__sceneCornerRadii = { ...cornerR };
+    tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
+    if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
+    applyMeta(g, left, top, meta, boxW, boxH);
+    applyNodeShadow(root, g, node);
+    return g;
+  }
+
   return null;
 }
 
@@ -1430,7 +1572,9 @@ function previewResizeImage(
   box: { left: number; top: number; width: number; height: number }
 ): boolean {
   const anyEl = el as any;
-  if (String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '') !== 'image') {
+  const key = String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '');
+  // Video plates use the same poster/<image> (or path) group layout as images.
+  if (key !== 'image' && key !== 'video') {
     return false;
   }
 
@@ -1652,11 +1796,12 @@ export function previewSvgNodeGeometry(
   const el = nodeEls.get(nodeId);
   if (!el) return false;
   const anyEl = el as any;
+  const nodeKey = String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '');
 
-  if (String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '') === 'image') {
+  if (nodeKey === 'image' || nodeKey === 'video') {
     return previewResizeImage(el, box);
   }
-  if (String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '') === 'svg') {
+  if (nodeKey === 'svg') {
     // Scale whole group like a custom path — content re-renders on commit.
     const geom = readGeom(el);
     if (!geom) return false;

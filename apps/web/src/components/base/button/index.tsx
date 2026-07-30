@@ -8,27 +8,27 @@ import { cn } from '@/utils/classnames';
 import './index.css';
 
 const buttonVariants = cva(
-  'btn disabled:btn-disabled',
+  'rcb-btn disabled:rcb-btn-disabled',
   {
     variants: {
       type: {
-        'primary': 'btn-primary',
-        'default': 'btn-default',
-        'dark': 'btn-dark',
+        'primary': 'rcb-btn-primary',
+        'default': 'rcb-btn-default',
+        'dark': 'rcb-btn-dark',
       },
       size: {
-        small: 'btn-small',
-        medium: 'btn-medium',
-        large: 'btn-large',
+        small: 'rcb-btn-small',
+        medium: 'rcb-btn-medium',
+        large: 'rcb-btn-large',
       },
       destructive: {
-        true: 'btn-destructive',
+        true: 'rcb-btn-destructive',
         false: '',
       },
       shape: {
-        default: 'btn-shape-default',
-        round: 'btn-shape-round',
-        circle: 'btn-shape-circle',
+        default: 'rcb-btn-shape-default',
+        round: 'rcb-btn-shape-round',
+        circle: 'rcb-btn-shape-circle',
       },
     },
     defaultVariants: {
