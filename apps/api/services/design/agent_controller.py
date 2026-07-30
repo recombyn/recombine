@@ -376,14 +376,19 @@ def _wants_short_plan(prompt: str, *, rules: dict[str, str]) -> bool:
     return any(k in p for k in keys)
 
 
-def _parse_plan(content: str) -> list[str]:
-    """LangChain PydanticOutputParser ? plan steps (legacy extract as fallback)."""
+def _parse_plan(content: Any) -> list[str]:
+    """Plan steps from PlanSchema, dict, or model JSON text."""
     raw_obj: dict[str, Any] = {}
-    try:
-        parsed = _plan_parser().parse(content or "")
-        raw_obj = parsed.model_dump() if hasattr(parsed, "model_dump") else {}
-    except Exception:
-        raw_obj = extract_json_object(content) or {}
+    if isinstance(content, PlanSchema):
+        raw_obj = content.model_dump() if hasattr(content, "model_dump") else {"plan": content.plan}
+    elif isinstance(content, dict):
+        raw_obj = content
+    else:
+        try:
+            parsed = _plan_parser().parse(content or "")
+            raw_obj = parsed.model_dump() if hasattr(parsed, "model_dump") else {}
+        except Exception:
+            raw_obj = extract_json_object(content) or {}
     raw = raw_obj.get("plan")
     if not isinstance(raw, list):
         return []

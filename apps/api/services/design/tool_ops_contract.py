@@ -15,8 +15,47 @@ logger = logging.getLogger(__name__)
 TOOL_OPS_SCHEMA_VERSION = "2026-07-21-v2"
 
 
+def _tools_from_seed(*, enabled_only: bool = True) -> list[dict[str, Any]]:
+    """Cold-start / unit-test fallback when design_canvas_tool is empty."""
+    try:
+        from services.design.action_registry import default_canvas_actions
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for item in default_canvas_actions():
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("op_key") or "").strip()
+        if not key:
+            continue
+        enabled = item.get("enabled", True)
+        if enabled_only and not enabled:
+            continue
+        schema = item.get("args_schema")
+        if isinstance(schema, dict):
+            try:
+                schema_s = json.dumps(schema, ensure_ascii=False)
+            except Exception:
+                schema_s = ""
+        else:
+            schema_s = str(schema or "").strip()
+        out.append(
+            {
+                "op_key": key,
+                "kind": str(item.get("kind") or "").strip() or "create",
+                "label": str(item.get("label") or "").strip(),
+                "model_hint": str(item.get("model_hint") or "").strip(),
+                "args_schema": schema_s,
+                "enabled": bool(enabled),
+                "sort_order": int(item.get("sort_order") or 0),
+            }
+        )
+    out.sort(key=lambda t: (int(t.get("sort_order") or 0), str(t.get("op_key") or "")))
+    return out
+
+
 def list_canvas_tools(*, enabled_only: bool = True) -> list[dict[str, Any]]:
-    """Rows from design_canvas_tool (Admin-maintainable Action registry)."""
+    """Rows from design_canvas_tool; seed JSON if DB empty (cold start / tests)."""
     try:
         from services.db import connect
 
@@ -60,14 +99,15 @@ def list_canvas_tools(*, enabled_only: bool = True) -> list[dict[str, Any]]:
                     "sort_order": int(r["sort_order"] or 0),
                 }
             )
-        return out
+        if out:
+            return out
     except Exception:
         logger.debug("list_canvas_tools unavailable", exc_info=True)
-        return []
+    return _tools_from_seed(enabled_only=enabled_only)
 
 
 def allowed_canvas_tool_keys() -> frozenset[str]:
-    """Enabled op_keys from DB only — no local catalog copy."""
+    """Enabled op_keys from DB, else canvas_actions_seed.json."""
     return frozenset(
         t["op_key"] for t in list_canvas_tools(enabled_only=True) if t.get("op_key")
     )
