@@ -81,8 +81,8 @@ apps/api/skills-lock.json
 apps/api/_tmp_*
 apps/api/list_packs.py
 
-# Cursor local skill dumps (keep team rules if added explicitly)
-.cursor/skills/
+# Cursor IDE local (rules / skills / plans — do not publish)
+.cursor/
 
 # Langfuse local secrets
 infra/langfuse/.env
