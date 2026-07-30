@@ -70,13 +70,12 @@ class Settings(BaseSettings):
     # Empty → LLM_DEFAULT_MODEL (cheaper than the main agent model when possible).
     agent_summarize_model: str = ""
 
-    # Langfuse — Design Agent / LangGraph observability (replaces custom 运行复盘 steps).
-    # Set LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY. Off when either key is empty.
+    # Optional observability (keys required; leave empty to disable).
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    langfuse_base_url: str = "https://cloud.langfuse.com"  # or https://us.cloud.langfuse.com / self-host
-    langfuse_tracing: bool = True
-    langfuse_project_id: str = ""  # optional; for console deep links
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_tracing: bool = False
+    langfuse_project_id: str = ""
 
     # Phase 5: table cells + SAM/LaMa models
     expand_table_cells: bool = True
@@ -119,9 +118,9 @@ class Settings(BaseSettings):
     # Purchase channel: Xianyu shop link and/or author contact (WeChat/email).
     xianyu_shop_url: str = ""
     author_contact: str = ""
-    # Hover QR images (URL or site path). Defaults to /qr/*.png in web public.
-    xianyu_qr_url: str = "/qr/xianyu.png"
-    wechat_qr_url: str = "/qr/wechat.png"
+    # Optional QR image URLs for the redeem dialog (leave empty to hide).
+    xianyu_qr_url: str = ""
+    wechat_qr_url: str = ""
 
     # Tencent Cloud SES — email registration verification
     tencent_secret_id: str = ""

@@ -41,6 +41,14 @@ On first API start, schema + seed data are applied automatically.
 
 Bring your own LLM keys (DeepSeek / Doubao / OpenRouter / …). Without keys, Agent features will not call models.
 
+### Credits & membership (self-host)
+
+The app includes a local credits / plan wallet (default free users get a small daily quota). This is **not** a Recombyn Cloud subscription — you control it on your instance:
+
+- Raise or remove limits in code (`FREE_DAILY_LIMIT` in `services/wallet/db.py`)
+- Issue card keys (admin + `CARD_KEY_SALT` / `CARD_KEY_OPS_PASSWORD`) to top up balances
+- Or patch billing gates for an unlimited private deploy
+
 ## Dev path (SQLite, no compose MySQL)
 
 ```bash

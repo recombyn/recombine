@@ -47,8 +47,8 @@ Self-host in minutes with Docker Compose (MySQL + Redis + web + API). MIT-licens
 ## Quick start (self-host)
 
 ```bash
-git clone <this-repo-url>
-cd recombyn   # or your local folder name
+git clone https://github.com/recombyn/recombine.git
+cd recombine
 cp apps/api/.env.example apps/api/.env   # add LLM_API_KEY / provider keys
 docker compose up -d --build
 ```

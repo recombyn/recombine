@@ -471,8 +471,8 @@ def purchase_info() -> dict[str, Any]:
     return {
         "xianyuUrl": (settings.xianyu_shop_url or "").strip() or None,
         "authorContact": (settings.author_contact or "").strip() or None,
-        "xianyuQrUrl": (settings.xianyu_qr_url or "").strip() or "/qr/xianyu.png",
-        "wechatQrUrl": (settings.wechat_qr_url or "").strip() or "/qr/wechat.png",
+        "xianyuQrUrl": (settings.xianyu_qr_url or "").strip() or None,
+        "wechatQrUrl": (settings.wechat_qr_url or "").strip() or None,
         "hint": "No WeChat/Alipay. Buy card keys on Xianyu or contact the author.",
     }
 

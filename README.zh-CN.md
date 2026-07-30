@@ -46,8 +46,8 @@
 ## 快速开始（自托管）
 
 ```bash
-git clone <本仓库地址>
-cd recombyn   # 或你的本地目录名
+git clone https://github.com/recombyn/recombine.git
+cd recombine
 cp apps/api/.env.example apps/api/.env   # 填入 LLM_API_KEY 等
 docker compose up -d --build
 ```

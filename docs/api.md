@@ -19,7 +19,7 @@ Base URL: `http://localhost:8000/api/v1`
 
 ## Health
 
-`GET /health` → `{ "status": "ok" }`（挂在应用根，不一定在 `/api/v1`）
+`GET /api/v1/health` → `{ "status": "ok" }`
 
 ## Import（摘要）
 
