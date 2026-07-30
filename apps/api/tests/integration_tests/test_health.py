@@ -9,7 +9,7 @@ def test_root_service_meta(client):
     res = client.get("/")
     assert res.status_code == 200
     body = res.json()
-    assert body.get("service") == "resume-scene-api"
+    assert body.get("service") == "recombyn-api"
     assert "docs" in body
 
 

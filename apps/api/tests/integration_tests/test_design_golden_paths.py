@@ -1,14 +1,15 @@
-"""Golden-path: agent permission gate + ReAct P0 (mocked LLM)."""
+"""Golden-path: agent permission gate + LangGraph agent (mocked LLM)."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
+from services.design.agent_controller import AgentTurnSchema
 from services.design.catalog import ensure_design_catalog
+from services.design.models_route import IntentClassifyDecision
 from tests.design_harness import collect_design_events, events_by_type
 
 TEST_USER = "user_eval_golden"
@@ -61,14 +62,6 @@ def _wallet(monkeypatch):
     )
 
 
-def _mock_stream(content: str):
-    async def _gen(**_kwargs: Any) -> AsyncIterator[tuple[str, Any]]:
-        yield "token", content
-        yield "usage", 42
-
-    return _gen
-
-
 def _run(**kwargs):
     return asyncio.run(
         collect_design_events(user_id=TEST_USER, run_mode="agent", **kwargs)
@@ -100,59 +93,68 @@ def test_permission_gate_denies_when_broke(monkeypatch):
 
 @pytest.mark.integration
 def test_react_chat_hello(monkeypatch):
+    """Chat short-circuits at intent_classify (no create_agent turn)."""
+
+    async def _classify(**_kwargs: Any) -> IntentClassifyDecision:
+        return IntentClassifyDecision(
+            intent="chat",
+            reply="你好！有什么可以帮你的？",
+            rationale="greeting",
+        )
+
     monkeypatch.setattr(
-        "services.design.agent_controller.stream_skill_step",
-        _mock_stream(
-            '{"thought":"greeting","intent":"chat","reply":"你好！有什么可以帮你的？","tool_ops":[],"done":true}'
-        ),
+        "services.design.agent_controller.classify_user_intent",
+        _classify,
     )
     events = _run(prompt="你好")
     perms = [e for e in events if e.get("type") == "permission"]
     assert perms and perms[0].get("can_call_llm") is True
-    assert events_by_type(events, "skill_start")
     tokens = events_by_type(events, "token")
     assert tokens and "你好" in (tokens[0].get("text") or "")
     assert events_by_type(events, "chat_done")
     assert events_by_type(events, "result")
     assert not events_by_type(events, "tool_ops")
+    assert not events_by_type(events, "skill_start")
 
 
 @pytest.mark.integration
 def test_react_edit_emits_tool_ops(monkeypatch):
-    monkeypatch.setattr(
-        "services.design.agent_controller.stream_skill_step",
-        _mock_stream(
-            '{"thought":"add title","intent":"edit","reply":"已添加标题",'
-            '"tool_ops":[{"op_key":"create_text","args":{"text":"标题","x":40,"y":40,"w":400,"h":80}}],'
-            '"done":true}'
-        ),
-    )
+    """edit/create → design_agent structured turn → action tool_ops SSE."""
 
-    async def _wait(_tid: str, timeout_sec: float = 12.0):
-        del timeout_sec
+    async def _classify(**_kwargs: Any) -> IntentClassifyDecision:
+        return IntentClassifyDecision(intent="edit", reply="", rationale="edit title")
+
+    async def _structured(**_kwargs: Any) -> dict[str, Any]:
         return {
-            "nodes": [
-                {
-                    "id": "n1",
-                    "type": "text",
-                    "text": "标题",
-                    "frameId": "f1",
-                }
-            ],
-            "frames": [{"id": "f1", "name": "Board", "w": 800, "h": 600}],
+            "structured": AgentTurnSchema(
+                thought="add title",
+                intent="edit",
+                reply="已添加标题",
+                tool_ops=[
+                    {
+                        "name": "create_text",
+                        "args": {
+                            "text": "标题",
+                            "x": 40,
+                            "y": 40,
+                            "w": 400,
+                            "h": 80,
+                        },
+                    }
+                ],
+                done=True,
+            )
         }
 
-    async def _begin(*_a, **_k):
-        return None
+    monkeypatch.setattr(
+        "services.design.agent_controller.classify_user_intent",
+        _classify,
+    )
+    monkeypatch.setattr(
+        "services.llm.agent.ainvoke_structured",
+        _structured,
+    )
 
-    monkeypatch.setattr(
-        "services.design.agent_controller.begin_wait",
-        _begin,
-    )
-    monkeypatch.setattr(
-        "services.design.agent_controller.wait_for_scene",
-        _wait,
-    )
     events = _run(
         prompt="加个标题",
         canvas_size="800x600",
@@ -160,8 +162,8 @@ def test_react_edit_emits_tool_ops(monkeypatch):
         scene_nodes=[],
         focus_frame_id="f1",
     )
+    assert events_by_type(events, "skill_start")
     ops = events_by_type(events, "tool_ops")
     assert ops, events
     assert ops[0].get("ops")
-    assert events_by_type(events, "scene_feedback_request")
     assert events_by_type(events, "result")
