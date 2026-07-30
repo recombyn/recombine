@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState, memo } from 'react';
 import {
   useRcbCamera,
   useRcbScreenToScene,
@@ -282,7 +282,7 @@ function loadSceneAnchors(document: any, nodeId: string) {
  * - Double-click anchor 鈫?remove handles
  * - Alt/Option + click a handle 鈫?delete that side鈥檚 handle
  */
-export default function PenPathEditFeature({
+function PenPathEditFeature({
   enabled,
   nodeId,
   document,
@@ -855,3 +855,5 @@ export default function PenPathEditFeature({
     </RcbSceneOverlaySvg>
   );
 }
+
+export default memo(PenPathEditFeature);

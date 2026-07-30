@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, memo } from 'react';
 import {
   HiOutlineSparkles,
   HiOutlineSun,
@@ -73,7 +73,7 @@ export function parseAdjustValues(raw: unknown): AdjustValues {
 }
 
 /** Fig.5 — Adjust: category tabs + light/color sliders (live preview via onChange). */
-export default function AdjustToolPanel({
+function AdjustToolPanel({
   initialValues,
   onCancel,
   onConfirm,
@@ -164,3 +164,5 @@ export default function AdjustToolPanel({
     </ImageToolPanelShell>
   );
 }
+
+export default memo(AdjustToolPanel);

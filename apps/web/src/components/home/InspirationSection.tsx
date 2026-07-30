@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -163,7 +163,7 @@ function resolveNextLikeCount(
   return wasLiked ? Math.max(0, base - 1) : base;
 }
 
-export function InspirationCaseCard({
+function InspirationCaseCard({
   meta,
   liked,
   likes,
@@ -341,7 +341,7 @@ export function InspirationCaseCard({
   );
 }
 
-export default function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
+function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const user = useSelector((s: any) => s.auth?.user);
@@ -595,3 +595,8 @@ export default function InspirationSection({ onOpenCase, disabled }: Props): Rea
     </section>
   );
 }
+
+export default memo(InspirationSection);
+
+const MemoizedInspirationCaseCard = memo(InspirationCaseCard);
+export { MemoizedInspirationCaseCard as InspirationCaseCard };

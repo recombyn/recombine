@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { memo, type CSSProperties, ReactNode } from 'react';
 import { cn } from '@/utils/classnames';
 import './style.css';
 
@@ -21,7 +21,7 @@ export type ProgressBarProps = {
 /**
  * 主站进度条（无 antd）：浅底 + 深色填充，可选扫光动画。
  */
-export default function ProgressBar({
+function ProgressBar({
   percent,
   active = true,
   height = 8,
@@ -64,3 +64,5 @@ export default function ProgressBar({
     </div>
   );
 }
+
+export default memo(ProgressBar);

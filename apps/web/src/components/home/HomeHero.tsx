@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineDevicePhoneMobile,
@@ -54,7 +54,7 @@ function HeroBrandMark({ size }: { size: number }) {
 /**
  * Home hero — EN: "{tagline} with [logo] Brand"; other locales: "[logo] Brand {tagline}".
  */
-export default function HomeHero({ onSubmit }: Props): ReactNode {
+function HomeHero({ onSubmit }: Props): ReactNode {
   const { t, i18n } = useTranslation();
   const [category, setCategory] = useState<HomeAgentCategory>('poster');
   const lastDesignCategoryRef = useRef<HomeAgentCategory>('poster');
@@ -147,3 +147,5 @@ export default function HomeHero({ onSubmit }: Props): ReactNode {
     </section>
   );
 }
+
+export default memo(HomeHero);

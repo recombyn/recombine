@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { RcbOverlayPortal, useRcbCamera, rcbSceneToScreen } from '@/components/rcb';
 import { isImageGeneratorNode } from '@/components/rcb/scene/sceneDocument';
@@ -9,7 +9,7 @@ import ImageGeneratorCard from '@/components/editor/nodes/ImageGeneratorNode/Ima
  * Screen-space Image Generator composers for every generator plate on the canvas.
  * SVG keeps the hit target; the title row comes from the shared selection label.
  */
-export default function ImageGeneratorOverlay({
+function ImageGeneratorOverlay({
   document,
   hidden,
   readOnly,
@@ -79,3 +79,5 @@ export default function ImageGeneratorOverlay({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(ImageGeneratorOverlay);

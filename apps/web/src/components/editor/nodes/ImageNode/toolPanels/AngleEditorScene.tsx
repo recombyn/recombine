@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import {
   HiOutlineChevronDown,
   HiOutlineChevronLeft,
@@ -101,7 +101,7 @@ function subjectBoxSize(
  * - skybox: wireframe cube only — no sphere / arrows / camera
  * - camera: fixed face-on center image (scale only) + orbiting camera (fig.3)
  */
-export default function AngleEditorScene({
+function AngleEditorScene({
   mode,
   rotate,
   tilt,
@@ -436,3 +436,5 @@ export default function AngleEditorScene({
     </div>
   );
 }
+
+export default memo(AngleEditorScene);

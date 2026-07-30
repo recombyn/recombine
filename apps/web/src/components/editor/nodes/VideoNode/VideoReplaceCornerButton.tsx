@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { HiOutlineArrowUpTray } from 'react-icons/hi2';
 import { message } from '@/components/base';
@@ -34,7 +34,7 @@ const EDGE_PAD = 10;
 /**
  * Bare replace control (button + file input) for embedding in a shared corner bar.
  */
-export function VideoReplaceUploadControl({
+function VideoReplaceUploadControl({
   nodeId,
   sceneBox,
   onLoadingChange,
@@ -219,7 +219,7 @@ export function VideoReplaceUploadControl({
  * Replace control for selected video nodes — top-right corner, 10px inset.
  * Uploads via backend COS; keeps node width; height follows new video aspect.
  */
-export default function VideoReplaceCornerButton({
+function VideoReplaceCornerButton({
   nodeId,
   box,
   align = 'top-right',
@@ -295,3 +295,5 @@ export default function VideoReplaceCornerButton({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(VideoReplaceCornerButton);

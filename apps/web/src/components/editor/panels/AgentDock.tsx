@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useParams, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -2354,7 +2354,7 @@ function createDesignAgentEventRouter(opts: {
 }
 
 /** Agent panel: chat + model picker + Agent input. */
-export default function AgentDock({
+function AgentDock({
   open,
   onClose,
   className,
@@ -4687,3 +4687,5 @@ export default function AgentDock({
     </aside>
   );
 }
+
+export default memo(AgentDock);

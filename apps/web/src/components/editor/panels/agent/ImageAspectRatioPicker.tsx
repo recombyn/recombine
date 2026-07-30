@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineLink, HiOutlineLinkSlash, HiOutlineQuestionMarkCircle } from 'react-icons/hi2';
 import { Icon } from '@/components/base/icon';
@@ -10,8 +10,6 @@ import SizePresetPanel, {
 } from '@/components/editor/chrome/SizePresetPanel';
 import type { ImageLimits } from '@/apis/chat';
 import { cn } from '@/utils/classnames';
-
-export { SizeAspectGlyph };
 
 /**
  * Image-gen ratio row (fig.1): Smart + common landscape → square → portrait.
@@ -453,7 +451,7 @@ export function formatImageSizeLabel(
  * Visual glyph for a ratio key (`smart` / `3:2` / `1248x832`).
  * Equal-area fit so 21:9 / 1:1 / 9:16 read at similar visual weight.
  */
-export function AspectRatioGlyph({
+function AspectRatioGlyph({
   ratio,
   className,
   size = 18,
@@ -510,20 +508,6 @@ function isRatioActive(current: string, preset: string, resolution: string) {
     return px.w === cur.w && px.h === cur.h;
   }
   return false;
-}
-
-/** Cyan sparkle for HD / UHD (fig.2 / fig.3). */
-export function ResolutionSparkle({ className }: { className?: string }) {
-  return (
-    <svg
-      className={cn('h-2.5 w-2.5', className)}
-      viewBox="0 0 12 12"
-      fill="currentColor"
-      aria-hidden
-    >
-      <path d="M6 0.5L7.2 4.8L11.5 6L7.2 7.2L6 11.5L4.8 7.2L0.5 6L4.8 4.8L6 0.5Z" />
-    </svg>
-  );
 }
 
 type Props = {
@@ -640,7 +624,7 @@ function DimField({
 }
 
 /** Image gen (fig.1 ratio chips) / design canvas size (SizePresetPanel). */
-export default function ImageAspectRatioPicker({
+function ImageAspectRatioPicker({
   variant = 'image',
   resolution = DEFAULT_IMAGE_RESOLUTION,
   aspectRatio,
@@ -983,3 +967,8 @@ export default function ImageAspectRatioPicker({
     </div>
   );
 }
+
+export default memo(ImageAspectRatioPicker);
+
+const MemoizedAspectRatioGlyph = memo(AspectRatioGlyph);
+export { MemoizedAspectRatioGlyph as AspectRatioGlyph };

@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { RcbOverlayPortal, useRcbCamera, rcbSceneToScreen } from '@/components/rcb';
 import { isVideoGeneratorNode } from '@/components/rcb/scene/sceneDocument';
@@ -9,7 +9,7 @@ import VideoGeneratorCard from '@/components/editor/nodes/VideoGeneratorNode/Vid
  * Screen-space Video Generator composers for every generator plate on the canvas.
  * SVG keeps the hit target; the title row comes from the shared selection label.
  */
-export default function VideoGeneratorOverlay({
+function VideoGeneratorOverlay({
   document,
   hidden,
   readOnly,
@@ -79,3 +79,5 @@ export default function VideoGeneratorOverlay({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(VideoGeneratorOverlay);

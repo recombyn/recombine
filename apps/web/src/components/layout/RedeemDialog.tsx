@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -16,7 +16,7 @@ type RedeemPanelProps = {
 };
 
 /** Redeem form — usable inside settings modal or standalone dialog. */
-export function RedeemPanel({ active = true, onRedeemed, onCancel }: RedeemPanelProps) {
+function RedeemPanel({ active = true, onRedeemed, onCancel }: RedeemPanelProps) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -133,7 +133,7 @@ type DialogProps = {
 };
 
 /** Standalone redeem dialog (legacy callers). Prefer AccountSettingsDialog. */
-export default function RedeemDialog({ open, onClose, onRedeemed }: DialogProps) {
+function RedeemDialog({ open, onClose, onRedeemed }: DialogProps) {
   const { t } = useTranslation();
   const dismiss = () => {
     // Blur before hide — cancel/redeem call parent setState and skip Dialog.onClose blur.
@@ -162,3 +162,8 @@ export default function RedeemDialog({ open, onClose, onRedeemed }: DialogProps)
     </Dialog>
   );
 }
+
+export default memo(RedeemDialog);
+
+const MemoizedRedeemPanel = memo(RedeemPanel);
+export { MemoizedRedeemPanel as RedeemPanel };

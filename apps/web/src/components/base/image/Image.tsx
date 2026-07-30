@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, Fragment, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { Transition, TransitionChild } from '@headlessui/react';
 import { cn } from '@/utils/classnames';
@@ -280,5 +280,4 @@ const Image: React.FC<ImageProps> = ({
   );
 };
 
-export default Image;
-
+export default memo(Image);

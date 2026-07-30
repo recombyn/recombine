@@ -1,7 +1,7 @@
 import {
   useRcbScreenToScene,
 } from '../camera/context';
-import { useEffect } from 'react';
+import { useEffect, memo } from 'react';
 
 type ImagePlaceFeatureProps = {
   enabled: boolean;
@@ -13,7 +13,7 @@ type ImagePlaceFeatureProps = {
 };
 
 /** Click-to-place pending image. */
-export default function ImagePlaceFeature({
+function ImagePlaceFeature({
   enabled,
   artboard,
   paperEl,
@@ -36,3 +36,5 @@ export default function ImagePlaceFeature({
 
   return null;
 }
+
+export default memo(ImagePlaceFeature);

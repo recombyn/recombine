@@ -1,11 +1,4 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type ReactNode, memo } from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -250,4 +243,4 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
   }
 );
 
-export default EraserMaskOverlay;
+export default memo(EraserMaskOverlay);

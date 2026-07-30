@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   useImperativeHandle,
   useRef,
   type ReactNode,
@@ -124,6 +125,6 @@ function VirtualListInner<T>(
   );
 }
 
-export const VirtualList = forwardRef(VirtualListInner) as <T>(
+export const VirtualList = memo(forwardRef(VirtualListInner)) as <T>(
   props: VirtualListProps<T> & { ref?: Ref<VirtualListHandle> }
 ) => ReactNode;

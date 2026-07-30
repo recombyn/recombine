@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { Button, Dialog, Input, message } from '@/components/base';
@@ -45,7 +45,7 @@ function sortRecentProjects(projects: ProjectItem[]): ProjectItem[] {
 }
 
 /** Home — recent owned projects (same ProjectCard as My projects; no Publish). */
-export default function RecentProjectsSection({
+function RecentProjectsSection({
   projects,
   loading = false,
   disabled = false,
@@ -170,3 +170,5 @@ export default function RecentProjectsSection({
     </section>
   );
 }
+
+export default memo(RecentProjectsSection);

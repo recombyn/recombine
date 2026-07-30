@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowsPointingOut, HiOutlineXMark } from 'react-icons/hi2';
@@ -46,10 +40,10 @@ function readCrop(attrs: {
 }
 
 /**
- * Fullscreen video preview — same VideoJsPlayer + same default size as image lightbox
+ * Fullscreen video preview — same VideoJsPlayer + shared VideoPlaybackBar as canvas/chat
  * (max 700×700). Zoom changes width/height (no CSS transform on the video ancestor).
  */
-export default function VideoFullscreenPreviewButton({
+function VideoFullscreenPreviewButton({
   src,
   poster,
   uploadKey,
@@ -176,7 +170,7 @@ export default function VideoFullscreenPreviewButton({
                         src={playSrc}
                         poster={posterUrl}
                         layout="fill"
-                        controlsMode="always"
+                        controlsMode="hover"
                         autoplay
                         muted
                         crop={crop}
@@ -202,3 +196,5 @@ export default function VideoFullscreenPreviewButton({
     </>
   );
 }
+
+export default memo(VideoFullscreenPreviewButton);

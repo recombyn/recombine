@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -238,7 +238,7 @@ function ExportSubmenu({
 }
 
 /** Right-click menu — screen-space portal (not scaled by canvas camera). */
-export default function CanvasContextMenu({
+function CanvasContextMenu({
   menu,
   hasNode,
   canAddToChat,
@@ -465,3 +465,5 @@ export default function CanvasContextMenu({
 }
 
 export type { CtxAction };
+
+export default memo(CanvasContextMenu);

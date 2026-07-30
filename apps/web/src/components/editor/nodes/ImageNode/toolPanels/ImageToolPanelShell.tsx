@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BiExit } from 'react-icons/bi';
 import { HiOutlineBolt } from 'react-icons/hi2';
@@ -29,7 +29,7 @@ export const IMAGE_TOOL_TOKEN_COST = {
 export const IMAGE_TOOL_CREDIT_COST = IMAGE_TOOL_TOKEN_COST;
 
 /** Shared chrome for image tool panels docked beside the source image. */
-export default function ImageToolPanelShell({
+function ImageToolPanelShell({
   title,
   headerRight,
   onClose,
@@ -86,7 +86,7 @@ export default function ImageToolPanelShell({
   );
 }
 
-export function PanelIconBtn({
+function PanelIconBtn({
   title,
   onClick,
   children,
@@ -110,7 +110,7 @@ export function PanelIconBtn({
 }
 
 /** Cost chip for primary CTAs: amount + bolt after the label; inherits text color. */
-export function PanelConfirmCost({
+function PanelConfirmCost({
   amount,
   unit = 'credits',
 }: {
@@ -135,7 +135,7 @@ export function PanelConfirmCost({
   );
 }
 
-export function PanelFooterActions({
+function PanelFooterActions({
   onCancel,
   onConfirm,
   confirmLabel,
@@ -182,7 +182,7 @@ export function PanelFooterActions({
   );
 }
 
-export function PanelSliderRow({
+function PanelSliderRow({
   label,
   value,
   display,
@@ -221,27 +221,13 @@ export function PanelSliderRow({
   );
 }
 
-export function PanelClickSelect({
-  value,
-  options,
-  onChange,
-}: {
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-}) {
-  const idx = Math.max(0, options.findIndex((o) => o.value === value));
-  const current = options[idx] || options[0];
-  return (
-    <button
-      type="button"
-      className="inline-flex h-7 min-w-[4.5rem] items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[12px] text-[var(--ink)] transition-colors hover:bg-[var(--accent-soft)]"
-      onClick={() => {
-        const next = options[(idx + 1) % options.length];
-        if (next) onChange(next.value);
-      }}
-    >
-      {current?.label}
-    </button>
-  );
-}
+export default memo(ImageToolPanelShell);
+
+const MemoizedPanelIconBtn = memo(PanelIconBtn);
+export { MemoizedPanelIconBtn as PanelIconBtn };
+const MemoizedPanelConfirmCost = memo(PanelConfirmCost);
+export { MemoizedPanelConfirmCost as PanelConfirmCost };
+const MemoizedPanelFooterActions = memo(PanelFooterActions);
+export { MemoizedPanelFooterActions as PanelFooterActions };
+const MemoizedPanelSliderRow = memo(PanelSliderRow);
+export { MemoizedPanelSliderRow as PanelSliderRow };

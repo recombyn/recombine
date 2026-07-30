@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -21,7 +21,7 @@ type PlansPanelProps = {
 const FAQ_IDS = ['units', 'chat', 'image', 'how'] as const;
 
 /** Plan cards — usable inside settings modal or standalone dialog. */
-export function PlansPanel({ active = true, compact = false }: PlansPanelProps) {
+function PlansPanel({ active = true, compact = false }: PlansPanelProps) {
   const { t, i18n } = useTranslation();
   const current = useSelector((state: any) => (state.wallet?.planId as PlanId) || 'free');
   const planLocked = useSelector((state: any) => Boolean(state.wallet?.planLocked));
@@ -314,7 +314,7 @@ type DialogProps = {
 };
 
 /** Standalone membership dialog. */
-export default function PlansDialog({ open, onClose }: DialogProps) {
+function PlansDialog({ open, onClose }: DialogProps) {
   const { t } = useTranslation();
   return (
     <Dialog
@@ -330,3 +330,8 @@ export default function PlansDialog({ open, onClose }: DialogProps) {
     </Dialog>
   );
 }
+
+export default memo(PlansDialog);
+
+const MemoizedPlansPanel = memo(PlansPanel);
+export { MemoizedPlansPanel as PlansPanel };

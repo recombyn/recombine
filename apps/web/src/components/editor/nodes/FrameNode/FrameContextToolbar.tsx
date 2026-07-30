@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -11,10 +11,7 @@ import {
   HiOutlineLockOpen,
 } from 'react-icons/hi2';
 import { ColorPanelPopover, FILL_ALPHA_PRESETS } from '@/components/base/colorPanel';
-import FrameSizePresetMenu, {
-  FramePresetIcon,
-  FrameRatioPresetMenu,
-} from '@/components/editor/nodes/FrameNode/FrameSizePresetMenu';
+import FrameSizePresetMenu from '@/components/editor/nodes/FrameNode/FrameSizePresetMenu';
 import {
   applyFramePreset,
   findFramePreset,
@@ -40,7 +37,7 @@ const field =
   'inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[12px] text-[var(--ink)]';
 
 /** Floating toolbar for the active artboard / frame (shown after draw / select). */
-export default function FrameContextToolbar({ frame }: Props) {
+function FrameContextToolbar({ frame }: Props) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const [presetOpen, setPresetOpen] = useState(false);
@@ -157,8 +154,8 @@ export default function FrameContextToolbar({ frame }: Props) {
           const next = applyFramePreset(frame, preset);
           patch(next);
         }}
+        iconKind={isRatio ? 'doc' : presetMeta?.icon || 'doc'}
       >
-        <FramePresetIcon kind={isRatio ? 'doc' : presetMeta?.icon || 'doc'} />
         <span className="max-w-[7rem] truncate">{deviceTitle}</span>
       </FrameSizePresetMenu>
 
@@ -193,7 +190,8 @@ export default function FrameContextToolbar({ frame }: Props) {
         </button>
       </Tooltip>
 
-      <FrameRatioPresetMenu
+      <FrameSizePresetMenu
+        variant="ratio"
         open={ratioOpen}
         onOpenChange={(v) => {
           if (canvasLocked) return;
@@ -231,7 +229,7 @@ export default function FrameContextToolbar({ frame }: Props) {
         }}
       >
         <span>{ratioTitle}</span>
-      </FrameRatioPresetMenu>
+      </FrameSizePresetMenu>
 
       <label className={cn(field, canvasLocked && 'opacity-50')}>
         <span className="text-[var(--muted)]">W</span>
@@ -347,3 +345,5 @@ export default function FrameContextToolbar({ frame }: Props) {
     </SelectionToolbarShell>
   );
 }
+
+export default memo(FrameContextToolbar);

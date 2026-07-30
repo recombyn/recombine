@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -57,7 +57,10 @@ import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
 import EditorShortcutsPanel from '@/components/editor/chrome/EditorShortcutsPanel';
 import PenStrokeToolbar from '@/components/editor/chrome/PenStrokeToolbar';
 import BucketFillToolbar from '@/components/editor/chrome/BucketFillToolbar';
-import { FloatingToolbar, PathEditToolbar, type PathEditSubtool } from '@/components/editor/chrome/FloatingToolbar';
+import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
+import PathEditToolbar, {
+  type PathEditSubtool,
+} from '@/components/editor/chrome/PathEditToolbar';
 import AlignGuidesOverlay, {
   type AlignGuide,
 } from '@/components/rcb/selection/AlignGuidesOverlay';
@@ -614,7 +617,7 @@ async function hydrateCloudProject(
   }
 }
 
-export default function EditorPage() {
+function EditorPage() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -2019,3 +2022,5 @@ export default function EditorPage() {
     </div>
   );
 }
+
+export default memo(EditorPage);

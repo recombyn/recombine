@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import ImageReplaceCornerButton from '@/components/editor/nodes/ImageNode/ImageReplaceCornerButton';
@@ -598,7 +598,7 @@ function movingGuideBoxes(
 /**
  * Selection: marquee / move / 8-way resize / rotate.
  */
-export default function SelectionFeature({
+function SelectionFeature({
   enabled,
   readOnly = false,
   document,
@@ -2548,3 +2548,5 @@ export default function SelectionFeature({
     </>
   );
 }
+
+export default memo(SelectionFeature);

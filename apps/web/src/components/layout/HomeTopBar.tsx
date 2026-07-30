@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -34,7 +34,7 @@ function MobilePlusIcon({ className }: { className?: string }) {
 }
 
 /** Floating top-right — account chip; mobile also has nav menu after avatar. */
-export default function HomeTopBar({ setNav, onCreate }: Props) {
+function HomeTopBar({ setNav, onCreate }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
@@ -125,3 +125,5 @@ export default function HomeTopBar({ setNav, onCreate }: Props) {
     </div>
   );
 }
+
+export default memo(HomeTopBar);

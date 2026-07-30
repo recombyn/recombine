@@ -2,7 +2,7 @@ import {
   useRcbCamera,
   useRcbScreenToScene,
 } from '../camera/context';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import {
   CLOSE_THRESHOLD,
   localizeAnchors,
@@ -175,7 +175,7 @@ function setHandle(
  * click curved anchor to clear handles (corner), close near first,
  * Enter / Esc / toolbar??????finish as open path.
  */
-export default function PenDrawFeature({
+function PenDrawFeature({
   enabled,
   artboard,
   paperEl,
@@ -815,3 +815,5 @@ export default function PenDrawFeature({
     </RcbSceneOverlaySvg>
   );
 }
+
+export default memo(PenDrawFeature);

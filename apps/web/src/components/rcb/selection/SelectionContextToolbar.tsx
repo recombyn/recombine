@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -105,7 +105,7 @@ function AlignIcon({ align }: { align: string }) {
   return <HiOutlineBars3BottomLeft className="h-4 w-4" />;
 }
 
-export default function SelectionContextToolbar(props: Props): ReactNode {
+function SelectionContextToolbar(props: Props): ReactNode {
   const { document, nodeId, box } = props;
   const dispatch = useDispatch();
   const { t } = useTranslation();
@@ -703,3 +703,5 @@ export default function SelectionContextToolbar(props: Props): ReactNode {
     </>
   );
 }
+
+export default memo(SelectionContextToolbar);

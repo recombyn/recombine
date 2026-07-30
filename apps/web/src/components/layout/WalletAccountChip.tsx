@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -15,7 +15,7 @@ type Props = {
 };
 
 /** Credit balance + avatar pill. */
-export default function WalletAccountChip({ className }: Props) {
+function WalletAccountChip({ className }: Props) {
   const { t } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);
   const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
@@ -88,3 +88,5 @@ export default function WalletAccountChip({ className }: Props) {
     </Dropdown>
   );
 }
+
+export default memo(WalletAccountChip);

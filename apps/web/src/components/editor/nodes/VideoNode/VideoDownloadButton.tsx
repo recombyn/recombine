@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowDownTray } from 'react-icons/hi2';
 import { message, Tooltip } from '@/components/base';
@@ -231,7 +231,7 @@ function baseName(name?: string) {
 }
 
 /** Download selected video — applies crop/flip/trim when present (re-encode). */
-export default function VideoDownloadButton({
+function VideoDownloadButton({
   src,
   name,
   uploadKey,
@@ -341,3 +341,5 @@ export default function VideoDownloadButton({
     </Tooltip>
   );
 }
+
+export default memo(VideoDownloadButton);

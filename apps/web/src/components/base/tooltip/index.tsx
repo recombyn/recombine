@@ -12,6 +12,7 @@ import {
   shift,
 } from '@floating-ui/react';
 import type { FC, ReactNode } from 'react';
+import { memo } from 'react';
 import { useBoolean } from 'ahooks';
 import * as React from 'react';
 import { useCallback, useEffect, useRef } from 'react';
@@ -216,4 +217,4 @@ const Tooltip: FC<TooltipProps> = ({
   );
 };
 
-export default React.memo(Tooltip);
+export default memo(Tooltip);

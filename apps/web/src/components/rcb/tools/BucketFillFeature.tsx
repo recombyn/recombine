@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 import {
   rcbScreenToScene,
 } from '../core/math';
@@ -36,7 +36,7 @@ type Props = {
 /**
  * Paint-bucket: click a shape → apply current FillPanel value.
  */
-export default function BucketFillFeature({
+function BucketFillFeature({
   enabled,
   artboard,
   paperEl,
@@ -91,3 +91,5 @@ export default function BucketFillFeature({
 
   return null;
 }
+
+export default memo(BucketFillFeature);

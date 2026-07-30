@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineLink, HiOutlineLinkSlash } from 'react-icons/hi2';
@@ -70,7 +70,7 @@ const ASPECT_ORIG_W = 'aspect-original-width';
 const ASPECT_ORIG_H = 'aspect-original-height';
 
 /** Single-shape floating bar: fill / stroke · corner radius · W·H · ratio · download. */
-export default function ShapeSelectionToolbar({
+function ShapeSelectionToolbar({
   nodeId,
   node,
   box,
@@ -367,3 +367,5 @@ export default function ShapeSelectionToolbar({
     </>
   );
 }
+
+export default memo(ShapeSelectionToolbar);

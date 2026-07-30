@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 import { rcbViewportSceneBounds, type RcbCamera } from '@/components/rcb';
 import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
@@ -92,7 +92,7 @@ type Props = {
 /**
  * Bottom-left minimap: artboards + scene nodes + viewport outline; click/drag to pan.
  */
-export default function EditorMinimap({
+function EditorMinimap({
   document,
   frames,
   camera,
@@ -270,3 +270,5 @@ export default function EditorMinimap({
     </div>
   );
 }
+
+export default memo(EditorMinimap);

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { LuPencil } from 'react-icons/lu';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
@@ -61,7 +61,7 @@ function TextGlyph({ className }: { className?: string }) {
  * Icon annotate strip (fig.1): pen · select · text · color · stroke width.
  * No photo tools (remove-bg / upscale / eraser …).
  */
-export default function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode {
+function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode {
   const dispatch = useDispatch();
   const activeTool = useSelector((s: any) => String(s.editor.activeTool || 'select'));
   const color = useSelector((s: any) => String(s.editor.penStrokeColor || '#ef4444'));
@@ -164,3 +164,5 @@ export default function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode 
     </div>
   );
 }
+
+export default memo(IconAnnotateToolbar);

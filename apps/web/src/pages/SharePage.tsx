@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -66,7 +66,7 @@ function framesBounds(frames: ArtboardFrame[]) {
  * Public / ACL share viewer (preview / inspect).
  * Authorized editors redirect into the normal EditorPage.
  */
-export default function SharePage() {
+function SharePage() {
   const { shareId = '' } = useParams();
   const { t } = useTranslation();
   const location = useLocation();
@@ -428,3 +428,5 @@ export default function SharePage() {
     </div>
   );
 }
+
+export default memo(SharePage);

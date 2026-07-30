@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { LuFrame, LuImage, LuImagePlus, LuVideo } from 'react-icons/lu';
 import { RiVideoAiLine } from 'react-icons/ri';
 import { RcbOverlayPortal, useRcbCamera, rcbSceneToScreen } from '@/components/rcb';
@@ -60,7 +60,7 @@ function TitleIcon({ kind }: { kind: NodeTitleIcon }) {
  * Shared title row above frames and selected images: `icon Name` · `W × H`.
  * Screen-fixed typography (does not grow with zoom) — same metrics as SelectionToolbarShell.
  */
-export default function NodeTitleLabel({
+function NodeTitleLabel({
   box,
   name,
   sizeWidth,
@@ -275,3 +275,5 @@ export default function NodeTitleLabel({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(NodeTitleLabel);

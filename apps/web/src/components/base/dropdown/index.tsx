@@ -1,5 +1,5 @@
 import type { FC, ReactNode } from 'react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -223,6 +223,6 @@ const Dropdown: FC<DropdownProps> = ({
 
 Dropdown.displayName = 'Dropdown';
 
-export default Dropdown;
+export default memo(Dropdown);
 export type { MenuItemType } from './MenuItem';
 export { DropdownPanel, DropdownPanelItem } from './DropdownPanel';

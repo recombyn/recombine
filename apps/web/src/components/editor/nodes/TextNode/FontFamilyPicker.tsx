@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -29,7 +29,7 @@ type Props = {
 };
 
 /** Font picker: loads catalog from API only (managed in admin). */
-export default function FontFamilyPicker({ value, onChange, className }: Props): ReactNode {
+function FontFamilyPicker({ value, onChange, className }: Props): ReactNode {
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState<FontFamilyNode[]>(() => getFontCatalogSync());
   const [query, setQuery] = useState('');
@@ -159,3 +159,5 @@ export default function FontFamilyPicker({ value, onChange, className }: Props):
     </>
   );
 }
+
+export default memo(FontFamilyPicker);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SVGProps, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -226,7 +226,7 @@ function SplitToolButton({
  * Bottom-center tool dock:
  * Select · 形状 · 钢笔 · 画笔 · 文字 · 智能画板 · 图片
  */
-export default function EditorToolStrip({
+function EditorToolStrip({
   className,
   camera,
   stageEl = null,
@@ -743,3 +743,5 @@ export default function EditorToolStrip({
     </div>
   );
 }
+
+export default memo(EditorToolStrip);

@@ -1,4 +1,4 @@
-import React, { cloneElement, isValidElement, useRef, useState, useCallback, useEffect } from 'react';
+import React, { cloneElement, isValidElement, useRef, useState, useCallback, useEffect, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -254,4 +254,4 @@ const CustomPopover = ({
   );
 };
 
-export default CustomPopover;
+export default memo(CustomPopover);

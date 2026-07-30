@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineDocumentText,
@@ -68,7 +68,7 @@ function kindCardClass(selected: boolean): string {
   );
 }
 
-export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
+function ImportFileDialog({ open, onClose, onConfirm }: Props) {
   const { t } = useTranslation();
   const [kind, setKind] = useState<ImportFileKind>('image');
 
@@ -127,3 +127,5 @@ export default function ImportFileDialog({ open, onClose, onConfirm }: Props) {
     </Dialog>
   );
 }
+
+export default memo(ImportFileDialog);

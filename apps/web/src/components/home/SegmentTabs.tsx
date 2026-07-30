@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { cn } from '@/utils/classnames';
 
 type SegmentTabsProps<T extends string> = {
@@ -17,7 +17,7 @@ type SegmentTabsProps<T extends string> = {
  * Active = ink; inactive = muted. Bold width is always reserved so switching
  * does not shift neighboring tabs / the page.
  */
-export default function SegmentTabs<T extends string>({
+function SegmentTabs<T extends string>({
   tabs,
   value,
   onChange,
@@ -60,3 +60,5 @@ export default function SegmentTabs<T extends string>({
     </div>
   );
 }
+
+export default memo(SegmentTabs) as typeof SegmentTabs;

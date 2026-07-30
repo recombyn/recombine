@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BiEditAlt } from 'react-icons/bi';
 import {
@@ -52,7 +52,7 @@ function statusLabelKey(status: PlazaStatus): string {
 }
 
 /** Shared card skeleton — cover + title lines. */
-export function ProjectCardSkeleton({ label }: { label?: string }): ReactNode {
+function ProjectCardSkeleton({ label }: { label?: string }): ReactNode {
   return (
     <article className="group" aria-busy="true" aria-label={label || 'loading'}>
       <div className={projectThumbFrameClass('skeleton-bone shadow-none')} />
@@ -65,7 +65,7 @@ export function ProjectCardSkeleton({ label }: { label?: string }): ReactNode {
 }
 
 /** Dashed “New project” tile — first cell in Recent / My projects grids. */
-export function NewProjectCard({
+function NewProjectCard({
   disabled = false,
   onClick,
 }: {
@@ -120,7 +120,7 @@ type Props = {
 };
 
 /** Shared project card for Recent projects + My projects. */
-export default function ProjectCard({
+function ProjectCard({
   item,
   disabled = false,
   selected = false,
@@ -371,3 +371,10 @@ export default function ProjectCard({
     </article>
   );
 }
+
+export default memo(ProjectCard);
+
+const MemoizedProjectCardSkeleton = memo(ProjectCardSkeleton);
+export { MemoizedProjectCardSkeleton as ProjectCardSkeleton };
+const MemoizedNewProjectCard = memo(NewProjectCard);
+export { MemoizedNewProjectCard as NewProjectCard };

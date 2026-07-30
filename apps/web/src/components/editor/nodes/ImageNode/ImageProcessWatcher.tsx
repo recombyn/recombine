@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { message } from '@/components/base';
 import { processImageTool } from '@/apis/imageTools';
@@ -82,7 +82,7 @@ function processFailMessage(err: any): string {
  * Results are uploaded to our file server so the canvas / export use our URLs.
  * Import / upload placeholders are finished by their own flows.
  */
-export default function ImageProcessWatcher() {
+function ImageProcessWatcher() {
   const dispatch = useDispatch();
   const pendingId = useSelector((s: any) => s.editor.pendingImageProcessId as string | null);
   const document = useSelector((s: any) => s.editor.document);
@@ -214,3 +214,5 @@ export default function ImageProcessWatcher() {
 
   return null;
 }
+
+export default memo(ImageProcessWatcher);

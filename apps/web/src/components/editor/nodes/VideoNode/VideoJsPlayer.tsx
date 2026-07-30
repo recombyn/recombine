@@ -1,15 +1,12 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import videojs from 'video.js';
 import type Player from 'video.js/dist/types/player';
 import 'video.js/dist/video-js.css';
 import { cn } from '@/utils/classnames';
 import { imageSrcToFile, isOurStoredImageUrl } from '@/utils/uploadImage';
+import VideoPlaybackBar, {
+  videoPlaybackBarScale,
+} from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import './VideoJsPlayer.css';
 
 /** Local `/api/v1/uploads/…` needs Bearer — `<video src>` cannot send it. */
@@ -22,40 +19,59 @@ function videoSrcNeedsAuthFetch(src: string): boolean {
 /**
  * Resolve a canvas / upload video `src` into something the player can play.
  * Auth-gated uploads → blob URL; public / data / blob URLs pass through.
+ * Keeps the last good URL while re-resolving so the player is not unmounted.
  */
 export function usePlayableVideoSrc(src: string, uploadKey?: string | null): string {
   const [playSrc, setPlaySrc] = useState(() =>
     videoSrcNeedsAuthFetch(src) ? '' : String(src || '').trim()
   );
+  const blobRef = useRef<string | null>(null);
 
   useEffect(() => {
     const s = String(src || '').trim();
     if (!s) {
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current);
+        blobRef.current = null;
+      }
       setPlaySrc('');
       return;
     }
     if (!videoSrcNeedsAuthFetch(s)) {
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current);
+        blobRef.current = null;
+      }
       setPlaySrc(s);
       return;
     }
     let cancelled = false;
-    let blobUrl: string | null = null;
-    setPlaySrc('');
     void imageSrcToFile(s, 'play.mp4', { uploadKey })
       .then((file) => {
         if (cancelled) return;
-        blobUrl = URL.createObjectURL(file);
-        setPlaySrc(blobUrl);
+        const next = URL.createObjectURL(file);
+        if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+        blobRef.current = next;
+        setPlaySrc(next);
       })
       .catch((err) => {
         console.warn('[video] auth src resolve failed', err);
-        if (!cancelled) setPlaySrc('');
+        // Keep previous playSrc on failure — blanking would flash/unmount the plate.
       });
     return () => {
       cancelled = true;
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   }, [src, uploadKey]);
+
+  useEffect(
+    () => () => {
+      if (blobRef.current) {
+        URL.revokeObjectURL(blobRef.current);
+        blobRef.current = null;
+      }
+    },
+    []
+  );
 
   return playSrc;
 }
@@ -66,7 +82,6 @@ function guessSourceType(src: string): string | undefined {
     const m = /^data:(video\/[^;]+)/i.exec(src);
     return m?.[1];
   }
-  // Auth-resolved uploads become blob: — browsers often need an explicit type.
   if (s.startsWith('blob:')) return 'video/mp4';
   if (/\.webm(\?|#|$)/i.test(s)) return 'video/webm';
   if (/\.mov(\?|#|$)/i.test(s)) return 'video/mp4';
@@ -86,12 +101,11 @@ export type VideoJsPlayerProps = {
   /** Fill parent box (canvas node). Default fluid for previews. */
   layout?: 'fill' | 'fluid';
   /**
-   * `always` — Video.js control bar (upload preview / fullscreen / chat).
-   * `hover` — Video.js bar toggled by `controlsVisible`.
-   * `none` — no Video.js chrome (canvas uses a separate portal bar).
+   * `always` / `hover` — shared React playback bar.
+   * `none` — no bar (caller may portal `VideoPlaybackBar`, e.g. canvas hover).
    */
   controlsMode?: 'always' | 'hover' | 'none';
-  /** Force control bar visible when `controlsMode === 'hover'`. */
+  /** Force bar visible when `controlsMode === 'hover'`. */
   controlsVisible?: boolean;
   autoplay?: boolean;
   muted?: boolean;
@@ -99,11 +113,11 @@ export type VideoJsPlayerProps = {
   /** Keep playback inside [trimStart, trimEnd]. */
   trimStart?: number;
   trimEnd?: number;
-  /** Normalized crop — applied to tech/poster only so the control bar stays in-frame. */
+  /** Normalized crop — applied to tech/poster only so the bar stays in-frame. */
   crop?: VideoCropNorm | null;
   flipX?: boolean;
   flipY?: boolean;
-  /** When true, video surface ignores pointer (canvas selection). Control bar stays clickable. */
+  /** When true, video surface ignores pointer (canvas selection). Bar stays clickable. */
   videoPointerNone?: boolean;
   onReady?: (player: Player) => void;
 };
@@ -120,9 +134,9 @@ function cropCssVars(crop?: VideoCropNorm | null): CSSProperties | undefined {
 
 /**
  * Shared Video.js player — canvas nodes, attachment hover preview, fullscreen.
- * Video element is created imperatively so `player.dispose()` does not fight React DOM.
+ * Chrome uses `VideoPlaybackBar` (never Video.js control bar).
  */
-export default function VideoJsPlayer({
+function VideoJsPlayer({
   src,
   poster,
   className,
@@ -142,24 +156,29 @@ export default function VideoJsPlayer({
   onReady,
 }: VideoJsPlayerProps): ReactNode {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<Player | null>(null);
+  const [player, setPlayer] = useState<Player | null>(null);
+  const [shellHovered, setShellHovered] = useState(false);
+  const [barScale, setBarScale] = useState(1);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   const trimStartRef = useRef(trimStart);
   const trimEndRef = useRef(trimEnd);
   trimStartRef.current = trimStart;
   trimEndRef.current = trimEnd;
-  const controlsVisibleRef = useRef(controlsVisible);
-  controlsVisibleRef.current = controlsVisible;
 
   const playable = String(src || '').trim();
   const cropVars = cropCssVars(crop);
   const hasCrop = Boolean(cropVars);
+  const showBar = controlsMode !== 'none';
+  const barVisible =
+    controlsMode === 'always' ||
+    (controlsMode === 'hover' && (controlsVisible || shellHovered));
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !playable) return;
-    // Wait until the host is actually in the document (portals / conditional mount).
     if (!host.isConnected) return;
 
     const videoEl = document.createElement('video');
@@ -171,9 +190,8 @@ export default function VideoJsPlayer({
     host.appendChild(videoEl);
 
     const sourceType = guessSourceType(playable);
-    const showChrome = controlsMode !== 'none';
-    const player = videojs(videoEl, {
-      controls: showChrome,
+    const instance = videojs(videoEl, {
+      controls: false,
       autoplay,
       muted,
       loop,
@@ -182,25 +200,8 @@ export default function VideoJsPlayer({
       fill: layout === 'fill',
       fluid: layout === 'fluid',
       playsinline: true,
-      bigPlayButton: showChrome,
-      inactivityTimeout: controlsMode === 'hover' ? 0 : showChrome ? 3000 : 0,
-      ...(showChrome
-        ? {
-            controlBar: {
-              children: [
-                'playToggle',
-                'currentTimeDisplay',
-                'progressControl',
-                'volumePanel',
-              ],
-              volumePanel: { inline: false },
-              pictureInPictureToggle: false,
-              remainingTimeDisplay: false,
-              durationDisplay: false,
-              fullscreenToggle: false,
-            },
-          }
-        : {}),
+      bigPlayButton: false,
+      inactivityTimeout: 0,
       sources: [
         {
           src: playable,
@@ -208,10 +209,10 @@ export default function VideoJsPlayer({
         },
       ],
     });
-    playerRef.current = player;
+    playerRef.current = instance;
 
     const clampTrim = () => {
-      const d = Number(player.duration()) || 0;
+      const d = Number(instance.duration()) || 0;
       const hasStart = Number.isFinite(trimStartRef.current);
       const hasEnd = Number.isFinite(trimEndRef.current);
       if (!hasStart && !hasEnd) return;
@@ -222,72 +223,67 @@ export default function VideoJsPlayer({
         end = Math.max(0, Math.min(end, d));
       }
       if (end <= start) return;
-      const t = Number(player.currentTime()) || 0;
-      if (t < start) player.currentTime(start);
+      const t = Number(instance.currentTime()) || 0;
+      if (t < start) instance.currentTime(start);
       else if (t >= end - 0.04) {
-        if (player.paused()) player.currentTime(end);
-        else player.currentTime(start);
+        if (instance.paused()) instance.currentTime(end);
+        else instance.currentTime(start);
       }
     };
 
-    player.ready(() => {
-      onReadyRef.current?.(player);
-      if (controlsMode === 'hover') {
-        player.userActive(Boolean(controlsVisibleRef.current));
-      }
+    instance.ready(() => {
+      setPlayer(instance);
+      onReadyRef.current?.(instance);
       clampTrim();
-      if (autoplay) void player.play()?.catch(() => undefined);
+      if (autoplay) void instance.play()?.catch(() => undefined);
     });
 
-    player.on('timeupdate', clampTrim);
-    player.on('loadedmetadata', clampTrim);
+    instance.on('timeupdate', clampTrim);
+    instance.on('loadedmetadata', clampTrim);
 
     return () => {
-      player.off('timeupdate', clampTrim);
-      player.off('loadedmetadata', clampTrim);
+      instance.off('timeupdate', clampTrim);
+      instance.off('loadedmetadata', clampTrim);
+      setPlayer(null);
       try {
-        if (!player.isDisposed()) player.dispose();
+        if (!instance.isDisposed()) instance.dispose();
       } catch {
         /* ignore */
       }
       playerRef.current = null;
-      // dispose removes the player DOM; clear any leftover nodes React does not own.
       while (host.firstChild) host.removeChild(host.firstChild);
     };
-    // Recreate when the playable URL or layout shell changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- poster/muted toggles handled below
-  }, [playable, layout, controlsMode]);
+  }, [playable, layout]);
 
   useEffect(() => {
-    const player = playerRef.current;
-    if (!player || player.isDisposed()) return;
-    if (controlsMode !== 'hover') return;
-    player.userActive(Boolean(controlsVisible));
-    try {
-      (player as any).options_.inactivityTimeout = controlsVisible ? 0 : 2000;
-    } catch {
-      /* ignore */
-    }
-  }, [controlsVisible, controlsMode]);
-
-  useEffect(() => {
-    const player = playerRef.current;
-    if (!player || player.isDisposed()) return;
-    player.muted(Boolean(muted));
+    const p = playerRef.current;
+    if (!p || p.isDisposed()) return;
+    p.muted(Boolean(muted));
   }, [muted]);
 
   useEffect(() => {
-    const player = playerRef.current;
-    if (!player || player.isDisposed()) return;
-    if (poster) player.poster(poster);
+    const p = playerRef.current;
+    if (!p || p.isDisposed()) return;
+    if (poster) p.poster(poster);
   }, [poster]);
 
   useEffect(() => {
-    const player = playerRef.current;
-    if (!player || player.isDisposed()) return;
-    player.autoplay(Boolean(autoplay));
-    if (autoplay) void player.play()?.catch(() => undefined);
+    const p = playerRef.current;
+    if (!p || p.isDisposed()) return;
+    p.autoplay(Boolean(autoplay));
+    if (autoplay) void p.play()?.catch(() => undefined);
   }, [autoplay]);
+
+  useEffect(() => {
+    const el = shellRef.current;
+    if (!el || controlsMode === 'none') return;
+    const sync = () => setBarScale(videoPlaybackBarScale(el.getBoundingClientRect().width));
+    sync();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, [controlsMode, playable]);
 
   if (!playable) {
     return (
@@ -302,24 +298,48 @@ export default function VideoJsPlayer({
 
   return (
     <div
-      ref={hostRef}
+      ref={shellRef}
       className={cn(
         'rcb-videojs relative min-h-0 min-w-0 overflow-hidden',
         layout === 'fill' && 'h-full w-full',
-        controlsMode === 'hover' && 'rcb-videojs--hover-controls',
-        controlsMode === 'hover' && controlsVisible && 'rcb-videojs--controls-on',
-        controlsMode === 'none' && 'rcb-videojs--no-chrome',
         hasCrop && 'rcb-videojs--cropped',
         flipX && 'rcb-videojs--flip-x',
         flipY && 'rcb-videojs--flip-y',
-        videoPointerNone && 'pointer-events-none rcb-videojs--video-pe-none',
         className
       )}
       style={{ ...cropVars, ...style }}
+      onPointerEnter={() => {
+        if (controlsMode === 'hover') setShellHovered(true);
+      }}
+      onPointerLeave={() => setShellHovered(false)}
       onPointerDown={(e) => {
         if (videoPointerNone) return;
         e.stopPropagation();
       }}
-    />
+    >
+      <div
+        ref={hostRef}
+        className={cn(
+          'absolute inset-0 min-h-0 min-w-0',
+          videoPointerNone && 'pointer-events-none'
+        )}
+      />
+      {/* When video is pe-none, this layer makes the shell receive hover. */}
+      {controlsMode === 'hover' && videoPointerNone ? (
+        <div className="absolute inset-0 z-[1]" aria-hidden />
+      ) : null}
+      {showBar ? (
+        <VideoPlaybackBar
+          player={player}
+          visible={barVisible}
+          trimStart={trimStart}
+          trimEnd={trimEnd}
+          scale={barScale}
+          className="absolute inset-x-0 bottom-0 z-[2]"
+        />
+      ) : null}
+    </div>
   );
 }
+
+export default memo(VideoJsPlayer);

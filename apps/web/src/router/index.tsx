@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from '@/components/layout/AppShell';
@@ -71,7 +71,7 @@ function AppRoutes() {
  * - `/home` → English (default, no prefix)
  * - `/zh/home`, `/zh-tw/home`, `/ja/home` → basename so Link/navigate stay unchanged
  */
-export default function AppRouter() {
+function AppRouter() {
   const [basename] = useState(() => getLocaleBasename());
 
   return (
@@ -82,3 +82,5 @@ export default function AppRouter() {
     </BrowserRouter>
   );
 }
+
+export default memo(AppRouter);

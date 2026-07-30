@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineScissors } from 'react-icons/hi2';
@@ -219,7 +219,7 @@ function applyTrimmedVideoToDocument(
  * Video trim session: theme-aware FloatingToolbar + filmstrip track.
  * Confirm re-encodes the selected range into a new video file on the same node.
  */
-export default function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
+function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const camera = useRcbCamera();
@@ -391,7 +391,16 @@ export default function VideoTrimSessionHost({ document }: { document: any }): R
     target: HTMLElement,
     pointerId: number
   ) => {
-    if (!saneDuration(durationRef.current)) return;
+    let d = saneDuration(durationRef.current);
+    if (!d) {
+      const p = playerRef.current;
+      const fromPlayer = saneDuration(p && !p.isDisposed() ? p.duration() : 0);
+      if (fromPlayer) {
+        applyDurationAndAttrs(fromPlayer);
+        d = fromPlayer;
+      }
+    }
+    if (!d) return;
     dragRef.current = {
       edge,
       originX: clientX,
@@ -580,16 +589,15 @@ export default function VideoTrimSessionHost({ document }: { document: any }): R
 
   return (
     <RcbOverlayPortal>
-      {/* Same Video.js chrome as hover playback. */}
-      <div className="pointer-events-none absolute z-[37] overflow-hidden" style={plateStyle}>
-        <div className="absolute inset-0 overflow-hidden">
+      {/* Same shared VideoPlaybackBar as hover / fullscreen. */}
+      <div className="absolute z-[37] overflow-hidden" style={{ ...plateStyle, pointerEvents: 'none' }}>
+        <div className="pointer-events-auto absolute inset-0 overflow-hidden">
           {playSrc ? (
             <VideoJsPlayer
               src={playSrc}
               poster={String(node.attrs?.poster || '').trim() || undefined}
               layout="fill"
               controlsMode="hover"
-              controlsVisible
               muted
               videoPointerNone
               crop={crop}
@@ -606,13 +614,14 @@ export default function VideoTrimSessionHost({ document }: { document: any }): R
       <div
         data-video-trim-toolbar
         data-sel-toolbar
-        className="pointer-events-auto absolute z-[38]"
+        className="pointer-events-auto absolute z-[80]"
         style={toolbarStyle}
         onPointerDown={(e) => {
           e.stopPropagation();
+          (e.nativeEvent as any).stopImmediatePropagation?.();
         }}
       >
-        <FloatingToolbar className="relative gap-1 py-1.5 pl-[15px] pr-2.5">
+        <FloatingToolbar className="relative gap-2 py-1.5 px-2.5">
           <span className="inline-flex h-8 shrink-0 items-center gap-1.5 text-[12px] font-medium text-[var(--ink)]">
             <HiOutlineScissors className="h-4 w-4 shrink-0" aria-hidden />
             <span>{t('editor.videoToolbar.trim', { defaultValue: '剪辑' })}</span>
@@ -737,7 +746,7 @@ export default function VideoTrimSessionHost({ document }: { document: any }): R
           <button
             type="button"
             disabled={!handlesReady || confirmBusy}
-            className="ml-1 inline-flex h-7 min-w-[52px] items-center justify-center gap-1 rounded-xl px-2.5 text-[12px] font-medium bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex h-7 min-w-[52px] items-center justify-center gap-1 rounded-xl px-2.5 text-[12px] font-medium bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-50"
             onClick={confirm}
           >
             {confirmBusy ? (
@@ -763,3 +772,5 @@ export default function VideoTrimSessionHost({ document }: { document: any }): R
     </RcbOverlayPortal>
   );
 }
+
+export default memo(VideoTrimSessionHost);

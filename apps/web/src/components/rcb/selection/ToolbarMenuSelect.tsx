@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode, memo } from 'react';
 import { HiOutlineChevronDown } from 'react-icons/hi2';
 import { Dropdown } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown';
@@ -32,7 +32,7 @@ type Props = {
  * Compact dropdown for floating selection chrome.
  * Optional `editable` turns the label into an input (presets + custom).
  */
-export default function ToolbarMenuSelect({
+function ToolbarMenuSelect({
   value,
   options,
   onChange,
@@ -169,3 +169,5 @@ export default function ToolbarMenuSelect({
     </Dropdown>
   );
 }
+
+export default memo(ToolbarMenuSelect);

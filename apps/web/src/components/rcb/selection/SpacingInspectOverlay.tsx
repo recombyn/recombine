@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, memo } from 'react';
 import { useRcbCamera } from '../camera/context';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
@@ -676,7 +676,7 @@ function MeasureArrowLine({
  * Spacing / margin lines in **camera world** (scene coords).
  * Screen-constant via page sizes `px / zoom` + SVG stroke.
  */
-export default function SpacingInspectOverlay({
+function SpacingInspectOverlay({
   box,
   others,
   pairBox = null,
@@ -865,3 +865,5 @@ export default function SpacingInspectOverlay({
     </div>
   );
 }
+
+export default memo(SpacingInspectOverlay);

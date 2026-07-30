@@ -1,4 +1,4 @@
-import { forwardRef, useRef, type ReactNode, type Ref } from 'react';
+import { forwardRef, useRef, type ReactNode, type Ref, memo } from 'react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -9,7 +9,7 @@ import {
   HiOutlineComputerDesktop,
   HiOutlineQuestionMarkCircle,
 } from 'react-icons/hi2';
-import { ChatMarkdown } from '@/components/editor/panels/ChatMarkdown';
+import ChatMarkdown from '@/components/editor/panels/ChatMarkdown';
 import { ContextChipPill } from '@/components/editor/panels/AgentComposerInput';
 import { Image } from '@/components/base/image';
 import {
@@ -957,4 +957,4 @@ const ChatTurnList = forwardRef(function ChatTurnList(
   );
 });
 
-export default ChatTurnList;
+export default memo(ChatTurnList);

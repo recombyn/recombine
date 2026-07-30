@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import {
   SegmentedControl,
   type SegmentedRadius,
@@ -75,4 +75,4 @@ export const Tabs: React.FC<TabsProps> = ({
   );
 };
 
-export default Tabs;
+export default memo(Tabs);

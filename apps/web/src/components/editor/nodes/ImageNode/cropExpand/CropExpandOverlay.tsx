@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import {
   RcbOverlayPortal,
@@ -283,7 +283,7 @@ type Props = {
 };
 
 /** Fig.1 — dashed frame, L-corners, edge bars, grid; expand shows gray margins. */
-export default function CropExpandOverlay({
+function CropExpandOverlay({
   mode,
   imageBox,
   cropRect,
@@ -731,3 +731,5 @@ export default function CropExpandOverlay({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(CropExpandOverlay);

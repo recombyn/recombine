@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 import type { RcbCamera } from '../core/types';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 import {
@@ -120,7 +120,7 @@ type DragState =
  * Empty artboard drag is owned by SelectionFeature (marquee). Move artboard via
  * the frame title label (HtmlArtboardFrame), not by dragging empty interior.
  */
-export default function FrameMoveFeature({
+function FrameMoveFeature({
   enabled,
   frames,
   camera,
@@ -307,3 +307,5 @@ export function clientHitsFrame(
   const p = clientToWorld(stageEl, camera, clientX, clientY);
   return Boolean(hitFrame(frames, p.x, p.y));
 }
+
+export default memo(FrameMoveFeature);

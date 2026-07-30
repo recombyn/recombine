@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Switch as HeadlessSwitch } from '@headlessui/react';
 import { cn } from '@/utils/classnames';
 
@@ -36,5 +36,4 @@ const SwitchBase: React.FC<SwitchProps> = ({ checked, onChange, disabled = false
 };
 
 export const Switch = React.memo(SwitchBase);
-export default Switch;
-
+export default memo(Switch);

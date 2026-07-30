@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { getMe } from '@/apis/auth';
 import { fetchWallet } from '@/apis/wallet';
@@ -53,7 +53,7 @@ function installBlockBrowserZoom() {
   };
 }
 
-export default function App() {
+function App() {
   const dispatch = useDispatch();
 
   useEffect(() => installBlockBrowserZoom(), []);
@@ -116,3 +116,5 @@ export default function App() {
 
   return <AppRouter />;
 }
+
+export default memo(App);

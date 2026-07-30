@@ -1,14 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -561,7 +551,7 @@ export function fillPanelPreview(value: FillPanelValue): string {
 }
 
 /** Full fill editor: solid / linear / radial / angular / image (fig.2–6). */
-export function FillPanel({
+function FillPanel({
   value,
   onChange,
   title = '颜色',
@@ -918,7 +908,7 @@ export type FillPanelPopoverProps = {
 };
 
 /** Floating fill panel (type tabs + solid / gradients / image). */
-export function FillPanelPopover({
+function FillPanelPopover({
   value,
   onChange,
   title = '颜色',
@@ -1039,4 +1029,8 @@ export function FillPanelPopover({
   );
 }
 
-export default FillPanel;
+export default memo(FillPanel);
+const MemoizedFillPanel = memo(FillPanel);
+export { MemoizedFillPanel as FillPanel };
+const MemoizedFillPanelPopover = memo(FillPanelPopover);
+export { MemoizedFillPanelPopover as FillPanelPopover };

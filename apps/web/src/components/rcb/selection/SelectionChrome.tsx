@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import Tooltip from '@/components/base/tooltip';
 import { useRcbCamera } from '../camera/context';
 import { toDomPrecision } from '../core/dpr';
@@ -124,7 +125,7 @@ const ROTATE_CORNER_PATH = (() => {
   return m?.[1] || '';
 })();
 
-export default function SelectionChrome({
+function SelectionChrome({
   box,
   angle = 0,
   showHandles = true,
@@ -504,3 +505,5 @@ export default function SelectionChrome({
     </>
   );
 }
+
+export default memo(SelectionChrome);

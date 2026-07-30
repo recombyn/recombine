@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import { RcbOverlayPortal, useRcbCamera } from '../camera/context';
 import { rcbSceneToScreen } from '../core/math';
 import NodeTitleLabel from '../selection/NodeTitleLabel';
@@ -28,7 +28,7 @@ type HtmlArtboardFrameProps = {
  * Label stays above via screen overlay.
  * Double-click the name to rename.
  */
-export default function HtmlArtboardFrame({
+function HtmlArtboardFrame({
   frame,
   onSelect,
   onRename,
@@ -163,3 +163,5 @@ export default function HtmlArtboardFrame({
     </>
   );
 }
+
+export default memo(HtmlArtboardFrame);

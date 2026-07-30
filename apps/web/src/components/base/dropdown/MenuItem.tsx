@@ -1,5 +1,5 @@
 import type { FC, ReactNode } from 'react';
-import { useCallback } from 'react';
+import { useCallback, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -184,4 +184,4 @@ const MenuItem: FC<MenuItemProps> = ({
   );
 };
 
-export default MenuItem;
+export default memo(MenuItem);

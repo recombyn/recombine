@@ -1,5 +1,5 @@
 import { cn } from '@/utils/classnames';
-import type { CSSProperties } from 'react';
+import { memo, type CSSProperties } from 'react';
 
 const CHECKER: CSSProperties = {
   backgroundImage:
@@ -9,7 +9,7 @@ const CHECKER: CSSProperties = {
 };
 
 /** 16×16 circular fill swatch — darker ring so white/near-white fills stay visible. */
-export function FillColorSwatch({
+function FillColorSwatch({
   color,
   className,
 }: {
@@ -30,7 +30,7 @@ export function FillColorSwatch({
 }
 
 /** 16×16 circular stroke ring — same outer size as FillColorSwatch. */
-export function StrokeColorSwatch({
+function StrokeColorSwatch({
   color = 'currentColor',
   className,
 }: {
@@ -50,7 +50,7 @@ export function StrokeColorSwatch({
 }
 
 /** Corner-radius mark. */
-export function IconCornerRadius({ className }: { className?: string }) {
+function IconCornerRadius({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
       <path
@@ -63,3 +63,10 @@ export function IconCornerRadius({ className }: { className?: string }) {
     </svg>
   );
 }
+
+const MemoizedFillColorSwatch = memo(FillColorSwatch);
+export { MemoizedFillColorSwatch as FillColorSwatch };
+const MemoizedStrokeColorSwatch = memo(StrokeColorSwatch);
+export { MemoizedStrokeColorSwatch as StrokeColorSwatch };
+const MemoizedIconCornerRadius = memo(IconCornerRadius);
+export { MemoizedIconCornerRadius as IconCornerRadius };

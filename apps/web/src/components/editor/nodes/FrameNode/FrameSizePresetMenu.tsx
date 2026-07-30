@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   autoUpdate,
@@ -19,7 +19,7 @@ import SizePresetPanel, {
 import { DropdownPanel, DropdownPanelItem } from '@/components/base';
 import { cn } from '@/utils/classnames';
 
-export function FramePresetIcon({ kind, className }: { kind: string; className?: string }) {
+function FramePresetIcon({ kind, className }: { kind: string; className?: string }) {
   const base = cn('rounded-[2px] border border-current opacity-80', className);
   if (kind === 'square') return <span className={cn(base, 'h-3.5 w-3.5')} />;
   if (kind === 'portrait' || kind === 'phone') return <span className={cn(base, 'h-3.5 w-2.5')} />;
@@ -94,7 +94,9 @@ function FramePresetMenuShell({
   );
 }
 
-type DeviceMenuProps = {
+type Props = {
+  /** Device / paper / web presets vs standalone ratio list. */
+  variant?: 'device' | 'ratio';
   open: boolean;
   onOpenChange: (v: boolean) => void;
   activeKey: string;
@@ -103,12 +105,15 @@ type DeviceMenuProps = {
   children?: ReactNode;
   placement?: Placement;
   panelDataAttrs?: Record<string, string | boolean | undefined>;
+  /** Optional icon kind for device trigger (ratio variant ignores). */
+  iconKind?: string;
 };
 
 /**
- * Device / paper / web size presets — shared SizePresetPanel (same as chat).
+ * Frame size / ratio preset menu — one component, `variant` switches the panel.
  */
-export default function FrameSizePresetMenu({
+function FrameSizePresetMenu({
+  variant = 'device',
   open,
   onOpenChange,
   activeKey,
@@ -117,8 +122,47 @@ export default function FrameSizePresetMenu({
   children,
   placement = 'bottom-start',
   panelDataAttrs,
-}: DeviceMenuProps) {
+  iconKind,
+}: Props) {
   const { t } = useTranslation();
+  const isRatio = variant === 'ratio';
+
+  const panel = isRatio ? (
+    <DropdownPanel className="w-[168px] p-1 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
+      <div role="listbox" className="max-h-[min(280px,45vh)] overflow-y-auto">
+        {FRAME_RATIO_PRESETS.map((p) => {
+          const selected = activeKey === p.key;
+          return (
+            <DropdownPanelItem
+              key={p.key}
+              role="option"
+              selected={selected}
+              onClick={() => {
+                onPick(p);
+                onOpenChange(false);
+              }}
+            >
+              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[var(--muted)]">
+                <FramePresetIcon kind={p.icon} />
+              </span>
+              <span className="min-w-0 flex-1 truncate">{framePresetDisplayLabel(p, t)}</span>
+            </DropdownPanelItem>
+          );
+        })}
+      </div>
+    </DropdownPanel>
+  ) : (
+    <DropdownPanel className="w-max max-w-[calc(100vw-24px)] overflow-hidden p-0 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
+      <SizePresetPanel
+        activeKey={activeKey}
+        onPick={(preset) => {
+          onPick(preset);
+          onOpenChange(false);
+        }}
+      />
+    </DropdownPanel>
+  );
+
   return (
     <FramePresetMenuShell
       open={open}
@@ -126,84 +170,15 @@ export default function FrameSizePresetMenu({
       triggerClassName={triggerClassName}
       placement={placement}
       panelDataAttrs={panelDataAttrs}
-      ariaLabel={t('editor.frameToolbar.sizePresets')}
-      panel={
-        <DropdownPanel className="w-max max-w-[calc(100vw-24px)] overflow-hidden p-0 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
-          <SizePresetPanel
-            activeKey={activeKey}
-            onPick={(preset) => {
-              onPick(preset);
-              onOpenChange(false);
-            }}
-          />
-        </DropdownPanel>
+      ariaLabel={
+        isRatio ? t('editor.frameToolbar.ratioPresets') : t('editor.frameToolbar.sizePresets')
       }
+      panel={panel}
     >
+      {iconKind ? <FramePresetIcon kind={iconKind} /> : null}
       {children}
     </FramePresetMenuShell>
   );
 }
 
-type RatioMenuProps = {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  activeKey: string;
-  onPick: (preset: FrameSizePreset) => void;
-  triggerClassName?: string;
-  children?: ReactNode;
-  placement?: Placement;
-  panelDataAttrs?: Record<string, string | boolean | undefined>;
-};
-
-/** Standalone ratio picker (not nested in device tabs). */
-export function FrameRatioPresetMenu({
-  open,
-  onOpenChange,
-  activeKey,
-  onPick,
-  triggerClassName,
-  children,
-  placement = 'bottom-start',
-  panelDataAttrs,
-}: RatioMenuProps) {
-  const { t } = useTranslation();
-  return (
-    <FramePresetMenuShell
-      open={open}
-      onOpenChange={onOpenChange}
-      triggerClassName={triggerClassName}
-      placement={placement}
-      panelDataAttrs={panelDataAttrs}
-      ariaLabel={t('editor.frameToolbar.ratioPresets')}
-      panel={
-        <DropdownPanel className="w-[168px] p-1 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
-          <div role="listbox" className="max-h-[min(280px,45vh)] overflow-y-auto">
-            {FRAME_RATIO_PRESETS.map((p) => {
-              const selected = activeKey === p.key;
-              return (
-                <DropdownPanelItem
-                  key={p.key}
-                  role="option"
-                  selected={selected}
-                  onClick={() => {
-                    onPick(p);
-                    onOpenChange(false);
-                  }}
-                >
-                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[var(--muted)]">
-                    <FramePresetIcon kind={p.icon} />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">
-                    {framePresetDisplayLabel(p, t)}
-                  </span>
-                </DropdownPanelItem>
-              );
-            })}
-          </div>
-        </DropdownPanel>
-      }
-    >
-      {children}
-    </FramePresetMenuShell>
-  );
-}
+export default memo(FrameSizePresetMenu);

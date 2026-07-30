@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import Tooltip from '@/components/base/tooltip';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
@@ -12,7 +13,7 @@ import { cn } from '@/utils/classnames';
 /**
  * Paint-bucket options: same FillPanel as shape fill (solid / gradient / image).
  */
-export default function BucketFillToolbar({ className }: { className?: string }) {
+function BucketFillToolbar({ className }: { className?: string }) {
   const dispatch = useDispatch();
   const value = useSelector((s: any) => {
     const raw = s.editor.bucketFill || {};
@@ -61,3 +62,5 @@ export default function BucketFillToolbar({ className }: { className?: string })
     </div>
   );
 }
+
+export default memo(BucketFillToolbar);

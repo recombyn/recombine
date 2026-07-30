@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, memo } from 'react';
 import { FloatingPortal } from '@floating-ui/react';
 import { useTranslation } from 'react-i18next';
 import { HiHeart, HiOutlineEye, HiOutlineShare, HiOutlineXMark } from 'react-icons/hi2';
@@ -202,7 +202,7 @@ type Props = {
  * left+center: project title + artboard rail + selected artboard content;
  * right: author / prompt card.
  */
-export default function InspirationCasePreview({
+function InspirationCasePreview({
   open,
   caseMeta,
   projectDocument,
@@ -633,3 +633,5 @@ export default function InspirationCasePreview({
     </FloatingPortal>
   );
 }
+
+export default memo(InspirationCasePreview);

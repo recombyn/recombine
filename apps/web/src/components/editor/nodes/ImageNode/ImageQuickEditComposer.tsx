@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type ReactNode,
-} from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch, useSelector } from 'react-redux';
 import { HiOutlineBolt, HiOutlineChevronDown, HiOutlinePlus, HiOutlineViewfinderCircle } from 'react-icons/hi2';
@@ -79,7 +72,7 @@ function ratioSummaryLabel(aspectRatio: string, t: (k: string) => string) {
  * Prefills `attrs.genPrompt` when the image was prompt-generated; sends the
  * current image as the primary reference for i2i edits.
  */
-export default function ImageQuickEditComposer({
+function ImageQuickEditComposer({
   document,
   nodeId,
   box,
@@ -579,3 +572,5 @@ export default function ImageQuickEditComposer({
     </RcbOverlayPortal>
   );
 }
+
+export default memo(ImageQuickEditComposer);

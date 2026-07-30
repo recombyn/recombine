@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, memo } from 'react';
 
 interface HueSliderProps {
   value: number;
@@ -9,7 +9,7 @@ interface HueSliderProps {
 /**
  * Horizontal hue strip (0–360°) with drag support.
  */
-export const HueSlider = ({ value, onChange, disabled }: HueSliderProps) => {
+export const HueSlider = memo(({ value, onChange, disabled }: HueSliderProps) => {
   const sliderRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -64,5 +64,5 @@ export const HueSlider = ({ value, onChange, disabled }: HueSliderProps) => {
       />
     </div>
   );
-};
+});
 

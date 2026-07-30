@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -31,7 +31,7 @@ function normAngle(deg: number) {
 /**
  * Flip & rotate strip: title on the left, exit (chat-style) on the right.
  */
-export default function FlipRotateToolbar({
+function FlipRotateToolbar({
   nodeId,
   angle,
   flipX,
@@ -136,3 +136,5 @@ export default function FlipRotateToolbar({
     </>
   );
 }
+
+export default memo(FlipRotateToolbar);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -194,7 +194,7 @@ function RailHelpMenu() {
 }
 
 /** Left rail — logo top, nav vertically centered, help bottom. */
-export function HomeSidebar({
+function HomeSidebar({
   nav,
   setNav,
   importing,
@@ -283,7 +283,7 @@ export function HomeSidebar({
   );
 }
 
-export function HomeTemplateList({
+function HomeTemplateList({
   nav,
   setNav,
   query,
@@ -493,3 +493,8 @@ export function useHomeNav() {
 
   return { nav, setNav, query, setQuery, importing, setImporting, importingName, setImportingName };
 }
+
+const MemoizedHomeSidebar = memo(HomeSidebar);
+export { MemoizedHomeSidebar as HomeSidebar };
+const MemoizedHomeTemplateList = memo(HomeTemplateList);
+export { MemoizedHomeTemplateList as HomeTemplateList };

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -378,7 +378,7 @@ function useRevealOnScroll() {
 }
 
 /** Public marketing homepage — brand-first, SEO-ready, scrollable. */
-export default function LandingPage(): ReactNode {
+function LandingPage(): ReactNode {
   const { t, i18n } = useTranslation();
   const revealRef = useRevealOnScroll();
   const lang = i18n.resolvedLanguage || i18n.language || 'zh-CN';
@@ -614,3 +614,5 @@ export default function LandingPage(): ReactNode {
     </div>
   );
 }
+
+export default memo(LandingPage);

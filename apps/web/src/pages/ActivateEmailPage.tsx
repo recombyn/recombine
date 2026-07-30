@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +10,7 @@ import { buildLoginUrl } from '@/utils/authReturnTo';
  * Landing from SES magic link: https://recombyn.com/activate/{{id}}
  * Exchanges the one-time id for a session, then enters the app.
  */
-export default function ActivateEmailPage() {
+function ActivateEmailPage() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -75,3 +75,5 @@ export default function ActivateEmailPage() {
     </div>
   );
 }
+
+export default memo(ActivateEmailPage);
