@@ -197,24 +197,41 @@ def search_long_term_store(
     if not uid:
         return []
     k = max(1, min(10, int(limit or 3)))
+    q = (query or "").strip()
+    items: Any = []
     try:
         items = store.search(
             long_term_namespace(uid),
-            query=(query or "").strip() or None,
+            query=q or None,
             limit=k,
         )
     except TypeError:
-        items = store.search(long_term_namespace(uid), limit=k)
+        try:
+            items = store.search(long_term_namespace(uid), limit=k)
+        except Exception:
+            logger.debug("store.search failed", exc_info=True)
+            items = []
     except Exception:
         logger.debug("store.search failed", exc_info=True)
-        return []
+        items = []
+    # No index / embed unavailable: semantic query can return []; fall back to list.
+    if not items:
+        try:
+            items = store.search(long_term_namespace(uid), limit=max(k, 20))
+        except Exception:
+            logger.debug("store.search list fallback failed", exc_info=True)
+            return []
     out: list[dict[str, Any]] = []
+    q_low = q.lower()
     for it in items or []:
         val = getattr(it, "value", None) or {}
         if not isinstance(val, dict):
             continue
         text = str(val.get("text") or "").strip()
         if not text:
+            continue
+        if q_low and q_low not in text.lower() and getattr(it, "score", None) is None:
+            # Listed (non-semantic) hits: keep substring matches only.
             continue
         score = getattr(it, "score", None)
         out.append(
@@ -226,6 +243,8 @@ def search_long_term_store(
                 "key": str(getattr(it, "key", "") or ""),
             }
         )
+        if len(out) >= k:
+            break
     return out
 
 

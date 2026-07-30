@@ -91,9 +91,10 @@ def resolve_agent_scene(
     del prompt, canvas_size, medium, ref_sizes
     keys = scene_keys(rules)
     provided = scene_key(scene)
-    if provided and provided in keys:
+    # Empty Admin allowlist → trust the client tab (cold start / OSS).
+    if provided and (not keys or provided in keys):
         return provided, False
-    default = _rule_text(rules, "canvas.default_scene").strip().lower()
+    default = _rule_text(rules, "canvas.default_scene").strip().lower() or "website"
     return default, False
 
 

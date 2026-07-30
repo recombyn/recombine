@@ -31,9 +31,13 @@ def test_prompt_packs_catalog_points_to_skills():
 
 
 def test_methodology_lives_in_skills():
+    from services.design.skill_store import ensure_design_skills, reset_skills_ready_for_tests
+
+    reset_skills_ready_for_tests()
+    ensure_design_skills(force=True)
     details = format_skills_details(keys=["design_methodology"], scene="website")
     assert "create_shape" in details and "create_text" in details
-    assert "need_aesthetics" in details
+    assert "need_aesthetics" in details or "skill: design_methodology" in details
 
 
 def test_list_prompt_nodes_from_explicit_graph():

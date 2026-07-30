@@ -322,7 +322,9 @@ export default function InspirationCasePreview({
     const el = window.document.querySelector(
       `[data-preview-frame-thumb="${CSS.escape(activeFrameId)}"]`
     ) as HTMLElement | null;
-    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (typeof el?.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
   }, [open, activeFrameId]);
 
   useEffect(() => {
