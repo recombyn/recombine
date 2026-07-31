@@ -23,6 +23,8 @@
 **Recombyn** 是开源的 **画布编辑器 + AI Design Agent**。  
 在无限画布上创作与编辑，用 Agent 规划并落笔改画布，整套可在自己的机器上跑。
 
+**LangGraph Agent 原生驱动**：AI 可直接操作画布图层、创建图形、修改文字、调整布局，实现「对话操控画布」——不是对话吐一张死图。
+
 几分钟内用 Docker Compose 自托管（**MySQL** + Redis + Web + API）。MIT 协议 monorepo。  
 另支持：本地 **SQLite**（空 `DATABASE_URL`），以及配置 `DATABASE_URL` 后使用 **PostgreSQL**（需先迁移 schema）— 见 [docs/postgres-switch.md](docs/postgres-switch.md)。
 
@@ -31,14 +33,14 @@
 ## 为什么选 Recombyn？
 
 - **可视化编辑** — 画板、形状、图片、视频、文字 — 不只是对话吐一张图
-- **会落笔的 Agent** — LangGraph 设计 Agent：工具、技能、确认流
+- **LangGraph 操控画布** — Agent 直接改图层 / 图形 / 文案 / 布局，用对话驱动设计
 - **自托管优先** — 本地与服务器同一套栈，数据在你这边
 - **可组合** — 技能 / 流程 / 字典以 `apps/api/data/` 下种子 JSON 交付，可自行改
 
 ## 核心能力
 
 - **可视化编辑** — 选区、图层、填充、导出、分享  
-- **Design Agent** — 创建 / 编辑 / 闲聊，流式对话 UI  
+- **Design Agent** — LangGraph 工具 / 技能；创建 / 编辑 / 闲聊，流式对话 UI  
 - **图片导入** — 本地图片 → 可编辑画布节点  
 - **广场与项目** — 灵感流与作品（API）
 
