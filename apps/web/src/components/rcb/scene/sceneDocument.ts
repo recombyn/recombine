@@ -565,18 +565,63 @@ export function measureVideoNaturalSize(
     video.preload = 'metadata';
     video.muted = true;
     video.playsInline = true;
+    let settled = false;
     const cleanup = () => {
       video.removeAttribute('src');
       video.load();
     };
-    video.onloadedmetadata = () => {
-      const width = Math.max(1, video.videoWidth || 1);
-      const height = Math.max(1, video.videoHeight || 1);
-      const duration = Number.isFinite(video.duration) ? Math.max(0, video.duration) : 0;
+    const finish = (width: number, height: number, duration: number) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       resolve({ width, height, duration });
     };
+    video.onloadedmetadata = () => {
+      const width = Math.max(1, video.videoWidth || 1);
+      const height = Math.max(1, video.videoHeight || 1);
+      const raw = Number(video.duration);
+      if (Number.isFinite(raw) && raw > 0 && raw < 60 * 60 * 12) {
+        finish(width, height, raw);
+        return;
+      }
+      // Fragmented MP4s often report Infinity — seek-clamp once at upload so we can store it.
+      const onSeeked = () => {
+        video.removeEventListener('seeked', onSeeked);
+        window.clearTimeout(timer);
+        const probed = Number(video.currentTime);
+        const duration =
+          Number.isFinite(probed) && probed > 0 && probed < 60 * 60 * 12 ? probed : 0;
+        try {
+          video.currentTime = 0;
+        } catch {
+          /* ignore */
+        }
+        finish(width, height, duration);
+      };
+      const timer = window.setTimeout(() => {
+        video.removeEventListener('seeked', onSeeked);
+        const probed = Number(video.currentTime);
+        const duration =
+          Number.isFinite(probed) && probed > 0 && probed < 60 * 60 * 12 ? probed : 0;
+        try {
+          video.currentTime = 0;
+        } catch {
+          /* ignore */
+        }
+        finish(width, height, duration);
+      }, 900);
+      video.addEventListener('seeked', onSeeked);
+      try {
+        video.currentTime = 1e10;
+      } catch {
+        window.clearTimeout(timer);
+        video.removeEventListener('seeked', onSeeked);
+        finish(width, height, 0);
+      }
+    };
     video.onerror = () => {
+      if (settled) return;
+      settled = true;
       cleanup();
       reject(new Error('video load failed'));
     };
@@ -1048,6 +1093,7 @@ export function createVideoNode({
   src = '',
   poster = '',
   name = 'Video',
+  duration,
 }: {
   x?: number;
   y?: number;
@@ -1056,8 +1102,11 @@ export function createVideoNode({
   src?: string;
   poster?: string;
   name?: string;
+  /** Media length in seconds — set at upload so players need not seek-probe. */
+  duration?: number;
 } = {}) {
   const id = nanoid(10);
+  const d = Number(duration);
   return {
     id,
     node: {
@@ -1075,6 +1124,7 @@ export function createVideoNode({
         assetKind: 'video',
         mode: 'FIT',
         lockAspect: 'true',
+        ...(Number.isFinite(d) && d > 0 ? { duration: d } : {}),
         radiusTL: 0,
         radiusTR: 0,
         radiusBR: 0,
@@ -1154,6 +1204,7 @@ export function spawnVideoUploadPlaceholderNode(
     x,
     y,
     name,
+    duration,
   }: {
     src: string;
     poster?: string;
@@ -1163,6 +1214,7 @@ export function spawnVideoUploadPlaceholderNode(
     x?: number;
     y?: number;
     name?: string;
+    duration?: number;
   }
 ) {
   if (!doc || !src) return { document: doc, id: null as string | null };
@@ -1175,6 +1227,7 @@ export function spawnVideoUploadPlaceholderNode(
     src,
     poster: poster || '',
     name: name || 'Video',
+    duration,
   });
   node.attrs = {
     ...(node.attrs || {}),

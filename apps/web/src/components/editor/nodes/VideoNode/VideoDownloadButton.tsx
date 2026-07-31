@@ -1,7 +1,19 @@
-import { useState, type ReactNode, memo } from 'react';
+import { useCallback, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineArrowDownTray } from 'react-icons/hi2';
+import {
+  autoUpdate,
+  flip,
+  FloatingPortal,
+  offset,
+  shift,
+  useDismiss,
+  useFloating,
+  useInteractions,
+} from '@floating-ui/react';
 import { message, Tooltip } from '@/components/base';
+import { DropdownPanel, DropdownPanelItem } from '@/components/base/dropdown/DropdownPanel';
+import { exportVideoAudio } from '@/utils/audioExporter';
 import { imageSrcToFile } from '@/utils/uploadImage';
 import { cn } from '@/utils/classnames';
 import { videoToolBtn } from './videoToolbarShared';
@@ -48,20 +60,36 @@ function pickRecorderMime(): { mime: string; ext: string } {
   return { mime: 'video/webm', ext: 'webm' };
 }
 
-function waitEvent(el: HTMLMediaElement, type: string) {
+function waitEvent(el: HTMLMediaElement, type: string, timeoutMs = 12_000) {
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
     const onOk = () => {
       cleanup();
-      resolve();
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
     };
     const onErr = () => {
       cleanup();
-      reject(new Error('media error'));
+      if (!settled) {
+        settled = true;
+        reject(new Error('media error'));
+      }
     };
     const cleanup = () => {
       el.removeEventListener(type, onOk);
       el.removeEventListener('error', onErr);
+      window.clearTimeout(timer);
     };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      if (!settled) {
+        settled = true;
+        // Seeked often never fires when currentTime is already near the target.
+        resolve();
+      }
+    }, timeoutMs);
     el.addEventListener(type, onOk, { once: true });
     el.addEventListener('error', onErr, { once: true });
   });
@@ -153,16 +181,21 @@ export async function exportCroppedVideoBlob(opts: {
     });
 
     video.currentTime = start;
-    await waitEvent(video, 'seeked');
+    // If already near `start`, `seeked` may never fire — waitEvent times out as resolve.
+    if (Math.abs((Number(video.currentTime) || 0) - start) > 0.04) {
+      await waitEvent(video, 'seeked', 8_000);
+    }
 
     recorder.start(200);
     await video.play();
 
+    const clipMs = Math.max(200, (end - start) * 1000);
     await new Promise<void>((resolve, reject) => {
       let stopped = false;
       const finish = () => {
         if (stopped) return;
         stopped = true;
+        window.clearTimeout(watchdog);
         try {
           video.pause();
         } catch {
@@ -175,6 +208,9 @@ export async function exportCroppedVideoBlob(opts: {
         }
         resolve();
       };
+
+      // Hard stop so export never hangs forever if frame callbacks stall.
+      const watchdog = window.setTimeout(finish, clipMs + 4_000);
 
       const flipX = opts.flipX === true;
       const flipY = opts.flipY === true;
@@ -230,7 +266,72 @@ function baseName(name?: string) {
   return (name || 'video').replace(/\.[^.]+$/, '') || 'video';
 }
 
-/** Download selected video — applies crop/flip/trim when present (re-encode). */
+export type VideoNodeDownloadOpts = {
+  src: string;
+  name?: string;
+  uploadKey?: string | null;
+  cropX?: number;
+  cropY?: number;
+  cropW?: number;
+  cropH?: number;
+  trimStart?: number;
+  trimEnd?: number;
+  flipX?: boolean;
+  flipY?: boolean;
+};
+
+/** Programmatic MP4 / audio download for toolbar + context menu. */
+export async function downloadVideoNodeAsset(
+  opts: VideoNodeDownloadOpts & { mode?: 'video' | 'audio' }
+): Promise<'video' | 'audio'> {
+  const url = String(opts.src || '').trim();
+  if (!url) throw new Error('missing src');
+  const mode = opts.mode === 'audio' ? 'audio' : 'video';
+  const crop = readCrop({
+    cropX: opts.cropX,
+    cropY: opts.cropY,
+    cropW: opts.cropW,
+    cropH: opts.cropH,
+  });
+  const mirroredX = opts.flipX === true;
+  const mirroredY = opts.flipY === true;
+  const hasFlip = mirroredX || mirroredY;
+  const hasTrim =
+    (Number.isFinite(opts.trimStart) && Number(opts.trimStart) > 0) ||
+    (Number.isFinite(opts.trimEnd) && Number(opts.trimEnd) > 0);
+  const needsVideoExport = Boolean(crop) || hasFlip || hasTrim;
+  const file = await imageSrcToFile(url, `${baseName(opts.name)}.mp4`, {
+    uploadKey: opts.uploadKey || null,
+  });
+
+  if (mode === 'audio') {
+    const { blob, ext } = await exportVideoAudio({
+      file,
+      trimStart: opts.trimStart,
+      trimEnd: opts.trimEnd,
+    });
+    downloadBlob(blob, `${baseName(opts.name)}.${ext}`);
+    return 'audio';
+  }
+
+  if (!needsVideoExport) {
+    downloadBlob(file, `${baseName(opts.name)}.mp4`);
+    return 'video';
+  }
+
+  const { blob, ext } = await exportCroppedVideoBlob({
+    file,
+    crop,
+    flipX: mirroredX,
+    flipY: mirroredY,
+    trimStart: opts.trimStart,
+    trimEnd: opts.trimEnd,
+  });
+  downloadBlob(blob, `${baseName(opts.name)}-edit.${ext}`);
+  return 'video';
+}
+
+/** Download trigger — dropdown with MP4 / MP3 (crop/flip/trim re-encodes when needed). */
 function VideoDownloadButton({
   src,
   name,
@@ -258,87 +359,168 @@ function VideoDownloadButton({
 }): ReactNode {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
   const url = String(src || '').trim();
-  if (!url) return null;
 
-  const crop = readCrop({ cropX, cropY, cropW, cropH });
-  const mirroredX = flipX === true;
-  const mirroredY = flipY === true;
-  const hasFlip = mirroredX || mirroredY;
-  const hasTrim =
-    (Number.isFinite(trimStart) && Number(trimStart) > 0) ||
-    (Number.isFinite(trimEnd) && Number(trimEnd) > 0);
-  const needsExport = Boolean(crop) || hasTrim || hasFlip;
+  const { refs, floatingStyles, context } = useFloating({
+    open,
+    onOpenChange: setOpen,
+    placement: 'bottom-end',
+    strategy: 'fixed',
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(8),
+      flip({
+        padding: 12,
+        fallbackPlacements: ['top-end', 'bottom-start', 'top-start'],
+      }),
+      shift({ padding: 12 }),
+    ],
+  });
+  const dismiss = useDismiss(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([dismiss]);
 
-  const onDownload = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const file = await imageSrcToFile(url, `${baseName(name)}.mp4`, {
-        uploadKey: uploadKey || null,
-      });
-
-      // Unedited → original bytes.
-      if (!needsExport) {
-        downloadBlob(file, `${baseName(name)}.mp4`);
-        return;
-      }
-
+  const onDownload = useCallback(
+    async (mode: 'video' | 'audio') => {
+      if (busy || !url) return;
+      setOpen(false);
+      setBusy(true);
       const hideLoading = message.loading(
-        t('editor.videoToolbar.exporting', { defaultValue: '正在导出视频…' }),
+        t(
+          mode === 'audio'
+            ? 'editor.videoToolbar.exportingAudio'
+            : 'editor.videoToolbar.exporting',
+          {
+            defaultValue: mode === 'audio' ? '正在导出音频…' : '正在导出视频…',
+          }
+        ),
         0
       );
       try {
-        const { blob, ext } = await exportCroppedVideoBlob({
-          file,
-          crop,
-          flipX: mirroredX,
-          flipY: mirroredY,
+        await downloadVideoNodeAsset({
+          src: url,
+          name,
+          uploadKey,
+          cropX,
+          cropY,
+          cropW,
+          cropH,
           trimStart,
           trimEnd,
+          flipX,
+          flipY,
+          mode,
         });
         hideLoading();
-        downloadBlob(blob, `${baseName(name)}-edit.${ext}`);
-      } catch (exportErr) {
-        hideLoading();
-        throw exportErr;
-      }
-    } catch (err) {
-      console.warn('[video-download]', err);
-      // Fall back to original file so download still works if re-encode fails.
-      try {
-        const res = await fetch(url);
-        const blob = await res.blob();
-        downloadBlob(blob, `${baseName(name)}.mp4`);
-        message.warning(
-          t('editor.videoToolbar.exportFallback', {
-            defaultValue: '裁剪导出失败，已下载原视频',
+        message.success(
+          t(mode === 'audio' ? 'editor.exportedAudio' : 'editor.exportedVideo', {
+            defaultValue: mode === 'audio' ? '已导出音频' : '已导出视频',
           })
         );
-      } catch {
-        try {
-          window.open(url, '_blank', 'noopener,noreferrer');
-        } catch {
-          message.error(t('editor.videoToolbar.downloadFail', { defaultValue: '下载失败' }));
+      } catch (err) {
+        hideLoading();
+        console.warn('[video-download]', err);
+        if (mode === 'audio') {
+          const detail = err instanceof Error ? err.message : String(err || '');
+          message.error(
+            t('editor.videoToolbar.exportAudioFail', {
+              defaultValue: '音频导出失败',
+            }) + (detail ? `：${detail}` : '')
+          );
+          return;
         }
+        // Fall back to original file so download still works if re-encode fails.
+        try {
+          const res = await fetch(url);
+          const blob = await res.blob();
+          downloadBlob(blob, `${baseName(name)}.mp4`);
+          message.warning(
+            t('editor.videoToolbar.exportFallback', {
+              defaultValue: '裁剪导出失败，已下载原视频',
+            })
+          );
+        } catch {
+          try {
+            window.open(url, '_blank', 'noopener,noreferrer');
+          } catch {
+            message.error(t('editor.videoToolbar.downloadFail', { defaultValue: '下载失败' }));
+          }
+        }
+      } finally {
+        setBusy(false);
       }
-    } finally {
-      setBusy(false);
-    }
-  };
+    },
+    [
+      busy,
+      url,
+      name,
+      uploadKey,
+      cropX,
+      cropY,
+      cropW,
+      cropH,
+      trimStart,
+      trimEnd,
+      flipX,
+      flipY,
+      t,
+    ]
+  );
+
+  if (!url) return null;
 
   return (
-    <Tooltip tip={t('editor.videoToolbar.download', { defaultValue: '下载' })} placement="top">
-      <button
-        type="button"
-        aria-label={t('editor.videoToolbar.download', { defaultValue: '下载' })}
-        disabled={busy}
-        className={cn(videoToolBtn, busy && 'opacity-50')}
-        onClick={() => void onDownload()}
+    <>
+      <Tooltip
+        tip={t('editor.videoToolbar.download', { defaultValue: '下载' })}
+        placement="top"
+        disabled={open}
       >
-        <HiOutlineArrowDownTray className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-      </button>
-    </Tooltip>
+        <button
+          type="button"
+          ref={refs.setReference}
+          aria-label={t('editor.videoToolbar.download', { defaultValue: '下载' })}
+          aria-expanded={open}
+          disabled={busy}
+          className={cn(videoToolBtn, (busy || open) && 'opacity-50', open && 'bg-[var(--accent-soft)]')}
+          {...getReferenceProps({
+            onClick: () => {
+              if (busy) return;
+              setOpen((v) => !v);
+            },
+          })}
+        >
+          <HiOutlineArrowDownTray className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+        </button>
+      </Tooltip>
+
+      <FloatingPortal>
+        {open ? (
+          <div
+            ref={refs.setFloating}
+            style={floatingStyles as CSSProperties}
+            className="z-[80]"
+            data-video-download-menu=""
+            {...getFloatingProps()}
+          >
+            <DropdownPanel className="min-w-[7.5rem]">
+              <DropdownPanelItem
+                disabled={busy}
+                onClick={() => void onDownload('video')}
+              >
+                MP4
+              </DropdownPanelItem>
+              <DropdownPanelItem
+                disabled={busy}
+                onClick={() => void onDownload('audio')}
+              >
+                MP3
+              </DropdownPanelItem>
+            </DropdownPanel>
+          </div>
+        ) : null}
+      </FloatingPortal>
+    </>
   );
 }
 

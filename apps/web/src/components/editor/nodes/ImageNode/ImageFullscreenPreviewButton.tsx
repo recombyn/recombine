@@ -1,6 +1,6 @@
 import { useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineArrowsPointingOut } from 'react-icons/hi2';
+import { RiFullscreenFill } from 'react-icons/ri';
 import { Image } from '@/components/base/image';
 import Tooltip from '@/components/base/tooltip';
 import { imageToolBtn } from './imageToolbarShared';
@@ -28,7 +28,7 @@ function ImageFullscreenPreviewButton({
           className={imageToolBtn}
           onClick={() => setOpen(true)}
         >
-          <HiOutlineArrowsPointingOut className="h-4 w-4" />
+          <RiFullscreenFill className="h-4 w-4" />
         </button>
       </Tooltip>
       {/* Hidden host — drives the shared Image lightbox portal. */}

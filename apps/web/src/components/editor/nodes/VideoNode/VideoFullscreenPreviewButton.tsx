@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineArrowsPointingOut, HiOutlineXMark } from 'react-icons/hi2';
+import { HiOutlineXMark } from 'react-icons/hi2';
+import { RiFullscreenFill } from 'react-icons/ri';
 import Tooltip from '@/components/base/tooltip';
 import PreviewToolbar from '@/components/base/image/PreviewToolbar';
 import VideoJsPlayer, {
@@ -39,11 +40,31 @@ function readCrop(attrs: {
   return { x, y, w, h };
 }
 
+export type VideoFullscreenPreviewProps = {
+  open: boolean;
+  onClose: () => void;
+  src?: string | null;
+  poster?: string | null;
+  uploadKey?: string | null;
+  aspectWidth?: number;
+  aspectHeight?: number;
+  cropX?: number;
+  cropY?: number;
+  cropW?: number;
+  cropH?: number;
+  trimStart?: number;
+  trimEnd?: number;
+  flipX?: boolean;
+  flipY?: boolean;
+  duration?: number;
+};
+
 /**
- * Fullscreen video preview — native player + shared VideoPlaybackBar as canvas/chat
- * (max 700×700). Zoom uses CSS scale like image lightbox so aspect never stretches.
+ * Fullscreen lightbox portal — used by toolbar button and hover playback bar.
  */
-function VideoFullscreenPreviewButton({
+export function VideoFullscreenPreview({
+  open,
+  onClose,
   src,
   poster,
   uploadKey,
@@ -57,24 +78,8 @@ function VideoFullscreenPreviewButton({
   trimEnd,
   flipX,
   flipY,
-}: {
-  src?: string | null;
-  poster?: string | null;
-  uploadKey?: string | null;
-  /** Node display size — drives lightbox aspect (not 16:9 default). */
-  aspectWidth?: number;
-  aspectHeight?: number;
-  cropX?: number;
-  cropY?: number;
-  cropW?: number;
-  cropH?: number;
-  trimStart?: number;
-  trimEnd?: number;
-  flipX?: boolean;
-  flipY?: boolean;
-}): ReactNode {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  duration,
+}: VideoFullscreenPreviewProps): ReactNode {
   const [scale, setScale] = useState(1);
   const url = String(src || '').trim();
   const playSrc = usePlayableVideoSrc(url, uploadKey);
@@ -85,9 +90,9 @@ function VideoFullscreenPreviewButton({
   const ah = Math.max(1, Number(aspectHeight) || 16);
 
   const close = useCallback(() => {
-    setOpen(false);
     setScale(1);
-  }, []);
+    onClose();
+  }, [onClose]);
 
   const zoomIn = useCallback(() => {
     setScale((s) => Math.min(s * 1.2, MAX_SCALE));
@@ -116,10 +121,12 @@ function VideoFullscreenPreviewButton({
     };
   }, [open, close]);
 
-  if (!url) return null;
+  useEffect(() => {
+    if (!open) setScale(1);
+  }, [open]);
 
-  // Fit inside 700×700 preserving node aspect; zoom via transform (never
-  // clamp width/height independently — that stretches portrait videos).
+  if (!open || !url || typeof document === 'undefined') return null;
+
   const fit = Math.min(PREVIEW_MAX_PX / aw, PREVIEW_MAX_PX / ah);
   const baseW = aw * fit;
   const baseH = ah * fit;
@@ -130,6 +137,89 @@ function VideoFullscreenPreviewButton({
     transformOrigin: 'center center',
   };
 
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[2500]"
+      onClick={close}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        e.nativeEvent.stopImmediatePropagation?.();
+      }}
+    >
+      <div className="fixed inset-0 bg-black/50" />
+      <button
+        type="button"
+        aria-label="Close"
+        className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
+        onClick={close}
+      >
+        <HiOutlineXMark className="h-5 w-5" />
+      </button>
+      <div className="pointer-events-none fixed inset-0 flex items-center justify-center overflow-hidden">
+        <div
+          className="pointer-events-auto relative overflow-hidden rounded-lg bg-black shadow-2xl"
+          style={frameStyle}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="absolute inset-0 overflow-hidden">
+            {playSrc ? (
+              <VideoJsPlayer
+                src={playSrc}
+                poster={posterUrl}
+                layout="fill"
+                controlsMode="hover"
+                muted
+                crop={crop}
+                flipX={flipX === true}
+                flipY={flipY === true}
+                trimStart={Number.isFinite(Number(trimStart)) ? Number(trimStart) : undefined}
+                trimEnd={Number.isFinite(Number(trimEnd)) ? Number(trimEnd) : undefined}
+                knownDuration={
+                  Number.isFinite(Number(duration)) && Number(duration) > 0
+                    ? Number(duration)
+                    : undefined
+                }
+                className="absolute inset-0 h-full w-full"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-[12px] text-white/60">
+                …
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <PreviewToolbar scale={scale} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+    </div>,
+    document.body
+  );
+}
+
+/**
+ * Toolbar fullscreen trigger + lightbox.
+ */
+function VideoFullscreenPreviewButton({
+  src,
+  poster,
+  uploadKey,
+  aspectWidth,
+  aspectHeight,
+  cropX,
+  cropY,
+  cropW,
+  cropH,
+  trimStart,
+  trimEnd,
+  flipX,
+  flipY,
+  duration,
+}: Omit<VideoFullscreenPreviewProps, 'open' | 'onClose'>): ReactNode {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const url = String(src || '').trim();
+
+  if (!url) return null;
+
   return (
     <>
       <Tooltip tip={t('editor.videoToolbar.fullscreen', { defaultValue: '全屏' })} placement="top">
@@ -139,62 +229,27 @@ function VideoFullscreenPreviewButton({
           className={videoToolBtn}
           onClick={() => setOpen(true)}
         >
-          <HiOutlineArrowsPointingOut className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+          <RiFullscreenFill className="h-4 w-4 shrink-0" />
         </button>
       </Tooltip>
-      {open && typeof document !== 'undefined'
-        ? createPortal(
-            <div
-              className="fixed inset-0 z-[2500]"
-              onClick={close}
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation?.();
-              }}
-            >
-              <div className="fixed inset-0 bg-black/50" />
-              <button
-                type="button"
-                aria-label="Close"
-                className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
-                onClick={close}
-              >
-                <HiOutlineXMark className="h-5 w-5" />
-              </button>
-              <div className="pointer-events-none fixed inset-0 flex items-center justify-center overflow-hidden">
-                <div
-                  className="pointer-events-auto relative overflow-hidden rounded-lg bg-black shadow-2xl"
-                  style={frameStyle}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="absolute inset-0 overflow-hidden">
-                    {playSrc ? (
-                      <VideoJsPlayer
-                        src={playSrc}
-                        poster={posterUrl}
-                        layout="fill"
-                        controlsMode="hover"
-                        muted
-                        crop={crop}
-                        flipX={flipX === true}
-                        flipY={flipY === true}
-                        trimStart={Number.isFinite(Number(trimStart)) ? Number(trimStart) : undefined}
-                        trimEnd={Number.isFinite(Number(trimEnd)) ? Number(trimEnd) : undefined}
-                        className="absolute inset-0 h-full w-full"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-[12px] text-white/60">
-                        …
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <PreviewToolbar scale={scale} onZoomIn={zoomIn} onZoomOut={zoomOut} />
-            </div>,
-            document.body
-          )
-        : null}
+      <VideoFullscreenPreview
+        open={open}
+        onClose={() => setOpen(false)}
+        src={src}
+        poster={poster}
+        uploadKey={uploadKey}
+        aspectWidth={aspectWidth}
+        aspectHeight={aspectHeight}
+        cropX={cropX}
+        cropY={cropY}
+        cropW={cropW}
+        cropH={cropH}
+        trimStart={trimStart}
+        trimEnd={trimEnd}
+        flipX={flipX}
+        flipY={flipY}
+        duration={duration}
+      />
     </>
   );
 }

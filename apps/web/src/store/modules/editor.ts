@@ -116,7 +116,12 @@ const initialState = {
   pendingImportPlaceholderId: null as string | null,
   /** Interactive image tool panel docked to the right of the source image (figs 2-5). */
   imageToolPanel: null as null | { nodeId: string; kind: ImageToolPanelKind },
-  videoToolPanel: null as null | { nodeId: string; kind: VideoToolPanelKind },
+  videoToolPanel: null as null | {
+    nodeId: string;
+    kind: VideoToolPanelKind;
+    /** Canvas playhead at open — trim preview must not jump to 0. */
+    keepTime?: number;
+  },
   /** Fill / stroke panel docked to the right of the selection (hides top chrome while open). */
   shapeStylePanel: null as null | { kind: 'fill' | 'stroke' | 'radius'; nodeIds: string[] },
   /** Shared stroke settings for pen / pencil tools. */
@@ -1254,6 +1259,7 @@ const editorSlice = createSlice({
         x: action.payload?.x,
         y: action.payload?.y,
         name: action.payload?.name,
+        duration: action.payload?.duration,
       });
       if (!id) return;
       state.document = next;
@@ -1378,9 +1384,14 @@ const editorSlice = createSlice({
       state.imageToolPanel = null;
     },
     openVideoToolPanel(state, action) {
-      const { nodeId, kind } = action.payload || {};
+      const { nodeId, kind, keepTime } = action.payload || {};
       if (!nodeId || kind !== 'trim') return;
-      state.videoToolPanel = { nodeId, kind };
+      const t = Number(keepTime);
+      state.videoToolPanel = {
+        nodeId,
+        kind,
+        ...(Number.isFinite(t) && t >= 0 ? { keepTime: t } : null),
+      };
       state.imageToolPanel = null;
       state.shapeStylePanel = null;
     },

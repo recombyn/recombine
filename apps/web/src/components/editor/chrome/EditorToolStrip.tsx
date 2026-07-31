@@ -530,6 +530,7 @@ function EditorToolStrip({
             y,
             label: L.uploading,
             name: prepared.name,
+            duration: prepared.duration,
           })
         );
         const uploaded = await uploadImageFile(file);
@@ -539,6 +540,9 @@ function EditorToolStrip({
             attrs: {
               ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
               ...(prepared.poster ? { poster: prepared.poster } : {}),
+              ...(Number.isFinite(prepared.duration) && prepared.duration > 0
+                ? { duration: prepared.duration }
+                : {}),
               assetKind: 'video',
             },
           })

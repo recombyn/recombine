@@ -137,6 +137,13 @@ function VideoNodeOverlay({
             hidden={Boolean(hidden) || trimOpen}
             trimStart={readOptionalNumber(node.attrs?.trimStart)}
             trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
+            knownDuration={readOptionalNumber(node.attrs?.duration)}
+            flipX={node.attrs?.flipX === true || node.attrs?.flipX === 'true'}
+            flipY={node.attrs?.flipY === true || node.attrs?.flipY === 'true'}
+            cropX={readOptionalNumber(node.attrs?.cropX)}
+            cropY={readOptionalNumber(node.attrs?.cropY)}
+            cropW={readOptionalNumber(node.attrs?.cropW)}
+            cropH={readOptionalNumber(node.attrs?.cropH)}
           />
         );
       })}

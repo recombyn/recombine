@@ -56,6 +56,7 @@ import {
   VideoDownloadButton,
   VideoFullscreenPreviewButton,
   VideoToolbarEditTools,
+  getVideoHoverHost,
 } from '@/components/editor/nodes/VideoNode';
 import ShapeSelectionToolbar from '@/components/editor/nodes/ShapeNode/ShapeSelectionToolbar';
 import { SelectionToolbarShell } from '@/components/rcb/selection/SelectionToolbarShell';
@@ -587,6 +588,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
                       trimEnd={Number(node?.attrs?.trimEnd)}
                       flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
                       flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
+                      duration={Number(node?.attrs?.duration)}
                     />
                     <VideoDownloadButton
                       src={String(node?.attrs?.src || '')}
@@ -609,7 +611,16 @@ function SelectionContextToolbar(props: Props): ReactNode {
             ) : (
               <VideoToolbarEditTools
                 nodeId={nodeId}
-                onTrim={() => dispatch(openVideoToolPanel({ nodeId, kind: 'trim' }))}
+                onTrim={() => {
+                  // Capture playhead before trim UI hides the hover host / remounts preview.
+                  const host = getVideoHoverHost(nodeId);
+                  const video = host?.getVideo?.();
+                  const vals = [host?.getFreezeAt?.(), host?.getMediaTime?.(), video?.currentTime]
+                    .map((x) => Number(x))
+                    .filter((x) => Number.isFinite(x) && x >= 0);
+                  const keepTime = vals.length ? Math.max(...vals) : 0;
+                  dispatch(openVideoToolPanel({ nodeId, kind: 'trim', keepTime }));
+                }}
                 onCrop={() => dispatch(openImageToolPanel({ nodeId, kind: 'crop' }))}
                 onFlipRotate={() =>
                   dispatch(openImageToolPanel({ nodeId, kind: 'flipRotate' }))
@@ -648,6 +659,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
                     trimEnd={Number(node?.attrs?.trimEnd)}
                     flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
                     flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
+                    duration={Number(node?.attrs?.duration)}
                   />
                 }
               />

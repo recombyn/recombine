@@ -61,12 +61,14 @@ export default defineConfig(({ mode }) => {
     },
     optimizeDeps: {
       include: ['fontkit'],
+      exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util', '@ffmpeg/core'],
     },
+    assetsInclude: ['**/*.wasm'],
     server: {
       port: 3000,
       open: true,
       fs: {
-        allow: [path.resolve(__dirname)],
+        allow: [path.resolve(__dirname), path.resolve(__dirname, '../..')],
       },
       proxy: {
         '/api': {

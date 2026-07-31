@@ -12,6 +12,7 @@ import VideoPlaybackBar, {
   videoPlaybackBarScale,
   type VideoMediaControl,
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
+import { VideoFullscreenPreview } from '@/components/editor/nodes/VideoNode/VideoFullscreenPreviewButton';
 
 function pointInRect(x: number, y: number, r: DOMRect) {
   return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
@@ -78,6 +79,8 @@ type VideoHoverPlaybackProps = {
   flipY?: boolean;
   trimStart?: number;
   trimEnd?: number;
+  /** Stored media length (seconds) from node attrs. */
+  knownDuration?: number;
   cropX?: number;
   cropY?: number;
   cropW?: number;
@@ -101,6 +104,13 @@ function VideoHoverPlayback({
   hidden,
   trimStart,
   trimEnd,
+  knownDuration,
+  flipX,
+  flipY,
+  cropX,
+  cropY,
+  cropW,
+  cropH,
 }: VideoHoverPlaybackProps): ReactNode {
   const plateRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -113,6 +123,7 @@ function VideoHoverPlayback({
   const [barHovered, setBarHovered] = useState(false);
   const [plateHovered, setPlateHovered] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [fsOpen, setFsOpen] = useState(false);
   /** Mirrors video.currentTime so scrubber vs freeze can diverge and show live video. */
   const [mediaTime, setMediaTime] = useState(0);
   /** Frozen still + the mediaTime it was captured at. */
@@ -337,11 +348,32 @@ function VideoHoverPlayback({
           visible={barVisible}
           trimStart={trimStart}
           trimEnd={trimEnd}
+          knownDuration={knownDuration}
           scale={videoPlaybackBarScale(scenePlate.width)}
+          onFullscreen={() => setFsOpen(true)}
           className="pointer-events-auto absolute inset-x-0 bottom-0"
           onHoverChange={setBarHovered}
         />
       ) : null}
+
+      <VideoFullscreenPreview
+        open={fsOpen}
+        onClose={() => setFsOpen(false)}
+        src={src}
+        poster={poster}
+        uploadKey={uploadKey}
+        aspectWidth={scenePlate.width}
+        aspectHeight={scenePlate.height}
+        cropX={cropX}
+        cropY={cropY}
+        cropW={cropW}
+        cropH={cropH}
+        trimStart={trimStart}
+        trimEnd={trimEnd}
+        flipX={flipX}
+        flipY={flipY}
+        duration={knownDuration}
+      />
     </div>
   );
 }
@@ -358,6 +390,13 @@ function propsEqual(prev: VideoHoverPlaybackProps, next: VideoHoverPlaybackProps
     prev.hidden === next.hidden &&
     prev.trimStart === next.trimStart &&
     prev.trimEnd === next.trimEnd &&
+    prev.knownDuration === next.knownDuration &&
+    prev.flipX === next.flipX &&
+    prev.flipY === next.flipY &&
+    prev.cropX === next.cropX &&
+    prev.cropY === next.cropY &&
+    prev.cropW === next.cropW &&
+    prev.cropH === next.cropH &&
     prev.scenePlate.left === next.scenePlate.left &&
     prev.scenePlate.top === next.scenePlate.top &&
     prev.scenePlate.width === next.scenePlate.width &&

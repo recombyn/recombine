@@ -428,7 +428,7 @@ function ExportSelectionPopover({
             onClick: onTriggerClick,
           })}
         >
-          {children ?? <HiOutlineArrowDownTray className="h-3.5 w-3.5" />}
+          {children ?? <HiOutlineArrowDownTray className="h-4 w-4 shrink-0" strokeWidth={1.75} />}
         </button>
       </Tooltip>
 

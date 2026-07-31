@@ -953,8 +953,8 @@ export async function nodeToSvgElement(
     if (!src && !processing) {
       const g = appendChild(parent, svgEl('g'));
       const plate = appendChild(g, svgEl('path', { d: clipD }));
-      // Generator chrome follows app theme (light/dark); upload empty stays dashed wash.
-      setFill(plate, isGen ? 'var(--surface)' : '#E5E7EB');
+      // Generator empty uses --gen-empty (light: cool wash #e9eaee; dark: raised surface).
+      setFill(plate, isGen ? 'var(--gen-empty)' : '#E5E7EB');
       setStroke(plate, {
         color: isGen ? 'var(--line)' : '#9CA3AF',
         width: isGen ? 1 : 1.5,
@@ -1116,7 +1116,7 @@ export async function nodeToSvgElement(
     if (!src && !processing) {
       const g = appendChild(parent, svgEl('g'));
       const plate = appendChild(g, svgEl('path', { d: clipD }));
-      setFill(plate, isGen ? 'var(--surface)' : '#E5E7EB');
+      setFill(plate, isGen ? 'var(--gen-empty)' : '#E5E7EB');
       setStroke(plate, {
         color: isGen ? 'var(--line)' : '#9CA3AF',
         width: isGen ? 1 : 1.5,

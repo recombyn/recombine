@@ -44,6 +44,8 @@ type CtxAction =
   | 'exportPng'
   | 'exportJpg'
   | 'exportSvg'
+  | 'exportMp4'
+  | 'exportMp3'
   | 'delete';
 
 export type ContextMenuState = {
@@ -75,6 +77,8 @@ type CanvasContextMenuProps = {
   targetLocked?: boolean;
   /** Grid snap + overlay (on → show “hide grid” label). */
   gridOn?: boolean;
+  /** Video-only selection → MP4 / MP3 instead of PNG / JPG / SVG. */
+  exportKind?: 'image' | 'video';
   /** Box / multi-select that is not already one shared group. */
   canGroup?: boolean;
   /** Selection is exactly one shared group. */
@@ -168,10 +172,14 @@ function MenuItem({
 
 function ExportSubmenu({
   disabled,
+  kind = 'image',
   onPick,
 }: {
   disabled?: boolean;
-  onPick: (action: 'exportPng' | 'exportJpg' | 'exportSvg') => void;
+  kind?: 'image' | 'video';
+  onPick: (
+    action: 'exportPng' | 'exportJpg' | 'exportSvg' | 'exportMp4' | 'exportMp3'
+  ) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -219,18 +227,28 @@ function ExportSubmenu({
           className={`absolute ${sideClass} ${vClass} z-[1] min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]`}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <button type="button" className={itemClass} onClick={() => onPick('exportPng')}>
-            PNG
-          </button>
-          <button type="button" className={itemClass} onClick={() => onPick('exportJpg')}>
-            JPG
-          </button>
-          <button type="button" className={itemClass} onClick={() => onPick('exportSvg')}>
-            SVG
-          </button>
-          <button type="button" className={itemClass} disabled title="PSD">
-            PSD
-          </button>
+          {kind === 'video' ? (
+            <>
+              <button type="button" className={itemClass} onClick={() => onPick('exportMp4')}>
+                MP4
+              </button>
+              <button type="button" className={itemClass} onClick={() => onPick('exportMp3')}>
+                MP3
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className={itemClass} onClick={() => onPick('exportPng')}>
+                PNG
+              </button>
+              <button type="button" className={itemClass} onClick={() => onPick('exportJpg')}>
+                JPG
+              </button>
+              <button type="button" className={itemClass} onClick={() => onPick('exportSvg')}>
+                SVG
+              </button>
+            </>
+          )}
         </div>
       ) : null}
     </div>
@@ -249,6 +267,7 @@ function CanvasContextMenu({
   targetHidden = false,
   targetLocked = false,
   gridOn = false,
+  exportKind = 'image',
   canGroup = false,
   canUngroup = false,
   canUndo,
@@ -448,6 +467,7 @@ function CanvasContextMenu({
         <div className="my-1 h-px bg-[var(--line)]" />
         <ExportSubmenu
           disabled={!layerEnabled}
+          kind={exportKind}
           onPick={(action) => onAction(action)}
         />
         <div className="my-1 h-px bg-[var(--line)]" />
