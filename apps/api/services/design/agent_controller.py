@@ -679,13 +679,14 @@ def _lc_design_needs_canvas_ops(
     turn_intent: str,
     has_ops: bool,
     has_clarify: bool = False,
+    ask_mode: bool = False,
 ) -> bool:
     """True when runtime must route to paint_ops (not narrate-only / clarify)."""
     if has_ops:
         return False
     t = (turn_intent or "").strip().lower()
-    # Real clarify = ask + choices/choice_ui. Bare ask+reply is a narrate escape.
-    if t == "ask" and has_clarify:
+    # Real clarify = ask + choices/choice_ui. Ask mode: any intent=ask waits on the user.
+    if t == "ask" and (has_clarify or ask_mode):
         return False
     c = (classified or "").strip().lower()
     if c in ("edit", "create"):
@@ -698,6 +699,7 @@ def _should_route_to_paint(
     classified: str,
     turn_intent: str,
     has_clarify: bool,
+    ask_mode: bool = False,
 ) -> bool:
     """Decision stage → paint_ops when canvas work is required."""
     return _lc_design_needs_canvas_ops(
@@ -705,6 +707,7 @@ def _should_route_to_paint(
         turn_intent=turn_intent,
         has_ops=False,
         has_clarify=has_clarify,
+        ask_mode=ask_mode,
     )
 
 
@@ -744,6 +747,14 @@ def _ensure_paint_tool_details(rt: Any) -> None:
 def _paint_ops_system(rt: Any) -> str:
     persona = str(getattr(rt, "persona", "") or "").strip()
     head = f"IDENTITY: {persona}\n\n" if persona else ""
+    ask_mode = str(getattr(rt, "flags", {}) or {}).get("mode") == "ask"
+    ask_reply = (
+        "- Ask mode: tool_ops are a PROPOSAL only until the user Confirms. "
+        "reply must be pending wording (e.g. 确认后将添加矩形); "
+        "never say 已添加/已完成/already added.\n"
+        if ask_mode
+        else "- Do not ask questions.\n"
+    )
     return (
         head
         + "You are the canvas PAINT stage of a design editor agent.\n"
@@ -753,7 +764,8 @@ def _paint_ops_system(rt: Any) -> str:
         "- New poster/page/artboard → create_frame first (with width/height), then children.\n"
         "- CANVAS_SIZE concrete WxH → create_frame must use that size; auto → pick WxH yourself.\n"
         "- intent must be edit or create. reply ≤40 characters (no design essay).\n"
-        "- Do not ask questions. Do not leave tool_ops empty. Do not invent node ids.\n"
+        + ask_reply
+        + "- Do not leave tool_ops empty. Do not invent node ids.\n"
     )
 
 
@@ -964,8 +976,8 @@ async def _stream_llm_text(
     return family, content, used, events, thinking
 
 
-def _ui_thought_text(thought: str | None, *, limit: int = 48) -> str:
-    """Short progress label for the chat fold — never protocol / MEMORY dumps."""
+def _ui_thought_text(thought: str | None, *, limit: int = 600) -> str:
+    """Chat-fold thought line — readable length, still clip runaway protocol dumps."""
     t = " ".join(str(thought or "").split())
     if not t:
         return ""
@@ -1629,11 +1641,9 @@ def _ensure_propose_choice_ui(st: AgentRunState) -> dict[str, Any]:
 
 
 def _ask_propose_user_text(*, model_reply: str, detail: str) -> str:
-    """User-facing propose copy. Do not append ops-detail lines (looks like already painted)."""
-    reply = (model_reply or "").strip()
-    if reply:
-        return reply
-    return (detail or "").strip()
+    """User-facing propose copy: model reply only. Never append ops-detail lines."""
+    del detail  # detail reads like already painted; Confirm chips carry the ask.
+    return (model_reply or "").strip()
 
 
 def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
@@ -2748,7 +2758,8 @@ async def _node_thought(
                 "kind": "thought",
                 "status": "done",
                 "detail": "已确认需求",
-                "body": thought,
+                # Full model thought for the fold body — not the short SSE label.
+                "body": thought_full or thought,
             }
         )
 
@@ -3242,7 +3253,9 @@ async def _node_propose(state: GraphState) -> Command:
     detail = (tool_ops_batch_detail(step_ops) or "").strip()
     model_reply = (rt.turn.get("reply") or "").strip()
     text = _ask_propose_user_text(model_reply=model_reply, detail=detail)
-    st.reply = text
+    # Keep decide-stage reply if paint left turn.reply empty (Ask confirm path).
+    if text:
+        st.reply = text
     st.push_log(
         phase="propose",
         ops_count=len(step_ops),
@@ -3252,7 +3265,7 @@ async def _node_propose(state: GraphState) -> Command:
         model=st.family,
         proposed=True,
         intent=st.intent,
-        reply=(text or "")[:2000] or None,
+        reply=(st.reply or "")[:2000] or None,
         summary=('提议确认：' + (apply_label or f"{len(step_ops)} ops"))[:120],
         **({"choices": list(st.choices)[:6]} if st.choices else {}),
         **({"apply_choice": st.apply_choice} if st.apply_choice else {}),
@@ -3840,6 +3853,7 @@ async def _node_design_agent(state: GraphState) -> Command:
     """Decision stage: chat / clarify / need_* only. Canvas ops → paint_ops."""
     rt = state["rt"]
     st = rt.run
+    ask_mode = str(rt.flags.get("mode") or "") == "ask"
     max_rounds = max(1, int(rt.max_rounds or _DEFAULT_MAX_ROUNDS))
 
     st.family, reason = _resolve_and_log_model(
@@ -3884,13 +3898,17 @@ async def _node_design_agent(state: GraphState) -> Command:
                 or _prompt_text(rt.rules, "agent.prompt.chat_agent_system")
                 or ""
             )
+        if ask_mode:
+            ask_pack = _prompt_text(rt.rules, "agent.prompt.ask_system")
+            if ask_pack and ask_pack not in lc_system:
+                lc_system = f"{lc_system}\n\n{ask_pack}" if lc_system else ask_pack
         if rt.persona and "IDENTITY:" not in lc_system:
             lc_system = f"IDENTITY: {rt.persona}\n\n{lc_system}"
+        # Graph contract only — Ask/Agent behavior lives in prompt packs (Admin).
         lc_system = (
             lc_system
             + "\n\nDECISION_STAGE: Do NOT output tool_ops (always []). "
-            "Choose intent chat|ask|edit|create; use need_* for missing resources; "
-            "use choice_ui when clarifying. Canvas ops are produced in a later paint stage."
+            "Canvas ops are produced in a later paint stage."
         )
         turn_images = list(rt.images or [])[:4] if rt.images else None
         if turn_images:
@@ -3994,6 +4012,7 @@ async def _node_design_agent(state: GraphState) -> Command:
             llm_raw=_clip_llm_raw(content, limit=4000),
             **_thinking_field(llm_think),
             stage="decide",
+            **({"ask_mode": True} if ask_mode else {}),
         )
         _emit(
             {
@@ -4014,11 +4033,16 @@ async def _node_design_agent(state: GraphState) -> Command:
         )
         if need_any:
             await _node_resource(state)
-            # Resources ready → paint when this is canvas work (skip another narrate round).
+            # Ask: after tools/skills land, decide again (clarify or paint).
+            if ask_mode:
+                st.round = round_i + 1
+                continue
+            # Agent: resources ready → paint when this is canvas work.
             if _should_route_to_paint(
                 classified=str(rt.classified_intent or ""),
                 turn_intent=str(rt.classified_intent or intent or "create"),
                 has_clarify=False,
+                ask_mode=False,
             ):
                 want = str(rt.classified_intent or intent or "create").strip().lower()
                 if want not in ("edit", "create"):
@@ -4031,12 +4055,19 @@ async def _node_design_agent(state: GraphState) -> Command:
             st.round = round_i + 1
             continue
 
+        # Ask: intent=ask → wait on user (chips and/or open reply).
+        if ask_mode and intent == "ask" and reply:
+            st.reply = reply
+            _emit({"type": "token", "text": reply})
+            _absorb_ask_choices(st, turn)
+            rt.flags["await_user"] = True
+            rt.terminal = True
+            return Command(update=_bump(rt), goto="__settle__")
+
         if intent == "ask" and reply and has_clarify:
             st.reply = reply
             _emit({"type": "token", "text": reply})
-            st.choices = list(turn.get("choices") or [])[:6]
-            if turn.get("choice_ui"):
-                st.choice_ui = turn.get("choice_ui")
+            _absorb_ask_choices(st, turn)
             rt.flags["await_user"] = True
             rt.terminal = True
             return Command(update=_bump(rt), goto="__settle__")
@@ -4045,6 +4076,7 @@ async def _node_design_agent(state: GraphState) -> Command:
             classified=str(rt.classified_intent or ""),
             turn_intent=intent,
             has_clarify=has_clarify,
+            ask_mode=ask_mode,
         ):
             want = str(rt.classified_intent or intent or "create").strip().lower()
             if want not in ("edit", "create"):
@@ -4067,8 +4099,9 @@ async def _node_design_agent(state: GraphState) -> Command:
         classified=str(rt.classified_intent or ""),
         turn_intent=str(st.intent or ""),
         has_clarify=False,
+        ask_mode=False,
     ):
-        want = str(rt.classified_intent or "create").strip().lower()
+        want = str(rt.classified_intent or st.intent or "create").strip().lower()
         if want not in ("edit", "create"):
             want = "create"
         st.intent = want
@@ -4082,10 +4115,9 @@ async def _node_design_agent(state: GraphState) -> Command:
 
 
 async def _node_paint_ops(state: GraphState) -> Command:
-    """Dedicated paint stage: structured tool_ops only → action/propose."""
+    """Dedicated paint stage: structured tool_ops only → action."""
     rt = state["rt"]
     st = rt.run
-    ask_mode = str(rt.flags.get("mode") or "") == "ask"
     want = str(rt.classified_intent or st.intent or "create").strip().lower()
     if want not in ("edit", "create"):
         want = "create"
@@ -4249,6 +4281,7 @@ async def _node_paint_ops(state: GraphState) -> Command:
         )
 
         if step_ops:
+            # Ask clarify already happened in decide; enough info → apply like Agent.
             if reply:
                 st.reply = reply[:200]
                 _emit({"type": "token", "text": st.reply})
@@ -4259,8 +4292,6 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 "reply": st.reply,
                 "tool_ops_raw": ops_raw,
             }
-            if ask_mode:
-                return Command(update=_bump(rt), goto="propose")
             return Command(update=_bump(rt), goto="action")
 
         err = validation_failure_reason(op_errors) if op_errors else "missing_tool_ops"
@@ -4485,11 +4516,13 @@ async def run_agent_graph(
     lc_overlay = _prompt_text(rules, "agent.prompt.lc_tools_overlay")
     chat_agent_system = _prompt_text(rules, "agent.prompt.chat_agent_system")
     react_system = _prompt_text(rules, "agent.prompt.react_system")
+    ask_system = _prompt_text(rules, "agent.prompt.ask_system") if ui_mode == "ask" else ""
     # Same pack priority as design_agent; catalogs must stay on rt.system for the LLM.
     system = "\n\n".join(
         p
         for p in [
             need_overlay or lc_overlay or chat_agent_system or react_system,
+            ask_system,
             persona_block,
             tools_catalog if defer_tools else tools_block,
             skills_catalog,

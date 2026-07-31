@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     rate_limit_design_per_window: int = 20
     rate_limit_chat_per_window: int = 40
     rate_limit_upload_per_window: int = 40
+    # Project list/get/upsert — keep out of the shared default bucket so agent
+    # traffic cannot starve the first cloud create (otherwise editor GETs 404 forever).
+    rate_limit_projects_per_window: int = 240
     rate_limit_default_per_window: int = 120
     # LangChain SummarizationMiddleware (short-term memory docs).
     agent_summarize_enabled: bool = True

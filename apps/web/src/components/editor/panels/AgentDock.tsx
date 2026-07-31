@@ -12,12 +12,6 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
-import { BiMessageSquareAdd, BiTimeFive } from 'react-icons/bi';
-import { LuPanelRight } from 'react-icons/lu';
-import {
-  HiOutlineChevronLeft,
-  HiOutlineChevronRight,
-} from 'react-icons/hi2';
 import { Icon } from '@/components/base/icon';
 import {
   listModels,
@@ -60,14 +54,15 @@ import {
   readFileAsDataUrl,
   uploadComposerAttachment,
 } from '@/utils/uploadImage';
-import { parseNodeText } from '@/components/rcb/scene/sceneText';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import { message } from '@/components/base';
-import Tooltip from '@/components/base/tooltip';
 import {
   chipBaseKey,
   parseAtMentionQuery,
   stripTrailingAtQuery,
+  buildComposerContext,
+  enrichComposerContextThumb,
+  rasterizeNodesToPngDataUrl,
+  rasterizeNodesToPngFile,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -76,17 +71,12 @@ import {
   resolveDesignTargetFrame,
   nodeIdsInsideFrame,
   frameIdContainingNode,
-  buildEditContextSvg,
-  buildSceneNodesForEdit,
-  buildSceneNodesForIds,
   buildSceneNodesForCanvas,
   buildSceneFramesSnapshot,
   buildSpatialSummary,
-  captureFocusFramePreview,
   type AgentStepEvent,
 } from '@/components/editor/panels/agent/runDesignAgent';
 import { canAttachNodeToChat, captureVideoPosterFrame } from '@/components/rcb/scene/sceneDocument';
-import { renderComposerChipThumb, renderExport } from '@/components/rcb/scene/exportImage';
 import {
   applyClientFrameHints,
   applyMemoryPatch,
@@ -97,7 +87,19 @@ import {
   type TaskState,
 } from '@/components/editor/panels/agent/agentMemory';
 import AgentMessageList from '@/components/editor/panels/agent/AgentMessageList';
-import { type AskChoicePick, type ChatUiMessage } from '@/components/editor/panels/agent/ChatTurnList';
+import AgentDockHeader from '@/components/editor/panels/agent/AgentDockHeader';
+import AgentDockComposerFooter from '@/components/editor/panels/agent/AgentDockComposerFooter';
+import AgentDockResizeHandle from '@/components/editor/panels/agent/AgentDockResizeHandle';
+import {
+  type AskChoicePick,
+  type ChatUiMessage,
+  applyActivityEventToSteps,
+  applyAnalysisDeltaToSteps,
+  applyThinkingBodyToSteps,
+  buildChatProcessSteps,
+  formatActivityLabel,
+  localizeExploreItem,
+} from '@/components/editor/panels/agent/ChatTurnList';
 import type { VirtualListHandle } from '@/components/base/VirtualList';
 import AgentComposerShell, {
   type ComposerInteractionMode,
@@ -161,49 +163,6 @@ type ChatSession = {
 };
 
 const MAX_CHAT_SESSIONS = 40;
-
-type ActivityStepEvent = {
-  kind: 'thought' | 'added' | 'updated' | 'explored' | 'skipped' | 'deleted' | 'tool';
-  status: 'running' | 'done';
-  durationSec?: number;
-  count?: number;
-  skillName?: string;
-  detail?: string;
-  stage?: string;
-};
-
-function exploreItemKindKey(id: string): string {
-  if (id === 'lookup-skill' || id.startsWith('lookup-skill')) {
-    return 'agent.lookupKindSkill';
-  }
-  if (id === 'lookup-rule' || id.startsWith('lookup-rule')) {
-    return 'agent.lookupKindRule';
-  }
-  if (id === 'lookup-knowledge' || id.startsWith('lookup-knowledge')) {
-    return 'agent.lookupKindKnowledge';
-  }
-  if (id === 'lookup-aesthetics' || id.startsWith('lookup-aesthetics')) {
-    return 'agent.lookupKindAesthetics';
-  }
-  if (id === 'lookup-gate') return 'agent.lookupGate';
-  if (id === 'stage-lookup' || id.startsWith('stage-lookup')) {
-    return 'agent.stageLookup';
-  }
-  if (id === 'stage-scene' || id.startsWith('stage-scene')) {
-    return 'agent.stageScene';
-  }
-  if (id === 'canvas-size') return 'agent.canvasSizeLabel';
-  return '';
-}
-
-function mergeExploreStepStatus(
-  a: 'running' | 'done' | 'error' | 'pending' | undefined,
-  b: 'running' | 'done' | 'error' | 'pending' | undefined
-): 'running' | 'done' | 'error' {
-  if (a === 'running' || b === 'running') return 'running';
-  if (a === 'error' || b === 'error') return 'error';
-  return 'done';
-}
 
 function resolveSeedLiveNodeIds(opts: {
   doc: any;
@@ -306,29 +265,6 @@ function resolveComposerPlaceholder(
   return t('agent.placeholderDefault');
 }
 
-function localizeExploreItem(
-  t: (key: string, opts?: Record<string, unknown>) => string,
-  item: { id: string; name: string; summary?: string }
-): { id: string; name: string; summary?: string } {
-  const id = String(item.id || '');
-  const kindKey = exploreItemKindKey(id);
-  if (!kindKey) return item;
-  if (kindKey === 'agent.canvasSizeLabel') {
-    // Keep WxH from backend as the visible name; i18n is the stage line only.
-    return {
-      ...item,
-      name: String(item.name || '').trim() || t(kindKey),
-      summary: item.summary,
-    };
-  }
-  const host = /^Host\s*·/i.test(String(item.name || '').trim());
-  const label = t(kindKey);
-  return {
-    ...item,
-    name: host ? t('agent.lookupHostPrefix', { name: label }) : label,
-  };
-}
-
 function humanizeDesignError(
   t: (key: string, opts?: Record<string, unknown>) => string,
   raw: string | undefined | null
@@ -362,325 +298,11 @@ function humanizeDesignError(
   return msg;
 }
 
-function formatActivityLabel(
-  t: (key: string, opts?: Record<string, unknown>) => string,
-  ev: ActivityStepEvent
-): string | null {
-  const detail = (ev.detail || '').trim();
-  // Prefer backend short `detail` as the row label when compact enough.
-  const preferDetail = detail.length > 0 && detail.length <= 48;
-
-  if (ev.kind === 'thought') {
-    if (ev.status === 'running') {
-      return preferDetail ? detail : t('agent.activityThoughtRunning');
-    }
-    if (preferDetail) return detail;
-    if (ev.status === 'done' && ev.durationSec != null) {
-      return t('agent.activityThought', { seconds: ev.durationSec });
-    }
-    if (ev.status === 'done') return t('agent.activityThoughtBrief');
-    return null;
-  }
-  if (ev.kind === 'added') {
-    if (preferDetail) return detail;
-    return ev.count != null && ev.count > 0
-      ? t('agent.activityAddedCount', { count: ev.count })
-      : t('agent.activityAdded');
-  }
-  if (ev.kind === 'updated') {
-    if (preferDetail) return detail;
-    return ev.count != null && ev.count > 0
-      ? t('agent.activityUpdatedCount', { count: ev.count })
-      : t('agent.activityUpdated');
-  }
-  if (ev.kind === 'explored') {
-    if (preferDetail && !detail.startsWith('canvas_size:')) return detail;
-    if (ev.stage === 'scene' || detail.startsWith('canvas_size:')) {
-      const raw = detail.replace(/^canvas_size:/i, '').trim();
-      const size =
-        raw && /^\d+x\d+$/i.test(raw) ? raw.replace(/x/i, '×') : detail;
-      if (ev.status === 'running') {
-        return size
-          ? t('agent.activityCanvasSizeRunning', { size })
-          : t('agent.stageScene');
-      }
-      return size
-        ? t('agent.activityCanvasSizeDone', { size })
-        : t('agent.stageScene');
-    }
-    if (ev.stage === 'lookup' || detail.includes('lookup')) {
-      if (ev.status === 'running') return t('agent.activityLookupRunning');
-      const n = ev.count != null && ev.count > 0 ? ev.count : 0;
-      return n > 0
-        ? t('agent.activityLookupDoneCount', { count: n })
-        : t('agent.activityLookupDone');
-    }
-    if (ev.status === 'running') return t('agent.activityExploredRunning');
-    const fromCount = ev.count != null && ev.count > 0 ? ev.count : 0;
-    const fromDetail = detail
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean).length;
-    const n = fromCount || fromDetail;
-    return n > 0
-      ? t('agent.activityExploredCount', { count: n })
-      : t('agent.activityExplored');
-  }
-  if (ev.kind === 'skipped') return preferDetail ? detail : t('agent.activitySkipped');
-  if (ev.kind === 'deleted') {
-    if (preferDetail) return detail;
-    return ev.count != null && ev.count > 0
-      ? t('agent.activityDeletedCount', { count: ev.count })
-      : t('agent.activityDeleted');
-  }
-  if (preferDetail) return detail;
-  return ev.status === 'running' ? t('agent.activityToolRunning') : t('agent.activityTool');
-}
-
-/** One Explored fold per turn — merge duplicate explore-pipeline / explored rows. */
-function collapseExplorePipelineSteps(
-  steps: NonNullable<ChatUiMessage['steps']>
-): NonNullable<ChatUiMessage['steps']> {
-  let explore: NonNullable<ChatUiMessage['steps']>[number] | null = null;
-  const rest: NonNullable<ChatUiMessage['steps']> = [];
-  for (const s of steps) {
-    const isExplore =
-      s.id === 'explore-pipeline' ||
-      (s.kind === 'explored' && s.id !== 'chat-process');
-    if (!isExplore) {
-      rest.push(s);
-      continue;
-    }
-    if (!explore) {
-      explore = { ...s, id: 'explore-pipeline', kind: 'explored' };
-      continue;
-    }
-    const items = [...(explore.items || [])];
-    for (const it of s.items || []) {
-      const ii = items.findIndex((x) => x.id === it.id);
-      if (ii >= 0) items[ii] = { ...items[ii], ...it };
-      else items.push(it);
-    }
-    explore = {
-      ...explore,
-      name: s.name || explore.name,
-      summary: s.summary || explore.summary,
-      body: s.body || explore.body,
-      items,
-      status: mergeExploreStepStatus(s.status, explore.status),
-    };
-  }
-  if (!explore) return rest;
-  const provisional = rest.findIndex(
-    (s) => s.id === 'thought-0' || s.id === 'skill-0'
-  );
-  if (provisional >= 0) {
-    const next = [...rest];
-    next.splice(provisional, 1, explore);
-    return next;
-  }
-  return [explore, ...rest];
-}
-
-type AssistantStep = NonNullable<ChatUiMessage['steps']>[number];
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
 type FinishAssistant = (
   m: ChatUiMessage,
   patch?: Partial<ChatUiMessage>
 ) => ChatUiMessage;
-
-function workedSecsOf(m: ChatUiMessage): number | undefined {
-  if (m.startedAt) return Math.max(1, Math.round((Date.now() - m.startedAt) / 1000));
-  if (m.durationMs != null) return Math.max(1, Math.round(m.durationMs / 1000));
-  return undefined;
-}
-
-/** Foldable chat process under "Worked for Xs". */
-function buildChatProcessSteps(t: TFn, m: ChatUiMessage): AssistantStep[] {
-  if (m.steps?.length) {
-    return m.steps.map((s) =>
-      s.status === 'running' ? { ...s, status: 'done' as const } : s
-    );
-  }
-  const secs = workedSecsOf(m);
-  return [
-    {
-      id: 'chat-process',
-      kind: 'explored',
-      name: t('agent.chatProcessTitle'),
-      status: 'done',
-      ...(secs != null ? { durationSec: secs } : {}),
-      items: [
-        { id: 'chat-wait', name: t('agent.chatProcessWait') },
-        { id: 'chat-reply', name: t('agent.chatProcessReply') },
-      ],
-    },
-  ];
-}
-
-function applyThinkingBodyToSteps(
-  stepsIn: AssistantStep[],
-  piece: string,
-  replace: boolean,
-  t: TFn
-): AssistantStep[] {
-  // Chat fold shows a short progress label only — never accumulate raw CoT / protocol text.
-  const brief = String(piece || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80);
-  if (!brief) return stepsIn;
-  // Ignore streaming crumbs unless replace (backend short thought).
-  if (!replace && brief.length > 48) return stepsIn;
-
-  const steps = [...stepsIn];
-  let idx = steps.findIndex((s) => s.id === 'explore-pipeline');
-  if (idx < 0) {
-    idx = steps.findIndex(
-      (s) => s.kind === 'explored' && s.id !== 'chat-process'
-    );
-  }
-  if (idx < 0) {
-    steps.push({
-      id: 'explore-pipeline',
-      kind: 'explored',
-      name: t('agent.activityExplored'),
-      status: replace ? 'done' : 'running',
-      items: [{ id: 'thought-brief', name: brief || t('agent.activityThoughtBrief') }],
-    });
-    return collapseExplorePipelineSteps(steps);
-  }
-  const prevStep = steps[idx];
-  const items = [...(prevStep.items || [])];
-  const thoughtLine = {
-    id: 'thought-brief',
-    name: brief || t('agent.activityThoughtBrief'),
-  };
-  const ti = items.findIndex((x) => x.id === 'thought-brief');
-  if (ti >= 0) items[ti] = thoughtLine;
-  else items.push(thoughtLine);
-  steps[idx] = {
-    ...prevStep,
-    id: 'explore-pipeline',
-    kind: 'explored',
-    items,
-    // Drop any prior CoT dump from older builds.
-    body: undefined,
-    status: prevStep.status,
-  };
-  return collapseExplorePipelineSteps(steps);
-}
-
-function applyAnalysisDeltaToSteps(
-  stepsIn: AssistantStep[],
-  piece: string
-): AssistantStep[] | null {
-  const steps = [...stepsIn];
-  let idx = steps.findIndex(
-    (s) =>
-      s.status === 'running' &&
-      /thinking|thought|思考/i.test(String(s.name || ''))
-  );
-  if (idx < 0) idx = steps.findIndex((s) => s.status === 'running');
-  if (idx < 0 && steps.length) idx = steps.length - 1;
-  if (idx < 0) return null;
-  const merged = `${steps[idx].summary || ''}${piece}`;
-  steps[idx] = {
-    ...steps[idx],
-    summary: merged.length > 1500 ? merged.slice(-1500) : merged,
-  };
-  return steps;
-}
-
-function applyActivityEventToSteps(
-  stepsIn: AssistantStep[],
-  opts: {
-    kind: NonNullable<AssistantStep['kind']>;
-    eventId?: string;
-    status: 'running' | 'done';
-    label: string;
-    summary?: string;
-    variant?: NonNullable<AssistantStep['variant']>;
-    nestItem?: { id: string; name: string; summary?: string } | null;
-    bodyMd: string;
-  }
-): AssistantStep[] | null {
-  const { kind, status, label, summary, variant, nestItem, bodyMd } = opts;
-  const steps = [...stepsIn];
-  let idx =
-    kind === 'explored'
-      ? steps.findIndex((s) => s.id === 'explore-pipeline')
-      : steps.findIndex((s) => s.id === String(opts.eventId || 'skill-0'));
-  if (idx < 0 && kind === 'explored') {
-    idx = steps.findIndex(
-      (s) => s.kind === 'explored' && s.id !== 'chat-process'
-    );
-  }
-  if (idx < 0 && kind === 'explored') {
-    idx = steps.findIndex((s) => s.id === 'skill-0' || s.id === 'thought-0');
-  }
-  if (idx < 0 && kind === 'thought' && status === 'running') {
-    idx = steps.findIndex(
-      (s) =>
-        s.status === 'running' &&
-        (s.id === 'skill-0' || s.id === 'thought-0' || !s.id)
-    );
-  }
-
-  if (kind === 'explored') {
-    const prevStep = idx >= 0 ? steps[idx] : null;
-    if (prevStep?.status === 'done' && status === 'running' && !nestItem && !bodyMd) {
-      return null;
-    }
-    let items = [...(prevStep?.items || [])];
-    if (nestItem) {
-      const ii = items.findIndex((x) => x.id === nestItem.id);
-      if (ii >= 0) items[ii] = { ...items[ii], ...nestItem };
-      else items.push(nestItem);
-    }
-    const nextStep: AssistantStep = {
-      id: 'explore-pipeline',
-      kind: 'explored',
-      name: label,
-      status,
-      variant: variant || 'confirm',
-      summary: summary || prevStep?.summary,
-      items,
-      body: bodyMd.trim() ? bodyMd : prevStep?.body,
-    };
-    if (idx >= 0) steps[idx] = nextStep;
-    else steps.push(nextStep);
-    return collapseExplorePipelineSteps(steps);
-  }
-
-  const stepId = String(opts.eventId || 'skill-0');
-  const safeId = stepId === 'explore-pipeline' ? `step-${stepId}` : stepId;
-  const next: AssistantStep = {
-    id: safeId,
-    kind,
-    name: label,
-    summary,
-    status,
-    variant,
-    body: bodyMd.trim() || undefined,
-  };
-  if (idx >= 0 && steps[idx]?.id !== 'explore-pipeline') {
-    if (kind === 'thought' && status === 'running' && steps[idx].status === 'done') {
-      return null;
-    }
-    const prevStep = steps[idx];
-    steps[idx] = {
-      ...next,
-      id: prevStep.id || next.id,
-      summary: next.summary || prevStep.summary,
-      items: prevStep.items,
-      body: next.body || prevStep.body,
-    };
-  } else {
-    steps.push(next);
-  }
-  return collapseExplorePipelineSteps(steps);
-}
 
 function patchChatDoneAssistant(
   m: ChatUiMessage,
@@ -722,7 +344,10 @@ function patchDesignDoneAssistant(
   }
 ): ChatUiMessage {
   let result = '';
-  if (opts.painted) {
+  if (opts.proposedOps?.length) {
+    // Keep streamed model wording; Confirm chips carry the ask.
+    result = (opts.summary || '').trim() || (m.content || '').trim();
+  } else if (opts.painted) {
     const rawProcess = (m.thinking || m.intent || '').trim();
     const hasIntentAnalysis =
       Boolean(rawProcess) && !/<svg\b|<\/svg>/i.test(rawProcess);
@@ -1229,240 +854,6 @@ function normalizeModelList(
     if (m.kind === 'svg') return { ...base, kind: 'text' as const };
     return { ...base, kind: (m.kind || 'text') as LlmModel['kind'] };
   });
-}
-
-function nodeKindLabel(node: any): string {
-  const shape = String(node?.attrs?.shapeType || '');
-  const key = String(node?.key || '');
-  const map: Record<string, string> = {
-    text: '文字',
-    image: '图片',
-    rect: '矩形',
-    line: '线条',
-    arrow: '箭头',
-    ellipse: '椭圆',
-    circle: '椭圆',
-    triangle: '多边形',
-    polygon: '多边形',
-    star: '星形',
-    pen: '钢笔',
-    pencil: '画笔',
-    path: '路径',
-  };
-  return map[shape] || map[key] || key || '元素';
-}
-
-/** Unique chip label: 矩形 1 / 矩形 2 / 多边形 1 … (stable by position). */
-function numberedNodeLabel(document: any, nodeId: string): string {
-  const node = document?.deltaSetLike?.[nodeId];
-  if (!node) return '元素';
-  const base = nodeKindLabel(node);
-  const delta = document?.deltaSetLike || {};
-  const peers = Object.keys(delta)
-    .filter((id) => {
-      const n = delta[id];
-      return Boolean(n) && nodeKindLabel(n) === base;
-    })
-    .sort((a, b) => {
-      const na = delta[a];
-      const nb = delta[b];
-      const ya = Number(na?.y) || 0;
-      const yb = Number(nb?.y) || 0;
-      if (ya !== yb) return ya - yb;
-      const xa = Number(na?.x) || 0;
-      const xb = Number(nb?.x) || 0;
-      if (xa !== xb) return xa - xb;
-      return a.localeCompare(b);
-    });
-  const idx = Math.max(1, peers.indexOf(nodeId) + 1);
-  return `${base} ${idx}`;
-}
-
-function nextGroupChipLabel(chips: ComposerContext[]): string {
-  let max = 0;
-  for (const c of chips) {
-    if (c.kind !== 'group' && c.kind !== 'multi') continue;
-    const m = /^组(\d+)$/.exec(String(c.label || '').trim());
-    if (m) max = Math.max(max, Number(m[1]) || 0);
-  }
-  return `组${max + 1}`;
-}
-
-export function buildComposerContext(
-  document: any,
-  selectedNodeIds: string[],
-  activeFrameId: string | null,
-  /** Existing chips — used to name multi-select as 组1 / 组2 … */
-  existingChips: ComposerContext[] = []
-): ComposerContext | null {
-  const ids = selectedNodeIds.filter(Boolean);
-  if (ids.length === 1) {
-    const id = ids[0];
-    const node = document?.deltaSetLike?.[id];
-    if (!node) return null;
-    const label = numberedNodeLabel(document, id);
-    // Full snapshot (same shape as SCENE_NODES); artboard-local when inside a frame.
-    const containingFrameId = frameIdContainingNode(document, id);
-    const inventory = containingFrameId
-      ? buildSceneNodesForEdit(document, containingFrameId, [id]).find((n) => n.id === id) ||
-        buildSceneNodesForIds(document, [id])[0]
-      : buildSceneNodesForIds(document, [id])[0];
-    const lines = [
-      '[Target element — full node; update_node may change any field]',
-      containingFrameId ? `artboard_id: ${containingFrameId}` : null,
-      inventory ? JSON.stringify(inventory) : `id: ${id}`,
-    ].filter(Boolean) as string[];
-    return {
-      key: `node:${id}`,
-      label,
-      kind: String(node.key || 'shape'),
-      payload: lines.join('\n'),
-      ...(node.key === 'image' && String(node.attrs?.src || '').trim()
-        ? {
-            thumbUrl: String(node.attrs.src).trim(),
-            // Same src for vision bag — send() resolves /api → data URL when needed.
-            dataUrl: String(node.attrs.src).trim(),
-          }
-        : {}),
-    };
-  }
-  if (ids.length > 1) {
-    const key = `group:${[...ids].sort().join(',')}`;
-    const reused = existingChips.find((c) => chipBaseKey(c.key) === key);
-    const label = reused?.label || nextGroupChipLabel(existingChips);
-    const frameIds = [
-      ...new Set(ids.map((id) => frameIdContainingNode(document, id)).filter(Boolean)),
-    ] as string[];
-    const inventory =
-      frameIds.length === 1
-        ? buildSceneNodesForEdit(document, frameIds[0], ids).filter((n) => ids.includes(n.id))
-        : buildSceneNodesForIds(document, ids);
-    return {
-      key,
-      label,
-      kind: 'group',
-      payload: [
-        '[Target group — full node snapshots; update_node may change any field]',
-        `group: ${label}`,
-        `count: ${ids.length}`,
-        `ids: ${ids.join(', ')}`,
-        JSON.stringify(inventory.slice(0, 40)),
-      ].join('\n'),
-    };
-  }
-
-  if (!activeFrameId || !document) return null;
-  const frames = Array.isArray(document.frames) ? document.frames : [];
-  const frame = frames.find((f: any) => f?.id === activeFrameId);
-  if (!frame) return null;
-  const name = String(frame.name || 'Frame');
-  const w = Math.round(Number(frame.width) || 0);
-  const h = Math.round(Number(frame.height) || 0);
-  const fx = Number(frame.x) || 0;
-  const fy = Number(frame.y) || 0;
-  const fw = Math.max(1, Number(frame.width) || 1);
-  const fh = Math.max(1, Number(frame.height) || 1);
-  const bg = String(frame.backgroundColor || 'transparent');
-
-  const childLines: string[] = [];
-  const rootChildren: string[] = document?.deltaSetLike?.ROOT?.children || [];
-  for (const id of rootChildren) {
-    const node = document?.deltaSetLike?.[id];
-    if (!node || !id) continue;
-    const { left, top } = nodeLeftTop(document, node);
-    const nw = Math.max(1, Number(node.width) || 1);
-    const nh = Math.max(1, Number(node.height) || 1);
-    // Treat as inside if the box mostly overlaps the artboard.
-    const ow = Math.max(0, Math.min(left + nw, fx + fw) - Math.max(left, fx));
-    const oh = Math.max(0, Math.min(top + nh, fy + fh) - Math.max(top, fy));
-    if (ow * oh < nw * nh * 0.4) continue;
-    const kind = nodeKindLabel(node);
-    const nodeLabel = numberedNodeLabel(document, id);
-    const fill = String(node.attrs?.['fill-color'] ?? node.attrs?.fill ?? '');
-    let line = `- id=${id} name="${nodeLabel}" kind=${kind} box=${Math.round(nw)}×${Math.round(nh)} at (${Math.round(left)},${Math.round(top)})`;
-    if (fill) line += ` fill=${fill}`;
-    if (node.key === 'text') {
-      const preview = parseNodeText(node.attrs || {}).slice(0, 120);
-      if (preview) line += ` text="${preview.replace(/\n/g, ' ')}"`;
-    }
-    childLines.push(line);
-    if (childLines.length >= 80) break;
-  }
-
-  return {
-    key: `frame:${activeFrameId}`,
-    label: name,
-    kind: 'frame',
-    payload: [
-      '[Target artboard]',
-      `id: ${activeFrameId}`,
-      `name: ${name}`,
-      `size: ${w}×${h} at (${Math.round(fx)}, ${Math.round(fy)})`,
-      `background: ${bg}`,
-      `elements (${childLines.length}):`,
-      ...(childLines.length
-        ? childLines
-        : ['(empty artboard — no scene nodes inside yet)']),
-    ].join('\n'),
-  };
-}
-
-/** Attach a live shape/group/frame raster when the chip has no image `src` yet. */
-export async function enrichComposerContextThumb(
-  document: any,
-  ctx: ComposerContext | null,
-  opts: { nodeIds?: string[]; frameId?: string | null } = {}
-): Promise<ComposerContext | null> {
-  if (!ctx) return null;
-  if (String(ctx.thumbUrl || '').trim()) return ctx;
-  try {
-    const thumb = await renderComposerChipThumb({
-      document,
-      nodeIds: opts.nodeIds,
-      frameId: opts.frameId,
-    });
-    if (thumb) return { ...ctx, thumbUrl: thumb };
-  } catch {
-    /* best-effort preview */
-  }
-  return ctx;
-}
-
-/** Same path as selection export — flatten nodes to one PNG data-URL. */
-export async function rasterizeNodesToPngDataUrl(
-  document: any,
-  nodeIds: string[]
-): Promise<string | null> {
-  const ids = nodeIds.filter(Boolean);
-  if (!document || !ids.length) return null;
-  try {
-    const rendered = await renderExport({
-      document,
-      format: 'png',
-      multiplier: 2,
-      selectionOnly: true,
-      nodeIds: ids,
-    });
-    if (rendered?.kind !== 'raster' || !rendered.dataUrl) return null;
-    return rendered.dataUrl;
-  } catch {
-    return null;
-  }
-}
-
-/** Same path as selection export — flatten nodes to one PNG File for Chat. */
-export async function rasterizeNodesToPngFile(
-  document: any,
-  nodeIds: string[],
-  filename = 'canvas-group.png'
-): Promise<File | null> {
-  const dataUrl = await rasterizeNodesToPngDataUrl(document, nodeIds);
-  if (!dataUrl) return null;
-  try {
-    return await imageSrcToFile(dataUrl, filename);
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -2050,14 +1441,7 @@ function buildStreamingAssistantSeed(opts: {
     };
   }
   return {
-    steps: [
-      {
-        id: 'thought-0',
-        kind: 'thought',
-        name: opts.t('agent.activityThoughtRunning'),
-        status: 'running' as const,
-      },
-    ],
+    steps: [],
   };
 }
 
@@ -2234,6 +1618,8 @@ function createDesignAgentEventRouter(opts: {
     if (ev.kind === 'tool' || ev.kind === 'added' || ev.kind === 'updated') {
       opts.mutable.designStarted = true;
     }
+    // Intent confirm / "understanding request" rows — keep off the chat timeline.
+    if (ev.kind === 'thought') return;
     const label = formatActivityLabel(opts.t, {
       kind: ev.kind,
       status: ev.status === 'running' ? 'running' : 'done',
@@ -4568,88 +3954,40 @@ function AgentDock({
       )}
     >
       {!floating ? (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={t('agent.resizeDock')}
-          aria-valuemin={AGENT_DOCK_MIN_W}
-          aria-valuemax={AGENT_DOCK_MAX_W}
-          aria-valuenow={dockWidth}
-          className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none hover:bg-[var(--accent)]/25 active:bg-[var(--accent)]/40"
+        <AgentDockResizeHandle
+          width={dockWidth}
+          minWidth={AGENT_DOCK_MIN_W}
+          maxWidth={AGENT_DOCK_MAX_W}
           onPointerDown={onDockResizePointerDown}
           onPointerMove={onDockResizePointerMove}
           onPointerUp={endDockResize}
           onPointerCancel={endDockResize}
-          onDoubleClick={() => persistDockWidth(AGENT_DOCK_DEFAULT_W)}
+          onResetWidth={() => persistDockWidth(AGENT_DOCK_DEFAULT_W)}
         />
       ) : null}
-      <div className="flex h-12 shrink-0 items-center justify-between px-4">
-        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--ink)]">
-          {historyOpen ? t('agent.history') : chatTitle}
-        </span>
-        <div className="relative flex items-center gap-0.5">
-          <Tooltip tip={t('agent.newChat')} placement="bottom">
-            <button
-              type="button"
-              aria-label={t('agent.newChat')}
-              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-              onClick={startNewChat}
-            >
-              <BiMessageSquareAdd className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          {!onlyImageInteraction && newChatTip ? (
-            <div className="pointer-events-none absolute left-0 top-[calc(100%+6px)] z-30 -translate-x-1/4">
-              <div className="relative rounded bg-[var(--ink)] px-2.5 py-1.5 text-[11px] text-[var(--on-brand)] shadow-md">
-                <span
-                  className="absolute left-6 top-0 h-2 w-2 -translate-y-1/2 rotate-45 bg-[var(--ink)]"
-                  aria-hidden
-                />
-                {t('agent.alreadyNewChat')}
-              </div>
-            </div>
-          ) : null}
-          <Tooltip tip={t('agent.history')} placement="bottom">
-            <button
-              type="button"
-              aria-label={t('agent.history')}
-              className={cn(
-                'inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
-                historyOpen && 'bg-[var(--accent-soft)] text-[var(--ink)]'
-              )}
-              onClick={() => {
-                closePopovers();
-                setHistoryOpen((v) => {
-                  const next = !v;
-                  if (next) void refreshSessions();
-                  return next;
-                });
-              }}
-            >
-              <BiTimeFive className="h-[18px] w-[18px]" />
-            </button>
-          </Tooltip>
-          {!floating ? (
-            <Tooltip tip={t('agent.closePanel')} placement="bottom">
-              <button
-                type="button"
-                aria-label={t('agent.closePanel')}
-                className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-                onClick={() => {
-                  abortRef.current?.abort();
-                  dispatch(setAgentBusy(false));
-                  setSending(false);
-                  closePopovers();
-                  setHistoryOpen(false);
-                  onClose();
-                }}
-              >
-                <LuPanelRight className="h-4 w-4" strokeWidth={1.75} />
-              </button>
-            </Tooltip>
-          ) : null}
-        </div>
-      </div>
+      <AgentDockHeader
+        title={chatTitle}
+        historyOpen={historyOpen}
+        showNewChatTip={!onlyImageInteraction && newChatTip}
+        showClose={!floating}
+        onNewChat={startNewChat}
+        onToggleHistory={() => {
+          closePopovers();
+          setHistoryOpen((v) => {
+            const next = !v;
+            if (next) void refreshSessions();
+            return next;
+          });
+        }}
+        onClose={() => {
+          abortRef.current?.abort();
+          dispatch(setAgentBusy(false));
+          setSending(false);
+          closePopovers();
+          setHistoryOpen(false);
+          onClose();
+        }}
+      />
 
       <AgentMessageList
         ref={listRef}
@@ -4672,112 +4010,48 @@ function AgentDock({
       />
 
       {historyOpen || editingUserId ? null : (
-        <div className="relative shrink-0 px-3 pb-3 pt-0.5" data-tour="editor-agent-chat">
-          <div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--canvas)] shadow-[0_4px_20px_rgba(0,0,0,0.08)]">
-            {pendingReview && !sending ? (
-              <div className="flex h-9 items-center gap-2 px-3">
-                <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
-                <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--muted)]">
-                  {t('agent.reviewHint')}
-                </span>
-                <div className="flex shrink-0 items-center gap-0.5">
-                  <button
-                    type="button"
-                    className="inline-flex h-7 items-center rounded-md px-2 text-[12px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-                    onClick={undoPendingReview}
-                  >
-                    {t('agent.undo')}
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex h-7 items-center rounded-md px-2 text-[12px] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
-                    onClick={keepPendingReview}
-                  >
-                    {t('agent.keep')}
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex h-7 items-center rounded-md bg-[var(--accent-soft)] px-2.5 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--line)]"
-                    onClick={reviewPendingChanges}
-                  >
-                    {t('agent.review')}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {pendingLongSuggestions.length > 0 && !sending ? (
-              <div className="border-t border-[var(--line)] px-3 py-2">
-                <p className="mb-1.5 text-[11px] text-[var(--muted)]">
-                  {t('agent.longMemorySuggestHint', '记住这个偏好？')}
-                </p>
-                {pendingLongSuggestions.map((s, i) => (
-                  <div key={i} className="mb-1.5 flex items-start gap-2">
-                    <span className="mt-0.5 min-w-0 flex-1 text-[11px] leading-4 text-[var(--ink)]">
-                      {s.text}
-                    </span>
-                    <div className="flex shrink-0 gap-1">
-                      <button
-                        type="button"
-                        className="rounded px-1.5 py-0.5 text-[11px] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-                        onClick={() =>
-                          setPendingLongSuggestions((prev) => prev.filter((_, j) => j !== i))
-                        }
-                      >
-                        {t('agent.longMemoryIgnore', '忽略')}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded bg-[var(--accent)] px-1.5 py-0.5 text-[11px] font-medium text-white hover:opacity-90"
-                        onClick={() => {
-                          fetch('/api/v1/design/memory/long', {
-                            method: 'POST',
-                            headers: {
-                              'Content-Type': 'application/json',
-                              Authorization: `Bearer ${getToken()}`,
-                            },
-                            body: JSON.stringify({ kind: s.kind, text: s.text }),
-                          }).catch(() => {/* silently ignore */});
-                          setPendingLongSuggestions((prev) => prev.filter((_, j) => j !== i));
-                        }}
-                      >
-                        {t('agent.longMemorySave', '记住')}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            <div>
-              <AgentComposerShell
-                className="min-h-[120px] rounded-none border-0 shadow-none"
-                inputRef={inputRef}
-                contexts={contextChips}
-                onContextsChange={onContextsChange}
-                value={input}
-                onChange={onInputChange}
-                onSubmit={() => void send()}
-                onEscape={() => escapeComposer()}
-                sending={sending}
-                onStop={stopGeneration}
-                placeholder={composerPlaceholder}
-                canSend={
-                  !sending &&
-                  (!!input.trim() || contextChips.length > 0) &&
-                  available !== false &&
-                  !attachmentsUploading
-                }
-                {...attachProps}
-                interactionMode={interactionMode}
-                onInteractionModeChange={applyInteractionMode}
-        allowedInteractionModes={enabledInteractionModes}
-                imageModeControls={imageModeControls}
-                videoModeControls={videoModeControls}
-                modelButtonProps={modelButtonProps}
-                {...imageAspectProps}
-              />
-            </div>
-          </div>
-        </div>
+        <AgentDockComposerFooter
+          pendingReview={Boolean(pendingReview && !sending)}
+          onUndoReview={undoPendingReview}
+          onKeepReview={keepPendingReview}
+          onReview={reviewPendingChanges}
+          pendingLongSuggestions={!sending ? pendingLongSuggestions : []}
+          onIgnoreLongSuggestion={(i) =>
+            setPendingLongSuggestions((prev) => prev.filter((_, j) => j !== i))
+          }
+          onSavedLongSuggestion={(i) =>
+            setPendingLongSuggestions((prev) => prev.filter((_, j) => j !== i))
+          }
+          composer={
+            <AgentComposerShell
+              className="min-h-[120px] rounded-none border-0 shadow-none"
+              inputRef={inputRef}
+              contexts={contextChips}
+              onContextsChange={onContextsChange}
+              value={input}
+              onChange={onInputChange}
+              onSubmit={() => void send()}
+              onEscape={() => escapeComposer()}
+              sending={sending}
+              onStop={stopGeneration}
+              placeholder={composerPlaceholder}
+              canSend={
+                !sending &&
+                (!!input.trim() || contextChips.length > 0) &&
+                available !== false &&
+                !attachmentsUploading
+              }
+              {...attachProps}
+              interactionMode={interactionMode}
+              onInteractionModeChange={applyInteractionMode}
+              allowedInteractionModes={enabledInteractionModes}
+              imageModeControls={imageModeControls}
+              videoModeControls={videoModeControls}
+              modelButtonProps={modelButtonProps}
+              {...imageAspectProps}
+            />
+          }
+        />
       )}
 
       {!historyOpen && mentionPanelOpen ? (

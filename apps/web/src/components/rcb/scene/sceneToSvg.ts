@@ -953,11 +953,10 @@ export async function nodeToSvgElement(
     if (!src && !processing) {
       const g = appendChild(parent, svgEl('g'));
       const plate = appendChild(g, svgEl('path', { d: clipD }));
-      // Generator: soft gray plate + centered photo icon (no selection chrome).
-      // Empty image upload placeholder: dashed border wash.
-      setFill(plate, isGen ? '#E8EAED' : '#E5E7EB');
+      // Generator chrome follows app theme (light/dark); upload empty stays dashed wash.
+      setFill(plate, isGen ? 'var(--surface)' : '#E5E7EB');
       setStroke(plate, {
-        color: isGen ? 'rgba(0,0,0,0.06)' : '#9CA3AF',
+        color: isGen ? 'var(--line)' : '#9CA3AF',
         width: isGen ? 1 : 1.5,
         dasharray: isGen ? undefined : '6 4',
       });
@@ -976,12 +975,12 @@ export async function nodeToSvgElement(
             'pointer-events': 'none',
           })
         );
-        // Sun (upper-right) — light gray so it sits softly on the plate
+        // Sun (upper-right)
         const sun = appendChild(
           icon,
           svgEl('circle', { cx: 16.5, cy: 7.5, r: 2.25 })
         );
-        setFill(sun, '#D1D5DB');
+        setFill(sun, 'var(--muted)');
         setStroke(sun, 'none');
         // Twin peaks silhouette
         const peaks = appendChild(
@@ -990,7 +989,7 @@ export async function nodeToSvgElement(
             d: 'M3.5 18.5 L9.2 10.2 L13.1 15.1 L16.4 11.4 L20.5 18.5 Z',
           })
         );
-        setFill(peaks, '#D1D5DB');
+        setFill(peaks, 'var(--muted)');
         setStroke(peaks, 'none');
       } else {
         const wash = appendChild(
@@ -1117,15 +1116,15 @@ export async function nodeToSvgElement(
     if (!src && !processing) {
       const g = appendChild(parent, svgEl('g'));
       const plate = appendChild(g, svgEl('path', { d: clipD }));
-      setFill(plate, isGen ? '#E8EAED' : '#E5E7EB');
+      setFill(plate, isGen ? 'var(--surface)' : '#E5E7EB');
       setStroke(plate, {
-        color: isGen ? 'rgba(0,0,0,0.06)' : '#9CA3AF',
+        color: isGen ? 'var(--line)' : '#9CA3AF',
         width: isGen ? 1 : 1.5,
         dasharray: isGen ? undefined : '6 4',
       });
       setAttrs(plate, { 'data-radius-body': '1' });
       if (isGen) {
-        // Soft play triangle only (图2) — no frame / plus.
+        // Soft play triangle only — no frame / plus.
         const iconSize = Math.max(72, Math.min(boxW, boxH) * 0.34);
         const ix = (boxW - iconSize) / 2;
         const iy = (boxH - iconSize) / 2;
@@ -1145,8 +1144,8 @@ export async function nodeToSvgElement(
             'stroke-linecap': 'round',
           })
         );
-        setFill(play, '#C4C4C4');
-        setStroke(play, { color: '#C4C4C4', width: 2.75 });
+        setFill(play, 'var(--muted)');
+        setStroke(play, { color: 'var(--muted)', width: 2.75 });
       }
       tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
       if (isGen || processing) setAttrs(g, { 'data-export-ignore': '1' });

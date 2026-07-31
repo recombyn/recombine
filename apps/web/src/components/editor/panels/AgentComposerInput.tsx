@@ -1,5 +1,15 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, memo } from 'react';
 import { cn } from '@/utils/classnames';
+import { parseNodeText } from '@/components/rcb/scene/sceneText';
+import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import {
+  frameIdContainingNode,
+  buildSceneNodesForEdit,
+  buildSceneNodesForIds,
+} from '@/components/editor/panels/agent/runDesignAgent';
+import { renderComposerChipThumb, renderExport } from '@/components/rcb/scene/exportImage';
+import { imageSrcToFile } from '@/utils/uploadImage';
+
 
 function editorHasComposerChips(el: HTMLElement | null | undefined): boolean {
   return Boolean(el?.querySelector('[data-composer-chip="1"]'));
@@ -936,3 +946,238 @@ const AgentComposerInput = forwardRef<
 export default memo(AgentComposerInput);
 const MemoizedContextChipPill = memo(ContextChipPill);
 export { MemoizedContextChipPill as ContextChipPill };
+
+function nodeKindLabel(node: any): string {
+  const shape = String(node?.attrs?.shapeType || '');
+  const key = String(node?.key || '');
+  const map: Record<string, string> = {
+    text: '文字',
+    image: '图片',
+    rect: '矩形',
+    line: '线条',
+    arrow: '箭头',
+    ellipse: '椭圆',
+    circle: '椭圆',
+    triangle: '多边形',
+    polygon: '多边形',
+    star: '星形',
+    pen: '钢笔',
+    pencil: '画笔',
+    path: '路径',
+  };
+  return map[shape] || map[key] || key || '元素';
+}
+
+/** Unique chip label: 矩形 1 / 矩形 2 / 多边形 1 … (stable by position). */
+function numberedNodeLabel(document: any, nodeId: string): string {
+  const node = document?.deltaSetLike?.[nodeId];
+  if (!node) return '元素';
+  const base = nodeKindLabel(node);
+  const delta = document?.deltaSetLike || {};
+  const peers = Object.keys(delta)
+    .filter((id) => {
+      const n = delta[id];
+      return Boolean(n) && nodeKindLabel(n) === base;
+    })
+    .sort((a, b) => {
+      const na = delta[a];
+      const nb = delta[b];
+      const ya = Number(na?.y) || 0;
+      const yb = Number(nb?.y) || 0;
+      if (ya !== yb) return ya - yb;
+      const xa = Number(na?.x) || 0;
+      const xb = Number(nb?.x) || 0;
+      if (xa !== xb) return xa - xb;
+      return a.localeCompare(b);
+    });
+  const idx = Math.max(1, peers.indexOf(nodeId) + 1);
+  return `${base} ${idx}`;
+}
+
+function nextGroupChipLabel(chips: ComposerContext[]): string {
+  let max = 0;
+  for (const c of chips) {
+    if (c.kind !== 'group' && c.kind !== 'multi') continue;
+    const m = /^组(\d+)$/.exec(String(c.label || '').trim());
+    if (m) max = Math.max(max, Number(m[1]) || 0);
+  }
+  return `组${max + 1}`;
+}
+
+export function buildComposerContext(
+  document: any,
+  selectedNodeIds: string[],
+  activeFrameId: string | null,
+  /** Existing chips — used to name multi-select as 组1 / 组2 … */
+  existingChips: ComposerContext[] = []
+): ComposerContext | null {
+  const ids = selectedNodeIds.filter(Boolean);
+  if (ids.length === 1) {
+    const id = ids[0];
+    const node = document?.deltaSetLike?.[id];
+    if (!node) return null;
+    const label = numberedNodeLabel(document, id);
+    // Full snapshot (same shape as SCENE_NODES); artboard-local when inside a frame.
+    const containingFrameId = frameIdContainingNode(document, id);
+    const inventory = containingFrameId
+      ? buildSceneNodesForEdit(document, containingFrameId, [id]).find((n) => n.id === id) ||
+        buildSceneNodesForIds(document, [id])[0]
+      : buildSceneNodesForIds(document, [id])[0];
+    const lines = [
+      '[Target element — full node; update_node may change any field]',
+      containingFrameId ? `artboard_id: ${containingFrameId}` : null,
+      inventory ? JSON.stringify(inventory) : `id: ${id}`,
+    ].filter(Boolean) as string[];
+    return {
+      key: `node:${id}`,
+      label,
+      kind: String(node.key || 'shape'),
+      payload: lines.join('\n'),
+      ...(node.key === 'image' && String(node.attrs?.src || '').trim()
+        ? {
+            thumbUrl: String(node.attrs.src).trim(),
+            // Same src for vision bag — send() resolves /api → data URL when needed.
+            dataUrl: String(node.attrs.src).trim(),
+          }
+        : {}),
+    };
+  }
+  if (ids.length > 1) {
+    const key = `group:${[...ids].sort().join(',')}`;
+    const reused = existingChips.find((c) => chipBaseKey(c.key) === key);
+    const label = reused?.label || nextGroupChipLabel(existingChips);
+    const frameIds = [
+      ...new Set(ids.map((id) => frameIdContainingNode(document, id)).filter(Boolean)),
+    ] as string[];
+    const inventory =
+      frameIds.length === 1
+        ? buildSceneNodesForEdit(document, frameIds[0], ids).filter((n) => ids.includes(n.id))
+        : buildSceneNodesForIds(document, ids);
+    return {
+      key,
+      label,
+      kind: 'group',
+      payload: [
+        '[Target group — full node snapshots; update_node may change any field]',
+        `group: ${label}`,
+        `count: ${ids.length}`,
+        `ids: ${ids.join(', ')}`,
+        JSON.stringify(inventory.slice(0, 40)),
+      ].join('\n'),
+    };
+  }
+
+  if (!activeFrameId || !document) return null;
+  const frames = Array.isArray(document.frames) ? document.frames : [];
+  const frame = frames.find((f: any) => f?.id === activeFrameId);
+  if (!frame) return null;
+  const name = String(frame.name || 'Frame');
+  const w = Math.round(Number(frame.width) || 0);
+  const h = Math.round(Number(frame.height) || 0);
+  const fx = Number(frame.x) || 0;
+  const fy = Number(frame.y) || 0;
+  const fw = Math.max(1, Number(frame.width) || 1);
+  const fh = Math.max(1, Number(frame.height) || 1);
+  const bg = String(frame.backgroundColor || 'transparent');
+
+  const childLines: string[] = [];
+  const rootChildren: string[] = document?.deltaSetLike?.ROOT?.children || [];
+  for (const id of rootChildren) {
+    const node = document?.deltaSetLike?.[id];
+    if (!node || !id) continue;
+    const { left, top } = nodeLeftTop(document, node);
+    const nw = Math.max(1, Number(node.width) || 1);
+    const nh = Math.max(1, Number(node.height) || 1);
+    // Treat as inside if the box mostly overlaps the artboard.
+    const ow = Math.max(0, Math.min(left + nw, fx + fw) - Math.max(left, fx));
+    const oh = Math.max(0, Math.min(top + nh, fy + fh) - Math.max(top, fy));
+    if (ow * oh < nw * nh * 0.4) continue;
+    const kind = nodeKindLabel(node);
+    const nodeLabel = numberedNodeLabel(document, id);
+    const fill = String(node.attrs?.['fill-color'] ?? node.attrs?.fill ?? '');
+    let line = `- id=${id} name="${nodeLabel}" kind=${kind} box=${Math.round(nw)}×${Math.round(nh)} at (${Math.round(left)},${Math.round(top)})`;
+    if (fill) line += ` fill=${fill}`;
+    if (node.key === 'text') {
+      const preview = parseNodeText(node.attrs || {}).slice(0, 120);
+      if (preview) line += ` text="${preview.replace(/\n/g, ' ')}"`;
+    }
+    childLines.push(line);
+    if (childLines.length >= 80) break;
+  }
+
+  return {
+    key: `frame:${activeFrameId}`,
+    label: name,
+    kind: 'frame',
+    payload: [
+      '[Target artboard]',
+      `id: ${activeFrameId}`,
+      `name: ${name}`,
+      `size: ${w}×${h} at (${Math.round(fx)}, ${Math.round(fy)})`,
+      `background: ${bg}`,
+      `elements (${childLines.length}):`,
+      ...(childLines.length
+        ? childLines
+        : ['(empty artboard — no scene nodes inside yet)']),
+    ].join('\n'),
+  };
+}
+
+/** Attach a live shape/group/frame raster when the chip has no image `src` yet. */
+export async function enrichComposerContextThumb(
+  document: any,
+  ctx: ComposerContext | null,
+  opts: { nodeIds?: string[]; frameId?: string | null } = {}
+): Promise<ComposerContext | null> {
+  if (!ctx) return null;
+  if (String(ctx.thumbUrl || '').trim()) return ctx;
+  try {
+    const thumb = await renderComposerChipThumb({
+      document,
+      nodeIds: opts.nodeIds,
+      frameId: opts.frameId,
+    });
+    if (thumb) return { ...ctx, thumbUrl: thumb };
+  } catch {
+    /* best-effort preview */
+  }
+  return ctx;
+}
+
+/** Same path as selection export — flatten nodes to one PNG data-URL. */
+export async function rasterizeNodesToPngDataUrl(
+  document: any,
+  nodeIds: string[]
+): Promise<string | null> {
+  const ids = nodeIds.filter(Boolean);
+  if (!document || !ids.length) return null;
+  try {
+    const rendered = await renderExport({
+      document,
+      format: 'png',
+      multiplier: 2,
+      selectionOnly: true,
+      nodeIds: ids,
+    });
+    if (rendered?.kind !== 'raster' || !rendered.dataUrl) return null;
+    return rendered.dataUrl;
+  } catch {
+    return null;
+  }
+}
+
+/** Same path as selection export — flatten nodes to one PNG File for Chat. */
+export async function rasterizeNodesToPngFile(
+  document: any,
+  nodeIds: string[],
+  filename = 'canvas-group.png'
+): Promise<File | null> {
+  const dataUrl = await rasterizeNodesToPngDataUrl(document, nodeIds);
+  if (!dataUrl) return null;
+  try {
+    return await imageSrcToFile(dataUrl, filename);
+  } catch {
+    return null;
+  }
+}
+

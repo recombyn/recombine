@@ -76,6 +76,7 @@ import {
 import type { ResizeHandle } from '@/components/rcb/selection/resizeGeometry';
 import { cn } from '@/utils/classnames';
 import { fetchProject } from '@/apis/projects';
+import { createEmptyDocument } from '@/components/rcb/scene/sceneDocument';
 import {
   getProjectDraft,
   getProjectSession,
@@ -488,6 +489,33 @@ function persistUnsyncedDraft(
   });
 }
 
+/** Keep /editor/:id when cloud has no row yet — never mint a second nanoid. */
+function seedLocalProjectForUrl(
+  targetId: string,
+  dispatch: ReturnType<typeof useDispatch>,
+  name: string,
+  document: unknown
+) {
+  dispatch(
+    importDocument({
+      id: targetId,
+      name,
+      document,
+      source: 'user',
+      dirty: true,
+    })
+  );
+  void putProjectDraft({
+    projectId: targetId,
+    name,
+    document,
+    updatedAt: Date.now(),
+    syncedAt: null,
+    cloudRevision: null,
+    baseDocument: null,
+  });
+}
+
 async function hydrateShareTarget(
   targetId: string,
   dispatch: ReturnType<typeof useDispatch>,
@@ -527,6 +555,22 @@ async function hydrateCloudProject(
   isCancelled: () => boolean
 ) {
   const draft = await getProjectDraft(targetId).catch(() => null);
+  // Local-only id (nanoid before first successful PUT): GET would always 404.
+  if (draft?.document && !draft.syncedAt) {
+    if (isCancelled()) return;
+    const name = draft.name || t('home.untitled');
+    dispatch(
+      importDocument({
+        id: targetId,
+        name,
+        document: draft.document,
+        source: 'user',
+        dirty: true,
+      })
+    );
+    persistUnsyncedDraft(targetId, draft, name);
+    return;
+  }
   try {
     const res = await fetchProject(targetId);
     if (isCancelled()) return;
@@ -566,7 +610,12 @@ async function hydrateCloudProject(
         if (!draft.syncedAt) persistUnsyncedDraft(targetId, draft, name);
         return;
       }
-      dispatch(createTemplate({ emptyWorld: true }));
+      seedLocalProjectForUrl(
+        targetId,
+        dispatch,
+        t('home.untitled'),
+        createEmptyDocument({ emptyWorld: true })
+      );
       return;
     }
 
@@ -615,7 +664,12 @@ async function hydrateCloudProject(
       persistUnsyncedDraft(targetId, draft, name);
       return;
     }
-    dispatch(createTemplate({ emptyWorld: true }));
+    seedLocalProjectForUrl(
+      targetId,
+      dispatch,
+      t('home.untitled'),
+      createEmptyDocument({ emptyWorld: true })
+    );
   }
 }
 
@@ -868,7 +922,26 @@ function EditorPage() {
 
     if (createNew) {
       dispatch(createTemplate({ emptyWorld: true }));
-      const id = ((store.getState() as any).editor?.currentId as string | null) || '';
+      const ed = (store.getState() as any).editor as {
+        currentId?: string | null;
+        document?: unknown;
+        templates?: { id: string; name?: string }[];
+      };
+      const id = String(ed?.currentId || '');
+      // Persist before first edit so refresh / hydrate won't GET a missing cloud row.
+      if (id && ed.document) {
+        const name =
+          ed.templates?.find((x) => x.id === id)?.name || t('home.untitled');
+        void putProjectDraft({
+          projectId: id,
+          name,
+          document: ed.document,
+          updatedAt: Date.now(),
+          syncedAt: null,
+          cloudRevision: null,
+          baseDocument: null,
+        });
+      }
       // Jump straight to /editor/:id so we never rely on a second remounting route.
       if (id) {
         navigate(

@@ -105,6 +105,10 @@ def test_ask_propose_keeps_model_reply():
     assert "添加rect" not in text
 
 
+def test_ask_propose_ignores_ops_detail_when_reply_empty():
+    assert _ask_propose_user_text(model_reply="", detail="添加rect") == ""
+
+
 def test_should_recover_edit_after_tools_drop_to_chat():
     assert _should_recover_edit_after_resources(
         prior_intent="edit",
@@ -133,9 +137,17 @@ def test_lc_design_needs_canvas_ops_blocks_narrate_only():
     assert _lc_design_needs_canvas_ops(
         classified="edit", turn_intent="done", has_ops=False
     )
-    # Bare ask without chips is still narrate escape when classified create.
+    # Agent: bare ask without chips still paints when classified create.
     assert _lc_design_needs_canvas_ops(
         classified="create", turn_intent="ask", has_ops=False, has_clarify=False
+    )
+    # Ask mode: intent=ask waits on user even without chips.
+    assert not _lc_design_needs_canvas_ops(
+        classified="create",
+        turn_intent="ask",
+        has_ops=False,
+        has_clarify=False,
+        ask_mode=True,
     )
     # Real clarify may settle without paint.
     assert not _lc_design_needs_canvas_ops(
@@ -157,6 +169,12 @@ def test_should_route_to_paint():
     )
     assert not _should_route_to_paint(
         classified="create", turn_intent="ask", has_clarify=True
+    )
+    assert not _should_route_to_paint(
+        classified="create",
+        turn_intent="ask",
+        has_clarify=False,
+        ask_mode=True,
     )
     assert not _should_route_to_paint(
         classified="chat", turn_intent="chat", has_clarify=False
