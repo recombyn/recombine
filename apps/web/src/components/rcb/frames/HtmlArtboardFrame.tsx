@@ -146,7 +146,7 @@ function HtmlArtboardFrame({
           <div
             data-artboard-process-shimmer
             data-frame-id={frame.id}
-            className="artboard-process-shimmer pointer-events-none absolute z-[29] overflow-hidden"
+            className="rcb-artboard-process-shimmer pointer-events-none absolute z-[29] overflow-hidden"
             style={processOverlayStyle}
             aria-hidden
           />

@@ -208,9 +208,9 @@ function AccountSettingsDialog({
                   Nav must stay a DialogPanel descendant (else outside-click closes the dialog).
                   No transform on this tree so `fixed` still anchors to the viewport.
                 */}
-                <DialogPanel className="relative w-full max-w-[1080px]">
+                <DialogPanel className="relative w-full max-w-[min(1080px,96vw)]">
                   <div className="flex h-[min(720px,calc(92dvh-4.5rem))] w-full flex-col overflow-hidden rounded-2xl bg-[var(--surface)] shadow-[0_24px_64px_-16px_rgba(0,0,0,0.28)] ring-1 ring-[var(--line)] md:h-[min(720px,92vh)] md:flex-row">
-                  <aside className="hidden w-[200px] shrink-0 flex-col bg-[var(--account-rail)] px-3 py-5 md:flex md:w-[220px]">
+                  <aside className="hidden w-[160px] shrink-0 flex-col bg-[var(--account-rail)] px-2.5 py-5 md:flex lg:w-[200px] lg:px-3 xl:w-[220px]">
                     <h2 className="mb-4 px-2.5 text-[16px] font-bold tracking-tight text-[var(--ink)]">
                       {t('wallet.settingsTitle')}
                     </h2>

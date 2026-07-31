@@ -1,4 +1,4 @@
-.angle-editor-scene {
+.rcb-angle-editor-scene {
   /* Theme-aware wires / faces: dark used white-on-black; light needs ink-on-canvas. */
   --mae-face-bg: color-mix(in srgb, var(--ink) 8%, var(--canvas));
   --mae-face-edge: color-mix(in srgb, var(--ink) 28%, transparent);
@@ -22,13 +22,13 @@
 }
 
 /* Preserve the original dark-mode cube weight (near #1f1f1f). */
-html[data-theme='dark'] .angle-editor-scene {
+html[data-theme='dark'] .rcb-angle-editor-scene {
   --mae-face-bg: #1f1f1f;
   --mae-subject-bg: #1a1a1a;
   --mae-subject-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
 }
 
-.angle-editor-scene .unified-scene {
+.rcb-angle-editor-scene .rcb-unified-scene {
   position: relative;
   width: 100%;
   height: 100%;
@@ -37,15 +37,15 @@ html[data-theme='dark'] .angle-editor-scene {
   touch-action: none;
 }
 
-.angle-editor-scene .unified-scene.mode-camera {
+.rcb-angle-editor-scene .rcb-unified-scene.rcb-mode-camera {
   transform-style: preserve-3d;
 }
 
-.angle-editor-scene .unified-scene.is-dragging {
+.rcb-angle-editor-scene .rcb-unified-scene.rcb-is-dragging {
   cursor: grabbing;
 }
 
-.angle-editor-scene .unified-scene-cube-container {
+.rcb-angle-editor-scene .rcb-unified-scene-cube-container {
   position: absolute;
   inset: 0;
   z-index: 0;
@@ -55,23 +55,23 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .angle-editor-scene-container {
+.rcb-angle-editor-scene .rcb-angle-editor-scene-container {
   perspective: 1200px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.angle-editor-scene .angle-editor-cube-wrapper {
+.rcb-angle-editor-scene .rcb-angle-editor-cube-wrapper {
   transform-style: preserve-3d;
 }
 
-.angle-editor-scene .angle-editor-cube {
+.rcb-angle-editor-scene .rcb-angle-editor-cube {
   position: relative;
   transform-style: preserve-3d;
 }
 
-.angle-editor-scene .angle-editor-cube-face {
+.rcb-angle-editor-scene .rcb-angle-editor-cube-face {
   position: absolute;
   inset: 0;
   display: flex;
@@ -89,7 +89,7 @@ html[data-theme='dark'] .angle-editor-scene {
 }
 
 /* Skybox: wireframe cube — inset shadows keep all 4 edges visible under 3D rotate. */
-.angle-editor-scene .mode-skybox .angle-editor-cube-face {
+.rcb-angle-editor-scene .rcb-mode-skybox .rcb-angle-editor-cube-face {
   border: none;
   /* Vertical edges especially get lost with border + rotateX; inset shadows stay painted. */
   box-shadow:
@@ -103,7 +103,7 @@ html[data-theme='dark'] .angle-editor-scene {
   backface-visibility: visible;
 }
 
-.angle-editor-scene .mode-skybox .angle-editor-cube-face.has-image {
+.rcb-angle-editor-scene .rcb-mode-skybox .rcb-angle-editor-cube-face.rcb-has-image {
   border: none;
   background: var(--mae-face-bg);
   box-shadow:
@@ -111,7 +111,7 @@ html[data-theme='dark'] .angle-editor-scene {
     0 0 0 0.5px var(--mae-face-edge-soft);
 }
 
-.angle-editor-scene .mode-skybox .angle-editor-face-image-content {
+.rcb-angle-editor-scene .rcb-mode-skybox .rcb-angle-editor-face-image-content {
   width: 72%;
   height: 72%;
   object-fit: contain;
@@ -120,7 +120,7 @@ html[data-theme='dark'] .angle-editor-scene {
   user-select: none;
 }
 
-.angle-editor-scene .angle-editor-face-image-content {
+.rcb-angle-editor-scene .rcb-angle-editor-face-image-content {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -129,7 +129,7 @@ html[data-theme='dark'] .angle-editor-scene {
 }
 
 /* Camera mode: fixed face-on subject (does not orbit; only scales). */
-.angle-editor-scene .angle-editor-fixed-subject {
+.rcb-angle-editor-scene .rcb-angle-editor-fixed-subject {
   position: relative;
   /* Fallback before natural size loads — leave padding inside the orbit globe. */
   width: 64px;
@@ -140,7 +140,7 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .angle-editor-fixed-subject-image {
+.rcb-angle-editor-scene .rcb-angle-editor-fixed-subject-image {
   display: block;
   width: 100%;
   height: 100%;
@@ -154,7 +154,7 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .angle-editor-fixed-subject-placeholder {
+.rcb-angle-editor-scene .rcb-angle-editor-fixed-subject-placeholder {
   width: 100%;
   height: 100%;
   border-radius: 2px;
@@ -162,27 +162,27 @@ html[data-theme='dark'] .angle-editor-scene {
   background: var(--mae-subject-bg);
 }
 
-.angle-editor-scene .angle-editor-face-front {
+.rcb-angle-editor-scene .rcb-angle-editor-face-front {
   transform: translateZ(var(--angle-cube-half, 46px));
 }
-.angle-editor-scene .angle-editor-face-back {
+.rcb-angle-editor-scene .rcb-angle-editor-face-back {
   transform: rotateY(180deg) translateZ(var(--angle-cube-half, 46px));
 }
-.angle-editor-scene .angle-editor-face-right {
+.rcb-angle-editor-scene .rcb-angle-editor-face-right {
   transform: rotateY(90deg) translateZ(var(--angle-cube-half, 46px));
 }
-.angle-editor-scene .angle-editor-face-left {
+.rcb-angle-editor-scene .rcb-angle-editor-face-left {
   transform: rotateY(-90deg) translateZ(var(--angle-cube-half, 46px));
 }
-.angle-editor-scene .angle-editor-face-top {
+.rcb-angle-editor-scene .rcb-angle-editor-face-top {
   transform: rotateX(90deg) translateZ(var(--angle-cube-half, 46px));
 }
-.angle-editor-scene .angle-editor-face-bottom {
+.rcb-angle-editor-scene .rcb-angle-editor-face-bottom {
   transform: rotateX(-90deg) translateZ(var(--angle-cube-half, 46px));
 }
 
 /* Camera-mode orbit wireframe (CSS 3D rings, not copied from third-party class names). */
-.angle-editor-scene .mae-orbit-globe {
+.rcb-angle-editor-scene .rcb-mae-orbit-globe {
   --mae-globe-size: 150px;
   position: absolute;
   inset: 0;
@@ -193,14 +193,14 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .mae-orbit-globe-core {
+.rcb-angle-editor-scene .rcb-mae-orbit-globe-core {
   position: relative;
   width: var(--mae-globe-size);
   height: var(--mae-globe-size);
   transform-style: preserve-3d;
 }
 
-.angle-editor-scene .mae-orbit-globe-ring {
+.rcb-angle-editor-scene .rcb-mae-orbit-globe-ring {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -216,7 +216,7 @@ html[data-theme='dark'] .angle-editor-scene {
   backface-visibility: visible;
 }
 
-.angle-editor-scene .mae-orbit-globe-axis {
+.rcb-angle-editor-scene .rcb-mae-orbit-globe-axis {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -228,7 +228,7 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .mae-orbit-nav {
+.rcb-angle-editor-scene .rcb-mae-orbit-nav {
   --mae-orbit-arrow-size: 18px;
   --mae-orbit-arrow-gap: 10px;
   position: absolute;
@@ -244,7 +244,7 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .angle-editor-scene-camera {
+.rcb-angle-editor-scene .rcb-angle-editor-scene-camera {
   position: absolute;
   inset: 0;
   z-index: 2;
@@ -255,7 +255,7 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-pivot {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-pivot {
   position: relative;
   width: 1px;
   height: 1px;
@@ -263,7 +263,7 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: none;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-position {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-position {
   position: absolute;
   left: 0;
   top: 0;
@@ -272,7 +272,7 @@ html[data-theme='dark'] .angle-editor-scene {
   transform-style: preserve-3d;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-body {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-body {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -281,24 +281,24 @@ html[data-theme='dark'] .angle-editor-scene {
   box-sizing: border-box;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-front,
-.angle-editor-scene .angle-editor-camera-3d-back {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-front,
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-back {
   width: 22px;
   height: 16px;
   border-radius: 3px;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-front {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-front {
   background: #fff;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
-.angle-editor-scene .angle-editor-camera-3d-back {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-back {
   background: #f3f0f0;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
-.angle-editor-scene .angle-editor-camera-3d-lens-outer {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-lens-outer {
   position: relative;
   width: 10px;
   height: 10px;
@@ -307,14 +307,14 @@ html[data-theme='dark'] .angle-editor-scene {
   background: #b4b4b4;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-lens-inner {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-lens-inner {
   position: absolute;
   inset: 2px;
   border-radius: 50%;
   background: #1f1f1f;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-screen {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-screen {
   position: absolute;
   inset: 2px;
   border-radius: 2px;
@@ -324,22 +324,22 @@ html[data-theme='dark'] .angle-editor-scene {
   background-repeat: no-repeat;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-top,
-.angle-editor-scene .angle-editor-camera-3d-bottom {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-top,
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-bottom {
   width: 22px;
   height: 16px;
   border-radius: 2px;
   background: #ddd8d8;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-side {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-side {
   width: 16px;
   height: 16px;
   border-radius: 2px;
   background: #d8d3d3;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-shutter {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-shutter {
   width: 6px;
   height: 6px;
   margin: 4px auto 0;
@@ -347,13 +347,13 @@ html[data-theme='dark'] .angle-editor-scene {
   background: #9a9a9a;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-hotshoe {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-hotshoe {
   position: absolute;
   width: 1px;
   height: 1px;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-hotshoe-body {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-hotshoe-body {
   width: 10px;
   height: 4px;
   margin-left: -5px;
@@ -361,7 +361,7 @@ html[data-theme='dark'] .angle-editor-scene {
   background: #cfcaca;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-hotshoe-mount {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-hotshoe-mount {
   width: 6px;
   height: 2px;
   margin: 1px auto 0;
@@ -369,7 +369,7 @@ html[data-theme='dark'] .angle-editor-scene {
   background: #aaa;
 }
 
-.angle-editor-scene .angle-editor-camera-3d-line {
+.rcb-angle-editor-scene .rcb-angle-editor-camera-3d-line {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -379,7 +379,7 @@ html[data-theme='dark'] .angle-editor-scene {
   transform-origin: top center;
 }
 
-.angle-editor-scene .angle-editor-direction-btn {
+.rcb-angle-editor-scene .rcb-angle-editor-direction-btn {
   position: absolute;
   z-index: 20;
   display: flex;
@@ -395,33 +395,33 @@ html[data-theme='dark'] .angle-editor-scene {
   pointer-events: auto;
 }
 
-.angle-editor-scene .angle-editor-direction-btn:hover {
+.rcb-angle-editor-scene .rcb-angle-editor-direction-btn:hover {
   color: var(--ink);
   background: var(--mae-arrow-hover-bg);
 }
 
-.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-up {
+.rcb-angle-editor-scene .rcb-mae-orbit-nav .rcb-angle-editor-direction-btn-up {
   top: 0;
   left: 50%;
   transform: translateX(-50%);
 }
-.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-down {
+.rcb-angle-editor-scene .rcb-mae-orbit-nav .rcb-angle-editor-direction-btn-down {
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
 }
-.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-left {
+.rcb-angle-editor-scene .rcb-mae-orbit-nav .rcb-angle-editor-direction-btn-left {
   left: 0;
   top: 50%;
   transform: translateY(-50%);
 }
-.angle-editor-scene .mae-orbit-nav .angle-editor-direction-btn-right {
+.rcb-angle-editor-scene .rcb-mae-orbit-nav .rcb-angle-editor-direction-btn-right {
   right: 0;
   top: 50%;
   transform: translateY(-50%);
 }
 
-.angle-editor-scene .mode-skybox .angle-editor-skybox-stage {
+.rcb-angle-editor-scene .rcb-mode-skybox .rcb-angle-editor-skybox-stage {
   position: absolute;
   inset: 0;
   display: flex;

@@ -61,7 +61,7 @@ function SvgPaper({
   return (
     <div
       ref={paperRef}
-      className={className || 'canvas-paper relative overflow-visible'}
+      className={className || 'rcb-canvas-paper relative overflow-visible'}
       data-doc-width={width}
       data-doc-height={height}
       style={{

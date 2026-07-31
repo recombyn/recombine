@@ -458,7 +458,7 @@ function InspirationCasePreview({
                             {thumb ? (
                               <TemplateThumbnail document={thumb} fit="cover" />
                             ) : (
-                              <div className="skeleton-bone h-full w-full" aria-hidden />
+                              <div className="rcb-skeleton-bone h-full w-full" aria-hidden />
                             )}
                           </PreviewFrameThumb>
                         );
@@ -477,7 +477,7 @@ function InspirationCasePreview({
                   </div>
                 ) : (
                   <div
-                    className="skeleton-bone h-full w-full max-w-5xl rounded-2xl"
+                    className="rcb-skeleton-bone h-full w-full max-w-5xl rounded-2xl"
                     aria-busy="true"
                   />
                 )}
@@ -559,7 +559,7 @@ function InspirationCasePreview({
                               {thumb ? (
                                 <TemplateThumbnail document={thumb} fit="cover" />
                               ) : (
-                                <div className="skeleton-bone h-full w-full" aria-hidden />
+                                <div className="rcb-skeleton-bone h-full w-full" aria-hidden />
                               )}
                             </PreviewFrameThumbMobile>
                           );
@@ -580,7 +580,7 @@ function InspirationCasePreview({
             </div>
           </div>
 
-          <aside className="hidden w-[min(400px,36vw)] shrink-0 flex-col bg-[var(--canvas)] md:flex">
+          <aside className="hidden min-w-0 shrink-0 flex-col bg-[var(--canvas)] md:flex md:w-[min(260px,32%)] lg:w-[min(320px,30%)] xl:w-[min(380px,28%)]">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)]">
               <div className="flex items-center gap-2 px-4 pb-3 pt-4">
                 <AuthorFollowAvatar

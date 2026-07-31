@@ -153,6 +153,18 @@ function aspectRatioForCategory(category: HomeAgentCategory): string {
   }
 }
 
+function modelTabForCategory(category: HomeAgentCategory): ModelPickerTab {
+  if (category === 'image') return 'image';
+  if (category === 'video') return 'video';
+  return 'design';
+}
+
+function interactionModeForCategory(category: HomeAgentCategory): ComposerInteractionMode {
+  if (category === 'image') return 'image';
+  if (category === 'video') return 'video';
+  return 'agent';
+}
+
 function designSceneCategoryOf(
   category: HomeAgentCategory
 ): 'website' | 'mobile' | 'image' | 'poster' {
@@ -268,15 +280,15 @@ function HomeAgentComposer({
   const [contexts, setContexts] = useState<ComposerContext[]>([]);
   const [models, setModels] = useState<LlmModel[]>([]);
   const [modelId, setModelId] = useState('auto');
-  const [modelTab, setModelTab] = useState<ModelPickerTab>(
-    category === 'image' ? 'image' : category === 'video' ? 'video' : 'design'
+  const [modelTab, setModelTab] = useState<ModelPickerTab>(() =>
+    modelTabForCategory(category)
   );
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [modelOpen, setModelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
-  const [interactionMode, setInteractionMode] = useState<ComposerInteractionMode>(
-    category === 'image' ? 'image' : category === 'video' ? 'video' : 'agent'
+  const [interactionMode, setInteractionMode] = useState<ComposerInteractionMode>(() =>
+    interactionModeForCategory(category)
   );
   const [imageModelPanelOpen, setImageModelPanelOpen] = useState(false);
   const [videoModelPanelOpen, setVideoModelPanelOpen] = useState(false);
@@ -563,19 +575,28 @@ function HomeAgentComposer({
       resolvedModelId,
       models,
     });
+
+    let submitMode: ComposerInteractionMode = interactionMode;
+    if (isVideoInteraction) submitMode = 'video';
+    else if (isImage) submitMode = 'image';
+
+    let scene: HomeAgentCategory | null = category;
+    if (isVideoInteraction || category === 'video') scene = null;
+    else if (isImage) scene = 'image';
+
+    let submitAspect = imageAspectRatio;
+    if (isImage) submitAspect = String(imageGenAspectRatio);
+    else if (isVideoInteraction) submitAspect = String(videoGenAspectRatio);
+
     onSubmit({
       prompt,
       attachments: contexts.filter((c) => c.kind === 'attachment'),
       modelId: resolvedModelId === 'auto' ? undefined : resolvedModelId || undefined,
-      interactionMode: isVideoInteraction ? 'video' : isImage ? 'image' : interactionMode,
+      interactionMode: submitMode,
       category,
-      scene: isVideoInteraction ? null : isImage ? 'image' : category === 'video' ? null : category,
+      scene,
       // Design canvas size for agent scenes; image-gen ratio for Image chat mode.
-      imageAspectRatio: isImage
-        ? String(imageGenAspectRatio)
-        : isVideoInteraction
-          ? String(videoGenAspectRatio)
-          : imageAspectRatio,
+      imageAspectRatio: submitAspect,
     });
   };
 
@@ -695,19 +716,6 @@ function HomeAgentComposer({
       }
     }
     setContexts(next);
-  };
-
-  const pickModel = (id: string) => {
-    if (!planAllowsModelId(planId, id)) {
-      message.warning(t('agent.freeModelLocked'));
-      setModelId('auto');
-      setModelTab('design');
-      setModelOpen(false);
-      return;
-    }
-    setModelId(id);
-    setModelTab(id === 'auto' ? 'design' : modelTabOf(models.find((m) => m.id === id)));
-    setModelOpen(false);
   };
 
   const maybeOpenMentionFromAt = (next: string) => {
@@ -852,27 +860,15 @@ function HomeAgentComposer({
             if (next) {
               setMentionPanelOpen(false);
               setMentionQuery('');
-              setModelTab(
-                modelId === 'auto'
-                  ? 'design'
-                  : modelTabOf(models.find((m) => m.id === modelId))
-              );
+              // Same as editor AgentDock: open route prefs, not a forked image list.
+              setModelId('auto');
+              setModelTab('design');
             }
             setModelOpen(next);
           },
-          panel:
-            modelTab === 'image' ? (
-              <ModelPickerPanel
-                tab="image"
-                models={models}
-                selectedId={modelId}
-                onPick={pickModel}
-                status={modelsStatus}
-                autoOnly={!canPickModel}
-              />
-            ) : (
-              <AgentRoutePrefsEditor compact modeLabel={t('agent.interactionAgent')} />
-            ),
+          panel: (
+            <AgentRoutePrefsEditor compact modeLabel={t('agent.interactionAgent')} />
+          ),
           icon: <Icon name="editor-model-cube" width={16} height={16} />,
         }}
       />

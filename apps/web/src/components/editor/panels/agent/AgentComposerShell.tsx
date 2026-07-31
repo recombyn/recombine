@@ -581,13 +581,21 @@ function AttachmentUploadSpinner(): ReactNode {
 
 /** Soft circular footprint for attach / pick actions. */
 export const COMPOSER_ATTACHMENT_CHIP_CLASS = 'h-9 w-9 shrink-0 rounded-xl';
-/** Circular action button (upload / pick from canvas) — not boxy. */
-export const COMPOSER_ATTACH_ACTION_CLASS =
+
+const COMPOSER_ATTACH_ACTION_CLASS =
   'h-9 w-9 shrink-0 rounded-full inline-flex items-center justify-center transition disabled:opacity-40';
-export const COMPOSER_ATTACH_ACTION_IDLE =
+const COMPOSER_ATTACH_ACTION_IDLE =
   'bg-[var(--canvas)] text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]';
-export const COMPOSER_ATTACH_ACTION_ACTIVE =
+const COMPOSER_ATTACH_ACTION_ACTIVE =
   'bg-[var(--ink)] text-[var(--surface)] hover:bg-[var(--ink)] hover:text-[var(--surface)]';
+
+/** Circular upload / pick-from-canvas button chrome (image & video generators share this). */
+export function composerAttachActionClass(active = false): string {
+  return cn(
+    COMPOSER_ATTACH_ACTION_CLASS,
+    active ? COMPOSER_ATTACH_ACTION_ACTIVE : COMPOSER_ATTACH_ACTION_IDLE
+  );
+}
 
 /**
  * One composer attachment square — thumbnail, upload spinner, remove badge and
@@ -892,11 +900,7 @@ function buildAttachPlusButton(opts: {
       disabled={opts.disabled || opts.sending || !opts.onAttachFiles}
       aria-label={opts.attachTooltip || opts.t('agent.uploadImage')}
       onClick={opts.onClick}
-      className={
-        opts.genMediaMode
-          ? cn(COMPOSER_ATTACH_ACTION_CLASS, COMPOSER_ATTACH_ACTION_IDLE)
-          : TOOL_ICON_BTN
-      }
+      className={opts.genMediaMode ? composerAttachActionClass() : TOOL_ICON_BTN}
     >
       <HiOutlinePlus className="h-4 w-4" strokeWidth={2} />
     </button>
@@ -920,10 +924,7 @@ function buildPickFromCanvasButton(opts: {
       onClick={opts.onClick}
       className={
         opts.genMediaMode
-          ? cn(
-              COMPOSER_ATTACH_ACTION_CLASS,
-              opts.active ? COMPOSER_ATTACH_ACTION_ACTIVE : COMPOSER_ATTACH_ACTION_IDLE
-            )
+          ? composerAttachActionClass(opts.active)
           : cn(TOOL_ICON_BTN, opts.active && TOOL_ICON_BTN_ACTIVE)
       }
     >
@@ -1271,11 +1272,13 @@ function AgentComposerShell({
             open={modelButtonProps.open}
             onOpenChange={modelButtonProps.onOpenChange}
             items={[]}
-            nestedDismissGuard="[data-agent-route-submenu], .agent-route-submenu-popup"
+            nestedDismissGuard="[data-agent-route-submenu], .rcb-agent-route-submenu-popup"
             floatingClassName="z-[80]"
             referenceClassName="inline-flex"
             popupRender={() => (
-              <div onPointerDown={(e) => e.stopPropagation()}>{modelButtonProps.panel}</div>
+              <div className="max-w-full" onPointerDown={(e) => e.stopPropagation()}>
+                {modelButtonProps.panel}
+              </div>
             )}
           >
             <button
@@ -1371,7 +1374,7 @@ function AgentComposerShell({
                 floatingClassName="z-[90]"
                 referenceClassName="inline-flex"
                 popupRender={() => (
-                  <div onPointerDown={(e) => e.stopPropagation()}>
+                  <div className="max-w-full" onPointerDown={(e) => e.stopPropagation()}>
                     {imageModeControls.modelPanel}
                   </div>
                 )}
@@ -1425,7 +1428,7 @@ function AgentComposerShell({
                 floatingClassName="z-[90]"
                 referenceClassName="inline-flex"
                 popupRender={() => (
-                  <div onPointerDown={(e) => e.stopPropagation()}>
+                  <div className="max-w-full" onPointerDown={(e) => e.stopPropagation()}>
                     {videoModeControls.modelPanel}
                   </div>
                 )}

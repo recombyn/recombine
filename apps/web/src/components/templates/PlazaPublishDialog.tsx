@@ -134,21 +134,21 @@ function PlazaPublishForm({
 
   if (phase === 'success') {
     return (
-      <div className="plaza-thanks relative px-1 pb-2 pt-6 text-center">
+      <div className="rcb-plaza-thanks relative px-1 pb-2 pt-6 text-center">
         <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-          <span className="plaza-thanks-orb plaza-thanks-orb-a" />
-          <span className="plaza-thanks-orb plaza-thanks-orb-b" />
-          <span className="plaza-thanks-orb plaza-thanks-orb-c" />
+          <span className="rcb-plaza-thanks-orb rcb-plaza-thanks-orb-a" />
+          <span className="rcb-plaza-thanks-orb rcb-plaza-thanks-orb-b" />
+          <span className="rcb-plaza-thanks-orb rcb-plaza-thanks-orb-c" />
         </div>
 
         <div className="relative mx-auto flex h-[72px] w-[72px] items-center justify-center">
-          <span className="plaza-thanks-ring" aria-hidden />
-          <span className="plaza-thanks-badge inline-flex h-14 w-14 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] shadow-[0_10px_28px_rgba(15,23,42,0.18)]">
+          <span className="rcb-plaza-thanks-ring" aria-hidden />
+          <span className="rcb-plaza-thanks-badge inline-flex h-14 w-14 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] shadow-[0_10px_28px_rgba(15,23,42,0.18)]">
             <HiCheck className="h-7 w-7" strokeWidth={2.25} />
           </span>
         </div>
 
-        <div className="plaza-thanks-copy relative mt-5">
+        <div className="rcb-plaza-thanks-copy relative mt-5">
           <div className="mb-1.5 inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--muted)]">
             <HiOutlineSparkles className="h-3.5 w-3.5" />
             {t('plaza.thanksEyebrow')}

@@ -89,23 +89,49 @@ def seed_fonts() -> int:
     return inserted
 
 
+def _default_official_case_entries(data_dir: Path) -> list[dict[str, str]]:
+    """Build index entries from known titles when index.json lists no cases."""
+    out: list[dict[str, str]] = []
+    for cid in _CASE_TITLES_ZH:
+        stem = cid.removeprefix("case-")
+        name = f"{stem}.json"
+        if not (data_dir / name).is_file():
+            continue
+        if "poster" in stem:
+            category = "poster"
+        elif "mobile" in stem:
+            category = "mobile"
+        else:
+            category = "website"
+        out.append({"id": cid, "file": name, "category": category})
+    return out
+
+
 def seed_official_plaza_cases() -> int:
     """Seed approved plaza_submissions from api/data/official_cases. Skip existing ids."""
     init_schema()
     data_dir = _api_data() / "official_cases"
     index_path = data_dir / "index.json"
-    if not index_path.is_file():
-        logger.warning("plaza cases seed skipped: missing %s", index_path)
-        return 0
+    cases: list[Any] = []
+    if index_path.is_file():
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            logger.warning("plaza cases seed failed to read index: %s", err)
+            index = None
+        if isinstance(index, dict) and isinstance(index.get("cases"), list):
+            cases = index["cases"]
+    else:
+        logger.warning("plaza cases seed: missing %s — using file fallback", index_path)
 
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as err:
-        logger.warning("plaza cases seed failed to read index: %s", err)
-        return 0
-
-    cases = index.get("cases") if isinstance(index, dict) else None
-    if not isinstance(cases, list):
+    if not cases:
+        cases = _default_official_case_entries(data_dir)
+        if cases:
+            logger.warning(
+                "plaza cases seed: index cases empty — seeding %s file(s) from titles map",
+                len(cases),
+            )
+    if not cases:
         return 0
 
     now = time.time()
@@ -142,7 +168,7 @@ def seed_official_plaza_cases() -> int:
 
             title = _CASE_TITLES_ZH.get(cid) or str(case.get("nameKey") or cid)
             category = str(case.get("category") or "website").strip().lower() or "website"
-            if category not in ("website", "mobile", "image", "poster"):
+            if category not in ("website", "mobile", "image", "poster", "video"):
                 category = "website"
             document = ensure_cover_artboard(document, title=title)
             raw = json.dumps(document, ensure_ascii=False, separators=(",", ":"))

@@ -29,9 +29,7 @@ import AgentComposerInput, {
 } from '@/components/editor/panels/AgentComposerInput';
 import {
   ComposerAttachmentChip,
-  COMPOSER_ATTACH_ACTION_CLASS,
-  COMPOSER_ATTACH_ACTION_IDLE,
-  COMPOSER_ATTACH_ACTION_ACTIVE,
+  composerAttachActionClass,
 } from '@/components/editor/panels/agent/AgentComposerShell';
 import { buildComposerContext, enrichComposerContextThumb, rasterizeNodesToPngDataUrl } from '@/components/editor/panels/AgentDock';
 import MentionAttachPanel, {
@@ -833,7 +831,7 @@ function ImageGeneratorCard({
                 disabled={disabled || sending}
                 aria-label={t('editor.tools.imageGenRef')}
                 onClick={() => fileRef.current?.click()}
-                className={cn(COMPOSER_ATTACH_ACTION_CLASS, COMPOSER_ATTACH_ACTION_IDLE)}
+                className={composerAttachActionClass()}
               >
                 <HiOutlinePlus className="h-4 w-4" strokeWidth={2} />
               </button>
@@ -874,12 +872,7 @@ function ImageGeneratorCard({
                   });
                   dispatch(startCanvasAttachPick({ target: pickTarget, accept: 'image' }));
                 }}
-                className={cn(
-                  COMPOSER_ATTACH_ACTION_CLASS,
-                  pickingFromCanvas
-                    ? COMPOSER_ATTACH_ACTION_ACTIVE
-                    : COMPOSER_ATTACH_ACTION_IDLE
-                )}
+                className={composerAttachActionClass(pickingFromCanvas)}
               >
                 <HiOutlineViewfinderCircle className="h-4 w-4" strokeWidth={2} />
               </button>

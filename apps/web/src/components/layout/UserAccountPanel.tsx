@@ -255,16 +255,13 @@ function SideFlyout({ children }: { children: ReactNode }) {
     setSide(spaceRight >= need ? 'right' : 'left');
   }, []);
 
+  const sideClass =
+    side === 'right'
+      ? 'left-full pl-[calc(0.5rem+10px)]'
+      : 'right-full pr-[calc(0.5rem+10px)]';
+
   return (
-    <div
-      ref={wrapRef}
-      className={cn(
-        'absolute top-0 z-10',
-        side === 'right'
-          ? 'left-full pl-[calc(0.5rem+10px)]'
-          : 'right-full pr-[calc(0.5rem+10px)]'
-      )}
-    >
+    <div ref={wrapRef} className={cn('absolute top-0 z-10', sideClass)}>
       <div
         className={cn(
           'min-w-[148px] overflow-hidden rounded-lg bg-[var(--surface)] py-1',
@@ -296,11 +293,18 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
     open,
     onOpenChange,
     placement: narrow ? 'bottom' : 'bottom-end',
+    strategy: 'fixed',
     whileElementsMounted: autoUpdate,
-    middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
+    middleware: [
+      offset(8),
+      flip({ padding: 8 }),
+      shift({ padding: 8 }),
+    ],
   });
   const click = useClick(context);
-  const dismiss = useDismiss(context);
+  // mousedown: remounting lang/theme drill-in on click must not count as outsidePress
+  // (detached click target would close the whole menu on small screens).
+  const dismiss = useDismiss(context, { outsidePressEvent: 'mousedown' });
   const { getReferenceProps, getFloatingProps } = useInteractions([click, dismiss]);
 
   useEffect(() => {
@@ -412,10 +416,17 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
             ref={refs.setFloating}
             style={floatingStyles}
             {...getFloatingProps()}
-            className={cn('z-[600]', narrow ? 'w-[min(100vw-1.5rem,280px)]' : 'w-[250px]')}
+            className={cn(
+              'z-[600] max-w-[calc(100vw-16px)]',
+              narrow ? 'w-[min(100vw-1.5rem,280px)]' : 'w-[250px]'
+            )}
           >
             <div
-              className="overflow-visible rounded-xl shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]"
+              className={cn(
+                'rounded-xl shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]',
+                // Narrow uses in-panel drill-in; desktop needs overflow-visible for side flyouts.
+                narrow ? 'overflow-hidden' : 'overflow-visible'
+              )}
               style={{ backgroundColor: 'var(--surface)' }}
             >
               {/* Header */}

@@ -52,7 +52,7 @@ async function captureStageBitmap(): Promise<{
   ctx.fillStyle = stageBg;
   ctx.fillRect(0, 0, rect.width, rect.height);
 
-  const papers = stage.querySelectorAll<HTMLElement>('.canvas-paper');
+  const papers = stage.querySelectorAll<HTMLElement>('.rcb-canvas-paper');
   for (const paper of papers) {
     const pr = paper.getBoundingClientRect();
     const x = pr.left - rect.left;

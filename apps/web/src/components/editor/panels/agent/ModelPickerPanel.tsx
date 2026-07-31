@@ -166,21 +166,27 @@ function ModelBrandIcon({
 
 export type ModelPickerTab = 'design' | 'image' | 'video';
 
-/** Shared chrome for model / size popovers (editor + home). */
-export const AGENT_POPOVER_PANEL =
-  'w-[min(420px,calc(100vw-24px))] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
+/** Shared surface chrome for model / route popovers. */
+const PANEL_SHELL =
+  'box-border min-w-0 max-w-[calc(100vw-24px)] rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
 
-/** Route-prefs primary panel — fixed 250px (opened via Dropdown). */
-export const AGENT_ROUTE_POPOVER_PANEL =
-  'w-[250px] max-w-[calc(100vw-24px)] max-h-[min(480px,calc(100vh-24px))] overflow-x-hidden overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
+/** Model / size popovers (editor + home). */
+export const AGENT_POPOVER_PANEL = cn(
+  PANEL_SHELL,
+  'w-[min(420px,calc(100vw-24px))] overflow-hidden'
+);
 
-/** Secondary model/preset menu — opened via Popover beside the trigger row. */
-export const AGENT_ROUTE_SUBMENU_PANEL =
-  'w-[300px] max-w-[calc(100vw-24px)] max-h-[min(420px,calc(100vh-24px))] overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
+/** Route-prefs primary panel — 250px (opened via Dropdown). */
+export const AGENT_ROUTE_POPOVER_PANEL = cn(
+  PANEL_SHELL,
+  'w-[min(250px,calc(100vw-24px))] max-h-[min(480px,calc(100vh-24px))] overflow-x-hidden overflow-y-auto'
+);
 
-/** Preference tier cards (Standard / Pro / Max style). */
-export const AGENT_ROUTE_PRESET_PANEL =
-  'w-[300px] max-w-[calc(100vw-24px)] max-h-[min(520px,calc(100vh-24px))] overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_40px_rgba(0,0,0,0.18)]';
+/** Route field / preset side flyout — 300px. */
+export const AGENT_ROUTE_SUBMENU_PANEL = cn(
+  PANEL_SHELL,
+  'w-[min(300px,calc(100vw-24px))] max-h-[min(520px,calc(100vh-24px))] overflow-y-auto'
+);
 
 /** 1 = 便宜 · 2 = 适中 · 3 = 较贵 (matches catalog price bands). */
 export type ModelPriceLevel = 1 | 2 | 3;
@@ -310,12 +316,101 @@ type Props = {
   status?: 'idle' | 'loading' | 'ready' | 'error';
   /** Free plan: show all models; only Auto + fixed free image model are selectable. */
   autoOnly?: boolean;
+  /** Optional header (e.g. route-prefs field submenu title). */
+  title?: string;
+  /** Skip injecting the Auto row for design tab (route lane pickers). */
+  hideAuto?: boolean;
+  /** Use `models` as-is (route field opts already filtered). */
+  useModelsAsIs?: boolean;
+  /** Show Cheap/Fair/Costly dots — default on (same as route submenu). */
+  showPrice?: boolean;
+  /**
+   * popover — standalone card (image/video mode).
+   * submenu — narrower card beside AgentRoutePrefsEditor rows.
+   * plain — list only (parent supplies chrome / Back).
+   */
+  chrome?: 'popover' | 'submenu' | 'plain';
+  /** Called with pointerdown on a row — keep parent floating menus focused. */
+  onRowPointerDown?: (e: { preventDefault: () => void }) => void;
   className?: string;
 };
 
+function loadingKindForTab(tab: ModelPickerTab): LlmModel['kind'] {
+  if (tab === 'image') return 'image';
+  if (tab === 'video') return 'video';
+  return 'text';
+}
+
+function dedupeModelsById(list: LlmModel[]): LlmModel[] {
+  const seen = new Set<string>();
+  return list.filter((m) => {
+    if (!m?.id || seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
+}
+
+function filterPickerModels(opts: {
+  pool: LlmModel[];
+  tab: ModelPickerTab;
+  useModelsAsIs: boolean;
+  hideAuto: boolean;
+  autoLabel: string;
+}): LlmModel[] {
+  const { pool, tab, useModelsAsIs, hideAuto, autoLabel } = opts;
+  if (useModelsAsIs) return dedupeModelsById(pool);
+
+  if (tab === 'image') {
+    return dedupeModelsById(pool.filter((m) => isImageKind(m) || m.id === '_loading'));
+  }
+  if (tab === 'video') {
+    return dedupeModelsById(pool.filter((m) => isVideoKind(m) || m.id === '_loading'));
+  }
+
+  const design = pool.filter(
+    (m) =>
+      (!isImageKind(m) && !isVideoKind(m) && m.id !== 'auto') || m.id === '_loading'
+  );
+  if (hideAuto || design.some((m) => m.id === '_loading')) {
+    return dedupeModelsById(design);
+  }
+  const autoRow = pool.find((m) => m.id === 'auto') || {
+    ...AUTO_MODEL,
+    label: autoLabel,
+  };
+  return dedupeModelsById([autoRow, ...design]);
+}
+
+function shellClassForChrome(chrome: NonNullable<Props['chrome']>): string {
+  switch (chrome) {
+    case 'submenu':
+      return AGENT_ROUTE_SUBMENU_PANEL;
+    case 'plain':
+      return 'w-full min-w-0';
+    default:
+      return AGENT_POPOVER_PANEL;
+  }
+}
+
+function listClassForChrome(
+  chrome: NonNullable<Props['chrome']>,
+  title?: string
+): string {
+  switch (chrome) {
+    case 'plain':
+      return 'pt-0.5';
+    case 'submenu':
+      return 'overflow-y-auto px-1.5 pb-1.5 pt-0.5';
+    default:
+      return cn(
+        'max-h-[min(360px,calc(100vh-160px))] overflow-y-auto px-1.5 pb-1.5',
+        title ? 'pt-0.5' : 'pt-1.5'
+      );
+  }
+}
+
 /**
- * Shared model picker — model list only (Agent / Ask / Image live in the composer mode menu).
- * Used by AgentDock and HomeAgentComposer.
+ * Shared model picker — one list UI for home, editor, and route-prefs field submenus.
  */
 function ModelPickerPanel({
   tab,
@@ -324,6 +419,12 @@ function ModelPickerPanel({
   onPick,
   status = 'ready',
   autoOnly = false,
+  title,
+  hideAuto = false,
+  useModelsAsIs = false,
+  showPrice = true,
+  chrome = 'popover',
+  onRowPointerDown,
   className,
 }: Props): ReactNode {
   const { t } = useTranslation();
@@ -335,107 +436,99 @@ function ModelPickerPanel({
             id: '_loading',
             label: 'Loading...',
             provider: '',
-            kind: (tab === 'image'
-              ? 'image'
-              : tab === 'video'
-                ? 'video'
-                : 'text') as LlmModel['kind'],
+            kind: loadingKindForTab(tab),
           } satisfies LlmModel,
         ]
       : models;
 
-  const filtered = (() => {
-    const raw =
-      tab === 'image'
-        ? pool.filter((m) => isImageKind(m) || m.id === '_loading')
-        : tab === 'video'
-          ? pool.filter((m) => isVideoKind(m) || m.id === '_loading')
-          : (() => {
-              const design = pool.filter(
-                (m) =>
-                  (!isImageKind(m) && !isVideoKind(m) && m.id !== 'auto') ||
-                  m.id === '_loading'
-              );
-              if (design.some((m) => m.id === '_loading')) return design;
-              const autoRow = pool.find((m) => m.id === 'auto') || {
-                ...AUTO_MODEL,
-                label: t('agent.autoToggle'),
-              };
-              return [autoRow, ...design];
-            })();
-    const seen = new Set<string>();
-    return raw.filter((m) => {
-      if (!m?.id || seen.has(m.id)) return false;
-      seen.add(m.id);
-      return true;
-    });
-  })();
+  const filtered = filterPickerModels({
+    pool,
+    tab,
+    useModelsAsIs,
+    hideAuto,
+    autoLabel: t('agent.autoToggle'),
+  });
+
+  const shell = shellClassForChrome(chrome);
+
+  const list = (
+    <div className={cn('min-w-0', listClassForChrome(chrome, title))}>
+      {status === 'error' && models.length === 0 ? (
+        <div className="px-2 py-4 text-center text-[12px] text-[var(--muted)]">
+          <p>{t('agent.apiDown')}</p>
+          <p className="mt-1">{t('agent.apiDownHint')}</p>
+        </div>
+      ) : null}
+
+      {!filtered.length && status !== 'loading' ? (
+        <div className="px-2 py-6 text-center text-[12px] text-[var(--muted)]">
+          {models.length === 0 && status === 'idle'
+            ? t('home.composerModelsLoading')
+            : t('agent.emptyModels')}
+        </div>
+      ) : (
+        filtered.map((m) => {
+          const selected = m.id === selectedId;
+          const loading = m.id === '_loading';
+          const freePick = m.id === 'auto' || m.id === FREE_IMAGE_MODEL_ID;
+          const locked = autoOnly && !freePick && !loading;
+          const desc = loading ? '...' : modelDescription(m, t);
+          const descLine =
+            autoOnly && freePick && !loading
+              ? `${desc} · ${t('agent.freeModelItemHint')}`
+              : desc;
+          const custom = !loading && isUserCustomModel(m);
+          const priceTag =
+            showPrice && !loading && !custom ? modelPriceTagInfo(m, t) : null;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              disabled={loading || locked}
+              title={locked ? t('agent.freeModelLocked') : undefined}
+              className={cn(
+                'flex w-full min-w-0 items-start gap-2.5 overflow-hidden rounded-lg px-2.5 py-2 text-left text-[var(--ink)] transition-colors',
+                selected && !locked ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]',
+                (loading || locked) && 'cursor-not-allowed',
+                locked && 'opacity-45 hover:bg-transparent'
+              )}
+              onPointerDown={onRowPointerDown}
+              onClick={() => {
+                if (loading || locked) return;
+                onPick(m.id);
+              }}
+            >
+              <ModelBrandIcon model={m} size={20} className="mt-0.5" />
+              <span className="min-w-0 flex-1 overflow-hidden">
+                <span className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5">
+                    {m.label || m.id}
+                  </span>
+                  {custom ? (
+                    <ModelMetaBadge label={t('agent.modelBadgeCustom')} />
+                  ) : priceTag ? (
+                    <ModelPriceTag level={priceTag.level} label={priceTag.label} />
+                  ) : null}
+                </span>
+                <span className="mt-0.5 block min-w-0 max-w-full truncate text-[11px] leading-[1.35] text-[var(--muted)]">
+                  {descLine}
+                </span>
+              </span>
+            </button>
+          );
+        })
+      )}
+    </div>
+  );
 
   return (
-    <div className={cn(AGENT_POPOVER_PANEL, 'flex flex-col', className)}>
-      <div className="max-h-[min(360px,calc(100vh-160px))] min-w-0 overflow-y-auto px-1.5 pb-1.5 pt-1.5">
-          {status === 'error' && models.length === 0 ? (
-            <div className="px-2 py-4 text-center text-[12px] text-[var(--muted)]">
-              <p>{t('agent.apiDown')}</p>
-              <p className="mt-1">{t('agent.apiDownHint')}</p>
-            </div>
-          ) : null}
-
-          {!filtered.length && status !== 'loading' ? (
-            <div className="px-2 py-6 text-center text-[12px] text-[var(--muted)]">
-              {models.length === 0 && status === 'idle'
-                ? t('home.composerModelsLoading')
-                : t('agent.emptyModels')}
-            </div>
-          ) : (
-            filtered.map((m) => {
-              const selected = m.id === selectedId;
-              const loading = m.id === '_loading';
-              const freePick =
-                m.id === 'auto' || m.id === FREE_IMAGE_MODEL_ID;
-              const locked = autoOnly && !freePick && !loading;
-              const desc = loading ? '...' : modelDescription(m, t);
-              const descLine =
-                autoOnly && freePick && !loading
-                  ? `${desc} · ${t('agent.freeModelItemHint')}`
-                  : desc;
-              const custom = !loading && isUserCustomModel(m);
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  disabled={loading || locked}
-                  title={locked ? t('agent.freeModelLocked') : undefined}
-                  className={cn(
-                    'flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-colors',
-                    selected && !locked ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]',
-                    (loading || locked) && 'cursor-not-allowed',
-                    locked && 'opacity-45 hover:bg-transparent'
-                  )}
-                  onClick={() => {
-                    if (loading || locked) return;
-                    onPick(m.id);
-                  }}
-                >
-                  <ModelBrandIcon model={m} size={20} className="mt-0.5" />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-[var(--ink)]">
-                        {m.label || m.id}
-                      </span>
-                      {custom ? (
-                        <ModelMetaBadge label={t('agent.modelBadgeCustom')} />
-                      ) : null}
-                    </span>
-                    <span className="mt-0.5 block truncate whitespace-nowrap text-[11px] leading-[1.35] text-[var(--muted)]">
-                      {descLine}
-                    </span>
-                  </span>
-                </button>
-              );
-            })
-          )}
-      </div>
+    <div className={cn(shell, 'flex flex-col', className)}>
+      {title ? (
+        <div className="px-3 pt-2.5 pb-1">
+          <p className="truncate text-[12px] font-medium text-[var(--muted)]">{title}</p>
+        </div>
+      ) : null}
+      {list}
     </div>
   );
 }

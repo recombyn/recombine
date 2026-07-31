@@ -65,20 +65,20 @@
 }
 
 /* Outside @layer so it reliably overrides Tailwind `transition` utilities during theme swaps */
-html.theme-switching,
-html.theme-switching *,
-html.theme-switching *::before,
-html.theme-switching *::after {
+html.rcb-theme-switching,
+html.rcb-theme-switching *,
+html.rcb-theme-switching *::before,
+html.rcb-theme-switching *::after {
   transition: none !important;
   animation: none !important;
 }
 
-.canvas-stage {
+.rcb-canvas-stage {
   @apply relative flex min-h-full w-full items-start justify-center py-2;
 }
 
 /* Real artboard paper (frames / standalone export). */
-.canvas-paper {
+.rcb-canvas-paper {
   position: relative;
   background: var(--color-background-default-base);
   box-shadow:
@@ -88,7 +88,7 @@ html.theme-switching *::after {
 }
 
 /* Infinite-world draw plane: invisible, no fixed “page” chrome. */
-.canvas-world {
+.rcb-canvas-world {
   position: relative;
   overflow: visible;
   background: transparent !important;
@@ -98,82 +98,82 @@ html.theme-switching *::after {
 
 /* Only the drawing surface needs an opaque fill.
    Fabric's .upper-canvas must stay transparent or it hides all content. */
-.canvas-paper canvas.lower-canvas {
+.rcb-canvas-paper canvas.lower-canvas {
   display: block;
   background: #ffffff;
 }
 
-.canvas-paper canvas.upper-canvas,
-.canvas-paper canvas.lower-canvas {
+.rcb-canvas-paper canvas.upper-canvas,
+.rcb-canvas-paper canvas.lower-canvas {
   /* Avoid browser upscaling blur when CSS size and buffer temporarily diverge. */
   image-rendering: auto;
 }
 
-.canvas-paper canvas.upper-canvas {
+.rcb-canvas-paper canvas.upper-canvas {
   background: transparent !important;
 }
 
-.panel-card {
+.rcb-panel-card {
   @apply rounded-xl border p-4 shadow-sm;
   border-color: var(--line);
   background: var(--surface);
 }
 
 /* Home — solid fill (no glow / dot grid). */
-.home-hero-canvas {
+.rcb-home-hero-canvas {
   background-color: #ffffff;
   background-image: none;
 }
 
-html[data-theme='dark'] .home-hero-canvas {
+html[data-theme='dark'] .rcb-home-hero-canvas {
   background-color: var(--canvas);
 }
 
-.panel-tip {
+.rcb-panel-tip {
   color: var(--muted);
   font-size: 12px;
 }
 
-.form-grid {
+.rcb-form-grid {
   @apply mb-3 grid grid-cols-2 gap-3;
 }
 
-.form-grid label,
-.full-width {
+.rcb-form-grid label,
+.rcb-full-width {
   display: block;
   font-size: 12px;
   font-weight: 500;
   color: var(--muted);
 }
 
-.form-grid input,
-.form-grid textarea,
-.full-width input,
-.full-width textarea {
+.rcb-form-grid input,
+.rcb-form-grid textarea,
+.rcb-full-width input,
+.rcb-full-width textarea {
   @apply mt-1 w-full rounded-lg border px-3 py-2 text-sm focus:outline-none;
   border-color: var(--line);
   background: var(--surface);
   color: var(--ink);
 }
 
-.form-grid input:focus,
-.form-grid textarea:focus,
-.full-width input:focus,
-.full-width textarea:focus {
+.rcb-form-grid input:focus,
+.rcb-form-grid textarea:focus,
+.rcb-full-width input:focus,
+.rcb-full-width textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.form-grid input[type='number'] {
+.rcb-form-grid input[type='number'] {
   @apply h-9 py-0;
 }
 
-.checkbox-row {
+.rcb-checkbox-row {
   @apply mt-2 flex items-center gap-2 text-sm;
   color: var(--ink);
 }
 
-.empty-card {
+.rcb-empty-card {
   @apply rounded-xl border p-8 text-center text-sm shadow-sm;
   border-color: var(--line);
   background: var(--surface);
@@ -189,7 +189,7 @@ html[data-theme='dark'] .home-hero-canvas {
   }
 }
 
-.skeleton-bone {
+.rcb-skeleton-bone {
   border-radius: 4px;
   background-image: linear-gradient(
     90deg,
@@ -217,12 +217,12 @@ html[data-theme='dark'] .home-hero-canvas {
 }
 
 /** Image process loading plate — soft sweep over whatever sits underneath. */
-.image-process-shimmer {
+.rcb-image-process-shimmer {
   position: relative;
   overflow: hidden;
 }
 
-.image-process-shimmer::after {
+.rcb-image-process-shimmer::after {
   content: '';
   position: absolute;
   top: -20%;
@@ -248,7 +248,7 @@ html[data-theme='dark'] .home-hero-canvas {
  * Artboard generating plate — soft steel→pale base (like design loading) + sweep.
  * Used in screen-space overlay so zoom does not enlarge the animation.
  */
-.artboard-process-shimmer {
+.rcb-artboard-process-shimmer {
   position: relative;
   overflow: hidden;
   background-color: #e4ecf4;
@@ -256,7 +256,7 @@ html[data-theme='dark'] .home-hero-canvas {
   background-repeat: no-repeat;
 }
 
-.artboard-process-shimmer::after {
+.rcb-artboard-process-shimmer::after {
   content: '';
   position: absolute;
   top: -20%;
@@ -279,7 +279,7 @@ html[data-theme='dark'] .home-hero-canvas {
 }
 
 /** Chat image-gen placeholders — sweep only, no center icon. */
-.chat-image-gen-shimmer {
+.rcb-chat-image-gen-shimmer {
   position: relative;
   overflow: hidden;
   background-color: #e4ecf4;
@@ -287,7 +287,7 @@ html[data-theme='dark'] .home-hero-canvas {
   background-repeat: no-repeat;
 }
 
-.chat-image-gen-shimmer::after {
+.rcb-chat-image-gen-shimmer::after {
   content: '';
   position: absolute;
   top: -20%;
@@ -325,7 +325,7 @@ html[data-theme='dark'] .home-hero-canvas {
   }
 }
 
-@keyframes plaza-thanks-ring {
+@keyframes rcb-plaza-thanks-ring {
   0% {
     opacity: 0.55;
     transform: scale(0.7);
@@ -359,30 +359,30 @@ html[data-theme='dark'] .home-hero-canvas {
   }
 }
 
-.plaza-thanks-badge {
+.rcb-plaza-thanks-badge {
   animation: plaza-thanks-pop 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.plaza-thanks-ring {
+.rcb-plaza-thanks-ring {
   position: absolute;
   inset: 0;
   border-radius: 9999px;
   border: 2px solid color-mix(in srgb, var(--ink) 35%, transparent);
-  animation: plaza-thanks-ring 0.9s ease-out 0.12s both;
+  animation: rcb-plaza-thanks-ring 0.9s ease-out 0.12s both;
 }
 
-.plaza-thanks-copy {
+.rcb-plaza-thanks-copy {
   animation: plaza-thanks-rise 0.45s ease-out 0.18s both;
 }
 
-.plaza-thanks-orb {
+.rcb-plaza-thanks-orb {
   position: absolute;
   border-radius: 9999px;
   background: color-mix(in srgb, var(--ink) 12%, transparent);
   animation: plaza-thanks-float 2.8s ease-in-out infinite;
 }
 
-.plaza-thanks-orb-a {
+.rcb-plaza-thanks-orb-a {
   width: 10px;
   height: 10px;
   left: 18%;
@@ -390,7 +390,7 @@ html[data-theme='dark'] .home-hero-canvas {
   animation-delay: 0s;
 }
 
-.plaza-thanks-orb-b {
+.rcb-plaza-thanks-orb-b {
   width: 7px;
   height: 7px;
   right: 20%;
@@ -398,7 +398,7 @@ html[data-theme='dark'] .home-hero-canvas {
   animation-delay: 0.4s;
 }
 
-.plaza-thanks-orb-c {
+.rcb-plaza-thanks-orb-c {
   width: 8px;
   height: 8px;
   left: 28%;
@@ -408,7 +408,7 @@ html[data-theme='dark'] .home-hero-canvas {
 
 /** Image process loading plate — soft wash only; spinner is HTML overlay. */
 
-html[data-theme='dark'] .skeleton-bone {
+html[data-theme='dark'] .rcb-skeleton-bone {
   background-image: linear-gradient(
     90deg,
     #2f2f2f 0%,
@@ -468,11 +468,11 @@ html[data-theme='dark'] *:hover::-webkit-scrollbar-thumb:hover {
 }
 
 /* Table body: keep scrollbar gutter inside the bordered scrollport */
-.table-scroll-body {
+.rcb-table-scroll-body {
   scrollbar-gutter: stable;
 }
 
-.table-scroll-body::-webkit-scrollbar-track {
+.rcb-table-scroll-body::-webkit-scrollbar-track {
   margin-block: 6px;
   margin-inline: 2px;
 }
