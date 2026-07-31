@@ -17,4 +17,11 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "db-backup-daily": {
+            "task": "worker.tasks.run_db_backup_job",
+            "schedule": 60 * 60 * 24,  # seconds; override via Celery beat if needed
+            "args": ("beat",),
+        },
+    },
 )

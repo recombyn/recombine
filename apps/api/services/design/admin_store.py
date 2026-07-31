@@ -24,106 +24,41 @@ _STAGE_RULES_READY = False
 
 
 def _pub_skill(r: Any) -> dict[str, Any]:
-    when = ""
-    preferred_raw = ""
-    triggers_raw = ""
-    source = "admin"
+    """Admin skill row → API dict (runtime fields from skill_store._pub + admin extras)."""
+    from services.design.skill_store import _pub
+
+    base = _pub(r)
+    base.pop("_localKey", None)
     try:
-        when = str(r["when_to_use"] or "") if "when_to_use" in r.keys() else ""
+        default_model = str(r["default_model"] or "doubao")
     except Exception:
-        when = ""
+        default_model = "doubao"
     try:
-        preferred_raw = str(r["preferred_tools"] or "") if "preferred_tools" in r.keys() else ""
+        max_retries = int(r["max_retries"] or 2)
     except Exception:
-        preferred_raw = ""
+        max_retries = 2
     try:
-        triggers_raw = str(r["triggers"] or "") if "triggers" in r.keys() else ""
+        output_format = str(r["output_format"] or "json")
     except Exception:
-        triggers_raw = ""
+        output_format = "json"
     try:
-        source = str(r["source"] or "admin") if "source" in r.keys() else "admin"
+        allow_override = bool(int(r["allow_user_model_override"] or 0))
     except Exception:
-        source = "admin"
-    preferred: list[str] = []
-    if preferred_raw:
-        try:
-            val = json.loads(preferred_raw)
-            if isinstance(val, list):
-                preferred = [str(x).strip() for x in val if str(x).strip()]
-        except Exception:
-            preferred = [p.strip() for p in preferred_raw.split(",") if p.strip()]
-    triggers: list[Any] = []
-    if triggers_raw:
-        try:
-            val = json.loads(triggers_raw)
-            if isinstance(val, list):
-                triggers = val
-            elif isinstance(val, dict):
-                triggers = [val]
-        except Exception:
-            triggers = []
-    mutex = ""
-    version = 1
+        allow_override = False
     try:
-        mutex = str(r["mutex_group"] or "") if "mutex_group" in r.keys() else ""
+        updated_at = int(float(r["updated_at"]) * 1000) if r["updated_at"] else None
     except Exception:
-        mutex = ""
-    try:
-        version = int(r["version"] or 1) if "version" in r.keys() else 1
-    except Exception:
-        version = 1
-    description = ""
-    logo = ""
-    pack_version = ""
-    locales: dict[str, Any] = {}
-    try:
-        description = str(r["description"] or "") if "description" in r.keys() else ""
-    except Exception:
-        description = ""
-    try:
-        logo = str(r["logo"] or "") if "logo" in r.keys() else ""
-    except Exception:
-        logo = ""
-    try:
-        pack_version = str(r["pack_version"] or "") if "pack_version" in r.keys() else ""
-    except Exception:
-        pack_version = ""
-    try:
-        locales_raw = r["locales"] if "locales" in r.keys() else ""
-        if isinstance(locales_raw, dict):
-            locales = locales_raw
-        elif locales_raw:
-            val = json.loads(str(locales_raw))
-            if isinstance(val, dict):
-                locales = val
-    except Exception:
-        locales = {}
-    return {
-        "id": int(r["id"]),
-        "skillKey": (r["skill_key"] if "skill_key" in r.keys() else None) or None,
-        "name": r["name"],
-        "description": description,
-        "category": r["category"],
-        "whenToUse": when,
-        "promptPositive": r["prompt_positive"],
-        "promptNegative": r["prompt_negative"],
-        "preferredTools": preferred,
-        "triggers": triggers,
-        "mutexGroup": mutex or None,
-        "version": version,
-        "packVersion": pack_version or None,
-        "logo": logo or None,
-        "locales": locales,
-        "source": (source or "admin").strip().lower() or "admin",
-        "sortWeight": int(r["sort_weight"] or 0),
-        "scenes": r["scenes"] or "all",
-        "defaultModel": r["default_model"] or "doubao",
-        "maxRetries": int(r["max_retries"] or 2),
-        "enabled": bool(int(r["enabled"] or 0)),
-        "outputFormat": r["output_format"] or "json",
-        "allowUserModelOverride": bool(int(r["allow_user_model_override"] or 0)),
-        "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
-    }
+        updated_at = None
+    base.update(
+        {
+            "defaultModel": default_model,
+            "maxRetries": max_retries,
+            "outputFormat": output_format,
+            "allowUserModelOverride": allow_override,
+            "updatedAt": updated_at,
+        }
+    )
+    return base
 
 
 def list_admin_skills(*, q: str | None = None, enabled: bool | None = None) -> list[dict[str, Any]]:
@@ -155,8 +90,32 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
     name = str(payload.get("name") or "").strip()
     if not name:
         raise ValueError("name required")
+    from services.design.skill_store import (
+        NS_CORE,
+        NS_EXT,
+        NS_USER,
+        SOURCE_ADMIN,
+        _CORE_RESERVED_KEYS,
+        qualify_skill_key,
+        save_skill_revision,
+        split_namespace_key,
+        validate_skill_io_schema,
+        validate_skill_meta,
+    )
+
     skill_key = payload.get("skillKey") or payload.get("skill_key")
     skill_key = str(skill_key).strip() if skill_key else None
+    namespace = str(payload.get("namespace") or NS_USER).strip().lower() or NS_USER
+    if namespace in (NS_CORE, NS_EXT):
+        raise ValueError("admin skills must use namespace=user")
+    namespace = NS_USER
+    if skill_key:
+        ns_prefix, local = split_namespace_key(skill_key)
+        if ns_prefix == NS_CORE or local in _CORE_RESERVED_KEYS:
+            raise ValueError(f"core skill key reserved: {local or skill_key}")
+        if ns_prefix == NS_EXT:
+            raise ValueError("user skill cannot use ext namespace")
+        skill_key = qualify_skill_key(NS_USER, local or skill_key)
     category = str(payload.get("category") or "layout").strip() or "layout"
     prompt_positive = str(payload.get("promptPositive") or payload.get("prompt_positive") or "")
     prompt_negative = payload.get("promptNegative") or payload.get("prompt_negative")
@@ -171,6 +130,30 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
         preferred_tools = str(preferred_raw).strip()
     else:
         preferred_tools = None
+    resources_raw = payload.get("allowedResources") or payload.get("allowed_resources")
+    if isinstance(resources_raw, list):
+        allowed_resources = json.dumps(
+            [str(x).strip().lower() for x in resources_raw if str(x).strip()],
+            ensure_ascii=False,
+        )
+    elif resources_raw is not None:
+        allowed_resources = str(resources_raw).strip()
+    else:
+        # Custom admin skills default: tools only (no knowledge/prompts/aesthetics).
+        allowed_resources = json.dumps(["tools"], ensure_ascii=False)
+    in_schema_obj, in_errs = validate_skill_io_schema(
+        payload.get("inputSchema") or payload.get("input_schema"), field="input_schema"
+    )
+    out_schema_obj, out_errs = validate_skill_io_schema(
+        payload.get("outputSchema") or payload.get("output_schema"), field="output_schema"
+    )
+    if in_errs or out_errs:
+        raise ValueError("; ".join(in_errs + out_errs))
+    input_schema = json.dumps(in_schema_obj, ensure_ascii=False) if in_schema_obj else None
+    output_schema = json.dumps(out_schema_obj, ensure_ascii=False) if out_schema_obj else None
+    owner_user_id = str(
+        payload.get("ownerUserId") or payload.get("owner_user_id") or ""
+    ).strip() or None
     triggers_raw = payload.get("triggers")
     if isinstance(triggers_raw, (list, dict)):
         triggers_json = json.dumps(triggers_raw, ensure_ascii=False)
@@ -184,7 +167,7 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         version = 0
     # Admin writes always become source=admin (seed/file will not overwrite).
-    source = "admin"
+    source = SOURCE_ADMIN
     sort_weight = int(payload.get("sortWeight") or payload.get("sort_weight") or 0)
     scenes = str(payload.get("scenes") or "all").strip() or "all"
     default_model = str(payload.get("defaultModel") or payload.get("default_model") or "doubao")
@@ -205,11 +188,31 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         locales_json = None
 
+    meta_errs = validate_skill_meta(
+        {
+            "skill_key": skill_key or f"user.{name}",
+            "name": name,
+            "prompt_positive": prompt_positive,
+            "preferred_tools": preferred_raw,
+            "allowed_resources": resources_raw if resources_raw is not None else ["tools"],
+            "input_schema": in_schema_obj,
+            "output_schema": out_schema_obj,
+            "namespace": namespace,
+        },
+        source=SOURCE_ADMIN,
+    )
+    if meta_errs and not sid:
+        # New skills must pass; updates may omit body when only toggling flags.
+        if "prompt_positive_required" in meta_errs and not prompt_positive:
+            raise ValueError("; ".join(meta_errs))
+        if any(e for e in meta_errs if e != "prompt_positive_required"):
+            raise ValueError("; ".join(meta_errs))
+
     with connect() as conn:
         if sid:
             # Bump version on admin edit unless explicitly set higher.
             cur = conn.execute(
-                "SELECT version FROM design_skill WHERE id = ?",
+                "SELECT version, skill_key FROM design_skill WHERE id = ?",
                 (int(sid),),
             ).fetchone()
             try:
@@ -217,12 +220,19 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
             except Exception:
                 cur_ver = 0
             next_ver = version if version > cur_ver else cur_ver + 1
+            if not skill_key and cur:
+                skill_key = str(cur["skill_key"] or "").strip() or None
             conn.execute(
                 """
                 UPDATE design_skill SET
                   skill_key=COALESCE(?, skill_key), name=?, category=?, prompt_positive=?, prompt_negative=?,
                   when_to_use=COALESCE(?, when_to_use),
                   preferred_tools=COALESCE(?, preferred_tools),
+                  allowed_resources=COALESCE(?, allowed_resources),
+                  input_schema=COALESCE(?, input_schema),
+                  output_schema=COALESCE(?, output_schema),
+                  namespace=?,
+                  owner_user_id=COALESCE(?, owner_user_id),
                   triggers=COALESCE(?, triggers),
                   mutex_group=COALESCE(?, mutex_group),
                   version=?,
@@ -237,7 +247,9 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
                 """,
                 (
                     skill_key, name, category, prompt_positive, prompt_negative,
-                    when_to_use or None, preferred_tools, triggers_json,
+                    when_to_use or None, preferred_tools, allowed_resources,
+                    input_schema, output_schema, namespace, owner_user_id,
+                    triggers_json,
                     mutex_group or None, next_ver,
                     pack_version, description or None, logo, locales_json,
                     source,
@@ -247,21 +259,33 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
             )
             conn.commit()
             item = get_skill(int(sid))
+            if item:
+                try:
+                    save_skill_revision(conn, skill_id=int(sid), item=_pub_skill(item))
+                    conn.commit()
+                except Exception:
+                    pass
         else:
+            if not skill_key:
+                raise ValueError("skillKey required")
             cur = conn.execute(
                 """
                 INSERT INTO design_skill (
                     skill_key, name, category, prompt_positive, prompt_negative,
-                    when_to_use, preferred_tools, triggers, mutex_group, version, source,
+                    when_to_use, preferred_tools, allowed_resources, input_schema, output_schema,
+                    namespace, owner_user_id,
+                    triggers, mutex_group, version, source,
                     pack_version, description, logo, locales,
                     sort_weight, scenes, default_model, max_retries,
                     enabled, output_format, allow_user_model_override,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     skill_key, name, category, prompt_positive, prompt_negative,
-                    when_to_use, preferred_tools or "[]", triggers_json or "[]",
+                    when_to_use, preferred_tools or "[]", allowed_resources,
+                    input_schema, output_schema, namespace, owner_user_id,
+                    triggers_json or "[]",
                     mutex_group, max(version, 1), source,
                     pack_version, description, logo, locales_json or "{}",
                     sort_weight, scenes, default_model, max_retries,
@@ -269,7 +293,14 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
             conn.commit()
-            item = get_skill(int(cur.lastrowid))
+            new_id = int(cur.lastrowid)
+            item = get_skill(new_id)
+            if item:
+                try:
+                    save_skill_revision(conn, skill_id=new_id, item=_pub_skill(item))
+                    conn.commit()
+                except Exception:
+                    pass
         try:
             from services.design.skill_store import invalidate_skill_key_cache
 

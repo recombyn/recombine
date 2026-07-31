@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from services.design.skill_store import (
+    NS_CORE,
+    NS_EXT,
+    NS_USER,
     PROMPT_KIND_TO_SKILL,
     SOURCE_ADMIN,
     SOURCE_SEED,
@@ -11,12 +14,22 @@ from services.design.skill_store import (
     _rule_matches,
     bridge_need_prompts_to_skills,
     ensure_design_skills,
+    filter_need_resources_by_skill_acl,
     filter_ops_by_skill_allowlist,
     format_skills_catalog,
     format_skills_details,
     normalize_need_skills,
+    parse_need_skills_with_pins,
+    parse_skill_pin,
+    qualify_skill_key,
+    reload_skills_if_disk_changed,
     reset_skills_ready_for_tests,
+    resolve_storage_skill_key,
     resolve_triggered_skill_keys,
+    skill_resource_allowlist,
+    split_namespace_key,
+    validate_against_schema,
+    validate_skill_meta,
 )
 
 
@@ -50,6 +63,7 @@ def test_skills_catalog_and_details_roundtrip():
     catalog = format_skills_catalog(scene="website")
     assert "need_skills" in catalog
     assert "design_methodology" in catalog
+    assert "core" in catalog
     details = format_skills_details(
         keys=["design_methodology", "canvas_edit"],
         scene="website",
@@ -151,6 +165,7 @@ def test_file_skill_example_brand_loaded():
     pack = by_key["example_brand"]
     assert pack.get("name") == "示例品牌规范"
     assert pack.get("pack_version") == "1.0.0"
+    assert pack.get("namespace") == NS_EXT
     assert pack.get("logo") == "example_brand/example_brand-logo.svg"
     assert (pack.get("locales") or {}).get("zh-CN", {}).get("displayName") == "示例品牌规范"
     assert "主色" in str(pack.get("prompt_positive") or "")
@@ -169,3 +184,68 @@ def test_parse_pack_version_semver():
 def test_source_constants():
     assert SOURCE_SEED == "seed"
     assert SOURCE_ADMIN == "admin"
+
+
+def test_namespace_split_and_qualify():
+    assert split_namespace_key("core.design_methodology") == (NS_CORE, "design_methodology")
+    assert split_namespace_key("user:my_brand") == (NS_USER, "my_brand")
+    assert qualify_skill_key(NS_CORE, "design_methodology") == "design_methodology"
+    assert qualify_skill_key(NS_USER, "my_brand") == "user.my_brand"
+    assert resolve_storage_skill_key("core.design_methodology") == "design_methodology"
+    assert resolve_storage_skill_key("ext.example_brand") == "example_brand"
+
+
+def test_skill_pin_and_parse_need_skills():
+    assert parse_skill_pin("design_methodology@2") == ("design_methodology", 2, None)
+    keys, pins, args, errs = parse_need_skills_with_pins(
+        [
+            "design_methodology@2",
+            {"key": "canvas_edit", "version": 1, "args": {}},
+        ]
+    )
+    assert "design_methodology" in keys
+    assert "canvas_edit" in keys
+    assert pins.get("design_methodology") == 2
+    assert errs == []
+
+
+def test_validate_skill_meta_rejects_core_collision_for_admin():
+    errs = validate_skill_meta(
+        {
+            "skill_key": "design_methodology",
+            "name": "x",
+            "prompt_positive": "body",
+        },
+        source=SOURCE_ADMIN,
+    )
+    assert any("core_key_reserved" in e for e in errs)
+
+
+def test_validate_against_schema_required():
+    schema = {
+        "type": "object",
+        "required": ["theme"],
+        "properties": {"theme": {"type": "string"}},
+    }
+    assert validate_against_schema(schema, {}) == ["missing_required:theme"]
+    assert validate_against_schema(schema, {"theme": "dark"}) == []
+
+
+def test_custom_skill_acl_platform_open():
+    assert skill_resource_allowlist(["design_methodology"], scene="website") is None
+    k, p, a, errs = filter_need_resources_by_skill_acl(
+        skill_keys=["design_methodology"],
+        scene="website",
+        need_knowledge=["ui"],
+        need_prompts=["x"],
+        need_aesthetics=True,
+    )
+    assert k == ["ui"]
+    assert p == ["x"]
+    assert a is True
+    assert errs == []
+
+
+def test_hot_reload_signature_stable():
+    reload_skills_if_disk_changed()
+    assert reload_skills_if_disk_changed() is False

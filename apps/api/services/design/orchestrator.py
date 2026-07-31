@@ -253,7 +253,11 @@ async def run_design_job(
             }
             return
         if free_daily:
-            user_selected_model = "auto"
+            from services.llm import is_byok_model_ref
+
+            # BYOK uses the user's own key — do not force platform auto model.
+            if not is_byok_model_ref(user_selected_model):
+                user_selected_model = "auto"
 
         scene_nodes_gate = [
             n for n in (scene_nodes or []) if isinstance(n, dict) and n.get("id")
@@ -269,34 +273,39 @@ async def run_design_job(
         )
 
         from services.design.agent_controller import run_agent_graph
+        from services.llm import reset_byok_user_id, set_byok_user_id
 
-        async for ev in run_agent_graph(
-            user_id=user_id,
-            mode=mode,
-            prompt=prompt,
-            rules=rules,
-            user_selected_model=user_selected_model,
-            canvas_id=canvas_id,
-            canvas_size=canvas_size,
-            scene=scene,
-            scene_nodes=scene_nodes_gate,
-            scene_frames=scene_frames_gate,
-            spatial_summary=spatial_summary if isinstance(spatial_summary, dict) else None,
-            focus_frame_id=focus_frame_id,
-            images=images,
-            memory_in=memory,
-            session_id=sid,
-            project_id=pid,
-            hold=hold,
-            free_daily=free_daily,
-            t0=t0,
-            reserve_hold_fn=_reserve_design_hold,
-            settle_hold_fn=_settle_hold,
-            refund_hold_fn=_refund_hold,
-            apply_ops=apply_ops,
-            interaction_mode=ui_mode,
-        ):
-            yield ev
+        byok_token = set_byok_user_id(user_id)
+        try:
+            async for ev in run_agent_graph(
+                user_id=user_id,
+                mode=mode,
+                prompt=prompt,
+                rules=rules,
+                user_selected_model=user_selected_model,
+                canvas_id=canvas_id,
+                canvas_size=canvas_size,
+                scene=scene,
+                scene_nodes=scene_nodes_gate,
+                scene_frames=scene_frames_gate,
+                spatial_summary=spatial_summary if isinstance(spatial_summary, dict) else None,
+                focus_frame_id=focus_frame_id,
+                images=images,
+                memory_in=memory,
+                session_id=sid,
+                project_id=pid,
+                hold=hold,
+                free_daily=free_daily,
+                t0=t0,
+                reserve_hold_fn=_reserve_design_hold,
+                settle_hold_fn=_settle_hold,
+                refund_hold_fn=_refund_hold,
+                apply_ops=apply_ops,
+                interaction_mode=ui_mode,
+            ):
+                yield ev
+        finally:
+            reset_byok_user_id(byok_token)
         return
 
     rules = pin_user_locked_model_routes(

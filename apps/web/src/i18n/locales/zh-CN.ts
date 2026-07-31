@@ -1241,6 +1241,7 @@ const zhCN = {
     placeholderImage: '描述你想生成的图片…',
     placeholderSkill: '描述你想在这里实现的内容…',
     placeholderDefault: '@Search for image, model, or project',
+    emptyHint: '描述你想要的设计，或上传参考图开始',
     newChat: '新对话',
     history: '历史对话',
     alreadyNewChat: '当前已是新对话',

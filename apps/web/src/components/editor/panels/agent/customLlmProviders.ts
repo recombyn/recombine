@@ -1,6 +1,13 @@
-/** Local custom LLM provider prefs (OpenAI-compatible). Stored in this browser. */
+/** Custom LLM provider prefs (OpenAI-compatible). API keys never stored as plaintext. */
 
 import type { LlmModel, ModelReferenceType } from '@/apis/chat';
+import { getToken } from '@/utils/token';
+import {
+  deleteByokProvider,
+  fetchByokProviders,
+  upsertByokProvider,
+  type ByokProviderDto,
+} from '@/apis/me';
 
 /** User-facing model category when adding a custom provider (no image — not billed / not wired). */
 export type CustomModelKind = 'text' | 'vision';
@@ -9,14 +16,24 @@ export type CustomLlmProvider = {
   id: string;
   name: string;
   website: string;
+  /** Plaintext only in memory after decrypt; persist as AES ciphertext or server vault. */
   apiKey: string;
+  /** Ciphertext for localStorage when offline; empty when server-backed. */
+  apiKeyCipher?: string;
+  apiKeyHint?: string;
   baseUrl: string;
+  /** Upstream chat model id (e.g. gpt-4o, deepseek-chat). */
+  apiModel: string;
   /** text | vision(multimodal). Legacy ``image`` is normalized to text. */
   modelKind: CustomModelKind;
   createdAt: number;
+  /** True when key lives in server AES vault (no local ciphertext). */
+  serverBacked?: boolean;
 };
 
-const STORAGE_KEY = 'resume.customLlmProviders.v1';
+const STORAGE_KEY = 'resume.customLlmProviders.v2';
+const LEGACY_STORAGE_KEY = 'resume.customLlmProviders.v1';
+const DEVICE_KEY_STORAGE = 'resume.byok.deviceKey.v1';
 export const CUSTOM_MODEL_ID_PREFIX = 'custom:';
 
 export function isCustomModelId(id: string | null | undefined): boolean {
@@ -27,14 +44,98 @@ function normalizeModelKind(raw: unknown): CustomModelKind {
   const v = String(raw || '')
     .trim()
     .toLowerCase();
-  // Former ``image`` option removed — third-party image gen is unsupported / unbilled.
   if (v === 'vision' || v === 'multimodal' || v === 'multi') return 'vision';
   return 'text';
 }
 
-export function loadCustomLlmProviders(): CustomLlmProvider[] {
+function bytesToB64(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 1) s += String.fromCharCode(bytes[i]!);
+  return btoa(s);
+}
+
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function getOrCreateDeviceKey(): Promise<CryptoKey> {
+  const existing = sessionStorage.getItem(DEVICE_KEY_STORAGE);
+  if (existing) {
+    const raw = b64ToBytes(existing);
+    return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  }
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+    'encrypt',
+    'decrypt',
+  ]);
+  const exported = await crypto.subtle.exportKey('raw', key);
+  sessionStorage.setItem(DEVICE_KEY_STORAGE, bytesToB64(exported));
+  return key;
+}
+
+/** AES-256-GCM encrypt — ciphertext never logged. */
+export async function encryptApiKeyLocal(plaintext: string): Promise<string> {
+  const text = String(plaintext || '');
+  if (!text) return '';
+  const key = await getOrCreateDeviceKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    new TextEncoder().encode(text)
+  );
+  const packed = new Uint8Array(iv.length + ct.byteLength);
+  packed.set(iv, 0);
+  packed.set(new Uint8Array(ct), iv.length);
+  return `enc:v1:${bytesToB64(packed)}`;
+}
+
+export async function decryptApiKeyLocal(cipher: string): Promise<string> {
+  const raw = String(cipher || '');
+  if (!raw.startsWith('enc:v1:')) return raw; // legacy plaintext migrate path
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const key = await getOrCreateDeviceKey();
+    const packed = b64ToBytes(raw.slice('enc:v1:'.length));
+    if (packed.length < 13) return '';
+    const iv = packed.slice(0, 12);
+    const ct = packed.slice(12);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return new TextDecoder().decode(pt);
+  } catch {
+    return '';
+  }
+}
+
+function apiKeyHint(plaintext: string): string {
+  const s = String(plaintext || '').trim();
+  if (!s) return '';
+  if (s.length <= 4) return '****';
+  return `…${s.slice(-4)}`;
+}
+
+function mapDto(d: ByokProviderDto): CustomLlmProvider {
+  return {
+    id: d.id,
+    name: d.name || '',
+    website: d.website || '',
+    apiKey: '',
+    apiKeyHint: d.apiKeyHint || '',
+    baseUrl: String(d.baseUrl || '').replace(/\/+$/, ''),
+    apiModel: String(d.apiModel || '').trim(),
+    modelKind: normalizeModelKind(d.modelKind),
+    createdAt: Number(d.createdAt) || Date.now(),
+    serverBacked: true,
+  };
+}
+
+function readLocalRaw(): CustomLlmProvider[] {
+  try {
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) raw = localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -45,25 +146,187 @@ export function loadCustomLlmProviders(): CustomLlmProvider[] {
         name: String(p.name || ''),
         website: String(p.website || ''),
         apiKey: String(p.apiKey || ''),
+        apiKeyCipher: p.apiKeyCipher ? String(p.apiKeyCipher) : undefined,
+        apiKeyHint: p.apiKeyHint ? String(p.apiKeyHint) : undefined,
         baseUrl: String(p.baseUrl || '').replace(/\/+$/, ''),
+        apiModel: String(p.apiModel || p.model || '').trim(),
         modelKind: normalizeModelKind(p.modelKind ?? p.kind),
         createdAt: Number(p.createdAt) || Date.now(),
+        serverBacked: Boolean(p.serverBacked),
       }));
   } catch {
     return [];
   }
 }
 
-export function saveCustomLlmProviders(list: CustomLlmProvider[]) {
+function writeLocalEncrypted(list: CustomLlmProvider[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    // Persist ciphertext / hints only — never plaintext apiKey.
+    const safe = list.map((p) => ({
+      id: p.id,
+      name: p.name,
+      website: p.website,
+      apiKeyCipher: p.apiKeyCipher || '',
+      apiKeyHint: p.apiKeyHint || '',
+      baseUrl: p.baseUrl,
+      apiModel: p.apiModel || '',
+      modelKind: p.modelKind,
+      createdAt: p.createdAt,
+      serverBacked: Boolean(p.serverBacked),
+    }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(safe));
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
   } catch {
     /* ignore quota */
   }
 }
 
+/** Sync load for picker — keys may be empty until hydrate. */
+export function loadCustomLlmProviders(): CustomLlmProvider[] {
+  return readLocalRaw().map((p) => ({
+    ...p,
+    apiKey: '', // never keep plaintext in the sync snapshot
+  }));
+}
+
+export function saveCustomLlmProviders(list: CustomLlmProvider[]) {
+  writeLocalEncrypted(list);
+}
+
 export function createCustomLlmProviderId() {
   return `prov_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Persist a provider: server AES vault when logged in; else local AES-GCM.
+ * Plaintext apiKey is never written to localStorage.
+ */
+export async function persistCustomLlmProvider(
+  provider: CustomLlmProvider
+): Promise<CustomLlmProvider> {
+  const token = getToken();
+  const plain = String(provider.apiKey || '').trim();
+  if (token) {
+    const item = await upsertByokProvider({
+      id: provider.id,
+      name: provider.name,
+      website: provider.website,
+      baseUrl: provider.baseUrl,
+      apiModel: provider.apiModel,
+      modelKind: provider.modelKind,
+      apiKey: plain || undefined,
+    });
+    const mapped = mapDto(item);
+    const next = [mapped, ...loadCustomLlmProviders().filter((p) => p.id !== mapped.id)];
+    writeLocalEncrypted(next);
+    return mapped;
+  }
+  let cipher = provider.apiKeyCipher || '';
+  if (plain) {
+    cipher = await encryptApiKeyLocal(plain);
+  }
+  const stored: CustomLlmProvider = {
+    ...provider,
+    apiKey: '',
+    apiKeyCipher: cipher,
+    apiKeyHint: plain ? apiKeyHint(plain) : provider.apiKeyHint,
+    serverBacked: false,
+  };
+  const next = [stored, ...loadCustomLlmProviders().filter((p) => p.id !== stored.id)];
+  writeLocalEncrypted(next);
+  return { ...stored, apiKey: plain };
+}
+
+export async function removeCustomLlmProvider(id: string): Promise<void> {
+  const token = getToken();
+  if (token) {
+    try {
+      await deleteByokProvider(id);
+    } catch {
+      /* still clear local */
+    }
+  }
+  writeLocalEncrypted(loadCustomLlmProviders().filter((p) => p.id !== id));
+}
+
+/** Pull server vault + migrate legacy plaintext local keys. */
+export async function hydrateCustomLlmProviders(): Promise<CustomLlmProvider[]> {
+  const token = getToken();
+  let local = readLocalRaw();
+
+  // Migrate legacy plaintext → ciphertext (or server).
+  const migrated: CustomLlmProvider[] = [];
+  for (const p of local) {
+    const plain = String(p.apiKey || '').trim();
+    if (plain && !p.apiKeyCipher && !p.serverBacked) {
+      if (token) {
+        try {
+          const item = await upsertByokProvider({
+            id: p.id,
+            name: p.name,
+            website: p.website,
+            baseUrl: p.baseUrl,
+            apiModel: p.apiModel || p.name,
+            modelKind: p.modelKind,
+            apiKey: plain,
+          });
+          migrated.push(mapDto(item));
+          continue;
+        } catch {
+          /* fall through to local encrypt */
+        }
+      }
+      const cipher = await encryptApiKeyLocal(plain);
+      migrated.push({
+        ...p,
+        apiKey: '',
+        apiKeyCipher: cipher,
+        apiKeyHint: apiKeyHint(plain),
+        serverBacked: false,
+      });
+      continue;
+    }
+    migrated.push({ ...p, apiKey: '' });
+  }
+  local = migrated;
+  writeLocalEncrypted(local);
+
+  if (token) {
+    try {
+      const remote = await fetchByokProviders();
+      const byId = new Map(remote.map((d) => [d.id, mapDto(d)]));
+      for (const p of local) {
+        if (!byId.has(p.id) && p.apiKeyCipher) {
+          // Push remaining local-only encrypted keys if we can decrypt.
+          const plain = await decryptApiKeyLocal(p.apiKeyCipher);
+          if (plain) {
+            try {
+              const item = await upsertByokProvider({
+                id: p.id,
+                name: p.name,
+                website: p.website,
+                baseUrl: p.baseUrl,
+                apiModel: p.apiModel || p.name,
+                modelKind: p.modelKind,
+                apiKey: plain,
+              });
+              byId.set(item.id, mapDto(item));
+            } catch {
+              byId.set(p.id, p);
+            }
+          } else {
+            byId.set(p.id, p);
+          }
+        }
+      }
+      const merged = Array.from(byId.values());
+      writeLocalEncrypted(merged);
+      return merged;
+    } catch {
+      /* keep local */
+    }
+  }
+  return loadCustomLlmProviders();
 }
 
 function referenceTypesFor(kind: CustomModelKind): ModelReferenceType[] {
@@ -86,7 +349,6 @@ export function customProvidersAsModels(
       referenceTypes: referenceTypesFor(modelKind),
       maxAttachments: isVision ? 16 : 8,
       description: undefined,
-      // Not on platform wallet — cost chip / credit estimate stay empty.
       price: null,
     };
   });

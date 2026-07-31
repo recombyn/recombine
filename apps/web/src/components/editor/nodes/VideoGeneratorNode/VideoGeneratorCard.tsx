@@ -22,6 +22,8 @@ import {
 import { SELECTION_TOOLBAR_BELOW_BOX_GAP_PX } from '@/components/rcb/selection/SelectionToolbarShell';
 import AgentComposerInput, {
   chipBaseKey,
+  parseAtMentionQuery,
+  stripTrailingAtQuery,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -541,6 +543,14 @@ function VideoGeneratorCard({
     );
     e.target.value = '';
     if (!files.length) return;
+    await attachRefFiles(files);
+  };
+
+  const attachRefFiles = async (files: File[]) => {
+    const media = files.filter(
+      (f) => f.type.startsWith('image/') || f.type.startsWith('video/')
+    );
+    if (!media.length) return;
 
     // Stage chips immediately with spinner, then upload (same pattern as AgentDock).
     const staged: Array<{
@@ -550,8 +560,8 @@ function VideoGeneratorCard({
       thumb: string;
       pending: ComposerContext;
     }> = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]!;
+    for (let i = 0; i < media.length; i++) {
+      const file = media[i]!;
       try {
         const preview = await readFileAsDataUrl(file);
         let thumb = preview;
@@ -631,25 +641,9 @@ function VideoGeneratorCard({
 
   // `@` opens the attachment mention panel, mirroring the chat composer.
   const maybeOpenMentionFromAt = (next: string) => {
-    const at = next.lastIndexOf('@');
-    if (at >= 0) {
-      const after = next.slice(at + 1);
-      if (!/\s/.test(after)) {
-        setMentionQuery(after);
-        setMentionOpen(true);
-        return;
-      }
-    }
-    setMentionOpen(false);
-    setMentionQuery('');
-  };
-
-  const stripTrailingAtQuery = (prev: string) => {
-    const at = prev.lastIndexOf('@');
-    if (at < 0) return prev;
-    const after = prev.slice(at + 1);
-    if (/\s/.test(after)) return prev;
-    return prev.slice(0, at);
+    const parsed = parseAtMentionQuery(next);
+    setMentionQuery(parsed.query);
+    setMentionOpen(parsed.open);
   };
 
   const mentionItems = useMemo((): MentionAttachItem[] => {
@@ -1010,6 +1004,9 @@ function VideoGeneratorCard({
               disabled={disabled || sending}
               placeholder={t('editor.tools.videoGenPlaceholder')}
               className="min-h-full w-full text-[13px]"
+              onPasteImages={(files) => {
+                void attachRefFiles(files);
+              }}
             />
           </div>
 

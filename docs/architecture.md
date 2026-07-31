@@ -21,7 +21,9 @@ HTTP  api/v1/*          薄路由
 运行  flow_runtime + agent_controller / orchestrator
 ```
 
-Design Agent 的可配置内容（默认图、节点模板、动作契约、字典、全局规则）以 `apps/api/data/` 为种子源；也可在运行后直接改数据库。
+Design Agent 的可配置内容（默认图、节点模板、动作契约、字典、全局规则、**Skill**）以 `apps/api/data/` 为种子源；也可在运行后直接改数据库。Skill 支持 `core` / `ext` / `user` 命名空间、ACL 与版本 pin（见 [design_skills/README.md](../apps/api/data/design_skills/README.md)）。
+
+数据库：SQLite / MySQL / PostgreSQL（见 [postgres-switch.md](./postgres-switch.md)）；SQLite 默认 WAL，可选周期备份。
 
 ## 导入数据流
 

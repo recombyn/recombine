@@ -1247,6 +1247,7 @@ const en = {
     placeholderImage: 'Describe the image you want to generate…',
     placeholderSkill: 'Describe what you want to accomplish here…',
     placeholderDefault: '@Search for image, model, or project',
+    emptyHint: 'Describe the design you want, or upload a reference image to start',
     newChat: 'New chat',
     history: 'Chat history',
     alreadyNewChat: 'Already on a new chat',

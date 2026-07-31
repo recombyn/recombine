@@ -13,6 +13,7 @@ import {
   isNodeHidden,
   isNodeLocked,
   measureImageNaturalSize,
+  prepareVideoUploadPreview,
   pasteClipboardIntoDocument,
   removeNodesFromDocument,
   reorderNodesInDocument,
@@ -110,6 +111,7 @@ import {
   setSelectedNodeId,
   setSelectedNodeIds,
   startImageUploadPlaceholder,
+  startVideoUploadPlaceholder,
   finishImageProcess,
   failImageProcess,
   undo,
@@ -250,6 +252,7 @@ function measureSvgMarkupSize(markup: string): { width: number; height: number; 
 
 type SystemPastePayload =
   | { kind: 'image'; file: File }
+  | { kind: 'video'; file: File }
   | { kind: 'svg'; markup: string }
   | { kind: 'text'; text: string };
 
@@ -259,7 +262,7 @@ function fileLooksLikeSvg(file: File): boolean {
   return /\.svg$/i.test(file.name || '');
 }
 
-/** Prefer image → SVG markup → plain text from a ClipboardEvent / ClipboardItem list. */
+/** Prefer image/video → SVG markup → plain text from a ClipboardEvent / ClipboardItem list. */
 async function readSystemPastePayload(
   data: DataTransfer | null | undefined
 ): Promise<SystemPastePayload | null> {
@@ -285,8 +288,12 @@ async function readSystemPastePayload(
         /* fall through to image upload */
       }
     }
-    if ((file.type || '').startsWith('image/')) {
+    const mime = (file.type || '').toLowerCase();
+    if (mime.startsWith('image/')) {
       return { kind: 'image', file };
+    }
+    if (mime.startsWith('video/')) {
+      return { kind: 'video', file };
     }
   }
 
@@ -310,9 +317,9 @@ async function readSystemPastePayload(
 
 function fingerprintSystemPaste(payload: SystemPastePayload | null | undefined): string {
   if (!payload) return '';
-  if (payload.kind === 'image') {
+  if (payload.kind === 'image' || payload.kind === 'video') {
     const f = payload.file;
-    return `image:${f.type}:${f.size}:${f.name}:${f.lastModified}`;
+    return `${payload.kind}:${f.type}:${f.size}:${f.name}:${f.lastModified}`;
   }
   if (payload.kind === 'svg') {
     const m = payload.markup;
@@ -344,6 +351,19 @@ async function readSystemPasteFromNavigator(): Promise<SystemPastePayload | null
           return {
             kind: 'image',
             file: new File([blob], `paste.${ext}`, { type: imageType }),
+          };
+        }
+        const videoType = types.find((t) => t.startsWith('video/'));
+        if (videoType) {
+          const blob = await item.getType(videoType);
+          const ext = videoType.includes('webm')
+            ? 'webm'
+            : videoType.includes('quicktime')
+              ? 'mov'
+              : 'mp4';
+          return {
+            kind: 'video',
+            file: new File([blob], `paste.${ext}`, { type: videoType }),
           };
         }
         if (types.includes('text/plain')) {
@@ -2798,6 +2818,80 @@ function SvgCanvas({
     })();
   };
 
+  const onVideoFile = (file: File | null) => {
+    if (!file) return;
+    void (async () => {
+      const at = imagePlaceAtRef.current;
+      imagePlaceAtRef.current = null;
+      try {
+        const prepared = await prepareVideoUploadPreview(file);
+        const { width, height } = imageSizeForViewport({
+          width: prepared.width,
+          height: prepared.height,
+        });
+        let x: number | undefined;
+        let y: number | undefined;
+        if (at) {
+          const placed = rcbCenterOnPoint({ x: at.x, y: at.y }, { width, height });
+          const latest = documentRef.current;
+          if (latest) {
+            const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
+            x = origin.x;
+            y = origin.y;
+          }
+        } else {
+          const view =
+            overlayRoot?.getBoundingClientRect() ||
+            paperEl?.parentElement?.getBoundingClientRect() ||
+            null;
+          if (view && (stageEl || paperEl)) {
+            const center = pointerToWorld(
+              camera,
+              { stageEl, paperEl, artboard },
+              view.left + view.width / 2,
+              view.top + view.height / 2
+            );
+            const placed = rcbCenterOnPoint(center, { width, height });
+            const latest = documentRef.current;
+            if (latest) {
+              const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
+              x = origin.x;
+              y = origin.y;
+            }
+          }
+        }
+        dispatch(
+          startVideoUploadPlaceholder({
+            src: prepared.preview,
+            poster: prepared.poster,
+            width,
+            height,
+            x,
+            y,
+            label: '上传中',
+            name: prepared.name,
+          })
+        );
+        finishToSelect();
+        const uploaded = await uploadImageFile(file);
+        dispatch(
+          finishImageProcess({
+            src: uploaded.url,
+            attrs: {
+              ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
+              ...(prepared.poster ? { poster: prepared.poster } : {}),
+              assetKind: 'video',
+            },
+          })
+        );
+      } catch (err: any) {
+        dispatch(failImageProcess({}));
+        const detail = err?.response?.data?.detail || err?.message || '视频上传失败';
+        message.error(typeof detail === 'string' ? detail : '视频上传失败');
+      }
+    })();
+  };
+
   /** Document x/y so a box of given size is centered on anchor or viewport. */
   const placeOriginForSize = useCallback(
     (
@@ -2916,6 +3010,11 @@ function SvgCanvas({
         }
         imagePlaceAtRef.current = anchor;
         onImageFile(payload.file);
+        return true;
+      }
+      if (payload.kind === 'video') {
+        imagePlaceAtRef.current = anchor;
+        onVideoFile(payload.file);
         return true;
       }
       return false;
@@ -3192,7 +3291,7 @@ function SvgCanvas({
     onAddToChat,
   ]);
 
-  // System clipboard: paste images (auto-upload), SVG icons, or plain text onto the canvas.
+  // System clipboard: paste images/videos (auto-upload), SVG icons, or plain text onto the canvas.
   useEffect(() => {
     if (readOnly) return undefined;
 
@@ -3222,7 +3321,11 @@ function SvgCanvas({
         else {
           try {
             for (const item of Array.from(data.items || [])) {
-              if (item.kind === 'file' || item.type.startsWith('image/')) {
+              if (
+                item.kind === 'file' ||
+                item.type.startsWith('image/') ||
+                item.type.startsWith('video/')
+              ) {
                 likelyOs = true;
                 break;
               }

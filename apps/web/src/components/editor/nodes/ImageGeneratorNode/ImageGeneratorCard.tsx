@@ -22,6 +22,8 @@ import {
 import { SELECTION_TOOLBAR_BELOW_BOX_GAP_PX } from '@/components/rcb/selection/SelectionToolbarShell';
 import AgentComposerInput, {
   chipBaseKey,
+  parseAtMentionQuery,
+  stripTrailingAtQuery,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -521,8 +523,14 @@ function ImageGeneratorCard({
     const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith('image/'));
     e.target.value = '';
     if (!files.length) return;
+    await attachRefFiles(files);
+  };
+
+  const attachRefFiles = async (files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    if (!images.length) return;
     const results = await Promise.all(
-      files.map(async (file, i) => {
+      images.map(async (file, i) => {
         try {
           const dataUrl = await readFileAsDataUrl(file);
           return {
@@ -546,25 +554,9 @@ function ImageGeneratorCard({
 
   // `@` opens the attachment mention panel, mirroring the chat composer.
   const maybeOpenMentionFromAt = (next: string) => {
-    const at = next.lastIndexOf('@');
-    if (at >= 0) {
-      const after = next.slice(at + 1);
-      if (!/\s/.test(after)) {
-        setMentionQuery(after);
-        setMentionOpen(true);
-        return;
-      }
-    }
-    setMentionOpen(false);
-    setMentionQuery('');
-  };
-
-  const stripTrailingAtQuery = (prev: string) => {
-    const at = prev.lastIndexOf('@');
-    if (at < 0) return prev;
-    const after = prev.slice(at + 1);
-    if (/\s/.test(after)) return prev;
-    return prev.slice(0, at);
+    const parsed = parseAtMentionQuery(next);
+    setMentionQuery(parsed.query);
+    setMentionOpen(parsed.open);
   };
 
   const mentionItems = useMemo(
@@ -923,6 +915,9 @@ function ImageGeneratorCard({
               disabled={disabled || sending}
               placeholder={t('editor.tools.imageGenPlaceholder')}
               className="min-h-full w-full text-[13px]"
+              onPasteImages={(files) => {
+                void attachRefFiles(files);
+              }}
             />
           </div>
 

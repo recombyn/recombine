@@ -35,3 +35,11 @@ def embed_quality_sample_job(self, sample_id: int) -> dict:
     from services.design.aesthetics.embed_job import embed_quality_sample
 
     return embed_quality_sample(int(sample_id))
+
+
+@celery.task(name="worker.tasks.run_db_backup_job")
+def run_db_backup_job(reason: str = "celery") -> dict:
+    """Periodic DB backup (SQLite snapshot or MySQL/Postgres dump hint)."""
+    from services.db.backup import run_db_backup
+
+    return run_db_backup(reason=reason or "celery")

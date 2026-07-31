@@ -1180,6 +1180,7 @@ const zhTW = {
     placeholderImage: '描述你想生成的圖片…',
     placeholderSkill: '描述你想在這裡實現的內容…',
     placeholderDefault: '@Search for image, model, or project',
+    emptyHint: '描述你想要的設計，或上傳參考圖開始',
     newChat: '新對話',
     history: '歷史對話',
     alreadyNewChat: '當前已是新對話',

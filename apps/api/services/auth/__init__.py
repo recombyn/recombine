@@ -87,6 +87,9 @@ def get_session(token: str | None) -> SessionUser | None:
     user = get_user_by_id(user_id) if user_id else None
     if not user:
         return None
+    status = (getattr(user, "status", None) or "active").strip().lower()
+    if status == "disabled":
+        return None
     user = heal_avatar_if_data_url(user)
     return SessionUser(
         id=user.id,

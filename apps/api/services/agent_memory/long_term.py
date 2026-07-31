@@ -111,7 +111,19 @@ def _build_sqlite_store() -> Any:
 
     global _STORE_CONN
     path = str(_store_sqlite_path())
-    conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+    conn = sqlite3.connect(
+        path, check_same_thread=False, isolation_level=None, timeout=30.0
+    )
+    try:
+        from services.db import configure_sqlite_connection
+
+        configure_sqlite_connection(conn)
+    except Exception:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 30000")
+        except Exception:
+            pass
     index = _optional_sqlite_index()
     store = SqliteStore(conn, index=index) if index is not None else SqliteStore(conn)
     store.setup()

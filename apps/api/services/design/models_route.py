@@ -225,9 +225,15 @@ def pick_fallback_model(
 
 
 def normalize_model_ref(selected: str | None) -> str:
-    s = str(selected if selected is not None else "auto").strip().lower()
-    if not s or s == "auto":
+    s = str(selected if selected is not None else "auto").strip()
+    low = s.lower()
+    if not low or low == "auto":
         return "auto"
+    # Preserve BYOK provider id casing after prefix.
+    if low.startswith("custom:") or low.startswith("byok:"):
+        prefix, _, rest = s.partition(":")
+        return f"{prefix.lower()}:{rest.strip()}"
+    s = low
     if s in ("doubao-seed", "doubao-pro"):
         return "doubao"
     if s in ("deepseek-chat", "deepseek-reasoner"):
@@ -236,6 +242,9 @@ def normalize_model_ref(selected: str | None) -> str:
 
 
 def _is_concrete(ref: str) -> bool:
+    low = str(ref or "").strip().lower()
+    if low.startswith("custom:") or low.startswith("byok:"):
+        return bool(low.split(":", 1)[-1].strip())
     return ref not in ("doubao", "deepseek", "auto", "glm", "kimi") and bool(ref)
 
 
@@ -257,24 +266,41 @@ _DEFAULT_VISION_FALLBACK = "doubao-seed-2-1-pro"
 
 def model_supports_vision(model_ref: str | None) -> bool:
     """Whether chat/completions may include image_url for this model."""
-    ref = str(model_ref or "").strip().lower()
-    if not ref or "seedream" in ref:
+    ref = str(model_ref or "").strip()
+    low = ref.lower()
+    if not low or "seedream" in low:
+        return False
+    from services.security import parse_byok_model_ref
+
+    byok_pid = parse_byok_model_ref(ref)
+    if byok_pid:
+        try:
+            from services.llm import get_byok_user_id
+            from services.security import get_byok_provider_row
+
+            uid = get_byok_user_id()
+            if uid:
+                row = get_byok_provider_row(uid, byok_pid)
+                if row:
+                    return str(row.get("modelKind") or "").strip().lower() == "vision"
+        except Exception:
+            pass
         return False
     try:
         from services.llm.catalog_store import get_model
 
-        item = get_model(ref)
+        item = get_model(low)
         if item:
             types = item.get("referenceTypes") or item.get("reference_types") or []
             if isinstance(types, list) and types:
                 return "vision" in types
     except Exception:
         pass
-    if "mini" in ref or "flash" in ref:
+    if "mini" in low or "flash" in low:
         return False
-    if ref in _VISION_MODEL_IDS:
+    if low in _VISION_MODEL_IDS:
         return True
-    return any(m in ref for m in _VISION_MODEL_MARKERS)
+    return any(m in low for m in _VISION_MODEL_MARKERS)
 
 
 def _vision_ok(model_ref: str | None) -> bool:

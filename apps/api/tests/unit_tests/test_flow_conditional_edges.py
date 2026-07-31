@@ -9,6 +9,7 @@ from langgraph.types import Command
 from services.design.agent_controller import (
     _build_lc_design_graph,
     _commit,
+    _design_thread_id,
     invalidate_agent_graph_cache,
 )
 from services.design.flow_runtime import choose_outgoing_edges, eval_edge_condition
@@ -34,6 +35,12 @@ def test_build_lc_design_graph_nodes():
         "__settle__",
     } <= nodes
     assert "thought" not in nodes
+    # Process-local checkpointer enables thread_id resume / get_state.
+    assert compiled.checkpointer is not None
+
+
+def test_design_thread_id():
+    assert _design_thread_id("abc") == "design:abc"
 
 
 def test_commit_has_no_goto():

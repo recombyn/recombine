@@ -7,6 +7,7 @@ Image generation and ordinary FastAPI routes stay on raw HTTP / httpx.
 
 from __future__ import annotations
 
+import contextvars
 import json
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -20,6 +21,30 @@ class LlmEndpoint:
     api_key: str
     model_id: str
     provider: str
+
+
+# Request-scoped user for BYOK ``custom:<providerId>`` resolution.
+_BYOK_USER_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "byok_user_id", default=None
+)
+
+
+def set_byok_user_id(user_id: str | None) -> contextvars.Token:
+    return _BYOK_USER_ID.set(str(user_id).strip() if user_id else None)
+
+
+def reset_byok_user_id(token: contextvars.Token) -> None:
+    _BYOK_USER_ID.reset(token)
+
+
+def get_byok_user_id() -> str | None:
+    return _BYOK_USER_ID.get()
+
+
+def is_byok_model_ref(model_string: str | None) -> bool:
+    from services.security import parse_byok_model_ref
+
+    return parse_byok_model_ref(model_string) is not None
 
 
 # OpenAI-compatible chat bases (`POST {base}/chat/completions`).
@@ -432,11 +457,33 @@ def get_llm_endpoint(model_string: str | None = None) -> LlmEndpoint:
     """
     Resolve an OpenAI-compatible chat endpoint.
 
-    Configure via apps/api/.env:
-      DOUBAO_API_KEY=... / DEEPSEEK_API_KEY=... / OPENROUTER_API_KEY=...
-      # or LLM_API_KEY=...
-      LLM_DEFAULT_MODEL=doubao-seed-2-0-mini
+    Platform keys via apps/api/.env, or BYOK ``custom:<providerId>`` using the
+    request-scoped user from ``set_byok_user_id``.
     """
+    from services.security import get_byok_provider_row, parse_byok_model_ref, redact_secrets
+
+    byok_pid = parse_byok_model_ref(model_string)
+    if byok_pid:
+        uid = get_byok_user_id()
+        if not uid:
+            raise RuntimeError("BYOK model requires an authenticated user context")
+        row = get_byok_provider_row(uid, byok_pid)
+        if not row:
+            raise RuntimeError("BYOK provider not found")
+        api_key = str(row.get("apiKey") or "").strip()
+        base_url = str(row.get("baseUrl") or "").strip().rstrip("/")
+        api_model = str(row.get("apiModel") or "").strip()
+        if not api_key or not base_url or not api_model:
+            raise RuntimeError("BYOK provider is missing apiKey, baseUrl, or apiModel")
+        # Never log secrets — touch redact for defensive message shaping.
+        _ = redact_secrets
+        return LlmEndpoint(
+            base_url=base_url,
+            api_key=api_key,
+            model_id=api_model,
+            provider="byok",
+        )
+
     provider, model_id = resolve_provider(model_string)
     api_key = _api_key_for(provider)
     if not api_key:
