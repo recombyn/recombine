@@ -2,14 +2,14 @@
  * Account Agent tab: Auto routing prefs + custom OpenAI-compatible providers (Pro).
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, memo } from 'react';
+import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiChevronLeft, HiChevronRight, HiOutlineTrash } from 'react-icons/hi2';
 import { listModels, type LlmModel } from '@/apis/chat';
 import { modelAllowsRouteSlot } from '@/components/editor/panels/agent/llmModelMeta';
 import { fetchDesignCatalog } from '@/apis/design';
-import { SegmentedControl, Select, Tooltip } from '@/components/base';
+import { Dropdown, SegmentedControl, Select, Tooltip } from '@/components/base';
 import AccountSettingsDialog from '@/components/layout/AccountSettingsDialog';
 import { cn } from '@/utils/classnames';
 import { planAllowsCustomModels, type PlanId } from '@/utils/wallet';
@@ -48,46 +48,10 @@ function useNarrowViewport() {
   return narrow;
 }
 
-/** Prefer opening to the right; flip left when clipped. Same gap as UserAccountPanel SideFlyout. */
-function RouteSideFlyout({ children }: { children: ReactNode }) {
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [side, setSide] = useState<'right' | 'left'>('right');
-  const [top, setTop] = useState(0);
+/** Nested route flyouts — same dismiss guard as AgentComposerShell model Dropdown. */
+const ROUTE_SUBMENU_DISMISS_GUARD =
+  '[data-agent-route-submenu], .rcb-agent-route-submenu-popup';
 
-  useLayoutEffect(() => {
-    const el = wrapRef.current;
-    const row = el?.parentElement;
-    if (!el || !row) return;
-    const rect = row.getBoundingClientRect();
-    const need = 300;
-    const spaceRight = window.innerWidth - rect.right - 8;
-    setSide(spaceRight >= need ? 'right' : 'left');
-    // Submenu is taller than lang/theme flyout — shift up if it would clip the viewport.
-    const h = Math.min(el.offsetHeight, window.innerHeight - 24);
-    const overflow = rect.top + h - (window.innerHeight - 12);
-    setTop(overflow > 0 ? -overflow : 0);
-  }, []);
-
-  const sideClass =
-    side === 'right'
-      ? 'left-full pl-[calc(0.625rem+10px)]'
-      : 'right-full pr-[calc(0.625rem+10px)]';
-
-  return (
-    <div
-      ref={wrapRef}
-      data-agent-route-submenu=""
-      className={cn(
-        'absolute z-10 max-h-[calc(100vh-24px)] [&>*]:max-h-full [&>*]:overflow-y-auto',
-        sideClass
-      )}
-      style={{ top }}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      {children}
-    </div>
-  );
-}
 type Props = {
   onProvidersChange?: () => void;
   /** When set (e.g. inside settings modal), open plans tab instead of nested dialog. */
@@ -690,16 +654,6 @@ function AgentRoutePrefsEditor({
       );
     };
 
-    const openFieldSubmenu = (key: (typeof fieldRows)[number]['key']) => {
-      setSubmenu((v) =>
-        v?.kind === 'field' && v.key === key ? null : { kind: 'field', key }
-      );
-    };
-
-    const openPresetSubmenu = () => {
-      setSubmenu((v) => (v?.kind === 'preset' ? null : { kind: 'preset' }));
-    };
-
     /** Keep focus inside the parent floating menu — remounting rows would blur to body and flicker-close. */
     const keepParentMenuFocus = (e: { preventDefault: () => void }) => {
       e.preventDefault();
@@ -713,40 +667,65 @@ function AgentRoutePrefsEditor({
       );
     }
 
-    const presetTrigger = (
-      <button
-        type="button"
-        className={cn(
-          'flex w-full min-w-0 items-center justify-between gap-2 rounded-xl bg-[var(--canvas)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--canvas)]/80',
-          submenu?.kind === 'preset' && 'ring-1 ring-[var(--line)]'
+    /**
+     * Side flyout via Dropdown (flip/shift), not absolute RouteSideFlyout.
+     * `items[].children` is hover 二级 for flat menus; here the body is custom
+     * ModelPickerPanel / preset cards → popupRender.
+     */
+    const routeSideDropdown = (opts: {
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+      trigger: ReactNode;
+    }) => (
+      <Dropdown
+        trigger="click"
+        placement="right-start"
+        strategy="fixed"
+        offset={20}
+        items={[]}
+        open={opts.open}
+        onOpenChange={opts.onOpenChange}
+        nestedDismissGuard={ROUTE_SUBMENU_DISMISS_GUARD}
+        floatingClassName="z-[80]"
+        referenceClassName="block w-full"
+        popupRender={() => (
+          <div className="max-w-full" onPointerDown={(e) => e.stopPropagation()}>
+            {renderSubmenuPanel()}
+          </div>
         )}
-        onPointerDown={keepParentMenuFocus}
-        onClick={openPresetSubmenu}
       >
-        <span className="shrink-0 text-[13px] font-semibold text-[var(--ink)]">{headerTitle}</span>
-        <span className="inline-flex min-w-0 max-w-[58%] items-center gap-0.5 text-[12px] text-[var(--muted)]">
-          <span className="truncate">{presetShortLabel}</span>
-          <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
-        </span>
-      </button>
+        {opts.trigger}
+      </Dropdown>
     );
 
     return (
-      <div
-        className={cn(
-          AGENT_ROUTE_POPOVER_PANEL,
-          // Match account menu: overflow-visible so absolute side flyouts are not clipped.
-          'overflow-visible',
-          className
-        )}
-      >
+      <div className={cn(AGENT_ROUTE_POPOVER_PANEL, 'overflow-visible', className)}>
         <div className="p-2.5">
-          <div className="relative">
-            {presetTrigger}
-            {!narrow && submenu?.kind === 'preset' ? (
-              <RouteSideFlyout>{renderSubmenuPanel()}</RouteSideFlyout>
-            ) : null}
-          </div>
+          {routeSideDropdown({
+            open: !narrow && submenu?.kind === 'preset',
+            onOpenChange: (open) => {
+              if (open) setSubmenu({ kind: 'preset' });
+              else setSubmenu((v) => (v?.kind === 'preset' ? null : v));
+            },
+            trigger: (
+              <button
+                type="button"
+                className={cn(
+                  'flex w-full min-w-0 items-center justify-between gap-2 rounded-xl bg-[var(--canvas)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--canvas)]/80',
+                  submenu?.kind === 'preset' && 'ring-1 ring-[var(--line)]'
+                )}
+                onPointerDown={keepParentMenuFocus}
+              >
+                <span className="shrink-0 text-[13px] font-semibold text-[var(--ink)]">
+                  {headerTitle}
+                </span>
+                <span className="inline-flex min-w-0 max-w-[58%] items-center gap-0.5 text-[12px] text-[var(--muted)]">
+                  <span className="truncate">{presetShortLabel}</span>
+                  <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
+                </span>
+              </button>
+            ),
+          })}
 
           <div className="mx-1 mt-2 border-t border-[var(--line)]" />
 
@@ -781,31 +760,43 @@ function AgentRoutePrefsEditor({
               {fieldRows.map((row) => {
                 const active = submenu?.kind === 'field' && submenu.key === row.key;
                 return (
-                  <div key={row.key} className="relative">
-                    <button
-                      type="button"
-                      className={cn(
-                        'flex w-full items-center justify-between gap-2 rounded-lg px-1 py-2 text-left transition-colors',
-                        active ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'
-                      )}
-                      onPointerDown={keepParentMenuFocus}
-                      onClick={() => openFieldSubmenu(row.key)}
-                    >
-                      <span className="shrink-0 text-[13px] text-[var(--ink)]">{row.label}</span>
-                      <span className="inline-flex w-[6.75rem] shrink-0 items-center justify-start gap-1 text-[12px] text-[var(--muted)]">
-                        <ModelBrandIcon
-                          model={modelRefOf(routePrefs[row.key], row.opts)}
-                          size={14}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-left">
-                          {modelLabelOf(routePrefs[row.key], row.opts)}
-                        </span>
-                        <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
-                      </span>
-                    </button>
-                    {!narrow && active ? (
-                      <RouteSideFlyout>{renderSubmenuPanel()}</RouteSideFlyout>
-                    ) : null}
+                  <div key={row.key}>
+                    {routeSideDropdown({
+                      open: !narrow && active,
+                      onOpenChange: (open) => {
+                        if (open) setSubmenu({ kind: 'field', key: row.key });
+                        else
+                          setSubmenu((v) =>
+                            v?.kind === 'field' && v.key === row.key ? null : v
+                          );
+                      },
+                      trigger: (
+                        <button
+                          type="button"
+                          className={cn(
+                            'flex w-full items-center justify-between gap-2 rounded-lg px-1 py-2 text-left transition-colors',
+                            active
+                              ? 'bg-[var(--accent-soft)]'
+                              : 'hover:bg-[var(--accent-soft)]'
+                          )}
+                          onPointerDown={keepParentMenuFocus}
+                        >
+                          <span className="shrink-0 text-[13px] text-[var(--ink)]">
+                            {row.label}
+                          </span>
+                          <span className="inline-flex w-[6.75rem] shrink-0 items-center justify-start gap-1 text-[12px] text-[var(--muted)]">
+                            <ModelBrandIcon
+                              model={modelRefOf(routePrefs[row.key], row.opts)}
+                              size={14}
+                            />
+                            <span className="min-w-0 flex-1 truncate text-left">
+                              {modelLabelOf(routePrefs[row.key], row.opts)}
+                            </span>
+                            <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
+                          </span>
+                        </button>
+                      ),
+                    })}
                   </div>
                 );
               })}

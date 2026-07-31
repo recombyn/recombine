@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
-import { LuFrame, LuImage, LuImagePlus, LuPlay } from 'react-icons/lu';
+import { LuFrame, LuImage, LuImagePlus, LuFilm } from 'react-icons/lu';
 import { RiVideoAiLine } from 'react-icons/ri';
 import { RcbOverlayPortal, useRcbCamera, rcbSceneToScreen } from '@/components/rcb';
 import {
@@ -52,7 +52,7 @@ function TitleIcon({ kind }: { kind: NodeTitleIcon }) {
   if (kind === 'video-generator') {
     return <RiVideoAiLine className={cls} aria-hidden />;
   }
-  if (kind === 'video') return <LuPlay className={cls} strokeWidth={2} aria-hidden />;
+  if (kind === 'video') return <LuFilm className={cls} strokeWidth={2} aria-hidden />;
   return <LuImage className={cls} strokeWidth={2} aria-hidden />;
 }
 

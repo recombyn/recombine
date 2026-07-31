@@ -10,6 +10,7 @@ import {
 import { useSelector } from 'react-redux';
 import { useRcbCamera } from '@/components/rcb';
 import {
+  isNodeHidden,
   isVideoGeneratorNode,
   isVideoNode,
   stackZIndex,
@@ -97,10 +98,11 @@ function VideoNodeOverlay({
         if (!node) return null;
         const src = String(node.attrs?.src || '').trim();
         if (!src) return null;
-        // Keep mounted during trim — hide only (unmount resets currentTime).
+        // Keep mounted during trim / layer-hide — hide only (unmount resets currentTime).
         const trimOpen = videoToolPanel?.nodeId === nodeId;
         const cropSession =
           imageToolPanel?.nodeId === nodeId && imageToolPanel.kind === 'crop';
+        const layerHidden = isNodeHidden(node);
         const { left, top } = nodeLeftTop(document, node);
         const ov = geometryOverrides?.[nodeId];
         const width = Math.max(1, ov ? ov.width : Number(node.width) || 1);
@@ -134,7 +136,7 @@ function VideoNodeOverlay({
               String(node.attrs?.uploadKey || node.attrs?.key || '').trim() || null
             }
             disabled={readOnly || cropSession}
-            hidden={Boolean(hidden) || trimOpen}
+            hidden={Boolean(hidden) || trimOpen || layerHidden}
             trimStart={readOptionalNumber(node.attrs?.trimStart)}
             trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
             knownDuration={readOptionalNumber(node.attrs?.duration)}

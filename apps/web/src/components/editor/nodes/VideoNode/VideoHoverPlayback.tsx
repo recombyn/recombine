@@ -138,6 +138,8 @@ function VideoHoverPlayback({
   freezeUrlRef.current = freeze.url;
   freezeAtRef.current = freeze.at;
   mediaTimeRef.current = mediaTime;
+  const showUiRef = useRef(showUi);
+  showUiRef.current = showUi;
 
   // Flip media pixels only — keep the playback bar upright.
   const mediaFlip =
@@ -203,7 +205,9 @@ function VideoHoverPlayback({
       const wrap = videoWrapRef.current;
       const prevVis = wrap?.style.visibility;
       // Hidden videos often won't decode the seeked frame — reveal for capture.
-      if (wrap) wrap.style.visibility = 'visible';
+      // Never punch through a layer-hidden plate (child visibility:visible wins
+      // over parent visibility:hidden in CSS).
+      if (wrap && showUiRef.current) wrap.style.visibility = 'visible';
 
       const gen = ++freezeGenRef.current;
       const finish = () => {
@@ -214,7 +218,9 @@ function VideoHoverPlayback({
           setMediaTime(at);
           setFreeze({ url: shot, at });
         }
-        if (wrap) wrap.style.visibility = prevVis ?? '';
+        if (wrap) {
+          wrap.style.visibility = showUiRef.current ? prevVis ?? '' : 'hidden';
+        }
       };
 
       if (typeof el.requestVideoFrameCallback === 'function') {
@@ -309,8 +315,11 @@ function VideoHoverPlayback({
         transform: scenePlate.transform,
         transformOrigin: scenePlate.transformOrigin || 'center center',
         zIndex: Math.max(0, stackZ),
-        visibility: showUi ? 'visible' : 'hidden',
+        // opacity — not visibility. Child visibility:visible punches through
+        // parent visibility:hidden (freeze / playing video wrap).
+        opacity: showUi ? 1 : 0,
       }}
+      aria-hidden={showUi ? undefined : true}
       data-video-hover-plate=""
       data-video-node-id={nodeId}
     >
@@ -336,7 +345,7 @@ function VideoHoverPlayback({
           height: scenePlate.height * z,
           transform: `scale(${1 / z})`,
           transformOrigin: '0 0',
-          visibility: showVideo ? 'visible' : 'hidden',
+          visibility: showUi && showVideo ? 'visible' : 'hidden',
         }}
       >
         <video

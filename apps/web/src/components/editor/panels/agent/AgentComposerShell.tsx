@@ -20,6 +20,7 @@ import {
   HiOutlineDocument,
   HiOutlineChatBubbleLeftRight,
   HiOutlinePhoto,
+  HiOutlineFilm,
   HiOutlinePlay,
   HiOutlinePlus,
   HiOutlineXMark,
@@ -764,7 +765,7 @@ function interactionModeLabel(
 
 function interactionModeIcon(mode: ComposerInteractionMode): ReactNode {
   if (mode === 'video') {
-    return <HiOutlinePlay className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
+    return <HiOutlineFilm className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
   }
   if (mode === 'image') {
     return <HiOutlinePhoto className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
@@ -798,7 +799,7 @@ function buildInteractionModeOptions(
     {
       key: 'video',
       label: t('agent.interactionVideo'),
-      icon: <HiOutlinePlay className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
+      icon: <HiOutlineFilm className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
     },
   ];
   return all.map((item) => ({ ...item, disabledItem: !allowedModes.includes(item.key) }));

@@ -825,6 +825,11 @@ export function isVideoGeneratorNode(node: any): boolean {
   return Boolean(node) && node.key === 'video' && attrFlagTrue(node.attrs?.videoGenerator);
 }
 
+/** Image / video generator plates — not real scene content (no hide / lock / export). */
+export function isGeneratorNode(node: any): boolean {
+  return isImageGeneratorNode(node) || isVideoGeneratorNode(node);
+}
+
 export function isVideoNode(node: any): boolean {
   return Boolean(node) && node.key === 'video' && !isVideoGeneratorNode(node);
 }
@@ -840,7 +845,7 @@ export function isNodeHidden(node: any): boolean {
  */
 export function isExportableSceneNode(node: any): boolean {
   if (!node || isNodeHidden(node)) return false;
-  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return false;
+  if (isGeneratorNode(node)) return false;
   if (String(node?.attrs?.processStatus || '') === 'running') return false;
   return true;
 }
@@ -867,7 +872,7 @@ export function canAttachNodeToChat(
   opts?: { imagesOnly?: boolean }
 ): boolean {
   if (!node) return false;
-  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return false;
+  if (isGeneratorNode(node)) return false;
   if (isImageProcessRunning(node)) return false;
   if (opts?.imagesOnly && node.key === 'video') return false;
   return true;

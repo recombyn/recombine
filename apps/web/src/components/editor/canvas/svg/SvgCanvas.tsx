@@ -29,6 +29,7 @@ import {
   updateNodeInDocument,
   isVideoNode,
   isExportableSceneNode,
+  isGeneratorNode,
   type SceneClipboardPayload,
 } from '@/components/rcb/scene/sceneDocument';
 import {
@@ -2667,7 +2668,7 @@ function SvgCanvas({
         documentRef.current,
         seedNodes,
         frameIdsForAction
-      );
+      ).filter((id) => !isGeneratorNode(documentRef.current?.deltaSetLike?.[id]));
       if (!targetIds.length) return;
       const doc = documentRef.current;
       if (!doc) return;
@@ -2692,7 +2693,9 @@ function SvgCanvas({
     if (action === 'toggleLocked') {
       const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
       const targetIds = seedNodes.length
-        ? resolveSelectionNodeIds(documentRef.current, seedNodes, frameIdsForAction)
+        ? resolveSelectionNodeIds(documentRef.current, seedNodes, frameIdsForAction).filter(
+            (id) => !isGeneratorNode(documentRef.current?.deltaSetLike?.[id])
+          )
         : [];
       const doc = documentRef.current;
       if (targetIds.length && doc) {
@@ -3292,7 +3295,9 @@ function SvgCanvas({
       if (mod && e.shiftKey && e.key.toLowerCase() === 'h' && !typing && !readOnly) {
         const ids = selectedIdsRef.current;
         const frameIds = selectedFrameIdsRef.current;
-        const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIds);
+        const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIds).filter(
+          (id) => !isGeneratorNode(documentRef.current?.deltaSetLike?.[id])
+        );
         if (!targetIds.length) return;
         e.preventDefault();
         runCtxActionRef.current('toggleHidden');
@@ -3301,7 +3306,12 @@ function SvgCanvas({
       if (mod && e.shiftKey && e.key.toLowerCase() === 'k' && !typing && !readOnly) {
         const ids = selectedIdsRef.current;
         const frameIds = selectedFrameIdsRef.current;
-        if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
+        const lockableNodes = ids.filter(
+          (id) => !isGeneratorNode(documentRef.current?.deltaSetLike?.[id])
+        );
+        if (!lockableNodes.length && !frameIds.length && !activeFrameIdRef.current) return;
+        // Generator-only selection: do not lock via shortcut.
+        if (ids.length && !lockableNodes.length && !frameIds.length) return;
         e.preventDefault();
         runCtxActionRef.current('toggleLocked');
         return;
@@ -3854,10 +3864,21 @@ function SvgCanvas({
           // Frame-only / empty artboard → crop export still makes sense.
           return Boolean(seedFrames.length || ctxMenu?.frameId || activeFrameId);
         })()}
-        canToggleHidden={Boolean(ids.length || ctxMenu?.nodeId)}
-        canToggleLocked={Boolean(
-          ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || selectedFrameIds.length || activeFrameId
-        )}
+        canToggleHidden={(() => {
+          const targetIds = ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId);
+          if (!targetIds.length) return false;
+          // Generators have no hide — same as export.
+          return targetIds.some((id) => !isGeneratorNode(document?.deltaSetLike?.[id]));
+        })()}
+        canToggleLocked={(() => {
+          const targetIds = ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId);
+          if (targetIds.length) {
+            return targetIds.some((id) => !isGeneratorNode(document?.deltaSetLike?.[id]));
+          }
+          return Boolean(
+            ctxMenu?.frameId || selectedFrameIds.length || activeFrameId
+          );
+        })()}
         canGroup={(() => {
           const targetIds = resolveSelectionNodeIds(
             document,

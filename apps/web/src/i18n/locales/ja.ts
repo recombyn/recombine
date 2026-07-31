@@ -1010,6 +1010,7 @@ const ja = {
     exportedImage: '画像を書き出しました',
     exportedSvg: 'SVG を書き出しました',
     exportFailed: '書き出しに失敗しました',
+    exportScaleTooLarge: '現在の選択範囲ではこの倍率がブラウザのキャンバス上限を超えます。',
     exportCompress: '書き出し時に圧縮',
     exportCompressTip: 'JPG のみ：品質を下げてファイルサイズを小さくします。',
     exportPrefix: '接頭辞',

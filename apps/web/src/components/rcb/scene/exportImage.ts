@@ -7,6 +7,13 @@ import { getToken } from '@/utils/token';
 
 export type ExportImageFormat = 'png' | 'jpeg' | 'svg';
 
+/**
+ * Browser canvas hard limits (Chrome ~16384/edge; area also capped).
+ * Stay under both so 4× of large selections fails in the UI instead of at download.
+ */
+export const MAX_EXPORT_CANVAS_EDGE = 16384;
+export const MAX_EXPORT_CANVAS_AREA = 268_435_456; // 16384²
+
 export type ExportImageOptions = {
   /** Output scale relative to scene pixels (1 = document / selection size). */
   multiplier?: number;
@@ -38,6 +45,37 @@ export type ExportSlotConfig = {
 };
 
 type SceneBox = { x: number; y: number; width: number; height: number };
+
+/** True when width×scale / height×scale fit in a browser canvas. */
+export function isExportScaleSafe(
+  width: number,
+  height: number,
+  scale: number
+): boolean {
+  const w = Math.max(1, Number(width) || 1);
+  const h = Math.max(1, Number(height) || 1);
+  const s = Math.max(0.01, Number(scale) || 1);
+  const outW = w * s;
+  const outH = h * s;
+  if (outW > MAX_EXPORT_CANVAS_EDGE || outH > MAX_EXPORT_CANVAS_EDGE) return false;
+  if (outW * outH > MAX_EXPORT_CANVAS_AREA) return false;
+  return true;
+}
+
+/** Largest scale ≤ preferred that still fits the canvas budget. */
+export function clampExportScale(
+  width: number,
+  height: number,
+  preferred: number
+): number {
+  const want = Math.max(0.01, Number(preferred) || 1);
+  if (isExportScaleSafe(width, height, want)) return want;
+  const w = Math.max(1, Number(width) || 1);
+  const h = Math.max(1, Number(height) || 1);
+  const byEdge = Math.min(MAX_EXPORT_CANVAS_EDGE / w, MAX_EXPORT_CANVAS_EDGE / h);
+  const byArea = Math.sqrt(MAX_EXPORT_CANVAS_AREA / (w * h));
+  return Math.max(0.01, Math.min(want, byEdge, byArea));
+}
 
 function clickDownloadLink(href: string, filename: string) {
   const a = window.document.createElement('a');
@@ -562,6 +600,7 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
 
     const m = resolveExportMultiplier(multiplier);
     const fmt = format === 'svg' ? 'svg' : format === 'jpeg' ? 'jpeg' : 'png';
+    // Compress only affects JPEG quality — PNG ignores it.
     const quality = fmt === 'jpeg' ? (compress ? 0.78 : 0.95) : 1;
     const mime = fmt === 'jpeg' ? 'image/jpeg' : 'image/png';
     const ids = (nodeIds || []).filter((id) => {
@@ -594,6 +633,13 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
       };
     }
 
+    // Reject scales that exceed browser canvas limits (UI should disable these).
+    if (fmt !== 'svg' && !isExportScaleSafe(crop.width, crop.height, m)) {
+      console.warn(
+        `[export] scale ${m}× exceeds canvas limit for ${crop.width}×${crop.height}`
+      );
+      return null;
+    }
     const outW = crop.width * m;
     const outH = crop.height * m;
     const selectionIds = selectionOnly || (cropOpt && ids.length) ? ids : undefined;

@@ -30,6 +30,7 @@ type HtmlArtboardFrameProps = {
  */
 function HtmlArtboardFrame({
   frame,
+  selected = false,
   onSelect,
   onRename,
   onMove,
@@ -80,19 +81,24 @@ function HtmlArtboardFrame({
     return (
       <>
         <RcbOverlayPortal>
-          {/* Screen-fixed frame edge. Selection blue comes from FrameSelectionChrome
-              (same 1.5px as shape chrome) — do not double-draw a thick inset here. */}
-          <div
-            className="pointer-events-none absolute z-[5]"
-            style={{
-              left: stageBox.left,
-              top: stageBox.top,
-              width: stageBox.width,
-              height: stageBox.height,
-              boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.12)',
-            }}
-            aria-hidden
-          />
+          {/*
+            Idle edge only. While selected, FrameSelectionChrome draws the blue
+            outline — keep the dark inset off so it doesn't read as a gap
+            (especially against dark theme canvas / white boards).
+          */}
+          {!selected ? (
+            <div
+              className="pointer-events-none absolute z-[5]"
+              style={{
+                left: stageBox.left,
+                top: stageBox.top,
+                width: stageBox.width,
+                height: stageBox.height,
+                boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent)',
+              }}
+              aria-hidden
+            />
+          ) : null}
         </RcbOverlayPortal>
         <NodeTitleLabel
           box={{
