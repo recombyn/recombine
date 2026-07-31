@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useState, type CSSProperties, type ReactNode, memo } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode, memo } from 'react';
 import {
   FloatingPortal,
   autoUpdate,
@@ -29,6 +29,8 @@ import {
   exportSelectionSlots,
   exportCropSlots,
   exportDocumentJson,
+  isExportScaleSafe,
+  clampExportScale,
   type ExportAffixMode,
   type ExportImageFormat,
   type ExportSlotConfig,
@@ -170,6 +172,43 @@ function contentCropFallback(document: any, name: string): NamedExportCrop | nul
   return null;
 }
 
+/** Scene pixel size of the export target (largest crop, or union of nodes). */
+function exportSourceSize(
+  document: any,
+  ids: string[],
+  cropList: NamedExportCrop[]
+): { width: number; height: number } {
+  if (cropList.length) {
+    let width = 1;
+    let height = 1;
+    for (const c of cropList) {
+      width = Math.max(width, Math.max(1, Number(c.width) || 1));
+      height = Math.max(height, Math.max(1, Number(c.height) || 1));
+    }
+    return { width, height };
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let hit = false;
+  for (const id of ids) {
+    const node = document?.deltaSetLike?.[id];
+    if (!node) continue;
+    const { left, top } = nodeLeftTop(document, node);
+    const w = Number(node.width);
+    const h = Number(node.height);
+    if (![left, top, w, h].every(Number.isFinite) || !(w > 0) || !(h > 0)) continue;
+    hit = true;
+    minX = Math.min(minX, left);
+    minY = Math.min(minY, top);
+    maxX = Math.max(maxX, left + w);
+    maxY = Math.max(maxY, top + h);
+  }
+  if (!hit) return { width: 1, height: 1 };
+  return { width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+}
+
 function ExportSelectionPanel({
   nodeIds,
   crop,
@@ -205,7 +244,35 @@ function ExportSelectionPanel({
   const inline = variant === 'inline';
   const canExport = cropList.length > 0 || ids.length > 0;
   const isSvg = slot.format === 'svg';
+  const isJpeg = slot.format === 'jpeg';
   const format = slot.format;
+  const sourceSize = useMemo(
+    () => exportSourceSize(document, ids, cropList),
+    [document, ids, cropList]
+  );
+  const scaleOptions = useMemo(() => {
+    if (isSvg) return SCALE_OPTIONS;
+    return SCALE_OPTIONS.map((opt) => ({
+      ...opt,
+      disabled: !isExportScaleSafe(sourceSize.width, sourceSize.height, opt.value),
+    }));
+  }, [isSvg, sourceSize.height, sourceSize.width]);
+  const scaleSafe =
+    isSvg || isExportScaleSafe(sourceSize.width, sourceSize.height, slot.scale);
+
+  // Drop to the largest safe preset when the current scale no longer fits.
+  useEffect(() => {
+    if (isSvg || scaleSafe) return;
+    const next = clampExportScale(sourceSize.width, sourceSize.height, slot.scale);
+    const pick =
+      SCALE_OPTIONS.map((o) => o.value)
+        .filter(
+          (v) =>
+            v <= next + 1e-6 && isExportScaleSafe(sourceSize.width, sourceSize.height, v)
+        )
+        .pop() || 1;
+    if (pick !== slot.scale) setSlot((s) => ({ ...s, scale: pick }));
+  }, [isSvg, scaleSafe, slot.scale, sourceSize.height, sourceSize.width]);
 
   const name = baseName || t('editor.selectionExportName');
   const affixOptions = [
@@ -218,9 +285,14 @@ function ExportSelectionPanel({
       message.warning(t('editor.noSelectionExport'));
       return;
     }
+    if (!isSvg && !isExportScaleSafe(sourceSize.width, sourceSize.height, slot.scale)) {
+      message.warning(t('editor.exportScaleTooLarge'));
+      return;
+    }
     setBusy(true);
     try {
       const resolved = resolveExportSlot({ ...slot, format });
+      const useCompress = isJpeg && compress;
       let n = 0;
       if (cropList.length > 0) {
         for (let i = 0; i < cropList.length; i += 1) {
@@ -232,7 +304,7 @@ function ExportSelectionPanel({
             crop: region,
             backgroundColor: region.backgroundColor,
             baseName: pageName,
-            compress: isSvg ? false : compress,
+            compress: useCompress,
             slots: [resolved],
             document,
           });
@@ -241,7 +313,7 @@ function ExportSelectionPanel({
         n = await exportSelectionSlots({
           nodeIds: ids,
           baseName: name,
-          compress: isSvg ? false : compress,
+          compress: useCompress,
           slots: [resolved],
           document,
         });
@@ -282,7 +354,7 @@ function ExportSelectionPanel({
           size="small"
           type="filled"
           value={isSvg ? 1 : slot.scale}
-          options={SCALE_OPTIONS}
+          options={scaleOptions}
           disabled={isSvg}
           onChange={(v) => setSlot((s) => ({ ...s, scale: Number(v) || 1 }))}
           className={selectFieldClass}
@@ -310,13 +382,14 @@ function ExportSelectionPanel({
           onChange={(v) => {
             const next = parseExportFormat(String(v));
             setSlot((s) => ({ ...s, format: next }));
+            if (next !== 'jpeg') setCompress(false);
           }}
           className={selectFieldClass}
           placement="bottom-start"
         />
       </div>
 
-      {!isSvg ? (
+      {isJpeg ? (
         <div className="mt-3 flex items-center gap-1.5 text-[12px] text-[var(--ink)]">
           <Checkbox
             size="small"
@@ -340,7 +413,7 @@ function ExportSelectionPanel({
 
       <button
         type="button"
-        disabled={busy || !canExport}
+        disabled={busy || !canExport || !scaleSafe}
         onClick={() => void runExport()}
         className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--ink)] text-[12px] font-medium text-[var(--surface)] disabled:opacity-40"
       >

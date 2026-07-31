@@ -1075,6 +1075,7 @@ const zhCN = {
     exportedVideo: '已导出视频',
     exportedAudio: '已导出音频',
     exportFailed: '导出失败',
+    exportScaleTooLarge: '当前选区尺寸过大，该倍率超出浏览器画布限制',
     exportCompress: '导出时压缩',
     exportCompressTip: '仅对 JPG 生效：开启后使用较低质量以减小文件体积。',
     exportPrefix: '前缀',

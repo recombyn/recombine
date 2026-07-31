@@ -1004,6 +1004,7 @@ const zhTW = {
     exportedImage: '已匯出圖片',
     exportedSvg: '已匯出 SVG',
     exportFailed: '匯出失敗',
+    exportScaleTooLarge: '目前選區尺寸過大，該倍率超出瀏覽器畫布限制',
     exportCompress: '匯出時壓縮',
     exportCompressTip: '僅對 JPG 生效：開啟後使用較低品質以減小檔案大小。',
     exportPrefix: '前綴',

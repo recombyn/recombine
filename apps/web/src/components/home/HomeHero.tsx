@@ -3,9 +3,9 @@ import { useMemo, useRef, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineDevicePhoneMobile,
+  HiOutlineFilm,
+  HiOutlineNewspaper,
   HiOutlinePhoto,
-  HiOutlinePlay,
-  HiOutlineRectangleStack,
 } from 'react-icons/hi2';
 import AppLogo from '@/components/base/AppLogo';
 import { SegmentedControl } from '@/components/base/segmented';
@@ -24,10 +24,10 @@ const CATEGORIES: Array<{
   icon: typeof HiOutlinePhoto;
   labelKey: string;
 }> = [
-  { id: 'poster', icon: HiOutlineRectangleStack, labelKey: 'homeCategories.poster' },
+  { id: 'poster', icon: HiOutlineNewspaper, labelKey: 'homeCategories.poster' },
   { id: 'mobile', icon: HiOutlineDevicePhoneMobile, labelKey: 'homeCategories.mobile' },
   { id: 'image', icon: HiOutlinePhoto, labelKey: 'homeCategories.image' },
-  { id: 'video', icon: HiOutlinePlay, labelKey: 'homeCategories.video' },
+  { id: 'video', icon: HiOutlineFilm, labelKey: 'homeCategories.video' },
 ];
 
 function resolveHeroLang(langRaw: string) {

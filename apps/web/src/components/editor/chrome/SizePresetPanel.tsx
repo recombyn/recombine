@@ -493,7 +493,7 @@ function SizePresetPanel({
         className
       )}
     >
-      <div className="flex shrink-0 items-end gap-1 border-b border-[var(--ink)]/12 px-1.5 pt-1">
+      <div className="flex shrink-0 items-end gap-1 px-1.5 pt-1">
         <div
           role="tablist"
           aria-label={t('editor.frameToolbar.sizePresets')}

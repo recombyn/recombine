@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type PointerE
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuFrame, LuPanelLeft, LuPencil, LuPlay } from 'react-icons/lu';
+import { LuFrame, LuPanelLeft, LuPencil, LuFilm } from 'react-icons/lu';
 import { RiVideoAiLine } from 'react-icons/ri';
 import { RxText } from 'react-icons/rx';
 import {
@@ -21,6 +21,7 @@ import { TbArrowUpRight, TbCircle, TbPolygon, TbStar, TbTriangle } from 'react-i
 import Tooltip from '@/components/base/tooltip';
 import { VirtualList, type VirtualListHandle } from '@/components/base/VirtualList';
 import {
+  isGeneratorNode,
   isImageGeneratorNode,
   isVideoGeneratorNode,
   isNodeHidden,
@@ -200,7 +201,7 @@ function LayerIcon({
     if (thumb) return thumb;
     return (
       <LayerGlyphFallback>
-        <LuPlay className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+        <LuFilm className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
       </LayerGlyphFallback>
     );
   }
@@ -392,6 +393,7 @@ function LayerStackRowView({
   if (!node) return null;
   const hidden = isNodeHidden(node);
   const locked = isNodeLocked(node);
+  const generator = isGeneratorNode(node);
   return (
     <div
       className={cn(
@@ -427,10 +429,12 @@ function LayerStackRowView({
       >
         <button
           type="button"
+          disabled={generator}
           aria-label={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
           aria-pressed={hidden}
           onClick={(e) => {
             e.stopPropagation();
+            if (generator) return;
             const nextHidden = !hidden;
             dispatch(
               patchDocumentNode({
@@ -443,9 +447,9 @@ function LayerStackRowView({
             }
           }}
           className={cn(
-            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
-            !hidden && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-            selected && !hidden && 'opacity-100'
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--muted)]',
+            !generator && !hidden && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            !generator && selected && !hidden && 'opacity-100'
           )}
         >
           {hidden ? (
@@ -461,10 +465,12 @@ function LayerStackRowView({
       >
         <button
           type="button"
+          disabled={generator}
           aria-label={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
           aria-pressed={locked}
           onClick={(e) => {
             e.stopPropagation();
+            if (generator) return;
             dispatch(
               patchDocumentNode({
                 nodeId: row.id,
@@ -473,9 +479,9 @@ function LayerStackRowView({
             );
           }}
           className={cn(
-            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
-            !locked && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-            selected && !locked && 'opacity-100'
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--muted)]',
+            !generator && !locked && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            !generator && selected && !locked && 'opacity-100'
           )}
         >
           {locked ? (

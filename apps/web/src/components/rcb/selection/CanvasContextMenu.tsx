@@ -69,9 +69,9 @@ type CanvasContextMenuProps = {
   canLayerActions?: boolean;
   /** Export selection — false for image/video-generator plates (no pixels to export). */
   canExport?: boolean;
-  /** True when show/hide targets at least one node (not frame-only). */
+  /** Show/hide — false for generator-only selection. */
   canToggleHidden?: boolean;
-  /** True when lock targets a node or frame. */
+  /** Lock — false for generator-only selection (frames still ok). */
   canToggleLocked?: boolean;
   /** Current visibility of the menu target (all hidden → show action). */
   targetHidden?: boolean;

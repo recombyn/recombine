@@ -1081,6 +1081,7 @@ const en = {
     exportedVideo: 'Video exported',
     exportedAudio: 'Audio exported',
     exportFailed: 'Export failed',
+    exportScaleTooLarge: 'This scale is too large for the current selection (browser canvas limit).',
     exportCompress: 'Compress on export',
     exportCompressTip: 'Applies to JPG only: lower quality for a smaller file.',
     exportPrefix: 'Prefix',
