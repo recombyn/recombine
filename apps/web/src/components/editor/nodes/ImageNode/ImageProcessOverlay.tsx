@@ -93,7 +93,7 @@ function ProcessNodeChrome({
     >
       <div
         data-image-process-shimmer
-        className="image-process-shimmer absolute z-[29] overflow-hidden"
+        className="rcb-image-process-shimmer absolute z-[29] overflow-hidden"
         style={shimmerStyle}
         aria-hidden
       />

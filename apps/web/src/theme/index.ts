@@ -28,14 +28,14 @@ export function applyThemeColors(resolved: 'light' | 'dark') {
   }
 
   // Suppress background/color transitions so CSS variable swaps don't interpolate/flash.
-  root.classList.add('theme-switching');
+  root.classList.add('rcb-theme-switching');
   root.setAttribute('data-theme', next);
   root.classList.toggle('dark', next === 'dark');
   // Force style flush while transitions are disabled.
   void root.offsetHeight;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      root.classList.remove('theme-switching');
+      root.classList.remove('rcb-theme-switching');
     });
   });
 }

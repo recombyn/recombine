@@ -1,5 +1,5 @@
 /* Kept for any legacy native ranges; panels now use base Slider. */
-.image-tool-range {
+.rcb-image-tool-range {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
@@ -15,14 +15,14 @@
   background-size: 100% 12px;
 }
 
-.image-tool-range::-webkit-slider-runnable-track {
+.rcb-image-tool-range::-webkit-slider-runnable-track {
   height: 12px;
   border-radius: 9999px;
   background: transparent;
   border: none;
 }
 
-.image-tool-range::-webkit-slider-thumb {
+.rcb-image-tool-range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 16px;
@@ -37,7 +37,7 @@
   cursor: pointer;
 }
 
-.image-tool-range::-moz-range-thumb {
+.rcb-image-tool-range::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -49,7 +49,7 @@
   cursor: pointer;
 }
 
-.image-tool-range::-moz-range-track {
+.rcb-image-tool-range::-moz-range-track {
   height: 12px;
   border-radius: 9999px;
   background: #e8e8e8;

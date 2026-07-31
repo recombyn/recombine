@@ -1,8 +1,47 @@
 {
   "categories": [
-    "resume",
+    "website",
+    "mobile",
+    "image",
     "poster",
-    "ui"
+    "video"
   ],
-  "cases": []
+  "cases": [
+    {
+      "id": "case-resume-fresh",
+      "file": "resume-fresh.json",
+      "category": "website",
+      "nameKey": "resumeFresh"
+    },
+    {
+      "id": "case-resume-classic",
+      "file": "resume-classic.json",
+      "category": "website",
+      "nameKey": "resumeClassic"
+    },
+    {
+      "id": "case-poster-event",
+      "file": "poster-event.json",
+      "category": "poster",
+      "nameKey": "posterEvent"
+    },
+    {
+      "id": "case-poster-promo",
+      "file": "poster-promo.json",
+      "category": "poster",
+      "nameKey": "posterPromo"
+    },
+    {
+      "id": "case-ui-dashboard",
+      "file": "ui-dashboard.json",
+      "category": "website",
+      "nameKey": "uiDashboard"
+    },
+    {
+      "id": "case-ui-mobile",
+      "file": "ui-mobile.json",
+      "category": "mobile",
+      "nameKey": "uiMobile"
+    }
+  ]
 }

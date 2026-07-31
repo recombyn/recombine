@@ -392,7 +392,7 @@ function HomePage() {
     <div
       className={cn(
         'relative h-full overflow-hidden',
-        'home-hero-canvas'
+        'rcb-home-hero-canvas'
       )}
     >
       <HomeSidebar
@@ -401,7 +401,8 @@ function HomePage() {
         importing={importing}
         onCreate={handleCreate}
       />
-      <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden md:pl-[76px]">
+      {/* Full-bleed column — left rail is position:fixed and must not reserve flow space. */}
+      <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
         <HomeTopBar setNav={setNav} onCreate={handleCreate} />
         <HomeTemplateList
           nav={nav}

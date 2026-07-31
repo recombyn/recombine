@@ -483,7 +483,7 @@ function AssistantTurn({
       ) : null}
 
       {assistant.content ? (
-        <div className="w-full min-w-0 overflow-x-hidden text-[13px] leading-[1.7] text-[var(--ink)] [&_.chat-md_p:first-child]:font-semibold">
+        <div className="w-full min-w-0 overflow-x-hidden text-[13px] leading-[1.7] text-[var(--ink)] [&_.rcb-chat-md_p:first-child]:font-semibold">
           <ChatMarkdown content={assistant.content} />
           {streaming ? (
             <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
@@ -633,7 +633,7 @@ function VideoGenGallery({
         return (
           <div
             key={`${assistant.id}-vshimmer-${i}`}
-            className="chat-image-gen-shimmer shrink-0 rounded-lg border border-[var(--line)]"
+            className="rcb-chat-image-gen-shimmer shrink-0 rounded-lg border border-[var(--line)]"
             style={{ width: box.width, height: box.height }}
             aria-hidden
           />
@@ -671,7 +671,7 @@ function ImageGenGallery({
         return (
           <div
             key={`${assistant.id}-shimmer-${i}`}
-            className="chat-image-gen-shimmer shrink-0 rounded-lg border border-[var(--line)]"
+            className="rcb-chat-image-gen-shimmer shrink-0 rounded-lg border border-[var(--line)]"
             style={{ width: box.width, height: box.height }}
             aria-hidden
           />

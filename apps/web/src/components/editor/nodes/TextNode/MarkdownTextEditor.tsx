@@ -39,7 +39,7 @@ function MarkdownTextEditor({ value, onChange, className, fill }: Props) {
     <div
       data-color-mode={colorMode}
       className={cn(
-        'md-editor-host min-h-0 w-full overflow-hidden rounded-[4px] border border-[var(--line)] bg-[var(--surface)]',
+        'rcb-md-editor-host min-h-0 w-full overflow-hidden rounded-[4px] border border-[var(--line)] bg-[var(--surface)]',
         '[&_.w-md-editor]:rounded-[4px] [&_.w-md-editor]:border-0 [&_.w-md-editor]:shadow-none',
         '[&_.w-md-editor-toolbar]:border-b [&_.w-md-editor-toolbar]:border-[var(--line)]',
         fill && 'flex h-full flex-1 flex-col [&_.w-md-editor]:h-full [&_.w-md-editor]:flex-1',

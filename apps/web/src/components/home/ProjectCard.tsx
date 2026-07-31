@@ -55,10 +55,10 @@ function statusLabelKey(status: PlazaStatus): string {
 function ProjectCardSkeleton({ label }: { label?: string }): ReactNode {
   return (
     <article className="group" aria-busy="true" aria-label={label || 'loading'}>
-      <div className={projectThumbFrameClass('skeleton-bone shadow-none')} />
+      <div className={projectThumbFrameClass('rcb-skeleton-bone shadow-none')} />
       <div className="mt-2.5 space-y-1.5 px-0.5">
-        <div className="skeleton-bone h-3.5 w-[72%]" />
-        <div className="skeleton-bone h-2.5 w-[48%]" />
+        <div className="rcb-skeleton-bone h-3.5 w-[72%]" />
+        <div className="rcb-skeleton-bone h-2.5 w-[48%]" />
       </div>
     </article>
   );

@@ -2,14 +2,14 @@
  * Account Agent tab: Auto routing prefs + custom OpenAI-compatible providers (Pro).
  */
 
-import { useEffect, useState, type ReactNode, memo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiChevronLeft, HiChevronRight, HiOutlineTrash } from 'react-icons/hi2';
 import { listModels, type LlmModel } from '@/apis/chat';
 import { modelAllowsRouteSlot } from '@/components/editor/panels/agent/llmModelMeta';
 import { fetchDesignCatalog } from '@/apis/design';
-import { Dropdown, SegmentedControl, Select, Tooltip } from '@/components/base';
+import { SegmentedControl, Select, Tooltip } from '@/components/base';
 import AccountSettingsDialog from '@/components/layout/AccountSettingsDialog';
 import { cn } from '@/utils/classnames';
 import { planAllowsCustomModels, type PlanId } from '@/utils/wallet';
@@ -21,9 +21,8 @@ import {
   type CustomLlmProvider,
   type CustomModelKind,
 } from './customLlmProviders';
-import {
+import ModelPickerPanel, {
   AGENT_ROUTE_POPOVER_PANEL,
-  AGENT_ROUTE_PRESET_PANEL,
   AGENT_ROUTE_SUBMENU_PANEL,
   ModelBrandIcon,
   ModelMetaBadge,
@@ -47,6 +46,47 @@ function useNarrowViewport() {
     return () => mq.removeEventListener('change', sync);
   }, []);
   return narrow;
+}
+
+/** Prefer opening to the right; flip left when clipped. Same gap as UserAccountPanel SideFlyout. */
+function RouteSideFlyout({ children }: { children: ReactNode }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [side, setSide] = useState<'right' | 'left'>('right');
+  const [top, setTop] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    const row = el?.parentElement;
+    if (!el || !row) return;
+    const rect = row.getBoundingClientRect();
+    const need = 300;
+    const spaceRight = window.innerWidth - rect.right - 8;
+    setSide(spaceRight >= need ? 'right' : 'left');
+    // Submenu is taller than lang/theme flyout — shift up if it would clip the viewport.
+    const h = Math.min(el.offsetHeight, window.innerHeight - 24);
+    const overflow = rect.top + h - (window.innerHeight - 12);
+    setTop(overflow > 0 ? -overflow : 0);
+  }, []);
+
+  const sideClass =
+    side === 'right'
+      ? 'left-full pl-[calc(0.625rem+10px)]'
+      : 'right-full pr-[calc(0.625rem+10px)]';
+
+  return (
+    <div
+      ref={wrapRef}
+      data-agent-route-submenu=""
+      className={cn(
+        'absolute z-10 max-h-[calc(100vh-24px)] [&>*]:max-h-full [&>*]:overflow-y-auto',
+        sideClass
+      )}
+      style={{ top }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {children}
+    </div>
+  );
 }
 type Props = {
   onProvidersChange?: () => void;
@@ -281,6 +321,22 @@ function modelOptions(
   return out;
 }
 
+type CompactSubmenu =
+  | { kind: 'preset' }
+  | { kind: 'field'; key: 'fast' | 'standard' | 'reasoning' | 'vision' | 'image' }
+  | null;
+
+function submenuSelectedIdOf(
+  submenu: CompactSubmenu,
+  routePrefs: AgentRoutePrefs
+): string {
+  if (submenu?.kind === 'field') return String(routePrefs[submenu.key] || '');
+  if (submenu?.kind !== 'preset') return '';
+  if (routePrefs.preset === 'economy') return 'platform';
+  if (routePrefs.preset === 'custom') return '';
+  return routePrefs.preset;
+}
+
 type AgentRoutePrefsEditorProps = {
   /** Popover in agent dock / home — Lovart-style card (not account form). */
   compact?: boolean;
@@ -290,11 +346,6 @@ type AgentRoutePrefsEditorProps = {
   /** Fired after prefs are written to localStorage. */
   onChanged?: (prefs: AgentRoutePrefs) => void;
 };
-
-type CompactSubmenu =
-  | { kind: 'preset' }
-  | { kind: 'field'; key: 'fast' | 'standard' | 'reasoning' | 'vision' | 'image' }
-  | null;
 
 /**
  * Auto routing prefs editor — shared by Account settings and Agent/Ask model popover.
@@ -498,16 +549,14 @@ function AgentRoutePrefsEditor({
       }
     }
 
-    const submenuSelectedId =
-      submenu?.kind === 'preset'
-        ? routePrefs.preset === 'economy'
-          ? 'platform'
-          : routePrefs.preset === 'custom'
-            ? ''
-            : routePrefs.preset
-        : submenu?.kind === 'field'
-          ? String(routePrefs[submenu.key] || '')
-          : '';
+    const submenuSelectedId = submenuSelectedIdOf(submenu, routePrefs);
+    const submenuTab =
+      submenu?.kind === 'field' && submenu.key === 'image' ? 'image' : 'design';
+    const submenuModels = submenuOptions.map(
+      (o) =>
+        o.model ||
+        ({ id: o.id, label: o.label, provider: '' } satisfies LlmModel)
+    );
 
     const renderSubmenuPanel = (opts?: { embedded?: boolean }) => {
       const embedded = Boolean(opts?.embedded);
@@ -516,8 +565,8 @@ function AgentRoutePrefsEditor({
           <div
             data-agent-route-submenu=""
             className={cn(
-              embedded ? 'w-full' : AGENT_ROUTE_PRESET_PANEL,
-              !embedded && 'agent-route-submenu-popup'
+              embedded ? 'w-full' : AGENT_ROUTE_SUBMENU_PANEL,
+              !embedded && 'rcb-agent-route-submenu-popup'
             )}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -555,15 +604,15 @@ function AgentRoutePrefsEditor({
                       setSubmenu(null);
                     }}
                     className={cn(
-                      'w-full rounded-xl px-3 py-2.5 text-left transition-colors',
+                      'w-full min-w-0 rounded-xl px-3 py-2.5 text-left transition-colors',
                       active
                         ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
                         : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
                     )}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <span className="text-[13px] font-bold leading-none">{title}</span>
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                        <span className="truncate text-[13px] font-bold leading-none">{title}</span>
                         <span
                           className={cn(
                             'inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none',
@@ -575,7 +624,7 @@ function AgentRoutePrefsEditor({
                           {mult}
                         </span>
                       </div>
-                      <span className="shrink-0 text-[11px] leading-none text-[var(--muted)]">
+                      <span className="min-w-0 shrink truncate text-[11px] leading-none text-[var(--muted)]">
                         {badge}
                       </span>
                     </div>
@@ -593,80 +642,50 @@ function AgentRoutePrefsEditor({
       return (
         <div
           data-agent-route-submenu=""
-          className={cn(
-            embedded ? 'w-full' : AGENT_ROUTE_SUBMENU_PANEL,
-            !embedded && 'agent-route-submenu-popup'
-          )}
+          className={cn(embedded ? 'w-full' : 'rcb-agent-route-submenu-popup')}
           onPointerDown={(e) => e.stopPropagation()}
         >
           {embedded ? (
-            <button
-              type="button"
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => setSubmenu(null)}
-              className="mb-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-            >
-              <HiChevronLeft className="h-5 w-5 shrink-0" aria-hidden />
-              {t('agent.routeBack')}
-            </button>
-          ) : (
-            <div className="px-3 pt-2.5 pb-1">
-              <p className="truncate text-[12px] font-medium text-[var(--muted)]">{submenuTitle}</p>
+            <div className="w-full">
+              <button
+                type="button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => setSubmenu(null)}
+                className="mb-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+              >
+                <HiChevronLeft className="h-5 w-5 shrink-0" aria-hidden />
+                {t('agent.routeBack')}
+              </button>
+              <ModelPickerPanel
+                chrome="plain"
+                hideAuto
+                useModelsAsIs
+                tab={submenuTab}
+                models={submenuModels}
+                selectedId={submenuSelectedId}
+                onPick={(id) => {
+                  if (submenu?.kind === 'field') patchRouteField(submenu.key, id);
+                  setSubmenu(null);
+                }}
+                onRowPointerDown={(e) => e.preventDefault()}
+              />
             </div>
+          ) : (
+            <ModelPickerPanel
+              chrome="submenu"
+              hideAuto
+              useModelsAsIs
+              title={submenuTitle}
+              tab={submenuTab}
+              models={submenuModels}
+              selectedId={submenuSelectedId}
+              onPick={(id) => {
+                if (submenu?.kind === 'field') patchRouteField(submenu.key, id);
+                setSubmenu(null);
+              }}
+              onRowPointerDown={(e) => e.preventDefault()}
+            />
           )}
-          <div className={cn(embedded ? 'pt-0.5' : 'p-1.5 pt-0.5')}>
-            {submenuOptions.map((opt) => {
-              const active = submenuSelectedId === opt.id;
-              const custom = opt.model ? isUserCustomModel(opt.model) : false;
-              const priceTag =
-                opt.model && !custom ? modelPriceTagInfo(opt.model, t) : null;
-              return (
-                <button
-                  key={opt.id || '__platform__'}
-                  type="button"
-                  className={cn(
-                    'flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-[var(--ink)] transition-colors',
-                    active ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'
-                  )}
-                  onPointerDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    if (submenu?.kind === 'field') {
-                      patchRouteField(submenu.key, opt.id);
-                    }
-                    setSubmenu(null);
-                  }}
-                >
-                  {opt.model ? (
-                    <ModelBrandIcon model={opt.model} size={20} className="mt-0.5" />
-                  ) : (
-                    <span
-                      className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--line)]/40 text-[10px] font-semibold text-[var(--muted)]"
-                      aria-hidden
-                    >
-                      A
-                    </span>
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-start justify-between gap-2">
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5">
-                        {opt.label}
-                      </span>
-                      {custom ? (
-                        <ModelMetaBadge label={t('agent.modelBadgeCustom')} />
-                      ) : priceTag ? (
-                        <ModelPriceTag level={priceTag.level} label={priceTag.label} />
-                      ) : null}
-                    </span>
-                    {opt.desc ? (
-                      <span className="mt-0.5 truncate whitespace-nowrap text-[11px] leading-[1.35] text-[var(--muted)]">
-                        {opt.desc}
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
         </div>
       );
     };
@@ -702,7 +721,7 @@ function AgentRoutePrefsEditor({
           submenu?.kind === 'preset' && 'ring-1 ring-[var(--line)]'
         )}
         onPointerDown={keepParentMenuFocus}
-        onClick={narrow ? openPresetSubmenu : undefined}
+        onClick={openPresetSubmenu}
       >
         <span className="shrink-0 text-[13px] font-semibold text-[var(--ink)]">{headerTitle}</span>
         <span className="inline-flex min-w-0 max-w-[58%] items-center gap-0.5 text-[12px] text-[var(--muted)]">
@@ -713,26 +732,21 @@ function AgentRoutePrefsEditor({
     );
 
     return (
-      <div className={cn(AGENT_ROUTE_POPOVER_PANEL, className)}>
+      <div
+        className={cn(
+          AGENT_ROUTE_POPOVER_PANEL,
+          // Match account menu: overflow-visible so absolute side flyouts are not clipped.
+          'overflow-visible',
+          className
+        )}
+      >
         <div className="p-2.5">
-          {narrow ? (
-            presetTrigger
-          ) : (
-            <Dropdown
-              trigger="click"
-              placement="right-start"
-              strategy="fixed"
-              offset={20}
-              open={submenu?.kind === 'preset'}
-              onOpenChange={(o) => setSubmenu(o ? { kind: 'preset' } : null)}
-              items={[]}
-              floatingClassName="z-[9500] agent-route-submenu-popup"
-              referenceClassName="block w-full"
-              popupRender={() => renderSubmenuPanel()}
-            >
-              {presetTrigger}
-            </Dropdown>
-          )}
+          <div className="relative">
+            {presetTrigger}
+            {!narrow && submenu?.kind === 'preset' ? (
+              <RouteSideFlyout>{renderSubmenuPanel()}</RouteSideFlyout>
+            ) : null}
+          </div>
 
           <div className="mx-1 mt-2 border-t border-[var(--line)]" />
 
@@ -766,48 +780,33 @@ function AgentRoutePrefsEditor({
             <div className="mt-1 px-0.5">
               {fieldRows.map((row) => {
                 const active = submenu?.kind === 'field' && submenu.key === row.key;
-                const fieldTrigger = (
-                  <button
-                    type="button"
-                    className={cn(
-                      'flex w-full items-center justify-between gap-2 rounded-lg px-1 py-2 text-left transition-colors',
-                      active ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'
-                    )}
-                    onPointerDown={keepParentMenuFocus}
-                    onClick={narrow ? () => openFieldSubmenu(row.key) : undefined}
-                  >
-                    <span className="shrink-0 text-[13px] text-[var(--ink)]">{row.label}</span>
-                    <span className="inline-flex w-[6.75rem] shrink-0 items-center justify-start gap-1 text-[12px] text-[var(--muted)]">
-                      <ModelBrandIcon
-                        model={modelRefOf(routePrefs[row.key], row.opts)}
-                        size={14}
-                      />
-                      <span className="min-w-0 flex-1 truncate text-left">
-                        {modelLabelOf(routePrefs[row.key], row.opts)}
-                      </span>
-                      <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
-                    </span>
-                  </button>
-                );
-                if (narrow) return <div key={row.key}>{fieldTrigger}</div>;
                 return (
-                  <Dropdown
-                    key={row.key}
-                    trigger="click"
-                    placement="right-start"
-                    strategy="fixed"
-                    offset={20}
-                    open={active}
-                    onOpenChange={(o) =>
-                      setSubmenu(o ? { kind: 'field', key: row.key } : null)
-                    }
-                    items={[]}
-                    floatingClassName="z-[9500] agent-route-submenu-popup"
-                    referenceClassName="block w-full"
-                    popupRender={() => (active ? renderSubmenuPanel() : <div />)}
-                  >
-                    {fieldTrigger}
-                  </Dropdown>
+                  <div key={row.key} className="relative">
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center justify-between gap-2 rounded-lg px-1 py-2 text-left transition-colors',
+                        active ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'
+                      )}
+                      onPointerDown={keepParentMenuFocus}
+                      onClick={() => openFieldSubmenu(row.key)}
+                    >
+                      <span className="shrink-0 text-[13px] text-[var(--ink)]">{row.label}</span>
+                      <span className="inline-flex w-[6.75rem] shrink-0 items-center justify-start gap-1 text-[12px] text-[var(--muted)]">
+                        <ModelBrandIcon
+                          model={modelRefOf(routePrefs[row.key], row.opts)}
+                          size={14}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-left">
+                          {modelLabelOf(routePrefs[row.key], row.opts)}
+                        </span>
+                        <HiChevronRight className="h-3.5 w-3.5 shrink-0" />
+                      </span>
+                    </button>
+                    {!narrow && active ? (
+                      <RouteSideFlyout>{renderSubmenuPanel()}</RouteSideFlyout>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
@@ -896,7 +895,7 @@ function AgentRoutePrefsEditor({
                             A
                           </span>
                         )}
-                        <span className="min-w-0 flex-1">
+                        <span className="min-w-0 flex-1 overflow-hidden">
                           <span className="flex min-w-0 items-start justify-between gap-2">
                             <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-[var(--ink)]">
                               {opt.label}
@@ -908,7 +907,7 @@ function AgentRoutePrefsEditor({
                             ) : null}
                           </span>
                           {desc ? (
-                            <span className="mt-0.5 block truncate whitespace-nowrap text-[11px] leading-[1.35] text-[var(--muted)]">
+                            <span className="mt-0.5 block min-w-0 max-w-full truncate text-[11px] leading-[1.35] text-[var(--muted)]">
                               {desc}
                             </span>
                           ) : null}

@@ -3535,7 +3535,7 @@ function SvgCanvas({
   const penMode = !readOnly && activeTool === 'pen';
 
   return (
-    <div className={embedded ? 'contents' : 'relative canvas-stage'}>
+    <div className={embedded ? 'contents' : 'relative rcb-canvas-stage'}>
       <SvgPaper
         paperRef={paperRef}
         hostRef={hostRef}
@@ -3546,7 +3546,7 @@ function SvgCanvas({
         className={
           embedded
             ? 'rcb-shapes relative overflow-visible'
-            : 'canvas-paper relative shadow-[0_8px_40px_rgba(15,23,42,0.12)] ring-1 ring-black/5'
+            : 'rcb-canvas-paper relative shadow-[0_8px_40px_rgba(15,23,42,0.12)] ring-1 ring-black/5'
         }
       >
         {infinite ? (

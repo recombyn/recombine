@@ -402,8 +402,16 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
         setPage(nextPage);
         setHasMore(Boolean(feed.hasMore));
         if (!append) setDocs({});
-      } catch {
-        if (gen === fetchGen.current) message.error(t('home.casesLoadFailed'));
+      } catch (err) {
+        if (gen !== fetchGen.current) return;
+        // Empty feed is success — only real HTTP errors toast. Network/proxy
+        // failures (API still starting) show EmptyState without alarm toast.
+        if (!append) {
+          setCases([]);
+          setHasMore(false);
+        }
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        if (status) message.error(t('home.casesLoadFailed'));
       } finally {
         if (gen === fetchGen.current) {
           setLoading(false);

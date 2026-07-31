@@ -57,13 +57,13 @@ function SkyboxCubeFaces({ imageSrc }: { imageSrc?: string }): ReactNode {
   const face = (faceClass: string, fallback: string, withImage = false) => (
     <div
       className={cn(
-        'angle-editor-cube-face',
+        'rcb-angle-editor-cube-face',
         faceClass,
-        withImage && imageSrc && 'has-image'
+        withImage && imageSrc && 'rcb-has-image'
       )}
     >
       {withImage && imageSrc ? (
-        <img className="angle-editor-face-image-content" alt="" src={imageSrc} draggable={false} />
+        <img className="rcb-angle-editor-face-image-content" alt="" src={imageSrc} draggable={false} />
       ) : (
         <span>{fallback}</span>
       )}
@@ -71,12 +71,12 @@ function SkyboxCubeFaces({ imageSrc }: { imageSrc?: string }): ReactNode {
   );
   return (
     <>
-      {face('angle-editor-face-front', 'F', true)}
-      {face('angle-editor-face-back', 'Bk')}
-      {face('angle-editor-face-right', 'R')}
-      {face('angle-editor-face-left', 'L')}
-      {face('angle-editor-face-top', 'T')}
-      {face('angle-editor-face-bottom', 'B')}
+      {face('rcb-angle-editor-face-front', 'F', true)}
+      {face('rcb-angle-editor-face-back', 'Bk')}
+      {face('rcb-angle-editor-face-right', 'R')}
+      {face('rcb-angle-editor-face-left', 'L')}
+      {face('rcb-angle-editor-face-top', 'T')}
+      {face('rcb-angle-editor-face-bottom', 'B')}
     </>
   );
 }
@@ -213,7 +213,7 @@ function AngleEditorScene({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    if (target.closest('.angle-editor-direction-btn')) return;
+    if (target.closest('.rcb-angle-editor-direction-btn')) return;
     e.preventDefault();
     e.stopPropagation();
     dragPointerIdRef.current = e.pointerId;
@@ -236,7 +236,7 @@ function AngleEditorScene({
     <>
       <button
         type="button"
-        className="angle-editor-direction-btn angle-editor-direction-btn-up"
+        className="rcb-angle-editor-direction-btn rcb-angle-editor-direction-btn-up"
         aria-label="Tilt up"
         onClick={() => bumpTilt(tiltStep)}
       >
@@ -244,7 +244,7 @@ function AngleEditorScene({
       </button>
       <button
         type="button"
-        className="angle-editor-direction-btn angle-editor-direction-btn-down"
+        className="rcb-angle-editor-direction-btn rcb-angle-editor-direction-btn-down"
         aria-label="Tilt down"
         onClick={() => bumpTilt(-tiltStep)}
       >
@@ -252,7 +252,7 @@ function AngleEditorScene({
       </button>
       <button
         type="button"
-        className="angle-editor-direction-btn angle-editor-direction-btn-left"
+        className="rcb-angle-editor-direction-btn rcb-angle-editor-direction-btn-left"
         aria-label="Rotate left"
         onClick={() => bumpRotate(-rotateStep)}
       >
@@ -260,7 +260,7 @@ function AngleEditorScene({
       </button>
       <button
         type="button"
-        className="angle-editor-direction-btn angle-editor-direction-btn-right"
+        className="rcb-angle-editor-direction-btn rcb-angle-editor-direction-btn-right"
         aria-label="Rotate right"
         onClick={() => bumpRotate(rotateStep)}
       >
@@ -272,24 +272,24 @@ function AngleEditorScene({
   if (mode === 'skybox') {
     // Wireframe cube only (fig.2). Same orbit as camera mode — Front (0,0) is face-on.
     return (
-      <div className={cn('angle-editor-scene', className)}>
+      <div className={cn('rcb-angle-editor-scene', className)}>
         <div
           ref={sceneRef}
-          className={cn('unified-scene', 'mode-skybox', isDragging && 'is-dragging')}
+          className={cn('rcb-unified-scene', 'rcb-mode-skybox', isDragging && 'rcb-is-dragging')}
           style={{ perspective: 900 }}
           onPointerDown={handlePointerDown}
         >
-          <div className="angle-editor-skybox-stage">
-            <div className="angle-editor-scene-container" style={{ perspective: 900 }}>
+          <div className="rcb-angle-editor-skybox-stage">
+            <div className="rcb-angle-editor-scene-container" style={{ perspective: 900 }}>
               <div
-                className="angle-editor-cube-wrapper"
+                className="rcb-angle-editor-cube-wrapper"
                 style={{
                   transition: isDragging ? 'none' : undefined,
                   // Invert tilt vs camera-orbit: +tilt = look down (俯视) for both modes.
                   transform: `scale(${visualScale}) rotateX(${-tilt}deg) rotateY(${rotate}deg)`,
                 }}
               >
-                <div className="angle-editor-cube" style={cubeStyle}>
+                <div className="rcb-angle-editor-cube" style={cubeStyle}>
                   <SkyboxCubeFaces imageSrc={imageSrc} />
                 </div>
               </div>
@@ -307,17 +307,17 @@ function AngleEditorScene({
   };
 
   return (
-    <div className={cn('angle-editor-scene', className)}>
+    <div className={cn('rcb-angle-editor-scene', className)}>
       <div
         ref={sceneRef}
-        className={cn('unified-scene', 'mode-camera', isDragging && 'is-dragging')}
+        className={cn('rcb-unified-scene', 'rcb-mode-camera', isDragging && 'rcb-is-dragging')}
         style={{ perspective: 1200 }}
         onPointerDown={handlePointerDown}
       >
         {/* Fixed face-on subject: scales with zoom, never rotates with camera. */}
-        <div className="unified-scene-cube-container" style={{ zIndex: 0 }}>
+        <div className="rcb-unified-scene-cube-container" style={{ zIndex: 0 }}>
           <div
-            className="angle-editor-fixed-subject"
+            className="rcb-angle-editor-fixed-subject"
             style={{
               width: subjectSize.width,
               height: subjectSize.height,
@@ -327,84 +327,84 @@ function AngleEditorScene({
           >
             {imageSrc ? (
               <img
-                className="angle-editor-fixed-subject-image"
+                className="rcb-angle-editor-fixed-subject-image"
                 alt=""
                 src={imageSrc}
                 draggable={false}
               />
             ) : (
-              <div className="angle-editor-fixed-subject-placeholder" />
+              <div className="rcb-angle-editor-fixed-subject-placeholder" />
             )}
           </div>
         </div>
 
         {/* Wireframe orbit globe — rotates with camera so rings stay a spatial reference. */}
-        <div className="mae-orbit-globe" role="presentation" aria-hidden>
-          <div className="mae-orbit-globe-core" style={orbitGlobeStyle}>
+        <div className="rcb-mae-orbit-globe" role="presentation" aria-hidden>
+          <div className="rcb-mae-orbit-globe-core" style={orbitGlobeStyle}>
             {ORBIT_RING_Y_DEG.map((deg) => (
               <div
                 key={`ring-y-${deg}`}
-                className="mae-orbit-globe-ring"
+                className="rcb-mae-orbit-globe-ring"
                 style={{ transform: `rotateY(${deg}deg)` }}
               />
             ))}
             {ORBIT_RING_X_DEG.map((deg) => (
               <div
                 key={`ring-x-${deg}`}
-                className="mae-orbit-globe-ring"
+                className="rcb-mae-orbit-globe-ring"
                 style={{ transform: `rotateX(${deg}deg)` }}
               />
             ))}
           </div>
-          <div className="mae-orbit-globe-axis" />
+          <div className="rcb-mae-orbit-globe-axis" />
         </div>
 
-        <div className="angle-editor-scene-camera">
+        <div className="rcb-angle-editor-scene-camera">
           <div
-            className="angle-editor-camera-3d-pivot"
+            className="rcb-angle-editor-camera-3d-pivot"
             style={{
               transformStyle: 'preserve-3d',
               transform: `rotateX(${tilt}deg) rotateY(${rotate}deg)`,
             }}
           >
             <div
-              className="angle-editor-camera-3d-position"
+              className="rcb-angle-editor-camera-3d-position"
               style={{ transformStyle: 'preserve-3d', transform: cameraPositionTransform }}
             >
               <div
-                className="angle-editor-camera-3d-body angle-editor-camera-3d-front"
+                className="rcb-angle-editor-camera-3d-body rcb-angle-editor-camera-3d-front"
                 style={{ transform: 'translate(-50%, -50%) translateZ(-8px)' }}
               >
-                <div className="angle-editor-camera-3d-lens-outer">
-                  <div className="angle-editor-camera-3d-lens-inner" />
+                <div className="rcb-angle-editor-camera-3d-lens-outer">
+                  <div className="rcb-angle-editor-camera-3d-lens-inner" />
                 </div>
               </div>
               <div
-                className="angle-editor-camera-3d-body angle-editor-camera-3d-back"
+                className="rcb-angle-editor-camera-3d-body rcb-angle-editor-camera-3d-back"
                 style={{ transform: 'translate(-50%, -50%) translateZ(8px)' }}
               >
-                <div className="angle-editor-camera-3d-screen" style={screenBgStyle} />
+                <div className="rcb-angle-editor-camera-3d-screen" style={screenBgStyle} />
               </div>
               <div
-                className="angle-editor-camera-3d-body angle-editor-camera-3d-top"
+                className="rcb-angle-editor-camera-3d-body rcb-angle-editor-camera-3d-top"
                 style={{ transform: 'translate(-50%, -50%) rotateX(90deg) translateZ(8.2px)' }}
               >
-                <div className="angle-editor-camera-3d-shutter" />
+                <div className="rcb-angle-editor-camera-3d-shutter" />
               </div>
               <div
-                className="angle-editor-camera-3d-body angle-editor-camera-3d-bottom"
+                className="rcb-angle-editor-camera-3d-body rcb-angle-editor-camera-3d-bottom"
                 style={{ transform: 'translate(-50%, -50%) rotateX(-90deg) translateZ(8.2px)' }}
               />
               <div
-                className="angle-editor-camera-3d-body angle-editor-camera-3d-side"
+                className="rcb-angle-editor-camera-3d-body rcb-angle-editor-camera-3d-side"
                 style={{ transform: 'translate(-50%, -50%) rotateY(-90deg) translateZ(11px)' }}
               />
               <div
-                className="angle-editor-camera-3d-body angle-editor-camera-3d-side"
+                className="rcb-angle-editor-camera-3d-body rcb-angle-editor-camera-3d-side"
                 style={{ transform: 'translate(-50%, -50%) rotateY(90deg) translateZ(11px)' }}
               />
               <div
-                className="angle-editor-camera-3d-hotshoe"
+                className="rcb-angle-editor-camera-3d-hotshoe"
                 style={{
                   left: '50%',
                   top: '50%',
@@ -413,14 +413,14 @@ function AngleEditorScene({
                 }}
               >
                 <div
-                  className="angle-editor-camera-3d-hotshoe-body"
+                  className="rcb-angle-editor-camera-3d-hotshoe-body"
                   style={{ transform: 'translateZ(2px)' }}
                 >
-                  <div className="angle-editor-camera-3d-hotshoe-mount" />
+                  <div className="rcb-angle-editor-camera-3d-hotshoe-mount" />
                 </div>
               </div>
               <div
-                className="angle-editor-camera-3d-line"
+                className="rcb-angle-editor-camera-3d-line"
                 style={{
                   height: CAMERA_SIGHT_LINE,
                   transform: 'translate(-50%, 0px) translateZ(-8px) rotateX(-90deg)',
@@ -428,7 +428,7 @@ function AngleEditorScene({
               />
             </div>
           </div>
-          <div className="mae-orbit-nav" aria-hidden={false}>
+          <div className="rcb-mae-orbit-nav" aria-hidden={false}>
             {dirBtns}
           </div>
         </div>

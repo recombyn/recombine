@@ -209,32 +209,32 @@ function LandingLangSwitcher(): ReactNode {
   }, [open]);
 
   return (
-    <div className="landing-lang" ref={rootRef}>
+    <div className="rcb-landing-lang" ref={rootRef}>
       <button
         type="button"
-        className="landing-lang-trigger"
+        className="rcb-landing-lang-trigger"
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-label={t('lang.label')}
         onClick={() => setOpen((v) => !v)}
       >
         <HiOutlineGlobeAlt className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-        <span className="landing-lang-label">{currentLabel}</span>
+        <span className="rcb-landing-lang-label">{currentLabel}</span>
         <HiOutlineChevronDown
-          className={cn('landing-lang-chevron h-3.5 w-3.5 transition-transform', open && 'rotate-180')}
+          className={cn('rcb-landing-lang-chevron h-3.5 w-3.5 transition-transform', open && 'rotate-180')}
           strokeWidth={2}
           aria-hidden
         />
       </button>
       {open ? (
-        <ul className="landing-lang-menu" role="listbox" aria-label={t('lang.label')}>
+        <ul className="rcb-landing-lang-menu" role="listbox" aria-label={t('lang.label')}>
           {SUPPORTED_LANGS.map((item) => {
             const active = item.code === current;
             return (
               <li key={item.code} role="option" aria-selected={active}>
                 <button
                   type="button"
-                  className={cn('landing-lang-item', active && 'is-active')}
+                  className={cn('rcb-landing-lang-item', active && 'rcb-is-active')}
                   onClick={() => {
                     setOpen(false);
                     if (item.code === current) return;
@@ -364,7 +364,7 @@ function useRevealOnScroll() {
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            entry.target.classList.add('is-visible');
+            entry.target.classList.add('rcb-is-visible');
             io.unobserve(entry.target);
           }
         }
@@ -394,8 +394,8 @@ function LandingPage(): ReactNode {
   // Unlock window scroll — app shell locks html/body/#root for the editor.
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.add('landing-scroll');
-    return () => root.classList.remove('landing-scroll');
+    root.classList.add('rcb-landing-scroll');
+    return () => root.classList.remove('rcb-landing-scroll');
   }, []);
 
   const year = new Date().getFullYear();
@@ -434,31 +434,31 @@ function LandingPage(): ReactNode {
   ] as const;
 
   return (
-    <div className="landing-page" ref={revealRef}>
-      <a href="#main" className="landing-skip">
+    <div className="rcb-landing-page" ref={revealRef}>
+      <a href="#main" className="rcb-landing-skip">
         {t('landing.skipToContent')}
       </a>
 
-      <header className="landing-nav">
-        <div className="landing-nav-inner">
-          <div className="landing-nav-start">
-            <Link to="/" className="landing-brand" aria-label="Recombyn">
-              <img src="/logo-mark.svg" alt="" width={26} height={26} className="landing-brand-mark" />
-              <span className="landing-brand-word">recombyn</span>
+      <header className="rcb-landing-nav">
+        <div className="rcb-landing-nav-inner">
+          <div className="rcb-landing-nav-start">
+            <Link to="/" className="rcb-landing-brand" aria-label="Recombyn">
+              <img src="/logo-mark.svg" alt="" width={26} height={26} className="rcb-landing-brand-mark" />
+              <span className="rcb-landing-brand-word">recombyn</span>
             </Link>
-            <nav className="landing-nav-links" aria-label={t('landing.navLabel')}>
+            <nav className="rcb-landing-nav-links" aria-label={t('landing.navLabel')}>
               <a href="#features">{t('landing.navFeatures')}</a>
               <a href="#workflow">{t('landing.navWorkflow')}</a>
               <a href="#scenes">{t('landing.navScenes')}</a>
             </nav>
           </div>
-          <div className="landing-nav-actions">
+          <div className="rcb-landing-nav-actions">
             <LandingLangSwitcher />
-            <Link to="/home" className="landing-link-quiet">
+            <Link to="/home" className="rcb-landing-link-quiet">
               {t('landing.navOpenApp')}
             </Link>
-            <span className="landing-nav-divider" aria-hidden />
-            <Link to="/home?login=1" className="landing-btn landing-btn-primary landing-btn-nav">
+            <span className="rcb-landing-nav-divider" aria-hidden />
+            <Link to="/home?login=1" className="rcb-landing-btn rcb-landing-btn-primary rcb-landing-btn-nav">
               {t('landing.ctaStart')}
             </Link>
           </div>
@@ -466,38 +466,38 @@ function LandingPage(): ReactNode {
       </header>
 
       <main id="main">
-        <section className="landing-hero" aria-labelledby="landing-hero-title">
-          <div className="landing-hero-atmosphere" aria-hidden>
-            <span className="landing-orb landing-orb-a" />
-            <span className="landing-orb landing-orb-b" />
-            <span className="landing-grid" />
-            <span className="landing-grain" />
+        <section className="rcb-landing-hero" aria-labelledby="landing-hero-title">
+          <div className="rcb-landing-hero-atmosphere" aria-hidden>
+            <span className="rcb-landing-orb rcb-landing-orb-a" />
+            <span className="rcb-landing-orb rcb-landing-orb-b" />
+            <span className="rcb-landing-grid" />
+            <span className="rcb-landing-grain" />
           </div>
 
-          <div className="landing-hero-inner">
-            <div className="landing-hero-copy">
-              <p className="landing-eyebrow landing-fade-in">{t('landing.eyebrow')}</p>
-              <h1 id="landing-hero-title" className="landing-h1 landing-fade-in landing-delay-1">
-                <span className="landing-h1-brand">Recombyn</span>
-                <span className="landing-h1-rest">{t('landing.heroRest')}</span>
+          <div className="rcb-landing-hero-inner">
+            <div className="rcb-landing-hero-copy">
+              <p className="rcb-landing-eyebrow rcb-landing-fade-in">{t('landing.eyebrow')}</p>
+              <h1 id="landing-hero-title" className="rcb-landing-h1 rcb-landing-fade-in rcb-landing-delay-1">
+                <span className="rcb-landing-h1-brand">Recombyn</span>
+                <span className="rcb-landing-h1-rest">{t('landing.heroRest')}</span>
               </h1>
-              <p className="landing-hero-lead landing-fade-in landing-delay-2">
+              <p className="rcb-landing-hero-lead rcb-landing-fade-in rcb-landing-delay-2">
                 {t('landing.heroLead')}
               </p>
-              <div className="landing-hero-cta landing-fade-in landing-delay-3">
-                <Link to="/home" className="landing-btn landing-btn-primary landing-btn-lg">
+              <div className="rcb-landing-hero-cta rcb-landing-fade-in rcb-landing-delay-3">
+                <Link to="/home" className="rcb-landing-btn rcb-landing-btn-primary rcb-landing-btn-lg">
                   {t('landing.ctaPrimary')}
                   <HiOutlineArrowRight className="h-4 w-4" aria-hidden />
                 </Link>
-                <a href="#features" className="landing-btn landing-btn-ghost landing-btn-lg">
+                <a href="#features" className="rcb-landing-btn rcb-landing-btn-ghost rcb-landing-btn-lg">
                   {t('landing.ctaSecondary')}
                 </a>
               </div>
             </div>
 
-            <div className="landing-hero-stage landing-fade-in landing-delay-4">
+            <div className="rcb-landing-hero-stage rcb-landing-fade-in rcb-landing-delay-4">
               <img
-                className="landing-ink-visual"
+                className="rcb-landing-ink-visual"
                 src="/landing-hero-pen.png?v=cutout"
                 alt=""
                 width={1024}
@@ -509,22 +509,22 @@ function LandingPage(): ReactNode {
           </div>
         </section>
 
-        <section id="features" className="landing-section" aria-labelledby="features-title">
-          <div className="landing-section-inner">
-            <header className="landing-section-head" data-reveal>
+        <section id="features" className="rcb-landing-section" aria-labelledby="features-title">
+          <div className="rcb-landing-section-inner">
+            <header className="rcb-landing-section-head" data-reveal>
               <h2 id="features-title">{t('landing.featuresTitle')}</h2>
               <p>{t('landing.featuresLead')}</p>
             </header>
-            <ul className="landing-feature-grid">
+            <ul className="rcb-landing-feature-grid">
               {features.map((f, i) => (
                 <li
                   key={f.title}
-                  className="landing-feature-card"
+                  className="rcb-landing-feature-card"
                   data-reveal
                   style={{ transitionDelay: `${i * 80}ms` }}
                 >
-                  <span className={cn('landing-feature-icon', `is-${f.tone}`)}>
-                    <f.icon className="landing-glyph" />
+                  <span className={cn('rcb-landing-feature-icon', `rcb-is-${f.tone}`)}>
+                    <f.icon className="rcb-landing-glyph" />
                   </span>
                   <h3>{f.title}</h3>
                   <p>{f.body}</p>
@@ -534,21 +534,21 @@ function LandingPage(): ReactNode {
           </div>
         </section>
 
-        <section id="workflow" className="landing-section landing-section-soft" aria-labelledby="workflow-title">
-          <div className="landing-section-inner">
-            <header className="landing-section-head" data-reveal>
+        <section id="workflow" className="rcb-landing-section rcb-landing-section-soft" aria-labelledby="workflow-title">
+          <div className="rcb-landing-section-inner">
+            <header className="rcb-landing-section-head" data-reveal>
               <h2 id="workflow-title">{t('landing.workflowTitle')}</h2>
               <p>{t('landing.workflowLead')}</p>
             </header>
-            <ol className="landing-steps">
+            <ol className="rcb-landing-steps">
               {steps.map((s, i) => (
                 <li
                   key={s.n}
-                  className="landing-step"
+                  className="rcb-landing-step"
                   data-reveal
                   style={{ transitionDelay: `${i * 90}ms` }}
                 >
-                  <span className="landing-step-n">{s.n}</span>
+                  <span className="rcb-landing-step-n">{s.n}</span>
                   <div>
                     <h3>{s.title}</h3>
                     <p>{s.body}</p>
@@ -559,17 +559,17 @@ function LandingPage(): ReactNode {
           </div>
         </section>
 
-        <section id="scenes" className="landing-section" aria-labelledby="scenes-title">
-          <div className="landing-section-inner">
-            <header className="landing-section-head" data-reveal>
+        <section id="scenes" className="rcb-landing-section" aria-labelledby="scenes-title">
+          <div className="rcb-landing-section-inner">
+            <header className="rcb-landing-section-head" data-reveal>
               <h2 id="scenes-title">{t('landing.scenesTitle')}</h2>
               <p>{t('landing.scenesLead')}</p>
             </header>
-            <ul className="landing-scenes" data-reveal>
+            <ul className="rcb-landing-scenes" data-reveal>
               {scenes.map((s) => (
-                <li key={s.label} className={cn('landing-scene-pill', `is-${s.tone}`)}>
-                  <span className="landing-scene-icon">
-                    <s.icon className="landing-glyph" />
+                <li key={s.label} className={cn('rcb-landing-scene-pill', `rcb-is-${s.tone}`)}>
+                  <span className="rcb-landing-scene-icon">
+                    <s.icon className="rcb-landing-glyph" />
                   </span>
                   <span>{s.label}</span>
                 </li>
@@ -578,11 +578,11 @@ function LandingPage(): ReactNode {
           </div>
         </section>
 
-        <section className="landing-closing" aria-labelledby="closing-title">
-          <div className="landing-closing-inner" data-reveal>
+        <section className="rcb-landing-closing" aria-labelledby="closing-title">
+          <div className="rcb-landing-closing-inner" data-reveal>
             <h2 id="closing-title">{t('landing.closingTitle')}</h2>
             <p>{t('landing.closingLead')}</p>
-            <Link to="/home" className={cn('landing-btn', 'landing-btn-primary', 'landing-btn-lg')}>
+            <Link to="/home" className={cn('rcb-landing-btn', 'rcb-landing-btn-primary', 'rcb-landing-btn-lg')}>
               {t('landing.ctaPrimary')}
               <HiOutlineArrowRight className="h-4 w-4" aria-hidden />
             </Link>
@@ -590,13 +590,13 @@ function LandingPage(): ReactNode {
         </section>
       </main>
 
-      <footer className="landing-footer">
-        <div className="landing-footer-inner">
-          <div className="landing-footer-brand">
+      <footer className="rcb-landing-footer">
+        <div className="rcb-landing-footer-inner">
+          <div className="rcb-landing-footer-brand">
             <img src="/logo-mark.svg" alt="" width={22} height={22} />
             <span>recombyn</span>
           </div>
-          <nav className="landing-footer-links" aria-label={t('landing.footerNav')}>
+          <nav className="rcb-landing-footer-links" aria-label={t('landing.footerNav')}>
             <a href={docsUrl('/guide/getting-started')} target="_blank" rel="noopener noreferrer">
               {t('landing.footerGuide')}
             </a>
@@ -608,7 +608,7 @@ function LandingPage(): ReactNode {
             </a>
             <Link to="/home">{t('landing.navOpenApp')}</Link>
           </nav>
-          <p className="landing-footer-copy">{t('landing.footerCopy', { year })}</p>
+          <p className="rcb-landing-footer-copy">{t('landing.footerCopy', { year })}</p>
         </div>
       </footer>
     </div>

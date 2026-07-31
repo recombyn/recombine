@@ -19,6 +19,22 @@ import { cn } from '@/utils/classnames';
 import MenuItem, { type MenuItemType } from './MenuItem';
 import { DropdownPanel } from './DropdownPanel';
 
+function flipFallbackPlacements(placement: Placement): Placement[] | undefined {
+  const side = placement.split('-')[0];
+  switch (side) {
+    case 'top':
+      return ['top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end'];
+    case 'bottom':
+      return ['bottom-start', 'bottom-end', 'top', 'top-start', 'top-end'];
+    case 'left':
+      return ['left-start', 'left-end', 'right-start', 'right-end'];
+    case 'right':
+      return ['right-start', 'right-end', 'left-start', 'left-end'];
+    default:
+      return undefined;
+  }
+}
+
 export type DropdownProps = {
   items: MenuItemType[];
   onClick?: (key: string, item: MenuItemType) => void;
@@ -108,16 +124,7 @@ const Dropdown: FC<DropdownProps> = ({
       offsetMiddleware(offset),
       flip({
         padding: 8,
-        fallbackPlacements:
-          placement.startsWith('top')
-            ? ['top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end']
-            : placement.startsWith('bottom')
-              ? ['bottom-start', 'bottom-end', 'top', 'top-start', 'top-end']
-              : placement.startsWith('left')
-                ? ['left-start', 'left-end', 'right-start', 'right-end']
-                : placement.startsWith('right')
-                  ? ['right-start', 'right-end', 'left-start', 'left-end']
-                  : undefined,
+        fallbackPlacements: flipFallbackPlacements(placement),
       }),
       shift({ padding: 8 }),
     ],
