@@ -139,6 +139,12 @@ function VideoHoverPlayback({
   freezeAtRef.current = freeze.at;
   mediaTimeRef.current = mediaTime;
 
+  // Flip media pixels only — keep the playback bar upright.
+  const mediaFlip =
+    flipX || flipY
+      ? (`scale(${flipX ? -1 : 1}, ${flipY ? -1 : 1})` as const)
+      : undefined;
+
   useEffect(() => {
     const id = String(nodeId);
     videoHoverHosts.set(id, {
@@ -314,7 +320,11 @@ function VideoHoverPlayback({
           alt=""
           draggable={false}
           className="pointer-events-none absolute inset-0 h-full w-full"
-          style={{ objectFit: 'fill' }}
+          style={{
+            objectFit: 'fill',
+            transform: mediaFlip,
+            transformOrigin: 'center center',
+          }}
         />
       ) : null}
 
@@ -332,7 +342,12 @@ function VideoHoverPlayback({
         <video
           ref={videoRef}
           className="pointer-events-none block h-full w-full"
-          style={{ objectFit: 'fill', background: '#111827' }}
+          style={{
+            objectFit: 'fill',
+            background: '#111827',
+            transform: mediaFlip,
+            transformOrigin: 'center center',
+          }}
           playsInline
           preload="auto"
           muted

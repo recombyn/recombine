@@ -405,12 +405,6 @@ function SelectionContextToolbar(props: Props): ReactNode {
                 angle={Number(node?.attrs?.angle) || 0}
                 flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
                 flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
-                downloadSlot={
-                  <ExportSelectionPopover
-                    nodeIds={[nodeId]}
-                    triggerClassName={imageToolBtn}
-                  />
-                }
               />
             ) : isIconImageNode(node) ? (
               <IconAnnotateToolbar
@@ -570,43 +564,6 @@ function SelectionContextToolbar(props: Props): ReactNode {
                 flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
                 flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
                 hideRotate
-                downloadSlot={
-                  <>
-                    <VideoFullscreenPreviewButton
-                      src={String(node?.attrs?.src || '')}
-                      poster={String(node?.attrs?.poster || '').trim() || null}
-                      uploadKey={
-                        String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null
-                      }
-                      aspectWidth={Number(node?.width) || undefined}
-                      aspectHeight={Number(node?.height) || undefined}
-                      cropX={Number(node?.attrs?.cropX)}
-                      cropY={Number(node?.attrs?.cropY)}
-                      cropW={Number(node?.attrs?.cropW)}
-                      cropH={Number(node?.attrs?.cropH)}
-                      trimStart={Number(node?.attrs?.trimStart)}
-                      trimEnd={Number(node?.attrs?.trimEnd)}
-                      flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
-                      flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
-                      duration={Number(node?.attrs?.duration)}
-                    />
-                    <VideoDownloadButton
-                      src={String(node?.attrs?.src || '')}
-                      name={String(node?.attrs?.name || 'video')}
-                      uploadKey={
-                        String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null
-                      }
-                      cropX={Number(node?.attrs?.cropX)}
-                      cropY={Number(node?.attrs?.cropY)}
-                      cropW={Number(node?.attrs?.cropW)}
-                      cropH={Number(node?.attrs?.cropH)}
-                      trimStart={Number(node?.attrs?.trimStart)}
-                      trimEnd={Number(node?.attrs?.trimEnd)}
-                      flipX={node?.attrs?.flipX === true || node?.attrs?.flipX === 'true'}
-                      flipY={node?.attrs?.flipY === true || node?.attrs?.flipY === 'true'}
-                    />
-                  </>
-                }
               />
             ) : (
               <VideoToolbarEditTools

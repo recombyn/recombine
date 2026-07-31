@@ -20,7 +20,6 @@ type Props = {
   flipY: boolean;
   /** Video: flip only — hide angle readout + 90° rotate. */
   hideRotate?: boolean;
-  downloadSlot?: ReactNode;
 };
 
 function normAngle(deg: number) {
@@ -30,6 +29,7 @@ function normAngle(deg: number) {
 
 /**
  * Flip & rotate strip: title on the left, exit (chat-style) on the right.
+ * No download / fullscreen here — those stay on the main selection toolbar.
  */
 function FlipRotateToolbar({
   nodeId,
@@ -37,7 +37,6 @@ function FlipRotateToolbar({
   flipX,
   flipY,
   hideRotate = false,
-  downloadSlot,
 }: Props): ReactNode {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -116,10 +115,6 @@ function FlipRotateToolbar({
           <HiOutlineArrowsUpDown className="h-4 w-4" />
         </button>
       </Tooltip>
-
-      <ImageToolSep />
-
-      {downloadSlot}
 
       <ImageToolSep />
 
