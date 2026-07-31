@@ -19,7 +19,29 @@ Host tools can reach MySQL at `127.0.0.1:3306` (same user/password). Change via 
 
 **Dev without Docker MySQL:** leave `DATABASE_URL` empty → SQLite at `storage/recombyn.db`.
 
-Default config (skills, flows, dicts, …) loads from seed JSON under `apps/api/data/` on first API start. See [design_skills/README.md](../apps/api/data/design_skills/README.md) for the skills layout.
+Default config (skills, flows, dicts, …) loads from seed JSON under `apps/api/data/` on first API start. See [design_skills/README.md](../apps/api/data/design_skills/README.md) for the skills layout (namespaces `core` / `ext` / `user`, ACL, version pins, hot reload).
+
+## Database options
+
+| URL | Backend |
+|-----|---------|
+| empty | SQLite (WAL + busy timeout + process write lock) |
+| `mysql://…` | MySQL pool; optional `DATABASE_READONLY_URL` |
+| `postgresql://…` | psycopg pool — **migrate schema first**; see [postgres-switch.md](./postgres-switch.md) |
+
+Periodic backups (default on): SQLite online copy under `DB_BACKUP_DIR` (`storage/backups/`); MySQL/Postgres write a dump hint. Celery beat: `run_db_backup_job`.
+
+## Design skills (Agent)
+
+- **core** — seed skills in `design_skills_seed.json`
+- **ext** — file packs under `data/design_skills/<key>/` (`_meta.json` + `SKILL.md`)
+- **user** — Admin API (`user.<local>` keys; cannot claim core keys)
+
+Env: `DESIGN_SKILLS_HOT_RELOAD` (default true), `DESIGN_SKILLS_HOT_RELOAD_INTERVAL_SEC`. Manual: Admin `POST /api/v1/admin/design/skills/resync`.
+
+## BYOK / secrets
+
+User OpenAI-compatible endpoints (custom LLM providers) store API keys encrypted (AES-GCM). Set a dedicated `BYOK_AES_KEY` (32+ chars) in production; empty falls back to a derive-from-`CARD_KEY_SALT` path for local only.
 
 ## Quick path (Docker)
 
@@ -72,11 +94,13 @@ docker compose up -d mysql redis
 
 1. Never commit `apps/api/.env`.
 2. Replace `CARD_KEY_SALT` / `CARD_KEY_OPS_PASSWORD` placeholders.
-3. Override `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_BOOTSTRAP_PASSWORD` (defaults are for local bootstrap only).
-4. Change `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` (and matching `DATABASE_URL`).
-5. Set strong secrets for Google / SES / S3 if enabled.
-6. Restrict CORS (`CORS_ORIGINS`) to your real origins.
-7. Put TLS in front (Nginx / Caddy); see `deploy/nginx/`.
+3. Set `BYOK_AES_KEY` (dedicated AES key for user LLM vaults).
+4. Override `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_BOOTSTRAP_PASSWORD` (defaults are for local bootstrap only).
+5. Change `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` (and matching `DATABASE_URL`).
+6. Set strong secrets for Google / SES / S3 if enabled.
+7. Restrict CORS (`CORS_ORIGINS`) to your real origins.
+8. Put TLS in front (Nginx / Caddy); see `deploy/nginx/`.
+9. Confirm DB backups (`DB_BACKUP_*`) or cloud automated backups.
 
 ## License & commercial model
 
@@ -94,3 +118,5 @@ Third-party images you may run alongside (Redis, MySQL, …) keep **their own** 
 - [Root README](../README.md)
 - [API README](../apps/api/README.md)
 - [Architecture](./architecture.md)
+- [PostgreSQL switch](./postgres-switch.md)
+- [Design skills packs](../apps/api/data/design_skills/README.md)
