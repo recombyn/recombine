@@ -6,6 +6,7 @@ import type { Dispatch } from '@reduxjs/toolkit';
 import {
   addArtboardFrame,
   patchDocumentNode,
+  patchDocumentNodes,
   pushEditorHistory,
   removeArtboardFrames,
   setCanvasMeta,
@@ -2062,7 +2063,7 @@ export function executeDesignTool(
       const midX = (minL + maxR) / 2;
       const midY = (minT + maxB) / 2;
       pushHistory();
-      for (const b of boxes) {
+      const alignPatches = boxes.map((b) => {
         const patch: { x?: number; y?: number } = {};
         if (mode === 'left') patch.x = minL;
         else if (mode === 'centerX') patch.x = midX - b.width / 2;
@@ -2070,8 +2071,9 @@ export function executeDesignTool(
         else if (mode === 'top') patch.y = minT;
         else if (mode === 'middle') patch.y = midY - b.height / 2;
         else patch.y = maxB - b.height;
-        ctx.dispatch(patchDocumentNode({ nodeId: b.id, patch, skipHistory: true }));
-      }
+        return { nodeId: b.id, patch };
+      });
+      ctx.dispatch(patchDocumentNodes({ patches: alignPatches, skipHistory: true }));
       return {
         status: 'success',
         summary: `Aligned ${boxes.length} nodes (${mode})`,
@@ -2091,6 +2093,7 @@ export function executeDesignTool(
       const first = sorted[0];
       const last = sorted[sorted.length - 1];
       pushHistory();
+      const distributePatches: Array<{ nodeId: string; patch: { x?: number; y?: number } }> = [];
       if (axis === 'h') {
         const span =
           last.left + last.width - first.left - sorted.reduce((s, b) => s + b.width, 0);
@@ -2102,7 +2105,7 @@ export function executeDesignTool(
             return;
           }
           if (i === sorted.length - 1) return;
-          ctx.dispatch(patchDocumentNode({ nodeId: b.id, patch: { x }, skipHistory: true }));
+          distributePatches.push({ nodeId: b.id, patch: { x } });
           x += b.width + gap;
         });
       } else {
@@ -2116,9 +2119,12 @@ export function executeDesignTool(
             return;
           }
           if (i === sorted.length - 1) return;
-          ctx.dispatch(patchDocumentNode({ nodeId: b.id, patch: { y }, skipHistory: true }));
+          distributePatches.push({ nodeId: b.id, patch: { y } });
           y += b.height + gap;
         });
+      }
+      if (distributePatches.length) {
+        ctx.dispatch(patchDocumentNodes({ patches: distributePatches, skipHistory: true }));
       }
       return {
         status: 'success',
@@ -2286,6 +2292,7 @@ export function executeDesignTool(
         axis === 'y';
       if (!doX && !doY) return { status: 'error', summary: 'Set flipX and/or flipY true' };
       pushHistory();
+      const flipPatches: Array<{ nodeId: string; patch: { attrs: Record<string, unknown> } }> = [];
       for (const id of ids) {
         const node = ctx.getDocument()?.deltaSetLike?.[id];
         if (!node) continue;
@@ -2298,7 +2305,10 @@ export function executeDesignTool(
           const cur = node.attrs?.flipY === true || node.attrs?.flipY === 'true';
           attrs.flipY = cur ? 'false' : 'true';
         }
-        ctx.dispatch(patchDocumentNode({ nodeId: id, patch: { attrs }, skipHistory: true }));
+        flipPatches.push({ nodeId: id, patch: { attrs } });
+      }
+      if (flipPatches.length) {
+        ctx.dispatch(patchDocumentNodes({ patches: flipPatches, skipHistory: true }));
       }
       return {
         status: 'success',

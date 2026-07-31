@@ -18,10 +18,11 @@ function pointInRect(x: number, y: number, r: DOMRect) {
 }
 
 /** `toSvg`-style: freeze the current decoded frame as a JPEG data URL. */
-function captureFrameFromVideoEl(video: HTMLVideoElement): string | null {
+export function captureFrameFromVideoEl(video: HTMLVideoElement): string | null {
   if (video.readyState < 2) return null;
   const w = Math.max(1, video.videoWidth || 1);
   const h = Math.max(1, video.videoHeight || 1);
+  if (w <= 1 || h <= 1) return null;
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -33,6 +34,21 @@ function captureFrameFromVideoEl(video: HTMLVideoElement): string | null {
   } catch {
     return null;
   }
+}
+
+type VideoHoverHost = {
+  getVideo: () => HTMLVideoElement | null;
+  getWrap: () => HTMLElement | null;
+  getFreezeUrl: () => string;
+  getFreezeAt: () => number;
+  getMediaTime: () => number;
+};
+
+const videoHoverHosts = new Map<string, VideoHoverHost>();
+
+/** Live plate host registered by VideoHoverPlayback (blob-backed `<video>`). */
+export function getVideoHoverHost(nodeId: string): VideoHoverHost | null {
+  return videoHoverHosts.get(String(nodeId)) || null;
 }
 
 type VideoWithFrameCallback = HTMLVideoElement & {
@@ -91,6 +107,9 @@ function VideoHoverPlayback({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoWrapRef = useRef<HTMLDivElement | null>(null);
   const freezeGenRef = useRef(0);
+  const freezeUrlRef = useRef(String(poster || '').trim());
+  const freezeAtRef = useRef(0);
+  const mediaTimeRef = useRef(0);
   const [media, setMedia] = useState<VideoMediaControl | null>(null);
   const [barHovered, setBarHovered] = useState(false);
   const [plateHovered, setPlateHovered] = useState(false);
@@ -106,6 +125,25 @@ function VideoHoverPlayback({
   const showUi = !hidden && !disabled;
   const z = Math.max(0.05, zoom || 1);
   const posterUrl = String(poster || '').trim();
+  freezeUrlRef.current = freeze.url;
+  freezeAtRef.current = freeze.at;
+  mediaTimeRef.current = mediaTime;
+
+  useEffect(() => {
+    const id = String(nodeId);
+    videoHoverHosts.set(id, {
+      getVideo: () => videoRef.current,
+      getWrap: () => videoWrapRef.current,
+      getFreezeUrl: () => freezeUrlRef.current,
+      getFreezeAt: () => freezeAtRef.current,
+      getMediaTime: () => mediaTimeRef.current,
+    });
+    return () => {
+      if (videoHoverHosts.get(id)?.getVideo() === videoRef.current) {
+        videoHoverHosts.delete(id);
+      }
+    };
+  }, [nodeId]);
 
   useEffect(() => {
     const next = String(poster || '').trim();

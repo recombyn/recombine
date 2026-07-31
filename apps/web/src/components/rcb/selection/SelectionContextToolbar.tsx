@@ -608,6 +608,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
               />
             ) : (
               <VideoToolbarEditTools
+                nodeId={nodeId}
                 onTrim={() => dispatch(openVideoToolPanel({ nodeId, kind: 'trim' }))}
                 onCrop={() => dispatch(openImageToolPanel({ nodeId, kind: 'crop' }))}
                 onFlipRotate={() =>

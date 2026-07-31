@@ -10,12 +10,62 @@ import {
 } from '@/apis/upload';
 import { getToken } from '@/utils/token';
 
+/** In-flight canvas placeholder uploads — delete node → abort. */
+const nodeUploadAborts = new Map<string, AbortController>();
+
+/** Start (or replace) an abortable upload tied to a canvas node id. */
+export function beginNodeUpload(nodeId: string): AbortSignal {
+  const id = String(nodeId || '').trim();
+  if (!id) return new AbortController().signal;
+  abortNodeUpload(id);
+  const ac = new AbortController();
+  nodeUploadAborts.set(id, ac);
+  return ac.signal;
+}
+
+/** Cancel upload for a deleted / dismissed placeholder node. */
+export function abortNodeUpload(nodeId: string | null | undefined): void {
+  const id = String(nodeId || '').trim();
+  if (!id) return;
+  const ac = nodeUploadAborts.get(id);
+  if (!ac) return;
+  nodeUploadAborts.delete(id);
+  try {
+    ac.abort();
+  } catch {
+    /* ignore */
+  }
+}
+
+export function finishNodeUpload(nodeId: string | null | undefined): void {
+  const id = String(nodeId || '').trim();
+  if (!id) return;
+  nodeUploadAborts.delete(id);
+}
+
+export function isUploadAbortError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: string; code?: string; message?: string };
+  return (
+    e.name === 'CanceledError' ||
+    e.name === 'AbortError' ||
+    e.code === 'ERR_CANCELED' ||
+    /abort|cancel/i.test(String(e.message || ''))
+  );
+}
+
 /** Upload a single image/video and return its public/display URL. */
-export async function uploadImageFile(file: File): Promise<UploadedFileItem> {
+export async function uploadImageFile(
+  file: File,
+  opts?: { signal?: AbortSignal }
+): Promise<UploadedFileItem> {
   const form = new FormData();
   form.append('files', file, file.name);
   const isVideo = String(file.type || '').startsWith('video/');
-  const res = await uploadFiles(form, { timeout: isVideo ? 600000 : 120000 });
+  const res = await uploadFiles(form, {
+    timeout: isVideo ? 600000 : 120000,
+    signal: opts?.signal,
+  });
   const item = res?.items?.[0];
   if (!item?.url) throw new Error('upload returned no url');
   return item;
@@ -208,11 +258,14 @@ export async function imageSrcToFile(
 
 export async function uploadImageFromSrc(
   src: string,
-  filename = 'processed.png'
+  filename = 'processed.png',
+  opts?: { signal?: AbortSignal; uploadKey?: string | null }
 ): Promise<UploadedFileItem> {
   const s = (src || '').trim();
   if (!s) throw new Error('empty image src');
+  if (opts?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   if (isOurStoredImageUrl(s)) return { url: s };
-  const file = await imageSrcToFile(s, filename);
-  return uploadImageFile(file);
+  const file = await imageSrcToFile(s, filename, { uploadKey: opts?.uploadKey });
+  if (opts?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  return uploadImageFile(file, { signal: opts?.signal });
 }

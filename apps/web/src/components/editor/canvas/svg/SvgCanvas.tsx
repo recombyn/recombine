@@ -76,10 +76,15 @@ import {
   type SvgBoardHandle,
 } from '@/components/rcb';
 import {
+  abortNodeUpload,
+  beginNodeUpload,
+  finishNodeUpload,
+  isUploadAbortError,
   uploadImageFile,
   uploadImageFromSrc,
   readFileAsDataUrl,
 } from '@/utils/uploadImage';
+import store from '@/store';
 import {
   dataTransferHasChatImage,
   readChatImageDragUrl,
@@ -103,9 +108,11 @@ import {
   setSelectedFrameIds,
   setMixedSelection,
   updateArtboardFrame,
+  updateArtboardFrames,
   setActiveTool,
   setDocument,
   setDocumentFromCanvas,
+  removeDocumentNodes,
   pushEditorHistory,
   setPendingImageSrc,
   setSelectedNodeId,
@@ -396,6 +403,61 @@ async function readSystemPasteFromNavigator(): Promise<SystemPastePayload | null
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
+type FrameGeomLive = { id: string; x: number; y: number; width: number; height: number };
+
+/**
+ * Coalesce high-frequency drag writes (frame Redux + video live geom) to one rAF.
+ * Keeps pointer-move SVG preview immediate; only Redux/React state is throttled.
+ */
+function createDragWriteCoalescer(apply: (batch: {
+  frames: FrameGeomLive[];
+  videoGeom?: Record<string, VideoGeomOverride> | null;
+}) => void) {
+  let raf = 0;
+  const pendingFrames = new Map<string, FrameGeomLive>();
+  /** Latest intended video overrides (kept after flush for merge-on-move). */
+  let pendingVideo: Record<string, VideoGeomOverride> | null = null;
+  let videoDirty = false;
+
+  const runFlush = () => {
+    raf = 0;
+    const frames = [...pendingFrames.values()];
+    pendingFrames.clear();
+    const flushVideo = videoDirty;
+    videoDirty = false;
+    if (!frames.length && !flushVideo) return;
+    apply({
+      frames,
+      videoGeom: flushVideo ? pendingVideo : undefined,
+    });
+  };
+
+  return {
+    queueFrames(frames: FrameGeomLive[]) {
+      for (const f of frames) pendingFrames.set(f.id, f);
+      if (!raf) raf = requestAnimationFrame(runFlush);
+    },
+    queueVideoGeom(next: Record<string, VideoGeomOverride> | null) {
+      pendingVideo = next;
+      videoDirty = true;
+      if (!raf) raf = requestAnimationFrame(runFlush);
+    },
+    getPendingVideoGeom() {
+      return pendingVideo;
+    },
+    /** Drop pending work without applying (commit owns the final document). */
+    cancel() {
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+      pendingFrames.clear();
+      pendingVideo = null;
+      videoDirty = false;
+    },
+  };
+}
+
 const EMPTY_NODE_IDS: string[] = [];
 
 /** Near-full-bleed rect covering an artboard — treat click as frame select. */
@@ -644,33 +706,45 @@ function SvgCanvas({
   const [videoLiveGeom, setVideoLiveGeom] = useState<Record<string, VideoGeomOverride> | null>(
     null
   );
-  const videoLiveGeomRafRef = useRef(0);
-  const pendingVideoLiveGeomRef = useRef<Record<string, VideoGeomOverride> | null>(null);
-  const overlayRoot = useRcbOverlayRoot();
-
-  const publishVideoLiveGeom = useCallback((next: Record<string, VideoGeomOverride> | null) => {
-    pendingVideoLiveGeomRef.current = next;
-    if (videoLiveGeomRafRef.current) return;
-    videoLiveGeomRafRef.current = requestAnimationFrame(() => {
-      videoLiveGeomRafRef.current = 0;
-      setVideoLiveGeom(pendingVideoLiveGeomRef.current);
-    });
-  }, []);
-
-  const onGeometryTransformingChange = useCallback(
-    (next: boolean) => {
-      setGeometryTransforming(next);
-      if (!next) {
-        if (videoLiveGeomRafRef.current) {
-          cancelAnimationFrame(videoLiveGeomRafRef.current);
-          videoLiveGeomRafRef.current = 0;
-        }
-        pendingVideoLiveGeomRef.current = null;
-        setVideoLiveGeom(null);
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
+  const setVideoLiveGeomRef = useRef(setVideoLiveGeom);
+  setVideoLiveGeomRef.current = setVideoLiveGeom;
+  const dragWriteCoalesceRef = useRef(
+    createDragWriteCoalescer(({ frames, videoGeom }) => {
+      if (frames.length) {
+        dispatchRef.current(
+          updateArtboardFrames({
+            skipHistory: true,
+            patches: frames.map((fp) => ({
+              id: fp.id,
+              patch: { x: fp.x, y: fp.y, width: fp.width, height: fp.height },
+            })),
+          })
+        );
       }
+      if (videoGeom !== undefined) setVideoLiveGeomRef.current(videoGeom);
+    })
+  );
+  useEffect(
+    () => () => {
+      dragWriteCoalesceRef.current.cancel();
     },
     []
   );
+  const overlayRoot = useRcbOverlayRoot();
+
+  const publishVideoLiveGeom = useCallback((next: Record<string, VideoGeomOverride> | null) => {
+    dragWriteCoalesceRef.current.queueVideoGeom(next);
+  }, []);
+
+  const onGeometryTransformingChange = useCallback((next: boolean) => {
+    setGeometryTransforming(next);
+    if (!next) {
+      dragWriteCoalesceRef.current.cancel();
+      setVideoLiveGeom(null);
+    }
+  }, []);
   documentRef.current = document;
   selectedIdsRef.current =
     selectedNodeIds?.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
@@ -1301,15 +1375,7 @@ function SvgCanvas({
           dispatch(pushEditorHistory());
           frameGeomHistoryPushedRef.current = true;
         }
-        frames.forEach((fp) => {
-          dispatch(
-            updateArtboardFrame({
-              id: fp.id,
-              skipHistory: true,
-              patch: { x: fp.x, y: fp.y, width: fp.width, height: fp.height },
-            })
-          );
-        });
+        dragWriteCoalesceRef.current.queueFrames(frames);
       }
       return { nodePatches, frames };
     },
@@ -1321,6 +1387,8 @@ function SvgCanvas({
       patches: Array<{ nodeId: string; left: number; top: number; width: number; height: number }>,
       options?: { textResizeMode?: 'scale' | 'wrap'; skipHistory?: boolean }
     ) => {
+      // Drop coalesced previews — commit writes the final document once.
+      dragWriteCoalesceRef.current.cancel();
       const doc = documentRef.current;
       const board = boardRef.current;
       if (!doc || readOnly || !patches.length) return;
@@ -1451,7 +1519,7 @@ function SvgCanvas({
       // Keep HTML <video> plates glued to chrome (Redux doc is still pre-gesture).
       if (hasVideo) {
         publishVideoLiveGeom({
-          ...(pendingVideoLiveGeomRef.current || {}),
+          ...(dragWriteCoalesceRef.current.getPendingVideoGeom() || {}),
           ...videoOverrides,
         });
       }
@@ -2180,11 +2248,9 @@ function SvgCanvas({
   const deleteSelected = useCallback(
     (ids: string[]) => {
       if (!ids.length || !documentRef.current) return;
-      const next = removeNodesFromDocument(documentRef.current, ids);
-      documentRef.current = next;
-      dispatch(setDocument(next));
-      dispatch(setSelectedNodeIds([]));
-      dispatch(setSelectedNodeId(null));
+      // Abort in-flight placeholder uploads so finishImageProcess cannot resurrect them.
+      ids.forEach((id) => abortNodeUpload(id));
+      dispatch(removeDocumentNodes({ nodeIds: ids }));
       // Persist ASAP — refresh must not restore deleted nodes from a stale cloud doc.
       requestProjectFlush();
     },
@@ -2194,6 +2260,7 @@ function SvgCanvas({
   /**
    * Delete selected nodes and/or artboards in one history step so Undo restores
    * frame + content together (Ctrl+A → Delete must not split into two undos).
+   * Upload placeholders are scrubbed from history (not restorable via Undo).
    */
   const deleteCanvasSelection = useCallback(
     (opts?: { nodeIds?: string[]; frameIds?: string[] }) => {
@@ -2208,27 +2275,9 @@ function SvgCanvas({
 
       const inside = frameIds.length ? nodeIdsInsideFrames(doc0, frameIds) : [];
       const allNodes = [...new Set([...nodeIds, ...inside])];
+      allNodes.forEach((id) => abortNodeUpload(id));
 
-      let next: any = doc0;
-      if (allNodes.length) next = removeNodesFromDocument(next, allNodes);
-      if (frameIds.length) {
-        const idSet = new Set(frameIds);
-        const frames = (Array.isArray(next.frames) ? next.frames : []).filter(
-          (f: any) => f && !idSet.has(String(f.id))
-        );
-        const active =
-          next.activeFrameId && idSet.has(String(next.activeFrameId))
-            ? frames[0]?.id ?? null
-            : next.activeFrameId ?? null;
-        next = { ...next, frames, activeFrameId: active };
-      }
-
-      documentRef.current = next;
-      dispatch(setDocument(next));
-      dispatch(setSelectedNodeIds([]));
-      dispatch(setSelectedNodeId(null));
-      dispatch(setSelectedFrameIds([]));
-      dispatch(setActiveFrameId(next.activeFrameId ?? null));
+      dispatch(removeDocumentNodes({ nodeIds: allNodes, frameIds }));
       requestProjectFlush();
       return true;
     },
@@ -2440,14 +2489,25 @@ function SvgCanvas({
             })
           );
           finishToSelect();
-          const uploaded = await uploadImageFromSrc(url, 'chat-image.png');
-          dispatch(
-            finishImageProcess({
-              src: uploaded.url,
-              attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
-            })
+          const spawnedId = String(
+            (store.getState() as any).editor?.pendingImageProcessId || ''
           );
+          const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
+          try {
+            const uploaded = await uploadImageFromSrc(url, 'chat-image.png', { signal });
+            if (signal?.aborted) return;
+            dispatch(
+              finishImageProcess({
+                nodeId: spawnedId || undefined,
+                src: uploaded.url,
+                attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
+              })
+            );
+          } finally {
+            finishNodeUpload(spawnedId);
+          }
         } catch (err: any) {
+          if (isUploadAbortError(err)) return;
           dispatch(failImageProcess({}));
           const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
           message.error(typeof detail === 'string' ? detail : '图片上传失败');
@@ -2652,14 +2712,14 @@ function SvgCanvas({
           const frame = frames.find((f: any) => f?.id === fid);
           return frame && !frame.locked;
         });
-        for (const fid of frameIdsForAction) {
-          dispatch(
-            updateArtboardFrame({
+        dispatch(
+          updateArtboardFrames({
+            patches: frameIdsForAction.map((fid) => ({
               id: fid,
               patch: { locked: anyFrameUnlocked },
-            })
-          );
-        }
+            })),
+          })
+        );
         return;
       }
       if (!targetIds.length && menuFrameId) {
@@ -2803,14 +2863,25 @@ function SvgCanvas({
           })
         );
         finishToSelect();
-        const uploaded = await uploadImageFile(file);
-        dispatch(
-          finishImageProcess({
-            src: uploaded.url,
-            attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
-          })
+        const spawnedId = String(
+          (store.getState() as any).editor?.pendingImageProcessId || ''
         );
+        const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
+        try {
+          const uploaded = await uploadImageFile(file, { signal });
+          if (signal?.aborted) return;
+          dispatch(
+            finishImageProcess({
+              nodeId: spawnedId || undefined,
+              src: uploaded.url,
+              attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
+            })
+          );
+        } finally {
+          finishNodeUpload(spawnedId);
+        }
       } catch (err: any) {
+        if (isUploadAbortError(err)) return;
         dispatch(failImageProcess({}));
         const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
         message.error(typeof detail === 'string' ? detail : '图片上传失败');

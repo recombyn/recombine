@@ -14,7 +14,7 @@ Infinite canvas with multiple **smart artboards**. Switch tools on the bottom ba
 | Paint bucket | B | Fill shape with current stroke color |
 | Text | T | Add text; font, weight, size; Markdown editing |
 | Smart artboard | F | Drag a frame; then size presets, fill, lock, clip overflow |
-| Upload image | I | Place a local image |
+| Upload image | I | Place a local image or video |
 | Image generator | A | Text-to-image node — [Image generation](/guide/image-generation) |
 
 ## Smart artboards
@@ -28,7 +28,7 @@ Infinite canvas with multiple **smart artboards**. Switch tools on the bottom ba
 
 | Capability | Notes |
 |------------|-------|
-| Scope | Lists **frames** and shape / text / image nodes together |
+| Scope | Lists **frames** and shape / text / image / video nodes together |
 | Search | Filter by name |
 | Order | Drag or shortcuts; matches canvas z-order |
 | Hide / show | Eye toggle (frames too) |
@@ -58,6 +58,13 @@ Solid, linear gradient, radial gradient, and **mesh / diffuse** fills with edita
 ## Images
 
 Image nodes use [Image editing tools](/guide/image-tools). For generation use **A** or Agent **Image** mode.
+
+## Video
+
+- Drop a local video onto the canvas or use the upload entry; an **Uploading** placeholder appears while the file transfers.
+- With a video selected: trim, crop, flip, **Extract frame** (first / at playhead), fullscreen, and download.
+- **Extract frame** places a still image node beside the video for further image edits.
+- Deleting an uploading placeholder **aborts the upload** and **cannot be undone** (so unfinished uploads are not restored via Ctrl+Z).
 
 ## Save & sync
 

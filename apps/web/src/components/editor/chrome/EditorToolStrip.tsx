@@ -24,7 +24,8 @@ import { RiVideoAiLine } from 'react-icons/ri';
 import { Dropdown, Tooltip, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
-import { uploadImageFile, readFileAsDataUrl } from '@/utils/uploadImage';
+import { uploadImageFile, readFileAsDataUrl, beginNodeUpload, finishNodeUpload, isUploadAbortError } from '@/utils/uploadImage';
+import store from '@/store';
 import {
   setActiveTool,
   setShapeKind,
@@ -483,14 +484,25 @@ function EditorToolStrip({
           name: file.name?.replace(/\.[^.]+$/, '') || 'Image',
         })
       );
-      const uploaded = await uploadImageFile(file);
-      dispatch(
-        finishImageProcess({
-          src: uploaded.url,
-          attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
-        })
+      const spawnedId = String(
+        (store.getState() as any).editor?.pendingImageProcessId || ''
       );
+      const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
+      try {
+        const uploaded = await uploadImageFile(file, { signal });
+        if (signal?.aborted) return;
+        dispatch(
+          finishImageProcess({
+            nodeId: spawnedId || undefined,
+            src: uploaded.url,
+            attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
+          })
+        );
+      } finally {
+        finishNodeUpload(spawnedId);
+      }
     } catch (err: any) {
+      if (isUploadAbortError(err)) return;
       dispatch(failImageProcess({}));
       const detail = err?.response?.data?.detail || err?.message || L.uploadFail;
       message.error(typeof detail === 'string' ? detail : L.uploadFail);

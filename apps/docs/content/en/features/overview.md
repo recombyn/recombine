@@ -2,7 +2,7 @@
 
 ## Canvas workspace
 
-Infinite canvas, multi artboards, vector / bitmap mix; select, shapes, pen, brush (eraser), bucket, text, upload, image generator. Layers manage frames and nodes (visibility, lock, order); multi-select align / distribute. See [Canvas & tools](/guide/canvas).
+Infinite canvas, multi artboards, vector / bitmap mix; select, shapes, pen, brush (eraser), bucket, text, image / video upload, image generator. Videos support trim, crop, extract frame, and more. Layers manage frames and nodes (visibility, lock, order); multi-select align / distribute. See [Canvas & tools](/guide/canvas).
 
 ## Three chat modes
 

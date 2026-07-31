@@ -399,6 +399,8 @@ export function useProjectCloudSync() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const manualSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushingRef = useRef(false);
+  /** Delete/edit while a flush is in-flight — run again after current finishes. */
+  const pendingFlushRef = useRef(false);
   const flushRef = useRef<(opts?: FlushProjectOptions) => Promise<void>>(async () => {});
   const latestRef = useRef({ document, currentId, template, dirty });
   latestRef.current = { document, currentId, template, dirty };
@@ -428,7 +430,10 @@ export function useProjectCloudSync() {
     if ((!isDirty && !force) || !doc || !id || !tpl) return;
     if (id.startsWith('share_')) return;
     if (!isOwnedTemplate(tpl)) return;
-    if (flushingRef.current) return;
+    if (flushingRef.current) {
+      pendingFlushRef.current = true;
+      return;
+    }
     flushingRef.current = true;
 
     try {
@@ -610,8 +615,12 @@ export function useProjectCloudSync() {
     } finally {
       flushingRef.current = false;
       const still = store.getState().editor as { dirty: boolean; currentId: string | null };
-      if (still.dirty && still.currentId === id) {
-        scheduleFlush(DEBOUNCE_MS);
+      const queued = pendingFlushRef.current;
+      pendingFlushRef.current = false;
+      const needAgain = queued || (still.dirty && still.currentId === id);
+      if (needAgain && still.currentId === id) {
+        // Immediate retry when delete/edit arrived mid-flush; else normal debounce.
+        scheduleFlush(queued ? 0 : DEBOUNCE_MS);
       }
     }
   }, [dispatch, scheduleFlush]);

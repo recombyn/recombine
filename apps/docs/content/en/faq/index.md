@@ -36,6 +36,9 @@ When signed in, cloud is source of truth; confirm sign-in and network. Local dra
 **Layers panel missing artboards?**  
 Frames and shape / image nodes appear together; hide, lock, and reorder. New frames stack on top. See [Canvas & tools](/guide/canvas).
 
+**I deleted an Uploading image/video, but Undo brought it back?**  
+Deleting an upload placeholder aborts the transfer and **cannot be undone**. If it reappears after refresh, cloud sync may still have the old doc—wait and refresh, or check the network. See [Canvas & tools · Video](/guide/canvas#video).
+
 ## Agent & image generation
 
 **Difference between Agent / Ask / Image?**  
