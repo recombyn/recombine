@@ -40,8 +40,8 @@ function readCrop(attrs: {
 }
 
 /**
- * Fullscreen video preview — same VideoJsPlayer + shared VideoPlaybackBar as canvas/chat
- * (max 700×700). Zoom changes width/height (no CSS transform on the video ancestor).
+ * Fullscreen video preview — native player + shared VideoPlaybackBar as canvas/chat
+ * (max 700×700). Zoom uses CSS scale like image lightbox so aspect never stretches.
  */
 function VideoFullscreenPreviewButton({
   src,
@@ -118,13 +118,16 @@ function VideoFullscreenPreviewButton({
 
   if (!url) return null;
 
-  // Fit inside 700×700 like image preview, then apply zoom via size (not transform).
+  // Fit inside 700×700 preserving node aspect; zoom via transform (never
+  // clamp width/height independently — that stretches portrait videos).
   const fit = Math.min(PREVIEW_MAX_PX / aw, PREVIEW_MAX_PX / ah);
+  const baseW = aw * fit;
+  const baseH = ah * fit;
   const frameStyle: CSSProperties = {
-    width: aw * fit * scale,
-    height: ah * fit * scale,
-    maxWidth: 'min(90vw, 700px)',
-    maxHeight: 'min(90vh, 700px)',
+    width: baseW,
+    height: baseH,
+    transform: `scale(${scale})`,
+    transformOrigin: 'center center',
   };
 
   return (
@@ -171,7 +174,6 @@ function VideoFullscreenPreviewButton({
                         poster={posterUrl}
                         layout="fill"
                         controlsMode="hover"
-                        autoplay
                         muted
                         crop={crop}
                         flipX={flipX === true}

@@ -4,8 +4,8 @@ import { useTranslation } from 'react-i18next';
 import {
   HiOutlineDevicePhoneMobile,
   HiOutlinePhoto,
+  HiOutlinePlay,
   HiOutlineRectangleStack,
-  HiOutlineVideoCamera,
 } from 'react-icons/hi2';
 import AppLogo from '@/components/base/AppLogo';
 import { SegmentedControl } from '@/components/base/segmented';
@@ -27,7 +27,7 @@ const CATEGORIES: Array<{
   { id: 'poster', icon: HiOutlineRectangleStack, labelKey: 'homeCategories.poster' },
   { id: 'mobile', icon: HiOutlineDevicePhoneMobile, labelKey: 'homeCategories.mobile' },
   { id: 'image', icon: HiOutlinePhoto, labelKey: 'homeCategories.image' },
-  { id: 'video', icon: HiOutlineVideoCamera, labelKey: 'homeCategories.video' },
+  { id: 'video', icon: HiOutlinePlay, labelKey: 'homeCategories.video' },
 ];
 
 function resolveHeroLang(langRaw: string) {

@@ -3,7 +3,6 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineScissors } from 'react-icons/hi2';
 import { BiExit } from 'react-icons/bi';
-import type Player from 'video.js/dist/types/player';
 import {
   RcbOverlayPortal,
   rcbSceneToScreen,
@@ -26,6 +25,7 @@ import { message, Tooltip } from '@/components/base';
 import VideoJsPlayer, {
   usePlayableVideoSrc,
 } from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
+import type { VideoMediaControl } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import { exportCroppedVideoBlob } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
 
 type TrimRange = { start: number; end: number };
@@ -235,7 +235,7 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   const uploadKey = String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null;
   const playSrc = usePlayableVideoSrc(src, uploadKey);
 
-  const playerRef = useRef<Player | null>(null);
+  const mediaRef = useRef<VideoMediaControl | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const durationRef = useRef(0);
   const rangeRef = useRef<TrimRange>({ start: 0, end: 1 });
@@ -252,11 +252,11 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   durationRef.current = duration;
   rangeRef.current = range;
 
-  const seekPlayer = (time: number) => {
-    const p = playerRef.current;
-    if (!p || p.isDisposed() || !Number.isFinite(time) || time < 0) return;
+  const seekMedia = (time: number) => {
+    const m = mediaRef.current;
+    if (!m || m.isDead() || !Number.isFinite(time) || time < 0) return;
     try {
-      p.currentTime(time);
+      m.setCurrentTime(time);
     } catch {
       /* ignore non-seekable */
     }
@@ -281,7 +281,7 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
       next = { start: 0, end: d };
     }
     setRange(next);
-    seekPlayer(next.start);
+    seekMedia(next.start);
   };
 
   const close = () => dispatch(closeVideoToolPanel());
@@ -365,24 +365,24 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   };
 
   const scrubPreviewTo = (time: number) => {
-    const p = playerRef.current;
-    if (!p || p.isDisposed() || !Number.isFinite(time) || time < 0) return;
+    const m = mediaRef.current;
+    if (!m || m.isDead() || !Number.isFinite(time) || time < 0) return;
     // Pause while scrubbing so the frame sticks on the dragged edge.
-    if (!p.paused()) p.pause();
-    seekPlayer(time);
+    if (!m.isPaused()) m.pause();
+    seekMedia(time);
   };
 
-  const onPlayerReady = (player: Player) => {
-    playerRef.current = player;
-    const seedFromPlayer = () => {
-      const next = saneDuration(player.duration());
+  const onMediaReady = (media: VideoMediaControl) => {
+    mediaRef.current = media;
+    const seedFromMedia = () => {
+      const next = saneDuration(media.getDuration());
       // Only seed once — don't snap handles back to attrs after the user edits.
       if (next && !saneDuration(durationRef.current)) applyDurationAndAttrs(next);
-      else seekPlayer(rangeRef.current.start);
+      else seekMedia(rangeRef.current.start);
     };
-    seedFromPlayer();
-    player.on('loadedmetadata', seedFromPlayer);
-    player.on('durationchange', seedFromPlayer);
+    seedFromMedia();
+    media.on('loadedmetadata', seedFromMedia);
+    media.on('durationchange', seedFromMedia);
   };
 
   const startDrag = (
@@ -393,11 +393,11 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   ) => {
     let d = saneDuration(durationRef.current);
     if (!d) {
-      const p = playerRef.current;
-      const fromPlayer = saneDuration(p && !p.isDisposed() ? p.duration() : 0);
-      if (fromPlayer) {
-        applyDurationAndAttrs(fromPlayer);
-        d = fromPlayer;
+      const m = mediaRef.current;
+      const fromMedia = saneDuration(m && !m.isDead() ? m.getDuration() : 0);
+      if (fromMedia) {
+        applyDurationAndAttrs(fromMedia);
+        d = fromMedia;
       }
     }
     if (!d) return;
@@ -603,7 +603,7 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
               crop={crop}
               trimStart={range.start}
               trimEnd={range.end}
-              onReady={onPlayerReady}
+              onReady={onMediaReady}
               className="h-full w-full"
             />
           ) : null}

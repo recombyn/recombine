@@ -83,7 +83,7 @@ import {
   captureFocusFramePreview,
   type AgentStepEvent,
 } from '@/components/editor/panels/agent/runDesignAgent';
-import { canAttachNodeToChat } from '@/components/rcb/scene/sceneDocument';
+import { canAttachNodeToChat, captureVideoPosterFrame } from '@/components/rcb/scene/sceneDocument';
 import { renderComposerChipThumb, renderExport } from '@/components/rcb/scene/exportImage';
 import {
   applyClientFrameHints,
@@ -131,7 +131,7 @@ import ModelPickerPanel, {
   modelDescription,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
 import { cn } from '@/utils/classnames';
-import { estimateImageCredits, parsePriceAmount } from '@/utils/imageCredits';
+import { estimateImageCredits, estimateVideoCredits } from '@/utils/imageCredits';
 import { FREE_IMAGE_MODEL_ID, planAllowsModelId, planAllowsModelPick, type PlanId } from '@/utils/wallet';
 
 type ChatSessionMessage = {
@@ -1467,12 +1467,40 @@ export async function rasterizeNodesToPngFile(
 
 /**
  * Canvas → composer:
- * - single image → attachment strip
- * - multi / group (image+shape etc.) → one export-raster PNG attachment (not split)
+ * - single image / video → attachment strip (not inline input chip)
+ * - multi: videos/images attach as media; remaining shapes → one PNG (not one giant raster of video)
  * - single shape / frame → context chip with thumb
  */
 function canvasAttachToken(payload: string | string[]): string {
   return Array.isArray(payload) ? `arr:${payload.map(String).join('\0')}` : `one:${payload}`;
+}
+
+async function buildCanvasVideoAttachment(
+  doc: any,
+  id: string,
+  existingChips: ComposerContext[]
+): Promise<ComposerContext | null> {
+  const node = doc?.deltaSetLike?.[id];
+  const src = String(node?.attrs?.src || '').trim();
+  if (node?.key !== 'video' || !src) return null;
+  const labeled = buildComposerContext(doc, [id], null, existingChips);
+  let thumb = String(node?.attrs?.poster || '').trim();
+  if (!thumb) {
+    try {
+      thumb = await captureVideoPosterFrame(src);
+    } catch {
+      /* thumb optional */
+    }
+  }
+  return {
+    key: `attach:canvas:${id}:${Date.now()}`,
+    label: labeled?.label || id,
+    kind: 'attachment',
+    payload: `[Canvas video]\nid: ${id}${labeled?.payload ? `\n${labeled.payload}` : ''}`,
+    dataUrl: src,
+    thumbUrl: thumb || undefined,
+    uploadStatus: 'ready',
+  };
 }
 
 export async function applyCanvasAttachPayload(opts: {
@@ -1481,6 +1509,8 @@ export async function applyCanvasAttachPayload(opts: {
   existingChips: ComposerContext[];
   onAttachFiles: (files: File[], opts?: { mention?: boolean }) => void | Promise<void>;
   insertChip: (ctx: ComposerContext) => void;
+  /** Canvas video → strip attachment without re-upload / file-type gates. */
+  pushAttachment?: (att: ComposerContext) => void;
   /** Image chat mode — reject video nodes (same as image generator pick). */
   imagesOnly?: boolean;
 }) {
@@ -1490,6 +1520,7 @@ export async function applyCanvasAttachPayload(opts: {
     existingChips,
     onAttachFiles,
     insertChip,
+    pushAttachment,
     imagesOnly = false,
   } = opts;
   let ids: string[] = [];
@@ -1514,17 +1545,67 @@ export async function applyCanvasAttachPayload(opts: {
   );
   if (!attachable.length) return;
 
-  // Group / multi-select — one flattened PNG (same raster path as export), never split.
-  if (attachable.length > 1) {
-    const file = await rasterizeNodesToPngFile(doc, attachable);
-    if (file) {
-      await onAttachFiles([file]);
+  const attachOneVideo = async (id: string) => {
+    const att = await buildCanvasVideoAttachment(doc, id, existingChips);
+    if (!att) return;
+    if (pushAttachment) {
+      pushAttachment(att);
       return;
     }
-    // Raster failed — fall back to a single group chip with thumb.
-    const base = buildComposerContext(doc, attachable, null, existingChips);
-    const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: attachable });
-    if (ctx) insertChip(ctx);
+    const src = String(att.dataUrl || '').trim();
+    if (!src) return;
+    try {
+      await onAttachFiles([await imageSrcToFile(src, `canvas-${id}.mp4`)]);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Multi: peel off videos/images so we never rasterize video into canvas-group.png.
+  if (attachable.length > 1) {
+    const videos: string[] = [];
+    const images: string[] = [];
+    const others: string[] = [];
+    for (const id of attachable) {
+      const node = doc?.deltaSetLike?.[id];
+      const src = String(node?.attrs?.src || '').trim();
+      if (!imagesOnly && node?.key === 'video' && src) videos.push(id);
+      else if (node?.key === 'image' && src) images.push(id);
+      else others.push(id);
+    }
+
+    for (const id of videos) {
+      await attachOneVideo(id);
+    }
+    const imageFiles: File[] = [];
+    for (const id of images) {
+      const src = String(doc?.deltaSetLike?.[id]?.attrs?.src || '').trim();
+      if (!src) continue;
+      try {
+        imageFiles.push(await imageSrcToFile(src, `canvas-${id}.png`));
+      } catch {
+        /* skip */
+      }
+    }
+    if (imageFiles.length) await onAttachFiles(imageFiles);
+
+    if (others.length > 1) {
+      const file = await rasterizeNodesToPngFile(doc, others);
+      if (file) {
+        await onAttachFiles([file]);
+        return;
+      }
+      const base = buildComposerContext(doc, others, null, existingChips);
+      const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: others });
+      if (ctx) insertChip(ctx);
+      return;
+    }
+    if (others.length === 1) {
+      const oid = others[0]!;
+      const base = buildComposerContext(doc, [oid], null, existingChips);
+      const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: [oid] });
+      if (ctx) insertChip(ctx);
+    }
     return;
   }
 
@@ -1539,6 +1620,11 @@ export async function applyCanvasAttachPayload(opts: {
     } catch {
       /* fall through to chip */
     }
+  }
+
+  if (!imagesOnly && node?.key === 'video' && src) {
+    await attachOneVideo(id);
+    return;
   }
 
   const base = buildComposerContext(doc, [id], null, existingChips);
@@ -1714,12 +1800,6 @@ function shouldRunImageGenPath(opts: {
   hasApplyOps: boolean;
 }): boolean {
   return opts.isImageModelSelected && !opts.forceAgent && !opts.hasApplyOps;
-}
-
-function estimateVideoCredits(model?: LlmModel | null): number {
-  const price = parsePriceAmount(model?.price);
-  if (price == null || price <= 0) return 8;
-  return Math.max(1, Math.ceil(price * (200 / 29) * 1.2));
 }
 
 function shouldRunVideoGenPath(opts: {
@@ -2778,7 +2858,7 @@ function AgentDock({
     clearHomeAgentBoot();
   }, [open, draftPrompt, location.search]);
 
-  /** Right-click / pick 「添加到 Chat」— shapes → chips; images → attachment strip. */
+  /** Right-click / pick 「添加到 Chat」— shapes → chips; images/videos → attachment strip. */
   useEffect(() => {
     if (attachToChat == null) {
       attachToChatLockRef.current = null;
@@ -2804,6 +2884,14 @@ function AgentDock({
         contextDismissedKeyRef.current = null;
         inputRef.current?.insertContextAtCaret(ctx);
         inputRef.current?.focusEnd();
+      },
+      pushAttachment: (att) => {
+        pinnedContextKeysRef.current.add(att.key);
+        setContextChips((prev) => {
+          if (prev.some((c) => c.key === att.key)) return prev;
+          return [...prev, att];
+        });
+        queueMicrotask(() => inputRef.current?.focusEnd());
       },
       imagesOnly:
         interactionMode === 'image' ||
@@ -2844,6 +2932,14 @@ function AgentDock({
         contextDismissedKeyRef.current = null;
         inputRef.current?.insertContextAtCaret(ctx);
         inputRef.current?.focusEnd();
+      },
+      pushAttachment: (att) => {
+        pinnedContextKeysRef.current.add(att.key);
+        setContextChips((prev) => {
+          if (prev.some((c) => c.key === att.key)) return prev;
+          return [...prev, att];
+        });
+        queueMicrotask(() => inputRef.current?.focusEnd());
       },
       imagesOnly:
         interactionMode === 'image' ||
@@ -3256,6 +3352,14 @@ function AgentDock({
             inputRef.current?.insertContextAtCaret(ctx);
             inputRef.current?.focusEnd();
           };
+          const pushAttachment = (att: ComposerContext) => {
+            pinnedContextKeysRef.current.add(att.key);
+            setContextChips((prev) => {
+              if (prev.some((c) => c.key === att.key)) return prev;
+              return [...prev, att];
+            });
+            queueMicrotask(() => inputRef.current?.focusEnd());
+          };
           if (attachable.length || frameId) {
             void (async () => {
               if (attachable.length) {
@@ -3265,6 +3369,7 @@ function AgentDock({
                   existingChips: contextChipsRef.current,
                   onAttachFiles: handleAttachFiles,
                   insertChip,
+                  pushAttachment,
                   imagesOnly,
                 });
               }
@@ -3275,6 +3380,7 @@ function AgentDock({
                   existingChips: contextChipsRef.current,
                   onAttachFiles: handleAttachFiles,
                   insertChip,
+                  pushAttachment,
                   imagesOnly,
                 });
               }

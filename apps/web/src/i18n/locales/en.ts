@@ -230,7 +230,7 @@ const en = {
     importApiDown: 'API is not reachable (port 8000). Run: make dev-api',
     importJsonFailed: 'Failed to parse JSON',
     importJsonInvalid: 'JSON does not match the scene document format. Use a template exported from this app.',
-    importUnsupported: 'Unsupported format. Use image / PDF / Word',
+    importUnsupported: 'Unsupported format. Use an image file',
     importNoDocument: 'Import failed: no document returned',
     importEmpty: 'Import produced an empty canvas. Check the file or confirm the API is running.',
     importNeedPoppler: 'PDF rasterization failed. Install Poppler and set POPPLER_PATH to its bin folder (or add pdftoppm to PATH).',
@@ -722,7 +722,7 @@ const en = {
   },
   importFile: {
     title: 'Convert to editable',
-    hint: 'Turn an Image, PDF, or Word file into an editable canvas',
+    hint: 'Turn an image into an editable canvas',
     import: 'Convert',
     image: 'Image',
     pdf: 'PDF',

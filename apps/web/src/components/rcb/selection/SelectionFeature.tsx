@@ -2395,7 +2395,9 @@ function SelectionFeature({
           edgeHandles={
             selectedIsImageGen || selectedIsVideoGen
               ? 'none'
-              : !lineChrome && singleNodeData?.key === 'text'
+              : // Video scrubber sits on the bottom edge — keep L/R only so the S handle
+                // does not steal pointer events from the playback bar.
+              selectedIsVideo || (!lineChrome && singleNodeData?.key === 'text')
                 ? 'horizontal'
                 : 'all'
           }

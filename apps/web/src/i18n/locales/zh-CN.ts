@@ -229,7 +229,7 @@ const zhCN = {
     importApiDown: '无法连接 API（8000 端口）。请先运行：make dev-api',
     importJsonFailed: 'JSON 解析失败，请检查文件格式',
     importJsonInvalid: 'JSON 格式不符合场景文档结构，请使用本应用导出的模板文件',
-    importUnsupported: '暂不支持该格式，请选择图片 / PDF / Word',
+    importUnsupported: '暂不支持该格式，请选择图片',
     importNoDocument: '导入失败：未返回文档数据',
     importEmpty: '导入结果为空，请检查文件或确认 API 已启动。',
     importNeedPoppler: 'PDF 转图失败：请安装 Poppler，并将 bin 目录设为 POPPLER_PATH（或加入 PATH）。',
@@ -716,7 +716,7 @@ const zhCN = {
   },
   importFile: {
     title: '导入转可编辑',
-    hint: '将图片、PDF 或 Word 转为可编辑画布',
+    hint: '将图片转为可编辑画布',
     import: '开始转换',
     image: '图片',
     pdf: 'PDF',

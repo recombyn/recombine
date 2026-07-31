@@ -189,23 +189,77 @@ export async function applyCanvasPickToImageComposer(opts: {
     setContexts([...atts, att, ...inline]);
   };
 
-  // Group / multi — one export-raster PNG (same as AgentDock), never split members.
+  // Group / multi — peel videos/images out; only rasterize leftover shapes together.
   if (ids.length > 1) {
-    const dataUrl = await rasterizeNodesToPngDataUrl(doc, ids);
-    if (dataUrl) {
+    const videos: string[] = [];
+    const images: string[] = [];
+    const others: string[] = [];
+    for (const mid of ids) {
+      const n = doc?.deltaSetLike?.[mid];
+      const s = String(n?.attrs?.src || '').trim();
+      if (!imagesOnly && n?.key === 'video' && s) videos.push(mid);
+      else if (n?.key === 'image' && s) images.push(mid);
+      else others.push(mid);
+    }
+
+    for (const vid of videos) {
+      const n = doc?.deltaSetLike?.[vid];
+      const s = String(n?.attrs?.src || '').trim();
+      const labeled = buildComposerContext(doc, [vid], null, existing);
+      let thumb = String(n?.attrs?.poster || '').trim();
+      if (!thumb) {
+        try {
+          thumb = await captureVideoPosterFrame(s);
+        } catch {
+          /* optional */
+        }
+      }
       pushAttachment({
-        key: `attach:canvas-group:${Date.now()}`,
-        label: 'canvas-group.png',
+        key: `attach:canvas:${vid}:${Date.now()}`,
+        label: labeled?.label || vid,
         kind: 'attachment',
-        payload: `[Canvas group]\nids: ${ids.join(', ')}`,
-        dataUrl,
-        thumbUrl: dataUrl,
+        payload: `[Canvas video]\nid: ${vid}${labeled?.payload ? `\n${labeled.payload}` : ''}`,
+        dataUrl: s,
+        thumbUrl: thumb || undefined,
       });
+    }
+    for (const iid of images) {
+      const s = String(doc?.deltaSetLike?.[iid]?.attrs?.src || '').trim();
+      const labeled = buildComposerContext(doc, [iid], null, existing);
+      pushAttachment({
+        key: `attach:canvas:${iid}:${Date.now()}`,
+        label: labeled?.label || iid,
+        kind: 'attachment',
+        payload: labeled?.payload || `[Canvas image]\nid: ${iid}`,
+        dataUrl: s,
+        thumbUrl: s,
+      });
+    }
+
+    if (others.length > 1) {
+      const dataUrl = await rasterizeNodesToPngDataUrl(doc, others);
+      if (dataUrl) {
+        pushAttachment({
+          key: `attach:canvas-group:${Date.now()}`,
+          label: 'canvas-group.png',
+          kind: 'attachment',
+          payload: `[Canvas group]\nids: ${others.join(', ')}`,
+          dataUrl,
+          thumbUrl: dataUrl,
+        });
+        return;
+      }
+      const base = buildComposerContext(doc, others, frameId, existing);
+      const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: others, frameId });
+      if (ctx) insertChip(ctx);
       return;
     }
-    const base = buildComposerContext(doc, ids, frameId, existing);
-    const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: ids, frameId });
-    if (ctx) insertChip(ctx);
+    if (others.length === 1) {
+      const oid = others[0]!;
+      const base = buildComposerContext(doc, [oid], null, existing);
+      const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: [oid] });
+      if (ctx) insertChip(ctx);
+    }
     return;
   }
 
@@ -250,7 +304,7 @@ export async function applyCanvasPickToImageComposer(opts: {
       key: `attach:canvas:${id}:${Date.now()}`,
       label: labeled?.label || id,
       kind: 'attachment',
-      payload: labeled?.payload || `[Canvas video]\nid: ${id}`,
+      payload: `[Canvas video]\nid: ${id}${labeled?.payload ? `\n${labeled.payload}` : ''}`,
       dataUrl: src,
       thumbUrl: thumb || undefined,
     });

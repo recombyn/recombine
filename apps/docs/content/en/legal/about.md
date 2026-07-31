@@ -15,7 +15,7 @@ recombyn is built by an independent developer in spare time. The goal is simple:
 ## What you can do
 
 - From a single poster or icon set to mobile / web layouts
-- Import references or PDF / Word; expand, multi-angle, remove background, and more on canvas
+- Import references; expand, multi-angle, remove background, and more on canvas
 - Auto routing or pick models; members can connect BYOK compatible providers
 - Publish to Plaza; share preview or collab-edit links
 - Run full Agent flows automatically, or pause at key milestones

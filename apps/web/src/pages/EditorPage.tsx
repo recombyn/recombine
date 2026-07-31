@@ -182,6 +182,8 @@ const EDITOR_PAN_BLOCK_SELECTOR = [
   '[data-gradient-handles]',
   '[data-mesh-handles]',
   '[data-shape-style-panel]',
+  '[data-video-playback-bar]',
+  '[data-video-trim-toolbar]',
 ].join(',');
 
 function computeWorldSurface(doc: any, frames: ArtboardFrame[]) {

@@ -35,8 +35,7 @@ function detectImportSourceType(file: File): ImportSourceType | null {
   if (/\.(psd|xd|rp|fig)$/i.test(name) || /photoshop|x-psd/i.test(type)) return null;
   if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(name)) return 'image';
   if (type.startsWith('image/')) return 'image';
-  if (name.endsWith('.pdf') || type === 'application/pdf') return 'pdf';
-  if (/\.(docx?|doc)$/i.test(name) || type.includes('word')) return 'docx';
+  // PDF / DOCX import is not a supported product path (image-only).
   return null;
 }
 

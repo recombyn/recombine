@@ -58,6 +58,7 @@ import {
   startCanvasAttachPick,
 } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
+import { estimateVideoCredits } from '@/utils/imageCredits';
 import { uploadComposerAttachment, readFileAsDataUrl } from '@/utils/uploadImage';
 import store from '@/store';
 
@@ -526,6 +527,7 @@ function VideoGeneratorCard({
     [contexts]
   );
   const selectedModel = models.find((m) => m.id === modelId);
+  const creditCost = estimateVideoCredits(selectedModel);
   const settingsSummary = `${resolution} · ${aspectRatio} · ${duration}s`;
 
   const removeContext = (key: string) =>
@@ -1113,7 +1115,7 @@ function VideoGeneratorCard({
                 </Tooltip>
               </Dropdown>
 
-              <Tooltip tip={t('editor.tools.videoGenSubmit')} placement="top">
+              <Tooltip tip={t('wallet.creditCostTip', { count: creditCost })} placement="top">
                 <button
                   type="button"
                   disabled={disabled || sending || attachmentsUploading || !prompt.trim()}
@@ -1125,7 +1127,7 @@ function VideoGeneratorCard({
                   )}
                 >
                   <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                  {sending ? '…' : null}
+                  {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
                 </button>
               </Tooltip>
             </div>

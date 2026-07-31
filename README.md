@@ -41,7 +41,7 @@ Self-host in minutes with Docker Compose (MySQL + Redis + web + API). MIT-licens
 
 - **Visual editor** — selection, layers, fills, export, share
 - **Design Agent** — create / edit / chat with streaming UI
-- **Import pipeline** — PDF / DOCX / image → Scene JSON
+- **Image import** — local images → editable canvas nodes
 - **Plaza & projects** — inspiration feed and saved work (API)
 
 ## Quick start (self-host)

@@ -1,10 +1,29 @@
-import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  memo,
+} from 'react';
 import { useSelector } from 'react-redux';
 import { useRcbCamera } from '@/components/rcb';
-import { isVideoGeneratorNode, isVideoNode } from '@/components/rcb/scene/sceneDocument';
+import {
+  isVideoGeneratorNode,
+  isVideoNode,
+  stackZIndex,
+} from '@/components/rcb/scene/sceneDocument';
 import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import VideoHoverPlayback from './VideoHoverPlayback';
+
+export type VideoGeomOverride = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
 
 function readOptionalNumber(value: unknown): number | undefined {
   const n = Number(value);
@@ -16,32 +35,42 @@ function readNodeAngle(node: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function readNodeFlip(node: any) {
-  const flipX = node?.attrs?.flipX === true || node?.attrs?.flipX === 'true';
-  const flipY = node?.attrs?.flipY === true || node?.attrs?.flipY === 'true';
-  return { flipX, flipY };
-}
-
 function plateTransform(angle: number) {
   if (Math.abs(angle) > 0.001) return `rotate(${angle}deg)`;
   return undefined;
 }
 
+/** Pan must not re-render every video plate — only push zoom when it changes. */
+function VideoZoomSync({ onZoom }: { onZoom: (zoom: number) => void }) {
+  const zoom = useRcbCamera().zoom;
+  useEffect(() => {
+    onZoom(Math.max(0.05, zoom || 1));
+  }, [zoom, onZoom]);
+  return null;
+}
+
 /**
- * World-layer video plates (under selection chrome — same stacking as images).
- * Counter-scale cancels camera zoom so <video> is not blacked out.
+ * hybrid: idle = 截帧 still; playing = stable HTML <video>.
+ * Selection must not remount plates (key=nodeId + memo).
+ * During move/resize, `geometryOverrides` keeps plates glued to the chrome
+ * (Redux document only commits at gesture end).
  */
 function VideoNodeOverlay({
   document,
   hidden,
   readOnly,
+  geometryOverrides = null,
 }: {
   document: any;
   hidden?: boolean;
   readOnly?: boolean;
+  /** Live drag/resize boxes — same scene space as selection chrome. */
+  geometryOverrides?: Record<string, VideoGeomOverride> | null;
 }): ReactNode {
-  const camera = useRcbCamera();
-  const zoom = Math.max(0.05, camera.zoom || 1);
+  const [zoom, setZoom] = useState(1);
+  const onZoom = useCallback((z: number) => {
+    setZoom((prev) => (Math.abs(prev - z) < 1e-6 ? prev : z));
+  }, []);
   const videoToolPanel = useSelector(
     (state: any) => state.editor.videoToolPanel as null | { nodeId: string; kind: string }
   );
@@ -59,23 +88,24 @@ function VideoNodeOverlay({
   }, [document]);
 
   if (!ids.length) return null;
-  if (hidden) return null;
 
   return (
     <>
+      <VideoZoomSync onZoom={onZoom} />
       {ids.map((nodeId) => {
         const node = document?.deltaSetLike?.[nodeId];
         if (!node) return null;
         const src = String(node.attrs?.src || '').trim();
         if (!src) return null;
-        if (videoToolPanel?.nodeId === nodeId) return null;
+        // Keep mounted during trim — hide only (unmount resets currentTime).
+        const trimOpen = videoToolPanel?.nodeId === nodeId;
         const cropSession =
           imageToolPanel?.nodeId === nodeId && imageToolPanel.kind === 'crop';
         const { left, top } = nodeLeftTop(document, node);
-        const width = Math.max(1, Number(node.width) || 1);
-        const height = Math.max(1, Number(node.height) || 1);
+        const ov = geometryOverrides?.[nodeId];
+        const width = Math.max(1, ov ? ov.width : Number(node.width) || 1);
+        const height = Math.max(1, ov ? ov.height : Number(node.height) || 1);
         const angle = readNodeAngle(node);
-        const { flipX, flipY } = readNodeFlip(node);
         const radii = radiiFromAttrs(node.attrs || {});
         const scenePlate: CSSProperties & {
           left: number;
@@ -83,8 +113,8 @@ function VideoNodeOverlay({
           width: number;
           height: number;
         } = {
-          left,
-          top,
+          left: ov ? ov.left : left,
+          top: ov ? ov.top : top,
           width,
           height,
           borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
@@ -97,22 +127,16 @@ function VideoNodeOverlay({
             nodeId={nodeId}
             scenePlate={scenePlate}
             zoom={zoom}
-            angle={angle}
+            stackZ={stackZIndex(document, 'node', nodeId)}
             src={src}
             poster={String(node.attrs?.poster || '').trim() || undefined}
             uploadKey={
               String(node.attrs?.uploadKey || node.attrs?.key || '').trim() || null
             }
             disabled={readOnly || cropSession}
-            hidden={hidden}
-            flipX={flipX}
-            flipY={flipY}
+            hidden={Boolean(hidden) || trimOpen}
             trimStart={readOptionalNumber(node.attrs?.trimStart)}
             trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
-            cropX={cropSession ? undefined : readOptionalNumber(node.attrs?.cropX)}
-            cropY={cropSession ? undefined : readOptionalNumber(node.attrs?.cropY)}
-            cropW={cropSession ? undefined : readOptionalNumber(node.attrs?.cropW)}
-            cropH={cropSession ? undefined : readOptionalNumber(node.attrs?.cropH)}
           />
         );
       })}

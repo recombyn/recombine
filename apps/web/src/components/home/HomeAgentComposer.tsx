@@ -58,7 +58,7 @@ import {
 } from '@/utils/uploadImage';
 import { message } from '@/components/base';
 import { useSelector } from 'react-redux';
-import { estimateImageCredits, parsePriceAmount } from '@/utils/imageCredits';
+import { estimateImageCredits, estimateVideoCredits } from '@/utils/imageCredits';
 
 export type HomeAgentCategory =
   | 'website'
@@ -123,12 +123,6 @@ const DEFAULT_VIDEO_ASPECT_RATIO = '16:9';
 const DEFAULT_VIDEO_RESOLUTION = '720p';
 const DEFAULT_VIDEO_DURATION = 5;
 const DEFAULT_VIDEO_MODEL_ID = 'or-seedance-2-0-fast';
-
-function estimateVideoCredits(model?: LlmModel | null): number {
-  const price = parsePriceAmount(model?.price);
-  if (price == null || price <= 0) return 8;
-  return Math.max(1, Math.ceil(price * (200 / 29) * 1.2));
-}
 
 function pickPreferredVideoModelId(models: LlmModel[]): string {
   const videos = models.filter((m) => isVideoKind(m));

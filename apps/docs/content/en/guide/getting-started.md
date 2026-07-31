@@ -26,7 +26,7 @@ Choose any of these:
 - **Send a brief from Home**: Pick poster / mobile app / website / image, describe your goal, and send → enter the editor and let Agent start the draft (you can adjust collaboration pace and run mode).
 - **Blank canvas**: Use **+** in the sidebar to create an empty project, then draw yourself or press **C** to open Agent.
 - **Inspiration cases**: Open a case in [Plaza](/features/plaza), copy it to your own project, and keep editing.
-- **Import files**: Turn images / PDF / Word into an editable canvas. See [Import files](/features/import).
+- **Import files**: Turn images into an editable canvas. See [Import files](/features/import).
 
 ## Step 4: Revise with Agent or the generator
 

@@ -138,7 +138,9 @@ import { parseFrameSelId } from '@/components/rcb/selection/SelectionFeature';
 import ImageProcessOverlay from '@/components/editor/nodes/ImageNode/ImageProcessOverlay';
 import ImageGeneratorOverlay from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorOverlay';
 import VideoGeneratorOverlay from '@/components/editor/nodes/VideoGeneratorNode/VideoGeneratorOverlay';
-import VideoNodeOverlay from '@/components/editor/nodes/VideoNode/VideoNodeOverlay';
+import VideoNodeOverlay, {
+  type VideoGeomOverride,
+} from '@/components/editor/nodes/VideoNode/VideoNodeOverlay';
 import type { PencilEraseStroke } from '@/components/rcb';
 import { erasePencilNode } from '@/components/rcb';
 import TextInlineEditor from '@/components/editor/nodes/TextNode/TextInlineEditor';
@@ -438,7 +440,24 @@ function resolveAttachPickPayload(
   frameId?: string | null,
   opts?: AttachPickOpts
 ): { payload: string | string[]; blockedOnly: boolean } | null {
-  const seed = expandSelectionWithGroups(doc, nodeIds || []);
+  const raw = (nodeIds || []).filter(Boolean);
+  // Clicking a video/image should attach that media alone — expanding a canvas group
+  // would rasterize siblings into canvas-group.png (wrong + often >10MB).
+  if (raw.length === 1) {
+    const hitId = raw[0]!;
+    const hit = doc?.deltaSetLike?.[hitId];
+    const src = String(hit?.attrs?.src || '').trim();
+    const mediaKey = hit?.key === 'video' || hit?.key === 'image';
+    if (
+      mediaKey &&
+      src &&
+      canAttachNodeToChat(hit, opts) &&
+      !(opts?.imagesOnly && hit?.key === 'video')
+    ) {
+      return { payload: hitId, blockedOnly: false };
+    }
+  }
+  const seed = expandSelectionWithGroups(doc, raw);
   const attachable = filterChatAttachNodeIds(doc, seed, opts);
   if (attachable.length) {
     return {
@@ -601,8 +620,37 @@ function SvgCanvas({
    */
   const frameGeomHistoryPushedRef = useRef(false);
   const [geometryTransforming, setGeometryTransforming] = useState(false);
+  /** Live video plate boxes while dragging — Redux only commits on gesture end. */
+  const [videoLiveGeom, setVideoLiveGeom] = useState<Record<string, VideoGeomOverride> | null>(
+    null
+  );
+  const videoLiveGeomRafRef = useRef(0);
+  const pendingVideoLiveGeomRef = useRef<Record<string, VideoGeomOverride> | null>(null);
   const overlayRoot = useRcbOverlayRoot();
 
+  const publishVideoLiveGeom = useCallback((next: Record<string, VideoGeomOverride> | null) => {
+    pendingVideoLiveGeomRef.current = next;
+    if (videoLiveGeomRafRef.current) return;
+    videoLiveGeomRafRef.current = requestAnimationFrame(() => {
+      videoLiveGeomRafRef.current = 0;
+      setVideoLiveGeom(pendingVideoLiveGeomRef.current);
+    });
+  }, []);
+
+  const onGeometryTransformingChange = useCallback(
+    (next: boolean) => {
+      setGeometryTransforming(next);
+      if (!next) {
+        if (videoLiveGeomRafRef.current) {
+          cancelAnimationFrame(videoLiveGeomRafRef.current);
+          videoLiveGeomRafRef.current = 0;
+        }
+        pendingVideoLiveGeomRef.current = null;
+        setVideoLiveGeom(null);
+      }
+    },
+    []
+  );
   documentRef.current = document;
   selectedIdsRef.current =
     selectedNodeIds?.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
@@ -697,17 +745,13 @@ function SvgCanvas({
     const board = boardRef.current;
     const doc = documentRef.current;
     if (!board || !doc) return;
-    const selected =
-      selectedIdsRef.current?.length > 0
-        ? selectedIdsRef.current
-        : selectedNodeId
-          ? [selectedNodeId]
-          : [];
-    const ids = [...new Set([...lastPatchedNodeIds, ...selected].filter(Boolean))];
-    ids.forEach((id) => {
+    // Only nodes touched by the latest document patch — never repaint on selection
+    // alone (re-setting a video poster flashes the first frame under the live <video>).
+    lastPatchedNodeIds.forEach((id) => {
+      if (!id) return;
       void replaceShapePaint(doc, board.nodeEls, id, board.root ? board : null);
     });
-  }, [documentPatchToken, selectedNodeId, lastPatchedNodeIds, geometryTransforming]);
+  }, [documentPatchToken, lastPatchedNodeIds, geometryTransforming]);
 
   // Stamp tip tint may resolve after first paint ? refresh pencil stamp strokes.
   useEffect(() => {
@@ -1350,6 +1394,8 @@ function SvgCanvas({
         textResizeMode: options?.textResizeMode,
       });
       documentRef.current = next;
+      const videoOverrides: Record<string, VideoGeomOverride> = {};
+      let hasVideo = false;
       normalized.forEach((p) => {
         const node = next?.deltaSetLike?.[p.nodeId];
         const isText = node?.key === 'text';
@@ -1362,6 +1408,15 @@ function SvgCanvas({
                 height: Math.max(1, Number(node.height) || p.height),
               }
             : p;
+        if (node?.key === 'video') {
+          hasVideo = true;
+          videoOverrides[p.nodeId] = {
+            left: box.left,
+            top: box.top,
+            width: Math.max(1, box.width),
+            height: Math.max(1, box.height),
+          };
+        }
         // Per-shape hosts may register before shared nodeEls is wired — recover.
         if (!board.nodeEls.get(p.nodeId)) {
           const hostEl = getShapeHost(p.nodeId)?.el;
@@ -1373,8 +1428,15 @@ function SvgCanvas({
           textStyle: isText ? parseNodeTextStyle(node.attrs || {}) : undefined,
         });
       });
+      // Keep HTML <video> plates glued to chrome (Redux doc is still pre-gesture).
+      if (hasVideo) {
+        publishVideoLiveGeom({
+          ...(pendingVideoLiveGeomRef.current || {}),
+          ...videoOverrides,
+        });
+      }
     },
-    [readOnly, normalizeGeomPatches, toGeometryPatches, applyFrameGeometryPatches]
+    [readOnly, normalizeGeomPatches, toGeometryPatches, applyFrameGeometryPatches, publishVideoLiveGeom]
   );
 
   const onAngleCommit = useCallback(
@@ -3323,6 +3385,14 @@ function SvgCanvas({
             keepVisibleIds={keepVisibleIds}
           />
         ) : null}
+        {/* : stable HTML <video> plates (SVG poster = underlay / export only). */}
+        {infinite ? (
+          <VideoNodeOverlay
+            document={document}
+            geometryOverrides={videoLiveGeom}
+            readOnly={readOnly}
+          />
+        ) : null}
         {/* Scene-space HTML overlays (selection / draw previews). Origin matches SVG. */}
         <div className="absolute left-0 top-0 z-20 h-0 w-0 overflow-visible">
           <SelectionFeature
@@ -3370,7 +3440,7 @@ function SvgCanvas({
               // Keep chrome while editing radius so the outline can follow rounded corners.
               (shapeStylePanelOpen && shapeStylePanel?.kind !== 'radius')
             }
-            onTransformingChange={setGeometryTransforming}
+            onTransformingChange={onGeometryTransformingChange}
           />
           <ImageProcessOverlay document={document} hidden={geometryTransforming} />
           <ImageGeneratorOverlay
@@ -3379,11 +3449,6 @@ function SvgCanvas({
             readOnly={readOnly}
           />
           <VideoGeneratorOverlay
-            document={document}
-            hidden={geometryTransforming}
-            readOnly={readOnly}
-          />
-          <VideoNodeOverlay
             document={document}
             hidden={geometryTransforming}
             readOnly={readOnly}

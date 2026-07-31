@@ -64,7 +64,7 @@ Select the image node, expand “N images”, set main or separate node. See [Im
 **Published to Plaza but not showing?**  
 Admin review required. See [Plaza & inspiration](/features/plaza).
 
-**PDF / Word import layout messy?**  
+**Import layout messy?**  
 Adjust artboard size and layers, or ask Agent to tidy. See [Import](/features/import).
 
 **Share link won’t let others edit?**  
