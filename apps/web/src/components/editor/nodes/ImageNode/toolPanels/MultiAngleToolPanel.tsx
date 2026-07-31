@@ -32,10 +32,13 @@ const ROTATE_MAX = 90;
 const TILT_MIN = -60;
 const TILT_MAX = 60;
 
+/** Preview column edge — matches the orbit globe stage. */
+const PREVIEW_SIZE = 280;
+
 const clampInt = (v: number, min: number, max: number) =>
   Math.round(Math.max(min, Math.min(max, v)));
 
-/** Multi-angle tool: skybox / camera scene. */
+/** Multi-angle tool: left preview + right controls (fig. 2 style). */
 function MultiAngleToolPanel({
   imageSrc,
   onCancel,
@@ -91,7 +94,7 @@ function MultiAngleToolPanel({
   return (
     <ImageToolPanelShell
       title={t('editor.imageToolbar.multiAngle')}
-      width={268}
+      width={PREVIEW_SIZE + 220 + 32}
       onClose={onCancel}
       headerRight={
         <PanelIconBtn title={t('editor.imageToolbar.reset')} onClick={reset}>
@@ -116,94 +119,101 @@ function MultiAngleToolPanel({
         />
       }
     >
-      <SegmentedControl
-        className="mb-3"
-        size="sm"
-        fullWidth
-        value={tab}
-        onChange={setTab}
-        options={[
-          { value: 'skybox', label: t('editor.imageToolbar.skybox') },
-          { value: 'camera', label: t('editor.imageToolbar.camera') },
-        ]}
-      />
-
-      <div
-        className={cn(
-          'relative mb-3 aspect-square overflow-hidden rounded bg-[var(--canvas)] ring-1 ring-[var(--line)]'
-        )}
-      >
-        <AngleEditorScene
-          className="h-full w-full"
-          mode={tab}
-          rotate={rotate}
-          tilt={tilt}
-          cubeScale={scale}
-          imageSrc={imageSrc}
-          onRotateChange={setRotateInt}
-          onTiltChange={setTiltInt}
-        />
-      </div>
-
-      <div className="mb-3">
-        <div className="mb-1.5 text-[12px] text-[var(--muted)]">
-          {t('editor.imageToolbar.commonAngles')}
+      <div className="flex items-stretch gap-3">
+        {/* Left — orbit / skybox preview */}
+        <div
+          className="relative shrink-0 overflow-hidden rounded bg-[var(--canvas)] ring-1 ring-[var(--line)]"
+          style={{ width: PREVIEW_SIZE, height: PREVIEW_SIZE }}
+        >
+          <AngleEditorScene
+            className="h-full w-full"
+            mode={tab}
+            rotate={rotate}
+            tilt={tilt}
+            cubeScale={scale}
+            imageSrc={imageSrc}
+            onRotateChange={setRotateInt}
+            onTiltChange={setTiltInt}
+          />
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {ANGLE_PRESET_KEYS.map((preset) => {
-            const active = activePresetKey === preset.key;
-            const label = angleLabel(preset.key);
-            const tip = `${label}  ${preset.rotate}° / ${preset.tilt}°`;
-            return (
-              <Tooltip key={preset.key} title={tip} placement="top">
-                <button
-                  type="button"
-                  aria-label={tip}
-                  onClick={() => applyPreset(preset)}
-                  className={cn(
-                    'h-7 rounded-xl px-2.5 text-[12px] font-medium transition-colors',
-                    active
-                      ? 'bg-[var(--ink)] text-[var(--on-brand)]'
-                      : 'bg-[var(--accent-soft)] text-[var(--ink)] hover:bg-[var(--line)]'
-                  )}
-                >
-                  {label}
-                </button>
-              </Tooltip>
-            );
-          })}
+
+        {/* Right — mode, presets, fine-tune */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <SegmentedControl
+            className="mb-3 shrink-0"
+            size="sm"
+            fullWidth
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: 'skybox', label: t('editor.imageToolbar.skybox') },
+              { value: 'camera', label: t('editor.imageToolbar.camera') },
+            ]}
+          />
+
+          <div className="mb-3 min-h-0 flex-1">
+            <div className="mb-1.5 text-[12px] text-[var(--muted)]">
+              {t('editor.imageToolbar.commonAngles')}
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {ANGLE_PRESET_KEYS.map((preset) => {
+                const active = activePresetKey === preset.key;
+                const label = angleLabel(preset.key);
+                const tip = `${label}  ${preset.rotate}° / ${preset.tilt}°`;
+                return (
+                  <Tooltip key={preset.key} title={tip} placement="top">
+                    <button
+                      type="button"
+                      aria-label={tip}
+                      onClick={() => applyPreset(preset)}
+                      className={cn(
+                        'h-8 w-full rounded-xl px-2 text-[12px] font-medium transition-colors',
+                        active
+                          ? 'bg-[var(--ink)] text-[var(--on-brand)]'
+                          : 'bg-[var(--accent-soft)] text-[var(--ink)] hover:bg-[var(--line)]'
+                      )}
+                    >
+                      {label}
+                    </button>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-auto shrink-0 space-y-0.5">
+            <PanelSliderRow
+              label={t('editor.imageToolbar.rotate')}
+              value={rotate}
+              min={ROTATE_MIN}
+              max={ROTATE_MAX}
+              step={1}
+              display={`${rotate}°`}
+              onChange={setRotateInt}
+              fillFromZero
+            />
+            <PanelSliderRow
+              label={t('editor.imageToolbar.tilt')}
+              value={tilt}
+              min={TILT_MIN}
+              max={TILT_MAX}
+              step={1}
+              display={`${tilt}°`}
+              onChange={setTiltInt}
+              fillFromZero
+            />
+            <PanelSliderRow
+              label={t('editor.imageToolbar.zoom')}
+              value={scaleValueToIndex(scale)}
+              min={0}
+              max={2}
+              step={1}
+              display={scaleLabel}
+              onChange={(v) => setScale(scaleIndexToValue(v))}
+            />
+          </div>
         </div>
       </div>
-
-      <PanelSliderRow
-        label={t('editor.imageToolbar.rotate')}
-        value={rotate}
-        min={ROTATE_MIN}
-        max={ROTATE_MAX}
-        step={1}
-        display={String(rotate)}
-        onChange={setRotateInt}
-        fillFromZero
-      />
-      <PanelSliderRow
-        label={t('editor.imageToolbar.tilt')}
-        value={tilt}
-        min={TILT_MIN}
-        max={TILT_MAX}
-        step={1}
-        display={String(tilt)}
-        onChange={setTiltInt}
-        fillFromZero
-      />
-      <PanelSliderRow
-        label={t('editor.imageToolbar.zoom')}
-        value={scaleValueToIndex(scale)}
-        min={0}
-        max={2}
-        step={1}
-        display={scaleLabel}
-        onChange={(v) => setScale(scaleIndexToValue(v))}
-      />
     </ImageToolPanelShell>
   );
 }
