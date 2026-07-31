@@ -598,8 +598,58 @@ export function captureVideoPosterFrame(
     video.preload = 'auto';
     video.muted = true;
     video.playsInline = true;
-    video.crossOrigin = 'anonymous';
-    const fail = () => reject(new Error('video poster capture failed'));
+    // data/blob are same-origin; forcing anonymous breaks some blob captures.
+    if (!src.startsWith('blob:') && !src.startsWith('data:')) {
+      video.crossOrigin = 'anonymous';
+    }
+    let settled = false;
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('video poster capture failed'));
+    };
+    const succeed = (url: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(url);
+    };
+    const timer = window.setTimeout(fail, 8000);
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      video.onerror = null;
+      video.onloadeddata = null;
+      video.onseeked = null;
+      try {
+        video.removeAttribute('src');
+        video.load();
+      } catch {
+        /* ignore */
+      }
+    };
+    const draw = () => {
+      try {
+        const w = Math.max(1, video.videoWidth || 1);
+        const h = Math.max(1, video.videoHeight || 1);
+        if (w <= 1 || h <= 1) {
+          fail();
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          fail();
+          return;
+        }
+        ctx.drawImage(video, 0, 0, w, h);
+        succeed(canvas.toDataURL('image/jpeg', 0.85));
+      } catch {
+        fail();
+      }
+    };
     video.onerror = fail;
     video.onloadeddata = () => {
       try {
@@ -607,25 +657,15 @@ export function captureVideoPosterFrame(
           Math.max(0, atSeconds),
           Math.max(0, (video.duration || 1) - 0.05)
         );
-        const draw = () => {
-          const w = Math.max(1, video.videoWidth || 1);
-          const h = Math.max(1, video.videoHeight || 1);
-          const canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            fail();
-            return;
-          }
-          ctx.drawImage(video, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg', 0.85));
-        };
-        if (seekTo <= 0.01) {
+        if (seekTo <= 0.01 || Math.abs((Number(video.currentTime) || 0) - seekTo) <= 0.04) {
           draw();
           return;
         }
-        video.onseeked = () => draw();
+        const seekTimer = window.setTimeout(draw, 700);
+        video.onseeked = () => {
+          window.clearTimeout(seekTimer);
+          draw();
+        };
         video.currentTime = seekTo;
       } catch {
         fail();
@@ -763,6 +803,13 @@ export function isExportableSceneNode(node: any): boolean {
 /** True while an image job (upload / remove-bg / …) shows the loading shimmer. */
 export function isImageProcessRunning(node: any): boolean {
   return Boolean(node) && String(node?.attrs?.processStatus || '') === 'running';
+}
+
+/** Upload/import placeholder — delete is permanent (not restorable via undo). */
+export function isEphemeralUploadNode(node: any): boolean {
+  if (!isImageProcessRunning(node)) return false;
+  const kind = String(node?.attrs?.processKind || '');
+  return kind === 'upload' || kind === 'import';
 }
 
 /**

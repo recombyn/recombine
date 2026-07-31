@@ -19,6 +19,7 @@ import {
   promoteVideoGeneratorToVideo,
   addNodeToDocument,
   removeNodesFromDocument,
+  isEphemeralUploadNode,
   applyImageDecomposeLayers,
   detachImageVariantToNode,
 } from '@/components/rcb/scene/sceneDocument';
@@ -200,6 +201,29 @@ function clearSelection(state: typeof initialState) {
   state.shapeStylePanel = null;
 }
 
+/** Drop pending process id when its node was deleted (upload-in-flight must not revive it). */
+function clearPendingProcessIfNodeGone(state: typeof initialState) {
+  const pending = state.pendingImageProcessId;
+  if (!pending) return;
+  if (!state.document?.deltaSetLike?.[pending]) {
+    state.pendingImageProcessId = null;
+  }
+}
+
+/** Strip nodes from every history snapshot so Undo cannot revive them. */
+function scrubNodeIdsFromHistory(state: typeof initialState, ids: string[]) {
+  if (!ids.length) return;
+  const idSet = new Set(ids.map(String));
+  const scrub = (doc: any) => {
+    if (!doc?.deltaSetLike) return doc;
+    const hit = ids.some((id) => doc.deltaSetLike[id]);
+    if (!hit) return doc;
+    return removeNodesFromDocument(doc, [...idSet]);
+  };
+  state.historyPast = state.historyPast.map(scrub);
+  state.historyFuture = state.historyFuture.map(scrub);
+}
+
 const editorSlice = createSlice({
   name: 'editor',
   initialState,
@@ -263,6 +287,84 @@ const editorSlice = createSlice({
       );
       state.dirty = true;
       state.sceneReloadToken += 1;
+      // Deleted upload placeholder — drop pending id (caller aborts the HTTP request).
+      if (
+        state.pendingImageProcessId &&
+        !state.document?.deltaSetLike?.[state.pendingImageProcessId]
+      ) {
+        state.pendingImageProcessId = null;
+      }
+      syncLibraryOnEdit(state);
+    },
+    /**
+     * Delete nodes / artboards. Upload/import placeholders are permanent:
+     * scrubbed from history so Ctrl+Z cannot bring them back.
+     */
+    removeDocumentNodes(state, action) {
+      if (!state.document) return;
+      const nodeIds = (action.payload?.nodeIds || [])
+        .map((id: unknown) => String(id || '').trim())
+        .filter(Boolean);
+      const frameIds = (action.payload?.frameIds || [])
+        .map((id: unknown) => String(id || '').trim())
+        .filter(Boolean);
+      if (!nodeIds.length && !frameIds.length) return;
+
+      const ephemeralIds = nodeIds.filter((id: string) =>
+        isEphemeralUploadNode(state.document?.deltaSetLike?.[id])
+      );
+      const undoableNodeIds = nodeIds.filter((id: string) => !ephemeralIds.includes(id));
+      const hasUndoableChange = undoableNodeIds.length > 0 || frameIds.length > 0;
+
+      if (hasUndoableChange) pushHistory(state);
+
+      let next: any = state.document;
+      if (nodeIds.length) next = removeNodesFromDocument(next, nodeIds);
+      if (frameIds.length) {
+        const idSet = new Set(frameIds);
+        const frames = (Array.isArray(next.frames) ? next.frames : []).filter(
+          (f: any) => f && !idSet.has(String(f.id))
+        );
+        const active =
+          next.activeFrameId && idSet.has(String(next.activeFrameId))
+            ? frames[0]?.id ?? null
+            : next.activeFrameId ?? null;
+        next = { ...next, frames, activeFrameId: active };
+        if (Array.isArray(next.stackOrder)) {
+          next.stackOrder = next.stackOrder.filter((key: string) => {
+            const k = String(key);
+            if (!k.startsWith('frame:')) return true;
+            return !idSet.has(k.slice(6));
+          });
+        }
+        state.selectedFrameIds = state.selectedFrameIds.filter((id) => !idSet.has(id));
+        if (active && !state.selectedFrameIds.includes(active)) {
+          state.selectedFrameIds = [active];
+        }
+      }
+
+      state.document = normalizeDocument(next);
+      if (ephemeralIds.length) scrubNodeIdsFromHistory(state, ephemeralIds);
+
+      const gone = new Set(nodeIds);
+      if (state.selectedNodeId && gone.has(state.selectedNodeId)) state.selectedNodeId = null;
+      state.selectedNodeIds = state.selectedNodeIds.filter((id) => !gone.has(id));
+      if (state.imageToolPanel && gone.has(state.imageToolPanel.nodeId)) {
+        state.imageToolPanel = null;
+      }
+      if (state.videoToolPanel && gone.has(state.videoToolPanel.nodeId)) {
+        state.videoToolPanel = null;
+      }
+      if (
+        state.pendingImportPlaceholderId &&
+        gone.has(state.pendingImportPlaceholderId)
+      ) {
+        state.pendingImportPlaceholderId = null;
+      }
+      clearPendingProcessIfNodeGone(state);
+
+      state.dirty = true;
+      state.sceneReloadToken += 1;
       syncLibraryOnEdit(state);
     },
     setDocumentFromCanvas(state, action) {
@@ -270,6 +372,12 @@ const editorSlice = createSlice({
         preserveStageCanvasMeta(state.document, action.payload)
       );
       state.dirty = true;
+      if (
+        state.pendingImageProcessId &&
+        !state.document?.deltaSetLike?.[state.pendingImageProcessId]
+      ) {
+        state.pendingImageProcessId = null;
+      }
       syncLibraryOnEdit(state);
     },
     patchDocumentNode(state, action) {
@@ -280,6 +388,27 @@ const editorSlice = createSlice({
       state.dirty = true;
       state.documentPatchToken += 1;
       state.lastPatchedNodeIds = [String(nodeId)];
+      syncLibraryOnEdit(state);
+    },
+    /** Apply many node patches in one Redux write (align / distribute / flip). */
+    patchDocumentNodes(state, action) {
+      const { patches, skipHistory } = action.payload || {};
+      if (!state.document || !Array.isArray(patches) || !patches.length) return;
+      if (!skipHistory) pushHistory(state);
+      let doc = state.document;
+      const ids: string[] = [];
+      for (const item of patches) {
+        const nodeId = item?.nodeId;
+        const patch = item?.patch;
+        if (!nodeId || !patch) continue;
+        doc = updateNodeInDocument(doc, nodeId, patch);
+        ids.push(String(nodeId));
+      }
+      if (!ids.length) return;
+      state.document = normalizeDocument(doc);
+      state.dirty = true;
+      state.documentPatchToken += 1;
+      state.lastPatchedNodeIds = ids;
       syncLibraryOnEdit(state);
     },
     setSelectedNodeId(state, action) {
@@ -488,6 +617,45 @@ const editorSlice = createSlice({
         keys.every((k) => chromeKeys.has(k)) &&
         !(Boolean(frame?.clipContent) && (keys.includes('x') || keys.includes('y')));
       if (!onlyChrome && !skipHistory) state.sceneReloadToken += 1;
+      syncLibraryOnEdit(state);
+    },
+    /** Batch frame patches in one document write (multi-select drag / lock). */
+    updateArtboardFrames(state, action) {
+      if (!state.document) return;
+      const { patches, skipHistory } = action.payload || {};
+      if (!Array.isArray(patches) || !patches.length) return;
+      if (!skipHistory) pushHistory(state);
+      const next = normalizeDocument(state.document);
+      const frames = Array.isArray(next.frames) ? next.frames : [];
+      const byId = new Map<string, any>(frames.map((f: any) => [String(f?.id), f]));
+      const chromeKeys = new Set([
+        'x',
+        'y',
+        'locked',
+        'hidden',
+        'processStatus',
+        'processLabel',
+        'processKind',
+      ]);
+      let needsReload = false;
+      for (const item of patches) {
+        const id = item?.id;
+        const patch = item?.patch;
+        if (!id || !patch) continue;
+        const frame: any = byId.get(String(id));
+        if (!frame) continue;
+        Object.assign(frame, patch);
+        const keys = Object.keys(patch);
+        const onlyChrome =
+          keys.length > 0 &&
+          keys.every((k) => chromeKeys.has(k)) &&
+          !(Boolean(frame.clipContent) && (keys.includes('x') || keys.includes('y')));
+        if (!onlyChrome && !skipHistory) needsReload = true;
+      }
+      next.frames = frames;
+      state.document = next;
+      state.dirty = true;
+      if (needsReload) state.sceneReloadToken += 1;
       syncLibraryOnEdit(state);
     },
     /** Snapshot history without changing the document (e.g. before a live frame drag). */
@@ -1129,6 +1297,11 @@ const editorSlice = createSlice({
       const sourceWidth = action.payload?.sourceWidth as number | undefined;
       const sourceHeight = action.payload?.sourceHeight as number | undefined;
       if (!state.document || !nodeId) return;
+      // User deleted the placeholder while upload/AI was in flight — do not resurrect it.
+      if (!state.document.deltaSetLike?.[nodeId]) {
+        if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+        return;
+      }
 
       // editText: replace placeholder with split layers.
       if (Array.isArray(layers) && layers.length > 0) {
@@ -1179,11 +1352,12 @@ const editorSlice = createSlice({
     /** Drop a failed process clone and clear pending id. */
     failImageProcess(state, action) {
       const nodeId = action.payload?.nodeId || state.pendingImageProcessId;
-      if (!state.document || !nodeId) return;
+      if (!nodeId) return;
+      if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+      if (!state.document?.deltaSetLike?.[nodeId]) return;
       state.document = removeNodesFromDocument(state.document, [nodeId]);
       state.dirty = true;
       state.sceneReloadToken += 1;
-      if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
       if (state.selectedNodeId === nodeId) {
         state.selectedNodeId = null;
         state.selectedNodeIds = [];
@@ -1191,6 +1365,7 @@ const editorSlice = createSlice({
         state.selectedNodeIds = state.selectedNodeIds.filter((id: string) => id !== nodeId);
         state.selectedNodeId = state.selectedNodeIds[0] || null;
       }
+      syncLibraryOnEdit(state);
     },
     openImageToolPanel(state, action) {
       const { nodeId, kind } = action.payload || {};
@@ -1328,7 +1503,9 @@ export const {
   openTemplate,
   setDocument,
   setDocumentFromCanvas,
+  removeDocumentNodes,
   patchDocumentNode,
+  patchDocumentNodes,
   setSelectedNodeId,
   setSelectedNodeIds,
   addArtboardFrame,
@@ -1338,6 +1515,7 @@ export const {
   removeArtboardFrames,
   renameArtboardFrame,
   updateArtboardFrame,
+  updateArtboardFrames,
   pushEditorHistory,
   renameTemplate,
   persistCurrent,

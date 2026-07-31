@@ -31,12 +31,10 @@ Also supported: local **SQLite** (empty `DATABASE_URL`), and **PostgreSQL** via 
 
 ## Why Recombyn?
 
-| | |
-|---|---|
-| **Visual editor** | Frames, shapes, images, text — not just chat that dumps a single image. |
-| **Agent that paints** | LangGraph design agent with tools, skills, and ask/confirm flows. |
-| **Self-host first** | Same stack for local and server; your data stays yours. |
-| **Composable** | Skills, flows, and dicts ship as editable seed JSON under `apps/api/data/`. |
+- **Visual editor** — Frames, shapes, images, video, text — not just chat that dumps a single image.
+- **Agent that paints** — LangGraph design agent with tools, skills, and ask/confirm flows.
+- **Self-host first** — Same stack for local and server; your data stays yours.
+- **Composable** — Skills, flows, and dicts ship as editable seed JSON under `apps/api/data/`.
 
 ## Core features
 

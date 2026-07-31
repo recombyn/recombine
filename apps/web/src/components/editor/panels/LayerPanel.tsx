@@ -19,6 +19,7 @@ import {
 } from 'react-icons/hi2';
 import { TbArrowUpRight, TbCircle, TbPolygon, TbStar, TbTriangle } from 'react-icons/tb';
 import Tooltip from '@/components/base/tooltip';
+import { VirtualList, type VirtualListHandle } from '@/components/base/VirtualList';
 import {
   isImageGeneratorNode,
   isVideoGeneratorNode,
@@ -34,6 +35,10 @@ import {
   setSelectedNodeId,
   updateArtboardFrame,
 } from '@/store/modules/editor';
+
+type LayerStackRow = { kind: 'frame' | 'node'; id: string };
+
+const LAYER_ROW_ESTIMATE_PX = 40;
 
 const LAYER_DOCK_WIDTH_KEY = 'layer-dock-width';
 const LAYER_DOCK_MIN_W = 180;
@@ -267,6 +272,223 @@ function lockedAttrPatch(nextLocked: boolean) {
   return { attrs: { locked: nextLocked ? 'true' : 'false' } };
 }
 
+function LayerStackRowView({
+  row,
+  frame,
+  node,
+  selected,
+  onSelectFrame,
+  onSelectNode,
+}: {
+  row: LayerStackRow;
+  frame?: any;
+  node?: any;
+  selected: boolean;
+  onSelectFrame?: (frameId: string) => void;
+  onSelectNode?: (nodeId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const dispatch = useDispatch();
+
+  if (row.kind === 'frame') {
+    if (!frame) return null;
+    const locked = Boolean(frame.locked);
+    const hidden = Boolean(frame.hidden);
+    return (
+      <div
+        className={cn(
+          'group flex min-h-[40px] w-full items-center gap-1 px-2 py-1 text-[13px] transition-colors',
+          selected
+            ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+            : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            if (onSelectFrame) onSelectFrame(row.id);
+            else dispatch(setActiveFrameId(row.id));
+          }}
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left',
+            hidden && 'opacity-50'
+          )}
+        >
+          <span className={LAYER_ICON_SLOT}>
+            <LuFrame className="h-[13px] w-[13px] block shrink-0" strokeWidth={1.75} />
+          </span>
+          <span className="min-w-0 flex-1 truncate">
+            {String(frame.name || t('editor.tools.frame') || 'Frame')}
+          </span>
+        </button>
+        <Tooltip
+          title={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
+          placement="top"
+        >
+          <button
+            type="button"
+            aria-label={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
+            aria-pressed={hidden}
+            onClick={(e) => {
+              e.stopPropagation();
+              const nextHidden = !hidden;
+              dispatch(
+                updateArtboardFrame({
+                  id: row.id,
+                  patch: { hidden: nextHidden },
+                })
+              );
+              if (nextHidden && selected) {
+                dispatch(setActiveFrameId(null));
+              }
+            }}
+            className={cn(
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+              !hidden && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              selected && !hidden && 'opacity-100'
+            )}
+          >
+            {hidden ? (
+              <HiOutlineEyeSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+            ) : (
+              <HiOutlineEye className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
+          </button>
+        </Tooltip>
+        <Tooltip
+          title={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
+          placement="top"
+        >
+          <button
+            type="button"
+            aria-label={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
+            aria-pressed={locked}
+            onClick={(e) => {
+              e.stopPropagation();
+              dispatch(
+                updateArtboardFrame({
+                  id: row.id,
+                  patch: { locked: !locked },
+                })
+              );
+            }}
+            className={cn(
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+              !locked && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              selected && !locked && 'opacity-100'
+            )}
+          >
+            {locked ? (
+              <HiOutlineLockClosed className="h-3.5 w-3.5" strokeWidth={1.75} />
+            ) : (
+              <HiOutlineLockOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
+          </button>
+        </Tooltip>
+      </div>
+    );
+  }
+
+  if (!node) return null;
+  const hidden = isNodeHidden(node);
+  const locked = isNodeLocked(node);
+  return (
+    <div
+      className={cn(
+        'group flex min-h-[40px] w-full items-center gap-1 px-2 py-1 text-[13px] transition-colors',
+        selected
+          ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
+          : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => {
+          if (onSelectNode) onSelectNode(row.id);
+          else dispatch(setSelectedNodeId(row.id));
+        }}
+        className={cn(
+          'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left',
+          hidden && 'opacity-50'
+        )}
+      >
+        <LayerIcon node={node} />
+        <span className="min-w-0 flex-1 truncate">
+          {layerLabel(
+            node,
+            t('editor.tools.imageGenerator'),
+            t('editor.tools.videoGenerator')
+          )}
+        </span>
+      </button>
+      <Tooltip
+        title={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
+        placement="top"
+      >
+        <button
+          type="button"
+          aria-label={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
+          aria-pressed={hidden}
+          onClick={(e) => {
+            e.stopPropagation();
+            const nextHidden = !hidden;
+            dispatch(
+              patchDocumentNode({
+                nodeId: row.id,
+                patch: hiddenAttrPatch(nextHidden),
+              })
+            );
+            if (nextHidden && selected) {
+              dispatch(setSelectedNodeId(null));
+            }
+          }}
+          className={cn(
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+            !hidden && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            selected && !hidden && 'opacity-100'
+          )}
+        >
+          {hidden ? (
+            <HiOutlineEyeSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+          ) : (
+            <HiOutlineEye className="h-3.5 w-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+      </Tooltip>
+      <Tooltip
+        title={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
+        placement="top"
+      >
+        <button
+          type="button"
+          aria-label={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
+          aria-pressed={locked}
+          onClick={(e) => {
+            e.stopPropagation();
+            dispatch(
+              patchDocumentNode({
+                nodeId: row.id,
+                patch: lockedAttrPatch(!locked),
+              })
+            );
+          }}
+          className={cn(
+            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
+            !locked && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            selected && !locked && 'opacity-100'
+          )}
+        >
+          {locked ? (
+            <HiOutlineLockClosed className="h-3.5 w-3.5" strokeWidth={1.75} />
+          ) : (
+            <HiOutlineLockOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
+
 /** Left layers dock — history + frames/nodes from unified stackOrder. */
 function LayerPanel({
   onClose,
@@ -306,7 +528,7 @@ function LayerPanel({
   }, [nodes]);
   const layerRows = useMemo(() => {
     const order = Array.isArray(document?.stackOrder) ? document.stackOrder.map(String) : [];
-    const rows: Array<{ kind: 'frame' | 'node'; id: string }> = [];
+    const rows: LayerStackRow[] = [];
     if (order.length) {
       for (const key of [...order].reverse()) {
         const parsed = parseStackKey(key);
@@ -329,6 +551,7 @@ function LayerPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [dockWidth, setDockWidth] = useState(LAYER_DOCK_DEFAULT_W);
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const layerListRef = useRef<VirtualListHandle | null>(null);
 
   useEffect(() => {
     setDockWidth(readStoredLayerDockWidth());
@@ -347,6 +570,20 @@ function LayerPanel({
     },
     []
   );
+
+  useEffect(() => {
+    if (!layerRows.length) return;
+    let index = -1;
+    if (selectedNodeId) {
+      index = layerRows.findIndex((r) => r.kind === 'node' && r.id === selectedNodeId);
+    } else if (selectedFrameIds.length) {
+      const fid = selectedFrameIds[0];
+      index = layerRows.findIndex((r) => r.kind === 'frame' && r.id === fid);
+    } else if (activeFrameId) {
+      index = layerRows.findIndex((r) => r.kind === 'frame' && r.id === activeFrameId);
+    }
+    if (index >= 0) layerListRef.current?.scrollToIndex(index, { align: 'auto' });
+  }, [selectedNodeId, selectedFrameIds, activeFrameId, layerRows]);
 
   const persistDockWidth = (width: number) => {
     const next = clampLayerDockWidth(width);
@@ -479,245 +716,38 @@ function LayerPanel({
         ) : null}
       </div>
 
-      {/* Layer rows — top of list = front of stack */}
-      <div className="min-h-0 flex-1 overflow-y-auto py-1">
-        {layerRows.length ? (
-          <ul>
-            {layerRows.map((row) => {
-              if (row.kind === 'frame') {
-                const frame = frameById.get(row.id);
-                if (!frame) return null;
-                const locked = Boolean(frame.locked);
-                const hidden = Boolean(frame.hidden);
-                const selected =
-                  selectedFrameIds.includes(row.id) ||
-                  (!selectedFrameIds.length && activeFrameId === row.id);
-                return (
-                  <li key={`frame-${row.id}`}>
-                    <div
-                      className={cn(
-                        'group flex min-h-[40px] w-full items-center gap-1 px-2 py-1 text-[13px] transition-colors',
-                        selected
-                          ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-                          : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (onSelectFrame) onSelectFrame(row.id);
-                          else dispatch(setActiveFrameId(row.id));
-                        }}
-                        className={cn(
-                          'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left',
-                          hidden && 'opacity-50'
-                        )}
-                      >
-                        <span className={LAYER_ICON_SLOT}>
-                          <LuFrame className="h-[13px] w-[13px] block shrink-0" strokeWidth={1.75} />
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">
-                          {String(frame.name || t('editor.tools.frame') || 'Frame')}
-                        </span>
-                      </button>
-                      <Tooltip
-                        title={
-                          hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
-                        }
-                        placement="top"
-                      >
-                        <button
-                          type="button"
-                          aria-label={
-                            hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
-                          }
-                          aria-pressed={hidden}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const nextHidden = !hidden;
-                            dispatch(
-                              updateArtboardFrame({
-                                id: row.id,
-                                patch: { hidden: nextHidden },
-                              })
-                            );
-                            if (nextHidden && selected) {
-                              dispatch(setActiveFrameId(null));
-                            }
-                          }}
-                          className={cn(
-                            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
-                            !hidden &&
-                              'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                            selected && !hidden && 'opacity-100'
-                          )}
-                        >
-                          {hidden ? (
-                            <HiOutlineEyeSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
-                          ) : (
-                            <HiOutlineEye className="h-3.5 w-3.5" strokeWidth={1.75} />
-                          )}
-                        </button>
-                      </Tooltip>
-                      <Tooltip
-                        title={
-                          locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
-                        }
-                        placement="top"
-                      >
-                        <button
-                          type="button"
-                          aria-label={
-                            locked
-                              ? t('editor.contextMenu.unlock')
-                              : t('editor.contextMenu.lock')
-                          }
-                          aria-pressed={locked}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            dispatch(
-                              updateArtboardFrame({
-                                id: row.id,
-                                patch: { locked: !locked },
-                              })
-                            );
-                          }}
-                          className={cn(
-                            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
-                            !locked &&
-                              'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                            selected && !locked && 'opacity-100'
-                          )}
-                        >
-                          {locked ? (
-                            <HiOutlineLockClosed className="h-3.5 w-3.5" strokeWidth={1.75} />
-                          ) : (
-                            <HiOutlineLockOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
-                          )}
-                        </button>
-                      </Tooltip>
-                    </div>
-                  </li>
-                );
-              }
-
-              const node = nodeById.get(row.id);
-              if (!node) return null;
-              const hidden = isNodeHidden(node);
-              const locked = isNodeLocked(node);
-              return (
-                <li key={`node-${row.id}`}>
-                  <div
-                    className={cn(
-                      'group flex min-h-[40px] w-full items-center gap-1 px-2 py-1 text-[13px] transition-colors',
-                      selectedNodeId === row.id
-                        ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-                        : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (onSelectNode) onSelectNode(row.id);
-                        else dispatch(setSelectedNodeId(row.id));
-                      }}
-                      className={cn(
-                        'flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left',
-                        hidden && 'opacity-50'
-                      )}
-                    >
-                      <LayerIcon node={node} />
-                      <span className="min-w-0 flex-1 truncate">
-                        {layerLabel(
-                          node,
-                          t('editor.tools.imageGenerator'),
-                          t('editor.tools.videoGenerator')
-                        )}
-                      </span>
-                    </button>
-                    <Tooltip
-                      title={
-                        hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
-                      }
-                      placement="top"
-                    >
-                      <button
-                        type="button"
-                        aria-label={
-                          hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
-                        }
-                        aria-pressed={hidden}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const nextHidden = !hidden;
-                          dispatch(
-                            patchDocumentNode({
-                              nodeId: row.id,
-                              patch: hiddenAttrPatch(nextHidden),
-                            })
-                          );
-                          if (nextHidden && selectedNodeId === row.id) {
-                            dispatch(setSelectedNodeId(null));
-                          }
-                        }}
-                        className={cn(
-                          'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
-                          !hidden && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                          selectedNodeId === row.id && !hidden && 'opacity-100'
-                        )}
-                      >
-                        {hidden ? (
-                          <HiOutlineEyeSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
-                        ) : (
-                          <HiOutlineEye className="h-3.5 w-3.5" strokeWidth={1.75} />
-                        )}
-                      </button>
-                    </Tooltip>
-                    <Tooltip
-                      title={
-                        locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
-                      }
-                      placement="top"
-                    >
-                      <button
-                        type="button"
-                        aria-label={
-                          locked
-                            ? t('editor.contextMenu.unlock')
-                            : t('editor.contextMenu.lock')
-                        }
-                        aria-pressed={locked}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          dispatch(
-                            patchDocumentNode({
-                              nodeId: row.id,
-                              patch: lockedAttrPatch(!locked),
-                            })
-                          );
-                        }}
-                        className={cn(
-                          'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]',
-                          !locked && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                          selectedNodeId === row.id && !locked && 'opacity-100'
-                        )}
-                      >
-                        {locked ? (
-                          <HiOutlineLockClosed className="h-3.5 w-3.5" strokeWidth={1.75} />
-                        ) : (
-                          <HiOutlineLockOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
-                        )}
-                      </button>
-                    </Tooltip>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="px-3 py-8 text-center text-[12px] text-[var(--muted)]">{t('editor.noLayers')}</p>
-        )}
-      </div>
+      {/* Layer rows — top of list = front of stack (virtualized) */}
+      <VirtualList
+        ref={layerListRef}
+        items={layerRows}
+        estimateSize={LAYER_ROW_ESTIMATE_PX}
+        overscan={10}
+        getItemKey={(row) => `${row.kind}-${row.id}`}
+        className="py-1"
+        empty={
+          <p className="px-3 py-8 text-center text-[12px] text-[var(--muted)]">
+            {t('editor.noLayers')}
+          </p>
+        }
+      >
+        {(row) => {
+          const selected =
+            row.kind === 'frame'
+              ? selectedFrameIds.includes(row.id) ||
+                (!selectedFrameIds.length && activeFrameId === row.id)
+              : selectedNodeId === row.id;
+          return (
+            <LayerStackRowView
+              row={row}
+              frame={row.kind === 'frame' ? frameById.get(row.id) : undefined}
+              node={row.kind === 'node' ? nodeById.get(row.id) : undefined}
+              selected={selected}
+              onSelectFrame={onSelectFrame}
+              onSelectNode={onSelectNode}
+            />
+          );
+        }}
+      </VirtualList>
     </aside>
   );
 }
