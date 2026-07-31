@@ -15,20 +15,22 @@ import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import { ImageToolSep, imageToolBtn } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
 import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
-import { closeVideoToolPanel, setDocument } from '@/store/modules/editor';
-import {
-  captureVideoPosterFrame,
-  normalizeDocument,
-} from '@/components/rcb/scene/sceneDocument';
-import { deleteUploadedFile, imageSrcToFile, uploadImageFile } from '@/utils/uploadImage';
+import { closeVideoToolPanel, setDocument, setSelectedNodeId, setSelectedNodeIds } from '@/store/modules/editor';
+import { addNodeToDocument } from '@/components/rcb/scene/sceneDocument';
 import { message, Tooltip } from '@/components/base';
+import { nanoid } from 'nanoid';
 import VideoJsPlayer, {
   usePlayableVideoSrc,
 } from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
+import {
+  getVideoHoverHost,
+} from '@/components/editor/nodes/VideoNode/VideoHoverPlayback';
 import type { VideoMediaControl } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
-import { exportCroppedVideoBlob } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
+import { imageSrcToFile } from '@/utils/uploadImage';
 
 type TrimRange = { start: number; end: number };
+
+const SIBLING_GAP = 16;
 
 /** Reject NaN / Infinity — some MP4/WebM report duration=Infinity until probed. */
 function saneDuration(value: unknown): number | null {
@@ -48,6 +50,30 @@ function clampRange(start: number, end: number, duration: number): TrimRange {
     else a = Math.max(0, b - 0.1);
   }
   return { start: a, end: b };
+}
+
+/** Default selection around playhead — not the full timeline. */
+function defaultTrimRange(duration: number, keepTime: number): TrimRange {
+  const d = saneDuration(duration) ?? 0.1;
+  const t = Math.max(0, Math.min(Number.isFinite(keepTime) ? keepTime : 0, d));
+  const span = Math.min(d, Math.max(1, Math.min(d * 0.45, 8)));
+  let start = t;
+  let end = Math.min(d, t + span);
+  if (end - start < 0.5) {
+    end = d;
+    start = Math.max(0, end - span);
+  }
+  return clampRange(start, end, d);
+}
+
+function readHostPlayhead(nodeId: string): number {
+  const host = getVideoHoverHost(nodeId);
+  if (!host) return 0;
+  const video = host.getVideo?.();
+  const vals = [host.getFreezeAt?.(), host.getMediaTime?.(), video?.currentTime]
+    .map((x) => Number(x))
+    .filter((x) => Number.isFinite(x) && x >= 0);
+  return vals.length ? Math.max(...vals) : 0;
 }
 
 function readCrop(attrs: any): { x: number; y: number; w: number; h: number } | null {
@@ -115,24 +141,43 @@ async function seekVideoFrame(video: HTMLVideoElement, time: number): Promise<vo
   const target = Number.isFinite(time) ? Math.max(0, time) : 0;
   if (!safeSeek(video, target)) return;
   await new Promise<void>((resolve) => {
+    let settled = false;
     const finish = () => {
-      video.onseeked = null;
+      if (settled) return;
+      settled = true;
+      video.removeEventListener('seeked', finish);
       resolve();
     };
-    video.onseeked = finish;
-    window.setTimeout(finish, 600);
+    video.addEventListener('seeked', finish);
+    window.setTimeout(finish, 700);
+  });
+  // Let a decoded frame paint before drawImage (especially after long seeks).
+  await new Promise<void>((resolve) => {
+    const v = video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: () => void) => number;
+    };
+    if (typeof v.requestVideoFrameCallback === 'function') {
+      const timer = window.setTimeout(() => resolve(), 200);
+      v.requestVideoFrameCallback(() => {
+        window.clearTimeout(timer);
+        resolve();
+      });
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 }
 
 /**
- * Pull filmstrip frames via authenticated blob URL so canvas isn't CORS-tainted
- * (same fetch path as before). Reports each frame as captured for progressive UI.
+ * Pull filmstrip frames via authenticated blob URL so canvas isn't CORS-tainted.
+ * `knownDuration` avoids Infinity-duration probes when attrs already store length.
  */
 async function extractFilmstrip(
   src: string,
   count: number,
   uploadKey?: string | null,
   opts?: {
+    knownDuration?: number;
     onDuration?: (duration: number) => void;
     onFrame?: (index: number, dataUrl: string, total: number) => void;
     isCancelled?: () => boolean;
@@ -149,12 +194,22 @@ async function extractFilmstrip(
   video.src = blobUrl;
   try {
     await new Promise<void>((resolve, reject) => {
-      video.onloadeddata = () => resolve();
-      video.onerror = () => reject(new Error('video load failed'));
+      const ok = () => resolve();
+      const fail = () => reject(new Error('video load failed'));
+      video.addEventListener('loadeddata', ok, { once: true });
+      video.addEventListener('error', fail, { once: true });
     });
+    if (video.readyState < 2) {
+      video.load();
+      await new Promise<void>((resolve) => {
+        video.addEventListener('loadeddata', () => resolve(), { once: true });
+        window.setTimeout(() => resolve(), 1200);
+      });
+    }
     if (opts?.isCancelled?.()) return { frames: [], duration: 0 };
 
-    const resolved = await resolveVideoDuration(video);
+    const known = saneDuration(opts?.knownDuration);
+    const resolved = known ?? (await resolveVideoDuration(video));
     const duration = saneDuration(resolved) ?? 0.1;
     opts?.onDuration?.(duration);
 
@@ -170,6 +225,7 @@ async function extractFilmstrip(
       const t = Math.min(Math.max(0, duration - 0.05), duration * ratio);
       await seekVideoFrame(video, t);
       if (opts?.isCancelled?.()) break;
+      if (!(video.videoWidth > 0) || video.readyState < 2) continue;
       const w = Math.max(1, video.videoWidth || 160);
       const h = Math.max(1, video.videoHeight || 90);
       canvas.width = 80;
@@ -177,6 +233,7 @@ async function extractFilmstrip(
       try {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        if (!dataUrl || dataUrl.length < 32) continue;
         frames[i] = dataUrl;
         opts?.onFrame?.(i, dataUrl, n);
       } catch {
@@ -192,32 +249,9 @@ async function extractFilmstrip(
 }
 
 /**
- * Apply a re-encoded trim result onto the same video node.
- * Clears trimStart/trimEnd — the new file is already cut.
- */
-function applyTrimmedVideoToDocument(
-  doc: any,
-  nodeId: string,
-  opts: { src: string; poster?: string; uploadKey?: string | null }
-) {
-  if (!doc || !nodeId || !opts.src) return doc;
-  const next = normalizeDocument(doc);
-  const node = next.deltaSetLike?.[nodeId];
-  if (!node || node.key !== 'video') return doc;
-  const attrs = { ...(node.attrs || {}) };
-  attrs.src = opts.src;
-  if (opts.poster) attrs.poster = opts.poster;
-  if (opts.uploadKey) attrs.uploadKey = opts.uploadKey;
-  else delete attrs.uploadKey;
-  delete attrs.trimStart;
-  delete attrs.trimEnd;
-  node.attrs = attrs;
-  return next;
-}
-
-/**
  * Video trim session: theme-aware FloatingToolbar + filmstrip track.
- * Confirm re-encodes the selected range into a new video file on the same node.
+ * Confirm clones a sibling to the right with trimStart/trimEnd (same src) —
+ * instant, like video crop. Source node is left untouched.
  */
 function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   const { t } = useTranslation();
@@ -225,7 +259,12 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   const camera = useRcbCamera();
   const { zoom } = camera;
   const panel = useSelector(
-    (s: any) => s.editor.videoToolPanel as null | { nodeId: string; kind: string }
+    (s: any) =>
+      s.editor.videoToolPanel as null | {
+        nodeId: string;
+        kind: string;
+        keepTime?: number;
+      }
   );
   const selectedNodeIds = useSelector((s: any) => (s.editor.selectedNodeIds || []) as string[]);
   const open = panel?.kind === 'trim';
@@ -238,11 +277,15 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   const mediaRef = useRef<VideoMediaControl | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const durationRef = useRef(0);
-  const rangeRef = useRef<TrimRange>({ start: 0, end: 1 });
+  const rangeRef = useRef<TrimRange>({ start: 0, end: 0 });
+  /** Playhead when trim opened — restore instead of jumping to 0. */
+  const keepTimeRef = useRef(0);
   const [duration, setDuration] = useState(0);
   const [frames, setFrames] = useState<string[]>([]);
   const [confirmBusy, setConfirmBusy] = useState(false);
-  const [range, setRange] = useState<TrimRange>({ start: 0, end: 1 });
+  // Empty until duration known — avoid painting a fake full-width selection.
+  const [range, setRange] = useState<TrimRange>({ start: 0, end: 0 });
+  const [sessionKeepTime, setSessionKeepTime] = useState(0);
   const dragRef = useRef<null | {
     edge: 'start' | 'end' | 'move';
     originX: number;
@@ -262,14 +305,24 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
     }
   };
 
+  const restoreKeepTime = () => {
+    // Preview is full-length while editing — always restore the open playhead,
+    // do not clamp into the selection window (that snapped mid-video opens to 0).
+    const t = Number(keepTimeRef.current);
+    if (!Number.isFinite(t) || t < 0) return;
+    seekMedia(t);
+  };
+
   /** Seed / clamp range from node attrs — never while a drag is active. */
-  const applyDurationAndAttrs = (raw: number) => {
+  const applyDurationAndAttrs = (raw: number, opts?: { seekToStart?: boolean }) => {
     const d = saneDuration(raw);
     if (!d) return;
     setDuration(d);
     durationRef.current = d;
     if (dragRef.current) {
-      setRange((prev) => clampRange(prev.start, prev.end, d));
+      setRange((prev) =>
+        prev.end > prev.start ? clampRange(prev.start, prev.end, d) : defaultTrimRange(d, keepTimeRef.current)
+      );
       return;
     }
     const start = Number(node?.attrs?.trimStart);
@@ -278,10 +331,12 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
     if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
       next = clampRange(start, end, d);
     } else {
-      next = { start: 0, end: d };
+      // Not full-timeline by default — window from current playhead.
+      next = defaultTrimRange(d, keepTimeRef.current);
     }
     setRange(next);
-    seekMedia(next.start);
+    if (opts?.seekToStart) seekMedia(next.start);
+    else restoreKeepTime();
   };
 
   const close = () => dispatch(closeVideoToolPanel());
@@ -305,10 +360,29 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
     let cancelled = false;
     const total = 12;
     setFrames(Array.from({ length: total }, () => ''));
-    setDuration(0);
-    setRange({ start: 0, end: 1 });
+
+    // Prefer keepTime captured at Trim click; fall back to live host read.
+    const fromPanel = Number(panel?.keepTime);
+    const fromHost = readHostPlayhead(nodeId);
+    const keep =
+      Number.isFinite(fromPanel) && fromPanel >= 0
+        ? Math.max(fromPanel, fromHost)
+        : fromHost;
+    keepTimeRef.current = keep;
+    setSessionKeepTime(keep);
+
+    const known = saneDuration(node?.attrs?.duration);
+    if (known) {
+      applyDurationAndAttrs(known);
+    } else {
+      setDuration(0);
+      setRange({ start: 0, end: 0 });
+      // Media may already be ready with initialTime=0 — snap to open playhead now.
+      restoreKeepTime();
+    }
 
     void extractFilmstrip(src, total, uploadKey, {
+      knownDuration: known || undefined,
       isCancelled: () => cancelled,
       onDuration: (d) => {
         if (!cancelled && saneDuration(d)) applyDurationAndAttrs(d);
@@ -378,12 +452,36 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
       const next = saneDuration(media.getDuration());
       // Only seed once — don't snap handles back to attrs after the user edits.
       if (next && !saneDuration(durationRef.current)) applyDurationAndAttrs(next);
-      else seekMedia(rangeRef.current.start);
+      else restoreKeepTime();
     };
     seedFromMedia();
     media.on('loadedmetadata', seedFromMedia);
     media.on('durationchange', seedFromMedia);
   };
+
+  // Re-apply open playhead after src binds / keepTime resolves (initialTime only runs on src change).
+  // Only snap when the preview is stuck near 0 while we intended a later time — avoid fighting handle scrub.
+  useEffect(() => {
+    if (!open) return;
+    const want = Number(sessionKeepTime);
+    if (!(want > 0.5)) return;
+    const snapIfReset = () => {
+      if (dragRef.current) return;
+      const m = mediaRef.current;
+      if (!m || m.isDead()) return;
+      const cur = Number(m.getCurrentTime()) || 0;
+      if (cur < 0.25 && Math.abs(cur - want) > 0.4) restoreKeepTime();
+    };
+    const id = window.setTimeout(snapIfReset, 0);
+    const id2 = window.setTimeout(snapIfReset, 220);
+    const id3 = window.setTimeout(snapIfReset, 500);
+    return () => {
+      window.clearTimeout(id);
+      window.clearTimeout(id2);
+      window.clearTimeout(id3);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sessionKeepTime, playSrc]);
 
   const startDrag = (
     edge: 'start' | 'end' | 'move',
@@ -483,7 +581,7 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
   }, [open]);
 
   const confirm = () => {
-    if (!nodeId || !src || confirmBusy) return;
+    if (!nodeId || !src || confirmBusy || !node || node.key !== 'video') return;
     const d = saneDuration(duration);
     const next = d ? clampRange(range.start, range.end, d) : range;
     if (!Number.isFinite(next.start) || !Number.isFinite(next.end)) return;
@@ -494,98 +592,71 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
       return;
     }
 
-    // Full-length selection → no re-encode; just clear any prior trim attrs.
+    // Full-length selection → nothing to clip; exit trim UI.
     const isFull =
       Boolean(d) && next.start <= 0.02 && next.end >= (d as number) - 0.02;
     if (isFull) {
-      dispatch(
-        setDocument(
-          applyTrimmedVideoToDocument(document, nodeId, {
-            src,
-            poster: String(node?.attrs?.poster || '').trim() || undefined,
-            uploadKey,
-          })
-        )
-      );
       close();
       return;
     }
 
+    // Same pattern as video crop: sibling to the right, display trim attrs, no re-encode.
     setConfirmBusy(true);
-    const hideLoading = message.loading(
-      t('editor.videoToolbar.trimEncoding', { defaultValue: '正在生成剪辑视频…' }),
-      0
-    );
-    void (async () => {
-      const oldKey = uploadKey;
-      try {
-        const file = await imageSrcToFile(src, 'trim-src.mp4', { uploadKey: oldKey });
-        const { blob, ext } = await exportCroppedVideoBlob({
-          file,
-          crop: null,
-          trimStart: next.start,
-          trimEnd: next.end,
-        });
-        const outFile = new File([blob], `video-trim.${ext}`, {
-          type: blob.type || `video/${ext}`,
-        });
-        const uploaded = await uploadImageFile(outFile);
-        const remoteUrl = String(uploaded.url || '').trim();
-        if (!remoteUrl) throw new Error('upload returned no url');
-        const key = String(uploaded.key || '').trim() || null;
-        // Prefer public http(s); local `/api/v1/uploads/…` is resolved via uploadKey on play.
-        const displaySrc =
-          remoteUrl.startsWith('http://') || remoteUrl.startsWith('https://')
-            ? remoteUrl
-            : remoteUrl;
-
-        let poster = '';
-        try {
-          const posterSrc = URL.createObjectURL(blob);
-          try {
-            poster = await captureVideoPosterFrame(posterSrc);
-          } finally {
-            URL.revokeObjectURL(posterSrc);
-          }
-        } catch {
-          /* poster optional */
-        }
-
-        dispatch(
-          setDocument(
-            applyTrimmedVideoToDocument(document, nodeId, {
-              src: displaySrc,
-              poster: poster || undefined,
-              uploadKey: key,
-            })
-          )
-        );
-        if (oldKey && key && oldKey !== key) {
-          void deleteUploadedFile(oldKey).catch(() => {});
-        }
-        close();
-      } catch (err: any) {
-        console.warn('[video trim confirm]', err);
-        message.error(
-          err?.message ||
-            t('editor.videoToolbar.trimFail', { defaultValue: '剪辑失败，请重试' })
-        );
-      } finally {
-        hideLoading();
-        setConfirmBusy(false);
-      }
-    })();
+    try {
+      const width = Math.max(1, Math.round(Number(node.width) || 640));
+      const height = Math.max(1, Math.round(Number(node.height) || 360));
+      const id = nanoid(10);
+      const clone = JSON.parse(JSON.stringify(node));
+      clone.id = id;
+      clone.x = Math.round((Number(node.x) || 0) + width + SIBLING_GAP);
+      clone.y = Math.round(Number(node.y) || 0);
+      clone.width = width;
+      clone.height = height;
+      const attrs = { ...(clone.attrs || {}) };
+      attrs.trimStart = next.start;
+      attrs.trimEnd = next.end;
+      attrs.name =
+        String(attrs.name || '').trim() ||
+        t('editor.videoToolbar.trimResultName', { defaultValue: '剪辑视频' });
+      delete attrs.processStatus;
+      delete attrs.processKind;
+      delete attrs.processLabel;
+      delete attrs.processSourceId;
+      clone.attrs = attrs;
+      const nextDoc = addNodeToDocument(document, id, clone);
+      dispatch(setDocument(nextDoc));
+      dispatch(setSelectedNodeIds([id]));
+      dispatch(setSelectedNodeId(id));
+      close();
+    } catch (err) {
+      console.warn('[video trim confirm]', err);
+      message.error(
+        t('editor.videoToolbar.trimFail', { defaultValue: '剪辑失败，请重试' })
+      );
+    } finally {
+      setConfirmBusy(false);
+    }
   };
 
   if (!open || !node || !src) return null;
 
+  // Prefer click-time keepTime from the panel so VideoJsPlayer's first src bind
+  // already seeks correctly (don't wait for the open effect).
+  const panelKeep = Number(panel?.keepTime);
+  const resolvedKeep =
+    Number.isFinite(panelKeep) && panelKeep >= 0
+      ? Math.max(panelKeep, sessionKeepTime, keepTimeRef.current)
+      : Math.max(sessionKeepTime, keepTimeRef.current);
+  if (resolvedKeep > keepTimeRef.current) keepTimeRef.current = resolvedKeep;
+
   const dSafe = saneDuration(duration);
-  const startPct = dSafe ? (range.start / dSafe) * 100 : 0;
-  const endPct = dSafe ? (range.end / dSafe) * 100 : 100;
+  // No duration yet → don't paint a fake full-width selection.
+  const startPct = dSafe && range.end > range.start ? (range.start / dSafe) * 100 : 0;
+  const endPct = dSafe && range.end > range.start ? (range.end / dSafe) * 100 : 0;
   const spanSec = Number.isFinite(range.end - range.start)
     ? Math.max(0, range.end - range.start)
     : 0;
-  const handlesReady = Boolean(dSafe);
+  const handlesReady = Boolean(dSafe && range.end > range.start);
 
   return (
     <RcbOverlayPortal>
@@ -601,8 +672,10 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
               muted
               videoPointerNone
               crop={crop}
-              trimStart={range.start}
-              trimEnd={range.end}
+              // Do NOT pass trimStart/trimEnd while editing — a temporary window
+              // (or {0,1} before duration resolves) would clamp the preview back to 0.
+              knownDuration={saneDuration(node.attrs?.duration) || undefined}
+              initialTime={resolvedKeep}
               onReady={onMediaReady}
               className="h-full w-full"
             />

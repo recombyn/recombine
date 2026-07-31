@@ -86,5 +86,8 @@ apps/api/list_packs.py
 # Cursor IDE local (rules / skills / plans — do not publish)
 .cursor/
 
+# FFmpeg.wasm core (~32MB) — copied locally by apps/web/scripts/copy-ffmpeg-core.mjs
+apps/web/public/ffmpeg/
+
 # Local infra not published with OSS (keep on disk only)
 infra/langfuse/

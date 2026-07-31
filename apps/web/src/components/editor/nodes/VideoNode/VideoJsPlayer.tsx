@@ -119,12 +119,16 @@ export type VideoJsPlayerProps = {
   /** Keep playback inside [trimStart, trimEnd]. */
   trimStart?: number;
   trimEnd?: number;
+  /** Stored media length (seconds) from upload / node attrs. */
+  knownDuration?: number;
   /** Normalized crop — applied to the media surface only. */
   crop?: VideoCropNorm | null;
   flipX?: boolean;
   flipY?: boolean;
   /** When true, video surface ignores pointer (canvas selection). Bar stays clickable. */
   videoPointerNone?: boolean;
+  /** Optional start time after src binds (trim / preview resume). */
+  initialTime?: number;
   onReady?: (media: VideoMediaControl) => void;
   /** Fired once intrinsic video size is known (preview aspect). */
   onMediaSize?: (size: { width: number; height: number }) => void;
@@ -158,10 +162,12 @@ function VideoJsPlayer({
   loop = false,
   trimStart,
   trimEnd,
+  knownDuration,
   crop,
   flipX = false,
   flipY = false,
   videoPointerNone = false,
+  initialTime,
   onReady,
   onMediaSize,
 }: VideoJsPlayerProps): ReactNode {
@@ -179,6 +185,8 @@ function VideoJsPlayer({
   const trimEndRef = useRef(trimEnd);
   trimStartRef.current = trimStart;
   trimEndRef.current = trimEnd;
+  const initialTimeRef = useRef(initialTime);
+  initialTimeRef.current = initialTime;
   const playable = String(src || '').trim();
   const cropVars = cropCssVars(crop);
   const hasCrop = Boolean(cropVars);
@@ -260,6 +268,22 @@ function VideoJsPlayer({
 
     // Real src change only — do not try to restore previous currentTime.
     el.src = playable;
+    const want = Number(initialTimeRef.current);
+    if (!(Number.isFinite(want) && want > 0.04)) return;
+
+    const apply = () => {
+      try {
+        if (Math.abs((Number(el.currentTime) || 0) - want) > 0.08) {
+          el.currentTime = want;
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    el.addEventListener('loadeddata', apply, { once: true });
+    el.addEventListener('loadedmetadata', apply, { once: true });
+    window.setTimeout(apply, 120);
+    window.setTimeout(apply, 400);
   }, [playable]);
 
   useEffect(() => {
@@ -386,6 +410,7 @@ function VideoJsPlayer({
           visible={barVisible}
           trimStart={trimStart}
           trimEnd={trimEnd}
+          knownDuration={knownDuration}
           scale={barScale}
           className="absolute inset-x-0 bottom-0 z-[2]"
         />
@@ -408,6 +433,7 @@ export default memo(VideoJsPlayer, (prev, next) => {
     prev.loop === next.loop &&
     prev.trimStart === next.trimStart &&
     prev.trimEnd === next.trimEnd &&
+    prev.knownDuration === next.knownDuration &&
     prev.flipX === next.flipX &&
     prev.flipY === next.flipY &&
     prev.videoPointerNone === next.videoPointerNone &&

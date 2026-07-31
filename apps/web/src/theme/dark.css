@@ -6,6 +6,8 @@ html[data-theme='dark'] {
   --account-rail: #1a1a1a;
   --account-main: #141416;
   --account-card: #1e1e1e;
+  /* Image/video generator empty plate — lifted above canvas. */
+  --gen-empty: #1e1e1e;
   --ink: #e3e3e3;
   --muted: #949494;
   --line: #383838;

@@ -27,6 +27,7 @@ import {
   supportsFill,
   ungroupNodesInDocument,
   updateNodeInDocument,
+  isVideoNode,
   type SceneClipboardPayload,
 } from '@/components/rcb/scene/sceneDocument';
 import {
@@ -150,6 +151,7 @@ import VideoGeneratorOverlay from '@/components/editor/nodes/VideoGeneratorNode/
 import VideoNodeOverlay, {
   type VideoGeomOverride,
 } from '@/components/editor/nodes/VideoNode/VideoNodeOverlay';
+import { downloadVideoNodeAsset } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
 import type { PencilEraseStroke } from '@/components/rcb';
 import { erasePencilNode } from '@/components/rcb';
 import TextInlineEditor from '@/components/editor/nodes/TextNode/TextInlineEditor';
@@ -2740,6 +2742,75 @@ function SvgCanvas({
       dispatch(setGridMode(!isGridMode));
       return;
     }
+    if (action === 'exportMp4' || action === 'exportMp3') {
+      const doc = documentRef.current;
+      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const targetIds = resolveSelectionNodeIds(
+        doc,
+        seedNodes,
+        frameIdsForAction
+      );
+      const videoNodes = targetIds
+        .map((id) => doc?.deltaSetLike?.[id])
+        .filter((node: any) => isVideoNode(node) && String(node?.attrs?.src || '').trim());
+      if (!videoNodes.length) {
+        message.warning(t('editor.noSelectionExport'));
+        return;
+      }
+      const mode = action === 'exportMp3' ? 'audio' : 'video';
+      const hideLoading = message.loading(
+        t(
+          mode === 'audio'
+            ? 'editor.videoToolbar.exportingAudio'
+            : 'editor.videoToolbar.exporting',
+          {
+            defaultValue: mode === 'audio' ? '正在导出音频…' : '正在导出视频…',
+          }
+        ),
+        0
+      );
+      void (async () => {
+        try {
+          for (const node of videoNodes) {
+            const attrs = node?.attrs || {};
+            await downloadVideoNodeAsset({
+              src: String(attrs.src || ''),
+              name: String(node?.name || attrs.name || 'video'),
+              uploadKey: attrs.uploadKey != null ? String(attrs.uploadKey) : null,
+              cropX: attrs.cropX,
+              cropY: attrs.cropY,
+              cropW: attrs.cropW,
+              cropH: attrs.cropH,
+              trimStart: attrs.trimStart,
+              trimEnd: attrs.trimEnd,
+              flipX: attrs.flipX === true || attrs.flipX === 'true',
+              flipY: attrs.flipY === true || attrs.flipY === 'true',
+              mode,
+            });
+          }
+          hideLoading();
+          message.success(
+            t(mode === 'audio' ? 'editor.exportedAudio' : 'editor.exportedVideo', {
+              defaultValue: mode === 'audio' ? '已导出音频' : '已导出视频',
+            })
+          );
+        } catch (err) {
+          hideLoading();
+          console.warn('[ctx-video-export]', err);
+          message.error(
+            t(
+              mode === 'audio'
+                ? 'editor.videoToolbar.exportAudioFail'
+                : 'editor.videoToolbar.downloadFail',
+              {
+                defaultValue: mode === 'audio' ? '音频导出失败（可能无音轨）' : '下载失败',
+              }
+            )
+          );
+        }
+      })();
+      return;
+    }
     if (action === 'exportPng' || action === 'exportJpg' || action === 'exportSvg') {
       const format: ExportImageFormat =
         action === 'exportJpg' ? 'jpeg' : action === 'exportSvg' ? 'svg' : 'png';
@@ -2941,6 +3012,7 @@ function SvgCanvas({
             y,
             label: '上传中',
             name: prepared.name,
+            duration: prepared.duration,
           })
         );
         finishToSelect();
@@ -2951,6 +3023,9 @@ function SvgCanvas({
             attrs: {
               ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
               ...(prepared.poster ? { poster: prepared.poster } : {}),
+              ...(Number.isFinite(prepared.duration) && prepared.duration > 0
+                ? { duration: prepared.duration }
+                : {}),
               assetKind: 'video',
             },
           })
@@ -3807,6 +3882,19 @@ function SvgCanvas({
           return Boolean(frame?.locked);
         })()}
         gridOn={isGridMode}
+        exportKind={(() => {
+          const targetIds = resolveSelectionNodeIds(
+            document,
+            ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId),
+            ctxMenuSeedFrameIds(selectedFrameIds, ctxMenu?.frameId)
+          );
+          if (!targetIds.length) return 'image';
+          const allVideo = targetIds.every((id) => {
+            const node = document?.deltaSetLike?.[id];
+            return isVideoNode(node) && Boolean(String(node?.attrs?.src || '').trim());
+          });
+          return allVideo ? 'video' : 'image';
+        })()}
         canUndo={canUndo}
         canRedo={canRedo}
         canPaste

@@ -13,12 +13,14 @@ import {
   HiOutlineSpeakerWave,
   HiOutlineSpeakerXMark,
 } from 'react-icons/hi2';
+import { RiFullscreenFill } from 'react-icons/ri';
 import { cn } from '@/utils/classnames';
 
 /** Horizontal padding; bar is full-bleed with bottom gradient. */
 const EDGE_PAD = 10;
-const BAR_H = 44;
-/** Uniform gap between play · time · track · volume. */
+/** Single-row chrome height. */
+const BAR_H = 36;
+/** Uniform gap between play · time · track · time · volume · fullscreen. */
 const ITEM_GAP = 10;
 
 function formatTime(seconds: number) {
@@ -40,7 +42,9 @@ function resolveTrimWindow(
 ) {
   const d = Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : 0;
   let start = Number.isFinite(trimStart) ? Math.max(0, Number(trimStart)) : 0;
-  let end = Number.isFinite(trimEnd) ? Number(trimEnd) : d || 0;
+  // trimEnd=0 is not a valid end — treat as "no trim".
+  let end =
+    Number.isFinite(trimEnd) && Number(trimEnd) > 0 ? Number(trimEnd) : d || 0;
   if (d > 0) {
     start = Math.max(0, Math.min(start, d));
     end = Math.max(0, Math.min(end || d, d));
@@ -49,11 +53,91 @@ function resolveTrimWindow(
   return { start, end };
 }
 
+/** Finite positive duration only — MP4/WebM often report Infinity until probed. */
+function readElementDuration(el: HTMLVideoElement): number {
+  const d = Number(el.duration);
+  if (Number.isFinite(d) && d > 0 && d < 60 * 60 * 12) return d;
+  try {
+    // seekable.end is ok only when finite — Infinity means “unknown / live-like”.
+    if (el.seekable && el.seekable.length > 0) {
+      const end = Number(el.seekable.end(el.seekable.length - 1));
+      if (Number.isFinite(end) && end > 0 && end < 60 * 60 * 12) return end;
+    }
+    // Never use buffered.end — that is only how far the file has loaded, not duration.
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
+
+/**
+ * Some generated / fragmented MP4s keep `duration === Infinity` until a seek
+ * clamps to the real end. Prefer stored upload duration over this probe.
+ */
+async function probeElementDuration(el: HTMLVideoElement): Promise<number> {
+  const first = readElementDuration(el);
+  if (first > 0) return first;
+  const prev = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+  const wasPaused = el.paused;
+  try {
+    try {
+      el.pause();
+    } catch {
+      /* ignore */
+    }
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        el.removeEventListener('seeked', done);
+        resolve();
+      };
+      el.addEventListener('seeked', done);
+      try {
+        el.currentTime = 1e10;
+      } catch {
+        done();
+        return;
+      }
+      window.setTimeout(done, 900);
+    });
+    const probed = Number.isFinite(el.currentTime) ? el.currentTime : 0;
+    const restoreTo = Math.max(0, Math.min(prev, probed > 0 ? Math.max(0, probed - 0.05) : 0));
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        el.removeEventListener('seeked', done);
+        resolve();
+      };
+      el.addEventListener('seeked', done);
+      try {
+        el.currentTime = restoreTo;
+      } catch {
+        done();
+        return;
+      }
+      window.setTimeout(done, 600);
+    });
+    if (!wasPaused) {
+      void el.play()?.catch(() => undefined);
+    }
+    if (Number.isFinite(probed) && probed > 0) return probed;
+  } catch {
+    /* ignore */
+  }
+  return readElementDuration(el);
+}
+
 /** Shared control surface for native `<video>`. */
 export type VideoMediaControl = {
   getCurrentTime: () => number;
   setCurrentTime: (t: number) => void;
   getDuration: () => number;
+  /** Resolve Infinity / missing duration via seek clamp. */
+  probeDuration: () => Promise<number>;
   isPaused: () => boolean;
   play: () => void;
   pause: () => void;
@@ -77,23 +161,8 @@ export function videoMediaFromElement(el: HTMLVideoElement): VideoMediaControl {
         /* ignore non-seekable */
       }
     },
-    getDuration: () => {
-      const d = Number(el.duration);
-      if (Number.isFinite(d) && d > 0) return d;
-      try {
-        if (el.seekable && el.seekable.length > 0) {
-          const end = Number(el.seekable.end(el.seekable.length - 1));
-          if (Number.isFinite(end) && end > 0) return end;
-        }
-        if (el.buffered && el.buffered.length > 0) {
-          const end = Number(el.buffered.end(el.buffered.length - 1));
-          if (Number.isFinite(end) && end > 0) return end;
-        }
-      } catch {
-        /* ignore */
-      }
-      return 0;
-    },
+    getDuration: () => readElementDuration(el),
+    probeDuration: () => probeElementDuration(el),
     isPaused: () => el.paused,
     play: () => {
       void el.play()?.catch(() => undefined);
@@ -120,7 +189,7 @@ export function videoPlaybackBarScale(screenWidth: number): number {
 }
 
 /**
- * Shared playback chrome — play · time · scrub · volume + bottom gradient.
+ * Shared playback chrome — one row: play · current · scrub · total · volume · fullscreen.
  */
 function VideoPlaybackBar({
   media,
@@ -131,8 +200,12 @@ function VideoPlaybackBar({
   style,
   onHoverChange,
   nodeId,
-  /** Visual scale (node resize / camera). Default 1. */
+  /** Visual scale (node resize). Default 1. Whole chrome scales together. */
   scale = 1,
+  /** Stored at upload — single source of truth for total length. */
+  knownDuration,
+  /** When set, show fullscreen control on the right. */
+  onFullscreen,
 }: {
   media: VideoMediaControl | null;
   visible: boolean;
@@ -143,22 +216,31 @@ function VideoPlaybackBar({
   onHoverChange?: (hovered: boolean) => void;
   nodeId?: string;
   scale?: number;
+  knownDuration?: number;
+  onFullscreen?: () => void;
 }): ReactNode {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const scrubbingRef = useRef(false);
+  const probingRef = useRef(false);
   const trimWindowRef = useRef({ start: 0, end: 0 });
   const playableRef = useRef(0);
   const pendingSeekRef = useRef<number | null>(null);
   const seekRafRef = useRef(0);
+  const known =
+    Number.isFinite(knownDuration) && Number(knownDuration) > 0
+      ? Number(knownDuration)
+      : 0;
   const [scrubbing, setScrubbing] = useState(false);
   const [scrubRatio, setScrubRatio] = useState<number | null>(null);
   const [paused, setPaused] = useState(true);
   const [current, setCurrent] = useState(0);
-  const [mediaDuration, setMediaDuration] = useState(0);
+  // Only used when attrs.duration is missing (legacy nodes).
+  const [fallbackDuration, setFallbackDuration] = useState(0);
   const [muted, setMuted] = useState(true);
   const [volume, setVolume] = useState(1);
   const [volOpen, setVolOpen] = useState(false);
 
+  const mediaDuration = known > 0 ? known : fallbackDuration;
   const s = Math.max(0.85, Number(scale) || 1);
   const trimWindow = resolveTrimWindow(mediaDuration, trimStart, trimEnd);
   const playable = Math.max(0, trimWindow.end - trimWindow.start);
@@ -173,17 +255,15 @@ function VideoPlaybackBar({
 
   useEffect(() => {
     if (!media || media.isDead()) return;
+    let cancelled = false;
     const syncMeta = () => {
       setPaused(media.isPaused());
-      setMediaDuration(media.getDuration());
       setMuted(media.isMuted());
       setVolume(media.getVolume());
     };
     const syncTime = () => {
-      // Don't fight the thumb while dragging — avoids seek↔timeupdate lag.
-      if (scrubbingRef.current) return;
+      if (scrubbingRef.current || probingRef.current) return;
       setCurrent(media.getCurrentTime());
-      setMediaDuration(media.getDuration());
     };
     syncMeta();
     syncTime();
@@ -191,23 +271,36 @@ function VideoPlaybackBar({
     media.on('seeked', syncTime);
     media.on('play', syncMeta);
     media.on('pause', syncMeta);
-    const onMeta = () => {
-      syncMeta();
-      syncTime();
-    };
-    media.on('loadedmetadata', onMeta);
-    media.on('durationchange', syncMeta);
+    media.on('loadedmetadata', syncMeta);
     media.on('volumechange', syncMeta);
+
+    // attrs.duration missing → read / probe once (legacy nodes only).
+    if (!(known > 0)) {
+      const live = media.getDuration();
+      if (live > 0) {
+        setFallbackDuration(live);
+      } else {
+        probingRef.current = true;
+        void media.probeDuration().then((probed) => {
+          probingRef.current = false;
+          if (cancelled || !(probed > 0)) return;
+          setFallbackDuration(probed);
+          setCurrent(media.getCurrentTime());
+        });
+      }
+    }
+
     return () => {
+      cancelled = true;
+      probingRef.current = false;
       media.off('timeupdate', syncTime);
       media.off('seeked', syncTime);
       media.off('play', syncMeta);
       media.off('pause', syncMeta);
-      media.off('loadedmetadata', onMeta);
-      media.off('durationchange', syncMeta);
+      media.off('loadedmetadata', syncMeta);
       media.off('volumechange', syncMeta);
     };
-  }, [media]);
+  }, [media, known]);
 
   const flushSeek = () => {
     seekRafRef.current = 0;
@@ -221,14 +314,14 @@ function VideoPlaybackBar({
   const seekFromClientX = (clientX: number) => {
     if (!media || media.isDead() || !trackRef.current) return;
     let span = playableRef.current;
-    if (!(span > 0)) {
+    if (!(span > 0) && !(known > 0)) {
       const d = media.getDuration();
       if (d > 0) {
+        setFallbackDuration(d);
         const win = resolveTrimWindow(d, trimStart, trimEnd);
         trimWindowRef.current = win;
         span = Math.max(0, win.end - win.start);
         playableRef.current = span;
-        setMediaDuration(d);
       }
     }
     if (!(span > 0)) return;
@@ -317,14 +410,17 @@ function VideoPlaybackBar({
 
   const pad = EDGE_PAD * s;
   const gap = ITEM_GAP * s;
-  const btn = 28 * s;
-  const icon = 16 * s;
-  const timeSize = 12 * s;
-  const trackH = 36 * s;
-  const rail = Math.max(4, 4 * s);
-  const thumb = Math.max(14, 14 * s);
-  // Thumb overhang so left/right of the rail keep equal inset from neighbors.
-  const trackInset = thumb / 2;
+  const icon = 15 * s;
+  // Hit target ≈ icon + padding; keep box tight so flex `gap` reads as true 10px.
+  const btn = icon + 8 * s;
+  const timeSize = 11 * s;
+  const trackH = 28 * s;
+  const rail = Math.max(3, 3 * s);
+  const thumb = Math.max(10, 10 * s);
+  const thumbTravel = `calc(100% - ${thumb}px)`;
+  const thumbLeft = `calc(${thumbTravel} * ${ratio})`;
+  const fillW = `calc(${thumbTravel} * ${ratio} + ${thumb / 2}px)`;
+  const shownCurrent = scrubRatio != null ? scrubRatio * playable : displayCurrent;
 
   return (
     <div
@@ -372,40 +468,38 @@ function VideoPlaybackBar({
 
       <span
         className="shrink-0 tabular-nums leading-none text-white/90"
-        style={{ fontSize: timeSize, minWidth: `${3.2 * timeSize}px` }}
+        style={{ fontSize: timeSize }}
       >
-        {formatTime(scrubRatio != null ? scrubRatio * playable : displayCurrent)}
+        {formatTime(shownCurrent)}
       </span>
 
       <div
         ref={trackRef}
         className="relative z-[1] min-w-[24px] flex-1 cursor-pointer touch-none"
-        style={{ height: trackH, paddingLeft: trackInset, paddingRight: trackInset }}
+        style={{ height: trackH }}
         onPointerDown={onTrackPointerDown}
       >
         <div
-          className="pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-full bg-white/30"
-          style={{ left: trackInset, right: trackInset, height: rail }}
+          className="pointer-events-none absolute top-1/2 left-0 right-0 -translate-y-1/2 rounded-full bg-white/30"
+          style={{ height: rail }}
         />
         <div
-          className="pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-full bg-white"
-          style={{
-            left: trackInset,
-            height: rail,
-            width: `calc((100% - ${trackInset * 2}px) * ${ratio})`,
-          }}
+          className="pointer-events-none absolute top-1/2 left-0 -translate-y-1/2 rounded-full bg-white"
+          style={{ height: rail, width: fillW }}
         />
         <div
-          className="pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-sm"
-          style={{
-            left: `calc(${trackInset}px + (100% - ${trackInset * 2}px) * ${ratio})`,
-            width: thumb,
-            height: thumb,
-          }}
+          className="pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-full bg-white shadow-sm"
+          style={{ left: thumbLeft, width: thumb, height: thumb }}
         />
       </div>
 
-      {/* Volume: panel + mute share one hover zone (bridge closes the gap). */}
+      <span
+        className="shrink-0 tabular-nums leading-none text-white/55"
+        style={{ fontSize: timeSize }}
+      >
+        {formatTime(playable)}
+      </span>
+
       <div
         className="relative shrink-0"
         onPointerEnter={() => setVolOpen(true)}
@@ -417,7 +511,12 @@ function VideoPlaybackBar({
           <div className="absolute bottom-full left-1/2 z-10 flex -translate-x-1/2 flex-col items-center">
             <div
               className="flex items-center justify-center rounded-md bg-black/70 shadow-md"
-              style={{ height: 88 * s, width: 32 * s, paddingTop: 10 * s, paddingBottom: 10 * s }}
+              style={{
+                height: 88 * s,
+                width: 32 * s,
+                paddingTop: 10 * s,
+                paddingBottom: 10 * s,
+              }}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 (e.nativeEvent as any).stopImmediatePropagation?.();
@@ -474,6 +573,18 @@ function VideoPlaybackBar({
           )}
         </button>
       </div>
+
+      {onFullscreen ? (
+        <button
+          type="button"
+          aria-label="全屏"
+          className="inline-flex shrink-0 items-center justify-center rounded-md hover:bg-white/10"
+          style={{ width: btn, height: btn }}
+          onClick={onFullscreen}
+        >
+          <RiFullscreenFill style={{ width: icon, height: icon }} />
+        </button>
+      ) : null}
     </div>
   );
 }

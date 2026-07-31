@@ -5,6 +5,8 @@ html[data-theme='light'] {
   --account-rail: #f3f3f3;
   --account-main: #f8f8f8;
   --account-card: #fcfcfc;
+  /* Image/video generator empty plate (cool wash on canvas). */
+  --gen-empty: #e9eaee;
   --ink: #141414;
   --muted: #767676;
   --line: #e5e5e5;

@@ -747,11 +747,12 @@ def _ensure_paint_tool_details(rt: Any) -> None:
 def _paint_ops_system(rt: Any) -> str:
     persona = str(getattr(rt, "persona", "") or "").strip()
     head = f"IDENTITY: {persona}\n\n" if persona else ""
-    ask_mode = str(getattr(rt, "flags", {}) or {}).get("mode") == "ask"
+    flags = getattr(rt, "flags", None)
+    if not isinstance(flags, dict):
+        flags = {}
+    ask_mode = str(flags.get("mode") or "").strip().lower() == "ask"
     ask_reply = (
-        "- Ask mode: tool_ops are a PROPOSAL only until the user Confirms. "
-        "reply must be pending wording (e.g. 确认后将添加矩形); "
-        "never say 已添加/已完成/already added.\n"
+        "- Ask mode: ops apply after the user already clarified; reply briefly after paint.\n"
         if ask_mode
         else "- Do not ask questions.\n"
     )
