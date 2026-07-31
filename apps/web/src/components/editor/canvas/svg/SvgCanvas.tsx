@@ -28,6 +28,7 @@ import {
   ungroupNodesInDocument,
   updateNodeInDocument,
   isVideoNode,
+  isExportableSceneNode,
   type SceneClipboardPayload,
 } from '@/components/rcb/scene/sceneDocument';
 import {
@@ -3842,6 +3843,17 @@ function SvgCanvas({
         canLayerActions={Boolean(
           ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || selectedFrameIds.length || activeFrameId
         )}
+        canExport={(() => {
+          const seedNodes = ctxMenuSeedNodeIds(ids, ctxMenu?.nodeId);
+          const seedFrames = ctxMenuSeedFrameIds(selectedFrameIds, ctxMenu?.frameId);
+          const targetIds = resolveSelectionNodeIds(document, seedNodes, seedFrames);
+          if (targetIds.length) {
+            // Generators / process shimmer have nothing to export.
+            return targetIds.some((id) => isExportableSceneNode(document?.deltaSetLike?.[id]));
+          }
+          // Frame-only / empty artboard → crop export still makes sense.
+          return Boolean(seedFrames.length || ctxMenu?.frameId || activeFrameId);
+        })()}
         canToggleHidden={Boolean(ids.length || ctxMenu?.nodeId)}
         canToggleLocked={Boolean(
           ids.length || ctxMenu?.nodeId || ctxMenu?.frameId || selectedFrameIds.length || activeFrameId

@@ -65,8 +65,10 @@ type CanvasContextMenuProps = {
   canAddToChat?: boolean;
   /** Nodes or active artboard frame. */
   canDelete?: boolean;
-  /** Show/hide + lock + export — node or frame target. */
+  /** Show/hide + lock — node or frame target. */
   canLayerActions?: boolean;
+  /** Export selection — false for image/video-generator plates (no pixels to export). */
+  canExport?: boolean;
   /** True when show/hide targets at least one node (not frame-only). */
   canToggleHidden?: boolean;
   /** True when lock targets a node or frame. */
@@ -262,6 +264,7 @@ function CanvasContextMenu({
   canAddToChat,
   canDelete,
   canLayerActions,
+  canExport,
   canToggleHidden,
   canToggleLocked,
   targetHidden = false,
@@ -281,6 +284,7 @@ function CanvasContextMenu({
   const deleteEnabled = canDelete ?? hasNode;
   const addToChatEnabled = canAddToChat ?? hasNode;
   const layerEnabled = canLayerActions ?? hasNode;
+  const exportEnabled = canExport ?? layerEnabled;
   const hideEnabled = canToggleHidden ?? hasNode;
   const lockEnabled = canToggleLocked ?? layerEnabled;
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -466,7 +470,7 @@ function CanvasContextMenu({
         />
         <div className="my-1 h-px bg-[var(--line)]" />
         <ExportSubmenu
-          disabled={!layerEnabled}
+          disabled={!exportEnabled}
           kind={exportKind}
           onPick={(action) => onAction(action)}
         />
