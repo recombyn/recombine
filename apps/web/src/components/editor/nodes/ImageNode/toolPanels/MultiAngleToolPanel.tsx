@@ -32,8 +32,9 @@ const ROTATE_MAX = 90;
 const TILT_MIN = -60;
 const TILT_MAX = 60;
 
-/** Preview column edge — matches the orbit globe stage. */
-const PREVIEW_SIZE = 280;
+/** Left preview: narrower column, keep stage height. */
+const PREVIEW_WIDTH = 240;
+const PREVIEW_HEIGHT = 280;
 
 const clampInt = (v: number, min: number, max: number) =>
   Math.round(Math.max(min, Math.min(max, v)));
@@ -94,7 +95,7 @@ function MultiAngleToolPanel({
   return (
     <ImageToolPanelShell
       title={t('editor.imageToolbar.multiAngle')}
-      width={PREVIEW_SIZE + 220 + 32}
+      width={PREVIEW_WIDTH + 220 + 32}
       onClose={onCancel}
       headerRight={
         <PanelIconBtn title={t('editor.imageToolbar.reset')} onClick={reset}>
@@ -119,11 +120,11 @@ function MultiAngleToolPanel({
         />
       }
     >
-      <div className="flex items-stretch gap-3">
+      <div className="flex items-stretch gap-2.5">
         {/* Left — orbit / skybox preview */}
         <div
           className="relative shrink-0 overflow-hidden rounded bg-[var(--canvas)] ring-1 ring-[var(--line)]"
-          style={{ width: PREVIEW_SIZE, height: PREVIEW_SIZE }}
+          style={{ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT }}
         >
           <AngleEditorScene
             className="h-full w-full"
@@ -137,10 +138,10 @@ function MultiAngleToolPanel({
           />
         </div>
 
-        {/* Right — mode, presets, fine-tune */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        {/* Right — mode, presets, fine-tune (10px item gaps) */}
+        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
           <SegmentedControl
-            className="mb-3 shrink-0"
+            className="shrink-0"
             size="sm"
             fullWidth
             value={tab}
@@ -151,11 +152,11 @@ function MultiAngleToolPanel({
             ]}
           />
 
-          <div className="mb-3 min-h-0 flex-1">
-            <div className="mb-1.5 text-[12px] text-[var(--muted)]">
+          <div className="min-h-0 flex-1">
+            <div className="mb-2.5 text-[12px] text-[var(--muted)]">
               {t('editor.imageToolbar.commonAngles')}
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-2 gap-2.5">
               {ANGLE_PRESET_KEYS.map((preset) => {
                 const active = activePresetKey === preset.key;
                 const label = angleLabel(preset.key);
@@ -181,8 +182,9 @@ function MultiAngleToolPanel({
             </div>
           </div>
 
-          <div className="mt-auto shrink-0 space-y-0.5">
+          <div className="mt-auto flex shrink-0 flex-col gap-2.5">
             <PanelSliderRow
+              className="py-0"
               label={t('editor.imageToolbar.rotate')}
               value={rotate}
               min={ROTATE_MIN}
@@ -193,6 +195,7 @@ function MultiAngleToolPanel({
               fillFromZero
             />
             <PanelSliderRow
+              className="py-0"
               label={t('editor.imageToolbar.tilt')}
               value={tilt}
               min={TILT_MIN}
@@ -203,6 +206,7 @@ function MultiAngleToolPanel({
               fillFromZero
             />
             <PanelSliderRow
+              className="py-0"
               label={t('editor.imageToolbar.zoom')}
               value={scaleValueToIndex(scale)}
               min={0}

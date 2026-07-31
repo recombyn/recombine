@@ -191,6 +191,7 @@ function PanelSliderRow({
   step = 1,
   onChange,
   fillFromZero,
+  className,
 }: {
   label: string;
   value: number;
@@ -200,9 +201,10 @@ function PanelSliderRow({
   step?: number;
   onChange: (v: number) => void;
   fillFromZero?: boolean;
+  className?: string;
 }) {
   return (
-    <div className="flex items-center gap-2.5 py-1.5">
+    <div className={cn('flex items-center gap-2.5 py-1.5', className)}>
       <span className="w-10 shrink-0 text-left text-[12px] text-[var(--ink)]">{label}</span>
       <div className="relative min-w-0 flex-1 py-0.5">
         <Slider
