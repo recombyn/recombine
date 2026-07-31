@@ -217,7 +217,7 @@ const ja = {
     importApiDown: 'API に接続できません（ポート 8000）。先に make dev-api を実行してください',
     importJsonFailed: 'JSON の解析に失敗しました',
     importJsonInvalid: 'シーン文書の形式ではありません。本アプリで書き出したテンプレートを使用してください。',
-    importUnsupported: '未対応の形式です（画像 / PDF / Word）',
+    importUnsupported: '未対応の形式です（画像）',
     importNoDocument: 'インポート失敗：ドキュメントがありません',
     importEmpty: '空のキャンバスになりました。ファイルまたは API を確認してください。',
     importNeedPoppler: 'PDF の画像化に失敗しました。Poppler を入れ、POPPLER_PATH に bin を指定してください。',
@@ -701,7 +701,7 @@ const ja = {
   },
   importFile: {
     title: '編集可能な形に変換',
-    hint: '画像・PDF・Word を編集可能なキャンバスに変換します',
+    hint: '画像を編集可能なキャンバスに変換します',
     import: '変換を開始',
     image: '画像',
     pdf: 'PDF',

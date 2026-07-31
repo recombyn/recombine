@@ -1,11 +1,18 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
-import videojs from 'video.js';
-import type Player from 'video.js/dist/types/player';
-import 'video.js/dist/video-js.css';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  memo,
+} from 'react';
 import { cn } from '@/utils/classnames';
 import { imageSrcToFile, isOurStoredImageUrl } from '@/utils/uploadImage';
 import VideoPlaybackBar, {
+  videoMediaFromElement,
   videoPlaybackBarScale,
+  type VideoMediaControl,
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import './VideoJsPlayer.css';
 
@@ -20,12 +27,14 @@ function videoSrcNeedsAuthFetch(src: string): boolean {
  * Resolve a canvas / upload video `src` into something the player can play.
  * Auth-gated uploads → blob URL; public / data / blob URLs pass through.
  * Keeps the last good URL while re-resolving so the player is not unmounted.
+ * Never revoke/recreate a blob for the same src+key (avoids reload → frame 0).
  */
 export function usePlayableVideoSrc(src: string, uploadKey?: string | null): string {
   const [playSrc, setPlaySrc] = useState(() =>
     videoSrcNeedsAuthFetch(src) ? '' : String(src || '').trim()
   );
   const blobRef = useRef<string | null>(null);
+  const cacheKeyRef = useRef<string>('');
 
   useEffect(() => {
     const s = String(src || '').trim();
@@ -34,6 +43,7 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
         URL.revokeObjectURL(blobRef.current);
         blobRef.current = null;
       }
+      cacheKeyRef.current = '';
       setPlaySrc('');
       return;
     }
@@ -42,7 +52,13 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
         URL.revokeObjectURL(blobRef.current);
         blobRef.current = null;
       }
+      cacheKeyRef.current = '';
       setPlaySrc(s);
+      return;
+    }
+    const cacheKey = `${s}::${uploadKey || ''}`;
+    if (cacheKeyRef.current === cacheKey && blobRef.current) {
+      setPlaySrc(blobRef.current);
       return;
     }
     let cancelled = false;
@@ -52,11 +68,11 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
         const next = URL.createObjectURL(file);
         if (blobRef.current) URL.revokeObjectURL(blobRef.current);
         blobRef.current = next;
+        cacheKeyRef.current = cacheKey;
         setPlaySrc(next);
       })
       .catch((err) => {
         console.warn('[video] auth src resolve failed', err);
-        // Keep previous playSrc on failure — blanking would flash/unmount the plate.
       });
     return () => {
       cancelled = true;
@@ -76,21 +92,6 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
   return playSrc;
 }
 
-function guessSourceType(src: string): string | undefined {
-  const s = src.toLowerCase();
-  if (s.startsWith('data:video/')) {
-    const m = /^data:(video\/[^;]+)/i.exec(src);
-    return m?.[1];
-  }
-  if (s.startsWith('blob:')) return 'video/mp4';
-  if (/\.webm(\?|#|$)/i.test(s)) return 'video/webm';
-  if (/\.mov(\?|#|$)/i.test(s)) return 'video/mp4';
-  if (/\.m4v(\?|#|$)/i.test(s)) return 'video/mp4';
-  if (/\.mp4(\?|#|$)/i.test(s)) return 'video/mp4';
-  if (s.includes('/api/v1/uploads/')) return 'video/mp4';
-  return undefined;
-}
-
 export type VideoCropNorm = { x: number; y: number; w: number; h: number };
 
 export type VideoJsPlayerProps = {
@@ -101,8 +102,13 @@ export type VideoJsPlayerProps = {
   /** Fill parent box (canvas node). Default fluid for previews. */
   layout?: 'fill' | 'fluid';
   /**
+   * How the video paints inside the shell.
+   * Canvas nodes use `fill` (match plate). Previews should use `contain`.
+   */
+  objectFit?: 'fill' | 'contain' | 'cover';
+  /**
    * `always` / `hover` — shared React playback bar.
-   * `none` — no bar (caller may portal `VideoPlaybackBar`, e.g. canvas hover).
+   * `none` — no bar (caller may portal / embed `VideoPlaybackBar`).
    */
   controlsMode?: 'always' | 'hover' | 'none';
   /** Force bar visible when `controlsMode === 'hover'`. */
@@ -113,13 +119,15 @@ export type VideoJsPlayerProps = {
   /** Keep playback inside [trimStart, trimEnd]. */
   trimStart?: number;
   trimEnd?: number;
-  /** Normalized crop — applied to tech/poster only so the bar stays in-frame. */
+  /** Normalized crop — applied to the media surface only. */
   crop?: VideoCropNorm | null;
   flipX?: boolean;
   flipY?: boolean;
   /** When true, video surface ignores pointer (canvas selection). Bar stays clickable. */
   videoPointerNone?: boolean;
-  onReady?: (player: Player) => void;
+  onReady?: (media: VideoMediaControl) => void;
+  /** Fired once intrinsic video size is known (preview aspect). */
+  onMediaSize?: (size: { width: number; height: number }) => void;
 };
 
 function cropCssVars(crop?: VideoCropNorm | null): CSSProperties | undefined {
@@ -133,8 +141,8 @@ function cropCssVars(crop?: VideoCropNorm | null): CSSProperties | undefined {
 }
 
 /**
- * Shared Video.js player — canvas nodes, attachment hover preview, fullscreen.
- * Chrome uses `VideoPlaybackBar` (never Video.js control bar).
+ * Native `<video>` player — canvas nodes, attachment hover preview, fullscreen, trim.
+ * Chrome uses `VideoPlaybackBar` (never browser default controls).
  */
 function VideoJsPlayer({
   src,
@@ -142,6 +150,7 @@ function VideoJsPlayer({
   className,
   style,
   layout = 'fluid',
+  objectFit = 'fill',
   controlsMode = 'always',
   controlsVisible = false,
   autoplay = false,
@@ -154,20 +163,22 @@ function VideoJsPlayer({
   flipY = false,
   videoPointerNone = false,
   onReady,
+  onMediaSize,
 }: VideoJsPlayerProps): ReactNode {
-  const hostRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
-  const playerRef = useRef<Player | null>(null);
-  const [player, setPlayer] = useState<Player | null>(null);
+  const mediaRef = useRef<VideoMediaControl | null>(null);
+  const [media, setMedia] = useState<VideoMediaControl | null>(null);
   const [shellHovered, setShellHovered] = useState(false);
   const [barScale, setBarScale] = useState(1);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const onMediaSizeRef = useRef(onMediaSize);
+  onMediaSizeRef.current = onMediaSize;
   const trimStartRef = useRef(trimStart);
   const trimEndRef = useRef(trimEnd);
   trimStartRef.current = trimStart;
   trimEndRef.current = trimEnd;
-
   const playable = String(src || '').trim();
   const cropVars = cropCssVars(crop);
   const hasCrop = Boolean(cropVars);
@@ -175,44 +186,28 @@ function VideoJsPlayer({
   const barVisible =
     controlsMode === 'always' ||
     (controlsMode === 'hover' && (controlsVisible || shellHovered));
+  const fit = hasCrop ? 'fill' : objectFit;
 
+  // Bind media once per element mount — do not recreate on selection re-renders.
+  // Canvas (controlsMode none): never auto-seek / clamp — leave currentTime alone.
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host || !playable) return;
-    if (!host.isConnected) return;
+    const el = videoRef.current;
+    if (!el) return;
+    const control = videoMediaFromElement(el);
+    mediaRef.current = control;
+    setMedia(control);
+    onReadyRef.current?.(control);
 
-    const videoEl = document.createElement('video');
-    videoEl.className = cn(
-      'video-js vjs-big-play-centered',
-      layout === 'fill' ? 'vjs-fill' : 'vjs-fluid'
-    );
-    videoEl.setAttribute('playsinline', 'true');
-    host.appendChild(videoEl);
-
-    const sourceType = guessSourceType(playable);
-    const instance = videojs(videoEl, {
-      controls: false,
-      autoplay,
-      muted,
-      loop,
-      preload: 'auto',
-      poster: poster || undefined,
-      fill: layout === 'fill',
-      fluid: layout === 'fluid',
-      playsinline: true,
-      bigPlayButton: false,
-      inactivityTimeout: 0,
-      sources: [
-        {
-          src: playable,
-          ...(sourceType ? { type: sourceType } : {}),
-        },
-      ],
-    });
-    playerRef.current = instance;
+    if (controlsMode === 'none') {
+      return () => {
+        mediaRef.current = null;
+        setMedia(null);
+      };
+    }
 
     const clampTrim = () => {
-      const d = Number(instance.duration()) || 0;
+      if (control.isPaused()) return;
+      const d = control.getDuration();
       const hasStart = Number.isFinite(trimStartRef.current);
       const hasEnd = Number.isFinite(trimEndRef.current);
       if (!hasStart && !hasEnd) return;
@@ -223,57 +218,79 @@ function VideoJsPlayer({
         end = Math.max(0, Math.min(end, d));
       }
       if (end <= start) return;
-      const t = Number(instance.currentTime()) || 0;
-      if (t < start) instance.currentTime(start);
-      else if (t >= end - 0.04) {
-        if (instance.paused()) instance.currentTime(end);
-        else instance.currentTime(start);
-      }
+      const t = control.getCurrentTime();
+      if (t < start - 0.02) control.setCurrentTime(start);
+      else if (t >= end - 0.04) control.setCurrentTime(start);
     };
 
-    instance.ready(() => {
-      setPlayer(instance);
-      onReadyRef.current?.(instance);
-      clampTrim();
-      if (autoplay) void instance.play()?.catch(() => undefined);
-    });
-
-    instance.on('timeupdate', clampTrim);
-    instance.on('loadedmetadata', clampTrim);
-
+    control.on('timeupdate', clampTrim);
     return () => {
-      instance.off('timeupdate', clampTrim);
-      instance.off('loadedmetadata', clampTrim);
-      setPlayer(null);
-      try {
-        if (!instance.isDisposed()) instance.dispose();
-      } catch {
-        /* ignore */
-      }
-      playerRef.current = null;
-      while (host.firstChild) host.removeChild(host.firstChild);
+      control.off('timeupdate', clampTrim);
+      mediaRef.current = null;
+      setMedia(null);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- poster/muted toggles handled below
-  }, [playable, layout]);
+    // controlsMode is fixed for a given mount site (canvas vs preview)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Imperative src only — never put `src`/`poster` on JSX.
+   * React re-applying those attrs on selection re-renders reloads the media → frame 0.
+   */
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !playable) return;
+    const abs = (() => {
+      try {
+        return new URL(playable, window.location.href).href;
+      } catch {
+        return playable;
+      }
+    })();
+    const currentAbs = (() => {
+      try {
+        if (el.currentSrc) return el.currentSrc;
+        const attr = el.getAttribute('src') || '';
+        return attr ? new URL(attr, window.location.href).href : '';
+      } catch {
+        return el.getAttribute('src') || '';
+      }
+    })();
+    if (currentAbs === abs) return;
+
+    // Real src change only — do not try to restore previous currentTime.
+    el.src = playable;
+  }, [playable]);
 
   useEffect(() => {
-    const p = playerRef.current;
-    if (!p || p.isDisposed()) return;
-    p.muted(Boolean(muted));
+    const el = videoRef.current;
+    if (!el) return;
+    el.muted = Boolean(muted);
   }, [muted]);
 
+  // Poster only for non-canvas previews; never re-touch once a frame is showing.
   useEffect(() => {
-    const p = playerRef.current;
-    if (!p || p.isDisposed()) return;
-    if (poster) p.poster(poster);
-  }, [poster]);
+    if (controlsMode === 'none') return;
+    const el = videoRef.current;
+    if (!el) return;
+    const next = String(poster || '').trim();
+    if (!next) return;
+    if (el.getAttribute('poster') === next) return;
+    if (el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    el.setAttribute('poster', next);
+  }, [poster, controlsMode]);
 
   useEffect(() => {
-    const p = playerRef.current;
-    if (!p || p.isDisposed()) return;
-    p.autoplay(Boolean(autoplay));
-    if (autoplay) void p.play()?.catch(() => undefined);
-  }, [autoplay]);
+    const el = videoRef.current;
+    if (!el) return;
+    el.loop = Boolean(loop);
+  }, [loop]);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !autoplay) return;
+    void el.play()?.catch(() => undefined);
+  }, [autoplay, playable]);
 
   useEffect(() => {
     const el = shellRef.current;
@@ -284,6 +301,34 @@ function VideoJsPlayer({
     ro?.observe(el);
     return () => ro?.disconnect();
   }, [controlsMode, playable]);
+
+  const videoStyle = useMemo((): CSSProperties => {
+    if (!hasCrop || !cropVars) {
+      return { width: '100%', height: '100%', objectFit: fit };
+    }
+    return {
+      position: 'absolute',
+      left: cropVars['--rcb-crop-left' as string] as string,
+      top: cropVars['--rcb-crop-top' as string] as string,
+      width: cropVars['--rcb-crop-w' as string] as string,
+      height: cropVars['--rcb-crop-h' as string] as string,
+      maxWidth: 'none',
+      objectFit: 'fill',
+    };
+  }, [hasCrop, cropVars, fit]);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    const report = () => {
+      const w = el.videoWidth;
+      const h = el.videoHeight;
+      if (w > 0 && h > 0) onMediaSizeRef.current?.({ width: w, height: h });
+    };
+    if (el.videoWidth > 0) report();
+    el.addEventListener('loadedmetadata', report);
+    return () => el.removeEventListener('loadedmetadata', report);
+  }, [playable]);
 
   if (!playable) {
     return (
@@ -300,14 +345,15 @@ function VideoJsPlayer({
     <div
       ref={shellRef}
       className={cn(
-        'rcb-videojs relative min-h-0 min-w-0 overflow-hidden',
+        'rcb-video relative min-h-0 min-w-0 overflow-hidden bg-[#111827]',
         layout === 'fill' && 'h-full w-full',
-        hasCrop && 'rcb-videojs--cropped',
-        flipX && 'rcb-videojs--flip-x',
-        flipY && 'rcb-videojs--flip-y',
+        hasCrop && 'rcb-video--cropped',
+        flipX && 'rcb-video--flip-x',
+        flipY && 'rcb-video--flip-y',
+        videoPointerNone && 'pointer-events-none',
         className
       )}
-      style={{ ...cropVars, ...style }}
+      style={style}
       onPointerEnter={() => {
         if (controlsMode === 'hover') setShellHovered(true);
       }}
@@ -317,20 +363,26 @@ function VideoJsPlayer({
         e.stopPropagation();
       }}
     >
-      <div
-        ref={hostRef}
+      <video
+        ref={videoRef}
         className={cn(
-          'absolute inset-0 min-h-0 min-w-0',
-          videoPointerNone && 'pointer-events-none'
+          'rcb-video__tech block',
+          videoPointerNone && 'pointer-events-none',
+          layout === 'fill' && !hasCrop && 'h-full w-full'
         )}
+        style={videoStyle}
+        playsInline
+        preload="auto"
+        muted={muted}
+        loop={loop}
+        controls={false}
       />
-      {/* When video is pe-none, this layer makes the shell receive hover. */}
       {controlsMode === 'hover' && videoPointerNone ? (
         <div className="absolute inset-0 z-[1]" aria-hidden />
       ) : null}
       {showBar ? (
         <VideoPlaybackBar
-          player={player}
+          media={media}
           visible={barVisible}
           trimStart={trimStart}
           trimEnd={trimEnd}
@@ -342,4 +394,25 @@ function VideoJsPlayer({
   );
 }
 
-export default memo(VideoJsPlayer);
+export default memo(VideoJsPlayer, (prev, next) => {
+  return (
+    prev.src === next.src &&
+    prev.poster === next.poster &&
+    prev.className === next.className &&
+    prev.layout === next.layout &&
+    prev.objectFit === next.objectFit &&
+    prev.controlsMode === next.controlsMode &&
+    prev.controlsVisible === next.controlsVisible &&
+    prev.autoplay === next.autoplay &&
+    prev.muted === next.muted &&
+    prev.loop === next.loop &&
+    prev.trimStart === next.trimStart &&
+    prev.trimEnd === next.trimEnd &&
+    prev.flipX === next.flipX &&
+    prev.flipY === next.flipY &&
+    prev.videoPointerNone === next.videoPointerNone &&
+    prev.crop === next.crop &&
+    // onReady is ref-driven — ignore identity churn from parents.
+    prev.style === next.style
+  );
+});

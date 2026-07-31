@@ -12,7 +12,7 @@ To provide the Service we may collect:
 |----------|----------|
 | **Account** | Email, display name, bio, avatar, sign-in method (email / Google) |
 | **Session & security** | Sign-in state, verification-related records, necessary security logs |
-| **Project content** | Canvas documents, uploaded images, PDF / Word import results, project covers |
+| **Project content** | Canvas documents, uploaded images, project covers |
 | **Usage & billing** | Credit balance and ledger, plan info, card-key redemption outcomes (full key plaintext is not kept for long-term display) |
 | **Collaboration & sharing** | Share-link settings, collaborator identifiers you add (username / email / ID) |
 | **Plaza** | Submitted work metadata and covers, review-related info |

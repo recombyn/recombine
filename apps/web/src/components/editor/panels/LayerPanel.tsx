@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type PointerE
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuFrame, LuPanelLeft, LuPencil, LuVideo } from 'react-icons/lu';
+import { LuFrame, LuPanelLeft, LuPencil, LuPlay } from 'react-icons/lu';
 import { RiVideoAiLine } from 'react-icons/ri';
 import { RxText } from 'react-icons/rx';
 import {
@@ -195,7 +195,7 @@ function LayerIcon({
     if (thumb) return thumb;
     return (
       <LayerGlyphFallback>
-        <LuVideo className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+        <LuPlay className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
       </LayerGlyphFallback>
     );
   }

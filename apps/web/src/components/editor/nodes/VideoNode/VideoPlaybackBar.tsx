@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
-import type Player from 'video.js/dist/types/player';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  memo,
+} from 'react';
 import {
   HiOutlinePause,
   HiOutlinePlay,
@@ -42,18 +49,81 @@ function resolveTrimWindow(
   return { start, end };
 }
 
+/** Shared control surface for native `<video>`. */
+export type VideoMediaControl = {
+  getCurrentTime: () => number;
+  setCurrentTime: (t: number) => void;
+  getDuration: () => number;
+  isPaused: () => boolean;
+  play: () => void;
+  pause: () => void;
+  isMuted: () => boolean;
+  setMuted: (v: boolean) => void;
+  getVolume: () => number;
+  setVolume: (v: number) => void;
+  on: (type: string, fn: () => void) => void;
+  off: (type: string, fn: () => void) => void;
+  isDead: () => boolean;
+};
+
+export function videoMediaFromElement(el: HTMLVideoElement): VideoMediaControl {
+  return {
+    getCurrentTime: () => Number(el.currentTime) || 0,
+    setCurrentTime: (t) => {
+      if (!Number.isFinite(t) || t < 0) return;
+      try {
+        el.currentTime = t;
+      } catch {
+        /* ignore non-seekable */
+      }
+    },
+    getDuration: () => {
+      const d = Number(el.duration);
+      if (Number.isFinite(d) && d > 0) return d;
+      try {
+        if (el.seekable && el.seekable.length > 0) {
+          const end = Number(el.seekable.end(el.seekable.length - 1));
+          if (Number.isFinite(end) && end > 0) return end;
+        }
+        if (el.buffered && el.buffered.length > 0) {
+          const end = Number(el.buffered.end(el.buffered.length - 1));
+          if (Number.isFinite(end) && end > 0) return end;
+        }
+      } catch {
+        /* ignore */
+      }
+      return 0;
+    },
+    isPaused: () => el.paused,
+    play: () => {
+      void el.play()?.catch(() => undefined);
+    },
+    pause: () => el.pause(),
+    isMuted: () => el.muted,
+    setMuted: (v) => {
+      el.muted = v;
+    },
+    getVolume: () => Number(el.volume) || 0,
+    setVolume: (v) => {
+      el.volume = v;
+    },
+    on: (type, fn) => el.addEventListener(type, fn),
+    off: (type, fn) => el.removeEventListener(type, fn),
+    isDead: () => !el.isConnected,
+  };
+}
+
 /** Chrome scale from node screen width so the bar shrinks/grows with the node. */
 export function videoPlaybackBarScale(screenWidth: number): number {
   const w = Math.max(1, screenWidth);
-  return Math.min(1.2, Math.max(0.5, w / 300));
+  return Math.min(1.25, Math.max(0.85, w / 280));
 }
 
 /**
  * Shared playback chrome — play · time · scrub · volume + bottom gradient.
- * Used by VideoJsPlayer overlay and by canvas hover (screen-space portal).
  */
 function VideoPlaybackBar({
-  player,
+  media,
   visible,
   trimStart,
   trimEnd,
@@ -64,7 +134,7 @@ function VideoPlaybackBar({
   /** Visual scale (node resize / camera). Default 1. */
   scale = 1,
 }: {
-  player: Player | null;
+  media: VideoMediaControl | null;
   visible: boolean;
   trimStart?: number;
   trimEnd?: number;
@@ -78,6 +148,10 @@ function VideoPlaybackBar({
   const scrubbingRef = useRef(false);
   const trimWindowRef = useRef({ start: 0, end: 0 });
   const playableRef = useRef(0);
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekRafRef = useRef(0);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubRatio, setScrubRatio] = useState<number | null>(null);
   const [paused, setPaused] = useState(true);
   const [current, setCurrent] = useState(0);
   const [mediaDuration, setMediaDuration] = useState(0);
@@ -85,49 +159,89 @@ function VideoPlaybackBar({
   const [volume, setVolume] = useState(1);
   const [volOpen, setVolOpen] = useState(false);
 
-  const s = Math.max(0.4, Number(scale) || 1);
+  const s = Math.max(0.85, Number(scale) || 1);
   const trimWindow = resolveTrimWindow(mediaDuration, trimStart, trimEnd);
   const playable = Math.max(0, trimWindow.end - trimWindow.start);
   trimWindowRef.current = trimWindow;
   playableRef.current = playable;
   const displayCurrent = Math.max(0, current - trimWindow.start);
-  const ratio = progressRatio(displayCurrent, playable);
+  const ratio =
+    scrubRatio != null ? scrubRatio : progressRatio(displayCurrent, playable);
   const volPct = muted ? 0 : volume;
+  // Keep hit-testing while scrubbing even if hover briefly drops.
+  const interactive = visible || scrubbing;
 
   useEffect(() => {
-    if (!player || player.isDisposed()) return;
-    const sync = () => {
-      setPaused(Boolean(player.paused()));
-      setCurrent(Number(player.currentTime()) || 0);
-      setMediaDuration(Number(player.duration()) || 0);
-      setMuted(Boolean(player.muted()));
-      setVolume(Number(player.volume()) || 0);
+    if (!media || media.isDead()) return;
+    const syncMeta = () => {
+      setPaused(media.isPaused());
+      setMediaDuration(media.getDuration());
+      setMuted(media.isMuted());
+      setVolume(media.getVolume());
     };
-    sync();
-    player.on('timeupdate', sync);
-    player.on('play', sync);
-    player.on('pause', sync);
-    player.on('loadedmetadata', sync);
-    player.on('durationchange', sync);
-    player.on('volumechange', sync);
+    const syncTime = () => {
+      // Don't fight the thumb while dragging — avoids seek↔timeupdate lag.
+      if (scrubbingRef.current) return;
+      setCurrent(media.getCurrentTime());
+      setMediaDuration(media.getDuration());
+    };
+    syncMeta();
+    syncTime();
+    media.on('timeupdate', syncTime);
+    media.on('seeked', syncTime);
+    media.on('play', syncMeta);
+    media.on('pause', syncMeta);
+    const onMeta = () => {
+      syncMeta();
+      syncTime();
+    };
+    media.on('loadedmetadata', onMeta);
+    media.on('durationchange', syncMeta);
+    media.on('volumechange', syncMeta);
     return () => {
-      player.off('timeupdate', sync);
-      player.off('play', sync);
-      player.off('pause', sync);
-      player.off('loadedmetadata', sync);
-      player.off('durationchange', sync);
-      player.off('volumechange', sync);
+      media.off('timeupdate', syncTime);
+      media.off('seeked', syncTime);
+      media.off('play', syncMeta);
+      media.off('pause', syncMeta);
+      media.off('loadedmetadata', onMeta);
+      media.off('durationchange', syncMeta);
+      media.off('volumechange', syncMeta);
     };
-  }, [player]);
+  }, [media]);
+
+  const flushSeek = () => {
+    seekRafRef.current = 0;
+    const t = pendingSeekRef.current;
+    pendingSeekRef.current = null;
+    if (t == null || !media || media.isDead()) return;
+    media.setCurrentTime(t);
+    setCurrent(t);
+  };
 
   const seekFromClientX = (clientX: number) => {
-    if (!player || player.isDisposed() || !trackRef.current) return;
-    const span = playableRef.current;
+    if (!media || media.isDead() || !trackRef.current) return;
+    let span = playableRef.current;
+    if (!(span > 0)) {
+      const d = media.getDuration();
+      if (d > 0) {
+        const win = resolveTrimWindow(d, trimStart, trimEnd);
+        trimWindowRef.current = win;
+        span = Math.max(0, win.end - win.start);
+        playableRef.current = span;
+        setMediaDuration(d);
+      }
+    }
     if (!(span > 0)) return;
     const r = trackRef.current.getBoundingClientRect();
     if (!(r.width > 0)) return;
-    const t = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
-    player.currentTime(trimWindowRef.current.start + t * span);
+    const ratioT = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    const next = trimWindowRef.current.start + ratioT * span;
+    setScrubRatio(ratioT);
+    setCurrent(next);
+    pendingSeekRef.current = next;
+    if (!seekRafRef.current) {
+      seekRafRef.current = requestAnimationFrame(flushSeek);
+    }
   };
 
   useEffect(() => {
@@ -139,7 +253,18 @@ function VideoPlaybackBar({
       seekFromClientX(e.clientX);
     };
     const onUp = () => {
+      if (!scrubbingRef.current) return;
       scrubbingRef.current = false;
+      setScrubbing(false);
+      if (seekRafRef.current) {
+        cancelAnimationFrame(seekRafRef.current);
+        seekRafRef.current = 0;
+      }
+      flushSeek();
+      if (media && !media.isDead()) {
+        setCurrent(media.getCurrentTime());
+      }
+      setScrubRatio(null);
     };
     root.addEventListener('pointermove', onMove, { capture: true, passive: false });
     root.addEventListener('pointerup', onUp, { capture: true });
@@ -148,14 +273,18 @@ function VideoPlaybackBar({
       root.removeEventListener('pointermove', onMove, true);
       root.removeEventListener('pointerup', onUp, true);
       root.removeEventListener('pointercancel', onUp, true);
+      if (seekRafRef.current) cancelAnimationFrame(seekRafRef.current);
     };
-  }, [player]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seek helpers close over latest media via refs/state setters
+  }, [media, trimStart, trimEnd]);
 
   const onTrackPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     (e.nativeEvent as any).stopImmediatePropagation?.();
     scrubbingRef.current = true;
+    setScrubbing(true);
+    onHoverChange?.(true);
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -165,35 +294,35 @@ function VideoPlaybackBar({
   };
 
   const togglePlay = () => {
-    if (!player || player.isDisposed()) return;
-    if (player.paused()) void player.play()?.catch(() => undefined);
-    else player.pause();
+    if (!media || media.isDead()) return;
+    if (media.isPaused()) media.play();
+    else media.pause();
   };
 
   const toggleMute = () => {
-    if (!player || player.isDisposed()) return;
-    const next = !player.muted();
-    player.muted(next);
-    if (!next && (Number(player.volume()) || 0) <= 0.01) player.volume(1);
+    if (!media || media.isDead()) return;
+    const next = !media.isMuted();
+    media.setMuted(next);
+    if (!next && media.getVolume() <= 0.01) media.setVolume(1);
   };
 
   const onVolumePointer = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!player || player.isDisposed()) return;
+    if (!media || media.isDead()) return;
     const el = e.currentTarget;
     const r = el.getBoundingClientRect();
     const t = Math.max(0, Math.min(1, (r.bottom - e.clientY) / Math.max(1, r.height)));
-    player.muted(t <= 0.01);
-    player.volume(t);
+    media.setMuted(t <= 0.01);
+    media.setVolume(t);
   };
 
   const pad = EDGE_PAD * s;
   const gap = ITEM_GAP * s;
   const btn = 28 * s;
   const icon = 16 * s;
-  const timeSize = 11 * s;
-  const trackH = 28 * s;
-  const rail = 3 * s;
-  const thumb = 10 * s;
+  const timeSize = 12 * s;
+  const trackH = 36 * s;
+  const rail = Math.max(4, 4 * s);
+  const thumb = Math.max(14, 14 * s);
   // Thumb overhang so left/right of the rail keep equal inset from neighbors.
   const trackInset = thumb / 2;
 
@@ -203,8 +332,8 @@ function VideoPlaybackBar({
       data-video-playback-bar
       data-video-node-id={nodeId}
       className={cn(
-        'pointer-events-auto flex items-center text-white transition-opacity duration-150',
-        visible ? 'opacity-100' : 'pointer-events-none opacity-0',
+        'flex items-center text-white transition-opacity duration-150',
+        interactive ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
         className
       )}
       style={{
@@ -222,8 +351,9 @@ function VideoPlaybackBar({
       }}
       onPointerEnter={() => onHoverChange?.(true)}
       onPointerLeave={() => {
+        if (scrubbingRef.current) return;
         onHoverChange?.(false);
-        if (!scrubbingRef.current) setVolOpen(false);
+        setVolOpen(false);
       }}
     >
       <button
@@ -244,7 +374,7 @@ function VideoPlaybackBar({
         className="shrink-0 tabular-nums leading-none text-white/90"
         style={{ fontSize: timeSize, minWidth: `${3.2 * timeSize}px` }}
       >
-        {formatTime(displayCurrent)}
+        {formatTime(scrubRatio != null ? scrubRatio * playable : displayCurrent)}
       </span>
 
       <div

@@ -14,7 +14,7 @@
 
 ## 匯入檔案
 
-圖片 / PDF / Word。詳見 [匯入檔案](/features/import)。
+圖片。詳見 [匯入檔案](/features/import)。
 
 ## 靈感與廣場
 

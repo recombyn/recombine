@@ -217,7 +217,7 @@ const zhTW = {
     importApiDown: '無法連線 API（8000 埠）。請先執行：make dev-api',
     importJsonFailed: 'JSON 解析失敗，請檢查檔案格式',
     importJsonInvalid: 'JSON 格式不符合場景文件結構，請使用本應用匯出的模板檔',
-    importUnsupported: '暫不支援該格式，請選擇圖片 / PDF / Word',
+    importUnsupported: '暫不支援該格式，請選擇圖片',
     importNoDocument: '匯入失敗：未返回文件資料',
     importEmpty: '匯入結果為空，請檢查檔案或確認 API 已啟動。',
     importNeedPoppler: 'PDF 轉圖失敗：請安裝 Poppler，並將 bin 目錄設為 POPPLER_PATH（或加入 PATH）。',
@@ -695,7 +695,7 @@ const zhTW = {
   },
   importFile: {
     title: '匯入轉可編輯',
-    hint: '將圖片、PDF 或 Word 轉為可編輯畫布',
+    hint: '將圖片轉為可編輯畫布',
     import: '開始轉換',
     image: '圖片',
     pdf: 'PDF',

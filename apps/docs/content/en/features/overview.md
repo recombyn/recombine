@@ -14,7 +14,7 @@ Generator (**A**) or Agent Image mode; 1K–4K, ratios, 1–4 images. Edit: Chat
 
 ## Import
 
-Images / PDF / Word → editable canvas. See [Import](/features/import).
+Images → editable canvas. See [Import](/features/import).
 
 ## Plaza
 

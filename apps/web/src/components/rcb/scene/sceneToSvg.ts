@@ -1184,7 +1184,8 @@ export async function nodeToSvgElement(
     }
 
     const g = appendChild(parent, svgEl('g'));
-    const visual = poster || src;
+    // : live pixels are HTML <video> on the world layer. SVG holds the
+    // poster (export / transform underlay) — same idea as toSvg() frame.
     const crop = (() => {
       const fx = Number(node.attrs?.cropX);
       const fy = Number(node.attrs?.cropY);
@@ -1227,13 +1228,12 @@ export async function nodeToSvgElement(
       setAttrs(img, { 'clip-path': urlRef(clipId) });
       setAttrs(g, { 'data-radius-clip-id': clipId });
     } else {
-      // No poster yet — dark plate; HTML VideoNodeOverlay paints the frame.
       const plate = appendChild(g, svgEl('path', { d: clipD }));
       setFill(plate, '#111827');
       setStroke(plate, 'none');
       setAttrs(plate, { 'data-radius-body': '1' });
     }
-    void visual;
+    void src;
     (g as any).__sceneCornerRadii = { ...cornerR };
     tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
     if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
@@ -1859,7 +1859,10 @@ export function previewSvgNodeGeometry(
       return previewResizeText(el, box, options);
     }
 
-    if (!sameSize && isCustomPathShape(shapeType)) {
+    // Custom path (boolean / pen): live resize is CSS scale from gesture base.
+    // Keep that scale for the whole gesture — including when clamped at min size
+    // (sameSize). Dropping it calls plain translate and the path flashes at 1:1.
+    if (isCustomPathShape(shapeType) && (!sameSize || anyEl.__sceneDidResize)) {
       if (!anyEl.__sceneDragBaseW) {
         anyEl.__sceneDragBaseW = geom.width;
         anyEl.__sceneDragBaseH = geom.height;
@@ -1887,7 +1890,7 @@ export function previewSvgNodeGeometry(
     }
 
     if (isStrokeShape) {
-      anyEl.__sceneDidResize = !sameSize;
+      if (!sameSize) anyEl.__sceneDidResize = true;
       writeGeom(el, {
         left: box.left,
         top: box.top,
@@ -1900,7 +1903,6 @@ export function previewSvgNodeGeometry(
       return true;
     }
 
-    anyEl.__sceneDidResize = !sameSize;
     writeGeom(el, {
       left: box.left,
       top: box.top,
@@ -1909,10 +1911,12 @@ export function previewSvgNodeGeometry(
       abs: false,
     });
     if (previewResizeLocalGeometry(el, box.width, box.height)) {
+      if (!sameSize) anyEl.__sceneDidResize = true;
       reapplySceneTransform(el, box.left, box.top, box.width, box.height);
       return true;
     }
-    if (!sameSize) {
+    // Scale-preview shapes (fallback): same min-clamp rule as custom path.
+    if (!sameSize || anyEl.__sceneDidResize) {
       if (!anyEl.__sceneDragBaseW) {
         anyEl.__sceneDragBaseW = geom.width;
         anyEl.__sceneDragBaseH = geom.height;
@@ -1935,7 +1939,7 @@ export function previewSvgNodeGeometry(
     return true;
   }
 
-  if (geom.abs && sameSize) {
+  if (geom.abs && sameSize && !anyEl.__sceneDidResize) {
     writeGeom(el, {
       left: box.left,
       top: box.top,
@@ -1947,7 +1951,7 @@ export function previewSvgNodeGeometry(
     return true;
   }
 
-  if (!sameSize) {
+  if (!sameSize || anyEl.__sceneDidResize) {
     if (!anyEl.__sceneDragBaseW) {
       anyEl.__sceneDragBaseW = geom.width;
       anyEl.__sceneDragBaseH = geom.height;

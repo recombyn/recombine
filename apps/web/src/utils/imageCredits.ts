@@ -159,3 +159,10 @@ export function estimateImageCredits(
   if (price == null || price <= 0) return FALLBACK_CREDITS * n;
   return Math.max(1, Math.ceil(price * n * (PLUS_FACE_CREDITS / PLUS_LIST_CNY) * DEFAULT_MARKUP));
 }
+
+/** Video gen credit estimate — same ¥→积分 conversion as image; fallback 8. */
+export function estimateVideoCredits(model?: LlmModel | null): number {
+  const price = parsePriceAmount(model?.price);
+  if (price == null || price <= 0) return 8;
+  return Math.max(1, Math.ceil(price * (PLUS_FACE_CREDITS / PLUS_LIST_CNY) * DEFAULT_MARKUP));
+}

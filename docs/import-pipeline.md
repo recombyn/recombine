@@ -1,13 +1,15 @@
 # 导入管线
 
-## 阶段一：预处理 + 任务队列
+> **产品现状**：对外仅支持**图片导入**。PDF / DOCX 相关步骤为仓库内遗留实现，**不作为正式产品能力**。
 
-1. 上传 PDF / DOCX / 图片
+## 阶段一：预处理 + 任务队列（图片）
+
+1. 上传图片
 2. Celery 异步任务（可选）+ Redis 存 job 状态
-3. PDF：`pdf2image` + poppler → 页图  
-   DOCX：LibreOffice → PDF → 页图  
-   图片：归一化为单页图
+3. 图片：归一化为单页图
 4. 页图写入 `storage/results/{job_id}/pages/`
+
+遗留（非产品路径）：PDF 经 `pdf2image` + poppler；DOCX 经 LibreOffice → PDF → 页图。
 
 ## 阶段二：图像算法（页图 → 布局/文字）
 
@@ -22,7 +24,7 @@
 | 轻量 SAM | 区域提案（默认关，需模型） | 可选 |
 | LaMa | 修复/去字（默认关） | 可选 |
 
-数字 PDF 若视觉链路无结果，仍回退 `pdfplumber` 文字层。
+数字 PDF 遗留链路：若视觉链路无结果，仍可能回退 `pdfplumber` 文字层（非产品保证）。
 
 坐标会缩放到 `SCENE_TARGET_WIDTH`（默认 794）再写入 Scene。
 

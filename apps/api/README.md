@@ -82,6 +82,11 @@ pip install -e ".[ocr,dev]"
 需要：
 
 - **Redis**（broker + job 状态）
+
+> 产品侧当前仅支持**图片导入**。下列 PDF / DOCX 相关依赖与接口为仓库内遗留能力，**不作为正式产品能力宣传或保证**。
+
+可选（遗留 PDF / DOCX 管线）：
+
 - **poppler**（`pdf2image`；Windows 配置 `POPPLER_PATH`）
 - **LibreOffice**（DOCX→PDF；`LIBREOFFICE_PATH`）
 
@@ -131,20 +136,25 @@ LLM / 对象存储等见 `.env.example`。
 
 ## 导入管线
 
-### 同步（兼容）
+### 产品支持
+
+- `POST /api/v1/import/image` — 图片 → Scene JSON
+
+### 遗留（不作为正式产品能力）
+
+同步兼容接口仍可能存在于仓库中，但 **PDF / DOCX 导入当前不对外支持**：
 
 - `POST /api/v1/import/pdf`
 - `POST /api/v1/import/docx`
-- `POST /api/v1/import/image`
 
-### 异步（推荐）
+### 异步（推荐用于图片）
 
-1. `POST /api/v1/import/jobs` → `{ job_id, status }`
+1. `POST /api/v1/import/jobs` → `{ job_id, status }`（`source_type=image`）
 2. `GET /api/v1/import/jobs/{job_id}` → `queued|processing|done|failed`
 
 页图：`storage/results/{job_id}/pages/`。
 
-未装 OCR 时：数字 PDF 回退 pdfplumber；图片可能空文档。SAM / LaMa 默认关闭。
+未装 OCR 时图片可能得到空文档。SAM / LaMa 默认关闭。
 
 ## 存储（可选）
 

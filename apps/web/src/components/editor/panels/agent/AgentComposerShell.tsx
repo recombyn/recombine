@@ -32,7 +32,9 @@ import AgentComposerInput, {
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
-import VideoJsPlayer from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
+import VideoJsPlayer, {
+  usePlayableVideoSrc,
+} from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
 import ImageAspectRatioPicker, {
   AspectRatioGlyph,
 } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
@@ -294,6 +296,16 @@ const ATTACH_PREVIEW_WIDTH = 160;
 /** Cap tall previews by shrinking width so aspect stays true. */
 const ATTACH_PREVIEW_MAX_HEIGHT = 360;
 
+function fitAttachPreviewPanel(vw: number, vh: number): { w: number; h: number } {
+  let w = ATTACH_PREVIEW_WIDTH;
+  let h = Math.round((ATTACH_PREVIEW_WIDTH * vh) / Math.max(1, vw));
+  if (h > ATTACH_PREVIEW_MAX_HEIGHT) {
+    h = ATTACH_PREVIEW_MAX_HEIGHT;
+    w = Math.max(72, Math.round((ATTACH_PREVIEW_MAX_HEIGHT * vw) / Math.max(1, vh)));
+  }
+  return { w, h };
+}
+
 function formatAudioTime(sec: number) {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -306,11 +318,44 @@ function attachmentPreviewKind(a: ComposerContext): 'image' | 'audio' | 'video' 
   const thumb = String(a.thumbUrl || '').trim();
   const payload = String(a.payload || '');
   const blob = `${data} ${thumb} ${payload}`;
+
+  // Images first: uploads often keep a data:image thumb while dataUrl is https.
+  // That must not be treated as "video + poster".
+  if (data.startsWith('data:image/') || thumb.startsWith('data:image/')) {
+    if (data.startsWith('data:video/') || /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(data)) {
+      return 'video';
+    }
+    if (/\[Canvas video\]/i.test(payload) || /\[Attached video\]/i.test(payload)) {
+      return 'video';
+    }
+    return 'image';
+  }
+  if (/\[Canvas image\]/i.test(payload) || /\[Attached image\]/i.test(payload)) return 'image';
+  if (/"key"\s*:\s*"image"/i.test(payload)) return 'image';
+  if (/\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(data)) return 'image';
+
+  // Explicit video markers / mime / extensions.
   if (data.startsWith('data:video/') || thumb.startsWith('data:video/')) return 'video';
-  if (/\[Canvas video\]/i.test(payload)) return 'video';
+  if (/\[Canvas video\]/i.test(payload) || /\[Attached video\]/i.test(payload)) return 'video';
   if (/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(blob)) return 'video';
+  if (/"key"\s*:\s*"video"/i.test(payload)) return 'video';
+
+  // Canvas video without extension: https/blob media + separate still poster (JPEG/PNG data URL).
+  if (
+    data &&
+    thumb &&
+    thumb !== data &&
+    thumb.startsWith('data:image/') &&
+    (data.startsWith('http://') ||
+      data.startsWith('https://') ||
+      data.startsWith('/') ||
+      data.startsWith('blob:')) &&
+    !/\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(data)
+  ) {
+    return 'video';
+  }
+
   if (data.startsWith('data:audio/') || thumb.startsWith('data:audio/')) return 'audio';
-  if (data.startsWith('data:image/') || thumb.startsWith('data:image/')) return 'image';
   if (
     data.startsWith('http://') ||
     data.startsWith('https://') ||
@@ -408,21 +453,55 @@ function AttachmentImagePreview({ src, label }: { src: string; label: string }):
   );
 }
 
-function AttachmentVideoPreview({ src, poster }: { src: string; poster?: string }): ReactNode {
+function AttachmentVideoPreview({
+  src,
+  poster,
+  uploadKey,
+}: {
+  src: string;
+  poster?: string;
+  uploadKey?: string | null;
+}): ReactNode {
+  const playSrc = usePlayableVideoSrc(src, uploadKey);
+  const [panel, setPanel] = useState({ w: ATTACH_PREVIEW_WIDTH, h: Math.round(ATTACH_PREVIEW_WIDTH * 1.25) });
+
+  useEffect(() => {
+    let cancelled = false;
+    const posterUrl = String(poster || '').trim();
+    if (!posterUrl || posterUrl.startsWith('data:video/')) return;
+    const img = new window.Image();
+    img.onload = () => {
+      if (cancelled || !(img.naturalWidth > 0)) return;
+      setPanel(fitAttachPreviewPanel(img.naturalWidth, img.naturalHeight));
+    };
+    img.src = posterUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [poster]);
+
   return (
     <div
       className="relative overflow-hidden rounded-xl bg-black shadow-[0_8px_24px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]"
-      style={{ width: ATTACH_PREVIEW_WIDTH, maxHeight: ATTACH_PREVIEW_MAX_HEIGHT }}
+      style={{ width: panel.w, height: panel.h }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <VideoJsPlayer
-        src={src}
-        poster={poster}
-        layout="fluid"
-        controlsMode="always"
-        muted
-        className="max-h-[min(280px,40vh)] w-full"
-      />
+      {playSrc ? (
+        <VideoJsPlayer
+          src={playSrc}
+          poster={poster}
+          layout="fill"
+          objectFit="contain"
+          controlsMode="always"
+          muted
+          className="h-full w-full"
+          onMediaSize={({ width, height }) => {
+            if (width > 0 && height > 0) setPanel(fitAttachPreviewPanel(width, height));
+          }}
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-[11px] text-white/60">…</div>
+      )}
     </div>
   );
 }
@@ -626,7 +705,11 @@ function ComposerAttachmentChip({
         previewKind === 'audio' ? (
           <AttachmentAudioPreview src={mediaSrc} />
         ) : previewKind === 'video' ? (
-          <AttachmentVideoPreview src={mediaSrc} poster={thumbSrc || undefined} />
+          <AttachmentVideoPreview
+            src={mediaSrc}
+            poster={thumbSrc || undefined}
+            uploadKey={a.uploadKey}
+          />
         ) : (
           <AttachmentImagePreview src={thumbSrc || mediaSrc} label={a.label} />
         )

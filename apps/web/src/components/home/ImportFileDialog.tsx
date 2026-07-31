@@ -1,19 +1,13 @@
 import { useEffect, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  HiOutlineDocumentText,
-  HiOutlinePhoto,
-  HiOutlineDocument,
-} from 'react-icons/hi2';
+import { HiOutlinePhoto } from 'react-icons/hi2';
 import { Button, Dialog } from '@/components/base';
 import { cn } from '@/utils/classnames';
 
-export type ImportFileKind = 'image' | 'pdf' | 'docx';
+export type ImportFileKind = 'image';
 
 export const IMPORT_ACCEPT: Record<ImportFileKind, string> = {
   image: 'image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp',
-  pdf: '.pdf,application/pdf',
-  docx: '.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 };
 
 type Props = {
@@ -34,19 +28,7 @@ const KIND_OPTIONS: KindOption[] = [
     id: 'image',
     icon: HiOutlinePhoto,
     titleKey: 'importFile.image',
-    formats: 'PNG · JPG · WEBP',
-  },
-  {
-    id: 'pdf',
-    icon: HiOutlineDocument,
-    titleKey: 'importFile.pdf',
-    formats: 'PDF',
-  },
-  {
-    id: 'docx',
-    icon: HiOutlineDocumentText,
-    titleKey: 'importFile.word',
-    formats: 'DOC · DOCX',
+    formats: 'PNG · JPG · WEBP · GIF',
   },
 ];
 
@@ -102,7 +84,7 @@ function ImportFileDialog({ open, onClose, onConfirm }: Props) {
     >
       <p className="mb-6 text-[13px] text-[var(--muted)]">{t('importFile.hint')}</p>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid max-w-sm grid-cols-1 gap-4">
         {KIND_OPTIONS.map((opt) => {
           const TypeIcon = opt.icon;
           const selected = kind === opt.id;

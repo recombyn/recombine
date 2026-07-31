@@ -1,120 +1,58 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type ReactNode,
   memo,
 } from 'react';
-import type Player from 'video.js/dist/types/player';
-import { RcbOverlayPortal, rcbSceneToScreen, useRcbCamera } from '@/components/rcb';
-import VideoJsPlayer, {
-  usePlayableVideoSrc,
-  type VideoCropNorm,
-} from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
+import { usePlayableVideoSrc } from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
 import VideoPlaybackBar, {
+  videoMediaFromElement,
   videoPlaybackBarScale,
+  type VideoMediaControl,
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
-
-function readCrop(
-  cropX?: number,
-  cropY?: number,
-  cropW?: number,
-  cropH?: number
-): VideoCropNorm | undefined {
-  if (
-    !Number.isFinite(cropX) ||
-    !Number.isFinite(cropY) ||
-    !Number.isFinite(cropW) ||
-    !Number.isFinite(cropH) ||
-    Number(cropW) <= 0 ||
-    Number(cropH) <= 0
-  ) {
-    return undefined;
-  }
-  const crop = {
-    x: Number(cropX),
-    y: Number(cropY),
-    w: Number(cropW),
-    h: Number(cropH),
-  };
-  if (crop.x <= 0.001 && crop.y <= 0.001 && crop.w >= 0.999 && crop.h >= 0.999) {
-    return undefined;
-  }
-  return crop;
-}
 
 function pointInRect(x: number, y: number, r: DOMRect) {
   return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 }
 
-/**
- * Screen-space portal wrapper so the shared bar tracks the node under camera zoom
- * (same positioning model as VideoReplaceCornerButton).
- */
-function VideoPlaybackBarPortal({
-  nodeId,
-  box,
-  angle,
-  visible,
-  player,
-  trimStart,
-  trimEnd,
-  onBarHoverChange,
-}: {
-  nodeId: string;
-  box: { left: number; top: number; width: number; height: number };
-  angle: number;
-  visible: boolean;
-  player: Player | null;
-  trimStart?: number;
-  trimEnd?: number;
-  onBarHoverChange: (hovered: boolean) => void;
-}): ReactNode {
-  const camera = useRcbCamera();
-  const tl = rcbSceneToScreen(camera, box.left, box.top);
-  const br = rcbSceneToScreen(camera, box.left + box.width, box.top + box.height);
-  const stageBox = {
-    left: Math.min(tl.x, br.x),
-    top: Math.min(tl.y, br.y),
-    width: Math.abs(br.x - tl.x),
-    height: Math.abs(br.y - tl.y),
-  };
-
-  const frameStyle: CSSProperties = {
-    position: 'absolute',
-    left: stageBox.left,
-    top: stageBox.top,
-    width: stageBox.width,
-    height: stageBox.height,
-    transform: Math.abs(angle) > 0.001 ? `rotate(${angle}deg)` : undefined,
-    transformOrigin: 'center center',
-  };
-
-  return (
-    <RcbOverlayPortal>
-      <div className="pointer-events-none absolute z-[60]" style={frameStyle}>
-        <VideoPlaybackBar
-          nodeId={nodeId}
-          player={player}
-          visible={visible}
-          trimStart={trimStart}
-          trimEnd={trimEnd}
-          scale={videoPlaybackBarScale(stageBox.width)}
-          className="absolute inset-x-0 bottom-0"
-          onHoverChange={onBarHoverChange}
-        />
-      </div>
-    </RcbOverlayPortal>
-  );
+/** `toSvg`-style: freeze the current decoded frame as a JPEG data URL. */
+function captureFrameFromVideoEl(video: HTMLVideoElement): string | null {
+  if (video.readyState < 2) return null;
+  const w = Math.max(1, video.videoWidth || 1);
+  const h = Math.max(1, video.videoHeight || 1);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  try {
+    ctx.drawImage(video, 0, 0, w, h);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  } catch {
+    return null;
+  }
 }
+
+type VideoWithFrameCallback = HTMLVideoElement & {
+  requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number;
+  cancelVideoFrameCallback?: (id: number) => void;
+};
+
+type ScenePlate = CSSProperties & {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
 
 type VideoHoverPlaybackProps = {
   nodeId: string;
-  scenePlate: CSSProperties & { left: number; top: number; width: number; height: number };
+  scenePlate: ScenePlate;
   zoom: number;
   angle?: number;
+  stackZ?: number;
   src: string;
   poster?: string;
   uploadKey?: string | null;
@@ -131,50 +69,134 @@ type VideoHoverPlaybackProps = {
 };
 
 /**
- * World-layer video plate + shared playback bar in screen-space portal.
- *
- * Idle + poster → keep Video.js mounted but invisible so the SVG poster paints
- * (same as images). Avoids flash when selection / canvas chrome re-renders.
- * Hover / playing / no-poster → show the HTML plate.
+ * hybrid:
+ * - Playing → live `<video>`
+ * - Paused → 截帧 `<img>` only when it matches currentTime (scrubber).
+ *   Otherwise keep showing paused `<video>` so seek/switch lands on the right frame.
  */
 function VideoHoverPlayback({
   nodeId,
   scenePlate,
   zoom,
-  angle = 0,
+  stackZ = 0,
   src,
   poster,
   uploadKey,
   disabled,
   hidden,
-  flipX,
-  flipY,
   trimStart,
   trimEnd,
-  cropX,
-  cropY,
-  cropW,
-  cropH,
 }: VideoHoverPlaybackProps): ReactNode {
   const plateRef = useRef<HTMLDivElement | null>(null);
-  const [player, setPlayer] = useState<Player | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const playSrc = usePlayableVideoSrc(src, uploadKey);
-  const [plateHovered, setPlateHovered] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoWrapRef = useRef<HTMLDivElement | null>(null);
+  const freezeGenRef = useRef(0);
+  const [media, setMedia] = useState<VideoMediaControl | null>(null);
   const [barHovered, setBarHovered] = useState(false);
+  const [plateHovered, setPlateHovered] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  /** Mirrors video.currentTime so scrubber vs freeze can diverge and show live video. */
+  const [mediaTime, setMediaTime] = useState(0);
+  /** Frozen still + the mediaTime it was captured at. */
+  const [freeze, setFreeze] = useState<{ url: string; at: number }>(() => ({
+    url: String(poster || '').trim(),
+    at: 0,
+  }));
+  const playSrc = usePlayableVideoSrc(src, uploadKey);
   const showUi = !hidden && !disabled;
-  const crop = readCrop(cropX, cropY, cropW, cropH);
   const z = Math.max(0.05, zoom || 1);
-  const hasPoster = Boolean(poster);
-  // Paint HTML only when needed; otherwise SVG poster is the idle surface.
-  const paintHtml =
-    showUi && (playing || plateHovered || barHovered || !hasPoster);
-  const barVisible = showUi && (plateHovered || barHovered);
+  const posterUrl = String(poster || '').trim();
+
+  useEffect(() => {
+    const next = String(poster || '').trim();
+    if (!next) return;
+    setFreeze((prev) => (prev.url ? prev : { url: next, at: 0 }));
+  }, [poster]);
+
+  // Bind src once — never via React `src={}`.
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !playSrc) return;
+    if (el.getAttribute('src') === playSrc || el.currentSrc === playSrc) return;
+    try {
+      if (el.currentSrc && new URL(el.currentSrc).href === new URL(playSrc, window.location.href).href) {
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    freezeGenRef.current += 1;
+    setFreeze({ url: posterUrl, at: 0 });
+    el.src = playSrc;
+  }, [playSrc, posterUrl]);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    setMedia(videoMediaFromElement(el));
+  }, []);
+
+  // Capture still after pause / seek — wait for a decoded frame, briefly reveal video if hidden.
+  useEffect(() => {
+    const el = videoRef.current as VideoWithFrameCallback | null;
+    if (!el) return;
+
+    let vfc = 0;
+    let raf = 0;
+
+    const freezeNow = () => {
+      if (!el.paused && !el.ended) return;
+      const wrap = videoWrapRef.current;
+      const prevVis = wrap?.style.visibility;
+      // Hidden videos often won't decode the seeked frame — reveal for capture.
+      if (wrap) wrap.style.visibility = 'visible';
+
+      const gen = ++freezeGenRef.current;
+      const finish = () => {
+        if (gen !== freezeGenRef.current) return;
+        const shot = captureFrameFromVideoEl(el);
+        if (shot) {
+          const at = Number(el.currentTime) || 0;
+          setMediaTime(at);
+          setFreeze({ url: shot, at });
+        }
+        if (wrap) wrap.style.visibility = prevVis ?? '';
+      };
+
+      if (typeof el.requestVideoFrameCallback === 'function') {
+        vfc = el.requestVideoFrameCallback(() => finish());
+      } else {
+        raf = requestAnimationFrame(() => {
+          raf = requestAnimationFrame(finish);
+        });
+      }
+    };
+
+    el.addEventListener('pause', freezeNow);
+    el.addEventListener('seeked', freezeNow);
+    el.addEventListener('loadeddata', freezeNow);
+    const syncTime = () => setMediaTime(Number(el.currentTime) || 0);
+    el.addEventListener('timeupdate', syncTime);
+    el.addEventListener('seeked', syncTime);
+    freezeNow();
+    syncTime();
+    return () => {
+      el.removeEventListener('pause', freezeNow);
+      el.removeEventListener('seeked', freezeNow);
+      el.removeEventListener('loadeddata', freezeNow);
+      el.removeEventListener('timeupdate', syncTime);
+      el.removeEventListener('seeked', syncTime);
+      cancelAnimationFrame(raf);
+      if (vfc && typeof el.cancelVideoFrameCallback === 'function') {
+        el.cancelVideoFrameCallback(vfc);
+      }
+    };
+  }, [playSrc]);
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const plate = plateRef.current;
-      if (!plate || hidden) {
+      if (!plate || !showUi) {
         setPlateHovered(false);
         return;
       }
@@ -187,125 +209,118 @@ function VideoHoverPlayback({
       document.removeEventListener('pointermove', onMove);
       window.removeEventListener('blur', onLeave);
     };
-  }, [hidden, scenePlate.left, scenePlate.top, scenePlate.width, scenePlate.height]);
+  }, [showUi, scenePlate.left, scenePlate.top, scenePlate.width, scenePlate.height]);
 
   useEffect(() => {
-    if (!player || player.isDisposed()) {
+    if (!media || media.isDead()) {
       setPlaying(false);
       return;
     }
     const sync = () => {
       try {
-        setPlaying(!player.paused());
+        setPlaying(!media.isPaused());
       } catch {
         setPlaying(false);
       }
     };
     sync();
-    player.on('play', sync);
-    player.on('pause', sync);
-    player.on('ended', sync);
+    media.on('play', sync);
+    media.on('pause', sync);
+    media.on('ended', sync);
     return () => {
-      player.off('play', sync);
-      player.off('pause', sync);
-      player.off('ended', sync);
+      media.off('play', sync);
+      media.off('pause', sync);
+      media.off('ended', sync);
     };
-  }, [player]);
+  }, [media]);
 
-  const plateStyle = useMemo(
-    (): CSSProperties => ({
-      ...scenePlate,
-      zIndex: 10,
-      // Keep laid out for hit-testing / player mount; hide when SVG poster owns paint.
-      visibility: paintHtml ? 'visible' : 'hidden',
-    }),
-    [scenePlate, paintHtml]
-  );
+  if (!src) return null;
 
-  const counterScaleStyle = useMemo(
-    (): CSSProperties => ({
-      width: scenePlate.width * z,
-      height: scenePlate.height * z,
-      transform: `scale(${1 / z})`,
-      transformOrigin: '0 0',
-    }),
-    [scenePlate.width, scenePlate.height, z]
-  );
-
-  if (!src || !playSrc) return null;
-
-  const sceneBox = {
-    left: scenePlate.left,
-    top: scenePlate.top,
-    width: scenePlate.width,
-    height: scenePlate.height,
-  };
+  // Still only when it matches scrubber time — otherwise show paused video at currentTime.
+  const freezeMatches = Boolean(freeze.url) && Math.abs(mediaTime - freeze.at) <= 0.12;
+  const showStill = !playing && freezeMatches;
+  const showVideo = playing || !showStill;
+  const barVisible = showUi && (plateHovered || barHovered || playing);
 
   return (
-    <>
+    <div
+      ref={plateRef}
+      className="pointer-events-none absolute overflow-hidden"
+      style={{
+        left: scenePlate.left,
+        top: scenePlate.top,
+        width: scenePlate.width,
+        height: scenePlate.height,
+        borderRadius: scenePlate.borderRadius,
+        transform: scenePlate.transform,
+        transformOrigin: scenePlate.transformOrigin || 'center center',
+        zIndex: Math.max(0, stackZ),
+        visibility: showUi ? 'visible' : 'hidden',
+      }}
+      data-video-hover-plate=""
+      data-video-node-id={nodeId}
+    >
+      {showStill ? (
+        <img
+          src={freeze.url}
+          alt=""
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full"
+          style={{ objectFit: 'fill' }}
+        />
+      ) : null}
+
       <div
-        ref={plateRef}
-        className="pointer-events-none absolute overflow-hidden"
-        style={plateStyle}
-        data-video-hover-plate=""
-        data-video-node-id={nodeId}
+        ref={videoWrapRef}
+        className="pointer-events-none absolute left-0 top-0 overflow-hidden"
+        style={{
+          width: scenePlate.width * z,
+          height: scenePlate.height * z,
+          transform: `scale(${1 / z})`,
+          transformOrigin: '0 0',
+          visibility: showVideo ? 'visible' : 'hidden',
+        }}
       >
-        <div className="absolute left-0 top-0 overflow-hidden" style={counterScaleStyle}>
-          <VideoJsPlayer
-            src={playSrc}
-            poster={poster}
-            layout="fill"
-            controlsMode="none"
-            muted
-            videoPointerNone
-            crop={crop}
-            flipX={flipX}
-            flipY={flipY}
-            trimStart={trimStart}
-            trimEnd={trimEnd}
-            className="h-full w-full"
-            onReady={setPlayer}
-          />
-        </div>
+        <video
+          ref={videoRef}
+          className="pointer-events-none block h-full w-full"
+          style={{ objectFit: 'fill', background: '#111827' }}
+          playsInline
+          preload="auto"
+          muted
+          controls={false}
+          draggable={false}
+        />
       </div>
 
       {showUi ? (
-        <VideoPlaybackBarPortal
+        <VideoPlaybackBar
           nodeId={nodeId}
-          box={sceneBox}
-          angle={angle}
+          media={media}
           visible={barVisible}
-          player={player}
           trimStart={trimStart}
           trimEnd={trimEnd}
-          onBarHoverChange={setBarHovered}
+          scale={videoPlaybackBarScale(scenePlate.width)}
+          className="pointer-events-auto absolute inset-x-0 bottom-0"
+          onHoverChange={setBarHovered}
         />
       ) : null}
-    </>
+    </div>
   );
 }
 
-function hoverPlaybackPropsEqual(
-  prev: VideoHoverPlaybackProps,
-  next: VideoHoverPlaybackProps
-): boolean {
+function propsEqual(prev: VideoHoverPlaybackProps, next: VideoHoverPlaybackProps): boolean {
   return (
     prev.nodeId === next.nodeId &&
     prev.zoom === next.zoom &&
-    prev.angle === next.angle &&
+    prev.stackZ === next.stackZ &&
     prev.src === next.src &&
     prev.poster === next.poster &&
     prev.uploadKey === next.uploadKey &&
     prev.disabled === next.disabled &&
     prev.hidden === next.hidden &&
-    prev.flipX === next.flipX &&
-    prev.flipY === next.flipY &&
     prev.trimStart === next.trimStart &&
     prev.trimEnd === next.trimEnd &&
-    prev.cropX === next.cropX &&
-    prev.cropY === next.cropY &&
-    prev.cropW === next.cropW &&
-    prev.cropH === next.cropH &&
     prev.scenePlate.left === next.scenePlate.left &&
     prev.scenePlate.top === next.scenePlate.top &&
     prev.scenePlate.width === next.scenePlate.width &&
@@ -315,4 +330,4 @@ function hoverPlaybackPropsEqual(
   );
 }
 
-export default memo(VideoHoverPlayback, hoverPlaybackPropsEqual);
+export default memo(VideoHoverPlayback, propsEqual);

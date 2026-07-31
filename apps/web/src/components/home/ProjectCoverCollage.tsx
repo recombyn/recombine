@@ -52,7 +52,7 @@ type Mode = 'urls' | 'docs' | 'doc-full' | 'empty';
 
 /**
  * Project card cover for 最近打开 / 我的项目 — multi `<img>` collage (max 4).
- * Layout: 1 full · 2 side-by-side · 3 tall-left · 4 = 2×2 flex columns.
+ * Layout: 1 full · 2 side-by-side · 3 tall-left · 4 = 2×2 CSS grid (equal gutters).
  */
 function ProjectCoverCollage({
   urls,
@@ -104,7 +104,7 @@ function ProjectCoverCollage({
   );
 }
 
-/** Fig2 structure: absolute flex columns of `<img class="h-1/2 w-full object-cover">`. */
+/** Multi-tile collage — CSS grid keeps row/column gutters equal. */
 function ImgCollage({
   urls,
   fallbackDocument,
@@ -150,13 +150,13 @@ function ImgCollage({
 
   if (n === 2) {
     return (
-      <div className="absolute inset-0 flex gap-1">
+      <div className="absolute inset-0 grid grid-cols-2 gap-1">
         {visible.map((src) => (
           <img
             key={src}
             src={src}
             alt=""
-            className="h-full w-1/2 flex-1 object-cover"
+            className="h-full w-full object-cover"
             loading="lazy"
             onError={() => onError(src)}
           />
@@ -167,68 +167,45 @@ function ImgCollage({
 
   if (n === 3) {
     return (
-      <div className="absolute inset-0 flex gap-1">
+      <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1">
         <img
           src={visible[0]}
           alt=""
-          className="h-full w-1/2 flex-1 object-cover"
-          loading="lazy"
-          onError={() => onError(visible[0])}
-        />
-        <div className="flex h-full flex-1 flex-col gap-1">
-          <img
-            src={visible[1]}
-            alt=""
-            className="h-1/2 w-full object-cover"
-            loading="lazy"
-            onError={() => onError(visible[1])}
-          />
-          <img
-            src={visible[2]}
-            alt=""
-            className="h-1/2 w-full object-cover"
-            loading="lazy"
-            onError={() => onError(visible[2])}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="absolute inset-0 flex gap-1">
-      <div className="flex h-full flex-1 flex-col gap-1">
-        <img
-          src={visible[0]}
-          alt=""
-          className="h-1/2 w-full object-cover"
+          className="row-span-2 h-full w-full object-cover"
           loading="lazy"
           onError={() => onError(visible[0])}
         />
         <img
           src={visible[1]}
           alt=""
-          className="h-1/2 w-full object-cover"
+          className="h-full w-full object-cover"
           loading="lazy"
           onError={() => onError(visible[1])}
         />
-      </div>
-      <div className="flex h-full flex-1 flex-col gap-1">
         <img
           src={visible[2]}
           alt=""
-          className="h-1/2 w-full object-cover"
+          className="h-full w-full object-cover"
           loading="lazy"
           onError={() => onError(visible[2])}
         />
-        <img
-          src={visible[3]}
-          alt=""
-          className="h-1/2 w-full object-cover"
-          loading="lazy"
-          onError={() => onError(visible[3])}
-        />
       </div>
+    );
+  }
+
+  // 2×2 — CSS grid so row/column gutters stay equal (h-1/2 + gap overflows and squeezes rows).
+  return (
+    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1">
+      {visible.slice(0, 4).map((src) => (
+        <img
+          key={src}
+          src={src}
+          alt=""
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onError={() => onError(src)}
+        />
+      ))}
     </div>
   );
 }
@@ -244,9 +221,9 @@ function DocCollage({ tiles }: { tiles: DocTile[] }) {
   }
   if (n === 2) {
     return (
-      <div className="absolute inset-0 flex gap-1">
+      <div className="absolute inset-0 grid grid-cols-2 gap-1">
         {tiles.map((t) => (
-          <div key={t.id} className="relative h-full min-w-0 flex-1 overflow-hidden">
+          <div key={t.id} className="relative min-h-0 min-w-0 overflow-hidden">
             <TemplateThumbnail document={t.document} fit="cover" />
           </div>
         ))}
@@ -255,39 +232,26 @@ function DocCollage({ tiles }: { tiles: DocTile[] }) {
   }
   if (n === 3) {
     return (
-      <div className="absolute inset-0 flex gap-1">
-        <div className="relative h-full min-w-0 flex-1 overflow-hidden">
+      <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1">
+        <div className="relative row-span-2 min-h-0 min-w-0 overflow-hidden">
           <TemplateThumbnail document={tiles[0].document} fit="cover" />
         </div>
-        <div className="flex h-full min-w-0 flex-1 flex-col gap-1">
-          <div className="relative min-h-0 flex-1 overflow-hidden">
-            <TemplateThumbnail document={tiles[1].document} fit="cover" />
-          </div>
-          <div className="relative min-h-0 flex-1 overflow-hidden">
-            <TemplateThumbnail document={tiles[2].document} fit="cover" />
-          </div>
+        <div className="relative min-h-0 min-w-0 overflow-hidden">
+          <TemplateThumbnail document={tiles[1].document} fit="cover" />
+        </div>
+        <div className="relative min-h-0 min-w-0 overflow-hidden">
+          <TemplateThumbnail document={tiles[2].document} fit="cover" />
         </div>
       </div>
     );
   }
   return (
-    <div className="absolute inset-0 flex gap-1">
-      <div className="flex h-full min-w-0 flex-1 flex-col gap-1">
-        <div className="relative min-h-0 flex-1 overflow-hidden">
-          <TemplateThumbnail document={tiles[0].document} fit="cover" />
+    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1">
+      {tiles.slice(0, 4).map((t) => (
+        <div key={t.id} className="relative min-h-0 min-w-0 overflow-hidden">
+          <TemplateThumbnail document={t.document} fit="cover" />
         </div>
-        <div className="relative min-h-0 flex-1 overflow-hidden">
-          <TemplateThumbnail document={tiles[1].document} fit="cover" />
-        </div>
-      </div>
-      <div className="flex h-full min-w-0 flex-1 flex-col gap-1">
-        <div className="relative min-h-0 flex-1 overflow-hidden">
-          <TemplateThumbnail document={tiles[2].document} fit="cover" />
-        </div>
-        <div className="relative min-h-0 flex-1 overflow-hidden">
-          <TemplateThumbnail document={tiles[3].document} fit="cover" />
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
