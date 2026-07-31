@@ -635,6 +635,34 @@ export function captureVideoPosterFrame(
   });
 }
 
+/** Shared prep for canvas video place (tool strip / paste): preview, poster, size, label. */
+export async function prepareVideoUploadPreview(file: File): Promise<{
+  preview: string;
+  poster: string;
+  width: number;
+  height: number;
+  duration: number;
+  name: string;
+}> {
+  const { readFileAsDataUrl } = await import('@/utils/uploadImage');
+  const preview = await readFileAsDataUrl(file);
+  const natural = await measureVideoNaturalSize(preview);
+  let poster = '';
+  try {
+    poster = await captureVideoPosterFrame(preview);
+  } catch {
+    /* optional */
+  }
+  return {
+    preview,
+    poster,
+    width: natural.width,
+    height: natural.height,
+    duration: natural.duration,
+    name: file.name?.replace(/\.[^.]+$/, '') || 'Video',
+  };
+}
+
 /** Fit natural size into a max box while keeping aspect ratio. */
 export function fitImageSize(
   naturalWidth: number,

@@ -12,6 +12,7 @@ const SESSION_STORAGE_KEYS = [
   'resume.agentRoutePrefs.v1',
   'resume.agentRoutePrefs.v2',
   'resume.customLlmProviders.v1',
+  'resume.customLlmProviders.v2',
   'resume.notices.read.v1',
   'recombyn:custom-project-thumbs',
   'recombyn-google-oauth-nonce-v1',
@@ -82,6 +83,7 @@ export function clearSessionCaches() {
   clearHomeAgentBoot();
   try {
     sessionStorage.removeItem('recombyn-google-oauth-nonce-v1');
+    sessionStorage.removeItem('resume.byok.deviceKey.v1');
   } catch {
     /* ignore */
   }

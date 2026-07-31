@@ -304,6 +304,24 @@ export function chipBaseKey(key: string): string {
   return i >= 0 ? key.slice(0, i) : key;
 }
 
+/** `@query` at end of composer text → open mention panel. */
+export function parseAtMentionQuery(next: string): { open: boolean; query: string } {
+  const at = next.lastIndexOf('@');
+  if (at < 0) return { open: false, query: '' };
+  const after = next.slice(at + 1);
+  if (/\s/.test(after)) return { open: false, query: '' };
+  return { open: true, query: after };
+}
+
+/** Remove trailing `@query` after picking a mention chip. */
+export function stripTrailingAtQuery(prev: string): string {
+  const at = prev.lastIndexOf('@');
+  if (at < 0) return prev;
+  const after = prev.slice(at + 1);
+  if (/\s/.test(after)) return prev;
+  return prev.slice(0, at);
+}
+
 function withChipInstance(key: string): string {
   if (key.includes(CHIP_INSTANCE_SEP)) return key;
   const uid =
@@ -401,13 +419,15 @@ function buildChip(
 
 const CONTEXT_ICON = CONTEXT_ICON_SVG;
 
-/** Collect image files from a paste / drop DataTransfer. */
-function clipboardImageFiles(data: DataTransfer | null): File[] {
+/** Collect image/video files from a paste / drop DataTransfer. */
+function clipboardMediaFiles(data: DataTransfer | null): File[] {
   if (!data) return [];
   const out: File[] = [];
   const seen = new Set<string>();
   const push = (f: File | null) => {
-    if (!f || !f.type.startsWith('image/')) return;
+    if (!f) return;
+    const mime = (f.type || '').toLowerCase();
+    if (!mime.startsWith('image/') && !mime.startsWith('video/')) return;
     const id = `${f.name}:${f.size}:${f.type}:${f.lastModified}`;
     if (seen.has(id)) return;
     seen.add(id);
@@ -415,7 +435,9 @@ function clipboardImageFiles(data: DataTransfer | null): File[] {
   };
   try {
     for (const item of Array.from(data.items || [])) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
+      if (item.kind !== 'file') continue;
+      const t = (item.type || '').toLowerCase();
+      if (t.startsWith('image/') || t.startsWith('video/')) {
         push(item.getAsFile());
       }
     }
@@ -451,7 +473,7 @@ const AgentComposerInput = forwardRef<
     disabled?: boolean;
     placeholder: string;
     className?: string;
-    /** Paste / drop images → upload + @ mention (do not insert raw <img>). */
+    /** Paste / drop media → attach strip (do not insert raw <img>). */
     onPasteImages?: (files: File[]) => void;
   }
 >(function AgentComposerInput(
@@ -815,7 +837,7 @@ const AgentComposerInput = forwardRef<
 
   const handlePaste = (e: ReactClipboardEvent<HTMLDivElement>) => {
     if (disabled) return;
-    const files = clipboardImageFiles(e.clipboardData);
+    const files = clipboardMediaFiles(e.clipboardData);
     if (files.length && onPasteImagesRef.current) {
       e.preventDefault();
       rememberCaret();

@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import logging
 import sys
 
@@ -14,6 +15,12 @@ logging.basicConfig(
     stream=sys.stdout,
     force=True,
 )
+try:
+    from services.security import install_log_redaction
+
+    install_log_redaction()
+except Exception:
+    pass
 for _name in (
     "services.design.orchestrator",
     "services.design.agent_controller",
@@ -46,6 +53,19 @@ def _init_stores() -> None:
         pass
     init_schema()
     try:
+        from services.security import ensure_byok_table
+
+        ensure_byok_table()
+    except Exception:
+        logger.exception("byok table bootstrap failed")
+    try:
+        from services.db.backup import start_db_backup_scheduler
+
+        start_db_backup_scheduler()
+        logger.info("db backup scheduler started")
+    except Exception:
+        logger.exception("db backup scheduler failed to start")
+    try:
         from services.seed import run_seeds
         counts = run_seeds()
         logger.info("seed complete: %s", counts)
@@ -56,6 +76,13 @@ def _init_stores() -> None:
 
         ensure_design_catalog()
         logger.info("design catalog ready")
+        try:
+            from services.design.skill_store import start_skills_hot_reload
+
+            if start_skills_hot_reload():
+                logger.info("design skills hot reload started")
+        except Exception:
+            logger.exception("design skills hot reload failed to start")
     except Exception:
         logger.exception("design catalog bootstrap failed")
     try:
@@ -91,6 +118,40 @@ def _init_stores() -> None:
         threading.Thread(target=_cold_pass, name="cold-archive", daemon=True).start()
     except Exception:
         logger.exception("cold archive thread failed to start")
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    path = request.url.path or ""
+    if path in ("/", "/docs", "/openapi.json", "/redoc") or path.startswith(
+        "/api/v1/health"
+    ):
+        return await call_next(request)
+    try:
+        from services.security import _client_ip, check_rate_limit
+
+        auth = request.headers.get("authorization") or ""
+        identity = (
+            auth[7:23]
+            if auth.lower().startswith("bearer ") and len(auth) > 10
+            else ""
+        )
+        if not identity:
+            identity = _client_ip(
+                {k: v for k, v in request.headers.items()},
+                request.client.host if request.client else None,
+            )
+        ok, limit = check_rate_limit(path=path, identity=identity)
+        if not ok:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests", "limit": limit},
+                headers={"Retry-After": "60"},
+            )
+    except Exception:
+        logger.debug("rate limit check failed", exc_info=True)
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,

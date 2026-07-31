@@ -36,10 +36,9 @@ import {
   failImageProcess,
 } from '@/store/modules/editor';
 import {
-  captureVideoPosterFrame,
   fitImageSize,
   measureImageNaturalSize,
-  measureVideoNaturalSize,
+  prepareVideoUploadPreview,
 } from '@/components/rcb/scene/sceneDocument';
 import { sceneToDocumentCoords } from '@/components/rcb/scene/svgToScene';
 import {
@@ -504,28 +503,21 @@ function EditorToolStrip({
     if (!file) return;
     if (file.type.startsWith('video/')) {
       try {
-        const preview = await readFileAsDataUrl(file);
-        const natural = await measureVideoNaturalSize(preview);
+        const prepared = await prepareVideoUploadPreview(file);
         const { width, height, x, y } = placeAtViewportCenter({
-          width: natural.width,
-          height: natural.height,
+          width: prepared.width,
+          height: prepared.height,
         });
-        let poster = '';
-        try {
-          poster = await captureVideoPosterFrame(preview);
-        } catch {
-          /* optional */
-        }
         dispatch(
           startVideoUploadPlaceholder({
-            src: preview,
-            poster,
+            src: prepared.preview,
+            poster: prepared.poster,
             width,
             height,
             x,
             y,
             label: L.uploading,
-            name: file.name?.replace(/\.[^.]+$/, '') || 'Video',
+            name: prepared.name,
           })
         );
         const uploaded = await uploadImageFile(file);
@@ -534,7 +526,7 @@ function EditorToolStrip({
             src: uploaded.url,
             attrs: {
               ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
-              ...(poster ? { poster } : {}),
+              ...(prepared.poster ? { poster: prepared.poster } : {}),
               assetKind: 'video',
             },
           })

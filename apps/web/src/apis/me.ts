@@ -76,3 +76,45 @@ export const syncMyLiked = (ids: string[]) =>
     invalidateMyLikedIdsCache();
     return data;
   });
+
+/** BYOK provider vault — list never includes plaintext apiKey. */
+export type ByokProviderDto = {
+  id: string;
+  name: string;
+  website?: string;
+  baseUrl: string;
+  apiModel?: string;
+  modelKind: string;
+  apiKeyHint?: string;
+  hasApiKey?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export const fetchByokProviders = () =>
+  request<{ items: ByokProviderDto[] }>({
+    url: '/api/v1/me/byok/providers',
+    method: 'get',
+    skipInflightDedupe: true,
+  }).then((data) => data.items || []);
+
+export const upsertByokProvider = (body: {
+  id?: string;
+  name: string;
+  website?: string;
+  baseUrl: string;
+  apiModel: string;
+  modelKind?: string;
+  apiKey?: string;
+}) =>
+  request<{ item: ByokProviderDto }>({
+    url: '/api/v1/me/byok/providers',
+    method: 'put',
+    data: body,
+  }).then((data) => data.item);
+
+export const deleteByokProvider = (providerId: string) =>
+  request<{ ok: boolean }>({
+    url: `/api/v1/me/byok/providers/${encodeURIComponent(providerId)}`,
+    method: 'delete',
+  });

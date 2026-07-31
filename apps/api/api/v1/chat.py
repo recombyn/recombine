@@ -11,7 +11,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from services.auth import get_session
-from services.llm import get_llm_endpoint, list_image_models, list_llm_models, list_video_models
+from services.llm import (
+    get_llm_endpoint,
+    list_image_models,
+    list_llm_models,
+    list_video_models,
+    reset_byok_user_id,
+    set_byok_user_id,
+)
 from services.llm.agent import stream_agent_turn, stream_official_agent
 from services.llm.chat import stream_chat
 from services.llm.design_tools import design_tool_definitions
@@ -192,6 +199,7 @@ async def post_message(
     )
 
     async def event_gen():
+        byok_token = set_byok_user_id(user.id)
         try:
             get_llm_endpoint(body.model)
             yield f"data: {json.dumps({'type': 'start', 'model': body.model}, ensure_ascii=False)}\n\n"
@@ -206,6 +214,8 @@ async def post_message(
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as err:
             yield f"data: {json.dumps({'type': 'error', 'message': str(err)}, ensure_ascii=False)}\n\n"
+        finally:
+            reset_byok_user_id(byok_token)
 
     return StreamingResponse(
         event_gen(),
@@ -250,6 +260,7 @@ async def post_agent_turn(
     )
 
     async def event_gen():
+        byok_token = set_byok_user_id(user.id)
         try:
             get_llm_endpoint(body.model)
             yield f"data: {json.dumps({'type': 'start', 'model': body.model, 'mode': mode}, ensure_ascii=False)}\n\n"
@@ -279,6 +290,8 @@ async def post_agent_turn(
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as err:
             yield f"data: {json.dumps({'type': 'error', 'message': str(err)}, ensure_ascii=False)}\n\n"
+        finally:
+            reset_byok_user_id(byok_token)
 
     return StreamingResponse(
         event_gen(),

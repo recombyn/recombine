@@ -23,6 +23,8 @@ import AgentComposerShell, {
 } from '@/components/editor/panels/agent/AgentComposerShell';
 import {
   chipBaseKey,
+  parseAtMentionQuery,
+  stripTrailingAtQuery,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -199,23 +201,6 @@ function resolveHomeIsImageSubmit(opts: {
     );
   }
   return opts.isImageModelSelected || opts.category === 'image';
-}
-
-/** `@query` at end of composer text → open mention panel. */
-function parseAtMentionQuery(next: string): { open: boolean; query: string } {
-  const at = next.lastIndexOf('@');
-  if (at < 0) return { open: false, query: '' };
-  const after = next.slice(at + 1);
-  if (/\s/.test(after)) return { open: false, query: '' };
-  return { open: true, query: after };
-}
-
-function stripTrailingAtQuery(prev: string): string {
-  const at = prev.lastIndexOf('@');
-  if (at < 0) return prev;
-  const after = prev.slice(at + 1);
-  if (/\s/.test(after)) return prev;
-  return prev.slice(0, at);
 }
 
 function resolveModelIdAfterCatalogLoad(

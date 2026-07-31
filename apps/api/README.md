@@ -42,7 +42,11 @@ apps/api/
 | `progress_stages.json` | 设计运行阶段文案与事件→阶段映射 |
 | `design_dicts_seed.json` | Admin 字典类型与条目 |
 | `fonts_seed.json` | 字体目录 |
+| `design_skills_seed.json` | Agent 核心 Skill（`source=seed` / namespace=`core`） |
+| `design_skills/` | 文件包扩展 Skill（`_meta.json` + `SKILL.md`，namespace=`ext`） |
 | `official_cases/` | 官方案例（首页灵感 / 广场种子） |
+
+Skill 命名空间、ACL、版本 pin、热加载说明见 [data/design_skills/README.md](./data/design_skills/README.md)。
 
 修改种子后：新环境会自动 seed；已有库需按业务决定是否手工同步或 bump dict `rev`。
 
@@ -50,6 +54,7 @@ apps/api/
 
 | 模块 | 职责 |
 |------|------|
+| `services/design/skill_store.py` | Skill 目录、ACL、版本快照、热加载 |
 | `services/design/flow_runtime.py` | 运行时执行已发布图 |
 | `services/design/admin_store.py` | Admin：流程 CRUD、规则、节点模板、动作契约、复盘 |
 | `services/design/dict_store.py` | 字典 |
@@ -57,8 +62,12 @@ apps/api/
 | `services/design/quality_sample_store.py` | 美学样本 |
 | `services/design/agent_controller.py` | Agent 主控 |
 | `services/design/orchestrator.py` | 任务编排 |
+| `services/security.py` | BYOK vault、脱敏、限流相关 |
+| `services/db/backup.py` | 周期性 DB 备份 |
 
 Admin HTTP 前缀：`/api/v1/admin/...`（需管理员会话）。
+
+Postgres / 读写分离 / 备份：见仓库 [docs/postgres-switch.md](../../docs/postgres-switch.md)。
 
 ## 安装
 

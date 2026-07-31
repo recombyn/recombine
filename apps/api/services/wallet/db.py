@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from services.db import connect, init_schema
+from services.db import connect, dialect, init_schema
 
 _UNIFIED_MIGRATION_ID = "wallet_unified_credits_v1"
 _SCALE_X10_MIGRATION_ID = "wallet_credits_scale_x10_v1"
@@ -339,20 +339,32 @@ def spend_tokens(user_id: str, amount: int, detail: str = "") -> int:
 
     now = time.time()
     note = (detail or "").strip()[:500]
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT tokens FROM user_balances WHERE user_id = ?",
-            (uid,),
-        ).fetchone()
+    with connect(immediate=True) as conn:
+        if dialect() in ("mysql", "postgres"):
+            row = conn.execute(
+                "SELECT tokens FROM user_balances WHERE user_id = ? FOR UPDATE",
+                (uid,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT tokens FROM user_balances WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
         prev = int(row["tokens"]) if row else 0
         if prev < amt:
             raise ValueError("insufficient_tokens")
         next_bal = prev - amt
         if row:
-            conn.execute(
-                "UPDATE user_balances SET tokens = ?, image_credits = 0, updated_at = ? WHERE user_id = ?",
-                (next_bal, now, uid),
+            cur = conn.execute(
+                """
+                UPDATE user_balances
+                SET tokens = ?, image_credits = 0, updated_at = ?
+                WHERE user_id = ? AND tokens >= ?
+                """,
+                (next_bal, now, uid, amt),
             )
+            if int(getattr(cur, "rowcount", 0) or 0) <= 0:
+                raise ValueError("insufficient_tokens")
         else:
             conn.execute(
                 """
@@ -369,7 +381,6 @@ def spend_tokens(user_id: str, amount: int, detail: str = "") -> int:
             """,
             (uid, -amt, next_bal, note, now),
         )
-        conn.commit()
     return next_bal
 
 
@@ -386,11 +397,17 @@ def credit_tokens(user_id: str, amount: int, detail: str = "") -> int:
 
     now = time.time()
     note = (detail or "").strip()[:500]
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT tokens FROM user_balances WHERE user_id = ?",
-            (uid,),
-        ).fetchone()
+    with connect(immediate=True) as conn:
+        if dialect() in ("mysql", "postgres"):
+            row = conn.execute(
+                "SELECT tokens FROM user_balances WHERE user_id = ? FOR UPDATE",
+                (uid,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT tokens FROM user_balances WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
         prev = int(row["tokens"]) if row else 0
         next_bal = prev + amt
         if row:
@@ -414,7 +431,6 @@ def credit_tokens(user_id: str, amount: int, detail: str = "") -> int:
             """,
             (uid, amt, next_bal, note, now),
         )
-        conn.commit()
     return next_bal
 
 

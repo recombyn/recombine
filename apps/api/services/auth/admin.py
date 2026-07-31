@@ -32,6 +32,9 @@ def require_user(authorization: str | None = Header(default=None)) -> SessionUse
     user = get_session(bearer_token(authorization))
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    status = (getattr(user, "status", None) or "active").strip().lower()
+    if status == "disabled":
+        raise HTTPException(status_code=403, detail="Account disabled")
     return user
 
 
@@ -50,7 +53,4 @@ def require_admin(authorization: str | None = Header(default=None)) -> SessionUs
     user = require_user(authorization)
     if not is_admin_user(user):
         raise HTTPException(status_code=403, detail="Forbidden")
-    status = (getattr(user, "status", None) or "active").strip().lower()
-    if status == "disabled":
-        raise HTTPException(status_code=403, detail="Account disabled")
     return user

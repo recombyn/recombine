@@ -15,8 +15,9 @@ import { cn } from '@/utils/classnames';
 import { planAllowsCustomModels, type PlanId } from '@/utils/wallet';
 import {
   createCustomLlmProviderId,
-  loadCustomLlmProviders,
-  saveCustomLlmProviders,
+  hydrateCustomLlmProviders,
+  persistCustomLlmProvider,
+  removeCustomLlmProvider,
   type CustomLlmProvider,
   type CustomModelKind,
 } from './customLlmProviders';
@@ -940,6 +941,7 @@ function AgentModelsPanel({
   const [website, setWebsite] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [apiModel, setApiModel] = useState('');
   const [modelKind, setModelKind] = useState<CustomModelKind>('text');
   const [error, setError] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -950,12 +952,17 @@ function AgentModelsPanel({
   };
 
   useEffect(() => {
-    setProviders(loadCustomLlmProviders());
+    let cancelled = false;
+    void hydrateCustomLlmProviders().then((list) => {
+      if (!cancelled) setProviders(list);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const persistProviders = (next: CustomLlmProvider[]) => {
     setProviders(next);
-    saveCustomLlmProviders(next);
     onProvidersChange?.();
   };
 
@@ -982,22 +989,40 @@ function AgentModelsPanel({
       setError(t('agent.providerBaseUrlInvalid'));
       return;
     }
+    const mid = apiModel.trim();
+    if (!mid) {
+      setError(t('agent.providerApiModelRequired', { defaultValue: '请填写模型 ID（如 gpt-4o）' }));
+      return;
+    }
+    const key = apiKey.trim();
+    if (!key) {
+      setError(t('agent.providerApiKeyRequired', { defaultValue: 'API key is required' }));
+      return;
+    }
     setError('');
-    const next: CustomLlmProvider = {
+    const draft: CustomLlmProvider = {
       id: createCustomLlmProviderId(),
       name: n,
       website: website.trim(),
-      apiKey: apiKey.trim(),
+      apiKey: key,
       baseUrl: url,
+      apiModel: mid,
       modelKind,
       createdAt: Date.now(),
     };
-    persistProviders([next, ...providers]);
-    setName('');
-    setWebsite('');
-    setApiKey('');
-    setBaseUrl('');
-    setModelKind('text');
+    void persistCustomLlmProvider(draft)
+      .then((saved) => {
+        persistProviders([saved, ...providers.filter((p) => p.id !== saved.id)]);
+        setName('');
+        setWebsite('');
+        setApiKey('');
+        setBaseUrl('');
+        setApiModel('');
+        setModelKind('text');
+      })
+      .catch(() => {
+        setError(t('agent.providerSaveFailed', { defaultValue: 'Failed to save provider' }));
+      });
   };
 
   const onRemove = (id: string) => {
@@ -1005,7 +1030,9 @@ function AgentModelsPanel({
       askUpgrade();
       return;
     }
-    persistProviders(providers.filter((p) => p.id !== id));
+    void removeCustomLlmProvider(id).then(() => {
+      persistProviders(providers.filter((p) => p.id !== id));
+    });
   };
 
   return (
@@ -1116,6 +1143,28 @@ function AgentModelsPanel({
                 {t('agent.providerBaseUrlHint')}
               </span>
             </label>
+
+            <label className="mb-4 block">
+              <span className="text-[13px] font-medium text-[var(--ink)]">
+                {t('agent.providerApiModel', { defaultValue: '模型 ID' })}
+                <span className="text-red-500"> *</span>
+              </span>
+              <input
+                className={fieldClass}
+                value={apiModel}
+                onChange={(e) => setApiModel(e.target.value)}
+                placeholder={t('agent.providerApiModelPh', {
+                  defaultValue: '例如 gpt-4o / deepseek-chat',
+                })}
+                autoComplete="off"
+                required
+              />
+              <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
+                {t('agent.providerApiModelHint', {
+                  defaultValue: '上游 chat/completions 使用的 model 字段，不是供应商显示名。',
+                })}
+              </span>
+            </label>
           </fieldset>
 
           {error ? <p className="mb-3 text-[13px] text-red-500">{error}</p> : null}
@@ -1150,7 +1199,11 @@ function AgentModelsPanel({
                         {t(customModelKindLabelKey(p.modelKind))}
                       </span>
                     </div>
-                    <div className="truncate text-[12px] text-[var(--muted)]">{p.baseUrl}</div>
+                    <div className="truncate text-[12px] text-[var(--muted)]">
+                      {p.apiModel ? `${p.apiModel} · ` : ''}
+                      {p.baseUrl}
+                      {p.apiKeyHint ? ` · ${p.apiKeyHint}` : ''}
+                    </div>
                   </div>
                   <button
                     type="button"

@@ -64,6 +64,7 @@ from services.design.prompt_pack_store import (
 from services.design.skill_store import (
     bridge_need_prompts_to_skills,
     filter_ops_by_skill_allowlist,
+    filter_need_resources_by_skill_acl,
     format_skills_catalog,
     format_skills_details,
     normalize_need_skills,
@@ -1292,9 +1293,24 @@ def _fetch_deferred_prompts(*, kinds: list[str], scene: str) -> dict[str, Any]:
     return {"kinds": list(kinds), "details": details or ""}
 
 
-def _fetch_deferred_skills(*, keys: list[str], scene: str) -> dict[str, Any]:
-    details = format_skills_details(keys=keys, scene=scene)
-    return {"keys": list(keys), "details": details or ""}
+def _fetch_deferred_skills(
+    *,
+    keys: list[str],
+    scene: str,
+    version_pins: dict[str, int | str] | None = None,
+    input_args: dict[str, Any] | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    from services.design.skill_store import format_skills_details_checked
+
+    details, errs = format_skills_details_checked(
+        keys=keys,
+        scene=scene,
+        version_pins=version_pins,
+        input_args=input_args,
+        user_id=user_id,
+    )
+    return {"keys": list(keys), "details": details or "", "errors": errs}
 
 
 def _fetch_deferred_tools(*, keys: list[str], rules: dict[str, str]) -> dict[str, Any]:
@@ -1367,6 +1383,9 @@ async def _gather_deferred_resource_details(
     user_ref_urls: list[str],
     use_user_refs: bool,
     rules: dict[str, str],
+    skill_version_pins: dict[str, int | str] | None = None,
+    skill_input_args: dict[str, Any] | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Fetch knowledge / prompts / skills / tools / aesthetics in parallel."""
     jobs: list[tuple[str, Any]] = []
@@ -1400,6 +1419,9 @@ async def _gather_deferred_resource_details(
                     _fetch_deferred_skills,
                     keys=fresh_skills,
                     scene=scene,
+                    version_pins=skill_version_pins,
+                    input_args=skill_input_args,
+                    user_id=user_id,
                 ),
             )
         )
@@ -1670,8 +1692,10 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
     need_prompts = normalize_need_prompts(
         obj.get("need_prompts") or obj.get("needPrompts")
     )
-    need_skills = normalize_need_skills(
-        obj.get("need_skills") or obj.get("needSkills")
+    from services.design.skill_store import parse_need_skills_with_pins
+
+    need_skills, skill_version_pins, skill_input_args, skill_parse_errs = (
+        parse_need_skills_with_pins(obj.get("need_skills") or obj.get("needSkills"))
     )
     need_prompts, need_skills = bridge_need_prompts_to_skills(need_prompts, need_skills)
     need_aesthetics = normalize_need_aesthetics(
@@ -1693,6 +1717,9 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
         "need_knowledge": need_knowledge,
         "need_prompts": need_prompts,
         "need_skills": need_skills,
+        "skill_version_pins": skill_version_pins,
+        "skill_input_args": skill_input_args,
+        "skill_parse_errs": skill_parse_errs,
         "need_aesthetics": need_aesthetics,
         "use_user_refs": use_user_refs,
         "choices": choices,
@@ -1955,7 +1982,7 @@ def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: Agen
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.config import get_stream_writer
-from langgraph.types import Command
+from langgraph.types import Command, RetryPolicy, TimeoutPolicy
 
 try:
     from typing_extensions import NotRequired
@@ -2105,6 +2132,7 @@ def invalidate_agent_graph_cache(flow_id: str | None = None) -> None:
     del flow_id
     global _LC_DESIGN_GRAPH
     _LC_DESIGN_GRAPH = None
+    # Keep process-local checkpointer so in-flight thread_ids stay readable until cleanup.
 
 
 
@@ -2901,6 +2929,22 @@ async def _node_resource(state: GraphState) -> Command:
     ):
         if k not in need_skills:
             need_skills.append(k)
+    # Custom skills cannot unlock knowledge / prompts / aesthetics without ACL.
+    acl_skills = list(st.skills_loaded or []) + list(need_skills)
+    need_knowledge, need_prompts, need_aesthetics, acl_errs = (
+        filter_need_resources_by_skill_acl(
+            skill_keys=acl_skills,
+            scene=rt.scene_key or "website",
+            need_knowledge=need_knowledge,
+            need_prompts=need_prompts,
+            need_aesthetics=need_aesthetics,
+        )
+    )
+    if acl_errs:
+        st.push_log(phase="skill_acl", errors=acl_errs[:8])
+        turn["need_knowledge"] = need_knowledge
+        turn["need_prompts"] = need_prompts
+        turn["need_aesthetics"] = need_aesthetics
     fresh_k = _fresh_knowledge_kinds(need_knowledge, knowledge_loaded=st.knowledge_loaded)
     load_knowledge = bool(need_knowledge) and not (
         set(need_knowledge) <= set(st.knowledge_loaded) and "*" not in need_knowledge
@@ -3012,6 +3056,9 @@ async def _node_resource(state: GraphState) -> Command:
             }
         )
 
+    if turn.get("skill_parse_errs"):
+        st.push_log(phase="skill_input", errors=list(turn.get("skill_parse_errs") or [])[:8])
+
     bundles = await _gather_deferred_resource_details(
         fresh_k=fresh_k if load_knowledge else [],
         fresh_prompts=fresh_p if load_prompts else [],
@@ -3025,6 +3072,9 @@ async def _node_resource(state: GraphState) -> Command:
         user_ref_urls=user_ref_urls,
         use_user_refs=use_user_refs,
         rules=rt.rules,
+        skill_version_pins=turn.get("skill_version_pins") or None,
+        skill_input_args=turn.get("skill_input_args") or None,
+        user_id=str(getattr(rt, "user_id", "") or "") or None,
     )
     kb = bundles.get("knowledge") if load_knowledge else None
     if isinstance(kb, dict) and kb.get("details"):
@@ -3075,29 +3125,33 @@ async def _node_resource(state: GraphState) -> Command:
             }
         )
     sb = bundles.get("skills") if load_skills else None
-    if isinstance(sb, dict) and sb.get("details"):
-        details_s = str(sb["details"])
-        rt.pending_skill_details = "SKILL_DETAILS:\n" + details_s
-        for k in fresh_s:
-            if k not in st.skills_loaded:
-                st.skills_loaded.append(k)
-        st.push_log(
-            phase="skill_details",
-            need_skills=list(fresh_s),
-            detail_chars=len(details_s),
-            summary="注入 skill：" + "、".join(fresh_s),
-        )
-        _emit(
-            {
-                "type": "activity",
-                "id": f"skill-details-{round_i}",
-                "kind": "explored",
-                "status": "done",
-                "summary": ("注入 skill：" + "、".join(fresh_s))[:200],
-                "detail": "设计方法已就绪",
-                "index": round_i,
-            }
-        )
+    if isinstance(sb, dict):
+        skill_errs = list(sb.get("errors") or [])
+        if skill_errs:
+            st.push_log(phase="skill_validate", errors=skill_errs[:8])
+        if sb.get("details"):
+            details_s = str(sb["details"])
+            rt.pending_skill_details = "SKILL_DETAILS:\n" + details_s
+            for k in fresh_s:
+                if k not in st.skills_loaded:
+                    st.skills_loaded.append(k)
+            st.push_log(
+                phase="skill_details",
+                need_skills=list(fresh_s),
+                detail_chars=len(details_s),
+                summary="注入 skill：" + "、".join(fresh_s),
+            )
+            _emit(
+                {
+                    "type": "activity",
+                    "id": f"skill-details-{round_i}",
+                    "kind": "explored",
+                    "status": "done",
+                    "summary": ("注入 skill：" + "、".join(fresh_s))[:200],
+                    "detail": "设计方法已就绪",
+                    "index": round_i,
+                }
+            )
     tb = bundles.get("tools") if need_tools else None
     if isinstance(tb, dict) and tb.get("details"):
         details_t = str(tb["details"])
@@ -4225,10 +4279,70 @@ async def _node_paint_ops(state: GraphState) -> Command:
     return Command(update=_bump(rt), goto="__settle__")
 
 _LC_DESIGN_GRAPH: Any = None
+_LC_DESIGN_CHECKPOINTER: Any = None
+
+
+def _design_thread_id(task_id: str) -> str:
+    return f"design:{str(task_id or '').strip()}"
+
+
+def _design_graph_retry_policy() -> RetryPolicy:
+    from config.settings import settings
+
+    attempts = max(1, int(getattr(settings, "design_graph_retry_attempts", 3) or 3))
+    return RetryPolicy(
+        max_attempts=attempts,
+        initial_interval=0.5,
+        backoff_factor=2.0,
+        max_interval=8.0,
+    )
+
+
+def _design_graph_node_timeout() -> TimeoutPolicy | None:
+    from config.settings import settings
+
+    sec = float(getattr(settings, "design_graph_node_timeout_sec", 180.0) or 0.0)
+    if sec <= 0:
+        return None
+    return TimeoutPolicy(run_timeout=sec)
+
+
+def _get_design_graph_checkpointer() -> Any:
+    """Process-local saver for outer design graph.
+
+    AgentRuntime carries settle/refund callables — msgpack cannot encode it.
+    pickle_fallback is OK only in-process; do not persist to MySQL/Sqlite
+    (RCE risk + callables are not durable across workers).
+    """
+    global _LC_DESIGN_CHECKPOINTER
+    if _LC_DESIGN_CHECKPOINTER is not None:
+        return _LC_DESIGN_CHECKPOINTER
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    _LC_DESIGN_CHECKPOINTER = InMemorySaver(
+        serde=JsonPlusSerializer(pickle_fallback=True)
+    )
+    return _LC_DESIGN_CHECKPOINTER
+
+
+async def _cleanup_design_thread(graph: Any, thread_id: str) -> None:
+    tid = str(thread_id or "").strip()
+    if not tid:
+        return
+    cp = getattr(graph, "checkpointer", None)
+    if cp is None:
+        return
+    try:
+        await cp.adelete_thread(tid)
+    except Exception:
+        _log.debug("design graph thread cleanup failed tid=%s", tid, exc_info=True)
 
 
 def _build_lc_design_graph():
     """Fixed outer graph: memory → intent → decide → paint_ops → action/propose → settle."""
+    from config.settings import settings
+
     g = StateGraph(GraphState)
     dest = (
         "bootstrap",
@@ -4242,16 +4356,24 @@ def _build_lc_design_graph():
         "__settle__",
         END,
     )
+    retry = _design_graph_retry_policy()
+    node_timeout = _design_graph_node_timeout()
+    # LLM / IO-heavy nodes: RetryPolicy + TimeoutPolicy. Semantic paint retries stay in-node.
+    io_kw: dict[str, Any] = {"destinations": dest, "retry_policy": retry}
+    if node_timeout is not None:
+        io_kw["timeout"] = node_timeout
     g.add_node("bootstrap", _node_bootstrap, destinations=dest)
     g.add_node("apply_confirm", _node_apply_confirm, destinations=dest)
-    g.add_node("memory", _node_memory, destinations=dest)
-    g.add_node("intent_classify", _node_intent_classify, destinations=dest)
-    g.add_node("design_agent", _node_design_agent, destinations=dest)
-    g.add_node("paint_ops", _node_paint_ops, destinations=dest)
+    g.add_node("memory", _node_memory, **io_kw)
+    g.add_node("intent_classify", _node_intent_classify, **io_kw)
+    g.add_node("design_agent", _node_design_agent, **io_kw)
+    g.add_node("paint_ops", _node_paint_ops, **io_kw)
     g.add_node("action", _node_action, destinations=dest)
     g.add_node("propose", _node_propose, destinations=dest)
     g.add_node("__settle__", _node_settle, destinations=(END,))
     g.add_edge(START, "bootstrap")
+    if bool(getattr(settings, "design_graph_checkpoint", True)):
+        return g.compile(checkpointer=_get_design_graph_checkpointer())
     return g.compile()
 
 
@@ -4421,12 +4543,17 @@ async def run_agent_graph(
     rt.flow_version = 1
     rt.run.flow_id = "lc_design"
     rt.run.flow_version = 1
+    thread_id = _design_thread_id(task_id)
+    from config.settings import settings as _settings
+
+    run_timeout = float(getattr(_settings, "design_graph_run_timeout_sec", 600.0) or 0.0)
+    keep_checkpoint = False
     try:
         from services.llm.agent import langfuse_callback_handler, merge_tracing_config
 
         lf_handler = langfuse_callback_handler()
         graph_cfg = merge_tracing_config(
-            None,
+            {"configurable": {"thread_id": thread_id}},
             run_name=f"lc_design:{task_id[:8]}",
             metadata={
                 "task_id": task_id,
@@ -4434,16 +4561,27 @@ async def run_agent_graph(
                 "user_id": user_id,
                 "scene": scene_key or "",
                 "mode": ui_mode,
+                "langgraph_thread_id": thread_id,
             },
             tags=["design", "lc_design"],
             callbacks=[lf_handler] if lf_handler is not None else None,
         )
-        async for chunk in graph.astream(
-            {"rt": rt, "tick": 0},
-            config=graph_cfg,
-            stream_mode="custom",
-        ):
-            if isinstance(chunk, dict) and chunk.get("type"):
+
+        async def _emit_stream() -> AsyncIterator[dict[str, Any]]:
+            async for chunk in graph.astream(
+                {"rt": rt, "tick": 0},
+                config=graph_cfg,
+                stream_mode="custom",
+            ):
+                if isinstance(chunk, dict) and chunk.get("type"):
+                    yield chunk
+
+        if run_timeout > 0:
+            async with asyncio.timeout(run_timeout):
+                async for chunk in _emit_stream():
+                    yield chunk
+        else:
+            async for chunk in _emit_stream():
                 yield chunk
         if lf_handler is not None:
             lf_tid = getattr(lf_handler, "last_trace_id", None)
@@ -4458,6 +4596,40 @@ async def run_agent_graph(
                     get_client().flush()
                 except Exception:
                     pass
+    except TimeoutError:
+        err = TimeoutError(f"design graph run timed out after {run_timeout:.0f}s")
+        rt.fatal = str(err)
+        try:
+            await asyncio.to_thread(refund_hold_fn, user_id, hold, task_id=task_id)
+        except Exception:
+            pass
+        run.note_error(str(err)[:240])
+        run.push_log(phase="error", error=str(err)[:240])
+        decision.apply(route="error", intent=run.intent)
+        await asyncio.to_thread(_persist_task_meta, task_id, decision=decision, state=run)
+        await asyncio.to_thread(
+            _update_task, task_id, status="error", error_message=str(err)[:800]
+        )
+        yield {"type": "execution_log", **run.to_execution_log()}
+        yield {
+            "type": "error",
+            "message": _user_facing_run_error(err, rules=rules),
+            "task_id": task_id,
+            "trace_id": trace_id,
+            "refunded_credits": hold,
+        }
+    except asyncio.CancelledError:
+        # Keep process-local checkpoint so same-worker resume/get_state can continue.
+        keep_checkpoint = True
+        run.note_error("cancelled")
+        run.push_log(phase="error", error="cancelled")
+        try:
+            await asyncio.to_thread(
+                _update_task, task_id, status="cancelled", error_message="cancelled"
+            )
+        except Exception:
+            pass
+        raise
     except Exception as err:  # noqa: BLE001
         rt.fatal = str(err)
         try:
@@ -4479,3 +4651,6 @@ async def run_agent_graph(
             "trace_id": trace_id,
             "refunded_credits": hold,
         }
+    finally:
+        if not keep_checkpoint:
+            await _cleanup_design_thread(graph, thread_id)

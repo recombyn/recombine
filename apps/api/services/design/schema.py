@@ -23,6 +23,7 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             prompt_negative {text},
             when_to_use {text},
             preferred_tools {text},
+            allowed_resources {text},
             triggers {text},
             mutex_group VARCHAR(64) NULL,
             version INTEGER NOT NULL DEFAULT 1,
@@ -31,6 +32,10 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             logo {text},
             locales {text},
             source VARCHAR(16) NOT NULL DEFAULT 'admin',
+            namespace VARCHAR(16) NOT NULL DEFAULT 'user',
+            owner_user_id VARCHAR(64) NULL,
+            input_schema {text},
+            output_schema {text},
             sort_weight INTEGER NOT NULL DEFAULT 0,
             scenes VARCHAR(128) NOT NULL DEFAULT 'all',
             default_model VARCHAR(32) NOT NULL DEFAULT 'doubao',
@@ -40,6 +45,19 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             allow_user_model_override INTEGER NOT NULL DEFAULT 0,
             created_at DOUBLE NOT NULL,
             updated_at DOUBLE NOT NULL
+        ){engine}
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS design_skill_revision (
+            id {pk},
+            skill_id BIGINT NOT NULL,
+            skill_key VARCHAR(64) NOT NULL,
+            namespace VARCHAR(16) NOT NULL DEFAULT 'user',
+            version INTEGER NOT NULL,
+            pack_version VARCHAR(32) NULL,
+            snapshot {text} NOT NULL,
+            source VARCHAR(16) NOT NULL DEFAULT 'admin',
+            created_at DOUBLE NOT NULL
         ){engine}
         """,
         f"""
@@ -342,6 +360,7 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
     _ensure_quality_sample_media_columns(conn, mysql=mysql)
     _ensure_design_skill_key_column(conn, mysql=mysql)
     _ensure_design_skill_runtime_columns(conn, mysql=mysql)
+    _ensure_design_skill_revision_table(conn, mysql=mysql)
     _ensure_canvas_tool_kind_column(conn, mysql=mysql)
     _ensure_canvas_tool_args_schema_column(conn, mysql=mysql)
     _ensure_global_rule_meta_columns(conn, mysql=mysql)
@@ -553,6 +572,11 @@ def _ensure_design_skill_runtime_columns(conn: Any, *, mysql: bool) -> None:
         ("logo", text),
         ("locales", text),
         ("source", f"{varchar16} DEFAULT 'admin'"),
+        ("allowed_resources", text),
+        ("namespace", f"{varchar16} NOT NULL DEFAULT 'user'"),
+        ("owner_user_id", f"{varchar64} NULL"),
+        ("input_schema", text),
+        ("output_schema", text),
     ):
         try:
             if mysql:
@@ -569,6 +593,45 @@ def _ensure_design_skill_runtime_columns(conn: Any, *, mysql: bool) -> None:
                 conn.rollback()
             except Exception:
                 pass
+
+
+def _ensure_design_skill_revision_table(conn: Any, *, mysql: bool) -> None:
+    """Version history snapshots for pin / rollback."""
+    pk = "BIGINT PRIMARY KEY AUTO_INCREMENT" if mysql else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    text = "LONGTEXT" if mysql else "TEXT"
+    engine = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" if mysql else ""
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS design_skill_revision (
+                id {pk},
+                skill_id BIGINT NOT NULL,
+                skill_key VARCHAR(64) NOT NULL,
+                namespace VARCHAR(16) NOT NULL DEFAULT 'user',
+                version INTEGER NOT NULL,
+                pack_version VARCHAR(32) NULL,
+                snapshot {text} NOT NULL,
+                source VARCHAR(16) NOT NULL DEFAULT 'admin',
+                created_at DOUBLE NOT NULL
+            ){engine}
+            """
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_design_skill_rev_key_ver "
+            "ON design_skill_revision(skill_key, version)"
+            if not mysql
+            else "CREATE INDEX idx_design_skill_rev_key_ver "
+            "ON design_skill_revision(skill_key, version)"
+        )
+    except Exception:
+        pass
 
 
 def _ensure_quality_sample_media_columns(conn: Any, *, mysql: bool) -> None:

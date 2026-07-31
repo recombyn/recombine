@@ -862,9 +862,7 @@ const ChatTurnList = forwardRef(function ChatTurnList(
       empty={
         <div className="flex flex-1 flex-col items-center justify-center px-4">
           <p className="text-center text-[14px] text-[var(--muted)]">
-            {t('agent.emptyHint', {
-              defaultValue: '描述你想要的设计，或上传参考图开始',
-            })}
+            {t('agent.emptyHint')}
           </p>
         </div>
       }

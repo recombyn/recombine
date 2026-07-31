@@ -1174,6 +1174,11 @@ class DesignSkillIn(BaseModel):
     promptPositive: str = ""
     promptNegative: str = ""
     preferredTools: list[str] | str | None = None
+    allowedResources: list[str] | str | None = None
+    inputSchema: dict[str, Any] | str | None = None
+    outputSchema: dict[str, Any] | str | None = None
+    namespace: str | None = Field(default="user", max_length=16)
+    ownerUserId: str | None = Field(default=None, max_length=64)
     triggers: list[Any] | dict[str, Any] | str | None = None
     mutexGroup: str = Field(default="", max_length=64)
     version: int = 0

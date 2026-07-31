@@ -4,9 +4,15 @@
   "version": "1.0.0",
   "logo": "example_brand-logo.svg",
   "category": "brand",
+  "namespace": "ext",
   "scenes": "all",
   "sort_weight": 40,
   "preferred_tools": ["create_shape", "create_text", "update_node", "create_frame"],
+  "allowed_resources": ["tools"],
+  "output_schema": {
+    "type": "object",
+    "allowed_ops": ["create_shape", "create_text", "update_node", "create_frame", "ask_user"]
+  },
   "triggers": [],
   "mutex_group": "brand",
   "locales": {

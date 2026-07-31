@@ -1055,7 +1055,8 @@ function AgentComposerShell({
 
   const onPasteImages = (files: File[]) => {
     if (!files.length || !onAttachFiles) return;
-    onAttachFiles(files, { mention: true });
+    // Attachment strip only — do not insert inline @ mention chips.
+    onAttachFiles(files);
   };
 
   const attachPlusBtn = buildAttachPlusButton({
@@ -1351,7 +1352,7 @@ function AgentComposerShell({
             accept={
               isVideoMode
                 ? 'image/*,video/*,.mp4,.webm,.mov,.m4v'
-                : 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,.png,.jpg,.jpeg,.webp,.gif,.svg'
+                : 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,video/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm,.mov,.m4v'
             }
             multiple
             className="hidden"

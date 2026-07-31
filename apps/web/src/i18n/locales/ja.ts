@@ -1186,6 +1186,7 @@ const ja = {
     placeholderImage: '生成したい画像を説明してください…',
     placeholderSkill: 'ここで実現したい内容を説明してください…',
     placeholderDefault: '@Search for image, model, or project',
+    emptyHint: '作りたいデザインを書くか、参考画像をアップロードして始めましょう',
     newChat: '新しいチャット',
     history: '履歴',
     alreadyNewChat: 'すでに新しいチャットです',

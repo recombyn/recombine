@@ -668,7 +668,17 @@ def _build_sqlite_checkpointer() -> Any:
 
     global _CHECKPOINTER_CONN
     path = str(_checkpoint_sqlite_path())
-    conn = sqlite3.connect(path, check_same_thread=False)
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
+    try:
+        from services.db import configure_sqlite_connection
+
+        configure_sqlite_connection(conn)
+    except Exception:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 30000")
+        except Exception:
+            pass
     saver = SqliteSaver(conn)
     saver.setup()
     _CHECKPOINTER_CONN = conn

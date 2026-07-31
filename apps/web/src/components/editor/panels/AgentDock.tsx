@@ -66,6 +66,8 @@ import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import {
   chipBaseKey,
+  parseAtMentionQuery,
+  stripTrailingAtQuery,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -106,7 +108,6 @@ import AgentComposerShell, {
 import { normalizeCanvasSizeChip } from '@/components/editor/chrome/SizePresetPanel';
 import {
   customProvidersAsModels,
-  isCustomModelId,
 } from '@/components/editor/panels/agent/customLlmProviders';
 import { routeOverridesForApi, warmAgentRoutePresetRules, loadAgentRoutePrefs, AgentRoutePrefsEditor } from '@/components/editor/panels/agent/AgentModelsPanel';
 import {
@@ -216,23 +217,22 @@ function resolveSeedLiveNodeIds(opts: {
   return [];
 }
 
-/** Model id sent to /design/run (plan + custom catalog → auto). */
+/** Model id sent to /design/run (plan gate → auto; custom BYOK kept). */
 function resolveAgentSendModel(canPickModel: boolean, model: string): string {
   if (!canPickModel) return 'auto';
-  if (isCustomModelId(model)) return 'auto';
   return model || 'auto';
 }
 
-/** Auto / custom model uses route prefs; locked model pins all tiers+vision. */
+/** Auto uses route prefs; locked / BYOK custom pins all tiers+vision. */
 function resolveAgentRouteOverrides(
   canPickModel: boolean,
   model: string
 ): Record<string, string> | null {
   if (!canPickModel) return null;
-  if (!model || model === 'auto' || isCustomModelId(model)) {
+  if (!model || model === 'auto') {
     return routeOverridesForApi();
   }
-  // 锁模：本用户本轮 fast/standard/reasoning/vision 都用同一模型
+  // 锁模 / BYOK：本用户本轮 fast/standard/reasoning/vision 都用同一模型
   return {
     fast: model,
     standard: model,
@@ -3114,7 +3114,8 @@ function AgentDock({
   };
 
   const handleAttachFiles = async (files: File[], opts?: { mention?: boolean }) => {
-    const MAX = 10 * 1024 * 1024;
+    const MAX_IMAGE = 10 * 1024 * 1024;
+    const MAX_VIDEO = 100 * 1024 * 1024;
     const pickedModel = models.find((m) => m.id === model);
     const isVideoMode =
       interactionMode === 'video' ||
@@ -3149,16 +3150,15 @@ function AgentDock({
         message.warning(t('agent.attachMaxReached', { count: limit }));
         break;
       }
-      if (isVideoMode) {
-        if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
-          message.warning(t('agent.attachImageOnly', { name: file.name }));
-          continue;
-        }
-      } else if (!file.type.startsWith('image/')) {
+      const mime = (file.type || '').toLowerCase();
+      const isVideo = mime.startsWith('video/');
+      const isImage = mime.startsWith('image/');
+      if (!isImage && !isVideo) {
         message.warning(t('agent.attachImageOnly', { name: file.name }));
         continue;
       }
-      if (file.size > MAX) {
+      const maxBytes = isVideo ? MAX_VIDEO : MAX_IMAGE;
+      if (file.size > maxBytes) {
         message.warning(t('agent.attachTooLarge', { name: file.name }));
         continue;
       }
@@ -3170,10 +3170,19 @@ function AgentDock({
     const previews = await Promise.all(
       accepted.map(async (file) => {
         try {
-          return { file, preview: await readFileAsDataUrl(file), ok: true as const };
+          const preview = await readFileAsDataUrl(file);
+          let thumb = preview;
+          if (file.type.startsWith('video/')) {
+            try {
+              thumb = await captureVideoPosterFrame(preview);
+            } catch {
+              /* poster optional */
+            }
+          }
+          return { file, preview, thumb, ok: true as const };
         } catch {
           message.error(t('agent.attachReadFailed', { name: file.name }));
-          return { file, preview: '', ok: false as const };
+          return { file, preview: '', thumb: '', ok: false as const };
         }
       })
     );
@@ -3187,15 +3196,18 @@ function AgentDock({
       preview: string;
       pending: ComposerContext;
       mentionCtx: ComposerContext | null;
-    }> = readable.map(({ file, preview }) => {
+    }> = readable.map(({ file, preview, thumb }) => {
       const key = `attachment:${file.name}:${file.size}:${file.lastModified}:${Math.random().toString(36).slice(2, 8)}`;
+      const isVideo = file.type.startsWith('video/');
       const pending: ComposerContext = {
         key,
         label: file.name,
         kind: 'attachment',
-        payload: `[Attached image]\nname: ${file.name}\nmime: ${file.type}`,
+        payload: isVideo
+          ? `[Attached video]\nname: ${file.name}\nmime: ${file.type}`
+          : `[Attached image]\nname: ${file.name}\nmime: ${file.type}`,
         dataUrl: preview,
-        thumbUrl: preview,
+        thumbUrl: thumb,
         uploadStatus: 'uploading',
       };
       pinnedContextKeysRef.current.add(key);
@@ -3208,7 +3220,7 @@ function AgentDock({
             kind: 'image',
             payload: pending.payload || `[User attachment ${n}]`,
             dataUrl: preview,
-            thumbUrl: preview,
+            thumbUrl: thumb,
           }
         : null;
       return { file, key, preview, pending, mentionCtx };
@@ -3225,13 +3237,17 @@ function AgentDock({
     queueMicrotask(() => inputRef.current?.focusEnd());
 
     await Promise.all(
-      batch.map(async ({ file, key, preview }) => {
+      batch.map(async ({ file, key, preview, pending }) => {
         try {
+          const poster = String(pending.thumbUrl || '').trim();
           const uploaded = await uploadComposerAttachment(file, {
-            previewDataUrl: preview,
+            previewDataUrl:
+              file.type.startsWith('video/') && poster.startsWith('data:image/')
+                ? poster
+                : preview,
           });
           const imageRef = String(uploaded.imageRef || '').trim();
-          const localPreview = String(uploaded.previewDataUrl || preview).trim();
+          const localPreview = String(uploaded.previewDataUrl || poster || preview).trim();
           setContextChips((prev) => {
             if (!prev.some((c) => c.key === key)) {
               if (uploaded.uploadKey) {
@@ -3244,7 +3260,14 @@ function AgentDock({
                 ? {
                     ...c,
                     dataUrl: imageRef || localPreview,
-                    thumbUrl: localPreview || imageRef,
+                    thumbUrl:
+                      (c.thumbUrl && c.thumbUrl.startsWith('data:image/')
+                        ? c.thumbUrl
+                        : null) ||
+                      (localPreview.startsWith('data:image/') ? localPreview : null) ||
+                      c.thumbUrl ||
+                      localPreview ||
+                      imageRef,
                     uploadKey: uploaded.uploadKey || undefined,
                     uploadStatus: 'ready' as const,
                   }
@@ -4217,26 +4240,10 @@ function AgentDock({
       setMentionQuery('');
       return;
     }
-    const at = value.lastIndexOf('@');
-    if (at >= 0) {
-      const after = value.slice(at + 1);
-      if (!/\s/.test(after)) {
-        setModelPanelOpen(false);
-        setMentionQuery(after);
-        setMentionPanelOpen(true);
-        return;
-      }
-    }
-    setMentionPanelOpen(false);
-    setMentionQuery('');
-  };
-
-  const stripTrailingAtQuery = (prev: string) => {
-    const at = prev.lastIndexOf('@');
-    if (at < 0) return prev;
-    const after = prev.slice(at + 1);
-    if (/\s/.test(after)) return prev;
-    return prev.slice(0, at);
+    const parsed = parseAtMentionQuery(value);
+    if (parsed.open) setModelPanelOpen(false);
+    setMentionQuery(parsed.query);
+    setMentionPanelOpen(parsed.open);
   };
 
   const mentionItems = useMemo((): MentionAttachItem[] => {
