@@ -153,6 +153,8 @@ def _rl_limit_for_path(path: str) -> int:
         return int(getattr(settings, "rate_limit_chat_per_window", 40) or 0)
     if p.startswith("/api/v1/uploads") or p.startswith("/api/v1/import"):
         return int(getattr(settings, "rate_limit_upload_per_window", 40) or 0)
+    if p.startswith("/api/v1/projects"):
+        return int(getattr(settings, "rate_limit_projects_per_window", 240) or 0)
     if p.startswith("/api/v1/me/byok"):
         return int(getattr(settings, "rate_limit_auth_per_window", 30) or 0)
     return int(getattr(settings, "rate_limit_default_per_window", 120) or 0)

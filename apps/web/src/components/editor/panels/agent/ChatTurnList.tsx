@@ -97,6 +97,381 @@ export type ChatUiMessage = {
   drawing?: boolean;
 };
 
+export type AssistantStep = NonNullable<ChatUiMessage['steps']>[number];
+
+export type ActivityStepEvent = {
+  kind: 'thought' | 'added' | 'updated' | 'explored' | 'skipped' | 'deleted' | 'tool';
+  status: 'running' | 'done';
+  durationSec?: number;
+  count?: number;
+  skillName?: string;
+  detail?: string;
+  stage?: string;
+};
+
+type ProcessTFn = (key: string, opts?: Record<string, unknown>) => string;
+
+function exploreItemKindKey(id: string): string {
+  if (id === 'lookup-skill' || id.startsWith('lookup-skill')) {
+    return 'agent.lookupKindSkill';
+  }
+  if (id === 'lookup-rule' || id.startsWith('lookup-rule')) {
+    return 'agent.lookupKindRule';
+  }
+  if (id === 'lookup-knowledge' || id.startsWith('lookup-knowledge')) {
+    return 'agent.lookupKindKnowledge';
+  }
+  if (id === 'lookup-aesthetics' || id.startsWith('lookup-aesthetics')) {
+    return 'agent.lookupKindAesthetics';
+  }
+  if (id === 'lookup-gate') return 'agent.lookupGate';
+  if (id === 'stage-lookup' || id.startsWith('stage-lookup')) {
+    return 'agent.stageLookup';
+  }
+  if (id === 'stage-scene' || id.startsWith('stage-scene')) {
+    return 'agent.stageScene';
+  }
+  if (id === 'canvas-size') return 'agent.canvasSizeLabel';
+  return '';
+}
+
+function mergeExploreStepStatus(
+  a: 'running' | 'done' | 'error' | 'pending' | undefined,
+  b: 'running' | 'done' | 'error' | 'pending' | undefined
+): 'running' | 'done' | 'error' {
+  if (a === 'running' || b === 'running') return 'running';
+  if (a === 'error' || b === 'error') return 'error';
+  return 'done';
+}
+
+export function localizeExploreItem(
+  t: ProcessTFn,
+  item: { id: string; name: string; summary?: string }
+): { id: string; name: string; summary?: string } {
+  const id = String(item.id || '');
+  const kindKey = exploreItemKindKey(id);
+  if (!kindKey) return item;
+  if (kindKey === 'agent.canvasSizeLabel') {
+    return {
+      ...item,
+      name: String(item.name || '').trim() || t(kindKey),
+      summary: item.summary,
+    };
+  }
+  const host = /^Host\s*·/i.test(String(item.name || '').trim());
+  const label = t(kindKey);
+  return {
+    ...item,
+    name: host ? t('agent.lookupHostPrefix', { name: label }) : label,
+  };
+}
+
+export function formatActivityLabel(
+  t: ProcessTFn,
+  ev: ActivityStepEvent
+): string | null {
+  const detail = (ev.detail || '').trim();
+  const preferDetail = detail.length > 0;
+
+  if (ev.kind === 'thought') {
+    if (ev.status === 'running') {
+      return preferDetail ? detail : t('agent.activityThoughtRunning');
+    }
+    if (preferDetail) return detail;
+    if (ev.status === 'done' && ev.durationSec != null) {
+      return t('agent.activityThought', { seconds: ev.durationSec });
+    }
+    if (ev.status === 'done') return t('agent.activityThoughtBrief');
+    return null;
+  }
+  if (ev.kind === 'added') {
+    if (preferDetail) return detail;
+    return ev.count != null && ev.count > 0
+      ? t('agent.activityAddedCount', { count: ev.count })
+      : t('agent.activityAdded');
+  }
+  if (ev.kind === 'updated') {
+    if (preferDetail) return detail;
+    return ev.count != null && ev.count > 0
+      ? t('agent.activityUpdatedCount', { count: ev.count })
+      : t('agent.activityUpdated');
+  }
+  if (ev.kind === 'explored') {
+    if (preferDetail && !detail.startsWith('canvas_size:')) return detail;
+    if (ev.stage === 'scene' || detail.startsWith('canvas_size:')) {
+      const raw = detail.replace(/^canvas_size:/i, '').trim();
+      const size =
+        raw && /^\d+x\d+$/i.test(raw) ? raw.replace(/x/i, '×') : detail;
+      if (ev.status === 'running') {
+        return size
+          ? t('agent.activityCanvasSizeRunning', { size })
+          : t('agent.stageScene');
+      }
+      return size
+        ? t('agent.activityCanvasSizeDone', { size })
+        : t('agent.stageScene');
+    }
+    if (ev.stage === 'lookup' || detail.includes('lookup')) {
+      if (ev.status === 'running') return t('agent.activityLookupRunning');
+      const n = ev.count != null && ev.count > 0 ? ev.count : 0;
+      return n > 0
+        ? t('agent.activityLookupDoneCount', { count: n })
+        : t('agent.activityLookupDone');
+    }
+    if (ev.status === 'running') return t('agent.activityExploredRunning');
+    const fromCount = ev.count != null && ev.count > 0 ? ev.count : 0;
+    const fromDetail = detail
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean).length;
+    const n = fromCount || fromDetail;
+    return n > 0
+      ? t('agent.activityExploredCount', { count: n })
+      : t('agent.activityExplored');
+  }
+  if (ev.kind === 'skipped') return preferDetail ? detail : t('agent.activitySkipped');
+  if (ev.kind === 'deleted') {
+    if (preferDetail) return detail;
+    return ev.count != null && ev.count > 0
+      ? t('agent.activityDeletedCount', { count: ev.count })
+      : t('agent.activityDeleted');
+  }
+  if (preferDetail) return detail;
+  return ev.status === 'running' ? t('agent.activityToolRunning') : t('agent.activityTool');
+}
+
+function collapseExplorePipelineSteps(steps: AssistantStep[]): AssistantStep[] {
+  let explore: AssistantStep | null = null;
+  const rest: AssistantStep[] = [];
+  for (const s of steps) {
+    const isExplore =
+      s.id === 'explore-pipeline' ||
+      (s.kind === 'explored' && s.id !== 'chat-process');
+    if (!isExplore) {
+      rest.push(s);
+      continue;
+    }
+    if (!explore) {
+      explore = { ...s, id: 'explore-pipeline', kind: 'explored' };
+      continue;
+    }
+    const items = [...(explore.items || [])];
+    for (const it of s.items || []) {
+      const ii = items.findIndex((x) => x.id === it.id);
+      if (ii >= 0) items[ii] = { ...items[ii], ...it };
+      else items.push(it);
+    }
+    explore = {
+      ...explore,
+      name: s.name || explore.name,
+      summary: s.summary || explore.summary,
+      body: s.body || explore.body,
+      items,
+      status: mergeExploreStepStatus(s.status, explore.status),
+    };
+  }
+  if (!explore) return rest;
+  const provisional = rest.findIndex(
+    (s) => s.id === 'thought-0' || s.id === 'skill-0'
+  );
+  if (provisional >= 0) {
+    const next = [...rest];
+    next.splice(provisional, 1, explore);
+    return next;
+  }
+  return [explore, ...rest];
+}
+
+function workedSecsOf(m: ChatUiMessage): number | undefined {
+  if (m.startedAt) return Math.max(1, Math.round((Date.now() - m.startedAt) / 1000));
+  if (m.durationMs != null) return Math.max(1, Math.round(m.durationMs / 1000));
+  return undefined;
+}
+
+/** Foldable chat process under "Worked for Xs". */
+export function buildChatProcessSteps(t: ProcessTFn, m: ChatUiMessage): AssistantStep[] {
+  if (m.steps?.length) {
+    return m.steps.map((s) =>
+      s.status === 'running' ? { ...s, status: 'done' as const } : s
+    );
+  }
+  const secs = workedSecsOf(m);
+  return [
+    {
+      id: 'chat-process',
+      kind: 'explored',
+      name: t('agent.chatProcessTitle'),
+      status: 'done',
+      ...(secs != null ? { durationSec: secs } : {}),
+      items: [
+        { id: 'chat-wait', name: t('agent.chatProcessWait') },
+        { id: 'chat-reply', name: t('agent.chatProcessReply') },
+      ],
+    },
+  ];
+}
+
+export function applyThinkingBodyToSteps(
+  stepsIn: AssistantStep[],
+  piece: string,
+  replace: boolean,
+  t: ProcessTFn
+): AssistantStep[] {
+  const text = String(piece || '').trim();
+  if (!text) return stepsIn;
+
+  const steps = [...stepsIn];
+  let idx = steps.findIndex((s) => s.id === 'explore-pipeline');
+  if (idx < 0) {
+    idx = steps.findIndex(
+      (s) => s.kind === 'explored' && s.id !== 'chat-process'
+    );
+  }
+  if (idx < 0) {
+    steps.push({
+      id: 'explore-pipeline',
+      kind: 'explored',
+      name: t('agent.activityExplored'),
+      status: replace ? 'done' : 'running',
+      items: [{ id: 'thought-brief', name: text }],
+    });
+    return collapseExplorePipelineSteps(steps);
+  }
+  const prevStep = steps[idx];
+  const items = [...(prevStep.items || [])];
+  const prev = items.find((x) => x.id === 'thought-brief');
+  const merged = replace
+    ? text
+    : `${String(prev?.summary || prev?.name || '')}${text}`.trim();
+  const thoughtLine = {
+    id: 'thought-brief',
+    name: merged,
+  };
+  const ti = items.findIndex((x) => x.id === 'thought-brief');
+  if (ti >= 0) items[ti] = thoughtLine;
+  else items.push(thoughtLine);
+  steps[idx] = {
+    ...prevStep,
+    id: 'explore-pipeline',
+    kind: 'explored',
+    items,
+    body: prevStep.body?.trim() ? prevStep.body : merged,
+    status: prevStep.status,
+  };
+  return collapseExplorePipelineSteps(steps);
+}
+
+export function applyAnalysisDeltaToSteps(
+  stepsIn: AssistantStep[],
+  piece: string
+): AssistantStep[] | null {
+  const steps = [...stepsIn];
+  let idx = steps.findIndex(
+    (s) =>
+      s.status === 'running' &&
+      /thinking|thought|思考/i.test(String(s.name || ''))
+  );
+  if (idx < 0) idx = steps.findIndex((s) => s.status === 'running');
+  if (idx < 0 && steps.length) idx = steps.length - 1;
+  if (idx < 0) return null;
+  const merged = `${steps[idx].summary || ''}${piece}`;
+  steps[idx] = {
+    ...steps[idx],
+    summary: merged,
+  };
+  return steps;
+}
+
+export function applyActivityEventToSteps(
+  stepsIn: AssistantStep[],
+  opts: {
+    kind: NonNullable<AssistantStep['kind']>;
+    eventId?: string;
+    status: 'running' | 'done';
+    label: string;
+    summary?: string;
+    variant?: NonNullable<AssistantStep['variant']>;
+    nestItem?: { id: string; name: string; summary?: string } | null;
+    bodyMd: string;
+  }
+): AssistantStep[] | null {
+  const { kind, status, label, summary, variant, nestItem, bodyMd } = opts;
+  const steps = [...stepsIn];
+  let idx =
+    kind === 'explored'
+      ? steps.findIndex((s) => s.id === 'explore-pipeline')
+      : steps.findIndex((s) => s.id === String(opts.eventId || 'skill-0'));
+  if (idx < 0 && kind === 'explored') {
+    idx = steps.findIndex(
+      (s) => s.kind === 'explored' && s.id !== 'chat-process'
+    );
+  }
+  if (idx < 0 && kind === 'explored') {
+    idx = steps.findIndex((s) => s.id === 'skill-0' || s.id === 'thought-0');
+  }
+  if (idx < 0 && kind === 'thought' && status === 'running') {
+    idx = steps.findIndex(
+      (s) =>
+        s.status === 'running' &&
+        (s.id === 'skill-0' || s.id === 'thought-0' || !s.id)
+    );
+  }
+
+  if (kind === 'explored') {
+    const prevStep = idx >= 0 ? steps[idx] : null;
+    if (prevStep?.status === 'done' && status === 'running' && !nestItem && !bodyMd) {
+      return null;
+    }
+    let items = [...(prevStep?.items || [])];
+    if (nestItem) {
+      const ii = items.findIndex((x) => x.id === nestItem.id);
+      if (ii >= 0) items[ii] = { ...items[ii], ...nestItem };
+      else items.push(nestItem);
+    }
+    const nextStep: AssistantStep = {
+      id: 'explore-pipeline',
+      kind: 'explored',
+      name: label,
+      status,
+      variant: variant || 'confirm',
+      summary: summary || prevStep?.summary,
+      items,
+      body: bodyMd.trim() ? bodyMd : prevStep?.body,
+    };
+    if (idx >= 0) steps[idx] = nextStep;
+    else steps.push(nextStep);
+    return collapseExplorePipelineSteps(steps);
+  }
+
+  const stepId = String(opts.eventId || 'skill-0');
+  const safeId = stepId === 'explore-pipeline' ? `step-${stepId}` : stepId;
+  const next: AssistantStep = {
+    id: safeId,
+    kind,
+    name: label,
+    summary,
+    status,
+    variant,
+    body: bodyMd.trim() || undefined,
+  };
+  if (idx >= 0 && steps[idx]?.id !== 'explore-pipeline') {
+    if (kind === 'thought' && status === 'running' && steps[idx].status === 'done') {
+      return null;
+    }
+    const prevStep = steps[idx];
+    steps[idx] = {
+      ...next,
+      id: prevStep.id || next.id,
+      summary: next.summary || prevStep.summary,
+      items: prevStep.items,
+      body: next.body || prevStep.body,
+    };
+  } else {
+    steps.push(next);
+  }
+  return collapseExplorePipelineSteps(steps);
+}
+
 export type ChatTurn = {
   user: ChatUiMessage | null;
   assistant?: ChatUiMessage;
@@ -124,7 +499,11 @@ export type AskChoicePick = {
 };
 
 function hasFoldableProcess(assistant: ChatUiMessage): boolean {
-  return Boolean(assistant.steps?.length);
+  return Boolean(
+    assistant.steps?.some(
+      (s) => s.kind !== 'thought' && s.id !== 'thought-0'
+    )
+  );
 }
 
 /** Gallery / shimmer cards — wide enough for hover CTA; scroll when many. */
@@ -263,13 +642,8 @@ function AssistantProcessBody({
   const steps = raw.filter((s) => {
     const id = String(s.id || '');
     if (!id || seen.has(id)) return false;
-    // Drop the streaming seed row once real thought/process steps exist.
-    if (
-      s.id === 'thought-0' &&
-      raw.some((x) => x.id !== 'thought-0' && (x.kind === 'thought' || x.kind === 'explored' || x.kind === 'tool' || x.kind === 'added' || x.kind === 'updated'))
-    ) {
-      return false;
-    }
+    // Intent/understanding rows ("要望を理解中…" / "已确认对话意图") — not shown in chat.
+    if (s.kind === 'thought' || id === 'thought-0') return false;
     seen.add(id);
     return true;
   });
@@ -337,26 +711,28 @@ function ProcessStepRow({
     open && expandable ? (
       <div className="flex w-full flex-col gap-1 text-[12px] leading-relaxed text-[var(--muted)]">
         {(step.items || []).map((it) => (
-          <div key={it.id} className="flex flex-col gap-0.5">
-            <span className="inline-flex items-center gap-1.5">
-              <HiOutlineCheckCircle
-                className="h-3 w-3 shrink-0 text-[var(--success,#22a06b)] opacity-80"
-                aria-hidden
-              />
-              {it.name}
-            </span>
-            {it.summary?.trim() ? (
-              <span className="whitespace-pre-wrap text-[11px] leading-snug opacity-80">
-                {it.summary}
+          <div key={it.id} className="flex w-full min-w-0 items-start gap-1.5">
+            <HiOutlineCheckCircle
+              className="mt-0.5 h-3 w-3 shrink-0 text-[var(--success,#22a06b)] opacity-80"
+              aria-hidden
+            />
+            <div className="min-w-0 flex-1">
+              <span className="block whitespace-pre-wrap break-words leading-snug">
+                {it.name}
               </span>
-            ) : null}
+              {it.summary?.trim() ? (
+                <span className="mt-0.5 block whitespace-pre-wrap break-words text-[11px] leading-snug opacity-80">
+                  {it.summary}
+                </span>
+              ) : null}
+            </div>
           </div>
         ))}
         {step.summary?.trim() && step.summary.trim() !== step.name.trim() ? (
-          <span className="w-full whitespace-pre-wrap leading-snug">{step.summary}</span>
+          <span className="w-full whitespace-pre-wrap break-words leading-snug">{step.summary}</span>
         ) : null}
         {step.body?.trim() ? (
-          <div className="w-full text-[12px] leading-relaxed text-[var(--ink)]/80">
+          <div className="w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--ink)]/80">
             <ChatMarkdown content={step.body} />
           </div>
         ) : null}
@@ -389,9 +765,9 @@ function ProcessStepRow({
 
   if (!expandable) {
     return (
-      <span className={rowClass}>
-        {leadingIcon}
-        <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className={cn(rowClass, 'items-start')}>
+        <span className="mt-0.5 shrink-0">{leadingIcon}</span>
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-snug">{label}</span>
       </span>
     );
   }
@@ -400,7 +776,7 @@ function ProcessStepRow({
     <div className="flex w-full flex-col items-stretch gap-1.5">
       <button
         type="button"
-        className={cn(rowClass, 'hover:text-[var(--ink)]')}
+        className={cn(rowClass, 'items-start hover:text-[var(--ink)]')}
         onClick={() => {
           userToggledRef.current = true;
           setOpen((v) => !v);
@@ -408,9 +784,11 @@ function ProcessStepRow({
         aria-expanded={open}
         title={open ? t('agent.collapseProcess') : t('agent.expandProcess')}
       >
-        {leadingIcon}
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        {chevron}
+        <span className="mt-0.5 shrink-0">{leadingIcon}</span>
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-left leading-snug">
+          {label}
+        </span>
+        <span className="mt-0.5 shrink-0">{chevron}</span>
       </button>
       {detail}
     </div>
@@ -430,6 +808,10 @@ function AssistantTurn({
   const { t } = useTranslation();
   const foldable = hasFoldableProcess(assistant);
   const streaming = Boolean(assistant.streaming);
+  const processRunning = (assistant.steps || []).some((s) => s.status === 'running');
+  // Process timeline first — don't stream the reply while earlier steps are still running.
+  const showReplyText =
+    Boolean(assistant.content?.trim()) && !(streaming && processRunning);
 
   const showImageGallery =
     Boolean(assistant.images?.length) ||
@@ -465,7 +847,7 @@ function AssistantTurn({
       <div className="flex w-full items-center gap-1.5 text-[12px] leading-none text-[var(--ink)]/70">
         <HiOutlineQuestionMarkCircle className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
         <span className="min-w-0 flex-1 truncate">
-          {streaming && !assistant.content?.trim()
+          {streaming && (!assistant.content?.trim() || processRunning)
             ? t('agent.working')
             : t('agent.replied', { defaultValue: '已回复' })}
         </span>
@@ -482,9 +864,9 @@ function AssistantTurn({
         <VideoGenGallery assistant={assistant} sending={sending} />
       ) : null}
 
-      {assistant.content ? (
+      {showReplyText ? (
         <div className="w-full min-w-0 overflow-x-hidden text-[13px] leading-[1.7] text-[var(--ink)] [&_.rcb-chat-md_p:first-child]:font-semibold">
-          <ChatMarkdown content={assistant.content} />
+          <ChatMarkdown content={assistant.content || ''} />
           {streaming ? (
             <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current align-middle opacity-50" />
           ) : null}

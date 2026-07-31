@@ -31,7 +31,7 @@ import {
   ComposerAttachmentChip,
   composerAttachActionClass,
 } from '@/components/editor/panels/agent/AgentComposerShell';
-import { buildComposerContext, enrichComposerContextThumb, rasterizeNodesToPngDataUrl } from '@/components/editor/panels/AgentDock';
+import { buildComposerContext, enrichComposerContextThumb, rasterizeNodesToPngDataUrl } from '@/components/editor/panels/AgentComposerInput';
 import MentionAttachPanel, {
   type MentionAttachItem,
 } from '@/components/editor/panels/agent/MentionAttachPanel';
