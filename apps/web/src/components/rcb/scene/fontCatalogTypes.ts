@@ -1,4 +1,4 @@
-/** Shared font catalog types (videoEditor FontFamily / FontChild). */
+/** Shared font catalog types (FontFamily / FontChild). */
 
 export type FontFaceFormat = 'woff2' | 'woff' | 'truetype' | 'opentype';
 

@@ -8,7 +8,7 @@ export interface CustomAxiosRequestConfig extends AxiosRequestConfig {
 }
 
 /**
- * Shared axios client — same pattern web.
+ * Shared axios client.
  * Call sites pass full `/api/v1/...` paths; Vite proxy / nginx handles host.
  */
 const http: AxiosInstance = axios.create({

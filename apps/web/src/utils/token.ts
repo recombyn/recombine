@@ -1,4 +1,4 @@
-/** Session token helpers ( Bearer for API). */
+/** Session token helpers (Bearer for API). */
 
 const TOKEN_KEY = 'recombine-auth-token-v1';
 

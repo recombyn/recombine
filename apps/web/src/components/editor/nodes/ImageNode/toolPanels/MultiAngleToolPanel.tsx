@@ -35,7 +35,7 @@ const TILT_MAX = 60;
 const clampInt = (v: number, min: number, max: number) =>
   Math.round(Math.max(min, Math.min(max, v)));
 
-/** Multi-angle: skybox / camera — scene ported AngleEditorV3. */
+/** Multi-angle tool: skybox / camera scene. */
 function MultiAngleToolPanel({
   imageSrc,
   onCancel,

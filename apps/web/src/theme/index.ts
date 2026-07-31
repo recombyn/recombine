@@ -18,7 +18,7 @@ export function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-/** Apply resolved theme via data-theme (CSS files own the tokens),  */
+/** Apply resolved theme via data-theme (CSS files own the tokens). */
 export function applyThemeColors(resolved: 'light' | 'dark') {
   const root = document.documentElement;
   const next = resolved;

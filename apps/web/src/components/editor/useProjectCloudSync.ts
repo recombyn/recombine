@@ -444,7 +444,7 @@ export function useProjectCloudSync() {
       const name = String(tpl.name || 'Untitled');
       const contentHash = hashDocument(pushedDoc);
 
-      // 1) Local persistenceKey draft first ( durable before cloud).
+      // 1) Local persistenceKey draft first (durable before cloud).
       const draft = await putProjectDraft({
         projectId: id,
         name,

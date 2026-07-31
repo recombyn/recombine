@@ -40,7 +40,7 @@ export function getSnapThreshold(zoom: number) {
   return 8 / Math.max(0.05, zoom || 1);
 }
 
-/** Scene-unit grid step (default). Override via document.gridSize. */
+/** Scene-unit grid step. Override via document.gridSize. */
 export const DEFAULT_GRID_SIZE = 10;
 
 export function getDocumentGridSize(doc: unknown): number {
@@ -570,7 +570,7 @@ export function snapBoxToGuides(
   let useGapX = false;
   let useGapY = false;
 
-  // collectPointSnaps: keep all ties at the nearest distance; wipe on closer.
+  // Keep all ties at the nearest distance; wipe on closer.
   const tryX = (
     sourceX: number,
     sourceY: number,
@@ -658,7 +658,7 @@ export function snapBoxToGuides(
   }
 
   const gap = bestGapNudge(moving, others, containers, threshold);
-  // Gap competes with point snaps on the same axis (minOffset).
+  // Gap competes with point snaps on the same axis.
   if (roundSnap(gap.bestX) < roundSnap(bestX)) {
     bestX = gap.bestX;
     dx = gap.dx;

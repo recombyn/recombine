@@ -1,5 +1,5 @@
 /**
- * Local project drafts + editor session ( persistenceKey → IndexedDB).
+ * Local project drafts + editor session (persistenceKey → IndexedDB).
  * Document drafts may sync to cloud; session (camera / selection) stays local only.
  */
 
@@ -8,7 +8,7 @@ const DB_VERSION = 2;
 const STORE_DRAFTS = 'drafts';
 const STORE_SESSIONS = 'sessions';
 
-/** Same idea as `persistenceKey` — one key per document. */
+/** One persistence key per document. */
 export function projectPersistenceKey(projectId: string): string {
   return `rcb-project:${String(projectId || '').trim()}`;
 }
@@ -46,7 +46,7 @@ export type ProjectSessionRecord = {
   camera: ProjectSessionCamera;
   selectedNodeIds: string[];
   selectedFrameIds: string[];
-  /** Local instance preference (isGridMode) — never synced to cloud. */
+  /** Local grid preference — never synced to cloud. */
   isGridMode?: boolean;
   updatedAt: number;
 };

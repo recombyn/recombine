@@ -3559,7 +3559,7 @@ function SvgCanvas({
             keepVisibleIds={keepVisibleIds}
           />
         ) : null}
-        {/* : stable HTML <video> plates (SVG poster = underlay / export only). */}
+        {/* Stable HTML <video> plates; SVG poster is underlay / export only. */}
         {infinite ? (
           <VideoNodeOverlay
             document={document}

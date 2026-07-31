@@ -17,7 +17,7 @@ function pointInRect(x: number, y: number, r: DOMRect) {
   return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 }
 
-/** `toSvg`-style: freeze the current decoded frame as a JPEG data URL. */
+/** Freeze the current decoded video frame as a JPEG data URL. */
 export function captureFrameFromVideoEl(video: HTMLVideoElement): string | null {
   if (video.readyState < 2) return null;
   const w = Math.max(1, video.videoWidth || 1);
@@ -85,10 +85,9 @@ type VideoHoverPlaybackProps = {
 };
 
 /**
- * hybrid:
- * - Playing → live `<video>`
- * - Paused → 截帧 `<img>` only when it matches currentTime (scrubber).
- *   Otherwise keep showing paused `<video>` so seek/switch lands on the right frame.
+ * Playing → live `<video>`.
+ * Paused → freeze-frame `<img>` only when it matches currentTime (scrubber);
+ * otherwise keep the paused `<video>` so seek/switch lands on the right frame.
  */
 function VideoHoverPlayback({
   nodeId,

@@ -23,7 +23,7 @@ const EMPTY_KEEP: readonly string[] = [];
 /** Screen-px margin so shapes entering the view aren't blank for a frame. */
 const CULL_PAD_SCREEN_PX = 96;
 
-/** Above this count, use stepped zoom while the camera is moving (). */
+/** Above this count, use stepped zoom while the camera is moving. */
 const EFFICIENT_ZOOM_SHAPE_THRESHOLD = 80;
 
 /**
