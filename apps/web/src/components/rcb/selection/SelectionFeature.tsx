@@ -1368,7 +1368,7 @@ function SelectionFeature({
           top: drag.union.top + dy,
         };
         // Grid first; align guides may still pull off-grid when nearby.
-        // Ctrl/Cmd temporarily disables grid snap (accel).
+        // Ctrl/Cmd temporarily disables grid snap.
         if (isGridMode && !e.ctrlKey && !e.metaKey) {
           nextUnion = snapBoxToGrid(nextUnion, gridSize);
         }

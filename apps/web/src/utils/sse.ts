@@ -1,5 +1,5 @@
 /**
- * Server-Sent Events helper ().
+ * Server-Sent Events helper.
  * Call sites parse `ev.data`; this only opens the stream and forwards frames.
  */
 

@@ -1,4 +1,4 @@
-/** Tree-shaped font catalog loader (mirrors videoEditor). */
+/** Tree-shaped font catalog loader. */
 
 import { fetchFonts } from '@/apis/fonts';
 import type { FontChild, FontFaceFormat, FontFamilyNode, FontWeightOption } from './fontCatalogTypes';
@@ -81,7 +81,7 @@ function formatHint(format?: FontFaceFormat, url?: string): FontFaceFormat {
   return 'truetype';
 }
 
-/** Inject @font-face for catalog entries that declare a `url` (). */
+/** Inject @font-face for catalog entries that declare a `url`. */
 export function injectFontFaces(catalog: FontFamilyNode[], opts?: { force?: boolean }) {
   if (typeof document === 'undefined') return;
   if (facesInjected && !opts?.force) return;

@@ -1,4 +1,4 @@
-"""Chat LLM API —  SSE message streaming."""
+"""Chat LLM API — SSE message streaming."""
 
 from __future__ import annotations
 

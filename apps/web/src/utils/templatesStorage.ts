@@ -6,7 +6,7 @@
  *
  * First real edit claims `case` | `scratch` → `user` and then it syncs to Projects API.
  * Project library list is NOT in localStorage; per-project drafts use IndexedDB
- * (`projectPersistenceKey` / projectDraftStore) persistenceKey.
+ * (`projectPersistenceKey` / projectDraftStore).
  */
 export type TemplateSource = 'user' | 'import' | 'case' | 'scratch';
 

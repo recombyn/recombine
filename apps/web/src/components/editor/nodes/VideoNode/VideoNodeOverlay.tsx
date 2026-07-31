@@ -50,7 +50,7 @@ function VideoZoomSync({ onZoom }: { onZoom: (zoom: number) => void }) {
 }
 
 /**
- * hybrid: idle = 截帧 still; playing = stable HTML <video>.
+ * Idle = freeze-frame still; playing = stable HTML <video>.
  * Selection must not remount plates (key=nodeId + memo).
  * During move/resize, `geometryOverrides` keeps plates glued to the chrome
  * (Redux document only commits at gesture end).

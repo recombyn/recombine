@@ -86,7 +86,7 @@ export function rcbViewportSceneBounds(
 }
 
 /**
- * Quantize zoom while the camera is moving (efficient-zoom).
+ * Quantize zoom while the camera is moving.
  * Keeps cull / LOD stable across tiny wheel deltas; idle uses true zoom.
  */
 export function rcbStepZoom(zoom: number, step = 0.05): number {

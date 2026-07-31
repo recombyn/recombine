@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/utils/classnames';
 
-/** Toast API and portal container — style aligned message. */
+/** Toast API and portal container. */
 
 export type ToastType = 'success' | 'error' | 'warning' | 'loading' | 'destructive';
 

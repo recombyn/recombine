@@ -1184,8 +1184,8 @@ export async function nodeToSvgElement(
     }
 
     const g = appendChild(parent, svgEl('g'));
-    // : live pixels are HTML <video> on the world layer. SVG holds the
-    // poster (export / transform underlay) — same idea as toSvg() frame.
+    // Live pixels are HTML <video> on the world layer; SVG holds the poster
+    // (export / transform underlay).
     const crop = (() => {
       const fx = Number(node.attrs?.cropX);
       const fy = Number(node.attrs?.cropY);

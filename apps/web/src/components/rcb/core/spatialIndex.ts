@@ -1,6 +1,6 @@
 /**
  * Uniform-grid spatial index for scene AABBs (culling + hit candidate filter).
- * Same role as RBush — kept dependency-free for the rcb core.
+ * Dependency-free for the rcb core.
  */
 
 import { nodeLeftTop } from '../scene/sceneToSvg';

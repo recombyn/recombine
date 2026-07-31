@@ -128,7 +128,7 @@ async function importViaJob(
 }
 
 /**
- * Scene document validation for JSON import (mirrors workflow Zod.safeParse flow).
+ * Scene document validation for JSON import (Zod.safeParse).
  * Required: width, height, deltaSetLike.ROOT.children — extra fields allowed.
  */
 
