@@ -23,7 +23,8 @@
 **Recombyn** 是开源的 **画布编辑器 + AI Design Agent**。  
 在无限画布上创作与编辑，用 Agent 规划并落笔改画布，整套可在自己的机器上跑。
 
-几分钟内用 Docker Compose 自托管（MySQL + Redis + Web + API）。MIT 协议 monorepo。
+几分钟内用 Docker Compose 自托管（**MySQL** + Redis + Web + API）。MIT 协议 monorepo。  
+另支持：本地 **SQLite**（空 `DATABASE_URL`），以及配置 `DATABASE_URL` 后使用 **PostgreSQL**（需先迁移 schema）— 见 [docs/postgres-switch.md](docs/postgres-switch.md)。
 
 ---
 
@@ -58,7 +59,7 @@ docker compose up -d --build
 | API 文档 | http://localhost:8000/docs |
 | MySQL | `127.0.0.1:3306` · `recombyn` / `recombyn` |
 
-更多选项（环境变量、模型密钥、生产加固）：**[docs/self-hosting.md](docs/self-hosting.md)**
+更多选项（环境变量、模型密钥、生产加固）：**[docs/self-hosting.md](docs/self-hosting.md)** · Postgres：**[docs/postgres-switch.md](docs/postgres-switch.md)**
 
 ### 本地开发
 
@@ -66,7 +67,7 @@ docker compose up -d --build
 docker compose up -d redis
 npm install
 cp apps/api/.env.example apps/api/.env
-npm run dev:api
+npm run dev:api              # 空 DATABASE_URL → SQLite
 npm run dev:web
 ```
 
@@ -77,16 +78,15 @@ apps/web/          React 画布 + Agent UI
 apps/api/          FastAPI
 apps/docs/         帮助 / 法律站
 packages/          共享协议
-docs/              架构与自托管
+docs/              架构与自托管（含 Postgres 切换）
 deploy/            Dockerfile / Nginx
 e2e/               Playwright
 ```
 
 ## 文档与社区
 
-- [自托管](docs/self-hosting.md) · [贡献指南](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
+- [自托管](docs/self-hosting.md) · [PostgreSQL 切换](docs/postgres-switch.md) · [贡献指南](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
 - Issue / PR 模板见 `.github/`
-
 ## 协议
 
 [MIT](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)

@@ -24,7 +24,8 @@
 **Recombyn** is an open-source **canvas editor + AI Design Agent**.  
 Create and edit visual designs on an infinite canvas, talk to an agent that can plan and apply canvas operations, and run everything on your own machine.
 
-Self-host in minutes with Docker Compose (MySQL + Redis + web + API). MIT-licensed monorepo.
+Self-host in minutes with Docker Compose (**MySQL** + Redis + web + API). MIT-licensed monorepo.  
+Also supported: local **SQLite** (empty `DATABASE_URL`), and **PostgreSQL** via `DATABASE_URL` after you migrate schema — see [docs/postgres-switch.md](docs/postgres-switch.md).
 
 ---
 
@@ -59,7 +60,7 @@ docker compose up -d --build
 | API docs | http://localhost:8000/docs |
 | MySQL | `127.0.0.1:3306` · `recombyn` / `recombyn` |
 
-More options (env, LLM keys, production hardening): **[docs/self-hosting.md](docs/self-hosting.md)**
+More options (env, LLM keys, production hardening): **[docs/self-hosting.md](docs/self-hosting.md)** · Postgres: **[docs/postgres-switch.md](docs/postgres-switch.md)**
 
 ### Local development
 
@@ -77,11 +78,12 @@ npm run dev:web
 flowchart LR
   User[Browser] --> Web[apps/web]
   Web --> API[apps/api]
-  API --> MySQL[(MySQL)]
+  API --> DB[(MySQL / SQLite / Postgres)]
   API --> Redis[(Redis)]
   API --> LLM[LLM providers]
 ```
 
+Compose defaults to **MySQL**. Dev often uses **SQLite**. **Postgres** is optional (driver + migrate first).
 ## Repository layout
 
 ```
@@ -99,6 +101,7 @@ e2e/               Playwright
 | Doc | Link |
 |-----|------|
 | Self-hosting | [docs/self-hosting.md](docs/self-hosting.md) |
+| PostgreSQL switch | [docs/postgres-switch.md](docs/postgres-switch.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Security | [SECURITY.md](SECURITY.md) |
 | Code of Conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
