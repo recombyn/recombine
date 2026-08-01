@@ -100,6 +100,8 @@ _PAINT_OP_META_KEYS = frozenset(
         "op_key",
         "opKey",
         "args",
+        "parameters",
+        "arguments",
         "properties",
         "props",
         "updates",
@@ -108,61 +110,92 @@ _PAINT_OP_META_KEYS = frozenset(
         "opId",
     }
 )
+# Prefer args; also accept parameters/arguments (function-calling habit) + legacy nests.
+_PAINT_OP_NEST_ARG_KEYS = (
+    "args",
+    "parameters",
+    "arguments",
+    "properties",
+    "props",
+    "updates",
+    "params",
+)
+
+_PAINT_OP_NAME_ALIASES = ("name", "tool", "op", "op_key", "opKey")
+_PAINT_CREATE_SHAPE_NAMES = frozenset(
+    {
+        "create_shape",
+        "create_text",
+        "create_image",
+        "create_frame",
+        "update_node",
+        "delete_nodes",
+        "delete_frame",
+        "create_svg",
+        "create_icon",
+    }
+)
+
+
+def _paint_op_name(d: dict[str, Any]) -> str:
+    for key in _PAINT_OP_NAME_ALIASES:
+        raw = d.get(key)
+        if raw is not None and str(raw).strip():
+            return str(raw).strip()
+    type_as_name = str(d.get("type") or "").strip()
+    if type_as_name in _PAINT_CREATE_SHAPE_NAMES:
+        return type_as_name
+    return ""
+
+
+def _merge_nested_op_args(d: dict[str, Any]) -> dict[str, Any]:
+    args: dict[str, Any] = {}
+    for nest_key in _PAINT_OP_NEST_ARG_KEYS:
+        nested = d.get(nest_key)
+        if not isinstance(nested, dict):
+            continue
+        for nk, nv in nested.items():
+            args.setdefault(nk, nv)
+    if not args:
+        return {k: v for k, v in d.items() if k not in _PAINT_OP_META_KEYS}
+    for k, v in d.items():
+        if k not in _PAINT_OP_META_KEYS:
+            args.setdefault(k, v)
+    return args
+
+
+def _coalesce_paint_tool_op(data: Any) -> Any:
+    """Normalize one tool_op envelope to ``{name, args}`` (accepts parameters)."""
+    if not isinstance(data, dict):
+        return data
+    d = dict(data)
+    name = _paint_op_name(d)
+    args = _merge_nested_op_args(d)
+    if (
+        name == "create_shape"
+        and args.get("shapeType") is None
+        and d.get("type") is not None
+        and str(d.get("type")) not in {"create_shape"}
+    ):
+        args.setdefault("shapeType", d.get("type"))
+    return {"name": name, "args": args}
 
 
 class PaintToolOp(BaseModel):
-    """LangChain envelope for one canvas op — name + args only (not canvas semantics)."""
+    """LangChain envelope for one canvas op — normalized to ``{name, args}``."""
 
     name: str = Field(..., min_length=1)
-    args: dict[str, Any] = Field(default_factory=dict)
+    args: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Canvas op arguments. Prefer key 'args'; 'parameters' also accepted.",
+    )
 
     model_config = {"extra": "allow"}
 
     @model_validator(mode="before")
     @classmethod
     def _coalesce_flat_op(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        d = dict(data)
-        name = (
-            d.get("name")
-            or d.get("tool")
-            or d.get("op")
-            or d.get("op_key")
-            or d.get("opKey")
-            or ""
-        )
-        type_as_name = str(d.get("type") or "").strip()
-        if not str(name or "").strip() and type_as_name in {
-            "create_shape",
-            "create_text",
-            "create_image",
-            "create_frame",
-            "update_node",
-            "delete_nodes",
-            "delete_frame",
-            "create_svg",
-            "create_icon",
-        }:
-            name = type_as_name
-        args = d.get("args")
-        if not isinstance(args, dict):
-            args = {k: v for k, v in d.items() if k not in _PAINT_OP_META_KEYS}
-        else:
-            args = dict(args)
-        for nest_key in ("properties", "props", "updates", "params"):
-            nested = d.get(nest_key)
-            if isinstance(nested, dict):
-                for nk, nv in nested.items():
-                    args.setdefault(nk, nv)
-        if (
-            str(name or "").strip() == "create_shape"
-            and args.get("shapeType") is None
-            and d.get("type") is not None
-            and str(d.get("type")) not in {"create_shape"}
-        ):
-            args.setdefault("shapeType", d.get("type"))
-        return {"name": str(name or "").strip(), "args": args}
+        return _coalesce_paint_tool_op(data)
 
 
 class AgentTurnSchema(BaseModel):
@@ -959,6 +992,7 @@ def _paint_ops_system(rt: Any) -> str:
         "Your ONLY job: emit non-empty tool_ops that change the canvas.\n"
         "Rules:\n"
         "- tool_ops must be a non-empty array; use TOOL_DETAILS `name`/`op_key` exactly.\n"
+        "- Each op: {\"name\":\"create_shape\",\"args\":{...}} (args preferred; parameters ok).\n"
         "- New poster/page/artboard → create_frame first (with width/height), then children.\n"
         "- Infinite canvas: add shape/text → create_shape/create_text in world "
         "space; do NOT create_frame unless the user asked for a new artboard/page/poster.\n"
@@ -1697,6 +1731,53 @@ def _op_errors_for_log(errors: list[Any] | None, *, limit: int = 20) -> list[str
         if s:
             out.append(s[:400])
     return out or None
+
+
+def _op_error_codes(errors: list[Any] | None, *, limit: int = 4) -> list[str]:
+    codes: list[str] = []
+    for e in list(errors or []):
+        s = str(e or "").strip()
+        if not s:
+            continue
+        code = s
+        if "code=" in s:
+            code = s.split("code=", 1)[1].split(";", 1)[0].strip()
+        if code and code not in codes:
+            codes.append(code)
+        if len(codes) >= limit:
+            break
+    return codes
+
+
+def _emit_tool_ops_validation_ui(
+    rt: Any,
+    errors: list[Any] | None,
+    *,
+    kept: int = 0,
+) -> None:
+    """Surface tool_ops validation failures in chat (not Admin-only)."""
+    errs = [str(e).strip() for e in list(errors or []) if str(e or "").strip()]
+    if not errs:
+        return
+    codes = _op_error_codes(errs)
+    code_hint = "、".join(codes[:3]) if codes else "invalid_op"
+    if kept > 0:
+        detail = f"{len(errs)} 条操作校验失败（已应用 {kept}）：{code_hint}"
+    else:
+        detail = f"{len(errs)} 条操作校验失败：{code_hint}"
+    st = rt.run
+    _emit(
+        {
+            "type": "activity",
+            "id": f"validate-ops-{st.task_id[:8]}",
+            "kind": "skipped",
+            "status": "error",
+            "stage": "validate",
+            "count": len(errs),
+            "detail": detail[:240],
+            "summary": "; ".join(errs[:6])[:800],
+        }
+    )
 
 
 def _hydrate_srcs_for_log(ops: list[dict[str, Any]] | None) -> list[str] | None:
@@ -4413,11 +4494,13 @@ async def _node_settle(state: GraphState) -> Command:
             )
         ),
     )
+    failed_attempt = bool(st.errors) and not st.painted and not has_proposal
+    settle_status = "error" if failed_attempt else "success"
     await asyncio.to_thread(_persist_task_meta, st.task_id, decision=rt.decision, state=st)
     await asyncio.to_thread(
         _update_task,
         st.task_id,
-        status="success",
+        status=settle_status,
         charged_credits=spend,
         total_tokens=st.total_tokens,
         result_svg="",
@@ -4425,14 +4508,17 @@ async def _node_settle(state: GraphState) -> Command:
     exec_payload = st.to_execution_log()
     balance = await asyncio.to_thread(get_user_tokens, rt.user_id)
     _emit({"type": "execution_log", **exec_payload})
+    fail_summary = ""
+    if failed_attempt and st.errors:
+        fail_summary = str(st.errors[-1])[:240]
     _emit(
         {
             "type": "result",
             "task_id": st.task_id,
             "trace_id": st.trace_id,
-            "status": "success",
+            "status": settle_status,
             "svg": "",
-            "summary": st.reply[:500] if st.reply else "",
+            "summary": (st.reply[:500] if st.reply else "") or fail_summary,
             "charged_credits": spend,
             "total_tokens": st.total_tokens,
             "tool_ops_applied": st.painted,
@@ -4442,6 +4528,7 @@ async def _node_settle(state: GraphState) -> Command:
             **({"proposed_ops": st.proposed_ops} if st.proposed_ops else {}),
             **({"apply_choice": st.apply_choice} if st.apply_choice else {}),
             **({"choice_ui": st.choice_ui} if st.choice_ui else {}),
+            **({"errors": list(st.errors)[-5:]} if failed_attempt else {}),
             "balance": balance,
             "decision_log": rt.decision.to_log(),
             "execution_log": exec_payload
@@ -5184,6 +5271,12 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 "tokens": used_hint
             }
         )
+        # Show validation failures in chat when leaving paint (keep or exhaust).
+        # Mid-retry: keep Admin/LAST_ERROR only so the model can fix quietly.
+        will_keep = bool(step_ops)
+        will_exhaust = (not will_keep) and (attempt >= max_attempts - 1)
+        if op_errors and (will_keep or will_exhaust):
+            _emit_tool_ops_validation_ui(rt, op_errors, kept=len(step_ops))
 
         if step_ops:
             ask_mode = str(rt.flags.get("mode") or "") == "ask"

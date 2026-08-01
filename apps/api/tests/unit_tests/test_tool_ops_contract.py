@@ -150,6 +150,37 @@ def test_update_node_accepts_shape_type():
     assert ops[0]["args"]["shapeType"] == "circle"
 
 
+def test_accepts_parameters_envelope_as_args():
+    """Models often emit OpenAI-style parameters; normalize to args."""
+    raw_ops = [
+        {
+            "name": "create_shape",
+            "parameters": {
+                "shapeType": "rect",
+                "x": 0,
+                "y": 0,
+                "width": 100,
+                "height": 80,
+                "fill": "#fff",
+            },
+        },
+        {
+            "name": "create_text",
+            "arguments": {"text": "Hi", "x": 10, "y": 20, "fontSize": 16},
+        },
+        {
+            "name": "create_image",
+            "parameters": {"genPrompt": "avatar", "x": 0, "y": 0, "width": 64, "height": 64},
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(raw_ops)
+    assert not errs
+    assert len(ops) == 3
+    assert ops[0]["args"]["shapeType"] == "rect"
+    assert ops[1]["args"]["text"] == "Hi"
+    assert ops[2]["args"]["genPrompt"] == "avatar"
+
+
 def test_create_shape_next_to_images_is_not_rewritten_to_update():
     """Large create_shape must not rewrite onto image nodes (looks like no-op)."""
     raw_ops = [

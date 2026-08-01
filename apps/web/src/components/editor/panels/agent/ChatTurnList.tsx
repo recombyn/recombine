@@ -101,7 +101,7 @@ export type AssistantStep = NonNullable<ChatUiMessage['steps']>[number];
 
 export type ActivityStepEvent = {
   kind: 'thought' | 'added' | 'updated' | 'explored' | 'skipped' | 'deleted' | 'tool';
-  status: 'running' | 'done';
+  status: 'running' | 'done' | 'error';
   durationSec?: number;
   count?: number;
   skillName?: string;
@@ -110,6 +110,171 @@ export type ActivityStepEvent = {
 };
 
 type ProcessTFn = (key: string, opts?: Record<string, unknown>) => string;
+
+export function normalizeActivityStatus(
+  status: string | undefined | null
+): 'running' | 'done' | 'error' {
+  if (status === 'running') return 'running';
+  if (status === 'error') return 'error';
+  return 'done';
+}
+
+function countLabel(
+  t: ProcessTFn,
+  count: number | undefined,
+  withCount: string,
+  bare: string
+): string {
+  if (count != null && count > 0) return t(withCount, { count });
+  return t(bare);
+}
+
+function formatThoughtLabel(
+  t: ProcessTFn,
+  ev: ActivityStepEvent,
+  detail: string,
+  preferDetail: boolean
+): string | null {
+  if (ev.status === 'running') {
+    return preferDetail ? detail : t('agent.activityThoughtRunning');
+  }
+  if (preferDetail) return detail;
+  if (ev.status === 'done' && ev.durationSec != null) {
+    return t('agent.activityThought', { seconds: ev.durationSec });
+  }
+  if (ev.status === 'done') return t('agent.activityThoughtBrief');
+  return null;
+}
+
+function formatPreloadExploredLabel(
+  t: ProcessTFn,
+  detail: string,
+  stage: string | undefined
+): string | null {
+  const preloadTag = detail.toLowerCase();
+  const isPreload =
+    stage === 'skill_preload' ||
+    preloadTag === 'skills' ||
+    preloadTag === 'tools' ||
+    preloadTag === 'knowledge' ||
+    preloadTag === 'aesthetics';
+  if (!isPreload) return null;
+  if (preloadTag === 'tools') return t('agent.lookupKindRule');
+  if (preloadTag === 'knowledge') return t('agent.lookupKindKnowledge');
+  if (preloadTag === 'aesthetics') return t('agent.lookupKindAesthetics');
+  return t('agent.lookupKindSkill');
+}
+
+function formatCanvasSizeExploredLabel(
+  t: ProcessTFn,
+  ev: ActivityStepEvent,
+  detail: string
+): string | null {
+  if (ev.stage !== 'scene' && !detail.startsWith('canvas_size:')) return null;
+  const raw = detail.replace(/^canvas_size:/i, '').trim();
+  const size =
+    raw && /^\d+x\d+$/i.test(raw) ? raw.replace(/x/i, '×') : detail;
+  if (ev.status === 'running') {
+    return size
+      ? t('agent.activityCanvasSizeRunning', { size })
+      : t('agent.stageScene');
+  }
+  return size
+    ? t('agent.activityCanvasSizeDone', { size })
+    : t('agent.stageScene');
+}
+
+function formatLookupExploredLabel(
+  t: ProcessTFn,
+  ev: ActivityStepEvent,
+  detail: string
+): string | null {
+  if (ev.stage !== 'lookup' && !detail.includes('lookup')) return null;
+  if (ev.status === 'running') return t('agent.activityLookupRunning');
+  const n = ev.count != null && ev.count > 0 ? ev.count : 0;
+  return countLabel(
+    t,
+    n || undefined,
+    'agent.activityLookupDoneCount',
+    'agent.activityLookupDone'
+  );
+}
+
+function formatExploredLabel(
+  t: ProcessTFn,
+  ev: ActivityStepEvent,
+  detail: string,
+  preferDetail: boolean
+): string {
+  const preload = formatPreloadExploredLabel(t, detail, ev.stage);
+  if (preload) return preload;
+  if (preferDetail && !detail.startsWith('canvas_size:')) return detail;
+  const canvas = formatCanvasSizeExploredLabel(t, ev, detail);
+  if (canvas) return canvas;
+  const lookup = formatLookupExploredLabel(t, ev, detail);
+  if (lookup) return lookup;
+  if (ev.status === 'running') return t('agent.activityExploredRunning');
+  const fromCount = ev.count != null && ev.count > 0 ? ev.count : 0;
+  const fromDetail = detail
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+  return countLabel(
+    t,
+    fromCount || fromDetail || undefined,
+    'agent.activityExploredCount',
+    'agent.activityExplored'
+  );
+}
+
+export function formatActivityLabel(
+  t: ProcessTFn,
+  ev: ActivityStepEvent
+): string | null {
+  const detail = (ev.detail || '').trim();
+  const preferDetail = detail.length > 0;
+
+  if (ev.kind === 'thought') {
+    return formatThoughtLabel(t, ev, detail, preferDetail);
+  }
+  if (ev.kind === 'added') {
+    if (preferDetail) return detail;
+    return countLabel(
+      t,
+      ev.count,
+      'agent.activityAddedCount',
+      'agent.activityAdded'
+    );
+  }
+  if (ev.kind === 'updated') {
+    if (preferDetail) return detail;
+    return countLabel(
+      t,
+      ev.count,
+      'agent.activityUpdatedCount',
+      'agent.activityUpdated'
+    );
+  }
+  if (ev.kind === 'explored') {
+    return formatExploredLabel(t, ev, detail, preferDetail);
+  }
+  if (ev.kind === 'skipped') {
+    if (preferDetail) return detail;
+    return t('agent.activitySkipped');
+  }
+  if (ev.kind === 'deleted') {
+    if (preferDetail) return detail;
+    return countLabel(
+      t,
+      ev.count,
+      'agent.activityDeletedCount',
+      'agent.activityDeleted'
+    );
+  }
+  if (preferDetail) return detail;
+  if (ev.status === 'running') return t('agent.activityToolRunning');
+  return t('agent.activityTool');
+}
 
 function exploreItemKindKey(id: string): string {
   if (id === 'lookup-skill' || id.startsWith('lookup-skill')) {
@@ -139,8 +304,8 @@ function mergeExploreStepStatus(
   a: 'running' | 'done' | 'error' | 'pending' | undefined,
   b: 'running' | 'done' | 'error' | 'pending' | undefined
 ): 'running' | 'done' | 'error' {
-  if (a === 'running' || b === 'running') return 'running';
   if (a === 'error' || b === 'error') return 'error';
+  if (a === 'running' || b === 'running') return 'running';
   return 'done';
 }
 
@@ -164,94 +329,6 @@ export function localizeExploreItem(
     ...item,
     name: host ? t('agent.lookupHostPrefix', { name: label }) : label,
   };
-}
-
-export function formatActivityLabel(
-  t: ProcessTFn,
-  ev: ActivityStepEvent
-): string | null {
-  const detail = (ev.detail || '').trim();
-  const preferDetail = detail.length > 0;
-
-  if (ev.kind === 'thought') {
-    if (ev.status === 'running') {
-      return preferDetail ? detail : t('agent.activityThoughtRunning');
-    }
-    if (preferDetail) return detail;
-    if (ev.status === 'done' && ev.durationSec != null) {
-      return t('agent.activityThought', { seconds: ev.durationSec });
-    }
-    if (ev.status === 'done') return t('agent.activityThoughtBrief');
-    return null;
-  }
-  if (ev.kind === 'added') {
-    if (preferDetail) return detail;
-    return ev.count != null && ev.count > 0
-      ? t('agent.activityAddedCount', { count: ev.count })
-      : t('agent.activityAdded');
-  }
-  if (ev.kind === 'updated') {
-    if (preferDetail) return detail;
-    return ev.count != null && ev.count > 0
-      ? t('agent.activityUpdatedCount', { count: ev.count })
-      : t('agent.activityUpdated');
-  }
-  if (ev.kind === 'explored') {
-    // skill-preload emits short tags (skills|tools|…) — never show raw English as the row title.
-    const preloadTag = detail.toLowerCase();
-    if (
-      ev.stage === 'skill_preload' ||
-      preloadTag === 'skills' ||
-      preloadTag === 'tools' ||
-      preloadTag === 'knowledge' ||
-      preloadTag === 'aesthetics'
-    ) {
-      if (preloadTag === 'tools') return t('agent.lookupKindRule');
-      if (preloadTag === 'knowledge') return t('agent.lookupKindKnowledge');
-      if (preloadTag === 'aesthetics') return t('agent.lookupKindAesthetics');
-      return t('agent.lookupKindSkill');
-    }
-    if (preferDetail && !detail.startsWith('canvas_size:')) return detail;
-    if (ev.stage === 'scene' || detail.startsWith('canvas_size:')) {
-      const raw = detail.replace(/^canvas_size:/i, '').trim();
-      const size =
-        raw && /^\d+x\d+$/i.test(raw) ? raw.replace(/x/i, '×') : detail;
-      if (ev.status === 'running') {
-        return size
-          ? t('agent.activityCanvasSizeRunning', { size })
-          : t('agent.stageScene');
-      }
-      return size
-        ? t('agent.activityCanvasSizeDone', { size })
-        : t('agent.stageScene');
-    }
-    if (ev.stage === 'lookup' || detail.includes('lookup')) {
-      if (ev.status === 'running') return t('agent.activityLookupRunning');
-      const n = ev.count != null && ev.count > 0 ? ev.count : 0;
-      return n > 0
-        ? t('agent.activityLookupDoneCount', { count: n })
-        : t('agent.activityLookupDone');
-    }
-    if (ev.status === 'running') return t('agent.activityExploredRunning');
-    const fromCount = ev.count != null && ev.count > 0 ? ev.count : 0;
-    const fromDetail = detail
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean).length;
-    const n = fromCount || fromDetail;
-    return n > 0
-      ? t('agent.activityExploredCount', { count: n })
-      : t('agent.activityExplored');
-  }
-  if (ev.kind === 'skipped') return preferDetail ? detail : t('agent.activitySkipped');
-  if (ev.kind === 'deleted') {
-    if (preferDetail) return detail;
-    return ev.count != null && ev.count > 0
-      ? t('agent.activityDeletedCount', { count: ev.count })
-      : t('agent.activityDeleted');
-  }
-  if (preferDetail) return detail;
-  return ev.status === 'running' ? t('agent.activityToolRunning') : t('agent.activityTool');
 }
 
 function collapseExplorePipelineSteps(steps: AssistantStep[]): AssistantStep[] {
@@ -431,7 +508,7 @@ export function applyActivityEventToSteps(
   opts: {
     kind: NonNullable<AssistantStep['kind']>;
     eventId?: string;
-    status: 'running' | 'done';
+    status: 'running' | 'done' | 'error';
     label: string;
     summary?: string;
     variant?: NonNullable<AssistantStep['variant']>;

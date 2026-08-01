@@ -304,6 +304,68 @@ def _max_ops_per_step(rules: dict[str, str] | None) -> int:
     return n
 
 
+_OP_META_KEYS = frozenset(
+    {
+        "name",
+        "tool",
+        "type",
+        "op",
+        "args",
+        "parameters",
+        "arguments",
+        "properties",
+        "props",
+        "updates",
+        "params",
+        "op_id",
+        "opId",
+    }
+)
+# Nested bags accepted as args payload (models often use parameters from FC habit).
+_OP_NEST_ARG_KEYS = (
+    "args",
+    "parameters",
+    "arguments",
+    "properties",
+    "props",
+    "updates",
+    "params",
+)
+
+
+def _coerce_op_args(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize op payload to ``args``; accept ``parameters`` / ``arguments`` too."""
+    args: dict[str, Any] = {}
+    # Prefer explicit args, then parameters/arguments, then other legacy nests.
+    for nest_key in _OP_NEST_ARG_KEYS:
+        nested = item.get(nest_key)
+        if not isinstance(nested, dict):
+            continue
+        for nk, nv in nested.items():
+            args.setdefault(nk, nv)
+    if not args:
+        args = {k: v for k, v in item.items() if k not in _OP_META_KEYS}
+    else:
+        # Flat sibling fields fill gaps (e.g. name + top-level x).
+        for k, v in item.items():
+            if k not in _OP_META_KEYS:
+                args.setdefault(k, v)
+    op_id = item.get("op_id") or item.get("opId")
+    if op_id is not None and str(op_id).strip():
+        args["op_id"] = str(op_id).strip()[:64]
+    if not args.get("nodeId"):
+        nid = (
+            args.get("id")
+            or item.get("id")
+            or item.get("nodeId")
+            or item.get("node_id")
+        )
+        if nid is not None and str(nid).strip():
+            args["nodeId"] = str(nid).strip()
+    args.pop("id", None)
+    return args
+
+
 def _parse_raw_ops(content: str | dict[str, Any] | list[Any] | None) -> list[dict[str, Any]]:
     """Parse model JSON into raw op dicts (before allowlist / validation)."""
     if isinstance(content, (dict, list)):
@@ -334,46 +396,7 @@ def _parse_raw_ops(content: str | dict[str, Any] | list[Any] | None) -> list[dic
         )
         if not name:
             continue
-        args = item.get("args")
-        if not isinstance(args, dict):
-            args = {
-                k: v
-                for k, v in item.items()
-                if k
-                not in (
-                    "name",
-                    "tool",
-                    "type",
-                    "op",
-                    "args",
-                    "properties",
-                    "props",
-                    "updates",
-                    "params",
-                    "op_id",
-                )
-            }
-        else:
-            args = dict(args)
-        for nest_key in ("properties", "props", "updates", "params"):
-            nested = item.get(nest_key)
-            if isinstance(nested, dict):
-                for nk, nv in nested.items():
-                    args.setdefault(nk, nv)
-        op_id = item.get("op_id") or item.get("opId")
-        if op_id is not None and str(op_id).strip():
-            args["op_id"] = str(op_id).strip()[:64]
-        if not args.get("nodeId"):
-            nid = (
-                args.get("id")
-                or item.get("id")
-                or item.get("nodeId")
-                or item.get("node_id")
-            )
-            if nid is not None and str(nid).strip():
-                args["nodeId"] = str(nid).strip()
-        args.pop("id", None)
-        out.append({"name": name, "args": args})
+        out.append({"name": name, "args": _coerce_op_args(item)})
     return out
 
 
@@ -717,8 +740,8 @@ def normalize_agent_tool_ops(
             )
             continue
         name = str(item.get("name") or "").strip()
-        args = item.get("args") if isinstance(item.get("args"), dict) else {}
-        args = dict(args)
+        # Accept args / parameters / arguments; normalize to args for FE.
+        args = _coerce_op_args(item)
         if not name:
             errors.append(
                 format_op_error(

@@ -11,7 +11,8 @@
     "scene_check": "回读画布状态",
     "critic": "目标检查",
     "refine": "根据检查结果调整",
-    "done": "完成"
+    "done": "完成",
+    "failed": "未完成"
   },
   "eventStage": {
     "decision": "prepare",

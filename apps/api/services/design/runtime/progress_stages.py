@@ -120,26 +120,35 @@ def explored_stage_event(
 
     FE upserts the parent and merges `item` into `items[]`.
     """
+    failed = status == "error"
     done = status == "done"
-    key = "done" if done else stage
+    if failed:
+        key = "failed"
+        ui_status = "error"
+    elif done:
+        key = "done"
+        ui_status = "done"
+    else:
+        key = stage
+        ui_status = "running"
     label = _item_label(
         key,
-        elapsed_s=None if done else elapsed_s,
-        extra=None if done else extra,
+        elapsed_s=None if (done or failed) else elapsed_s,
+        extra=None if (done or failed) else extra,
     )
     count = item_count
-    if count is None and not done:
+    if count is None and not done and not failed:
         count = max(1, stage_index(stage) + 1)
     return {
         "type": "activity",
         "id": EXPLORE_ID,
         "kind": "explored",
-        "status": "done" if done else "running",
+        "status": ui_status,
         "count": count,
         "detail": "design pipeline",
         "stage": key,
         "item": {
-            "id": item_id or f"stage-{stage}",
+            "id": item_id or f"stage-{key}",
             "name": label,
         },
         "skill_name": "agent",

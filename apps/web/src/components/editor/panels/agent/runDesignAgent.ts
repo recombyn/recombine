@@ -2044,7 +2044,7 @@ export type AgentStepEvent =
       type: 'activity';
       id: string;
       kind: 'thought' | 'added' | 'updated' | 'explored' | 'skipped' | 'deleted' | 'tool';
-      status: 'running' | 'done';
+      status: 'running' | 'done' | 'error';
       durationSec?: number;
       count?: number;
       skillName?: string;
@@ -2180,6 +2180,135 @@ type LiveDrawState = {
   frameId: string | null;
   fingerprintById: Record<string, string>;
 };
+
+type ActivityKind =
+  | 'thought'
+  | 'added'
+  | 'updated'
+  | 'explored'
+  | 'skipped'
+  | 'deleted'
+  | 'tool';
+
+function parseActivityKind(raw: unknown): ActivityKind {
+  const k = String(raw || '').trim();
+  if (
+    k === 'thought' ||
+    k === 'added' ||
+    k === 'updated' ||
+    k === 'explored' ||
+    k === 'skipped' ||
+    k === 'deleted' ||
+    k === 'tool'
+  ) {
+    return k;
+  }
+  return 'tool';
+}
+
+function activityDetailParts(ev: {
+  detail?: unknown;
+  summary?: unknown;
+  body?: unknown;
+}): { detail: string; summaryRaw: string; body: string } {
+  const detailRaw = String(ev.detail || '').trim();
+  const summaryRaw = String(ev.summary || '').trim();
+  const detail =
+    detailRaw ||
+    (summaryRaw.length > 0 && summaryRaw.length <= 48 ? summaryRaw : '');
+  const bodyFromSummary =
+    !detailRaw && summaryRaw.length > 48 ? summaryRaw : '';
+  return {
+    detail,
+    summaryRaw,
+    body: String(ev.body || bodyFromSummary || '').trim(),
+  };
+}
+
+function activityItemPayload(item: {
+  id?: unknown;
+  name?: unknown;
+  summary?: unknown;
+} | null | undefined) {
+  if (!item) return undefined;
+  return {
+    id: item.id ? String(item.id) : undefined,
+    name: item.name ? String(item.name) : undefined,
+    summary: item.summary ? String(item.summary) : undefined,
+  };
+}
+
+function normalizeActivityStatusLocal(
+  status: unknown
+): 'running' | 'done' | 'error' {
+  if (status === 'running') return 'running';
+  if (status === 'error') return 'error';
+  return 'done';
+}
+
+function bindExploredSceneActivity(opts: {
+  chatDiverted: boolean;
+  kind: unknown;
+  stage: string;
+  detail: string;
+  pinnedFrameId?: string | null;
+  live: LiveDrawState;
+  getDocument: RunDesignAgentParams['getDocument'];
+  shimmerFrameId: string | null;
+  setProcessPill: (frameId: string, label: string) => void;
+  exploringLabel: string;
+  setLiveCanvasSize: (size: string) => void;
+}): void {
+  if (opts.chatDiverted || opts.kind !== 'explored') return;
+  if (opts.stage !== 'scene' && !opts.detail.startsWith('canvas_size:')) return;
+  if (opts.detail.startsWith('canvas_size:')) {
+    const raw = opts.detail.replace(/^canvas_size:/i, '').trim().toLowerCase();
+    if (/^\d+x\d+$/.test(raw)) opts.setLiveCanvasSize(raw);
+  }
+  const pinned = explicitPinnedFrameId({
+    pinnedFrameId: opts.pinnedFrameId,
+  });
+  const focus = pinned || opts.live.frameId || null;
+  if (!focus) return;
+  const boardSize = frameSizeFromDoc(opts.getDocument, focus);
+  if (boardSize) {
+    opts.setLiveCanvasSize(`${boardSize.width}x${boardSize.height}`);
+  }
+  opts.live.frameId = focus;
+  if (!opts.shimmerFrameId && !pinned) return;
+  opts.setProcessPill(focus, opts.exploringLabel);
+}
+
+function refreshActivityProcessPill(opts: {
+  pillFrame: string | null;
+  status: unknown;
+  kind: ActivityKind;
+  setProcessPill: (frameId: string, label: string) => void;
+  processLabels: {
+    exploring?: string;
+    thinking?: string;
+    editing?: string;
+  };
+}): void {
+  const { pillFrame, status, kind, setProcessPill, processLabels } = opts;
+  if (!pillFrame || status === 'done') return;
+  if (kind === 'explored') {
+    setProcessPill(pillFrame, processLabels.exploring || 'Exploring…');
+    return;
+  }
+  if (kind === 'thought') {
+    setProcessPill(pillFrame, processLabels.thinking || 'Thinking…');
+    return;
+  }
+  if (
+    kind === 'tool' ||
+    kind === 'added' ||
+    kind === 'updated' ||
+    kind === 'deleted'
+  ) {
+    setProcessPill(pillFrame, processLabels.editing || 'Editing elements…');
+  }
+}
 
 export async function runDesignAgent(params: RunDesignAgentParams): Promise<void> {
   const runMode = params.runMode || 'agent';
@@ -2668,96 +2797,51 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
   };
 
   const handleStreamActivity = (ev: any) => {
-
     // Backend-authored progress (counts / detail) — do not invent on the client.
     if (chatDiverted && (ev.kind === 'explored' || ev.kind === 'thought')) {
       return;
     }
     const stage = ev.stage ? String(ev.stage) : '';
-    const detailRaw = String(ev.detail || '').trim();
-    const summaryRaw = String(ev.summary || '').trim();
-    // Product capsule/row label from `detail`; long `summary` becomes expandable body.
-    const detail =
-      detailRaw ||
-      (summaryRaw.length > 0 && summaryRaw.length <= 48 ? summaryRaw : '');
-    const bodyFromSummary =
-      !detailRaw && summaryRaw.length > 48 ? summaryRaw : '';
-    const activityBody = String(ev.body || bodyFromSummary || '').trim();
+    const { detail, summaryRaw, body: activityBody } = activityDetailParts(ev);
     // Bind an existing @ / focus board for shimmer — never spawn an empty artboard.
-    // Free-canvas create/edit does not need a frame; only model create_frame opens one.
-    if (
-      !chatDiverted &&
-      ev.kind === 'explored' &&
-      (stage === 'scene' || detail.startsWith('canvas_size:'))
-    ) {
-      if (detail.startsWith('canvas_size:')) {
-        const raw = detail.replace(/^canvas_size:/i, '').trim().toLowerCase();
-        if (/^\d+x\d+$/.test(raw)) liveCanvasSize = raw;
-      }
-      // Only @-pin or a plate already opened this run — not ambient FOCUS.
-      const pinned = explicitPinnedFrameId({
-        pinnedFrameId: params.pinnedFrameId,
-      });
-      const focus = pinned || live.frameId || null;
-      if (focus) {
-        const boardSize = frameSizeFromDoc(params.getDocument, focus);
-        if (boardSize) {
-          liveCanvasSize = `${boardSize.width}x${boardSize.height}`;
-        }
-        live.frameId = focus;
-        if (shimmerFrameId || pinned) {
-          setProcessPill(focus, processLabels.exploring || 'Exploring…');
-        }
-      }
-    }
-    const kind =
-      (ev.kind as
-        | 'thought'
-        | 'added'
-        | 'updated'
-        | 'explored'
-        | 'skipped'
-        | 'deleted'
-        | 'tool') || 'tool';
+    bindExploredSceneActivity({
+      chatDiverted,
+      kind: ev.kind,
+      stage,
+      detail,
+      pinnedFrameId: params.pinnedFrameId,
+      live,
+      getDocument: params.getDocument,
+      shimmerFrameId,
+      setProcessPill,
+      exploringLabel: processLabels.exploring || 'Exploring…',
+      setLiveCanvasSize: (size) => {
+        liveCanvasSize = size;
+      },
+    });
+    const kind = parseActivityKind(ev.kind);
+    const actStatus = normalizeActivityStatusLocal(ev.status);
     params.onEvent({
       type: 'activity',
       id: String(ev.id || `activity-${activitySeq++}`),
       kind,
-      status: ev.status === 'running' ? 'running' : 'done',
+      status: actStatus,
       count: typeof ev.count === 'number' ? ev.count : undefined,
       detail: detail || undefined,
       summary: summaryRaw && summaryRaw !== detail ? summaryRaw : undefined,
       skillName: ev.skillName || ev.skill_name || undefined,
       durationSec: typeof ev.durationSec === 'number' ? ev.durationSec : undefined,
       stage: stage || undefined,
-      item: ev.item
-        ? {
-            id: ev.item.id ? String(ev.item.id) : undefined,
-            name: ev.item.name ? String(ev.item.name) : undefined,
-            summary: ev.item.summary ? String(ev.item.summary) : undefined,
-          }
-        : undefined,
+      item: activityItemPayload(ev.item),
       body: activityBody || undefined,
     });
-    // Only refresh an already-active plate shimmer — never start scan-light from
-    // ambient focus / free-canvas create_shape.
-    const pillFrame = shimmerFrameId;
-    if (pillFrame && ev.status !== 'done') {
-      if (kind === 'explored') {
-        setProcessPill(pillFrame, processLabels.exploring || 'Exploring…');
-      } else if (kind === 'thought') {
-        setProcessPill(pillFrame, processLabels.thinking || 'Thinking…');
-      } else if (
-        kind === 'tool' ||
-        kind === 'added' ||
-        kind === 'updated' ||
-        kind === 'deleted'
-      ) {
-        setProcessPill(pillFrame, processLabels.editing || 'Editing elements…');
-      }
-    }
-    return;
-    
+    refreshActivityProcessPill({
+      pillFrame: shimmerFrameId,
+      status: ev.status,
+      kind,
+      setProcessPill,
+      processLabels,
+    });
   };
 
   const handleStreamToolOps = (ev: any) => {
