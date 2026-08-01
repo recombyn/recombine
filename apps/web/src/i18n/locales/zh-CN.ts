@@ -987,6 +987,7 @@ const zhCN = {
       opacity: '不透明度',
       processingUpscale: '放大中',
       processingRemoveBg: '去背景中',
+      processingEraser: '擦除中',
       processingEditText: '编辑文字中',
       cornerRadius: '圆角',
       bold: '加粗',

@@ -48,8 +48,8 @@ function EraserToolPanel({
     >
       <div className="flex flex-col items-stretch gap-3 py-3">
         <Slider
-          min={8}
-          max={100}
+          min={16}
+          max={400}
           step={1}
           value={brushSize}
           onChange={onBrushSizeChange}
