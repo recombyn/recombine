@@ -78,7 +78,6 @@ function isImageCreditSpend(row: LedgerEntry) {
   return (
     d.includes('image') ||
     d.includes('seedream') ||
-    d.includes('生图') ||
     d.includes('image tool') ||
     d.includes('removebg') ||
     d.includes('upscale') ||

@@ -588,6 +588,14 @@ function SelectionContextToolbar(props: Props): ReactNode {
                   onEraser={() =>
                     dispatch(openImageToolPanel({ nodeId, kind: 'eraser' }))
                   }
+                  onReplaceText={
+                    String(node?.attrs?.letteringText || '').trim()
+                      ? () =>
+                          dispatch(
+                            openImageToolPanel({ nodeId, kind: 'replaceText' })
+                          )
+                      : undefined
+                  }
                   onEditElements={() =>
                     runImageProcess(
                       'editElements',

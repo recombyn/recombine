@@ -37,6 +37,7 @@ import {
   RcbSvgDefs,
   RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
   rcbFitCamera,
+  rcbViewportSceneBounds,
   zoomAtPoint,
   PENCIL_CURSOR,
   ERASER_CURSOR,
@@ -2036,6 +2037,18 @@ function EditorPage() {
               zoomOut: onZoomOut,
               setZoom: (z) => zoomAtStageCenter(z),
               fitView: onFitView,
+              getViewportSceneBounds: () => {
+                const w = stageSize.width;
+                const h = stageSize.height;
+                if (!(w > 8 && h > 8)) return null;
+                const b = rcbViewportSceneBounds(camera, { width: w, height: h });
+                return {
+                  x: b.x,
+                  y: b.y,
+                  width: b.width,
+                  height: b.height,
+                };
+              },
               setLayersOpen,
               setMinimapOpen,
               getLayersOpen: () => layersOpen,

@@ -9,7 +9,7 @@ import './imageToolPanel.css';
 
 /** Panel actions — soft rect (xl), same family as default SegmentedControl. */
 const panelBtn =
-  'inline-flex h-7 flex-1 items-center justify-center rounded-xl px-2.5 text-[12px] font-medium leading-none transition-colors';
+  'inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-xl px-2 text-[12px] font-medium leading-none transition-colors';
 
 /**
  * Image-tool 积分 costs — sync with apps/api/api/v1/image_tools.py `_KIND_CREDIT_COST`.
@@ -22,6 +22,7 @@ export const IMAGE_TOOL_TOKEN_COST = {
   expand: 30,
   editText: 20,
   editElements: 30,
+  replaceText: 30,
   vector: 20,
   adjust: 20,
 } as const;
@@ -82,7 +83,11 @@ function ImageToolPanelShell({
         </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2">{children}</div>
-      {footer ? <div className="flex items-center gap-1.5 px-4 pb-2.5 pt-0.5">{footer}</div> : null}
+      {footer ? (
+        <div className="flex flex-nowrap items-center gap-1.5 px-4 pb-2.5 pt-0.5">
+          {footer}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -128,7 +133,7 @@ function PanelConfirmCost({
       : t('wallet.creditCostTip', { count: display });
   return (
     <Tooltip tip={tip} placement="top">
-      <span className="inline-flex items-center gap-0.5 text-current">
+      <span className="inline-flex shrink-0 items-center gap-0.5 text-current">
         <span className="tabular-nums">{display}</span>
         <HiOutlineBolt className="h-3.5 w-3.5 shrink-0" aria-hidden />
       </span>
@@ -168,14 +173,14 @@ function PanelFooterActions({
         disabled={confirmDisabled || confirmBusy}
         className={cn(
           panelBtn,
-          'gap-1 bg-[var(--ink)] text-[var(--on-brand)] hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80'
+          'bg-[var(--ink)] text-[var(--on-brand)] hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80'
         )}
         onClick={onConfirm}
       >
         {confirmBusy ? (
-          <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+          <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white" />
         ) : null}
-        <span>{confirmLabel}</span>
+        <span className="truncate">{confirmLabel}</span>
         {typeof confirmCost === 'number' ? <PanelConfirmCost amount={confirmCost} /> : null}
         {confirmExtra}
       </button>

@@ -76,8 +76,12 @@ import {
   buildSpatialSummary,
   type AgentStepEvent,
 } from '@/components/editor/panels/agent/runDesignAgent';
-import { canAttachNodeToChat, captureVideoPosterFrame } from '@/components/rcb/scene/document/sceneDocument';
 import {
+  canAttachNodeToChat,
+  captureVideoPosterFrame,
+  listGroupMemberIds,
+  readNodeGroupId,
+} from '@/components/rcb/scene/document/sceneDocument';import {
   applyClientFrameHints,
   applyMemoryPatch,
   buildShortTermFromMessages,
@@ -351,8 +355,11 @@ function patchDesignDoneAssistant(
     const rawProcess = (m.thinking || m.intent || '').trim();
     const hasIntentAnalysis =
       Boolean(rawProcess) && !/<svg\b|<\/svg>/i.test(rawProcess);
-    const fromSummary = opts.summary?.trim();
-    if (fromSummary) result = fromSummary;
+    const fromSummary = opts.summary?.trim() || '';
+    // Prefer short done copy — long summary is usually the decide/paint essay
+    // already shown as gray process thought.
+    const summaryIsShortDone = fromSummary.length > 0 && fromSummary.length <= 48;
+    if (summaryIsShortDone) result = fromSummary;
     else if (hasIntentAnalysis) result = opts.t('agent.canvasReadyHint');
     else result = opts.t('agent.canvasUpdated');
   } else if (opts.designStarted) {
@@ -866,6 +873,16 @@ function canvasAttachToken(payload: string | string[]): string {
   return Array.isArray(payload) ? `arr:${payload.map(String).join('\0')}` : `one:${payload}`;
 }
 
+/** Full member ids when every selected id shares one groupId; otherwise null. */
+function sharedGroupAttachIds(doc: any, ids: string[]): string[] | null {
+  if (!doc || !ids || ids.length < 2) return null;
+  const first = readNodeGroupId(doc?.deltaSetLike?.[ids[0]]);
+  if (!first) return null;
+  if (!ids.every((id) => readNodeGroupId(doc?.deltaSetLike?.[id]) === first)) return null;
+  const members = listGroupMemberIds(doc, first);
+  return members.length >= 2 ? members : ids;
+}
+
 async function buildCanvasVideoAttachment(
   doc: any,
   id: string,
@@ -952,7 +969,23 @@ export async function applyCanvasAttachPayload(opts: {
     }
   };
 
-  // Multi: peel off videos/images so we never rasterize video into canvas-group.png.
+  // 编组 → one「组」chip in the input (never as image attachment / file).
+  const groupIds = sharedGroupAttachIds(doc, attachable);
+  if (groupIds) {
+    const base = buildComposerContext(doc, groupIds, null, existingChips);
+    let ctx = await enrichComposerContextThumb(doc, base, { nodeIds: groupIds });
+    if (ctx && !String(ctx.dataUrl || '').trim()) {
+      const dataUrl = await rasterizeNodesToPngDataUrl(doc, groupIds);
+      if (dataUrl) {
+        ctx = { ...ctx, dataUrl, thumbUrl: String(ctx.thumbUrl || '').trim() || dataUrl };
+      }
+    }
+    if (ctx) insertChip(ctx);
+    else if (base) insertChip(base);
+    return;
+  }
+
+  // Ad-hoc multi: peel videos/images so we never rasterize video into canvas-group.png.
   if (attachable.length > 1) {
     const videos: string[] = [];
     const images: string[] = [];
@@ -1481,6 +1514,7 @@ function buildDesignSceneSnapshot(opts: {
   mentionNodeIds: string[];
   lastAgentFrameId: string | null;
   taskStateFrameId?: string | null;
+  canvasUi?: CanvasUiBridge | null;
 }) {
   let chipFrameId = opts.chipFrameId;
   if (!chipFrameId && opts.mentionNodeIds.length && opts.docNow) {
@@ -1509,10 +1543,29 @@ function buildDesignSceneSnapshot(opts: {
       })
     : [];
   const sceneFrames = opts.docNow ? buildSceneFramesSnapshot(opts.docNow) : [];
+  const vp = opts.canvasUi?.getViewportSceneBounds?.() || null;
   const spatialSummary = opts.docNow
-    ? buildSpatialSummary(opts.docNow, { focusFrameId: targetFrameId })
+    ? buildSpatialSummary(opts.docNow, {
+        focusFrameId: targetFrameId,
+        viewport: vp
+          ? { x: vp.x, y: vp.y, w: vp.width, h: vp.height }
+          : null,
+      })
     : null;
-  return { chipFrameId, targetFrameId, sceneNodes, sceneFrames, spatialSummary };
+  const seedLiveNodeIds = resolveSeedLiveNodeIds({
+    doc: opts.docNow,
+    editTarget,
+    freeCanvasMention,
+    mentionNodeIds: opts.mentionNodeIds,
+  });
+  return {
+    chipFrameId,
+    targetFrameId,
+    sceneNodes,
+    sceneFrames,
+    spatialSummary,
+    seedLiveNodeIds,
+  };
 }
 
 function createDesignAgentEventRouter(opts: {
@@ -3282,6 +3335,7 @@ function AgentDock({
       sceneNodes,
       sceneFrames,
       spatialSummary,
+      seedLiveNodeIds,
     } = buildDesignSceneSnapshot({
       docNow,
       chipFrameId: chipFrameIdFromContext,
@@ -3289,6 +3343,7 @@ function AgentDock({
       mentionNodeIds,
       lastAgentFrameId: lastAgentFrameIdRef.current,
       taskStateFrameId: taskState?.canvas?.last_agent_frame_id || null,
+      canvasUi,
     });
     const sendImages = uniqueVisionUrls(
       await Promise.all(
@@ -3378,6 +3433,7 @@ function AgentDock({
         sceneFrames: sceneFrames.length ? sceneFrames : undefined,
         spatialSummary: spatialSummary || undefined,
         focusFrameId: targetFrameId || undefined,
+        seedLiveNodeIds: seedLiveNodeIds.length ? seedLiveNodeIds : undefined,
         images: sendImages.length ? sendImages : undefined,
         sessionId,
         projectId: chatScopeId || '__none__',

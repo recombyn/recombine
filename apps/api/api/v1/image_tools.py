@@ -23,6 +23,7 @@ _KIND_CREDIT_COST: dict[str, int] = {
     "expand": 30,
     "editText": 20,
     "editElements": 30,
+    "replaceText": 30,
     "vector": 20,
     "adjust": 20,
 }

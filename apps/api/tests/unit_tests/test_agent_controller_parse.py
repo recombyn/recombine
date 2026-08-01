@@ -235,19 +235,20 @@ def test_has_pending_resource_details():
 def test_heuristic_user_intent_gate():
     from services.design.models_route import heuristic_user_intent
 
-    assert heuristic_user_intent("你好", has_images=False).intent == "chat"
+    # Fallback is structural (length / images) — normal path uses intent LLM pack.
+    assert heuristic_user_intent("hi", has_images=False).intent == "chat"
     assert (
-        heuristic_user_intent("User request:\n你好", has_images=False).intent == "chat"
+        heuristic_user_intent("User request:\nhi", has_images=False).intent == "chat"
     )
     assert (
         heuristic_user_intent(
-            "[Attached image 1]\nname: canvas.png\n\nUser request:\n你好",
+            "[Attached image 1]\nname: canvas.png\n\nUser request:\nhi",
             has_images=True,
         ).intent
-        == "chat"
+        == "create"
     )
     assert (
-        heuristic_user_intent("参考帮我设计一张海报", has_images=True).intent
+        heuristic_user_intent("design a poster please", has_images=True).intent
         == "create"
     )
 
@@ -264,3 +265,75 @@ def test_agent_model_id_prefers_api_model():
         == "doubao-seed-2-1-turbo-260628"
     )
     assert _agent_model_id("deepseek-reasoner", "deepseek-reasoner") == "deepseek-chat"
+
+
+def test_paint_tool_keys_structural_not_shape_specific():
+    """Lean free-canvas add: shape+text only — works for any shapeType, not just rect."""
+    from types import SimpleNamespace
+
+    from services.design.agent_controller import (
+        AgentRunState,
+        _is_lean_paint_turn,
+        _paint_tool_keys_for_turn,
+    )
+
+    st = AgentRunState(trace_id="t", task_id="task", goal="add")
+    rt = SimpleNamespace(
+        prompt="添加一个绿色圆形到画布",
+        images=[],
+        classified_intent="create",
+        scene_nodes=[{"id": "n1", "type": "text"}],
+        scene_frames=[{"id": "f1", "w": 1280, "h": 720, "is_empty": False}],
+        focus_id="f1",
+        run=st,
+    )
+    assert _is_lean_paint_turn(rt) is True
+    keys = _paint_tool_keys_for_turn(rt)
+    assert keys == ["create_shape", "create_text"]
+    assert "create_frame" not in keys
+    assert "create_image" not in keys
+
+
+def test_paint_tool_keys_empty_canvas_includes_frame():
+    from types import SimpleNamespace
+
+    from services.design.agent_controller import AgentRunState, _paint_tool_keys_for_turn
+
+    st = AgentRunState(trace_id="t", task_id="task", goal="new")
+    rt = SimpleNamespace(
+        prompt="做一个海报",
+        images=[],
+        classified_intent="create",
+        scene_nodes=[],
+        scene_frames=[],
+        focus_id="",
+        run=st,
+    )
+    keys = _paint_tool_keys_for_turn(rt)
+    assert keys[0] == "create_frame"
+    assert "create_shape" in keys
+    assert "create_text" in keys
+
+
+def test_paint_tool_keys_with_images_includes_create_image():
+    from types import SimpleNamespace
+
+    from services.design.agent_controller import (
+        AgentRunState,
+        _is_lean_paint_turn,
+        _paint_tool_keys_for_turn,
+    )
+
+    st = AgentRunState(trace_id="t", task_id="task", goal="img")
+    rt = SimpleNamespace(
+        prompt="用这张图",
+        images=["data:image/png;base64,xx"],
+        classified_intent="create",
+        scene_nodes=[],
+        scene_frames=[{"id": "f1", "is_empty": False}],
+        focus_id="f1",
+        run=st,
+    )
+    assert _is_lean_paint_turn(rt) is False
+    keys = _paint_tool_keys_for_turn(rt)
+    assert "create_image" in keys
