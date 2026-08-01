@@ -157,13 +157,28 @@ def test_source_constants():
     assert SOURCE_ADMIN == "admin"
 
 
-def test_namespace_split_and_qualify():
+def test_namespace_split_and_qualify(monkeypatch):
     assert split_namespace_key("core.design_methodology") == (NS_CORE, "design_methodology")
     assert split_namespace_key("user:my_brand") == (NS_USER, "my_brand")
     assert qualify_skill_key(NS_CORE, "design_methodology") == "design_methodology"
     assert qualify_skill_key(NS_USER, "my_brand") == "user.my_brand"
     assert resolve_storage_skill_key("core.design_methodology") == "design_methodology"
+    # OSS no longer ships ext file packs; stub one row so ns.ext resolve stays covered.
+    from services.design import skill_store as skill_mod
+
+    monkeypatch.setattr(
+        skill_mod,
+        "list_runtime_skills",
+        lambda **_kwargs: [
+            {
+                "skillKey": "example_brand",
+                "namespace": NS_EXT,
+                "_localKey": "example_brand",
+            }
+        ],
+    )
     assert resolve_storage_skill_key("ext.example_brand") == "example_brand"
+    assert resolve_storage_skill_key("ext.missing_pack") is None
 
 
 def test_skill_pin_and_parse_need_skills():
