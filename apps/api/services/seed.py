@@ -122,7 +122,7 @@ def _default_official_case_entries(data_dir: Path) -> list[dict[str, str]]:
 
 
 def seed_official_plaza_cases() -> int:
-    """Seed approved plaza_submissions from api/data/official_cases. Skip existing ids."""
+    """Seed approved plaza_submissions from data/public|private/official_cases."""
     init_schema()
     data_dir = _resolve_seed_dir("official_cases")
     index_path = data_dir / "index.json"
