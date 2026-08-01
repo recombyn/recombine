@@ -180,6 +180,21 @@ function rangesOverlap(a0: number, a1: number, b0: number, b1: number) {
   return Math.min(a1, b1) - Math.max(a0, b0) > 0.5;
 }
 
+/** Gap between two 1D ranges (0 when they overlap). Used as a locality tie-break. */
+function spanGap(a0: number, a1: number, b0: number, b1: number) {
+  if (rangesOverlap(a0, a1, b0, b1)) return 0;
+  if (a1 <= b0) return b0 - a1;
+  return a0 - b1;
+}
+
+/**
+ * Scene pad for neighbor collection (~24× snap threshold ≈ 192 screen px).
+ * Keeps snaps local (nearby / same artboard) instead of scanning the whole canvas.
+ */
+export function getSnapNeighborPad(snapThreshold: number) {
+  return Math.max(snapThreshold * 24, 64);
+}
+
 type Gap = {
   orient: 'h' | 'v';
   /** Distance between the two faces. */
@@ -565,12 +580,16 @@ export function snapBoxToGuides(
   let dy = 0;
   let bestX = threshold;
   let bestY = threshold;
+  /** Secondary score: prefer overlapping / nearby targets over distant ones. */
+  let bestCrossX = Number.POSITIVE_INFINITY;
+  let bestCrossY = Number.POSITIVE_INFINITY;
   let snapsX: SnapPair[] = [];
   let snapsY: SnapPair[] = [];
   let useGapX = false;
   let useGapY = false;
 
-  // Keep all ties at the nearest distance; wipe on closer.
+  // Keep ties at the nearest snap distance; among ties prefer smaller cross-axis gap
+  // so a local artboard center beats a distant sibling with the same mid line.
   const tryX = (
     sourceX: number,
     sourceY: number,
@@ -582,10 +601,19 @@ export function snapBoxToGuides(
     if (!facesCompatible(sourceFace, target.face)) return;
     const d = target.pos - sourceX;
     const ad = Math.abs(d);
-    if (roundSnap(ad) > roundSnap(bestX)) return;
-    if (roundSnap(ad) < roundSnap(bestX)) {
+    const cross = spanGap(sourceSpan[0], sourceSpan[1], target.span0, target.span1);
+    const rad = roundSnap(ad);
+    const rBest = roundSnap(bestX);
+    if (rad > rBest) return;
+    if (rad < rBest) {
       snapsX = [];
       bestX = ad;
+      bestCrossX = cross;
+    } else if (roundSnap(cross) > roundSnap(bestCrossX)) {
+      return;
+    } else if (roundSnap(cross) < roundSnap(bestCrossX)) {
+      snapsX = [];
+      bestCrossX = cross;
     }
     dx = d;
     snapsX.push({
@@ -609,10 +637,19 @@ export function snapBoxToGuides(
     if (!facesCompatible(sourceFace, target.face)) return;
     const d = target.pos - sourceY;
     const ad = Math.abs(d);
-    if (roundSnap(ad) > roundSnap(bestY)) return;
-    if (roundSnap(ad) < roundSnap(bestY)) {
+    const cross = spanGap(sourceSpan[0], sourceSpan[1], target.span0, target.span1);
+    const rad = roundSnap(ad);
+    const rBest = roundSnap(bestY);
+    if (rad > rBest) return;
+    if (rad < rBest) {
       snapsY = [];
       bestY = ad;
+      bestCrossY = cross;
+    } else if (roundSnap(cross) > roundSnap(bestCrossY)) {
+      return;
+    } else if (roundSnap(cross) < roundSnap(bestCrossY)) {
+      snapsY = [];
+      bestCrossY = cross;
     }
     dy = d;
     snapsY.push({
@@ -752,6 +789,7 @@ export function snapResizeToGuides(
     axis: 'x' | 'y'
   ) => {
     let best = threshold + 1;
+    let bestCross = Number.POSITIVE_INFINITY;
     let delta = 0;
     const pairs: SnapPair[] = [];
     for (const source of sources) {
@@ -759,10 +797,20 @@ export function snapResizeToGuides(
         if (!facesCompatible(source.face, t.face)) continue;
         const d = t.pos - source.pos;
         const ad = Math.abs(d);
-        if (roundSnap(ad) > roundSnap(best)) continue;
-        if (roundSnap(ad) < roundSnap(best)) {
+        const cross = spanGap(source.span0, source.span1, t.span0, t.span1);
+        const rad = roundSnap(ad);
+        const rBest = roundSnap(best);
+        if (rad > rBest) continue;
+        if (rad < rBest) {
           pairs.length = 0;
           best = ad;
+          bestCross = cross;
+          delta = d;
+        } else if (roundSnap(cross) > roundSnap(bestCross)) {
+          continue;
+        } else if (roundSnap(cross) < roundSnap(bestCross)) {
+          pairs.length = 0;
+          bestCross = cross;
           delta = d;
         }
         const center = !!source.isMid && !!t.isMid;
@@ -1135,6 +1183,40 @@ export function frameGuideBoxes(document: { frames?: ArtboardFrame[] } | null | 
       width: Math.max(1, Number(f.width) || 1),
       height: Math.max(1, Number(f.height) || 1),
     }));
+}
+
+type FrameGuideEntry = SceneBox & { id: string };
+
+/** Artboard frames with ids (for containing-frame snap scoping). */
+export function frameGuideEntries(
+  document: { frames?: ArtboardFrame[] } | null | undefined
+): FrameGuideEntry[] {
+  const frames = Array.isArray(document?.frames) ? document.frames : [];
+  return frames
+    .filter((f) => f?.id && Number(f.width) > 0 && Number(f.height) > 0)
+    .map((f) => ({
+      id: String(f.id),
+      left: Number(f.x) || 0,
+      top: Number(f.y) || 0,
+      width: Math.max(1, Number(f.width) || 1),
+      height: Math.max(1, Number(f.height) || 1),
+    }));
+}
+
+/** Frames whose bounds contain the box center (same-artboard snap scope). */
+export function framesContainingBox(
+  document: { frames?: ArtboardFrame[] } | null | undefined,
+  box: SceneBox
+): FrameGuideEntry[] {
+  const cx = box.left + box.width / 2;
+  const cy = box.top + box.height / 2;
+  return frameGuideEntries(document).filter(
+    (f) =>
+      cx >= f.left &&
+      cx <= f.left + f.width &&
+      cy >= f.top &&
+      cy <= f.top + f.height
+  );
 }
 
 function pushNodeGuideBoxes(
