@@ -15,7 +15,9 @@ import AlignGuidesOverlay, { type AlignGuide } from './AlignGuidesOverlay';
 import {
   chromeBandGuideBoxes,
   frameGuideBoxes,
+  framesContainingBox,
   getDocumentGridSize,
+  getSnapNeighborPad,
   getSnapThreshold,
   nodeGuideBoxes,
   nodeGuideBoxesForIds,
@@ -49,6 +51,7 @@ import {
   isNodeHidden,
   isNodeLocked,
   listImageVariantUrls,
+  nodeIdsInsideFrames,
   supportsFill,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/document/sceneEffects';
@@ -715,7 +718,7 @@ function computeMovedUnion(ctx: MoveSnapContext): {
         .map((id) => ctx.getNodeBox(id))
         .filter(Boolean) as SceneBox[]
   );
-  const frames = frameGuideBoxes(ctx.document);
+  const frames = snapContainerFrames(ctx.document, nextUnion, ctx.snapThreshold);
   const snapped = snapBoxToGuides(nextUnion, others, frames, ctx.snapThreshold, {
     edgeBoxes: movingGuideBoxes(nextUnion, ctx.document, ctx.originIds),
   });
@@ -786,7 +789,7 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
         .map((id) => ctx.getNodeBox(id))
         .filter(Boolean) as SceneBox[]
   );
-  const frames = frameGuideBoxes(ctx.document);
+  const frames = snapContainerFrames(ctx.document, next, ctx.snapThreshold);
   const snapped = snapResizeToGuides(next, handle, others, frames, ctx.snapThreshold, 8, {
     edgeBoxes: movingGuideBoxes(next, ctx.document, originIds),
     lockAspect,
@@ -862,8 +865,10 @@ function siblingGuideBoxes(
 }
 
 /**
- * Prefer spatial neighbors around `probe` (move / resize / nudge).
- * Pad covers snap threshold + nearby gap partners without scanning the whole doc.
+ * Prefer local snap targets:
+ * - siblings inside the containing artboard(s)
+ * - plus spatial neighbors within ~192 screen px
+ * Avoid scanning distant posters that steal center-align guides.
  */
 function siblingGuideBoxesNear(
   document: any,
@@ -873,23 +878,58 @@ function siblingGuideBoxesNear(
   queryNodeIdsInRect: ((box: SceneBox) => string[]) | undefined,
   fallback: () => SceneBox[]
 ): SceneBox[] {
-  if (queryNodeIdsInRect) {
-    const pad = Math.max(
-      snapThreshold * 8,
-      probe.width || 0,
-      probe.height || 0,
-      256
-    );
-    const ids = queryNodeIdsInRect({
-      left: probe.left - pad,
-      top: probe.top - pad,
-      width: probe.width + pad * 2,
-      height: probe.height + pad * 2,
-    });
-    const fromDoc = nodeGuideBoxesForIds(document, ids, { excludeIds });
+  const containing = framesContainingBox(document, probe);
+  const insideIds = containing.length
+    ? nodeIdsInsideFrames(
+        document,
+        containing.map((f) => f.id)
+      )
+    : [];
+  const pad = getSnapNeighborPad(snapThreshold);
+  const nearIds = queryNodeIdsInRect
+    ? queryNodeIdsInRect({
+        left: probe.left - pad,
+        top: probe.top - pad,
+        width: probe.width + pad * 2,
+        height: probe.height + pad * 2,
+      })
+    : [];
+  const idSet = new Set<string>([...insideIds, ...nearIds]);
+  if (idSet.size) {
+    const fromDoc = nodeGuideBoxesForIds(document, [...idSet], { excludeIds });
     if (fromDoc.length) return fromDoc;
   }
+  // Inside a frame with no siblings yet — empty is OK (still snap to the frame).
+  if (containing.length) return [];
   return siblingGuideBoxes(document, excludeIds, fallback);
+}
+
+/** Containers for snap: containing artboard(s), else nearby frames only. */
+function snapContainerFrames(
+  document: any,
+  probe: SceneBox,
+  snapThreshold: number
+): SceneBox[] {
+  const containing = framesContainingBox(document, probe);
+  if (containing.length) {
+    return containing.map(({ left, top, width, height }) => ({
+      left,
+      top,
+      width,
+      height,
+    }));
+  }
+  const pad = getSnapNeighborPad(snapThreshold);
+  const all = frameGuideBoxes(document);
+  return all.filter((f) => {
+    const ol =
+      Math.min(probe.left + probe.width + pad, f.left + f.width) -
+      Math.max(probe.left - pad, f.left);
+    const ot =
+      Math.min(probe.top + probe.height + pad, f.top + f.height) -
+      Math.max(probe.top - pad, f.top);
+    return ol > 0 && ot > 0;
+  });
 }
 
 /** Moving selection's stroke-band faces (single node) or chrome union (multi). */
@@ -2106,7 +2146,7 @@ function SelectionFeature({
             .map((id) => getNodeBox(id))
             .filter(Boolean) as SceneBox[]
       );
-      const frames = frameGuideBoxes(document);
+      const frames = snapContainerFrames(document, nextUnion, snapThreshold);
       setLiveUnion(nextUnion);
       setLiveOrigins(nextOrigins);
       // Arrow-key nudge: show nearest gaps as measure guides (orange + arrows).
