@@ -172,6 +172,9 @@ def test_build_official_agent_accepts_response_format():
 
 
 def test_sqlite_checkpointer_setup_and_thread_config(tmp_path, monkeypatch):
+    import asyncio
+
+    from langgraph.checkpoint.base import BaseCheckpointSaver
     from config import settings as settings_mod
     from services.llm import agent as agent_mod
 
@@ -189,8 +192,21 @@ def test_sqlite_checkpointer_setup_and_thread_config(tmp_path, monkeypatch):
     cp = agent_mod.get_agent_checkpointer()
     assert agent_mod.checkpointer_backend() in ("sqlite", "memory")
     assert cp is not None
+    assert isinstance(cp, BaseCheckpointSaver)
     cfg = agent_mod.agent_thread_config("unit-thread")
     assert cfg and cfg["configurable"]["thread_id"] == "unit-thread"
+    # graph.astream needs aget_tuple; bare SqliteSaver raises NotImplementedError.
+    assert asyncio.run(cp.aget_tuple(cfg)) is None
+
+
+def test_mysql_version_ok_for_langgraph():
+    from services.llm.agent import _mysql_version_ok_for_langgraph
+
+    assert _mysql_version_ok_for_langgraph("8.0.19")
+    assert _mysql_version_ok_for_langgraph("8.4.0")
+    assert not _mysql_version_ok_for_langgraph("5.7.18-cynos-2.1.14-log")
+    assert _mysql_version_ok_for_langgraph("10.7.1-MariaDB")
+    assert not _mysql_version_ok_for_langgraph("10.6.0-MariaDB")
 
 
 def test_summarization_middleware_matches_docs(monkeypatch):

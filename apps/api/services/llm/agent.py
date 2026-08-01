@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -636,6 +637,124 @@ def _checkpoint_serde() -> Any:
     )
 
 
+def _mysql_version_ok_for_langgraph(version: str) -> bool:
+    """langgraph-checkpoint-mysql needs MySQL >= 8.0.19 or MariaDB >= 10.7.1."""
+    raw = (version or "").strip().lower()
+    if not raw:
+        return False
+    if "mariadb" in raw:
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", raw)
+        return bool(m) and tuple(int(x) for x in m.groups()) >= (10, 7, 1)
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", raw)
+    return bool(m) and tuple(int(x) for x in m.groups()) >= (8, 0, 19)
+
+
+def _checkpointer_async_is_stub(saver: Any) -> bool:
+    """True when ``aget_tuple`` is NotImplemented / SqliteSaver's raise stub."""
+    import inspect
+
+    try:
+        src = inspect.getsource(type(saver).aget_tuple)
+    except (OSError, TypeError):
+        return False
+    return "NotImplementedError" in src
+
+
+def _wrap_sync_checkpointer_for_async(inner: Any) -> Any:
+    """
+    Make sync savers usable with ``graph.astream``.
+
+    SqliteSaver / PyMySQLSaver only implement sync APIs; LangGraph async paths
+    call ``aget_*`` / ``aput_*``. Mirror InMemorySaver: async methods delegate
+    to the sync implementations (conn is ``check_same_thread=False`` / autocommit).
+    """
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    if isinstance(inner, BaseCheckpointSaver) and not _checkpointer_async_is_stub(inner):
+        return inner
+
+    class _AsyncBridge(BaseCheckpointSaver):
+        def __init__(self, wrapped: Any) -> None:
+            super().__init__(serde=getattr(wrapped, "serde", None))
+            self._inner = wrapped
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+        def get_tuple(self, config: Any) -> Any:
+            return self._inner.get_tuple(config)
+
+        def list(
+            self,
+            config: Any | None,
+            *,
+            filter: dict[str, Any] | None = None,
+            before: Any | None = None,
+            limit: int | None = None,
+        ) -> Iterator[Any]:
+            return self._inner.list(config, filter=filter, before=before, limit=limit)
+
+        def put(
+            self,
+            config: Any,
+            checkpoint: Any,
+            metadata: Any,
+            new_versions: Any,
+        ) -> Any:
+            return self._inner.put(config, checkpoint, metadata, new_versions)
+
+        def put_writes(
+            self,
+            config: Any,
+            writes: Sequence[tuple[str, Any]],
+            task_id: str,
+            task_path: str = "",
+        ) -> Any:
+            return self._inner.put_writes(config, writes, task_id, task_path)
+
+        def delete_thread(self, thread_id: str) -> Any:
+            return self._inner.delete_thread(thread_id)
+
+        async def aget_tuple(self, config: Any) -> Any:
+            return self._inner.get_tuple(config)
+
+        async def alist(
+            self,
+            config: Any | None,
+            *,
+            filter: dict[str, Any] | None = None,
+            before: Any | None = None,
+            limit: int | None = None,
+        ) -> AsyncIterator[Any]:
+            for item in self._inner.list(
+                config, filter=filter, before=before, limit=limit
+            ):
+                yield item
+
+        async def aput(
+            self,
+            config: Any,
+            checkpoint: Any,
+            metadata: Any,
+            new_versions: Any,
+        ) -> Any:
+            return self._inner.put(config, checkpoint, metadata, new_versions)
+
+        async def aput_writes(
+            self,
+            config: Any,
+            writes: Sequence[tuple[str, Any]],
+            task_id: str,
+            task_path: str = "",
+        ) -> Any:
+            return self._inner.put_writes(config, writes, task_id, task_path)
+
+        async def adelete_thread(self, thread_id: str) -> Any:
+            return self._inner.delete_thread(thread_id)
+
+    return _AsyncBridge(inner)
+
+
 def _build_mysql_checkpointer() -> Any | None:
     url = _checkpoint_mysql_url()
     if not url:
@@ -643,13 +762,45 @@ def _build_mysql_checkpointer() -> Any | None:
     import pymysql
     from langgraph.checkpoint.mysql.pymysql import PyMySQLSaver
 
+    from services.db import _parse_mysql_url
+
     global _CHECKPOINTER_CONN
-    params = PyMySQLSaver.parse_conn_string(url)
-    conn = pymysql.connect(**params, autocommit=True)
-    saver = PyMySQLSaver(conn, serde=_checkpoint_serde())
-    saver.setup()
+    # App parser unquotes password; PyMySQLSaver.parse_conn_string does not
+    # (``!`` / ``&`` in DATABASE_URL → Access denied → false sqlite fallback).
+    cfg = _parse_mysql_url(url)
+    conn = pymysql.connect(
+        host=cfg["host"],
+        port=int(cfg["port"]),
+        user=cfg["user"],
+        password=cfg["password"],
+        database=cfg["database"],
+        charset=cfg.get("charset") or "utf8mb4",
+        autocommit=True,
+        connect_timeout=10,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT VERSION()")
+            row = cur.fetchone()
+        ver = str(row[0] if row else "")
+        if not _mysql_version_ok_for_langgraph(ver):
+            _log.warning(
+                "MySQL %s below langgraph-checkpoint-mysql requirement "
+                "(MySQL >= 8.0.19 / MariaDB >= 10.7.1); using sqlite",
+                ver,
+            )
+            conn.close()
+            return None
+        saver = PyMySQLSaver(conn, serde=_checkpoint_serde())
+        saver.setup()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
     _CHECKPOINTER_CONN = conn
-    return saver
+    return _wrap_sync_checkpointer_for_async(saver)
 
 
 def _build_sqlite_checkpointer() -> Any:
@@ -673,16 +824,15 @@ def _build_sqlite_checkpointer() -> Any:
     saver = SqliteSaver(conn, serde=_checkpoint_serde())
     saver.setup()
     _CHECKPOINTER_CONN = conn
-    return saver
+    return _wrap_sync_checkpointer_for_async(saver)
 
 
 def get_agent_checkpointer() -> Any:
     """
-    Production short-term memory checkpointer (docs: In production → DB saver).
+    Durable short-term memory checkpointer for ``create_agent`` + design graph.
 
-    Shared by ``create_agent`` threads and the design outer ``StateGraph``.
-    Priority: MySQL (``langgraph-checkpoint-mysql``, same DB as app) →
-    SqliteSaver → InMemorySaver.
+    Priority: MySQL 8.0.19+ (same DB as app) → Sqlite (async-bridged) → memory.
+    Sync Sqlite/MySQL savers are wrapped so ``graph.astream`` can call ``aget_*``.
     """
     global _CHECKPOINTER, _CHECKPOINTER_BACKEND
     if _CHECKPOINTER is not None:
@@ -703,7 +853,7 @@ def get_agent_checkpointer() -> Any:
             _CHECKPOINTER = _build_sqlite_checkpointer()
             _CHECKPOINTER_BACKEND = "sqlite"
             _log.info(
-                "LangGraph checkpointer: SqliteSaver (%s)",
+                "LangGraph checkpointer: Sqlite+async-bridge (%s)",
                 _checkpoint_sqlite_path(),
             )
             return _CHECKPOINTER

@@ -5343,10 +5343,9 @@ def _design_graph_node_timeout() -> TimeoutPolicy | None:
 
 
 def _get_design_graph_checkpointer() -> Any:
-    """Durable LangGraph checkpointer (MySQL → Sqlite → memory).
+    """Shared durable checkpointer (MySQL 8+ → Sqlite+async-bridge → memory).
 
-    Wallet settle/refund callables are bound via ``_bind_design_hold_fns`` and
-    must never sit on ``AgentRuntime`` in checkpointed state.
+    Wallet settle/refund stay on ``_bind_design_hold_fns``, not in graph state.
     """
     from services.llm.agent import checkpointer_backend, get_agent_checkpointer
 
