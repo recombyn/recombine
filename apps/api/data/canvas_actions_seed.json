@@ -73,11 +73,12 @@
       "kind": "create",
       "label": "新建图片",
       "sort_order": 40,
-      "model_hint": "Add an image node. Args: src|url or attachmentIndex (user attach), x,y,width,height. Or genPrompt for AI image hydrate.",
+      "model_hint": "Add an image node. Args: src|url or attachmentIndex (user attach), x,y,width,height. Or genPrompt for AI image hydrate. Optional letteringText=visible text in the image (helps later replaceText).",
       "args_schema": {
         "src": "string?",
         "attachmentIndex": "number?",
         "genPrompt": "string?",
+        "letteringText": "string?",
         "x": "number",
         "y": "number",
         "width": "number",
@@ -284,10 +285,10 @@
       "kind": "image",
       "label": "图片处理",
       "sort_order": 200,
-      "model_hint": "Run image toolbar pipeline on a node (spawns processing clone). Args: nodeId (image id), kind=upscale|removeBg|eraser|editText|editElements|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. editText=OCR text layers; editElements=subjects+text+bg (still looks like one picture). Optional: targetWidth, targetHeight, meta (object).",
+      "model_hint": "Run image toolbar pipeline on a node (spawns processing clone). Args: nodeId (image id), kind=upscale|removeBg|eraser|editText|editElements|replaceText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. replaceText=i2i swap lettering (meta.originalText + meta.newText); editText=OCR text layers; editElements=subjects+text+bg. Optional: targetWidth, targetHeight, meta (object).",
       "args_schema": {
         "nodeId": "string",
-        "kind": "upscale|removeBg|eraser|editText|editElements|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector",
+        "kind": "upscale|removeBg|eraser|editText|editElements|replaceText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector",
         "targetWidth": "number?",
         "targetHeight": "number?",
         "meta": "object?"
@@ -355,7 +356,8 @@
     "image_process": {
       "must_contain": [
         "moveObject",
-        "vector"
+        "vector",
+        "replaceText"
       ],
       "stale_if_contains": []
     },

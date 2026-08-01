@@ -384,6 +384,37 @@ function resolveToolOpsFrameId(opts: {
   return opts.liveFrameId || pinned || target || null;
 }
 
+/** Explicit @ / chip pin only — ambient focus must not swallow free-canvas creates. */
+function explicitPinnedFrameId(opts: {
+  pinnedFrameId?: string | null;
+}): string | null {
+  return String(opts.pinnedFrameId || '').trim() || null;
+}
+
+const FREE_CANVAS_CREATE_OPS = new Set([
+  'create_shape',
+  'create_text',
+  'create_image',
+  'create_svg',
+  'create_icon',
+]);
+
+/** Drop model frameId on free-canvas creates so they do not inject into an existing page. */
+function stripFrameIdFromFreeCreates(
+  ops: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>
+): Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }> {
+  return ops.map((op) => {
+    const name = String(op?.name || '').trim();
+    if (!FREE_CANVAS_CREATE_OPS.has(name)) return op;
+    const args =
+      op?.args && typeof op.args === 'object' ? { ...op.args } : {};
+    if (args.frameId == null && args.parentId == null) return op;
+    delete args.frameId;
+    delete args.parentId;
+    return { ...op, args };
+  });
+}
+
 /** Pull WxH from a create_frame op when Host size is still unknown. */
 function sizeFromCreateFrameOp(
   ops: Array<{ name?: string; args?: Record<string, unknown> }>
@@ -636,6 +667,8 @@ export type SpatialSummary = {
   new_frame_slots: SpatialBox[];
   /** Frame-local default place for new children. */
   suggested_place: SpatialBox;
+  /** Raw camera viewport in world coords (sensor only — host derives placement). */
+  viewport?: SpatialBox;
 };
 
 const SPATIAL_GAP = 40;
@@ -666,7 +699,12 @@ function _boxesOverlap(a: SpatialBox, b: SpatialBox, gap = 0): boolean {
 /** Map-like summary for the agent (focused / peripheral / empty slots). */
 export function buildSpatialSummary(
   doc: any,
-  opts?: { focusFrameId?: string | null; maxFocused?: number }
+  opts?: {
+    focusFrameId?: string | null;
+    maxFocused?: number;
+    /** Raw camera viewport — report only; do not invent placement on the client. */
+    viewport?: SpatialBox | null;
+  }
 ): SpatialSummary {
   const gap = SPATIAL_GAP;
   const frames = buildSceneFramesSnapshot(doc);
@@ -679,6 +717,15 @@ export function buildSpatialSummary(
   const focusFrame = focus ? frames.find((f) => f.id === focus) : undefined;
   const fw = Math.max(1, focusFrame?.w || 1280);
   const fh = Math.max(1, focusFrame?.h || 720);
+  // Pass-through camera AABB only (no client-side "where to put" logic).
+  const viewport = opts?.viewport && opts.viewport.w > 8 && opts.viewport.h > 8
+    ? {
+        x: Math.round(opts.viewport.x),
+        y: Math.round(opts.viewport.y),
+        w: Math.round(opts.viewport.w),
+        h: Math.round(opts.viewport.h),
+      }
+    : undefined;
 
   const inventory = buildSceneNodesForCanvas(doc, {
     focusFrameId: focus,
@@ -808,6 +855,8 @@ export function buildSpatialSummary(
     empty_rects,
     new_frame_slots,
     suggested_place: empty_rects[0],
+    // viewport is raw camera AABB only — host derives suggested_place_world.
+    ...(viewport ? { viewport } : {}),
   };
 }
 
@@ -2246,44 +2295,22 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     category?: string,
     skillName?: string
   ): 'thought' | 'explored' | 'tool' | 'hidden' => {
-    const cat = String(category || '').toLowerCase();
-    const name = String(skillName || '').toLowerCase();
-    // Tool-first agent loop turns — stage Explored covers wait progress; hide bare Thought.
+    // Prefer structured `category` from backend — no Chinese/English name keyword lists.
+    const cat = String(category || '').toLowerCase().trim();
+    const name = String(skillName || '').toLowerCase().trim();
     if (cat === 'agent' || name === 'agent' || name === 'agent_loop') {
       return 'hidden';
     }
-    if (
-      cat === 'summary' ||
-      name.includes('结果总结') ||
-      name.includes('summar')
-    ) {
+    if (cat === 'summary' || cat === 'execute' || cat === 'draw') {
       return 'hidden';
     }
-    if (
-      cat === 'plan' ||
-      name.includes('需求') ||
-      name.includes('parse') ||
-      name.includes('brief') ||
-      name.includes('intent') ||
-      name.includes('思考') ||
-      name.includes('think')
-    ) {
+    if (cat === 'plan' || cat === 'think' || cat === 'intent') {
       return 'thought';
     }
-    if (
-      cat === 'layout' ||
-      cat === 'validate' ||
-      name.includes('布局') ||
-      name.includes('构图') ||
-      name.includes('校验') ||
-      name.includes('validate') ||
-      name.includes('explore') ||
-      name.includes('检索') ||
-      name.includes('参考')
-    ) {
+    if (cat === 'layout' || cat === 'validate' || cat === 'explore') {
       return 'explored';
     }
-    // Execute / draw: backend SSE `activity` owns "Tool call" + op detail.
+    // Unknown / execute / draw: backend SSE `activity` owns Tool call + op detail.
     return 'hidden';
   };
 
@@ -2589,11 +2616,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         skillName: name,
       });
     }
-    if (kind === 'thought' && (shimmerFrameId || live.frameId)) {
-      setProcessPill(
-        shimmerFrameId || live.frameId,
-        processLabels.thinking || 'Thinking…'
-      );
+    if (kind === 'thought' && shimmerFrameId) {
+      setProcessPill(shimmerFrameId, processLabels.thinking || 'Thinking…');
     }
     emitPhase(ev.index, ev.category || params.scene || 'design');
     return;
@@ -2647,23 +2671,20 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         const raw = detail.replace(/^canvas_size:/i, '').trim().toLowerCase();
         if (/^\d+x\d+$/.test(raw)) liveCanvasSize = raw;
       }
-      const pinned = String(params.pinnedFrameId || '').trim() || null;
-      const focus =
-        pinned ||
-        String(params.targetFrameId || '').trim() ||
-        live.frameId ||
-        null;
-      let frameId: string | null = null;
+      // Only @-pin or a plate already opened this run — not ambient FOCUS.
+      const pinned = explicitPinnedFrameId({
+        pinnedFrameId: params.pinnedFrameId,
+      });
+      const focus = pinned || live.frameId || null;
       if (focus) {
         const boardSize = frameSizeFromDoc(params.getDocument, focus);
         if (boardSize) {
           liveCanvasSize = `${boardSize.width}x${boardSize.height}`;
         }
         live.frameId = focus;
-        frameId = focus;
-      }
-      if (frameId) {
-        setProcessPill(frameId, processLabels.exploring || 'Exploring…');
+        if (shimmerFrameId || pinned) {
+          setProcessPill(focus, processLabels.exploring || 'Exploring…');
+        }
       }
     }
     const kind =
@@ -2695,7 +2716,9 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         : undefined,
       body: activityBody || undefined,
     });
-    const pillFrame = shimmerFrameId || live.frameId;
+    // Only refresh an already-active plate shimmer — never start scan-light from
+    // ambient focus / free-canvas create_shape.
+    const pillFrame = shimmerFrameId;
     if (pillFrame && ev.status !== 'done') {
       if (kind === 'explored') {
         setProcessPill(pillFrame, processLabels.exploring || 'Exploring…');
@@ -2727,10 +2750,14 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     paintChain = paintChain.then(async () => {
       if (params.signal?.aborted) return;
       params.onEvent({ type: 'drawing', active: true, done: 0, total: ops.length });
-      const pinned = String(params.pinnedFrameId || '').trim() || null;
+      const pinned = explicitPinnedFrameId({
+        pinnedFrameId: params.pinnedFrameId,
+      });
       const aiCreatesFrame = ops.some(
         (o: { name?: string }) => String(o?.name || '').trim() === 'create_frame'
       );
+      // Free-canvas add (rect/text/…) must not inherit ambient FOCUS / page frame.
+      const bindToBoard = Boolean(pinned || aiCreatesFrame || editInPlace);
 
       // Fallback if backend did not emit open_artboard: Host opens plate first.
       if (!pinned && !live.frameId && aiCreatesFrame && !editInPlace) {
@@ -2755,20 +2782,26 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       }
 
       // Host already opened → drop model create_frame so we don't get a second plate.
-      const paintOps =
+      let paintOps =
         live.frameId || pinned
           ? ops.filter((o) => String(o?.name || '').trim() !== 'create_frame')
           : ops;
+      if (!bindToBoard) {
+        paintOps = stripFrameIdFromFreeCreates(paintOps);
+      }
 
-      const frameId = resolveToolOpsFrameId({
-        editInPlace,
-        liveFrameId: live.frameId,
-        targetFrameId: params.targetFrameId,
-        pinnedFrameId: params.pinnedFrameId,
-      });
+      const frameId = bindToBoard
+        ? resolveToolOpsFrameId({
+            editInPlace,
+            liveFrameId: live.frameId,
+            targetFrameId: params.targetFrameId,
+            pinnedFrameId: params.pinnedFrameId,
+          })
+        : null;
       if (frameId) {
         live.frameId = frameId;
-        if (shouldShimmerFrame(frameId, editInPlace) || Boolean(live.frameId)) {
+        // Plate scan-light only for new/blank boards — not for adding a rect onto a page.
+        if (aiCreatesFrame || shouldShimmerFrame(frameId, editInPlace)) {
           setProcessPill(
             frameId,
             processLabels.editing || 'Editing elements…'
@@ -2799,20 +2832,23 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
             kind: 'skipped',
             status: 'done',
             count: failures.length,
-            detail: `${failures.length} 个操作未生效：${failures[0].error || '目标元素不存在'}`,
+            detail: `${failures.length} op(s) not applied: ${failures[0].error || 'target missing'}`,
           });
         }
         const anyOk = applied.opResults.some((r) => r.ok);
         toolOpsApplied = true;
         painted = painted || anyOk;
-        if (applied.frameId) {
+        if (applied.frameId && bindToBoard) {
           live.frameId = applied.frameId;
         }
         if (applied.nodeIds.length) {
           live.nodeIds = [...new Set([...live.nodeIds, ...applied.nodeIds])];
         }
-        // Keep shimmer until the whole run finishes (cleared after paintChain).
-        if (live.frameId) {
+        // Keep plate shimmer only when we intentionally opened a board this run.
+        if (
+          live.frameId &&
+          (aiCreatesFrame || shouldShimmerFrame(live.frameId, editInPlace))
+        ) {
           setProcessPill(
             live.frameId,
             processLabels.editing || 'Editing elements…'
@@ -2846,7 +2882,13 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       });
       const frames = buildSceneFramesSnapshot(docNow);
       const focusId = live.frameId || params.targetFrameId || null;
-      const spatial = buildSpatialSummary(docNow, { focusFrameId: focusId });
+      const vp = params.canvasUi?.getViewportSceneBounds?.() || null;
+      const spatial = buildSpatialSummary(docNow, {
+        focusFrameId: focusId,
+        viewport: vp
+          ? { x: vp.x, y: vp.y, w: vp.width, h: vp.height }
+          : null,
+      });
       const opResults = pendingOpResults;
       pendingOpResults = [];
       console.info('[scene_feedback] post', {
@@ -3115,7 +3157,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         params.onEvent({
           type: 'error',
           message: /Failed to fetch|NetworkError|ERR_/i.test(msg)
-            ? '连接中断（代理超时或 API 热重载）。请重试；生成过程中勿保存 API 代码。'
+            ? 'Connection lost (proxy timeout or API reload). Retry; avoid saving API code mid-run.'
             : msg || 'Failed to fetch',
         });
       },

@@ -116,11 +116,8 @@ def seed_from_goal(goal: str, *, rules: dict[str, str] | None = None) -> list[di
     g = (goal or "").strip()
     if not g:
         return []
-    # Skip greetings — chat should not create a queue.
-    low = g.lower()
-    if len(g) <= 8 and any(
-        x in low for x in ("你好", "您好", "hi", "hello", "hey", "哈咯")
-    ):
+    # Skip tiny prompts (structural). Greeting vs task is the intent LLM's job.
+    if len(g) < 4:
         return []
     return seed_from_texts([g[:160]], rules=rules)
 

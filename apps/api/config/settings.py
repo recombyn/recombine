@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     design_graph_retry_attempts: int = 3
     # Per LLM/IO node; 0 disables node TimeoutPolicy.
     design_graph_node_timeout_sec: float = 180.0
+    # Per paint_ops LLM attempt (in-node); fail fast so empty-ops retries can run.
+    design_paint_attempt_timeout_sec: float = 75.0
     # Whole run_agent_graph wall clock; 0 disables.
     design_graph_run_timeout_sec: float = 600.0
     # LangGraph long-term memory Store (docs). Empty → same MySQL as DATABASE_URL;

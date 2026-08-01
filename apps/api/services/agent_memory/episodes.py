@@ -191,10 +191,8 @@ def maybe_write_episode(
     if not uid or not goal_t:
         return None
 
-    low = goal_t.lower()
-    if len(goal_t) <= 8 and any(
-        g in low for g in ("你好", "您好", "hi", "hello", "hey", "哈咯")
-    ):
+    # Skip tiny prompts (structural). Greeting detection is the intent LLM's job.
+    if len(goal_t) < 4:
         return None
 
     actions = _summarize_actions(applied_ops)

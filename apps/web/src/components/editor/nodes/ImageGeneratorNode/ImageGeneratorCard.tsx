@@ -52,6 +52,8 @@ import {
   captureVideoPosterFrame,
   clearImageProcessAttrs,
   expandSelectionWithGroups,
+  listGroupMemberIds,
+  readNodeGroupId,
 } from '@/components/rcb/scene/document/sceneDocument';
 import {
   clearCanvasAttachPick,
@@ -138,12 +140,50 @@ function readGenAttrCount(attrs: Record<string, unknown> | null | undefined) {
   return Math.max(1, Math.min(4, Math.round(n)));
 }
 
-/** Apply a canvas pick (node / group / frame) into an image-node composer. */
+/** If ids all share one groupId, return full group member ids (for one composite attach). */
+function resolveSharedGroupAttachIds(doc: any, ids: string[]): string[] | null {
+  if (!doc || !ids || ids.length < 2) return null;
+  const first = readNodeGroupId(doc?.deltaSetLike?.[ids[0]]);
+  if (!first) return null;
+  if (!ids.every((id) => readNodeGroupId(doc?.deltaSetLike?.[id]) === first)) return null;
+  const members = listGroupMemberIds(doc, first);
+  return members.length >= 2 ? members : ids;
+}
+
+/** 编组 → inline「组N」chip (not an attachment image strip). */
+async function attachGroupAsComposerChip(opts: {
+  doc: any;
+  groupIds: string[];
+  frameId: string | null;
+  existing: ComposerContext[];
+  insertChip: (ctx: ComposerContext) => void;
+}): Promise<boolean> {
+  const { doc, groupIds, frameId, existing, insertChip } = opts;
+  const base = buildComposerContext(doc, groupIds, frameId, existing);
+  if (!base) return false;
+  let ctx = await enrichComposerContextThumb(doc, base, {
+    nodeIds: groupIds,
+    frameId,
+  });
+  // Keep a composite dataUrl so image-gen can still send one reference frame.
+  if (ctx && !String(ctx.dataUrl || '').trim()) {
+    const dataUrl = await rasterizeNodesToPngDataUrl(doc, groupIds);
+    if (dataUrl) {
+      ctx = { ...ctx, dataUrl, thumbUrl: String(ctx.thumbUrl || '').trim() || dataUrl };
+    }
+  }
+  if (!ctx) return false;
+  insertChip(ctx);
+  return true;
+}
+
 export async function applyCanvasPickToImageComposer(opts: {
   document: any;
   payload: string | string[];
   existing: ComposerContext[];
-  setContexts: (next: ComposerContext[]) => void;
+  setContexts: (
+    next: ComposerContext[] | ((prev: ComposerContext[]) => ComposerContext[])
+  ) => void;
   insertChip: (ctx: ComposerContext) => void;
   /** Image generator / quick-edit: reject video nodes (default true). Video gen passes false. */
   imagesOnly?: boolean;
@@ -175,17 +215,32 @@ export async function applyCanvasPickToImageComposer(opts: {
   }
 
   const pushAttachment = (att: ComposerContext) => {
-    const atts = existing.filter((c) => c.kind === 'attachment');
-    const inline = existing.filter((c) => c.kind !== 'attachment');
-    // Avoid duplicating the same key if setContexts is called twice in one pick.
-    if (atts.some((c) => c.key === att.key) || inline.some((c) => c.key === att.key)) {
-      setContexts([...atts, ...inline]);
-      return;
-    }
-    setContexts([...atts, att, ...inline]);
+    // Functional update — peel loops must accumulate, not overwrite from stale `existing`.
+    setContexts((prev: ComposerContext[]) => {
+      const base = Array.isArray(prev) ? prev : existing;
+      const atts = base.filter((c) => c.kind === 'attachment');
+      const inline = base.filter((c) => c.kind !== 'attachment');
+      if (atts.some((c) => c.key === att.key) || inline.some((c) => c.key === att.key)) {
+        return [...atts, ...inline];
+      }
+      return [...atts, att, ...inline];
+    });
   };
 
-  // Group / multi — peel videos/images out; only rasterize leftover shapes together.
+  // 编组 → one「组」chip in the input (not peeled / not attachment strip).
+  const groupIds = resolveSharedGroupAttachIds(doc, ids);
+  if (groupIds) {
+    await attachGroupAsComposerChip({
+      doc,
+      groupIds,
+      frameId,
+      existing,
+      insertChip,
+    });
+    return;
+  }
+
+  // Ad-hoc multi — peel videos/images out; only rasterize leftover shapes together.
   if (ids.length > 1) {
     const videos: string[] = [];
     const images: string[] = [];
@@ -319,7 +374,9 @@ function attachSelectionToImageComposer(opts: {
   selectedNodeIds: string[];
   selectedFrameIds: string[];
   existing: ComposerContext[];
-  setContexts: (next: ComposerContext[]) => void;
+  setContexts: (
+    next: ComposerContext[] | ((prev: ComposerContext[]) => ComposerContext[])
+  ) => void;
   insertChip: (ctx: ComposerContext) => void;
 }): boolean {
   const {
@@ -642,9 +699,10 @@ function ImageGeneratorCard({
       };
       // Smart ratio: omit so the model picks a fitting aspect.
       if (aspectRatio !== 'smart') body.aspect_ratio = aspectRatio;
-      const refImages = attachments
+      const refImages = contextsRef.current
+        .filter((c) => c.kind === 'attachment' || c.kind === 'group')
         .map((c) => String(c.dataUrl || c.thumbUrl || '').trim())
-        .filter(Boolean);
+        .filter((u) => Boolean(u) && !u.startsWith('data:video/'));
       if (refImages.length) body.images = refImages;
       // Parallel per-slot gens (provider `n` is unreliable) — same pattern as AgentDock.
       const count = Math.max(1, Math.min(4, Math.round(imageCount) || 1));
@@ -828,7 +886,7 @@ function ImageGeneratorCard({
                     inputRef.current?.focus();
                   };
                   // If something is already selected, add it now; otherwise enter one-shot pick.
-                  attachSelectionToImageComposer({
+                  const attached = attachSelectionToImageComposer({
                     hostNodeId: nodeId,
                     document: doc,
                     selectedNodeIds,
@@ -837,7 +895,11 @@ function ImageGeneratorCard({
                     setContexts,
                     insertChip,
                   });
-                  dispatch(startCanvasAttachPick({ target: pickTarget, accept: 'image' }));
+                  if (!attached) {
+                    dispatch(
+                      startCanvasAttachPick({ target: pickTarget, accept: 'image' })
+                    );
+                  }
                 }}
                 className={composerAttachActionClass(pickingFromCanvas)}
               >

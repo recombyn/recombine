@@ -10,6 +10,7 @@ import {
   fitImageSize,
   canAttachNodeToChat,
   groupNodesInDocument,
+  readNodeGroupId,
   isNodeHidden,
   isNodeLocked,
   measureImageNaturalSize,
@@ -528,20 +529,22 @@ function resolveAttachPickPayload(
   opts?: AttachPickOpts
 ): { payload: string | string[]; blockedOnly: boolean } | null {
   const raw = (nodeIds || []).filter(Boolean);
-  // Clicking a video/image should attach that media alone — expanding a canvas group
-  // would rasterize siblings into canvas-group.png (wrong + often >10MB).
+  // Ungrouped media: attach that file alone. Grouped members expand to the whole 编组
+  // so the composer can attach one composite (not peel siblings into separate thumbs).
   if (raw.length === 1) {
     const hitId = raw[0]!;
     const hit = doc?.deltaSetLike?.[hitId];
-    const src = String(hit?.attrs?.src || '').trim();
-    const mediaKey = hit?.key === 'video' || hit?.key === 'image';
-    if (
-      mediaKey &&
-      src &&
-      canAttachNodeToChat(hit, opts) &&
-      !(opts?.imagesOnly && hit?.key === 'video')
-    ) {
-      return { payload: hitId, blockedOnly: false };
+    if (!readNodeGroupId(hit)) {
+      const src = String(hit?.attrs?.src || '').trim();
+      const mediaKey = hit?.key === 'video' || hit?.key === 'image';
+      if (
+        mediaKey &&
+        src &&
+        canAttachNodeToChat(hit, opts) &&
+        !(opts?.imagesOnly && hit?.key === 'video')
+      ) {
+        return { payload: hitId, blockedOnly: false };
+      }
     }
   }
   const seed = expandSelectionWithGroups(doc, raw);

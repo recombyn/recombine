@@ -112,21 +112,17 @@ def extract_facts_from_text(*, role: str, text: str) -> list[dict[str, str]]:
         g = _GOAL_HINT.search(t)
         if g:
             out.append({"kind": "goal", "text": g.group(0).strip()[:80]})
-        elif len(t) <= 80 and not t.startswith("你好") and not t.startswith("您好"):
-            # Short non-greeting user lines often are the goal itself.
-            if any(k in t for k in ("页", "海报", "图", "色", "字", "按钮", "布局", "改")):
-                out.append({"kind": "goal", "text": t[:80]})
+        elif len(t) <= 80 and (out or len(t) >= 4):
+            # Short user lines with extracted slots (or any short ask) → goal.
+            # No content keyword lists — intent/style judgment is the LLM's job.
+            out.append({"kind": "goal", "text": t[:80]})
         p = _PREF_HINT.search(t)
         if p:
             out.append({"kind": "preference", "text": p.group(0).strip()[:80]})
-        if any(k in t for k in ("简约", "扁平", "商务", "活泼", "科技", "卡片", "无卡片")):
-            out.append({"kind": "style", "text": t[:60]})
     else:
         d = _DECISION_HINT.search(t)
         if d:
             out.append({"kind": "decision", "text": d.group(0).strip()[:100]})
-        elif t.startswith("已") or "已经" in t[:20]:
-            out.append({"kind": "decision", "text": t[:100]})
     return out
 
 

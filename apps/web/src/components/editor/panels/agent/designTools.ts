@@ -107,6 +107,14 @@ function resolveFrameOpId(
   return fromArgs;
 }
 
+/** Visible scene AABB in world coords (from camera + stage size). */
+export type ViewportSceneBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 /** Optional callbacks from EditorPage / AgentDock for non-document UI. */
 export type CanvasUiBridge = {
   getZoom?: () => number;
@@ -116,6 +124,8 @@ export type CanvasUiBridge = {
   setZoom?: (zoom: number) => void;
   /** Fit / reset view (typically 100% at stage center). */
   fitView?: () => void;
+  /** Camera viewport in world coords — reported to the agent as scene context only. */
+  getViewportSceneBounds?: () => ViewportSceneBounds | null;
   getCollabMode?: () => 'collaborative' | 'milestone' | 'auto';
   setCollabMode?: (mode: 'collaborative' | 'milestone' | 'auto') => void;
   setLayersOpen?: (open: boolean) => void;
@@ -125,7 +135,7 @@ export type CanvasUiBridge = {
   openAccountAgent?: () => void;
 };
 
-/** Capabilities the agent can honestly say are not wired yet. */
+/** Capabilities the agent can honestly say are not wired yet. Tool-facing copy stays English. */
 export const UNAVAILABLE_CAPABILITIES: Array<{
   id: string;
   label: string;
@@ -133,30 +143,142 @@ export const UNAVAILABLE_CAPABILITIES: Array<{
 }> = [
   {
     id: 'product_preview',
-    label: '产品预览 / 全屏预览',
-    hint: '暂未接入 Agent。请选中图片后点「全屏预览」，或用顶栏分享预览。',
+    label: 'Product / fullscreen preview',
+    hint: 'Not wired for Agent. Use the editor fullscreen preview or top-bar share preview.',
   },
   {
     id: 'share',
-    label: '分享链接',
-    hint: '暂未接入 Agent。请点编辑器顶栏「分享」。',
+    label: 'Share link',
+    hint: 'Not wired for Agent. Use the editor top-bar Share control.',
   },
   {
     id: 'workspace_dev',
-    label: '切换 Design / Dev 工作区',
-    hint: '暂未接入 Agent。请用顶栏 Design / Dev 切换。',
+    label: 'Switch Design / Dev workspace',
+    hint: 'Not wired for Agent. Use the top-bar Design / Dev toggle.',
   },
   {
     id: 'hand_tool',
-    label: '切换抓手 / 选择工具',
-    hint: '暂未接入 Agent。请用底部工具条或空格拖移画布。',
+    label: 'Hand / select tool',
+    hint: 'Not wired for Agent. Use the bottom tool strip or Space to pan.',
   },
   {
     id: 'tour',
-    label: '新手引导回放',
-    hint: '暂未接入 Agent。请点左下角「?」重看引导。',
+    label: 'Replay onboarding tour',
+    hint: 'Not wired for Agent. Use the bottom-left "?" to replay the tour.',
   },
 ];
+
+type CanvasUi = CanvasUiBridge;
+
+/** Registry for `toggle_editor_panel` — add rows here instead of growing if-chains. */
+const EDITOR_PANEL_REGISTRY: Array<
+  | {
+      id: string;
+      aliases?: string[];
+      kind: 'toggle';
+      missing: string;
+      opened: string;
+      closed: string;
+      apply: (ui: CanvasUi, open: boolean) => boolean;
+    }
+  | {
+      id: string;
+      aliases?: string[];
+      kind: 'navigate';
+      missing: string;
+      success: string;
+      apply: (ui: CanvasUi) => boolean;
+    }
+  | {
+      id: string;
+      aliases?: string[];
+      kind: 'unavailable';
+      /** Matches `UNAVAILABLE_CAPABILITIES.id` */
+      capabilityId: string;
+    }
+  | {
+      id: string;
+      aliases?: string[];
+      kind: 'redirect';
+      summary: string;
+      next_actions: string[];
+    }
+> = [
+  {
+    id: 'layers',
+    aliases: ['layer'],
+    kind: 'toggle',
+    missing: 'Layers panel bridge missing. Use the bottom-left Layers control.',
+    opened: 'Opened layers panel',
+    closed: 'Closed layers panel',
+    apply: (ui, open) => {
+      if (!ui.setLayersOpen) return false;
+      ui.setLayersOpen(open);
+      return true;
+    },
+  },
+  {
+    id: 'minimap',
+    aliases: ['map'],
+    kind: 'toggle',
+    missing: 'Minimap bridge missing. Use the bottom-left Minimap control.',
+    opened: 'Opened minimap',
+    closed: 'Closed minimap',
+    apply: (ui, open) => {
+      if (!ui.setMinimapOpen) return false;
+      ui.setMinimapOpen(open);
+      return true;
+    },
+  },
+  {
+    id: 'agent_settings',
+    aliases: ['settings', 'collab'],
+    kind: 'navigate',
+    missing: 'Open Account → Agent to manage third-party models.',
+    success: 'Opened Account → Agent model settings',
+    apply: (ui) => {
+      if (!ui.openAccountAgent) return false;
+      ui.openAccountAgent();
+      return true;
+    },
+  },
+  {
+    id: 'preview',
+    aliases: ['product_preview'],
+    kind: 'unavailable',
+    capabilityId: 'product_preview',
+  },
+  {
+    id: 'share',
+    kind: 'unavailable',
+    capabilityId: 'share',
+  },
+  {
+    id: 'export',
+    kind: 'redirect',
+    summary:
+      'Use export_canvas (format=png|jpeg|svg); not toggle_editor_panel.',
+    next_actions: ['export_canvas'],
+  },
+];
+
+function resolveEditorPanel(raw: string) {
+  const key = String(raw || '')
+    .toLowerCase()
+    .trim();
+  if (!key) return null;
+  return (
+    EDITOR_PANEL_REGISTRY.find(
+      (p) => p.id === key || (p.aliases || []).includes(key)
+    ) || null
+  );
+}
+
+function supportedTogglePanelIds(): string[] {
+  return EDITOR_PANEL_REGISTRY.filter(
+    (p) => p.kind === 'toggle' || p.kind === 'navigate'
+  ).map((p) => p.id);
+}
 
 /** FE Action executors (op_key must match Admin design_canvas_tool). */
 export const FE_ACTION_EXECUTOR_KEYS = [
@@ -931,7 +1053,7 @@ function centerInFrame(
   };
 }
 
-/** Resolve create_* origin: omitted or LLM-default (0,0) → frame center; full-bleed keeps 0,0. */
+/** Resolve create_* origin: honor model x/y as-is; only fill gaps when omitted. */
 function resolveCreateXY(
   args: Record<string, unknown>,
   frame: ArtboardFrame | null | undefined,
@@ -940,20 +1062,12 @@ function resolveCreateXY(
 ): { x: number; y: number } {
   const hasX = args.x != null && Number.isFinite(Number(args.x));
   const hasY = args.y != null && Number.isFinite(Number(args.y));
-  const x = hasX ? num(args.x) : NaN;
-  const y = hasY ? num(args.y) : NaN;
-  const fw = Math.max(1, Number(frame?.width) || 1);
-  const fh = Math.max(1, Number(frame?.height) || 1);
-  const fullBleed =
-    width >= fw * 0.9 && height >= fh * 0.9;
-  // Models often emit x:0,y:0 meaning "default" — center unless this is a full-bleed fill.
-  const looksUnset =
-    (!hasX && !hasY) ||
-    (hasX && hasY && x === 0 && y === 0 && !fullBleed);
-  if (looksUnset) return centerInFrame(frame, width, height);
+  // Do not reinterpret (0,0) — host/model chose those coords. Fill only missing axes.
+  if (!hasX && !hasY) return centerInFrame(frame, width, height);
+  const fallback = centerInFrame(frame, width, height);
   return {
-    x: hasX ? x : centerInFrame(frame, width, height).x,
-    y: hasY ? y : centerInFrame(frame, width, height).y,
+    x: hasX ? num(args.x) : fallback.x,
+    y: hasY ? num(args.y) : fallback.y,
   };
 }
 
@@ -1789,22 +1903,22 @@ function execListCapabilities(
     const keys = [...getAllowedCanvasToolKeys()].sort();
     const available = [
       keys.length
-        ? `画布 tool_ops（design_canvas_tool）：${keys.join(' / ')}`
-        : '画布 tool_ops：尚未从 catalog 同步（Admin 维护 design_canvas_tool）',
-      '样式：实色/线性/径向/角度/网格渐变(diffuse)/图片填充、描边虚线、阴影、混合模式、圆角、文字排版',
+        ? `Canvas tool_ops (design_canvas_tool): ${keys.join(' / ')}`
+        : 'Canvas tool_ops: catalog not synced yet (Admin maintains design_canvas_tool)',
+      'Style: solid/linear/radial/angular/diffuse/image fill, stroke dash, shadow, blend, radius, typography',
       ui?.setZoom || ui?.zoomIn
-        ? '视口：set_viewport（缩放/适应画布）'
+        ? 'Viewport: set_viewport (zoom / fit)'
         : null,
       ui?.setCollabMode
-        ? 'Agent 模式：set_agent_mode（collaborative|milestone|auto）'
+        ? 'Agent mode: set_agent_mode (collaborative|milestone|auto)'
         : null,
       ui?.setLayersOpen || ui?.setMinimapOpen
-        ? '面板：toggle_editor_panel（layers|minimap|agent_settings）'
+        ? `Panels: toggle_editor_panel (${supportedTogglePanelIds().join('|')})`
         : null,
     ].filter(Boolean);
     return {
       status: 'success',
-      summary: '已列出 Agent 已接入与暂未接入的画布能力',
+      summary: 'Listed available and unavailable canvas capabilities for Agent',
       artifacts: {
         available,
         tool_ops: keys,
@@ -1813,8 +1927,8 @@ function execListCapabilities(
         collabMode: ui?.getCollabMode?.() ?? null,
       },
       next_actions: [
-        '对已接入能力直接调用对应工具',
-        '对暂未接入能力用中文告知用户，并给出手动操作路径；不要假装已执行',
+        'Call wired tools directly',
+        'For unavailable capabilities, tell the user the manual path; do not pretend they ran',
       ],
     };
   
@@ -1833,28 +1947,27 @@ function execSetViewport(
     if (!ui?.zoomIn && !ui?.setZoom && !ui?.fitView) {
       return {
         status: 'error',
-        summary:
-          '缩放暂未接入当前会话。请用左下角缩放条手动调节。',
+        summary: 'Zoom bridge missing in this session. Use the bottom-left zoom control.',
       };
     }
     if (action === 'zoom_in' || action === 'in') {
       ui.zoomIn?.();
       return {
         status: 'success',
-        summary: `已放大（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
+        summary: `Zoomed in (~${Math.round((ui.getZoom?.() || 1) * 100)}%)`,
       };
     }
     if (action === 'zoom_out' || action === 'out') {
       ui.zoomOut?.();
       return {
         status: 'success',
-        summary: `已缩小（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
+        summary: `Zoomed out (~${Math.round((ui.getZoom?.() || 1) * 100)}%)`,
       };
     }
     if (action === 'fit' || action === 'reset' || action === 'fit_view') {
       if (typeof ui.fitView === 'function') ui.fitView();
       else ui.setZoom?.(1);
-      return { status: 'success', summary: '已适应/重置画布缩放' };
+      return { status: 'success', summary: 'Fit / reset canvas zoom' };
     }
     if (
       action === 'set' ||
@@ -1872,15 +1985,15 @@ function execSetViewport(
       if (!ui.setZoom) {
         return {
           status: 'error',
-          summary: '当前无法设置精确缩放百分比，请用左下角缩放条。',
+          summary: 'Exact zoom percent unavailable. Use the bottom-left zoom control.',
         };
       }
       ui.setZoom(z);
-      return { status: 'success', summary: `缩放已设为 ${Math.round(z * 100)}%` };
+      return { status: 'success', summary: `Zoom set to ${Math.round(z * 100)}%` };
     }
     return {
       status: 'error',
-      summary: 'set_viewport 需要 action: zoom_in|zoom_out|fit|set（可配 percent）',
+      summary: 'set_viewport needs action: zoom_in|zoom_out|fit|set (optional percent)',
     };
   
 }
@@ -1894,7 +2007,7 @@ function execSetCanvasBackground(
     const color = String(args.color ?? args.backgroundColor ?? args.fill ?? '').trim();
     const fillType = String(args.fillType || 'solid').toLowerCase();
     if (!color && fillType === 'solid') {
-      return { status: 'error', summary: 'set_canvas_background 需要 color' };
+      return { status: 'error', summary: 'set_canvas_background requires color' };
     }
     const allowed = new Set(['solid', 'linear', 'radial', 'angular', 'diffuse', 'image']);
     const meta: Record<string, unknown> = {
@@ -1944,7 +2057,7 @@ function execSetCanvasBackground(
     ctx.dispatch(setCanvasMeta(meta));
     return {
       status: 'success',
-      summary: `画布背景已更新（${fillType}${color ? ` ${color}` : ''}）`,
+      summary: `Canvas background updated (${fillType}${color ? ` ${color}` : ''})`,
       artifacts: meta,
     };
   
@@ -1960,24 +2073,19 @@ function execSetAgentMode(
     if (!['collaborative', 'milestone', 'auto'].includes(mode)) {
       return {
         status: 'error',
-        summary: 'mode 须为 collaborative | milestone | auto（对应协作/里程碑/全自动）',
+        summary: 'mode must be collaborative | milestone | auto',
       };
     }
     if (!ctx.canvasUi?.setCollabMode) {
       return {
         status: 'error',
-        summary: 'Agent 模式切换暂未注入。请在输入框左侧切换 Agent / 图片生成。',
+        summary: 'Agent mode bridge missing. Toggle Agent / image-gen beside the composer.',
       };
     }
     ctx.canvasUi.setCollabMode(mode as 'collaborative' | 'milestone' | 'auto');
-    const labels: Record<string, string> = {
-      collaborative: '协作（每阶段确认）',
-      milestone: '里程碑（关键节点确认）',
-      auto: '全自动',
-    };
     return {
       status: 'success',
-      summary: `Agent 执行模式已设为「${labels[mode]}」`,
+      summary: `Agent mode set to ${mode}`,
       artifacts: { mode },
     };
   
@@ -1986,69 +2094,46 @@ function execSetAgentMode(
 function execToggleEditorPanel(
   args: Record<string, unknown>,
   ctx: DesignToolContext,
-  doc: any,
-  pushHistory: () => void
+  _doc: any,
+  _pushHistory: () => void
 ): AgentToolResult {
-    const panel = String(args.panel || args.name || '').toLowerCase();
-    const open = args.open == null ? true : args.open === true || args.open === 'true';
-    const ui = ctx.canvasUi;
-    if (panel === 'layers' || panel === 'layer') {
-      if (!ui?.setLayersOpen) {
-        return {
-          status: 'error',
-          summary: '图层面板暂未接入。请点左下角「图层」按钮。',
-        };
-      }
-      ui.setLayersOpen(open);
-      return { status: 'success', summary: open ? '已打开图层面板' : '已关闭图层面板' };
-    }
-    if (panel === 'minimap' || panel === 'map') {
-      if (!ui?.setMinimapOpen) {
-        return {
-          status: 'error',
-          summary: '小地图暂未接入。请点左下角「小地图」按钮。',
-        };
-      }
-      ui.setMinimapOpen(open);
-      return { status: 'success', summary: open ? '已打开小地图' : '已关闭小地图' };
-    }
-    if (panel === 'agent_settings' || panel === 'settings' || panel === 'collab') {
-      if (ui?.openAccountAgent) {
-        ui.openAccountAgent();
-        return { status: 'success', summary: '已打开账户页的 Agent 模型设置' };
-      }
-      return {
-        status: 'error',
-        summary: '请到「管理账户 → Agent」添加第三方模型。',
-      };
-    }
-    if (
-      panel.includes('preview') ||
-      panel.includes('预览') ||
-      panel.includes('share') ||
-      panel.includes('分享')
-    ) {
-      const hit =
-        UNAVAILABLE_CAPABILITIES.find((c) =>
-          panel.includes('share') || panel.includes('分享')
-            ? c.id === 'share'
-            : c.id === 'product_preview'
-        ) || UNAVAILABLE_CAPABILITIES[0];
-      return { status: 'error', summary: hit.hint };
-    }
-    if (panel.includes('export') || panel.includes('导出')) {
-      return {
-        status: 'error',
-        summary:
-          '导出请用 export_canvas（format=png|jpeg|svg），不是 toggle_editor_panel。',
-        next_actions: ['export_canvas'],
-      };
-    }
+  const spec = resolveEditorPanel(String(args.panel || args.name || ''));
+  const supported = supportedTogglePanelIds().join(' | ');
+  if (!spec) {
     return {
       status: 'error',
-      summary: 'panel 支持：layers | minimap | agent_settings。其他请 list_capabilities。',
+      summary: `Supported panels: ${supported}. Use list_capabilities for others.`,
     };
-  
+  }
+
+  if (spec.kind === 'redirect') {
+    return {
+      status: 'error',
+      summary: spec.summary,
+      next_actions: spec.next_actions,
+    };
+  }
+
+  if (spec.kind === 'unavailable') {
+    const hit =
+      UNAVAILABLE_CAPABILITIES.find((c) => c.id === spec.capabilityId) ||
+      UNAVAILABLE_CAPABILITIES[0];
+    return { status: 'error', summary: hit.hint };
+  }
+
+  const ui = ctx.canvasUi;
+  if (!ui) {
+    return { status: 'error', summary: spec.missing };
+  }
+
+  if (spec.kind === 'navigate') {
+    if (!spec.apply(ui)) return { status: 'error', summary: spec.missing };
+    return { status: 'success', summary: spec.success };
+  }
+
+  const open = args.open == null ? true : args.open === true || args.open === 'true';
+  if (!spec.apply(ui, open)) return { status: 'error', summary: spec.missing };
+  return { status: 'success', summary: open ? spec.opened : spec.closed };
 }
 
 function execAskUser(
@@ -2062,14 +2147,18 @@ function execAskUser(
     const options = Array.isArray(args.options)
       ? args.options
           .map((x) => String(x).trim())
-          .filter((x) => Boolean(x) && x !== '取消')
+          .filter((x) => {
+            if (!x) return false;
+            const low = x.toLowerCase();
+            return low !== 'cancel' && x !== '取消';
+          })
           .slice(0, 6)
       : [];
     return {
       status: 'success',
       summary: question,
       artifacts: { ask: true, options },
-      next_actions: options.length ? options : ['等待用户回复'],
+      next_actions: options.length ? options : ['Wait for user reply'],
     };
   
 }
@@ -2080,7 +2169,7 @@ function execFinish(
   doc: any,
   pushHistory: () => void
 ): AgentToolResult {
-    const summary = String(args.summary || '完成');
+    const summary = String(args.summary || 'Done');
     return { status: 'success', summary, artifacts: { done: true } };
   
 }
@@ -2184,8 +2273,13 @@ function execCreateImage(
     name: String(args.name || (sourceKind === 'placeholder' ? 'Image Placeholder' : 'Image')),
     assetKind: 'image',
   });
-  if (genPrompt && sourceKind === 'placeholder') {
-    node.attrs = { ...(node.attrs || {}), genPrompt };
+  const letteringText = String(args.letteringText || args.textContent || '').trim();
+  if (genPrompt || letteringText) {
+    node.attrs = {
+      ...(node.attrs || {}),
+      ...(genPrompt ? { genPrompt } : {}),
+      ...(letteringText ? { letteringText } : {}),
+    };
   }
   pushHistory();
   ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
@@ -2659,6 +2753,7 @@ function execImageProcess(
       'eraser',
       'editText',
       'editElements',
+      'replaceText',
       'multiAngle',
       'expand',
       'adjust',
@@ -2752,17 +2847,18 @@ function resolveUnknownToolError(name: string): AgentToolResult {
   return {
         status: 'error',
         summary: (() => {
-          const n = String(name || '').toLowerCase();
-          const miss = UNAVAILABLE_CAPABILITIES.find(
-            (c) =>
-              n.includes(c.id) ||
-              n.includes('preview') ||
-              n.includes('share') ||
-              n.includes('zoom') ||
-              n.includes('预览')
+          const n = String(name || '').toLowerCase().trim();
+          const panel = resolveEditorPanel(n);
+          if (panel?.kind === 'unavailable') {
+            const hit = UNAVAILABLE_CAPABILITIES.find((c) => c.id === panel.capabilityId);
+            if (hit) return hit.hint;
+          }
+          if (panel?.kind === 'redirect') return panel.summary;
+          const byId = UNAVAILABLE_CAPABILITIES.find(
+            (c) => n === c.id || n.includes(c.id)
           );
-          if (miss) return miss.hint;
-          return `未知工具: ${name}。请先 list_capabilities；不要假装已执行未接入能力。`;
+          if (byId) return byId.hint;
+          return `Unknown tool: ${name}. Call list_capabilities first; do not pretend unavailable capabilities ran.`;
         })(),
         next_actions: ['list_capabilities', ...DESIGN_TOOL_NAMES.slice(0, 8)],
       };

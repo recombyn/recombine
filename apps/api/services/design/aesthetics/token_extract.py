@@ -581,11 +581,21 @@ def build_aesthetic_token_guidance(
 
     analyzed: list[dict[str, Any]] = []
     has_user = bool(user_rows)
-    lines: list[str] = [
-        "AESTHETIC_DESIGN_TOKENS（运行时已分析 — 必须遵守；不要凭截图瞎猜）：",
-        "在 tool_ops 中使用十六进制色 + 布局度量：fill/color/fontSize/cornerRadius/x/y/width/"
-        "height/padding/gap/margin。对齐 marginPx、gapMin、density、columns、gravity。",
-    ]
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        tok_hdr = resolve_prompt_body("agent.prompt.aesthetic_tokens_header").strip()
+    except Exception:
+        tok_hdr = ""
+    lines: list[str] = (
+        [ln for ln in tok_hdr.splitlines() if ln.strip()]
+        if tok_hdr
+        else [
+            "AESTHETIC_DESIGN_TOKENS（运行时已分析 — 必须遵守；不要凭截图瞎猜）：",
+            "在 tool_ops 中使用十六进制色 + 布局度量：fill/color/fontSize/cornerRadius/x/y/width/"
+            "height/padding/gap/margin。对齐 marginPx、gapMin、density、columns、gravity。",
+        ]
+    )
     if has_user:
         lines.append(
             "优先级：用户参考令牌优先。"

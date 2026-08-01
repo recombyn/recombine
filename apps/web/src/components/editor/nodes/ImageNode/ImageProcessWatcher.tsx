@@ -14,6 +14,7 @@ const AI_KINDS = new Set([
   'expand',
   'editText',
   'editElements',
+  'replaceText',
   'adjust',
 ]);
 
@@ -191,12 +192,27 @@ function ImageProcessWatcher() {
         }
         const storedUrl = await persistProcessedSrc(res.image, `${kind}.png`);
         if (cancelled) return;
+        const replaceMeta = kind === 'replaceText' ? parseMeta(liveNode?.attrs?.processMeta) : {};
+        const replacedCopy = String(replaceMeta.newText || '').trim();
         dispatch(
           finishImageProcess({
             nodeId: pendingId,
             src: storedUrl,
             ...(kind === 'removeBg'
               ? { attrs: { cutout: 'true', name: '抠图' } }
+              : {}),
+            ...(kind === 'replaceText' && replacedCopy
+              ? {
+                  attrs: {
+                    letteringText: replacedCopy,
+                    genPrompt: [
+                      String(sourceNode?.attrs?.genPrompt || '').trim(),
+                      `Text replaced to: ${replacedCopy}`,
+                    ]
+                      .filter(Boolean)
+                      .join('\n'),
+                  },
+                }
               : {}),
           })
         );
@@ -207,6 +223,7 @@ function ImageProcessWatcher() {
           expand: '扩展完成',
           editText: '编辑文字完成',
           editElements: '图片分层完成',
+          replaceText: '文案替换完成',
           vector: '矢量化完成',
           adjust: '调整完成',
         };

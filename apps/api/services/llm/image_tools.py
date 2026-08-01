@@ -18,6 +18,7 @@ IMAGE_PROCESS_KINDS = frozenset(
         "expand",
         "editText",
         "editElements",
+        "replaceText",
         "vector",
         "adjust",
     }
@@ -85,6 +86,17 @@ def _prompt_for(
         )
     if kind in ("editText", "editElements"):
         return "unused"
+    if kind == "replaceText":
+        original = str(m.get("originalText") or m.get("from") or "").strip()
+        new = str(m.get("newText") or m.get("to") or "").strip()
+        if not original or not new:
+            raise ValueError("replaceText requires meta.originalText and meta.newText")
+        return (
+            f"Edit this image in place: replace the visible text \"{original}\" "
+            f"with \"{new}\". Keep the same artistic lettering style, brush/calligraphy "
+            f"texture, colors, lighting, layout, and background. Do not add extra "
+            f"captions, watermarks, or unrelated objects. Only change that text content."
+        )
     if kind == "vector":
         return (
             "Convert this image into a clean flat vector-illustration style: "
