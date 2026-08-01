@@ -47,11 +47,21 @@ data/design_skills/<key>/
 
 | Key | Role |
 |-----|------|
-| `design_methodology` | Create from scratch |
+| `design_methodology` | Create **steps** + material one-liners (not layout ops) |
 | `vision_extract` | User reference images |
 | `aesthetics_align` | Optional sample alignment |
 | `canvas_edit` | Edit existing nodes |
-| `image_gen` | `create_image` + genPrompt |
-| `example_brand/` | File-pack demo (`_meta.json` + `SKILL.md`) |
+| `image_gen` | `create_image` + genPrompt boundary |
 
-Seed sync: API startup `ensure_design_skills` upserts by `skill_key` with `source=seed` (won’t overwrite rows already marked `admin` / `file`). Bump `version` in JSON when changing bodies.
+## Ownership vs prompt packs / knowledge
+
+| Layer | Owns |
+|-------|------|
+| Prompt packs (`design_prompt_packs_seed.json`) | Protocol only: JSON shape, intent, when to `need_*` |
+| Core skills (this seed) | Engine playbooks: create steps, vision, edit, image boundary |
+| Admin skills (`user.*`) | Product workflows + **layout ops** (`user.layout_ops`) |
+| Knowledge | Numeric/encyclopedia detail (banner sizes, icon rules, palette) |
+
+Designer workflow skills（需求整理 / 交互体验 / 视觉规范 / 交付表达 / 落层操作）走 **Admin**（`source=admin` / `user.*`），不要放进本目录。
+
+Seed sync: API startup `ensure_design_skills` **inserts missing** `source=seed` keys only (cold start). It never updates existing rows and never overwrites `admin` / `file`. Bump `version` in JSON for new empty DBs; existing installs keep DB values — ops must Admin-edit seed rows to refresh bodies.

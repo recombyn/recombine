@@ -56,13 +56,7 @@ from services.design.knowledge_store import (
     format_knowledge_details,
     normalize_need_knowledge,
 )
-from services.design.prompt_pack_store import (
-    format_prompt_packs_catalog,
-    format_prompt_packs_details,
-    normalize_need_prompts,
-)
 from services.design.skill_store import (
-    bridge_need_prompts_to_skills,
     filter_ops_by_skill_allowlist,
     filter_need_resources_by_skill_acl,
     format_skills_catalog,
@@ -99,7 +93,6 @@ class AgentTurnSchema(BaseModel):
     ops: list[Any] = Field(default_factory=list)
     need_tools: list[Any] = Field(default_factory=list)
     need_knowledge: list[Any] = Field(default_factory=list)
-    need_prompts: list[Any] = Field(default_factory=list)
     need_skills: list[Any] = Field(default_factory=list)
     need_aesthetics: bool = False
     use_user_refs: bool = False
@@ -113,7 +106,6 @@ class AgentTurnSchema(BaseModel):
     done: bool | None = None
     needTools: list[Any] = Field(default_factory=list)
     needKnowledge: list[Any] = Field(default_factory=list)
-    needPrompts: list[Any] = Field(default_factory=list)
     needSkills: list[Any] = Field(default_factory=list)
     needAesthetics: bool | None = None
     useUserRefs: bool | None = None
@@ -130,7 +122,6 @@ class DecideTurnSchema(BaseModel):
     reply: str = ""
     need_tools: list[Any] = Field(default_factory=list)
     need_knowledge: list[Any] = Field(default_factory=list)
-    need_prompts: list[Any] = Field(default_factory=list)
     need_skills: list[Any] = Field(default_factory=list)
     need_aesthetics: bool = False
     use_user_refs: bool = False
@@ -293,8 +284,6 @@ class AgentRunState:
     tools_loaded: list[str] = field(default_factory=list)
     # Deferred knowledge kinds injected this run.
     knowledge_loaded: list[str] = field(default_factory=list)
-    # Deferred prompt-pack kinds injected this run.
-    prompts_loaded: list[str] = field(default_factory=list)
     # Deferred skill keys injected this run.
     skills_loaded: list[str] = field(default_factory=list)
     # Deferred aesthetics refs injected this run.
@@ -384,7 +373,6 @@ class AgentRunState:
             "dual_picked": self.dual_picked,
             "tools_loaded": list(self.tools_loaded),
             "knowledge_loaded": list(self.knowledge_loaded),
-            "prompts_loaded": list(self.prompts_loaded),
             "skills_loaded": list(self.skills_loaded),
             "aesthetics_loaded": bool(self.aesthetics_loaded),
             "flow_id": self.flow_id or None,
@@ -648,11 +636,10 @@ def _ops_payload_nonempty(raw: Any) -> bool:
 
 
 def _has_pending_resource_details(rt: Any) -> bool:
-    """True when tool/knowledge/prompt/skill/aesthetics details were injected this run."""
+    """True when tool/knowledge/skill/aesthetics details were injected this run."""
     return bool(
         str(getattr(rt, "pending_tool_details", "") or "").strip()
         or str(getattr(rt, "pending_knowledge_details", "") or "").strip()
-        or str(getattr(rt, "pending_prompt_details", "") or "").strip()
         or str(getattr(rt, "pending_skill_details", "") or "").strip()
         or str(getattr(rt, "pending_aesthetics_details", "") or "").strip()
     )
@@ -1274,17 +1261,6 @@ def _fresh_knowledge_kinds(
     return fresh or list(need_knowledge)
 
 
-def _fresh_prompt_kinds(
-    need_prompts: list[str], *, prompts_loaded: list[str]
-) -> list[str]:
-    if not need_prompts:
-        return []
-    if "*" in need_prompts:
-        return list(need_prompts)
-    fresh = [k for k in need_prompts if k not in prompts_loaded]
-    return fresh or list(need_prompts)
-
-
 def _fresh_skill_keys(
     need_skills: list[str], *, skills_loaded: list[str]
 ) -> list[str]:
@@ -1298,11 +1274,6 @@ def _fresh_skill_keys(
 
 def _fetch_deferred_knowledge(*, kinds: list[str], scene: str) -> dict[str, Any]:
     details = format_knowledge_details(kinds=kinds, scene=scene)
-    return {"kinds": list(kinds), "details": details or ""}
-
-
-def _fetch_deferred_prompts(*, kinds: list[str], scene: str) -> dict[str, Any]:
-    details = format_prompt_packs_details(kinds=kinds, scene=scene)
     return {"kinds": list(kinds), "details": details or ""}
 
 
@@ -1385,7 +1356,6 @@ def _fetch_deferred_aesthetics(
 async def _gather_deferred_resource_details(
     *,
     fresh_k: list[str],
-    fresh_prompts: list[str],
     fresh_skills: list[str],
     fresh_tools: list[str],
     load_aesthetics: bool,
@@ -1400,7 +1370,7 @@ async def _gather_deferred_resource_details(
     skill_input_args: dict[str, Any] | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch knowledge / prompts / skills / tools / aesthetics in parallel."""
+    """Fetch knowledge / skills / tools / aesthetics in parallel."""
     jobs: list[tuple[str, Any]] = []
     if fresh_k:
         jobs.append(
@@ -1409,17 +1379,6 @@ async def _gather_deferred_resource_details(
                 asyncio.to_thread(
                     _fetch_deferred_knowledge,
                     kinds=fresh_k,
-                    scene=scene,
-                ),
-            )
-        )
-    if fresh_prompts:
-        jobs.append(
-            (
-                "prompts",
-                asyncio.to_thread(
-                    _fetch_deferred_prompts,
-                    kinds=fresh_prompts,
                     scene=scene,
                 ),
             )
@@ -1700,15 +1659,11 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
     need_knowledge = normalize_need_knowledge(
         obj.get("need_knowledge") or obj.get("needKnowledge")
     )
-    need_prompts = normalize_need_prompts(
-        obj.get("need_prompts") or obj.get("needPrompts")
-    )
     from services.design.skill_store import parse_need_skills_with_pins
 
     need_skills, skill_version_pins, skill_input_args, skill_parse_errs = (
         parse_need_skills_with_pins(obj.get("need_skills") or obj.get("needSkills"))
     )
-    need_prompts, need_skills = bridge_need_prompts_to_skills(need_prompts, need_skills)
     need_aesthetics = normalize_need_aesthetics(
         obj.get("need_aesthetics")
         if "need_aesthetics" in obj
@@ -1726,7 +1681,6 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
         "tool_ops_raw": ops_raw,
         "need_tools": need_tools,
         "need_knowledge": need_knowledge,
-        "need_prompts": need_prompts,
         "need_skills": need_skills,
         "skill_version_pins": skill_version_pins,
         "skill_input_args": skill_input_args,
@@ -1786,11 +1740,6 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
         pending_parts.append(rt.pending_knowledge_details)
         pending_parts.append(
             "以上 KNOWLEDGE_DETAILS 为准。写 tool_ops 时使用它们；将 need_knowledge 设为 []。"
-        )
-    if rt.pending_prompt_details:
-        pending_parts.append(rt.pending_prompt_details)
-        pending_parts.append(
-            "以上 PROMPT_DETAILS 为准。按场景/看图规则决策或追问；将 need_prompts 设为 []。"
         )
     if rt.pending_skill_details:
         pending_parts.append(rt.pending_skill_details)
@@ -2066,8 +2015,6 @@ class AgentRuntime:
     pending_tool_keys: list[str] = field(default_factory=list)
     pending_knowledge_details: str = ""
     pending_knowledge_kinds: list[str] = field(default_factory=list)
-    pending_prompt_details: str = ""
-    pending_prompt_kinds: list[str] = field(default_factory=list)
     pending_skill_details: str = ""
     pending_skill_keys: list[str] = field(default_factory=list)
     pending_aesthetics_details: str = ""
@@ -2766,7 +2713,6 @@ async def _node_thought(
 
     need_tools = list(turn.get("need_tools") or [])
     need_knowledge = list(turn.get("need_knowledge") or [])
-    need_prompts = list(turn.get("need_prompts") or [])
     need_skills = list(turn.get("need_skills") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
     use_user_refs = turn.get("use_user_refs") is True
@@ -2776,18 +2722,16 @@ async def _node_thought(
     rt.flags["no_ops"] = not has_ops_payload
     defer = bool(rt.defer_tools)
     editable = intent in ("edit", "create")
-    can_prompt = intent in ("ask", "edit", "create")
+    can_skill = intent in ("ask", "edit", "create")
     rt.flags["need_tools"] = bool(defer and editable and need_tools)
     rt.flags["need_knowledge"] = bool(defer and editable and need_knowledge)
-    rt.flags["need_prompts"] = bool(defer and can_prompt and need_prompts)
-    rt.flags["need_skills"] = bool(defer and can_prompt and need_skills)
+    rt.flags["need_skills"] = bool(defer and can_skill and need_skills)
     rt.flags["need_aesthetics"] = bool(defer and editable and need_aesthetics)
     rt.flags["slot_missing"] = False
 
     wants_fetch = bool(
         rt.flags["need_tools"]
         or rt.flags["need_knowledge"]
-        or rt.flags["need_prompts"]
         or rt.flags["need_skills"]
         or rt.flags["need_aesthetics"]
     )
@@ -2925,7 +2869,6 @@ async def _node_resource(state: GraphState) -> Command:
     round_i = st.round
     need_tools = list(turn.get("need_tools") or [])
     need_knowledge = list(turn.get("need_knowledge") or [])
-    need_prompts = list(turn.get("need_prompts") or [])
     need_skills = list(turn.get("need_skills") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
     use_user_refs = turn.get("use_user_refs") is True
@@ -2941,21 +2884,17 @@ async def _node_resource(state: GraphState) -> Command:
     ):
         if k not in need_skills:
             need_skills.append(k)
-    # Custom skills cannot unlock knowledge / prompts / aesthetics without ACL.
+    # Custom skills cannot unlock knowledge / aesthetics without ACL.
     acl_skills = list(st.skills_loaded or []) + list(need_skills)
-    need_knowledge, need_prompts, need_aesthetics, acl_errs = (
-        filter_need_resources_by_skill_acl(
-            skill_keys=acl_skills,
-            scene=rt.scene_key or "website",
-            need_knowledge=need_knowledge,
-            need_prompts=need_prompts,
-            need_aesthetics=need_aesthetics,
-        )
+    need_knowledge, need_aesthetics, acl_errs = filter_need_resources_by_skill_acl(
+        skill_keys=acl_skills,
+        scene=rt.scene_key or "website",
+        need_knowledge=need_knowledge,
+        need_aesthetics=need_aesthetics,
     )
     if acl_errs:
         st.push_log(phase="skill_acl", errors=acl_errs[:8])
         turn["need_knowledge"] = need_knowledge
-        turn["need_prompts"] = need_prompts
         turn["need_aesthetics"] = need_aesthetics
     fresh_k = _fresh_knowledge_kinds(need_knowledge, knowledge_loaded=st.knowledge_loaded)
     load_knowledge = bool(need_knowledge) and not (
@@ -2963,12 +2902,6 @@ async def _node_resource(state: GraphState) -> Command:
     )
     if not load_knowledge:
         fresh_k = []
-    fresh_p = _fresh_prompt_kinds(need_prompts, prompts_loaded=st.prompts_loaded)
-    load_prompts = bool(need_prompts) and not (
-        set(need_prompts) <= set(st.prompts_loaded) and "*" not in need_prompts
-    )
-    if not load_prompts:
-        fresh_p = []
     fresh_s = _fresh_skill_keys(need_skills, skills_loaded=st.skills_loaded)
     load_skills = bool(need_skills) and not (
         set(need_skills) <= set(st.skills_loaded) and "*" not in need_skills
@@ -2998,24 +2931,6 @@ async def _node_resource(state: GraphState) -> Command:
                 "status": "done",
                 "summary": ("申请知识：" + "、".join(fresh_k))[:200],
                 "detail": "已确认设计参考",
-                "index": round_i,
-            }
-        )
-    if load_prompts:
-        st.push_log(
-            phase="need_prompts",
-            need_prompts=list(fresh_p),
-            intent=st.intent,
-            summary="申请提示词包：" + "、".join(fresh_p),
-        )
-        _emit(
-            {
-                "type": "activity",
-                "id": f"need-prompts-{round_i}",
-                "kind": "explored",
-                "status": "done",
-                "summary": ("申请提示词：" + "、".join(fresh_p))[:200],
-                "detail": "已确认提示策略",
                 "index": round_i,
             }
         )
@@ -3073,7 +2988,6 @@ async def _node_resource(state: GraphState) -> Command:
 
     bundles = await _gather_deferred_resource_details(
         fresh_k=fresh_k if load_knowledge else [],
-        fresh_prompts=fresh_p if load_prompts else [],
         fresh_skills=fresh_s if load_skills else [],
         fresh_tools=fresh_tools if need_tools else [],
         load_aesthetics=load_aesthetics,
@@ -3109,30 +3023,6 @@ async def _node_resource(state: GraphState) -> Command:
                 "status": "done",
                 "summary": ("注入知识：" + "、".join(fresh_k))[:200],
                 "detail": "设计参考已就绪",
-                "index": round_i,
-            }
-        )
-    pb = bundles.get("prompts") if load_prompts else None
-    if isinstance(pb, dict) and pb.get("details"):
-        details_p = str(pb["details"])
-        rt.pending_prompt_details = "PROMPT_DETAILS:\n" + details_p
-        for k in fresh_p:
-            if k not in st.prompts_loaded:
-                st.prompts_loaded.append(k)
-        st.push_log(
-            phase="prompt_details",
-            need_prompts=list(fresh_p),
-            detail_chars=len(details_p),
-            summary="注入提示词包：" + "、".join(fresh_p),
-        )
-        _emit(
-            {
-                "type": "activity",
-                "id": f"prompt-details-{round_i}",
-                "kind": "explored",
-                "status": "done",
-                "summary": ("注入提示词：" + "、".join(fresh_p))[:200],
-                "detail": "提示策略已就绪",
                 "index": round_i,
             }
         )
@@ -3228,7 +3118,6 @@ async def _node_resource(state: GraphState) -> Command:
     # (not the same need_tools edge that sent us here).
     rt.flags["need_tools"] = False
     rt.flags["need_knowledge"] = False
-    rt.flags["need_prompts"] = False
     rt.flags["need_skills"] = False
     rt.flags["need_aesthetics"] = False
     return Command(update=_bump(rt))
@@ -4028,7 +3917,6 @@ async def _node_design_agent(state: GraphState) -> Command:
         need_any = bool(
             turn.get("need_tools")
             or turn.get("need_knowledge")
-            or turn.get("need_prompts")
             or turn.get("need_skills")
             or turn.get("need_aesthetics")
         )
@@ -4501,9 +4389,8 @@ async def run_agent_graph(
 
     tools_block = format_canvas_tools_for_model(rules)
     tools_catalog = format_canvas_tools_catalog(rules)
-    skills_catalog, prompts_catalog, aesthetics_catalog = await asyncio.gather(
+    skills_catalog, aesthetics_catalog = await asyncio.gather(
         asyncio.to_thread(format_skills_catalog, scene=scene_key or "website"),
-        asyncio.to_thread(format_prompt_packs_catalog, scene=scene_key or "website"),
         asyncio.to_thread(format_aesthetics_catalog, scene=scene_key or "website"),
     )
     defer_tools = _flag_on(rules, "agent.react.defer_tools", "1")
@@ -4527,7 +4414,6 @@ async def run_agent_graph(
             persona_block,
             tools_catalog if defer_tools else tools_block,
             skills_catalog,
-            prompts_catalog,
             aesthetics_catalog,
         ]
         if p

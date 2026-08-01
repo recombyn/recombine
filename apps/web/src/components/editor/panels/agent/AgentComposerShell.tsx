@@ -18,7 +18,7 @@ import {
   HiOutlineBolt,
   HiOutlineViewfinderCircle,
   HiOutlineDocument,
-  HiOutlineChatBubbleLeftRight,
+  HiOutlineChatBubbleLeft,
   HiOutlinePhoto,
   HiOutlineFilm,
   HiOutlinePlay,
@@ -771,7 +771,7 @@ function interactionModeIcon(mode: ComposerInteractionMode): ReactNode {
     return <HiOutlinePhoto className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
   }
   if (mode === 'ask') {
-    return <HiOutlineChatBubbleLeftRight className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
+    return <HiOutlineChatBubbleLeft className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
   }
   return <LuInfinity className="h-4 w-4 shrink-0" strokeWidth={2.25} />;
 }
@@ -789,7 +789,7 @@ function buildInteractionModeOptions(
     {
       key: 'ask',
       label: t('agent.interactionAsk'),
-      icon: <HiOutlineChatBubbleLeftRight className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
+      icon: <HiOutlineChatBubbleLeft className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
     },
     {
       key: 'image',
