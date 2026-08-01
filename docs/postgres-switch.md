@@ -54,7 +54,25 @@ with connect(immediate=True) as conn:  # wallet / critical writes
 - MySQL/Postgres: scheduler writes a `.hint.txt` with `mysqldump` / `pg_dump`; prefer cloud automated backups in production
 - Celery beat task: `worker.tasks.run_db_backup_job`
 
+## LangGraph checkpointer (Design Agent / create_agent)
+
+App data (`DATABASE_URL`) and LangGraph **short-term checkpoints** share the same priority chain in `services/llm/agent.py` → `get_agent_checkpointer()`:
+
+| Priority | Backend | When |
+|----------|---------|------|
+| 1 | MySQL via `langgraph-checkpoint-mysql` | `DATABASE_URL` / `LANGGRAPH_CHECKPOINT_URL` is MySQL **≥ 8.0.19** (or MariaDB ≥ 10.7.1) |
+| 2 | SQLite file | Below that version, or MySQL connect/setup fails → `LANGGRAPH_CHECKPOINT_SQLITE_PATH` (default `storage/langgraph_checkpoints.db`) |
+| 3 | In-memory | SQLite unavailable |
+
+Password in `DATABASE_URL` must be URL-encoded (`!` → `%21`, `&` → `%26`); the app unquotes before connecting. Sync savers are wrapped so `graph.astream` can call `aget_*` / `aput_*`.
+
+| Env | Role |
+|-----|------|
+| `LANGGRAPH_CHECKPOINT_URL` | Optional override (empty → reuse `DATABASE_URL`) |
+| `LANGGRAPH_CHECKPOINT_SQLITE_PATH` | SQLite fallback path |
+| `DESIGN_GRAPH_CHECKPOINT` | Compile outer design graph with checkpointer (default on) |
+
 ## Not in scope yet
 
 - Full dual DDL for every `CREATE TABLE` in Postgres (use migration tools)
-- LangGraph checkpointer/store Postgres backends (still MySQL/SQLite paths)
+- LangGraph checkpointer/store **Postgres** backends (still MySQL 8+ / SQLite paths)
