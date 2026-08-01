@@ -4,8 +4,8 @@ import {
   useRcbCamera,
   rcbSceneToScreen,
 } from '@/components/rcb';
-import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
 const PILL_BOTTOM_PAD_PX = 14;
 

@@ -10,22 +10,22 @@ import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelecti
 import {
   fillImageFieldsFromAttrs,
   parseFillType,
-} from '@/components/rcb/scene/sceneFill';
-import { boolEffectAttr } from '@/components/rcb/scene/sceneEffects';
+} from '@/components/rcb/scene/document/sceneFill';
+import { boolEffectAttr } from '@/components/rcb/scene/document/sceneEffects';
 import { openShapeStylePanel, patchDocumentNode } from '@/store/modules/editor';
 import ToolbarValueSlider, {
   SEL_ICON_BTN,
   SEL_SIZE_INPUT,
   SEL_TOOL_BTN,
-} from '@/components/rcb/selection/ToolbarValueSlider';
+} from '@/components/rcb/selection/chrome/ToolbarValueSlider';
 import {
   FillColorSwatch,
   IconCornerRadius,
   StrokeColorSwatch,
-} from '@/components/rcb/selection/StyleToolbarIcons';
+} from '@/components/rcb/selection/chrome/StyleToolbarIcons';
 import AspectRatioPresetMenu, {
   ELEMENT_ASPECT_PRESETS,
-} from '@/components/rcb/selection/AspectRatioPresetMenu';
+} from '@/components/rcb/selection/chrome/AspectRatioPresetMenu';
 import {
   matchAspectPresetKey,
   sizeFromAspectPreset,
@@ -38,21 +38,21 @@ import {
   supportsFill,
   supportsShapeSides,
   supportsStroke,
-} from '@/components/rcb/scene/sceneDocument';
-import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
+} from '@/components/rcb/scene/document/sceneDocument';
+import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import {
   clampShapeSides,
   DEFAULT_SHAPE_SIDES,
   MAX_SHAPE_SIDES,
   MIN_SHAPE_SIDES,
   sidesFromAttrs,
-} from '@/components/rcb/scene/sceneShapes';
+} from '@/components/rcb/scene/document/sceneShapes';
 import {
   buildOutlinePathAsync,
   canOutlineNode,
   outlineNodePatch,
   requestEnterPathEdit,
-} from '@/components/rcb/scene/outlineToPath';
+} from '@/components/rcb/scene/paint/outlineToPath';
 import { TbVectorBezier } from 'react-icons/tb';
 import { message } from '@/components/base';
 
@@ -221,7 +221,7 @@ function ShapeSelectionToolbar({
             },
           })
         );
-        requestEnterPathEdit(nodeId);
+        requestEnterPathEdit(nodeId, outline.pathD);
         message.success('已轮廓化');
       } finally {
         hide();

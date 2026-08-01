@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { createSvgBoard } from '@/components/rcb/scene/sceneToSvg';
+import { createSvgBoard } from '@/components/rcb/scene/paint/sceneToSvg';
 import { setSvgBoard, type SvgBoardHandle } from './svgBoardRegistry';
 
 /**

@@ -9,7 +9,7 @@ import {
 import {
   isImageGeneratorNode,
   listImageVariantUrls,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import { detachImageVariant, patchDocumentNode } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
 import ImageReplaceUploadControl from './ImageReplaceUploadControl';

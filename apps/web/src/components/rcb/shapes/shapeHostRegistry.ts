@@ -1,4 +1,4 @@
-import { replaceSvgNode, dedupeSceneNode } from '@/components/rcb/scene/sceneToSvg';
+import { replaceSvgNode, dedupeSceneNode } from '@/components/rcb/scene/paint/sceneToSvg';
 
 /** One native SVG mini-board per scene node. */
 export type ShapeHostHandle = {

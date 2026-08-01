@@ -24,12 +24,12 @@ import {
   STROKE_STYLES,
   strokeStyleLabel,
 } from '@/components/editor/nodes/ShapeNode/StrokeStylePicker';
-import { strokeDashPreview } from '@/components/rcb/scene/sceneStrokeStyle';
+import { strokeDashPreview } from '@/components/rcb/scene/document/sceneStrokeStyle';
 import type {
   StrokeAlign,
   StrokeLinecap,
   StrokeLinejoin,
-} from '@/components/rcb/scene/sceneEffects';
+} from '@/components/rcb/scene/document/sceneEffects';
 import {
   PanelSegmentedIcons,
   PanelToggleIcons,
@@ -38,7 +38,7 @@ import {
 import {
   SEL_ICON_BTN,
   SEL_ICON_BTN_ACTIVE,
-} from '@/components/rcb/selection/ToolbarValueSlider';
+} from '@/components/rcb/selection/chrome/ToolbarValueSlider';
 import { cn } from '@/utils/classnames';
 
 function StrokeStyleIcon({

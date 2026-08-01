@@ -19,7 +19,7 @@ import {
   useRcbCamera,
   useRcbScreenToolbarStyle,
 } from '@/components/rcb';
-import { SELECTION_TOOLBAR_BELOW_BOX_GAP_PX } from '@/components/rcb/selection/SelectionToolbarShell';
+import { SELECTION_TOOLBAR_BELOW_BOX_GAP_PX } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import AgentComposerInput, {
   chipBaseKey,
   parseAtMentionQuery,
@@ -54,7 +54,7 @@ import {
   expandSelectionWithGroups,
   fitImageSize,
   measureImageNaturalSize,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import {
   clearCanvasAttachPick,
   consumePendingCanvasAttach,

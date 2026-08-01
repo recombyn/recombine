@@ -14,7 +14,7 @@ import {
 import {
   captureVideoPosterFrame,
   measureVideoNaturalSize,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import { finishImageProcess, patchDocumentNode } from '@/store/modules/editor';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
