@@ -103,6 +103,7 @@ import {
   buildChatProcessSteps,
   formatActivityLabel,
   localizeExploreItem,
+  normalizeActivityStatus,
 } from '@/components/editor/panels/agent/ChatTurnList';
 import type { VirtualListHandle } from '@/components/base/VirtualList';
 import AgentComposerShell, {
@@ -309,6 +310,52 @@ function humanizeDesignError(
 }
 
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
+
+const DETAIL_SUMMARY_KINDS = new Set([
+  'tool',
+  'skipped',
+  'added',
+  'updated',
+  'deleted',
+]);
+const SUCCESS_VARIANT_KINDS = new Set(['added', 'updated', 'deleted']);
+const CONFIRM_VARIANT_KINDS = new Set(['thought', 'explored', 'tool']);
+
+function activityRowSummary(opts: {
+  kind: string;
+  label: string;
+  detailText: string;
+  summaryText: string;
+}): string | undefined {
+  const { kind, label, detailText, summaryText } = opts;
+  if (summaryText && summaryText !== label) return summaryText;
+  if (!DETAIL_SUMMARY_KINDS.has(kind)) return undefined;
+  if (detailText && detailText !== label) return detailText;
+  return undefined;
+}
+
+function activityRowVariant(
+  status: 'running' | 'done' | 'error',
+  kind: string
+): 'success' | 'confirm' | undefined {
+  if (status === 'error') return undefined;
+  if (SUCCESS_VARIANT_KINDS.has(kind)) return 'success';
+  if (CONFIRM_VARIANT_KINDS.has(kind)) return 'confirm';
+  return undefined;
+}
+
+function activityNestItem(
+  t: TFn,
+  item: { id?: string; name?: string; summary?: string } | undefined
+) {
+  if (!item || !(item.name || item.id)) return null;
+  return localizeExploreItem(t, {
+    id: String(item.id || `item-${Date.now()}`),
+    name: String(item.name || '').trim() || '…',
+    summary: item.summary ? String(item.summary) : undefined,
+  });
+}
+
 type FinishAssistant = (
   m: ChatUiMessage,
   patch?: Partial<ChatUiMessage>
@@ -1679,9 +1726,10 @@ function createDesignAgentEventRouter(opts: {
     }
     // Intent confirm / "understanding request" rows — keep off the chat timeline.
     if (ev.kind === 'thought') return;
+    const actStatus = normalizeActivityStatus(ev.status);
     const label = formatActivityLabel(opts.t, {
       kind: ev.kind,
-      status: ev.status === 'running' ? 'running' : 'done',
+      status: actStatus,
       durationSec: ev.durationSec,
       count: ev.count,
       skillName: ev.skillName,
@@ -1691,38 +1739,21 @@ function createDesignAgentEventRouter(opts: {
     if (!label) return;
     const detailText = (ev.detail || '').trim();
     const summaryText = String(ev.summary || '').trim();
-    const summary =
-      (summaryText && summaryText !== label ? summaryText : undefined) ||
-      (ev.kind === 'tool' ||
-      ev.kind === 'skipped' ||
-      ev.kind === 'added' ||
-      ev.kind === 'updated' ||
-      ev.kind === 'deleted'
-        ? detailText && detailText !== label
-          ? detailText
-          : undefined
-        : undefined);
-    const variant =
-      ev.kind === 'added' || ev.kind === 'updated' || ev.kind === 'deleted'
-        ? ('success' as const)
-        : ev.kind === 'thought' || ev.kind === 'explored' || ev.kind === 'tool'
-          ? ('confirm' as const)
-          : undefined;
-    const nestItem =
-      ev.item && (ev.item.name || ev.item.id)
-        ? localizeExploreItem(opts.t, {
-            id: String(ev.item.id || `item-${Date.now()}`),
-            name: String(ev.item.name || '').trim() || '…',
-            summary: ev.item.summary ? String(ev.item.summary) : undefined,
-          })
-        : null;
+    const summary = activityRowSummary({
+      kind: ev.kind,
+      label,
+      detailText,
+      summaryText,
+    });
+    const variant = activityRowVariant(actStatus, ev.kind);
+    const nestItem = activityNestItem(opts.t, ev.item);
     opts.setMessages((prev) =>
       prev.map((m) => {
         if (m.id !== opts.assistantId) return m;
         const next = applyActivityEventToSteps(m.steps || [], {
           kind: ev.kind,
           eventId: ev.id,
-          status: ev.status === 'running' ? 'running' : 'done',
+          status: actStatus,
           label,
           summary,
           variant,
