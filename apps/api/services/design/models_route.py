@@ -415,6 +415,86 @@ def apply_user_route_overrides(
     return out
 
 
+def _serialize_lanes(lanes: dict[str, str]) -> str:
+    return ";".join(
+        f"{k}->{v}"
+        for k, v in lanes.items()
+        if k and v and k in ("fast", "standard", "reasoning", "else", "vision", "image")
+    )
+
+
+def sanitize_rules_for_openrouter_region(
+    rules: dict[str, str] | None,
+    *,
+    platform_rules: dict[str, str] | None,
+    country: str | None,
+) -> dict[str, str]:
+    """Replace OpenRouter lane models with Standard (platform) map when region blocks OR."""
+    from services.geoip import is_openrouter_model_ref, openrouter_allowed_for_country
+
+    out = dict(rules or {})
+    if openrouter_allowed_for_country(country):
+        return out
+    plat = parse_model_lanes(platform_rules)
+    lanes = parse_model_lanes(out)
+    changed = False
+    for key in ("fast", "standard", "reasoning", "else", "vision", "image"):
+        mid = str(lanes.get(key) or "").strip()
+        if not is_openrouter_model_ref(mid):
+            continue
+        fallback = (
+            str(plat.get(key) or "").strip()
+            or str(plat.get("standard") or "").strip()
+            or str(plat.get("else") or "").strip()
+            or mid
+        )
+        if fallback and fallback != mid:
+            lanes[key] = fallback
+            changed = True
+    if changed:
+        serialized = _serialize_lanes(lanes)
+        out["precheck.model_threshold"] = serialized
+        out["precheck.model_lanes"] = serialized
+    vision = str(out.get("precheck.vision_model") or "").strip()
+    if is_openrouter_model_ref(vision):
+        out["precheck.vision_model"] = (
+            str(plat.get("vision") or "").strip()
+            or str(platform_rules or {}).get("precheck.vision_model")
+            or str(plat.get("standard") or "").strip()
+            or vision
+        )
+    image = str(out.get("assets.image_default_model") or "").strip()
+    if is_openrouter_model_ref(image):
+        out["assets.image_default_model"] = (
+            str(plat.get("image") or "").strip()
+            or str(platform_rules or {}).get("assets.image_default_model")
+            or image
+        )
+    return out
+
+
+def sanitize_model_ref_for_openrouter_region(
+    model_ref: str | None,
+    *,
+    platform_rules: dict[str, str] | None,
+    country: str | None,
+) -> str:
+    """Locked/BYOK OpenRouter picks fall back to platform standard lane when blocked."""
+    from services.geoip import is_openrouter_model_ref, openrouter_allowed_for_country
+
+    mid = str(model_ref or "").strip()
+    if not mid or mid.lower() in ("auto", "platform", "default"):
+        return mid or "auto"
+    if openrouter_allowed_for_country(country) or not is_openrouter_model_ref(mid):
+        return mid
+    plat = parse_model_lanes(platform_rules)
+    return (
+        str(plat.get("standard") or "").strip()
+        or str(plat.get("else") or "").strip()
+        or "auto"
+    )
+
+
 def heuristic_route_lane(
     prompt: str,
     *,

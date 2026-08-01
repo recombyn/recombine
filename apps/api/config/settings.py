@@ -140,6 +140,12 @@ class Settings(BaseSettings):
     # Optional OpenRouter attribution headers (https://openrouter.ai/docs)
     openrouter_http_referer: str = ""
     openrouter_app_title: str = "recombyn"
+    # Region gate: hide/block OpenRouter when client country is listed (ISO-3166-1 alpha-2).
+    # GeoLite2-Country.mmdb path (optional). Edge headers CF-IPCountry etc. also work.
+    openrouter_block_countries: str = "CN"
+    geolite2_country_db: str = ""
+    # Force country for local tests (e.g. CLIENT_COUNTRY_OVERRIDE=CN). Empty = detect.
+    client_country_override: str = ""
     # Doubao Ark chat: model name or inference endpoint id (ep-xxxx).
     # Leave empty to hide that Doubao entry from the catalog.
     doubao_seed_model: str = ""

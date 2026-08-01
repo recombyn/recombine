@@ -656,6 +656,8 @@ const zhCN = {
     agentRoutePlatformNote: '当前使用标准版路由（优先国内 Seed / DeepSeek / Seedream）。',
     agentRouteBalancedNote: '当前使用 Pro 路由偏好，按车道自动选用更强模型。',
     agentRouteQualityNote: '当前使用 Max 路由偏好，优先高质量推理与指令跟随。',
+    agentRouteOpenrouterBlocked:
+      '当前网络无法使用 OpenRouter。Pro / Max 已回退为国内模型（与标准版车道一致）。',
     agentRouteSave: '保存路由偏好',
     agentRouteSaved: '已保存',
     notices: {

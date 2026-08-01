@@ -641,6 +641,8 @@ const ja = {
     agentRoutePlatformNote: 'スタンダード（プラットフォーム既定）ルートを使用中です。',
     agentRouteBalancedNote: 'Pro ルートを使用中。車線に応じてより強いモデルを選びます。',
     agentRouteQualityNote: 'Max ルートを使用中。最高品質の推論と指示追従を優先します。',
+    agentRouteOpenrouterBlocked:
+      'このネットワークでは OpenRouter を利用できません。Pro / Max は国内モデル（Standard 相当）にフォールバックします。',
     agentRouteSave: 'ルーティングを保存',
     agentRouteSaved: '保存済み',
     notices: {
