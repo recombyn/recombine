@@ -1,12 +1,15 @@
-"""Image toolbar vision decompose (editText OCR).
+"""Image toolbar vision decompose.
 
 editText
   - OCR only → editable text layers (font/color)
   - Background = original with text inpainted
-  - Do NOT split other visual subjects
+  - Does NOT split other visual subjects
 
-Note: generative / multi-RGBA layer decompose (editElements) was removed;
-true layer separation needs GPU models (e.g. Qwen-Image-Layered).
+editElements
+  - Subjects (SAM / layout heuristics) as transparent PNG crops
+  - OCR text layers
+  - Background = original with text + subjects inpainted
+  - Canvas places layers at source coords so the stack still reads as one picture
 """
 
 from __future__ import annotations
@@ -218,8 +221,75 @@ def _estimate_font(block: dict[str, Any], fill: str) -> dict[str, Any]:
     }
 
 
+def _rembg_subject_regions(bgr, max_regions: int = 3) -> list[dict[str, Any]]:
+    """Photo / product main subject via rembg alpha (works without SAM)."""
+    import cv2
+    import numpy as np
+
+    try:
+        from services.vision.remove_bg import cutout_rgba_from_bytes, rembg_available
+    except Exception:
+        return []
+    if not rembg_available():
+        return []
+
+    ok, buf = cv2.imencode(".png", bgr)
+    if not ok:
+        return []
+    raw = buf.tobytes()
+    rgba = None
+    for mode in ("product", "hair"):
+        try:
+            rgba = cutout_rgba_from_bytes(raw, mode=mode)  # type: ignore[arg-type]
+            break
+        except Exception:
+            continue
+    if rgba is None:
+        return []
+
+    arr = np.asarray(rgba)
+    if arr.ndim != 3 or arr.shape[2] < 4:
+        return []
+    alpha = arr[:, :, 3]
+    if int(alpha.max()) < 8:
+        return []
+
+    mask = (alpha >= 16).astype(np.uint8) * 255
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    h, w = mask.shape[:2]
+    min_area = max(400, int(h * w * 0.02))
+    max_area = int(h * w * 0.92)
+    regions: list[dict[str, Any]] = []
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < min_area or area > max_area:
+            continue
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y = int(stats[i, cv2.CC_STAT_TOP])
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        if bw < 12 or bh < 12:
+            continue
+        soft = np.where(labels == i, alpha, 0).astype(np.uint8)
+        regions.append(
+            {
+                "x": float(x),
+                "y": float(y),
+                "width": float(bw),
+                "height": float(bh),
+                "area": float(area),
+                "source": "rembg",
+                "layout_type": "subject",
+                "name": "主体",
+                "mask": soft,
+            }
+        )
+    regions.sort(key=lambda r: r["area"], reverse=True)
+    return regions[:max_regions]
+
+
 def _opencv_subject_regions(bgr, texts: list[dict[str, Any]], max_regions: int = 8) -> list[dict[str, Any]]:
-    """Contour-based subject proposals when SAM is unavailable."""
+    """Contour-based subject proposals when rembg / SAM are unavailable."""
     import cv2
     import numpy as np
 
@@ -359,9 +429,23 @@ def _enrich_texts(bgr, texts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _collect_subjects(bgr, path: Path, texts: list[dict[str, Any]], mixed_blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Subject proposals for editElements — ordered by reliability for photos:
+
+    1. rembg cutout (dogs / products / people) — works without SAM
+    2. document layout figures (PPT / posters)
+    3. SAM automatic masks when ENABLE_SAM + checkpoint
+    4. OpenCV edges only if still empty
+    """
     subjects: list[dict[str, Any]] = []
 
-    # Layout figures
+    # 1) Photo main subject (rembg) — primary path for canvas photos.
+    try:
+        subjects.extend(_rembg_subject_regions(bgr))
+    except Exception:
+        pass
+
+    # 2) Layout figures (document / poster analysis)
     for b in mixed_blocks:
         if str(b.get("type") or "") == "text":
             continue
@@ -380,7 +464,7 @@ def _collect_subjects(bgr, path: Path, texts: list[dict[str, Any]], mixed_blocks
         if not _overlaps_text(region, texts, 0.6):
             subjects.append(region)
 
-    # SAM
+    # 3) SAM (optional, needs checkpoint)
     if settings.enable_sam:
         try:
             for region in sam_mod.segment_regions(path) or []:
@@ -400,14 +484,22 @@ def _collect_subjects(bgr, path: Path, texts: list[dict[str, Any]], mixed_blocks
         except Exception:
             pass
 
-    # OpenCV fallback when few subjects
-    if len(subjects) < 2:
+    # 4) OpenCV edges — last resort only
+    if not subjects:
         subjects.extend(_opencv_subject_regions(bgr, texts))
 
-    # NMS across sources
-    subjects.sort(key=lambda r: _num(r.get("width")) * _num(r.get("height")), reverse=True)
+    # Prefer rembg/SAM over layout/opencv when boxes overlap.
+    def _rank(r: dict[str, Any]) -> tuple[float, float]:
+        src = str(r.get("source") or "")
+        pri = {"rembg": 3.0, "sam": 2.5, "layout": 1.5, "opencv": 1.0}.get(src, 1.0)
+        area = _num(r.get("area")) or (_num(r.get("width")) * _num(r.get("height")))
+        return (pri, area)
+
+    subjects.sort(key=_rank, reverse=True)
     kept: list[dict[str, Any]] = []
     for r in subjects:
+        if _overlaps_text(r, texts, 0.55) and str(r.get("source") or "") in {"opencv", "layout"}:
+            continue
         if any(_iou(r, k) > 0.5 for k in kept):
             continue
         kept.append(r)
@@ -472,8 +564,19 @@ async def decompose_image(
                 )
             if image_layers:
                 engines.append("subjects")
+                sources = sorted(
+                    {
+                        str(r.get("source") or "")
+                        for r in subject_regions
+                        if str(r.get("source") or "")
+                    }
+                )
+                if sources:
+                    engines.append("subjects:" + "+".join(sources))
             else:
-                warnings.append("未识别到可拆分主体，仅拆出文字与背景")
+                warnings.append(
+                    "未识别到可拆分主体（需 rembg 或开启 SAM），仅拆出文字与背景"
+                )
 
         # Background: inpaint text always; also subjects for editElements
         erase = list(texts_raw)

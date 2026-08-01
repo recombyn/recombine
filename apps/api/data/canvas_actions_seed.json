@@ -284,10 +284,10 @@
       "kind": "image",
       "label": "图片处理",
       "sort_order": 200,
-      "model_hint": "Run image toolbar pipeline on a node (spawns processing clone). Args: nodeId (image id), kind=upscale|removeBg|eraser|editText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. Optional: targetWidth, targetHeight, meta (object).",
+      "model_hint": "Run image toolbar pipeline on a node (spawns processing clone). Args: nodeId (image id), kind=upscale|removeBg|eraser|editText|editElements|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. editText=OCR text layers; editElements=subjects+text+bg (still looks like one picture). Optional: targetWidth, targetHeight, meta (object).",
       "args_schema": {
         "nodeId": "string",
-        "kind": "upscale|removeBg|eraser|editText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector",
+        "kind": "upscale|removeBg|eraser|editText|editElements|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector",
         "targetWidth": "number?",
         "targetHeight": "number?",
         "meta": "object?"

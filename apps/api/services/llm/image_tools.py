@@ -17,13 +17,14 @@ IMAGE_PROCESS_KINDS = frozenset(
         "multiAngle",
         "expand",
         "editText",
+        "editElements",
         "vector",
         "adjust",
     }
 )
 
 # Vision split / cutout — not Seedream re-render.
-DECOMPOSE_KINDS = frozenset({"editText"})
+DECOMPOSE_KINDS = frozenset({"editText", "editElements"})
 CUTOUT_KINDS = frozenset({"removeBg"})
 
 
@@ -82,7 +83,7 @@ def _prompt_for(
             f"Continue the scene naturally beyond the edges; match lighting, perspective, and style. "
             f"Do not distort the original subject."
         )
-    if kind == "editText":
+    if kind in ("editText", "editElements"):
         return "unused"
     if kind == "vector":
         return (
@@ -138,7 +139,8 @@ async def process_image_tool(
     Run a toolbar image tool.
 
     - ``removeBg`` → local rembg (GrabCut fallback) transparent PNG
-    - ``editText`` → vision OCR + inpaint
+    - ``editText`` → OCR text layers + inpainted background
+    - ``editElements`` → subjects + text layers + inpainted background
     - other kinds → Seedream image-to-image
 
     Returns ``{ image, layers?, text?, kind, model?, width?, height?, warnings? }``.
