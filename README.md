@@ -105,6 +105,12 @@ e2e/               Playwright
 
 Individuals can self-host for free. We plan to offer **hosted Cloud** and enterprise support later — the MIT core stays open (same shape as many OSS + Cloud products).
 
+## Star us on GitHub ⭐
+
+Open source takes time. If Recombyn helps your work, please hit **⭐ Star** in the top-right of the GitHub repo — your support is the best fuel for making it better.
+
+→ [https://github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+
 ---
 
 <p align="center">
