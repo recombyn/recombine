@@ -22,7 +22,7 @@
 HTTP  api/v1/*          薄路由
 业务  services/*        按域分包（design / plaza / wallet / …）
 种子  data/*.json       流程、字典、字体、官方案例 → DB（INSERT 缺失，不覆盖已有）
-运行  flow_runtime + agent_controller / orchestrator
+运行  design.runtime（agent_controller / orchestrator / flow_runtime）
 ```
 
 Design Agent 的可配置内容（默认图、节点模板、动作契约、字典、全局规则、**Skill**）以 `apps/api/data/` 为种子源；也可在运行后直接改数据库。Skill 支持 `core` / `ext` / `user` 命名空间、ACL 与版本 pin（见 [design_skills/README.md](../apps/api/data/design_skills/README.md)）。

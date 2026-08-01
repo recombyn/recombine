@@ -852,6 +852,7 @@ const zhCN = {
     contextMenu: {
       addToChat: '添加到 Chat',
       uploadImage: '上传图片',
+      uploadMedia: '上传图片/视频',
       undo: '撤销',
       redo: '重做',
       cut: '剪切',

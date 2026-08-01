@@ -858,6 +858,7 @@ const en = {
     contextMenu: {
       addToChat: 'Add to Chat',
       uploadImage: 'Upload image',
+      uploadMedia: 'Upload image/video',
       undo: 'Undo',
       redo: 'Redo',
       cut: 'Cut',

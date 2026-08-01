@@ -831,6 +831,7 @@ const zhTW = {
     contextMenu: {
       addToChat: '加入 Chat',
       uploadImage: '上傳圖片',
+      uploadMedia: '上傳圖片/影片',
       undo: '復原',
       redo: '重做',
       cut: '剪下',
@@ -870,6 +871,7 @@ const zhTW = {
       polygon: '多邊形',
       star: '星形',
       uploadImage: '圖片上傳',
+      uploadMedia: '上傳圖片/影片',
       imageGenerator: '圖像生成器',
       imageGenerating: '生成中',
       imageGenFail: '圖像生成失敗',
