@@ -933,14 +933,15 @@ function SvgCanvas({
   const queryNodeIdsInRect = useCallback(
     (box: { left: number; top: number; width: number; height: number }) => {
       const all = listNodeIds();
-      if (all.length < 48) return all;
+      // Always prefer spatial hits — returning every node on small docs made distant
+      // posters steal center-align guides; keep snaps to nearby / same-artboard targets.
       const hits = nodeSpatialIndex.search(
         box.left,
         box.top,
         box.left + box.width,
         box.top + box.height
       );
-      if (!hits.length) return all;
+      if (!hits.length) return [];
       const allow = new Set(hits.map((h) => h.id));
       // Keep document z-order.
       return all.filter((id) => allow.has(id));
