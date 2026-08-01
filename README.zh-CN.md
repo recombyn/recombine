@@ -90,6 +90,12 @@ e2e/               Playwright
 
 个人可免费自托管；后续计划提供 **Cloud 托管与企业服务**，核心保持 MIT 开源。
 
+## 帮忙点个 ⭐ Star
+
+开源不易，如果觉得 Recombyn 对您的工作还有帮助，请帮忙在 GitHub 仓库右上角点个 ⭐ Star。您的支持是让 Recombyn 变得更好最大的动力。
+
+→ [https://github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+
 ---
 
 <p align="center">
