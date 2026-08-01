@@ -31,6 +31,17 @@ _AES_W = 0.3
 _TOWER_HARD_RATIO = 0.92
 
 
+def _aes_pack(key: str, **variables: Any) -> str:
+    """Admin prompt pack → LangChain render. No hardcoded Chinese fallbacks."""
+    try:
+        from services.design.prompts.prompt_pack_store import render_prompt_body
+
+        return render_prompt_body(key, **variables).strip()
+    except Exception:
+        logger.debug("aesthetic pack miss key=%s", key, exc_info=True)
+        return ""
+
+
 def _load_threshold() -> float:
     try:
         from services.design.admin.admin_store import list_global_rules
@@ -94,46 +105,55 @@ def _gaps(
     threshold: float,
     nearest: dict[str, Any] | None,
 ) -> list[dict[str, str]]:
-    comment = (nearest or {}).get("comment") or ""
-    name = (nearest or {}).get("name") or f"#{(nearest or {}).get('id', '')}"
-    ref = f"对照优质样本「{name}」"
+    comment = str((nearest or {}).get("comment") or "").strip()
+    name = str(
+        (nearest or {}).get("name") or f"#{(nearest or {}).get('id', '')}"
+    ).strip()
     if comment:
-        ref = f"{ref}：{comment}"
+        ref = _aes_pack(
+            "agent.prompt.aesthetic_gap_ref_comment", name=name, comment=comment
+        )
+    else:
+        ref = _aes_pack("agent.prompt.aesthetic_gap_ref", name=name)
 
     gaps: list[dict[str, str]] = []
     tower_thresh = _tower_floor(threshold)
     if layout_sim < tower_thresh:
-        gaps.append(
-            {
-                "kind": "layout",
-                "detail": f"留白/层级未对齐参考（layout {layout_sim:.2f} < {tower_thresh:.2f}）",
-                "hint": f"{ref} — 强制对齐留白密度与信息层级（标题/正文档差）",
-            }
+        detail = _aes_pack(
+            "agent.prompt.aesthetic_gap_layout_detail",
+            layout_sim=f"{layout_sim:.2f}",
+            tower_thresh=f"{tower_thresh:.2f}",
         )
+        hint = _aes_pack("agent.prompt.aesthetic_gap_layout_hint", ref=ref)
+        if detail or hint:
+            gaps.append({"kind": "layout", "detail": detail, "hint": hint})
     if color_sim < tower_thresh:
-        gaps.append(
-            {
-                "kind": "color",
-                "detail": f"色数/色板未对齐参考（color {color_sim:.2f} < {tower_thresh:.2f}）",
-                "hint": f"{ref} — 收敛有效强调色（通常 ≤6），拉开文字与背景对比",
-            }
+        detail = _aes_pack(
+            "agent.prompt.aesthetic_gap_color_detail",
+            color_sim=f"{color_sim:.2f}",
+            tower_thresh=f"{tower_thresh:.2f}",
         )
+        hint = _aes_pack("agent.prompt.aesthetic_gap_color_hint", ref=ref)
+        if detail or hint:
+            gaps.append({"kind": "color", "detail": detail, "hint": hint})
     if aesthetic_sim < tower_thresh:
-        gaps.append(
-            {
-                "kind": "aesthetic",
-                "detail": f"整体工艺未对齐参考（aesthetic {aesthetic_sim:.2f} < {tower_thresh:.2f}）",
-                "hint": f"{ref} — 统一边距、对齐与视觉重心，勿线框/占位感",
-            }
+        detail = _aes_pack(
+            "agent.prompt.aesthetic_gap_aesthetic_detail",
+            aesthetic_sim=f"{aesthetic_sim:.2f}",
+            tower_thresh=f"{tower_thresh:.2f}",
         )
+        hint = _aes_pack("agent.prompt.aesthetic_gap_aesthetic_hint", ref=ref)
+        if detail or hint:
+            gaps.append({"kind": "aesthetic", "detail": detail, "hint": hint})
     if score < threshold and not gaps:
-        gaps.append(
-            {
-                "kind": "aesthetic",
-                "detail": f"整体美学分 {score:.2f} < 门禁 {threshold:.2f}",
-                "hint": ref or "对照优质参考图强制 refine：留白 / 层级 / 色数",
-            }
+        detail = _aes_pack(
+            "agent.prompt.aesthetic_gap_score_detail",
+            score=f"{score:.2f}",
+            threshold=f"{threshold:.2f}",
         )
+        hint = _aes_pack("agent.prompt.aesthetic_gap_score_hint", ref=ref or "")
+        if detail or hint:
+            gaps.append({"kind": "aesthetic", "detail": detail, "hint": hint})
     return gaps[:6]
 
 
@@ -495,27 +515,20 @@ def retrieve_aesthetic_refs(
     # Vision-first: CLIP ranks sample images; do NOT inject 短评/tags/DESIGN_TOKENS.
     # The next thought turn attaches imageUrls and the model should look at them.
     if has_user:
-        try:
-            from services.design.prompts.prompt_pack_store import resolve_prompt_body
-
-            user_hdr = resolve_prompt_body("agent.prompt.aesthetic_refs_user").strip()
-        except Exception:
-            user_hdr = ""
-        slim_lines = (
-            [ln for ln in user_hdr.splitlines() if ln.strip()]
-            if user_hdr
-            else [
-                "AESTHETIC_REFS（用户附件为主 — 请看图模仿用户风格）：",
-                "已跳过语料优秀/可用样本图（存在用户附件）。可选反例图仍附上时请避开其失败模式。",
-                "以附图视觉为准。",
-            ]
-        )
+        user_hdr = _aes_pack("agent.prompt.aesthetic_refs_user")
+        slim_lines = [ln for ln in user_hdr.splitlines() if ln.strip()]
         if bad_refs:
             for i, r in enumerate(bad_refs, start=1):
                 name = (r.get("name") or f"#{r.get('id')}")[:80]
-                slim_lines.append(f"{i}. [bad] {name} — 见附图，避开")
+                line = _aes_pack(
+                    "agent.prompt.aesthetic_refs_bad_item", i=i, name=name
+                )
+                if line:
+                    slim_lines.append(line)
         else:
-            slim_lines.append("（本场景暂无反例样本）")
+            empty_bad = _aes_pack("agent.prompt.aesthetic_refs_empty_bad_user")
+            if empty_bad:
+                slim_lines.append(empty_bad)
         ladder = "\n".join(slim_lines)
     else:
         ladder = format_aesthetic_refs_block(
@@ -569,65 +582,53 @@ def format_aesthetic_refs_block(
             out_lines.append(" | ".join(bits))
             if include_vision_hint:
                 url = (r.get("imageUrl") or "").strip()
-                if url:
-                    out_lines.append(f"   已附图 — 请看图并{verb}（配色/疏密/层级/装饰）")
-                else:
-                    out_lines.append(f"   （无图）仅作等级标记 — {verb}")
+                hint_key = (
+                    "agent.prompt.aesthetic_refs_vision_hint"
+                    if url
+                    else "agent.prompt.aesthetic_refs_no_image_hint"
+                )
+                hint = _aes_pack(hint_key, verb=verb)
+                if hint:
+                    out_lines.append(hint)
         return out_lines
 
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
-
-        corpus_hdr = resolve_prompt_body("agent.prompt.aesthetic_refs_corpus").strip()
-    except Exception:
-        corpus_hdr = ""
-    lines = (
-        [ln for ln in corpus_hdr.splitlines() if ln.strip()]
-        if corpus_hdr
-        else [
-            "AESTHETIC_REFS（向量检索样本图 — 请看附图）：",
-            "优秀→模仿并达到其水准；可用→超越；反例→避开失败模式。勿逐字抄样本文案。",
-        ]
-    )
+    corpus_hdr = _aes_pack("agent.prompt.aesthetic_refs_corpus")
+    lines = [ln for ln in corpus_hdr.splitlines() if ln.strip()]
     if not matched_by_clip:
-        lines.append("（按时间排序；CLIP 向量匹配不可用）")
+        clip_fb = _aes_pack("agent.prompt.aesthetic_refs_clip_fallback")
+        if clip_fb:
+            lines.append(clip_fb)
+
+    verb_good = _aes_pack("agent.prompt.aesthetic_refs_verb_imitate")
+    verb_ok = _aes_pack("agent.prompt.aesthetic_refs_verb_surpass")
+    verb_bad = _aes_pack("agent.prompt.aesthetic_refs_verb_avoid")
 
     if goods:
-        lines.extend(
-            [
-                "",
-                "优秀（grade=good — 看图模仿；目标水准）：",
-            ]
-        )
-        lines.extend(_lines_for(goods, verb="模仿"))
+        sec = _aes_pack("agent.prompt.aesthetic_refs_section_good")
+        lines.extend(["", sec] if sec else [""])
+        lines.extend(_lines_for(goods, verb=verb_good))
 
     if mids:
-        lines.extend(
-            [
-                "",
-                "可用（grade=ok — 看图了解基线，请明显超越）：",
-            ]
-        )
-        lines.extend(_lines_for(mids, verb="超越"))
+        sec = _aes_pack("agent.prompt.aesthetic_refs_section_ok")
+        lines.extend(["", sec] if sec else [""])
+        lines.extend(_lines_for(mids, verb=verb_ok))
     elif goods or bads:
-        lines.append("（本场景暂无可用 grade=ok 样本）")
+        empty_ok = _aes_pack("agent.prompt.aesthetic_refs_empty_ok")
+        if empty_ok:
+            lines.append(empty_ok)
 
     if bads:
-        lines.extend(
-            [
-                "",
-                "反例（grade=bad — 看图避开这些失败模式）：",
-            ]
-        )
-        lines.extend(_lines_for(bads, verb="避开"))
+        sec = _aes_pack("agent.prompt.aesthetic_refs_section_bad")
+        lines.extend(["", sec] if sec else [""])
+        lines.extend(_lines_for(bads, verb=verb_bad))
     elif goods or mids:
-        lines.append(
-            "（本场景暂无反例 grade=bad 样本 — 仍请超越「可用」朝「优秀」）"
-        )
+        empty_bad = _aes_pack("agent.prompt.aesthetic_refs_empty_bad")
+        if empty_bad:
+            lines.append(empty_bad)
 
-    lines.append(
-        "根据附图写出具体配色与疏密到 tool_ops；将 need_aesthetics 设为 false。"
-    )
+    footer = _aes_pack("agent.prompt.aesthetic_refs_footer")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -657,30 +658,12 @@ def format_aesthetics_catalog(*, scene: str = "website") -> str:
                 counts[g] = int(r["c"] or 0)
     except Exception:
         logger.exception("aesthetics catalog count failed scene=%s", sc)
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
-
-        tmpl = resolve_prompt_body("agent.prompt.aesthetic_catalog").strip()
-    except Exception:
-        tmpl = ""
-    if tmpl:
-        try:
-            return tmpl.format(
-                scene=sc,
-                good=counts["good"],
-                ok=counts["ok"],
-                bad=counts["bad"],
-            )
-        except Exception:
-            pass
-    return (
-        f"美学样本库（场景={sc}）："
-        f"优秀≈{counts['good']}，可用≈{counts['ok']}，反例≈{counts['bad']}。\n"
-        "设 need_aesthetics=true：CLIP 向量检索样本图并附图，请看图"
-        "（模仿优秀 / 超越可用 / 避开反例）。\n"
-        "当用户附带图片时：仅当 USER_PROMPT 要求匹配/模仿该图风格/配色/布局时，"
-        "才设 use_user_refs=true；若附件仅为内容素材、占位，或用户拒绝风格参考"
-        "（如「不要参考这张图」）则 false。"
+    return _aes_pack(
+        "agent.prompt.aesthetic_catalog",
+        scene=sc,
+        good=counts["good"],
+        ok=counts["ok"],
+        bad=counts["bad"],
     )
 
 
