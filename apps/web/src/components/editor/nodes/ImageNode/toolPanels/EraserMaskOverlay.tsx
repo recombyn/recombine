@@ -1,9 +1,19 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type ReactNode, memo } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  memo,
+} from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
   rcbSceneToScreen,
 } from '@/components/rcb';
+import { imageSrcToFile } from '@/utils/uploadImage';
 
 /**
  * Opaque mask fill — preview opacity is applied via CSS on the canvas so
@@ -11,12 +21,14 @@ import {
  */
 const MASK_FILL = '#9333EA';
 const PREVIEW_OPACITY = 0.38;
+/** Soft cap — getImageData + toDataURL on huge plates OOMs in Chromium. */
+const MAX_ERASE_EDGE = 8192;
 
 export type EraserMaskOverlayHandle = {
   clear: () => void;
   hasStrokes: () => boolean;
   /** Erase painted regions from `src` → PNG data URL. */
-  applyErase: (src: string) => Promise<string>;
+  applyErase: (src: string, opts?: { uploadKey?: string | null }) => Promise<string>;
 };
 
 type Props = {
@@ -26,7 +38,7 @@ type Props = {
   onDirtyChange?: (dirty: boolean) => void;
 };
 
-function loadImage(src: string): Promise<HTMLImageElement> {
+function loadImageFromUrl(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     if (!src) {
       reject(new Error('empty image src'));
@@ -34,9 +46,27 @@ function loadImage(src: string): Promise<HTMLImageElement> {
     }
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('image load failed'));
+    img.onerror = () => reject(new Error('图片加载失败'));
     img.src = src;
   });
+}
+
+/** Fetch via auth/upload pipeline so canvas is not CORS-tainted. */
+async function loadImageForErase(
+  src: string,
+  uploadKey?: string | null
+): Promise<HTMLImageElement> {
+  const s = (src || '').trim();
+  if (s.startsWith('data:') || s.startsWith('blob:')) {
+    return loadImageFromUrl(s);
+  }
+  const file = await imageSrcToFile(s, 'erase-src.png', { uploadKey });
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    return await loadImageFromUrl(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 /**
@@ -54,10 +84,13 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
     onDirtyRef.current = onDirtyChange;
     const brushRef = useRef(brushSize);
     brushRef.current = brushSize;
+    /** Tip center in stage (screen) px relative to the image overlay. */
+    const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
 
     const origin = rcbSceneToScreen(camera, imageBox.left, imageBox.top);
     const stageW = Math.max(1, imageBox.width * z);
     const stageH = Math.max(1, imageBox.height * z);
+    const tipDiameter = Math.max(6, brushSize * z);
 
     const markDirty = () => {
       if (dirtyRef.current) return;
@@ -80,12 +113,15 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
       () => ({
         clear,
         hasStrokes: () => dirtyRef.current,
-        applyErase: async (src: string) => {
+        applyErase: async (src: string, opts?: { uploadKey?: string | null }) => {
           const maskEl = canvasRef.current;
           if (!maskEl || !dirtyRef.current) return src;
-          const img = await loadImage(src);
+          const img = await loadImageForErase(src, opts?.uploadKey);
           const nw = Math.max(1, img.naturalWidth || img.width || 1);
           const nh = Math.max(1, img.naturalHeight || img.height || 1);
+          if (nw > MAX_ERASE_EDGE || nh > MAX_ERASE_EDGE) {
+            throw new Error(`图片过大（>${MAX_ERASE_EDGE}px），请先缩小后再擦`);
+          }
 
           const out = document.createElement('canvas');
           out.width = nw;
@@ -117,7 +153,11 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
 
           ctx.globalCompositeOperation = 'destination-out';
           ctx.drawImage(hard, 0, 0);
-          return out.toDataURL('image/png');
+          try {
+            return out.toDataURL('image/png');
+          } catch {
+            throw new Error('无法导出擦除结果（图片跨域或内存不足）');
+          }
         },
       }),
       []
@@ -153,6 +193,13 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
       return {
         x: ((clientX - rect.left) / rect.width) * canvas.width,
         y: ((clientY - rect.top) / rect.height) * canvas.height,
+        stageX: clientX - rect.left,
+        stageY: clientY - rect.top,
+        inside:
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom,
       };
     };
 
@@ -185,11 +232,16 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
 
     useEffect(() => {
       const onMove = (e: PointerEvent) => {
-        if (!paintingRef.current) return;
         const p = localFromClient(e.clientX, e.clientY);
-        if (!p) return;
+        if (!p) {
+          setTip(null);
+          return;
+        }
+        if (p.inside || paintingRef.current) setTip({ x: p.stageX, y: p.stageY });
+        else setTip(null);
+        if (!paintingRef.current) return;
         strokeTo(p.x, p.y, lastRef.current);
-        lastRef.current = p;
+        lastRef.current = { x: p.x, y: p.y };
       };
       const onUp = () => {
         paintingRef.current = false;
@@ -212,10 +264,28 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
       width: stageW,
       height: stageH,
       zIndex: 34,
-      cursor: 'crosshair',
+      cursor: 'none',
       touchAction: 'none',
       opacity: PREVIEW_OPACITY,
     };
+
+    const tipStyle: CSSProperties | undefined = tip
+      ? {
+          position: 'absolute',
+          left: origin.x + tip.x,
+          top: origin.y + tip.y,
+          width: tipDiameter,
+          height: tipDiameter,
+          marginLeft: -tipDiameter / 2,
+          marginTop: -tipDiameter / 2,
+          zIndex: 35,
+          borderRadius: '50%',
+          background: 'rgba(147, 51, 234, 0.35)',
+          border: '1.5px solid rgba(88, 28, 135, 0.9)',
+          boxSizing: 'border-box',
+          pointerEvents: 'none',
+        }
+      : undefined;
 
     return (
       <RcbOverlayPortal>
@@ -232,12 +302,17 @@ const EraserMaskOverlay = forwardRef<EraserMaskOverlayHandle, Props>(
             e.nativeEvent.stopImmediatePropagation?.();
             const p = localFromClient(e.clientX, e.clientY);
             if (!p) return;
+            setTip({ x: p.stageX, y: p.stageY });
             paintingRef.current = true;
-            lastRef.current = p;
+            lastRef.current = { x: p.x, y: p.y };
             strokeTo(p.x, p.y, null);
             (e.target as HTMLCanvasElement).setPointerCapture?.(e.pointerId);
           }}
+          onPointerLeave={() => {
+            if (!paintingRef.current) setTip(null);
+          }}
         />
+        {tip && tipStyle ? <div aria-hidden data-image-tool-panel style={tipStyle} /> : null}
       </RcbOverlayPortal>
     );
   }

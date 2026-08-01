@@ -6,7 +6,7 @@ import {
   type ResizeHandle,
   type SceneBox,
 } from '@/components/rcb/selection/resizeGeometry';
-import { bridgeSceneHitTest } from '@/components/rcb/scene/sceneHitBridge';
+import { bridgeSceneHitTest } from '@/components/rcb/scene/document/sceneHitBridge';
 
 /** `dragDistanceSquared` default. */
 const DRAG_DISTANCE_SQUARED = 16;
@@ -103,7 +103,7 @@ type DragState =
       pointerX0: number;
       pointerY0: number;
       aspectRatio: number;
-      /** Persisted aspect lock at pointer-down (Shift inverts while dragging). */
+      /** Persisted aspect lock at pointer-down (Shift OR's with lock while dragging). */
       aspectLocked: boolean;
       started: boolean;
     }
@@ -247,7 +247,8 @@ function FrameMoveFeature({
         onMoveStart?.();
         onDraggingChangeRef.current?.(drag.id);
       }
-      const lockAspect = e.shiftKey ? !drag.aspectLocked : drag.aspectLocked;
+      // Lock UI OR Shift — Shift reinforces ratio; never unlocks when chain is on.
+      const lockAspect = drag.aspectLocked || e.shiftKey;
       const next = resizeFromHandle(drag.union, drag.handle, dx, dy, 0, {
         lockAspect,
         aspectRatio: drag.aspectRatio,

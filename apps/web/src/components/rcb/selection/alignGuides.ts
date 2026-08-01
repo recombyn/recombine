@@ -4,9 +4,9 @@ import {
   inflateBoxByTextSelectionPad,
   strokeBandGuideBoxes,
   type StrokeBandFace,
-} from '@/components/rcb/scene/sceneEffects';
-import { isNodeHidden } from '@/components/rcb/scene/sceneDocument';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+} from '@/components/rcb/scene/document/sceneEffects';
+import { isNodeHidden } from '@/components/rcb/scene/document/sceneDocument';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { applyAspectToHandle } from './resizeGeometry';
 
 /**

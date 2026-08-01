@@ -1,7 +1,7 @@
 import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import { RcbOverlayPortal, useRcbCamera } from '../camera/context';
 import { rcbSceneToScreen } from '../core/math';
-import NodeTitleLabel from '../selection/NodeTitleLabel';
+import NodeTitleLabel from '../selection/chrome/NodeTitleLabel';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 
 type HtmlArtboardFrameProps = {

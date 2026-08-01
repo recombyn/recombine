@@ -34,11 +34,11 @@ import {
   type ExportAffixMode,
   type ExportImageFormat,
   type ExportSlotConfig,
-} from '@/components/rcb/scene/exportImage';
-import { normalizeDocument } from '@/components/rcb/scene/sceneDocument';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+} from '@/components/rcb/scene/paint/exportImage';
+import { normalizeDocument } from '@/components/rcb/scene/document/sceneDocument';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { cn } from '@/utils/classnames';
-import { SEL_ICON_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
+import { SEL_ICON_BTN } from '@/components/rcb/selection/chrome/ToolbarValueSlider';
 
 const SCALE_OPTIONS = [
   { value: 0.5, label: '0.5x' },

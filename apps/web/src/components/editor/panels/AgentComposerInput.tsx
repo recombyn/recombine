@@ -1,13 +1,13 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, memo } from 'react';
 import { cn } from '@/utils/classnames';
-import { parseNodeText } from '@/components/rcb/scene/sceneText';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { parseNodeText } from '@/components/rcb/scene/document/sceneText';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   frameIdContainingNode,
   buildSceneNodesForEdit,
   buildSceneNodesForIds,
 } from '@/components/editor/panels/agent/runDesignAgent';
-import { renderComposerChipThumb, renderExport } from '@/components/rcb/scene/exportImage';
+import { renderComposerChipThumb, renderExport } from '@/components/rcb/scene/paint/exportImage';
 import { imageSrcToFile } from '@/utils/uploadImage';
 
 

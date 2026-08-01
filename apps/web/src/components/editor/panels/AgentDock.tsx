@@ -76,7 +76,7 @@ import {
   buildSpatialSummary,
   type AgentStepEvent,
 } from '@/components/editor/panels/agent/runDesignAgent';
-import { canAttachNodeToChat, captureVideoPosterFrame } from '@/components/rcb/scene/sceneDocument';
+import { canAttachNodeToChat, captureVideoPosterFrame } from '@/components/rcb/scene/document/sceneDocument';
 import {
   applyClientFrameHints,
   applyMemoryPatch,

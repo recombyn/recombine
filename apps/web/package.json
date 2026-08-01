@@ -44,7 +44,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:stress": "vitest run src/components/rcb/scene/__tests__/canvasStress.bench.test.ts"
   },
   "devDependencies": {
     "@testing-library/user-event": "^14.6.1",

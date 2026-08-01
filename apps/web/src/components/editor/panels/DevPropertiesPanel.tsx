@@ -7,13 +7,13 @@ import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import { ExportSelectionPanel } from '@/components/editor/panels/ExportSelectionPanel';
 import { cn } from '@/utils/classnames';
-import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
+import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import {
   resolveFillColor,
   resolveShadow,
   resolveStroke,
-} from '@/components/rcb/scene/sceneEffects';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+} from '@/components/rcb/scene/document/sceneEffects';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
 function formatPx(n: number) {
   const r = Math.round(n * 100) / 100;

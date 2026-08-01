@@ -4,8 +4,17 @@ import Slider from '@/components/base/slider';
 import { StylePanelShell } from '@/components/editor/panels/StylePanelChrome';
 import { cn } from '@/utils/classnames';
 import { useTranslation } from 'react-i18next';
+import { MAX_EDITABLE_CORNER_VERTICES } from '@/components/rcb/scene/document/sceneRadii';
 
-export type CornerRadiiValue = { tl: number; tr: number; br: number; bl: number; linked: boolean };
+export type CornerRadiiValue = {
+  tl: number;
+  tr: number;
+  br: number;
+  bl: number;
+  linked: boolean;
+  /** Per-vertex radii when the shape has ≠4 corners. */
+  vertices?: number[];
+};
 
 function CornerGlyph({
   corner,
@@ -55,9 +64,28 @@ function IconUnlink({ className }: { className?: string }) {
   );
 }
 
+function ensureVertices(value: CornerRadiiValue, count: number): number[] {
+  const fromVal = value.vertices;
+  if (fromVal && fromVal.length === count) {
+    return fromVal.map((v) => Math.max(0, Math.round(v || 0)));
+  }
+  if (fromVal && fromVal.length) {
+    return Array.from({ length: count }, (_, i) =>
+      Math.max(0, Math.round(fromVal[i] ?? fromVal[fromVal.length - 1] ?? 0))
+    );
+  }
+  if (count === 4) {
+    return [value.tl, value.tr, value.br, value.bl].map((v) =>
+      Math.max(0, Math.round(v || 0))
+    );
+  }
+  const u = Math.round((value.tl + value.tr + value.br + value.bl) / 4) || value.tl || 0;
+  return Array.from({ length: count }, () => u);
+}
+
 /**
  * Dedicated corner-radius panel (not nested under stroke).
- * Uniform slider when linked; 4 independent inputs when unlinked.
+ * Rect: 4 corner inputs. Multi-corner path/polygon: one control per vertex.
  */
 function CornerRadiusPanel({
   value,
@@ -65,6 +93,7 @@ function CornerRadiusPanel({
   title = '圆角',
   onClose,
   max = 999,
+  vertexCount = 4,
   className,
 }: {
   value: CornerRadiiValue;
@@ -72,24 +101,59 @@ function CornerRadiusPanel({
   title?: string;
   onClose?: () => void;
   max?: number;
+  /** Fillet-able corners on the selected shape (4 for rect). */
+  vertexCount?: number;
   className?: string;
 }) {
   const { t } = useTranslation();
   const clamp = (n: number) => Math.max(0, Math.min(max, Math.round(Number.isFinite(n) ? n : 0)));
-  const uniform = Math.round((value.tl + value.tr + value.br + value.bl) / 4) || value.tl || 0;
+  const n = Math.max(3, Math.round(vertexCount) || 4);
+  const multi = n !== 4;
+  const editablePerVertex = multi && n <= MAX_EDITABLE_CORNER_VERTICES;
+  const vertices = ensureVertices(value, n);
+  const uniform =
+    Math.round(vertices.reduce((a, b) => a + b, 0) / Math.max(1, vertices.length)) ||
+    value.tl ||
+    0;
 
-  const setUniform = (n: number) => {
-    const v = clamp(n);
-    onChange({ tl: v, tr: v, br: v, bl: v, linked: true });
+  const emit = (next: { linked: boolean; vertices: number[] }) => {
+    const vs = next.vertices.map(clamp);
+    onChange({
+      tl: vs[0] ?? 0,
+      tr: vs[1] ?? vs[0] ?? 0,
+      br: vs[2] ?? vs[0] ?? 0,
+      bl: vs[3] ?? vs[0] ?? 0,
+      linked: next.linked,
+      vertices: vs,
+    });
   };
 
-  const setCorner = (key: keyof Omit<CornerRadiiValue, 'linked'>, raw: number) => {
+  const setUniform = (raw: number) => {
+    const v = clamp(raw);
+    emit({ linked: true, vertices: Array.from({ length: n }, () => v) });
+  };
+
+  const setCorner = (key: 'tl' | 'tr' | 'br' | 'bl', raw: number) => {
     const v = clamp(raw);
     if (value.linked) {
-      onChange({ tl: v, tr: v, br: v, bl: v, linked: true });
+      setUniform(v);
       return;
     }
-    onChange({ ...value, [key]: v });
+    const idx = key === 'tl' ? 0 : key === 'tr' ? 1 : key === 'br' ? 2 : 3;
+    const vs = ensureVertices(value, 4).slice();
+    vs[idx] = v;
+    emit({ linked: false, vertices: vs });
+  };
+
+  const setVertex = (index: number, raw: number) => {
+    const v = clamp(raw);
+    if (value.linked) {
+      setUniform(v);
+      return;
+    }
+    const vs = vertices.slice();
+    vs[index] = v;
+    emit({ linked: false, vertices: vs });
   };
 
   const cells: Array<{ key: 'tl' | 'tr' | 'bl' | 'br'; tip: string; iconEnd?: boolean }> = [
@@ -98,6 +162,14 @@ function CornerRadiusPanel({
     { key: 'bl', tip: t('editor.cornerRadiusBL'), iconEnd: true },
     { key: 'br', tip: t('editor.cornerRadiusBR') },
   ];
+
+  const linkLabel = value.linked
+    ? multi
+      ? t('editor.cornerRadiusUnlockAll', { defaultValue: '解锁各角' })
+      : t('editor.cornerRadiusUnlock', { defaultValue: '解锁四角' })
+    : multi
+      ? t('editor.cornerRadiusLockAll', { defaultValue: '锁定各角' })
+      : t('editor.cornerRadiusLock', { defaultValue: '锁定四角' });
 
   return (
     <StylePanelShell
@@ -130,60 +202,107 @@ function CornerRadiusPanel({
             INPUT_NO_SPIN
           )}
         />
-        <button
-          type="button"
-          aria-label={value.linked ? '解锁四角' : '锁定四角'}
-          aria-pressed={value.linked}
-          title={value.linked ? '解锁四角' : '锁定四角'}
-          className={cn(
-            'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl transition-colors',
-            value.linked
-              ? 'bg-[var(--surface)] text-[var(--accent)] ring-1 ring-[var(--line)]'
-              : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
-          )}
-          onClick={() => {
-            if (!value.linked) {
-              setUniform(uniform);
-              return;
-            }
-            onChange({ ...value, linked: false });
-          }}
-        >
-          {value.linked ? (
-            <IconLink className="h-4 w-4" />
-          ) : (
-            <IconUnlink className="h-4 w-4" />
-          )}
-        </button>
+        {editablePerVertex || !multi ? (
+          <button
+            type="button"
+            aria-label={linkLabel}
+            aria-pressed={value.linked}
+            title={linkLabel}
+            className={cn(
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl transition-colors',
+              value.linked
+                ? 'bg-[var(--surface)] text-[var(--accent)] ring-1 ring-[var(--line)]'
+                : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
+            )}
+            onClick={() => {
+              if (!value.linked) {
+                setUniform(uniform);
+                return;
+              }
+              emit({ linked: false, vertices });
+            }}
+          >
+            {value.linked ? (
+              <IconLink className="h-4 w-4" />
+            ) : (
+              <IconUnlink className="h-4 w-4" />
+            )}
+          </button>
+        ) : null}
       </div>
 
-      <div className="grid w-full grid-cols-2 gap-1.5">
-        {cells.map(({ key, tip, iconEnd }) => (
-          <label
-            key={key}
-            title={tip}
-            className={cn(
-              'flex h-8 min-w-0 items-center gap-1 rounded-xl bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]',
-              iconEnd ? 'justify-between' : 'flex-row-reverse justify-between'
-            )}
-          >
-            <input
-              type="number"
-              min={0}
-              max={max}
-              aria-label={tip}
-              value={Math.round(value[key] || 0)}
-              onChange={(e) => setCorner(key, Number(e.target.value))}
+      {multi && !editablePerVertex ? (
+        <div className="text-[11px] text-[var(--muted)]">
+          {n} {t('editor.cornerRadiusVertexCount', { defaultValue: '个角' })}
+          {` · ${t('editor.cornerRadiusUniformOnly', { defaultValue: '顶点较多，仅支持统一圆角' })}`}
+        </div>
+      ) : null}
+
+      {/* Rect: always show 4 corners (link = edit-one-updates-all). */}
+      {!multi ? (
+        <div className="grid w-full grid-cols-2 gap-1.5">
+          {cells.map(({ key, tip, iconEnd }) => (
+            <label
+              key={key}
+              title={tip}
               className={cn(
-                'min-w-0 flex-1 bg-transparent text-[12px] tabular-nums outline-none',
-                iconEnd ? 'text-left' : 'text-right',
-                INPUT_NO_SPIN
+                'flex h-8 min-w-0 items-center gap-1 rounded-xl bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]',
+                iconEnd ? 'justify-between' : 'flex-row-reverse justify-between'
               )}
-            />
-            <CornerGlyph corner={key} className="h-4 w-4 shrink-0 text-[var(--muted)]" />
-          </label>
-        ))}
-      </div>
+            >
+              <input
+                type="number"
+                min={0}
+                max={max}
+                aria-label={tip}
+                value={Math.round(value[key] || 0)}
+                onChange={(e) => setCorner(key, Number(e.target.value))}
+                className={cn(
+                  'min-w-0 flex-1 bg-transparent text-[12px] tabular-nums outline-none',
+                  iconEnd ? 'text-left' : 'text-right',
+                  INPUT_NO_SPIN
+                )}
+              />
+              <CornerGlyph corner={key} className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+            </label>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Multi-corner path/polygon: always list each vertex (same as rect). */}
+      {editablePerVertex ? (
+        <div className="grid max-h-48 w-full grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
+          {vertices.map((v, i) => {
+            const tip = t('editor.cornerRadiusVertex', {
+              defaultValue: '角 {{n}}',
+              n: i + 1,
+            });
+            return (
+              <label
+                key={`v-${i}`}
+                title={tip}
+                className="flex h-8 min-w-0 items-center gap-1.5 rounded-xl bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]"
+              >
+                <span className="w-5 shrink-0 tabular-nums text-[11px] text-[var(--muted)]">
+                  {i + 1}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={max}
+                  aria-label={tip}
+                  value={Math.round(v || 0)}
+                  onChange={(e) => setVertex(i, Number(e.target.value))}
+                  className={cn(
+                    'min-w-0 flex-1 bg-transparent text-left text-[12px] tabular-nums outline-none',
+                    INPUT_NO_SPIN
+                  )}
+                />
+              </label>
+            );
+          })}
+        </div>
+      ) : null}
     </StylePanelShell>
   );
 }

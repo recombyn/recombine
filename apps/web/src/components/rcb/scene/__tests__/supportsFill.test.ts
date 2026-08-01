@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { supportsFill } from '@/components/rcb/scene/sceneDocument';
+import { supportsFill } from '@/components/rcb/scene/document/sceneDocument';
 
 describe('supportsFill', () => {
   it('is true for closed boolean path results', () => {

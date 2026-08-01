@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 import { rcbViewportSceneBounds, type RcbCamera } from '@/components/rcb';
-import { listSceneNodes } from '@/components/rcb/scene/sceneDocument';
-import { resolveFillColor, resolveStroke } from '@/components/rcb/scene/sceneEffects';
-import { parseNodeTextStyle } from '@/components/rcb/scene/sceneText';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { listSceneNodes } from '@/components/rcb/scene/document/sceneDocument';
+import { resolveFillColor, resolveStroke } from '@/components/rcb/scene/document/sceneEffects';
+import { parseNodeTextStyle } from '@/components/rcb/scene/document/sceneText';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
 type Box = { x: number; y: number; width: number; height: number };
 

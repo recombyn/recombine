@@ -1,6 +1,6 @@
 # 架构
 
-## Monorepo 布局
+## 仓库结构
 
 | 目录 | 职责 |
 |------|------|
@@ -11,6 +11,10 @@
 | `packages/scene-builder-py` | 解析块 → Scene JSON |
 
 后端细节见 [apps/api/README.md](../apps/api/README.md)。
+
+## Web 画布
+
+混排约 **5k** 节点日常编辑流畅（Chromium 平移中位约 **17ms**）；矩形向可到约 **10k**；超重 path 建议单场景约 **1k–2k**。靠视口裁剪 + LOD、空间索引命中、写时复制历史实现。复测：`npm run test:stress --workspace=apps/web`。
 
 ## 后端分层
 
@@ -27,20 +31,11 @@ Design Agent 的可配置内容（默认图、节点模板、动作契约、字�
 
 ## 导入数据流
 
-产品路径：
-
 ```
 Image -> OpenCV + OCR/布局 ──> scene_builder ──> Scene JSON ──> Web
 ```
 
-遗留（非产品保证）：
-
-```
-PDF ──> pdfplumber / 页图+OCR ──────────────┐
-DOCX -> LibreOffice -> PDF ──────────────────┤──> scene_builder
-```
-
-异步任务：Redis + Celery（`POST /api/v1/import/jobs`，产品侧用 `source_type=image`）。
+异步任务：Redis + Celery（`POST /api/v1/import/jobs`，`source_type=image`）。
 
 ## 部署
 
