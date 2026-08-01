@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -27,6 +28,25 @@ _log = logging.getLogger("design.run_api")
 # Also drives user-visible Thought-row heartbeats while the model is silent.
 _SSE_HEARTBEAT_SEC = 8.0
 
+_DESIGN_ARM_STAGES = frozenset(
+    {
+        "lookup",
+        "validate",
+        "ops",
+        "scene_check",
+        "critic",
+        "refine",
+        "scene",
+        "failed",
+    }
+)
+_EARLY_EXPLORE_STAGES = frozenset(
+    {"prompt", "prepare", "model_wait", "model_stream"}
+)
+_PAINT_EVENT_TYPES = frozenset({"tool_ops", "svg_delta", "drawing"})
+_PAINT_ACTIVITY_KINDS = frozenset({"tool", "added", "updated", "deleted"})
+_TERMINAL_STAGES = frozenset({"done", "failed"})
+
 
 def _bearer(authorization: str | None) -> str | None:
     if not authorization:
@@ -42,6 +62,188 @@ def _require_user(authorization: str | None):
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return user
+
+
+def _sse_data(obj: dict[str, Any]) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+@dataclass
+class _PipelineSseState:
+    """Mutable Explored-pipeline bookkeeping for one /run SSE stream."""
+
+    current_stage: str | None = None
+    pipeline_armed: bool = False
+    saw_paint: bool = False
+    chat_divert: bool = False
+    result_failed: bool = False
+    out_n: int = 0
+    t0: float = field(default_factory=time.time)
+
+    def arm(self, stage: str | None = "prepare") -> None:
+        if self.chat_divert or self.pipeline_armed:
+            return
+        self.pipeline_armed = True
+        self.current_stage = stage or "prepare"
+
+    def mark_chat_divert(self) -> None:
+        self.chat_divert = True
+        self.current_stage = "done"
+
+    def terminal_stage_event(self) -> dict[str, Any] | None:
+        from services.design.runtime.progress_stages import thought_stage_event
+
+        if not self.pipeline_armed or self.chat_divert:
+            return None
+        if self.current_stage in _TERMINAL_STAGES:
+            return None
+        if self.result_failed:
+            return thought_stage_event("failed", status="error")
+        return thought_stage_event("done", status="done")
+
+    def heartbeat_stage_event(self) -> dict[str, Any] | None:
+        from services.design.runtime.progress_stages import thought_stage_event
+
+        if not self.pipeline_armed or self.chat_divert or self.saw_paint:
+            return None
+        if not self.current_stage or self.current_stage in _TERMINAL_STAGES:
+            return None
+        elapsed = int(time.time() - self.t0)
+        return thought_stage_event(self.current_stage, elapsed_s=elapsed)
+
+
+def _should_chat_divert(payload: dict[str, Any]) -> bool:
+    et = str(payload.get("type") or "")
+    if et == "chat_done":
+        return True
+    if et == "result":
+        if str(payload.get("status") or "") == "error":
+            return False
+        return str(payload.get("intent") or "") == "chat"
+    if et != "decision":
+        return False
+    return (
+        payload.get("is_chitchat") is True
+        or str(payload.get("route") or "") == "chitchat"
+        or str(payload.get("intent") or "") == "chat"
+    )
+
+
+def _arm_stage_from_activity(payload: dict[str, Any]) -> str | None:
+    kind = str(payload.get("kind") or "")
+    stage = str(payload.get("stage") or "").strip()
+    if kind in _PAINT_ACTIVITY_KINDS:
+        return "ops"
+    if stage in _DESIGN_ARM_STAGES:
+        return stage
+    if kind == "explored" and stage and stage not in _EARLY_EXPLORE_STAGES:
+        return stage
+    return None
+
+
+def _maybe_arm_pipeline(state: _PipelineSseState, payload: dict[str, Any]) -> None:
+    if state.chat_divert:
+        return
+    et = str(payload.get("type") or "")
+    if et in _PAINT_EVENT_TYPES:
+        state.arm("ops")
+        return
+    if et != "activity":
+        return
+    stage = _arm_stage_from_activity(payload)
+    if stage:
+        state.arm(stage)
+
+
+def _is_paint_signal(payload: dict[str, Any]) -> bool:
+    et = str(payload.get("type") or "")
+    if et in _PAINT_EVENT_TYPES or et == "result":
+        return True
+    if et != "activity":
+        return False
+    return str(payload.get("kind") or "") in _PAINT_ACTIVITY_KINDS
+
+
+def _stage_advance_events(
+    state: _PipelineSseState, payload: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Advance Explored stage and return any stage SSE frames to emit."""
+    from services.design.runtime.progress_stages import (
+        maybe_advance_stage,
+        stage_for_event,
+        thought_stage_event,
+    )
+
+    if not state.pipeline_armed or state.chat_divert:
+        return []
+    nxt = stage_for_event(payload)
+    advanced = maybe_advance_stage(state.current_stage, nxt)
+    if not advanced or advanced == state.current_stage:
+        return []
+    state.current_stage = advanced
+    elapsed = int(time.time() - state.t0)
+    if advanced == "done":
+        if state.result_failed:
+            state.current_stage = "failed"
+            return [thought_stage_event("failed", status="error")]
+        return [thought_stage_event("done", status="done")]
+    if not state.saw_paint or advanced in ("ops", "refine"):
+        return [thought_stage_event(advanced, elapsed_s=elapsed)]
+    return []
+
+
+def _result_terminal_event(
+    state: _PipelineSseState,
+) -> dict[str, Any] | None:
+    from services.design.runtime.progress_stages import thought_stage_event
+
+    if not state.pipeline_armed or state.current_stage in _TERMINAL_STAGES:
+        return None
+    if state.result_failed:
+        state.current_stage = "failed"
+        return thought_stage_event("failed", status="error")
+    state.current_stage = "done"
+    return None
+
+
+def _pipeline_side_effects(
+    state: _PipelineSseState, payload: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Update pipeline state for one agent event; return extra stage frames."""
+    extra: list[dict[str, Any]] = []
+    if _should_chat_divert(payload):
+        state.mark_chat_divert()
+    if str(payload.get("type") or "") == "result" and str(
+        payload.get("status") or ""
+    ) == "error":
+        state.result_failed = True
+    _maybe_arm_pipeline(state, payload)
+    extra.extend(_stage_advance_events(state, payload))
+    if _is_paint_signal(payload):
+        state.saw_paint = True
+    if str(payload.get("type") or "") == "result":
+        term = _result_terminal_event(state)
+        if term:
+            extra.append(term)
+    return extra
+
+
+def _should_log_sse(et: str | None, out_n: int) -> bool:
+    return out_n <= 12 or et in (
+        "thinking",
+        "analysis_delta",
+        "skill_start",
+        "error",
+    )
+
+
+def _sse_log_line(
+    *, t0: float, out_n: int, et: str | None, payload: Any
+) -> str:
+    preview = ""
+    if isinstance(payload, dict) and et in ("thinking", "analysis_delta"):
+        preview = repr(str(payload.get("text") or "")[:60])
+    return f"[sse_out] +{time.time() - t0:6.2f}s  n={out_n} type={et} {preview}"
 
 
 class DesignRunIn(BaseModel):
@@ -129,23 +331,11 @@ async def design_run(
     client_country = resolve_client_country(request)
 
     async def gen():
-        from services.design.runtime.progress_stages import (
-            maybe_advance_stage,
-            stage_for_event,
-            thought_stage_event,
-        )
-
         # Flush headers / proxy buffers immediately so FE can leave "Thinking…".
         yield ": connected\n\n"
 
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-        t0 = time.time()
-        out_n = 0
-        # Explored pipeline only after model return codes show design (lookups/ops).
-        current_stage: str | None = None
-        pipeline_armed = False
-        saw_paint = False
-        chat_divert = False
+        state = _PipelineSseState()
 
         async def produce() -> None:
             try:
@@ -185,136 +375,52 @@ async def design_run(
             finally:
                 await queue.put(("done", None))
 
-        def _emit(obj: dict[str, Any]) -> str:
-            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
-
-        def _arm_pipeline(stage: str | None = "prepare") -> None:
-            nonlocal pipeline_armed, current_stage
-            if chat_divert:
-                return
-            if not pipeline_armed:
-                pipeline_armed = True
-                current_stage = stage or "prepare"
-
         task = asyncio.create_task(produce())
         try:
-            # Do NOT seed Explored here — wait for lookups/ops (design return codes).
-
             while True:
                 try:
                     kind, payload = await asyncio.wait_for(
                         queue.get(), timeout=_SSE_HEARTBEAT_SEC
                     )
                 except asyncio.TimeoutError:
-                    elapsed = int(time.time() - t0)
-                    if (
-                        pipeline_armed
-                        and not chat_divert
-                        and not saw_paint
-                        and current_stage
-                        and current_stage != "done"
-                    ):
-                        yield _emit(
-                            thought_stage_event(current_stage, elapsed_s=elapsed)
-                        )
+                    hb = state.heartbeat_stage_event()
+                    if hb:
+                        yield _sse_data(hb)
                     yield ": ping\n\n"
                     continue
+
                 if kind == "done":
-                    if (
-                        pipeline_armed
-                        and not chat_divert
-                        and current_stage != "done"
-                    ):
-                        yield _emit(thought_stage_event("done", status="done"))
+                    term = state.terminal_stage_event()
+                    if term:
+                        yield _sse_data(term)
                     break
+
                 if kind == "err":
                     msg = str(payload)[:800] or "design_run_failed"
-                    yield _emit({"type": "error", "message": msg})
+                    yield _sse_data({"type": "error", "message": msg})
                     break
 
-                out_n += 1
+                state.out_n += 1
                 et = payload.get("type") if isinstance(payload, dict) else None
                 if isinstance(payload, dict):
-                    if et == "chat_done" or (
-                        et == "result"
-                        and str(payload.get("intent") or "") == "chat"
-                    ):
-                        chat_divert = True
-                        current_stage = "done"
-                    elif et == "decision" and (
-                        payload.get("is_chitchat") is True
-                        or str(payload.get("route") or "") == "chitchat"
-                        or str(payload.get("intent") or "") == "chat"
-                    ):
-                        chat_divert = True
-                        current_stage = "done"
+                    for frame in _pipeline_side_effects(state, payload):
+                        yield _sse_data(frame)
 
-                    # Arm Explored only on design signals — never on early
-                    # prompt/model_wait alone (those used to fire for 「你好」).
-                    if not chat_divert:
-                        if et in ("tool_ops", "svg_delta", "drawing"):
-                            _arm_pipeline("ops")
-                        elif et == "activity":
-                            kind_a = str(payload.get("kind") or "")
-                            stage_a = str(payload.get("stage") or "")
-                            if kind_a in ("tool", "added", "updated", "deleted"):
-                                _arm_pipeline("ops")
-                            elif stage_a in (
-                                "lookup",
-                                "validate",
-                                "ops",
-                                "scene_check",
-                                "critic",
-                                "refine",
-                                "scene",
-                            ):
-                                _arm_pipeline(stage_a)
-                            elif (
-                                kind_a == "explored"
-                                and stage_a
-                                and stage_a
-                                not in (
-                                    "prompt",
-                                    "prepare",
-                                    "model_wait",
-                                    "model_stream",
-                                )
-                            ):
-                                _arm_pipeline(stage_a)
+                if _should_log_sse(et if isinstance(et, str) else None, state.out_n):
+                    line = _sse_log_line(
+                        t0=state.t0,
+                        out_n=state.out_n,
+                        et=et if isinstance(et, str) else None,
+                        payload=payload,
+                    )
+                    _log.info(line)
+                    _safe_print(line)
 
-                    if pipeline_armed and not chat_divert:
-                        nxt = stage_for_event(payload)
-                        advanced = maybe_advance_stage(current_stage, nxt)
-                        if advanced and advanced != current_stage:
-                            current_stage = advanced
-                            elapsed = int(time.time() - t0)
-                            if advanced == "done":
-                                yield _emit(thought_stage_event("done", status="done"))
-                            elif not saw_paint or advanced in ("ops", "refine"):
-                                yield _emit(
-                                    thought_stage_event(advanced, elapsed_s=elapsed)
-                                )
-                    if et in ("tool_ops", "svg_delta", "drawing") or (
-                        et == "activity"
-                        and str(payload.get("kind") or "")
-                        in ("tool", "added", "updated", "deleted")
-                    ):
-                        saw_paint = True
-                    elif et == "result":
-                        saw_paint = True
-                        if pipeline_armed:
-                            current_stage = "done"
+                if isinstance(payload, dict):
+                    yield _sse_data(payload)
+                else:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-                if out_n <= 12 or et in ("thinking", "analysis_delta", "skill_start", "error"):
-                    preview = ""
-                    if isinstance(payload, dict) and et in ("thinking", "analysis_delta"):
-                        preview = repr(str(payload.get("text") or "")[:60])
-                    msg = f"[sse_out] +{time.time()-t0:6.2f}s  n={out_n} type={et} {preview}"
-                    _log.info(msg)
-                    _safe_print(msg)
-                yield _emit(payload) if isinstance(payload, dict) else (
-                    f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                )
             yield "data: [DONE]\n\n"
         finally:
             if not task.done():
@@ -323,6 +429,7 @@ async def design_run(
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
