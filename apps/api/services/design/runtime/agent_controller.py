@@ -29,7 +29,6 @@ from services.design.runtime.decision_log import DesignRunDecision
 from services.design.runtime.llm_step import stream_skill_step
 from services.design.runtime.models_route import (
     CANVAS_WORK_INTENTS,
-    allows_skill_preload,
     clamp_tier,
     classify_user_intent,
     enabled_tiers,
@@ -61,6 +60,7 @@ from services.design.ops.tool_ops_contract import (
     validation_failure_reason,
 )
 from services.design.prompts.knowledge_store import (
+    format_knowledge_catalog,
     format_knowledge_details,
     normalize_need_knowledge,
 )
@@ -274,7 +274,7 @@ _DEFAULT_PAINT_EDIT_TOOLS = (
     "update_node",
     "delete_nodes",
 )
-# Compact prompt length (whitespace-stripped) for lean paint / skip skill preload.
+# Compact prompt length (whitespace-stripped) for lean paint path.
 _LEAN_PAINT_PROMPT_CHARS = 96
 
 
@@ -2880,7 +2880,6 @@ class GraphState(TypedDict):
 _DESIGN_HOLD_FNS: dict[str, tuple[Any, Any]] = {}
 _DESIGN_HOLD_LOCK = threading.Lock()
 
-
 def _bind_design_hold_fns(task_id: str, settle: Any, refund: Any) -> None:
     tid = str(task_id or "").strip()
     if not tid:
@@ -2976,62 +2975,6 @@ def _canvas_is_empty(rt: Any) -> bool:
     if not frames:
         return True
     return all(bool(f.get("is_empty")) for f in frames)
-
-
-def _preload_triggered_skills(rt: Any) -> None:
-    """Hard-load skills whose triggers match — only intent=design.
-
-    canvas_op (tool-catalog ops) must not pull methodology packs.
-    """
-    if not rt.defer_tools:
-        return
-    st = rt.run
-    intent = normalize_user_intent(
-        getattr(rt, "classified_intent", None) or st.intent or ""
-    )
-    if not allows_skill_preload(intent=intent):
-        return
-    paint_lane = _resolve_paint_want(rt)
-    keys = resolve_triggered_skill_keys(
-        scene=rt.scene_key or "website",
-        empty_canvas=_canvas_is_empty(rt),
-        has_images=bool(rt.images),
-        intent=paint_lane if paint_lane in ("create", "edit") else "create",
-        prompt_chars=len(str(rt.prompt or "").strip()),
-        already_loaded=list(st.skills_loaded or []),
-    )
-    if not keys:
-        return
-    try:
-        details = format_skills_details(
-            keys=keys, scene=rt.scene_key or "website"
-        )
-    except Exception:
-        details = ""
-    if not details.strip():
-        return
-    # Append if something already pending; else set.
-    prev = str(getattr(rt, "pending_skill_details", "") or "").strip()
-    block = "SKILL_DETAILS:\n" + details
-    rt.pending_skill_details = (prev + "\n\n" + block) if prev else block
-    for k in keys:
-        if k not in st.skills_loaded:
-            st.skills_loaded.append(k)
-    st.push_log(
-        phase="skill_preload",
-        need_skills=list(keys),
-        summary="triggers 预载 skill：" + "、".join(keys),
-    )
-    _emit(
-        {
-            "type": "activity",
-            "id": f"skill-preload-{st.task_id[:8]}",
-            "kind": "explored",
-            "status": "done",
-            "stage": "skill_preload",
-            "detail": "skills",
-        }
-    )
 
 
 async def _node_bootstrap(state: GraphState) -> Command:
@@ -3469,8 +3412,8 @@ async def _node_intent_classify(state: GraphState) -> Command:
             _emit({"type": "token", "text": reply})
         return _goto_cmd(rt, frm="intent_classify", to="__settle__")
 
-    # Methodology packs only for design; canvas_op uses tools directly.
-    await asyncio.to_thread(_preload_triggered_skills, rt)
+    # Catalogs (tools/skills/knowledge/…) are already on rt.system; skill bodies
+    # load only after the model emits need_skills. Memory is injected in memory node.
     _emit_design_loading_artboard(rt)
     if intent == "canvas_op":
         # Achievable via canvas tools — skip decide, paint tool_ops immediately.
@@ -3787,8 +3730,7 @@ async def _node_resource(state: GraphState) -> Command:
     need_skills = list(turn.get("need_skills") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
     use_user_refs = turn.get("use_user_refs") is True
-    # Only aesthetics-gated hard triggers here — do NOT re-fire broad create/edit packs
-    # (those are intent=design skill_preload or explicit need_skills).
+    # Aesthetics-gated hard triggers only after the model asks need_aesthetics.
     if need_aesthetics:
         for k in resolve_triggered_skill_keys(
             scene=rt.scene_key or "website",
@@ -5488,9 +5430,11 @@ async def run_agent_graph(
 
     tools_block = format_canvas_tools_for_model(rules)
     tools_catalog = format_canvas_tools_catalog(rules)
-    skills_catalog, aesthetics_catalog = await asyncio.gather(
-        asyncio.to_thread(format_skills_catalog, scene=scene_key or "website"),
-        asyncio.to_thread(format_aesthetics_catalog, scene=scene_key or "website"),
+    scene_for_cat = scene_key or "website"
+    skills_catalog, knowledge_catalog, aesthetics_catalog = await asyncio.gather(
+        asyncio.to_thread(format_skills_catalog, scene=scene_for_cat),
+        asyncio.to_thread(format_knowledge_catalog, scene=scene_for_cat),
+        asyncio.to_thread(format_aesthetics_catalog, scene=scene_for_cat),
     )
     defer_tools = _flag_on(rules, "agent.react.defer_tools", "1")
     persona = _resolve_agent_persona(rules, user_selected_model)
@@ -5504,7 +5448,9 @@ async def run_agent_graph(
     chat_agent_system = _prompt_text(rules, "agent.prompt.chat_agent_system")
     react_system = _prompt_text(rules, "agent.prompt.react_system")
     ask_system = _prompt_text(rules, "agent.prompt.ask_system") if ui_mode == "ask" else ""
-    # Same pack priority as design_agent; catalogs must stay on rt.system for the LLM.
+    # Start with catalogs only (tools / skills / knowledge / aesthetics).
+    # Full skill/tool/knowledge bodies arrive later via need_* → resource node.
+    # Memory is injected in the memory graph node (not here).
     system = "\n\n".join(
         p
         for p in [
@@ -5513,6 +5459,7 @@ async def run_agent_graph(
             persona_block,
             tools_catalog if defer_tools else tools_block,
             skills_catalog,
+            knowledge_catalog,
             aesthetics_catalog,
         ]
         if p
