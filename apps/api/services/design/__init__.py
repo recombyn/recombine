@@ -1,5 +1,13 @@
-"""Table-driven design skill scheduling (website / mobile / image / poster).
+"""Design Agent domain.
 
-Import from submodules (e.g. ``services.design.catalog``,
-``services.design.orchestrator``).
+Prefer domain packages:
+
+- ``services.design.runtime`` — graph / orchestrator / model routing
+- ``services.design.ops`` — tool_ops contract and validation
+- ``services.design.prompts`` — skills / packs / knowledge / tokens
+- ``services.design.readpath`` — catalog read-path and library
+- ``services.design.admin`` — admin stores and schema
+- ``services.design.aesthetics`` — aesthetics RAG
+
+Legacy ``services.design.<module>`` imports still work via compatibility shims.
 """
