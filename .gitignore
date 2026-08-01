@@ -91,3 +91,8 @@ apps/web/public/ffmpeg/
 
 # Local infra not published with OSS (keep on disk only)
 infra/langfuse/
+
+# local sqlite sidecars
+apps/api/storage/*.db-shm
+apps/api/storage/*.db-wal
+
