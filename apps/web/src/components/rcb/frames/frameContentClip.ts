@@ -1,5 +1,5 @@
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
-import { ensureDefs, setAttrs, svgEl, urlRef } from '@/components/rcb/svgDom';
+import { ensureDefs, setAttrs, svgEl, urlRef } from '@/components/rcb/scene/paint/svgDom';
 
 function num(v: unknown, fallback = 0): number {
   const n = Number(v);

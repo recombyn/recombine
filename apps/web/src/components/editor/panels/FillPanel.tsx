@@ -31,7 +31,7 @@ import { DropdownPanel, DropdownPanelItem, SegmentedControl } from '@/components
 import DiffuseMeshEditor from '@/components/editor/panels/DiffuseMeshEditor';
 import { StylePanelShell } from '@/components/editor/panels/StylePanelChrome';
 import { cn } from '@/utils/classnames';
-import { meshPreviewDataUrl } from '@/components/rcb/scene/sceneDiffuseMesh';
+import { meshPreviewDataUrl } from '@/components/rcb/scene/document/sceneDiffuseMesh';
 import {
   buildImageAdjustFilterCss,
   cssPreviewForGradient,
@@ -48,7 +48,7 @@ import {
   type FillImageRotate,
   type FillStop,
   type FillType,
-} from '@/components/rcb/scene/sceneFill';
+} from '@/components/rcb/scene/document/sceneFill';
 export type FillPanelValue = {
   fillType: FillType;
   fillColor: string;

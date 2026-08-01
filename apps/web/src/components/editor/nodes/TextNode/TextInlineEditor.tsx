@@ -4,7 +4,7 @@ import {
   useRcbCamera,
   rcbSceneToScreen,
 } from '@/components/rcb';
-import { toFabricFontFamily } from '@/components/rcb/scene/sceneText';
+import { toFabricFontFamily } from '@/components/rcb/scene/document/sceneText';
 import {
   buildMarkdownTextAttrs,
   DEFAULT_TEXT_STYLE,
@@ -13,9 +13,9 @@ import {
   parseNodeMarkdown,
   parseNodeTextStyle,
   resolveTextBoxWidth,
-} from '@/components/rcb/scene/sceneText';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
-import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/sceneEffects';
+} from '@/components/rcb/scene/document/sceneText';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/document/sceneEffects';
 
 type Props = {
   document: any;

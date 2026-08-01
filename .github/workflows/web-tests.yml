@@ -36,5 +36,8 @@ jobs:
       - name: Unit tests
         run: npm run test:web
 
+      - name: Canvas stress bench
+        run: npm run test:stress --workspace=apps/web
+
       - name: Coverage
         run: npm run test:web:coverage

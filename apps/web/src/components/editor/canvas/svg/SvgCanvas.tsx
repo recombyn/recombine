@@ -31,7 +31,7 @@ import {
   isExportableSceneNode,
   isGeneratorNode,
   type SceneClipboardPayload,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import {
   loadSceneOntoSvg,
   nodeLeftTop,
@@ -40,16 +40,17 @@ import {
   previewSvgNodeAngle,
   previewSvgNodeGeometry,
   purgeOrphanSceneNodes,
-} from '@/components/rcb/scene/sceneToSvg';
-import { patchNodesGeometry, sceneToDocumentCoords } from '@/components/rcb/scene/svgToScene';
+} from '@/components/rcb/scene/paint/sceneToSvg';
+import { patchNodesGeometry, sceneToDocumentCoords } from '@/components/rcb/scene/paint/svgToScene';
 import {
   DEFAULT_TEXT_BOX_WIDTH,
   measurePlainTextSize,
   measureWrappedTextSize,
-} from '@/components/rcb/scene/sceneText';
-import { strokeCenterlineToFilledOutline } from '@/components/rcb/scene/outlineToPath';
+} from '@/components/rcb/scene/document/sceneText';
+import { strokeCenterlineToFilledOutline } from '@/components/rcb/scene/paint/outlineToPath';
 import { computeShapeBoolean, type ShapeBox } from '@/components/rcb/selection/shapeBoolean';
 import {
+  HEAVY_PATH_D_CHARS,
   STROKE_HIT,
   distPointToPathD,
   distPointToSegment,
@@ -58,13 +59,13 @@ import {
   pathStrokeHitsSceneBox,
   strokeEndpointsFromBox,
   strokeNodeFromEndpoints,
-} from '@/components/rcb/scene/sceneShapes';
+} from '@/components/rcb/scene/document/sceneShapes';
 import {
   deflateSelectionBox,
   inflateBoxByStrokeOutset,
   inflateSelectionBox,
-} from '@/components/rcb/scene/sceneEffects';
-import { setSceneHitTestBridge } from '@/components/rcb/scene/sceneHitBridge';
+} from '@/components/rcb/scene/document/sceneEffects';
+import { setSceneHitTestBridge } from '@/components/rcb/scene/document/sceneHitBridge';
 import { RcbSpatialIndex, nodeSceneAabb } from '@/components/rcb/core/spatialIndex';
 import { useSvgBoard } from '@/components/rcb/canvas/useSvgBoard';
 import {
@@ -93,17 +94,17 @@ import {
   readChatImageDragUrl,
 } from '@/utils/chatImageDrag';
 import { message } from '@/components/base';
-import { exportFabricImage, exportCropSlots, type ExportImageFormat } from '@/components/rcb/scene/exportImage';
+import { exportFabricImage, exportCropSlots, type ExportImageFormat } from '@/components/rcb/scene/paint/exportImage';
 import { useTranslation } from 'react-i18next';
 import {
   parseNodeText,
   parseNodeTextStyle,
-} from '@/components/rcb/scene/sceneText';
+} from '@/components/rcb/scene/document/sceneText';
 import {
   cssPreviewForGradient,
   parseFillGradient,
   parseFillType,
-} from '@/components/rcb/scene/sceneFill';
+} from '@/components/rcb/scene/document/sceneFill';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
 import {
   patchDocumentNode,
@@ -160,7 +161,7 @@ import TextInlineEditor from '@/components/editor/nodes/TextNode/TextInlineEdito
 import CanvasContextMenu, {
   type ContextMenuState,
   type CtxAction,
-} from '@/components/rcb/selection/CanvasContextMenu';
+} from '@/components/rcb/selection/chrome/CanvasContextMenu';
 import {
   useRcbCamera,
   useRcbOverlayRoot,
@@ -880,23 +881,51 @@ function SvgCanvas({
     return [...(doc?.deltaSetLike?.ROOT?.children || [])];
   }, []);
 
-  /** Rebuild when scene membership / geometry tokens change — used to narrow hit-tests. */
+  /** Spatial index — full rebuild on reload; incremental upsert on patched ids. */
+  const spatialIndexRef = useRef(new RcbSpatialIndex(256));
+  const spatialReloadRef = useRef<number | string | null>(null);
   const nodeSpatialIndex = useMemo(() => {
-    const idx = new RcbSpatialIndex(256);
+    const idx = spatialIndexRef.current;
     const doc = document;
-    if (!doc) return idx;
+    if (!doc) {
+      idx.clear();
+      spatialReloadRef.current = null;
+      return idx;
+    }
     const page = doc?.pages?.find((p: any) => p.id === doc?.activePageId) || doc?.pages?.[0];
     const fromPage = page?.children;
     const ids: string[] = Array.isArray(fromPage) && fromPage.length
       ? [...fromPage]
       : [...(doc?.deltaSetLike?.ROOT?.children || [])];
-    for (const id of ids) {
+    // Drift (add/delete without reloadToken) → full rebuild so cull stays correct.
+    const needFull =
+      spatialReloadRef.current !== reloadToken ||
+      idx.size === 0 ||
+      ids.length < 48 ||
+      Math.abs(idx.size - ids.length) > 0;
+    if (needFull) {
+      idx.clear();
+      for (const id of ids) {
+        const box = nodeSceneAabb(doc, id, 32);
+        if (!box) continue;
+        idx.upsert({ id, ...box });
+      }
+      spatialReloadRef.current = reloadToken;
+      return idx;
+    }
+    // Incremental: refresh only nodes touched by the latest patch.
+    if (!lastPatchedNodeIds.length) return idx;
+    for (const id of lastPatchedNodeIds) {
+      if (!doc.deltaSetLike?.[id]) {
+        idx.remove(String(id));
+        continue;
+      }
       const box = nodeSceneAabb(doc, id, 32);
-      if (!box) continue;
-      idx.upsert({ id, ...box });
+      if (!box) idx.remove(String(id));
+      else idx.upsert({ id: String(id), ...box });
     }
     return idx;
-  }, [document, documentPatchToken, reloadToken]);
+  }, [document, documentPatchToken, reloadToken, lastPatchedNodeIds]);
 
   const queryNodeIdsInRect = useCallback(
     (box: { left: number; top: number; width: number; height: number }) => {
@@ -960,14 +989,13 @@ function SvgCanvas({
       const pad = Math.max(STROKE_HIT / 2, 12 / zoom);
       const allIds = listNodeIds();
       let order = [...allIds].reverse();
-      // Large scenes: try spatially nearby candidates first (still fall through — never drop).
+      // Large scenes: only test spatially nearby candidates (z-order preserved among them).
+      // Falling through the full list made hover O(N) even with an index.
       if (allIds.length >= 48) {
-        const nearby = nodeSpatialIndex.searchPoint(x, y, pad + 48);
+        const nearby = nodeSpatialIndex.searchPoint(x, y, pad + 64);
         if (nearby.length) {
           const allow = new Set(nearby.map((n) => n.id));
-          const near = order.filter((id) => allow.has(id));
-          const far = order.filter((id) => !allow.has(id));
-          order = near.length ? [...near, ...far] : order;
+          order = order.filter((id) => allow.has(id));
         }
       }
       for (const id of order) {
@@ -1001,6 +1029,8 @@ function SvgCanvas({
           if (!inLooseBox) continue;
 
           const svgEl = board?.nodeEls?.get(id);
+          const d = String(node.attrs?.path || node.attrs?.d || '');
+          const heavyPath = d.length >= HEAVY_PATH_D_CHARS;
           if (svgEl && screen) {
             const mode = shapeType === 'pencil' || fillHit ? 'auto' : 'stroke';
             // Cap temporary stroke width — huge values ≈ AABB at low zoom.
@@ -1013,6 +1043,9 @@ function SvgCanvas({
             ) {
               return id;
             }
+            // Outlined text: trust DOM isPointInFill/Stroke — re-parsing the full
+            // multi-glyph `d` on every pointermove freezes the page.
+            if (heavyPath) continue;
           }
 
           // Path centerline / fill sample (also used when DOM hit misses / node not mounted).
@@ -1028,7 +1061,19 @@ function SvgCanvas({
             lx = dx * Math.cos(rad) - dy * Math.sin(rad) + cx;
             ly = dx * Math.sin(rad) + dy * Math.cos(rad) + cy;
           }
-          const d = String(node.attrs?.path || node.attrs?.d || '');
+          // Unmounted / DOM miss: heavy paths → AABB only (never sample 12KB+ d).
+          if (heavyPath) {
+            if (
+              fillHit &&
+              lx >= 0 &&
+              ly >= 0 &&
+              lx <= box.width &&
+              ly <= box.height
+            ) {
+              return id;
+            }
+            continue;
+          }
           if (fillHit) {
             const rule = String(node.attrs?.['fill-rule'] || 'nonzero');
             if (pathDContainsPoint(lx, ly, d, rule)) return id;
@@ -3643,6 +3688,7 @@ function SvgCanvas({
             lastPatchedNodeIds={lastPatchedNodeIds}
             hiddenNodeId={editingTextId}
             keepVisibleIds={keepVisibleIds}
+            spatialIndex={nodeSpatialIndex}
           />
         ) : null}
         {/* Stable HTML <video> plates; SVG poster is underlay / export only. */}

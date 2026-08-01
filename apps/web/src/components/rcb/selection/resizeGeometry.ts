@@ -180,10 +180,14 @@ export function matchAspectPresetKey(
   height: number,
   presets: Array<{ id: string; w: number; h: number }>
 ): string {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
   for (const p of presets) {
     if (p.id === 'original' || p.w <= 0 || p.h <= 0) continue;
-    const r = width / Math.max(1, height);
-    if (Math.abs(r - p.w / p.h) < 0.02) return p.id;
+    // Cross-multiply with a small pixel slack — old ±0.02 ratio falsely
+    // labeled 449×457 as 1:1.
+    const slack = Math.max(2, 0.005 * Math.max(w, h));
+    if (Math.abs(w * p.h - h * p.w) <= slack) return p.id;
   }
   return 'original';
 }

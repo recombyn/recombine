@@ -2,7 +2,7 @@ import {
   useRcbScreenToScene,
 } from '../camera/context';
 import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
-import { ARROW_HEAD, ptsAttr, shapeVertexPoints } from '@/components/rcb/scene/sceneShapes';
+import { ARROW_HEAD, ptsAttr, shapeVertexPoints } from '@/components/rcb/scene/document/sceneShapes';
 
 function normalizeBox(x0: number, y0: number, x1: number, y1: number) {
   const left = Math.min(x0, x1);

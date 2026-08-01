@@ -12,7 +12,7 @@ import {
   type PenAnchor,
 } from './penPath';
 import RcbSceneOverlaySvg from '../canvas/RcbSceneOverlaySvg';
-import { isEditablePathNode } from '../scene/outlineToPath';
+import { isEditablePathNode } from '../scene/paint/outlineToPath';
 import { PEN_CURSOR } from './PencilDrawFeature';
 
 type HandleSide = 'in' | 'out';

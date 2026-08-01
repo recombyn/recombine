@@ -2,7 +2,7 @@
  * Agent memory — task state, short-term turns, patches (M1–M3 client contract).
  */
 
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
 export type ShortTermTurn = {
   role: 'user' | 'assistant';
