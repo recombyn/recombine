@@ -65,7 +65,15 @@ Skill 命名空间、ACL、版本 pin、热加载说明见 [data/design_skills/R
 
 Admin HTTP 前缀：`/api/v1/admin/...`（需管理员会话）。
 
-Postgres / 读写分离 / 备份：见仓库 [docs/postgres-switch.md](../../docs/postgres-switch.md)。
+Postgres / 读写分离 / 备份 / LangGraph checkpointer：见仓库 [docs/postgres-switch.md](../../docs/postgres-switch.md)。
+
+### LangGraph checkpointer
+
+`get_agent_checkpointer()`（`services/llm/agent.py`）供 Design 外层图与 `create_agent` 共用：
+
+1. **MySQL ≥ 8.0.19**（`LANGGRAPH_CHECKPOINT_URL` 或 `DATABASE_URL`）
+2. 否则 **SQLite**（`LANGGRAPH_CHECKPOINT_SQLITE_PATH`，默认 `storage/langgraph_checkpoints.db`）+ async bridge（供 `graph.astream`）
+3. 再否则内存
 
 ## 安装
 

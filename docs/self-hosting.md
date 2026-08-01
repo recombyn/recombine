@@ -31,6 +31,8 @@ Default config (skills, flows, dicts, …) loads from seed JSON under `apps/api/
 
 Periodic backups (default on): SQLite online copy under `DB_BACKUP_DIR` (`storage/backups/`); MySQL/Postgres write a dump hint. Celery beat: `run_db_backup_job`.
 
+LangGraph checkpoints: [postgres-switch.md](./postgres-switch.md#langgraph-checkpointer-design-agent--create_agent).
+
 ## Design skills (Agent)
 
 - **core** — seed skills in `design_skills_seed.json`
