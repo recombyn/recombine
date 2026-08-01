@@ -337,3 +337,102 @@ def test_paint_tool_keys_with_images_includes_create_image():
     assert _is_lean_paint_turn(rt) is False
     keys = _paint_tool_keys_for_turn(rt)
     assert "create_image" in keys
+
+
+def test_derive_suggested_place_world_prefers_viewport():
+    from services.design.agent_controller import _derive_suggested_place_world
+
+    spw = _derive_suggested_place_world(
+        {"viewport": {"x": 5000, "y": 2000, "w": 1200, "h": 800}},
+        focus_frame={"id": "f1", "x": 0, "y": 0, "w": 410, "h": 729},
+    )
+    assert spw is not None
+    assert 5000 <= spw["x"] <= 6200
+    assert 2000 <= spw["y"] <= 2800
+
+
+def test_format_spatial_placement_from_focus_frame_alone():
+    from services.design.agent_controller import _format_spatial_placement
+
+    text = _format_spatial_placement(
+        None,
+        focus_frame={"id": "f1", "x": 4800, "y": 1200, "w": 410, "h": 729},
+    )
+    assert "PLACEMENT" in text
+    assert "suggested_place_world" in text
+    # Centered inside focus frame world box (4800 + inset).
+    assert "x=4954" in text
+    assert "y=1473" in text
+
+
+def test_placement_errors_for_offscreen_free_creates():
+    from types import SimpleNamespace
+
+    from services.design.agent_controller import (
+        _derive_suggested_place_world,
+        _placement_errors_for_free_creates,
+    )
+
+    spatial = {"viewport": {"x": 4800, "y": 1200, "w": 1400, "h": 900}}
+    focus = {"id": "f1", "x": 5000, "y": 1400, "w": 410, "h": 729}
+    rt = SimpleNamespace(
+        spatial_summary=spatial,
+        focus_id="f1",
+        scene_frames=[focus],
+    )
+    # Normalized post-validate shape ({name, args}).
+    ops = [
+        {
+            "name": "create_shape",
+            "args": {
+                "shapeType": "rect",
+                "x": 120,
+                "y": 440,
+                "width": 170,
+                "height": 120,
+            },
+            "op_id": "t1",
+        }
+    ]
+    errs = _placement_errors_for_free_creates(rt, ops)
+    spw = _derive_suggested_place_world(spatial, focus_frame=focus)
+    assert errs
+    assert "outside viewport_world" in errs[0]
+    assert "suggested_place_world" in errs[0]
+    assert spw is not None
+    assert f"x={spw['x']}" in errs[0]
+    assert f"y={spw['y']}" in errs[0]
+    # Ops must not be mutated — teach via error, model re-emits.
+    assert ops[0]["args"]["x"] == 120
+
+
+def test_placement_errors_skip_framed_creates():
+    from types import SimpleNamespace
+
+    from services.design.agent_controller import _placement_errors_for_free_creates
+
+    rt = SimpleNamespace(
+        spatial_summary={"viewport": {"x": 4800, "y": 1200, "w": 1400, "h": 900}},
+        focus_id="f1",
+        scene_frames=[{"id": "f1", "x": 5000, "y": 1400, "w": 410, "h": 729}],
+    )
+    ops = [
+        {
+            "name": "create_shape",
+            "args": {"shapeType": "rect", "x": 120, "y": 440, "frameId": "f1"},
+            "op_id": "t1",
+        }
+    ]
+    assert _placement_errors_for_free_creates(rt, ops) == []
+
+
+def test_scene_digest_includes_frame_world_xy():
+    from services.design.agent_controller import _scene_digest
+
+    text = _scene_digest(
+        [],
+        [{"id": "f1", "name": "Design", "x": 5120, "y": 880, "w": 410, "h": 729, "is_empty": False}],
+        focus_id="f1",
+    )
+    assert "x=5120" in text
+    assert "y=880" in text

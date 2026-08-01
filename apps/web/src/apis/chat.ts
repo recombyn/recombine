@@ -64,6 +64,10 @@ export type ChatModelsResponse = {
   available: boolean;
   imageModels?: LlmModel[];
   videoModels?: LlmModel[];
+  /** ISO country from GeoLite2 / edge headers when known. */
+  clientRegion?: string | null;
+  /** False on CN (and other blocked) networks — OpenRouter catalog hidden. */
+  openrouterAvailable?: boolean;
 };
 
 export type GenerateImageInput = {

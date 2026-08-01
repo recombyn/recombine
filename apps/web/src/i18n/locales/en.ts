@@ -662,6 +662,8 @@ const en = {
     agentRoutePlatformNote: 'Using Standard routes (domestic Seed / DeepSeek / Seedream preferred).',
     agentRouteBalancedNote: 'Using Pro routing — stronger models by lane.',
     agentRouteQualityNote: 'Using Max routing — highest quality reasoning and instruction following.',
+    agentRouteOpenrouterBlocked:
+      'OpenRouter is unavailable on this network. Pro / Max fall back to domestic models (same as Standard lanes).',
     agentRouteSave: 'Save routing prefs',
     agentRouteSaved: 'Saved',
     notices: {

@@ -489,77 +489,6 @@ def _collect_delete_node_ids(args: dict[str, Any]) -> list[str]:
     return [str(x).strip() for x in ids if str(x).strip()]
 
 
-def _rewrite_shape_morph_ops(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """delete one node + create_shape → update_node(shapeType) to keep z-order.
-
-    Models often morph via delete+create because older schemas lacked shapeType
-    on update_node; that bumps the new shape to the top of the stack.
-    """
-    if len(ops) < 2:
-        return ops
-    delete_idxs: list[int] = []
-    create_idxs: list[int] = []
-    deleted: list[str] = []
-    for i, raw in enumerate(ops):
-        name = str(raw.get("name") or "").strip()
-        args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
-        if name == "delete_nodes":
-            ids = _collect_delete_node_ids(args)
-            if ids:
-                delete_idxs.append(i)
-                deleted.extend(ids)
-        elif name == "create_shape":
-            create_idxs.append(i)
-    if len(deleted) != 1 or len(create_idxs) != 1 or len(delete_idxs) != 1:
-        return ops
-    create = ops[create_idxs[0]]
-    cargs = dict(create.get("args") or {})
-    shape_type = cargs.get("shapeType")
-    if shape_type is None:
-        shape_type = cargs.get("type")
-    if shape_type is None or not str(shape_type).strip():
-        return ops
-    update_args: dict[str, Any] = {
-        "nodeId": deleted[0],
-        "shapeType": shape_type,
-    }
-    for k in (
-        "x",
-        "y",
-        "width",
-        "height",
-        "w",
-        "h",
-        "fill",
-        "fillColor",
-        "stroke",
-        "borderWidth",
-        "opacity",
-        "rotation",
-        "cornerRadius",
-        "sides",
-        "name",
-    ):
-        if cargs.get(k) is not None:
-            update_args[k] = cargs.get(k)
-    drop = {delete_idxs[0], create_idxs[0]}
-    out: list[dict[str, Any]] = []
-    inserted = False
-    for i, raw in enumerate(ops):
-        if i in drop:
-            if not inserted:
-                out.append(
-                    {
-                        "name": "update_node",
-                        "args": _normalize_update_node_args(update_args),
-                    }
-                )
-                inserted = True
-            continue
-        out.append(raw)
-    return out
-
-
 def _normalize_inventory_text(s: str) -> str:
     return re.sub(r"\s+", "", str(s or "")).lower()
 
@@ -597,25 +526,49 @@ def _find_matching_text_node(
     return None
 
 
-def _hygiene_edit_ops(
+def _reject_shape_morph_ops(
+    ops: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Detect delete+create_shape morphs — do not rewrite; tell the model to use update_node."""
+    if len(ops) < 2:
+        return ops, []
+    delete_idxs: list[int] = []
+    create_idxs: list[int] = []
+    deleted: list[str] = []
+    for i, raw in enumerate(ops):
+        name = str(raw.get("name") or "").strip()
+        args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
+        if name == "delete_nodes":
+            ids = _collect_delete_node_ids(args)
+            if ids:
+                delete_idxs.append(i)
+                deleted.extend(ids)
+        elif name == "create_shape":
+            create_idxs.append(i)
+    if len(deleted) != 1 or len(create_idxs) != 1 or len(delete_idxs) != 1:
+        return ops, []
+    create = ops[create_idxs[0]]
+    cargs = create.get("args") if isinstance(create.get("args"), dict) else {}
+    shape_type = cargs.get("shapeType")
+    if shape_type is None:
+        shape_type = cargs.get("type")
+    if shape_type is None or not str(shape_type).strip():
+        return ops, []
+    drop = {delete_idxs[0], create_idxs[0]}
+    kept = [raw for i, raw in enumerate(ops) if i not in drop]
+    err = (
+        f"prefer_update_node_shapeType: delete_nodes+create_shape morphs z-order; "
+        f"re-emit update_node nodeId={deleted[0]} shapeType={shape_type} "
+        f"(include fill/x/y/width/height as needed)."
+    )
+    return kept, [err]
+
+
+def _reject_create_text_as_edit(
     ops: list[dict[str, Any]],
     scene_nodes: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    """Edit-run hygiene (formerly FE sanitizeEditToolOps). Backend owns this.
-
-    - create_shape always stays create (add ≠ update an existing rect)
-    - create_text matching SCENE_NODES → update_node
-    - unmatched create_text on populated UI (no deletes) → drop
-    - update_node missing nodeId + fill → bind largest plate
-    """
-    _non_plate = frozenset({"text", "image", "svg"})
-    plates = [
-        n
-        for n in (scene_nodes or [])
-        if isinstance(n, dict)
-        and n.get("id")
-        and str(n.get("type") or "").lower() not in _non_plate
-    ]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Detect create_text that matches SCENE_NODES — do not rewrite to update_node."""
     existing_texts = [
         n
         for n in (scene_nodes or [])
@@ -623,63 +576,29 @@ def _hygiene_edit_ops(
         and n.get("id")
         and str(n.get("type") or "").lower() == "text"
     ]
-    bg = None
-    if plates:
-        bg = max(
-            plates,
-            key=lambda n: float(n.get("w") or n.get("width") or 0)
-            * float(n.get("h") or n.get("height") or 0),
-        )
-    bg_id = str((bg or {}).get("id") or "")
-    has_delete = any(
-        str(o.get("name") or "").strip() in ("delete_nodes", "delete_frame") for o in ops
-    )
+    if not existing_texts:
+        return ops, []
     used_text_ids: set[str] = set()
-    out: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    errors: list[str] = []
     for raw in ops:
         name = str(raw.get("name") or "").strip()
-        if not name:
+        args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
+        if name != "create_text":
+            kept.append(raw)
             continue
-        args = dict(raw.get("args") or {})
-        if name == "create_text" and existing_texts:
-            match = _find_matching_text_node(
-                scene_nodes, str(args.get("text") or ""), used_text_ids
-            )
-            if match:
-                mid = str(match.get("id") or "")
-                used_text_ids.add(mid)
-                update_args: dict[str, Any] = {"nodeId": mid}
-                for k in (
-                    "text",
-                    "fontSize",
-                    "color",
-                    "fontWeight",
-                    "fontFamily",
-                    "textAlign",
-                ):
-                    if args.get(k) is not None:
-                        update_args[k] = args.get(k)
-                out.append(
-                    {
-                        "name": "update_node",
-                        "args": _normalize_update_node_args(update_args),
-                    }
-                )
-                continue
-            if not has_delete and len(existing_texts) >= 2:
-                continue
-        if (
-            name == "update_node"
-            and not args.get("nodeId")
-            and not args.get("id")
-            and bg_id
-            and args.get("fill") is not None
-        ):
-            args["nodeId"] = bg_id
-        if name == "update_node":
-            args = _normalize_update_node_args(args)
-        out.append({"name": name, "args": args})
-    return out
+        text = str(args.get("text") or args.get("content") or "")
+        match = _find_matching_text_node(scene_nodes, text, used_text_ids)
+        if not match:
+            kept.append(raw)
+            continue
+        mid = str(match.get("id") or "")
+        used_text_ids.add(mid)
+        errors.append(
+            f"prefer_update_node: create_text matches SCENE_NODES id={mid}; "
+            f"re-emit update_node nodeId={mid} with text/fontSize/color (do not create_text)."
+        )
+    return kept, errors
 
 
 def normalize_agent_tool_ops(
@@ -690,7 +609,10 @@ def normalize_agent_tool_ops(
     rules: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
-    Allowlist + edit hygiene + per-op validation + op_id + dedupe.
+    Allowlist + alias normalize + per-op validation + op_id + dedupe.
+
+    Semantic mistakes are rejected with errors for the model to re-emit — never
+    silently rewritten (no create→update morph, no inventing nodeId).
     Returns (ops, errors). ops empty with errors → orchestrator should retry/fail.
     FE must execute these ops as-is (no client rewrite).
     """
@@ -719,6 +641,9 @@ def normalize_agent_tool_ops(
         if name == "create_shape":
             if args.get("shapeType") is None and args.get("type") is not None:
                 args["shapeType"] = args.get("type")
+        if name == "create_text":
+            if args.get("text") is None and args.get("content") is not None:
+                args["text"] = args.get("content")
         if name in (
             "delete_nodes",
             "align_nodes",
@@ -735,8 +660,11 @@ def normalize_agent_tool_ops(
             args = _normalize_update_node_args(args)
         working.append({"name": name, "args": args})
 
-    working = _rewrite_shape_morph_ops(working)
-    working = _hygiene_edit_ops(working, scene_nodes)
+    # Validate intent — reject, do not rewrite into a "fixed" op.
+    working, morph_errs = _reject_shape_morph_ops(working)
+    errors.extend(morph_errs)
+    working, text_errs = _reject_create_text_as_edit(working, scene_nodes)
+    errors.extend(text_errs)
 
     normalized: list[dict[str, Any]] = []
     for idx, item in enumerate(working):
