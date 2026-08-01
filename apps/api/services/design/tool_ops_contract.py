@@ -202,8 +202,15 @@ def format_canvas_tools_details(
         for t in list_canvas_tools(enabled_only=True)
         if t.get("op_key")
     }
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        header = resolve_prompt_body("agent.prompt.tool_details_header").strip()
+    except Exception:
+        header = ""
     lines: list[str] = [
-        "TOOL_DETAILS（请用这些 op 的 `name` 写入 tool_ops；不要再申请 need_tools）："
+        header
+        or "TOOL_DETAILS（请用这些 op 的 `name` 写入 tool_ops；不要再申请 need_tools）："
     ]
     missing: list[str] = []
     for key in wanted:
@@ -596,14 +603,11 @@ def _hygiene_edit_ops(
 ) -> list[dict[str, Any]]:
     """Edit-run hygiene (formerly FE sanitizeEditToolOps). Backend owns this.
 
-    - near full-bleed create_shape → update_node on largest **shape** plate
-      (never rewrite onto image/svg — that swallows "add a rect next to photos")
+    - create_shape always stays create (add ≠ update an existing rect)
     - create_text matching SCENE_NODES → update_node
     - unmatched create_text on populated UI (no deletes) → drop
     - update_node missing nodeId + fill → bind largest plate
     """
-    # Images/SVGs are content, not background plates — rewriting create_shape onto
-    # them makes "add a rectangle next to photos" look like a no-op update.
     _non_plate = frozenset({"text", "image", "svg"})
     plates = [
         n
@@ -627,13 +631,6 @@ def _hygiene_edit_ops(
             * float(n.get("h") or n.get("height") or 0),
         )
     bg_id = str((bg or {}).get("id") or "")
-    canvas_area = 0.0
-    if bg:
-        canvas_area = max(
-            1.0,
-            float(bg.get("w") or bg.get("width") or 0)
-            * float(bg.get("h") or bg.get("height") or 0),
-        )
     has_delete = any(
         str(o.get("name") or "").strip() in ("delete_nodes", "delete_frame") for o in ops
     )
@@ -644,26 +641,6 @@ def _hygiene_edit_ops(
         if not name:
             continue
         args = dict(raw.get("args") or {})
-        if bg_id and name == "create_shape" and (
-            args.get("fill") is not None or args.get("fillColor") is not None
-        ):
-            w = max(1.0, _num(args.get("width"), 0.0))
-            h = max(1.0, _num(args.get("height"), 0.0))
-            if canvas_area > 0 and w * h >= canvas_area * 0.85:
-                out.append(
-                    {
-                        "name": "update_node",
-                        "args": _normalize_update_node_args(
-                            {
-                                "nodeId": bg_id,
-                                "fill": args.get("fill")
-                                if args.get("fill") is not None
-                                else args.get("fillColor"),
-                            }
-                        ),
-                    }
-                )
-                continue
         if name == "create_text" and existing_texts:
             match = _find_matching_text_node(
                 scene_nodes, str(args.get("text") or ""), used_text_ids
@@ -926,7 +903,7 @@ def tool_ops_activity_counts(ops: list[dict[str, Any]]) -> tuple[int, int, int]:
 
 
 def tool_ops_batch_detail(batch: list[dict[str, Any]], *, limit: int = 10) -> str:
-    """One-line Tool call detail for activity SSE (shape / text / delete…)."""
+    """One-line ops summary for activity SSE — locale-neutral (op keys + content)."""
     parts: list[str] = []
     for op in batch or []:
         if not isinstance(op, dict):
@@ -936,34 +913,35 @@ def tool_ops_batch_detail(batch: list[dict[str, Any]], *, limit: int = 10) -> st
         if name == "create_shape":
             st = str(args.get("shapeType") or args.get("type") or "shape").strip() or "shape"
             fill = str(args.get("fill") or "").strip()
-            parts.append(f"添加{st}" + (f" ({fill})" if fill else ""))
+            parts.append(f"+{st}" + (f" ({fill})" if fill else ""))
         elif name == "create_text":
             t = str(args.get("text") or args.get("content") or "").replace("\n", " ").strip()
-            if t:
-                parts.append(f"添加文字「{t[:20]}」")
-            else:
-                parts.append("添加文字")
+            parts.append(f'+text "{t[:20]}"' if t else "+text")
         elif name == "create_image":
-            parts.append("添加图片")
+            parts.append("+image")
         elif name == "create_svg":
-            parts.append("添加图标")
+            parts.append("+svg")
+        elif name == "create_frame":
+            parts.append("+frame")
         elif name == "update_node":
             nid = str(args.get("nodeId") or "")[:8]
             fill = str(args.get("fill") or "").strip()
             if fill:
-                parts.append(f"更新填充 {fill}")
+                parts.append(f"update fill {fill}")
             elif nid:
-                parts.append(f"更新 {nid}")
+                parts.append(f"update {nid}")
             else:
-                parts.append("更新元素")
+                parts.append("update")
         elif name == "delete_nodes":
             n = len(args.get("nodeIds") or [])
-            parts.append(f"删除 {n or 1} 个元素")
+            parts.append(f"delete×{n or 1}")
         elif name == "delete_frame":
-            parts.append("删除画板")
+            parts.append("delete_frame")
+        elif name:
+            parts.append(name)
         if len(parts) >= limit:
             break
-    return "，".join(parts)
+    return ", ".join(parts)
 
 
 def tool_ops_activity_events(
@@ -980,6 +958,7 @@ def tool_ops_activity_events(
     evs: list[dict[str, Any]] = []
     detail = tool_ops_batch_detail(batch)
     # Confirm row only when there is no success capsule for this batch.
+    # Labels come from FE i18n (activityAdded / Updated / …). Keep summary = ops list.
     if detail and not created and not updated and not deleted:
         seq = (
             int(totals["created"])
@@ -992,7 +971,6 @@ def tool_ops_activity_events(
                 "id": f"ops-tool-{skill_index}-{seq}",
                 "kind": "tool",
                 "status": "done",
-                "detail": "已确认画布操作",
                 "summary": detail,
                 "index": skill_index,
             }
@@ -1006,8 +984,7 @@ def tool_ops_activity_events(
                 "kind": "added",
                 "status": "done",
                 "count": n,
-                "detail": "画布内容已生成",
-                "summary": detail or f"已添加 {n} 个元素",
+                "summary": detail or None,
                 "index": skill_index,
             }
         )
@@ -1020,8 +997,7 @@ def tool_ops_activity_events(
                 "kind": "updated",
                 "status": "done",
                 "count": n,
-                "detail": "画布已更新",
-                "summary": detail or f"已更新 {n} 个元素",
+                "summary": detail or None,
                 "index": skill_index,
             }
         )
@@ -1034,8 +1010,7 @@ def tool_ops_activity_events(
                 "kind": "deleted",
                 "status": "done",
                 "count": n,
-                "detail": "已删除画布内容",
-                "summary": detail or f"已删除 {n} 个元素",
+                "summary": detail or None,
                 "index": skill_index,
             }
         )

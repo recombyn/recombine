@@ -495,11 +495,21 @@ def retrieve_aesthetic_refs(
     # Vision-first: CLIP ranks sample images; do NOT inject 短评/tags/DESIGN_TOKENS.
     # The next thought turn attaches imageUrls and the model should look at them.
     if has_user:
-        slim_lines = [
-            "AESTHETIC_REFS（用户附件为主 — 请看图模仿用户风格）：",
-            "已跳过语料优秀/可用样本图（存在用户附件）。可选反例图仍附上时请避开其失败模式。",
-            "以附图视觉为准。",
-        ]
+        try:
+            from services.design.prompt_pack_store import resolve_prompt_body
+
+            user_hdr = resolve_prompt_body("agent.prompt.aesthetic_refs_user").strip()
+        except Exception:
+            user_hdr = ""
+        slim_lines = (
+            [ln for ln in user_hdr.splitlines() if ln.strip()]
+            if user_hdr
+            else [
+                "AESTHETIC_REFS（用户附件为主 — 请看图模仿用户风格）：",
+                "已跳过语料优秀/可用样本图（存在用户附件）。可选反例图仍附上时请避开其失败模式。",
+                "以附图视觉为准。",
+            ]
+        )
         if bad_refs:
             for i, r in enumerate(bad_refs, start=1):
                 name = (r.get("name") or f"#{r.get('id')}")[:80]
@@ -565,10 +575,20 @@ def format_aesthetic_refs_block(
                     out_lines.append(f"   （无图）仅作等级标记 — {verb}")
         return out_lines
 
-    lines = [
-        "AESTHETIC_REFS（向量检索样本图 — 请看附图）：",
-        "优秀→模仿并达到其水准；可用→超越；反例→避开失败模式。勿逐字抄样本文案。",
-    ]
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        corpus_hdr = resolve_prompt_body("agent.prompt.aesthetic_refs_corpus").strip()
+    except Exception:
+        corpus_hdr = ""
+    lines = (
+        [ln for ln in corpus_hdr.splitlines() if ln.strip()]
+        if corpus_hdr
+        else [
+            "AESTHETIC_REFS（向量检索样本图 — 请看附图）：",
+            "优秀→模仿并达到其水准；可用→超越；反例→避开失败模式。勿逐字抄样本文案。",
+        ]
+    )
     if not matched_by_clip:
         lines.append("（按时间排序；CLIP 向量匹配不可用）")
 
@@ -637,6 +657,22 @@ def format_aesthetics_catalog(*, scene: str = "website") -> str:
                 counts[g] = int(r["c"] or 0)
     except Exception:
         logger.exception("aesthetics catalog count failed scene=%s", sc)
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        tmpl = resolve_prompt_body("agent.prompt.aesthetic_catalog").strip()
+    except Exception:
+        tmpl = ""
+    if tmpl:
+        try:
+            return tmpl.format(
+                scene=sc,
+                good=counts["good"],
+                ok=counts["ok"],
+                bad=counts["bad"],
+            )
+        except Exception:
+            pass
     return (
         f"美学样本库（场景={sc}）："
         f"优秀≈{counts['good']}，可用≈{counts['ok']}，反例≈{counts['bad']}。\n"

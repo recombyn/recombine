@@ -908,39 +908,9 @@ async def ainvoke_structured(
         tags=tags or [source, "structured"],
     )
 
+    # Prefer direct structured output first — create_agent often burns multiple
+    # model round-trips (intent_classify hit 6×~4s) for a simple schema fill.
     try:
-        # One-shot structured calls: ephemeral checkpointer (don't pollute session threads).
-        from langgraph.checkpoint.memory import InMemorySaver
-
-        agent = build_official_agent(
-            model=model,
-            system=sys_text,
-            tools=[],
-            source=source,
-            response_format=schema,
-            checkpointer=InMemorySaver(),
-            summarize=False,
-            with_long_term_store=False,
-        )
-        result = await agent.ainvoke({"messages": lc_messages}, config=cfg)
-        structured = None
-        out_msgs: list[Any] = []
-        if isinstance(result, dict):
-            structured = result.get("structured_response")
-            out_msgs = result.get("messages") or []
-        text = ""
-        if out_msgs:
-            last = out_msgs[-1]
-            text = content_text_from_chunk(last) or (
-                str(last.content)
-                if isinstance(getattr(last, "content", None), str)
-                else ""
-            )
-        if structured is None:
-            raise RuntimeError("create_agent returned no structured_response")
-        return {"structured": structured, "text": text, "messages": out_msgs}
-    except Exception:
-        # Provider / strategy fallback — still official LangChain structured API.
         llm = build_chat_model(
             endpoint=endpoint,
             model_id_override=model_id,
@@ -952,6 +922,42 @@ async def ainvoke_structured(
         structured_llm = llm.with_structured_output(schema)
         got = await structured_llm.ainvoke(lc_messages, config=cfg)
         return {"structured": got, "text": "", "messages": lc_messages}
+    except Exception as direct_err:
+        _log.debug(
+            "direct with_structured_output failed (%s); falling back to create_agent",
+            type(direct_err).__name__,
+        )
+
+    # Fallback: official create_agent + response_format.
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    agent = build_official_agent(
+        model=model,
+        system=sys_text,
+        tools=[],
+        source=source,
+        response_format=schema,
+        checkpointer=InMemorySaver(),
+        summarize=False,
+        with_long_term_store=False,
+    )
+    result = await agent.ainvoke({"messages": lc_messages}, config=cfg)
+    structured = None
+    out_msgs: list[Any] = []
+    if isinstance(result, dict):
+        structured = result.get("structured_response")
+        out_msgs = result.get("messages") or []
+    text = ""
+    if out_msgs:
+        last = out_msgs[-1]
+        text = content_text_from_chunk(last) or (
+            str(last.content)
+            if isinstance(getattr(last, "content", None), str)
+            else ""
+        )
+    if structured is None:
+        raise RuntimeError("create_agent returned no structured_response")
+    return {"structured": structured, "text": text, "messages": out_msgs}
 
 
 

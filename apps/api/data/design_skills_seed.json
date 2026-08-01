@@ -110,7 +110,7 @@
       "skill_key": "image_gen",
       "name": "生图配图",
       "category": "image",
-      "when_to_use": "需要 create_image + genPrompt",
+      "when_to_use": "需要 create_image（含艺术字作图）",
       "scenes": "all",
       "sort_weight": 60,
       "preferred_tools": [
@@ -118,11 +118,11 @@
         "create_frame",
         "update_node"
       ],
-      "prompt_positive": "# 生图配图\n\n摄影/场景/材质用 create_image+genPrompt；标题/卖点/CTA/价格用 create_text。\n用户禁止生图时跳过 create_image。\n尺寸、透明底、叠层位置见 user.layout_ops（勿在此展开）。\n",
-      "prompt_negative": "用户禁止生图时不要 create_image；价格未提供时不要写入画面。",
+      "prompt_positive": "# 生图配图\n\n`create_image` 的 `genPrompt`（或 `prompt`）：给图像模型的自然语言描述，用来生成位图；不是画布上的可编辑文字节点。\n\n## 选型（由你判断，勿套固定文案品类清单）\n- **create_image**：需要摄影/插画/材质，或文字本身是视觉特效（书法笔触、分色块字、立体挤出等——字体文件做不到）→ 整块当图形生图；prompt 写清要出现的字、风格、配色、是否透明底。\n- **create_text**：需要可编辑、可改字、当图层文字排版的内容（无上述特效）。\n\n用户禁止生图时跳过 create_image；特效字退回简洁 create_text，勿假装有书法字体。\n艺术字可带 letteringText（图上原文），便于 image_process kind=replaceText（meta.originalText+newText）换字。\n未提供的事实信息不要编造进画面。\n尺寸、透明底、叠层位置见 user.layout_ops（勿在此展开）。\n",
+      "prompt_negative": "用户禁止生图时不要 create_image；勿用 create_text 冒充书法/立体艺术字；勿写死「某类文案必须用某 op」。",
       "triggers": [],
       "mutex_group": "image",
-      "version": 6
+      "version": 9
     }
   ]
 }

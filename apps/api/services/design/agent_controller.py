@@ -32,6 +32,7 @@ from services.design.models_route import (
     enabled_tiers,
     estimate_task_tier,
     resolve_model_for_skill,
+    router_model_id,
 )
 from services.design.pipeline_support import (
     _normalize_ref_images,
@@ -148,7 +149,8 @@ class PlanSchema(BaseModel):
     model_config = {"extra": "allow"}
 
 
-# Default tools injected when paint stage starts without a prior need_tools round.
+# Fallback paint kits (structural — not content-category lists).
+# Prefer `_paint_tool_keys_for_turn` which trims by scene / vision / intent.
 _DEFAULT_PAINT_CREATE_TOOLS = (
     "create_frame",
     "create_shape",
@@ -162,6 +164,8 @@ _DEFAULT_PAINT_EDIT_TOOLS = (
     "update_node",
     "delete_nodes",
 )
+# Compact prompt length (whitespace-stripped) for lean paint / skip skill preload.
+_LEAN_PAINT_PROMPT_CHARS = 96
 
 
 def _agent_turn_parser():
@@ -377,7 +381,7 @@ class AgentRunState:
             "aesthetics_loaded": bool(self.aesthetics_loaded),
             "flow_id": self.flow_id or None,
             "flow_version": self.flow_version or None,
-            "steps": list(self.log),
+            "steps": list(self.log)
         }
 
 
@@ -389,27 +393,20 @@ def _flag_on(rules: dict[str, str] | None, key: str, default: str = "0") -> bool
 
 
 def _wants_short_plan(prompt: str, *, rules: dict[str, str]) -> bool:
-    """P2.2: short plan for create-ish / long briefs when Admin enables."""
+    """Short plan when Admin enables — length gate only (no content keywords).
+
+    Whether the brief is a poster/page/etc. is the planner LLM's job.
+    """
     if not _flag_on(rules, "agent.react.short_plan", "0"):
         return False
-    p = (prompt or "").strip()
-    if len(p) >= 36:
-        return True
-    keys = (
-        "海报",
-        "整页",
-        "官网",
-        "落地页",
-        "landing",
-        "一套",
-        "完整",
-        "做一张",
-        "设计一张",
-        "创建海报",
-        "banner",
-        "主视觉",
-    )
-    return any(k in p for k in keys)
+    try:
+        min_chars = int(
+            _rule_text(rules, "agent.react.short_plan_min_chars", "36") or 36
+        )
+    except ValueError:
+        min_chars = 36
+    min_chars = max(8, min_chars)
+    return len((prompt or "").strip()) >= min_chars
 
 
 def _parse_plan(content: Any) -> list[str]:
@@ -708,20 +705,67 @@ def _turn_has_clarify(turn: dict[str, Any] | None) -> bool:
     return isinstance(choices, list) and bool(choices)
 
 
+def _prompt_compact_len(prompt: str | None) -> int:
+    return len(re.sub(r"\s+", "", str(prompt or "")))
+
+
+def _is_lean_paint_turn(rt: Any) -> bool:
+    """Short, no-vision canvas add/edit — slim paint prompt (no content keywords)."""
+    if bool(getattr(rt, "images", None)):
+        return False
+    return _prompt_compact_len(getattr(rt, "prompt", None)) <= _LEAN_PAINT_PROMPT_CHARS
+
+
+def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
+    """Structural paint tool kit — not hard-coded to rect / one shape type.
+
+    - Always: create_shape + create_text (covers shapes, paths, labels).
+    - create_frame only when there is no artboard yet / canvas empty.
+    - create_image only when the turn has attachments.
+    - update/delete when edit intent and scene has nodes.
+    - Plus any tools the model already requested via need_tools.
+    """
+    st = rt.run
+    want = str(rt.classified_intent or st.intent or "create").strip().lower()
+    if want not in ("edit", "create"):
+        want = "create"
+    has_images = bool(getattr(rt, "images", None))
+    empty = _canvas_is_empty(rt)
+    frames = [
+        f for f in (getattr(rt, "scene_frames", None) or [])
+        if isinstance(f, dict) and f.get("id")
+    ]
+    nodes = [
+        n for n in (getattr(rt, "scene_nodes", None) or [])
+        if isinstance(n, dict) and n.get("id")
+    ]
+
+    keys: list[str] = ["create_shape", "create_text"]
+    if want == "create" and (empty or not frames):
+        keys.insert(0, "create_frame")
+    if has_images:
+        keys.append("create_image")
+    if want == "edit" and nodes:
+        for k in ("update_node", "delete_nodes"):
+            if k not in keys:
+                keys.append(k)
+
+    for raw in st.tools_loaded or []:
+        k = str(raw or "").strip()
+        if k and k not in keys:
+            keys.append(k)
+    return keys[:8]
+
+
 def _ensure_paint_tool_details(rt: Any) -> None:
     """Guarantee TOOL_DETAILS before the paint stage (no narrate-only escape)."""
     st = rt.run
-    want = str(rt.classified_intent or st.intent or "create").strip().lower()
-    defaults = (
-        list(_DEFAULT_PAINT_EDIT_TOOLS)
-        if want == "edit"
-        else list(_DEFAULT_PAINT_CREATE_TOOLS)
-    )
-    keys = list(st.tools_loaded or []) or defaults
-    for k in defaults:
-        if k not in keys:
-            keys.append(k)
-    keys = keys[:12]
+    keys = _paint_tool_keys_for_turn(rt)
+    if not keys:
+        want = str(rt.classified_intent or st.intent or "create").strip().lower()
+        keys = list(
+            _DEFAULT_PAINT_EDIT_TOOLS if want == "edit" else _DEFAULT_PAINT_CREATE_TOOLS
+        )
     details = format_canvas_tools_details(keys, rules=rt.rules)
     if not details:
         return
@@ -738,11 +782,17 @@ def _paint_ops_system(rt: Any) -> str:
     if not isinstance(flags, dict):
         flags = {}
     ask_mode = str(flags.get("mode") or "").strip().lower() == "ask"
-    ask_reply = (
-        "- Ask mode: ops apply after the user already clarified; reply briefly after paint.\n"
+    ask_rule = (
+        "- Ask mode: user already clarified; emit ops only; reply briefly (never claim applied).\n"
         if ask_mode
         else "- Do not ask questions.\n"
     )
+    tmpl = _prompt_text(rt.rules, "agent.prompt.paint_system")
+    if tmpl:
+        try:
+            return head + tmpl.format(ask_rule=ask_rule)
+        except Exception:
+            pass
     return (
         head
         + "You are the canvas PAINT stage of a design editor agent.\n"
@@ -750,26 +800,141 @@ def _paint_ops_system(rt: Any) -> str:
         "Rules:\n"
         "- tool_ops must be a non-empty array; use TOOL_DETAILS `name`/`op_key` exactly.\n"
         "- New poster/page/artboard → create_frame first (with width/height), then children.\n"
+        "- Infinite canvas: add shape/text (添加矩形等) → create_shape/create_text in world "
+        "space; do NOT create_frame unless the user asked for a new artboard/page/poster.\n"
+        "- If FOCUS_FRAME_ID is set, prefer placing inside that frame; otherwise free-canvas.\n"
+        "- When the user gives no position: use PLACEMENT.suggested_place_world (or "
+        "suggested_place inside a focused frame). Keep new nodes inside viewport_world.\n"
+        "- Do NOT place free-canvas creates far outside the current viewport.\n"
         "- CANVAS_SIZE concrete WxH → create_frame must use that size; auto → pick WxH yourself.\n"
         "- intent must be edit or create. reply ≤40 characters (no design essay).\n"
-        + ask_reply
+        "- Never say you already added/applied anything; ops are applied by the host after this.\n"
+        + ask_rule
         + "- Do not leave tool_ops empty. Do not invent node ids.\n"
     )
 
 
+def _box_num(d: dict[str, Any], *keys: str, default: float = 0.0) -> float:
+    for k in keys:
+        if k in d and d[k] is not None:
+            try:
+                return float(d[k])
+            except (TypeError, ValueError):
+                pass
+    return default
+
+
+def _derive_suggested_place_world(
+    spatial: dict[str, Any],
+    *,
+    focus_frame: dict[str, Any] | None = None,
+) -> dict[str, float] | None:
+    """Host derives free-canvas place from FE viewport / frame-local slot."""
+    vp = spatial.get("viewport")
+    if isinstance(vp, dict):
+        vx = _box_num(vp, "x")
+        vy = _box_num(vp, "y")
+        vw = _box_num(vp, "w", "width")
+        vh = _box_num(vp, "h", "height")
+        if vw > 8 and vh > 8:
+            cw = min(320.0, max(80.0, vw * 0.25))
+            ch = min(200.0, max(80.0, vh * 0.25))
+            return {
+                "x": round(vx + max(24.0, (vw - cw) / 2)),
+                "y": round(vy + max(24.0, (vh - ch) / 2)),
+                "w": round(cw),
+                "h": round(ch),
+            }
+    sp = spatial.get("suggested_place")
+    if isinstance(sp, dict) and isinstance(focus_frame, dict):
+        fox = _box_num(focus_frame, "x")
+        foy = _box_num(focus_frame, "y")
+        return {
+            "x": round(fox + _box_num(sp, "x")),
+            "y": round(foy + _box_num(sp, "y")),
+            "w": round(_box_num(sp, "w", "width", default=320)),
+            "h": round(_box_num(sp, "h", "height", default=200)),
+        }
+    return None
+
+
+def _format_spatial_placement(
+    spatial: dict[str, Any] | None,
+    *,
+    focus_frame: dict[str, Any] | None = None,
+) -> str:
+    """Host placement brief — FE supplies viewport + scene facts only."""
+    if not isinstance(spatial, dict) or not spatial:
+        return ""
+    spw = _derive_suggested_place_world(spatial, focus_frame=focus_frame)
+    lines: list[str] = [
+        "PLACEMENT (no user position → pick a visible empty slot; stay in viewport):",
+        "- free-canvas create_shape/create_text (omit frameId): use suggested_place_world x/y.",
+        "- inside FOCUS_FRAME_ID: suggested_place / empty_rects are frame-local.",
+    ]
+    vp = spatial.get("viewport")
+    if isinstance(vp, dict) and _box_num(vp, "w", "width") > 0:
+        lines.append(
+            f"- viewport_world: x={vp.get('x')} y={vp.get('y')} "
+            f"w={vp.get('w') or vp.get('width')} h={vp.get('h') or vp.get('height')}"
+        )
+    if spw:
+        lines.append(
+            f"- suggested_place_world: x={spw['x']} y={spw['y']} "
+            f"w={spw['w']} h={spw['h']}"
+        )
+    sp = spatial.get("suggested_place")
+    if isinstance(sp, dict) and _box_num(sp, "w", "width") > 0:
+        lines.append(
+            f"- suggested_place (frame-local): x={sp.get('x')} y={sp.get('y')} "
+            f"w={sp.get('w')} h={sp.get('h')}"
+        )
+    empties = spatial.get("empty_rects")
+    if isinstance(empties, list):
+        for i, box in enumerate(empties[:3]):
+            if not isinstance(box, dict):
+                continue
+            lines.append(
+                f"- empty_rect[{i}] (frame-local): x={box.get('x')} y={box.get('y')} "
+                f"w={box.get('w')} h={box.get('h')}"
+            )
+    return "\n".join(lines) if len(lines) > 3 else ""
+
+
 def _paint_ops_user(rt: Any) -> str:
     vars_ = _thought_prompt_variables(rt)
+    spatial = (
+        getattr(rt, "spatial_summary", None)
+        if isinstance(getattr(rt, "spatial_summary", None), dict)
+        else None
+    )
+    focus_frame = None
+    focus_id = str(getattr(rt, "focus_id", "") or "").strip()
+    if focus_id:
+        for f in getattr(rt, "scene_frames", None) or []:
+            if isinstance(f, dict) and str(f.get("id") or "") == focus_id:
+                focus_frame = f
+                break
+    spatial_hint = _format_spatial_placement(spatial, focus_frame=focus_frame)
+    lean = _is_lean_paint_turn(rt)
+    # Lean: tools + scene only — drop skill/knowledge/aesthetics essays for short adds.
+    if lean:
+        pending = str(getattr(rt, "pending_tool_details", "") or "").strip()
+    else:
+        pending = vars_["pending_blocks"]
     parts = [
         f"USER_PROMPT:\n{vars_['prompt']}",
         f"CANVAS_SIZE: {vars_['canvas_size']}",
         f"SCENE: {vars_['scene']}",
         vars_["scene_digest"],
-        vars_["pending_blocks"],
-        vars_["plan_block"],
-        vars_["error_block"],
-        vars_["edit_context"],
-        "Emit PaintOpsSchema now: non-empty tool_ops first.",
+        spatial_hint,
+        pending,
     ]
+    if not lean:
+        parts.append(vars_["plan_block"])
+        parts.append(vars_["edit_context"])
+    parts.append(vars_["error_block"])
+    parts.append("Emit PaintOpsSchema now: non-empty tool_ops first.")
     return "\n\n".join(p for p in parts if str(p or "").strip())
 
 
@@ -800,59 +965,116 @@ def _slim_failure_steps(steps: list[dict[str, Any]], *, limit: int = 12) -> list
     return out
 
 
-def _should_early_open_artboard(rt: Any) -> bool:
-    """New create (or empty edit) may open a loading plate before paint."""
-    intent = str(
-        getattr(rt, "classified_intent", None) or getattr(rt.run, "intent", "") or ""
-    ).strip().lower()
-    if intent == "create":
-        return True
-    if intent != "edit":
+def _should_early_open_artboard(_rt: Any) -> bool:
+    """Do not invent an artboard before paint.
+
+    Infinite canvas: shapes/text need no plate. A plate opens only when paint
+    emits ``create_frame`` (see ``_emit_canvas_size_from_ops``).
+    """
+    return False
+
+
+def _resolve_loading_wh(rt: Any) -> tuple[int, int]:
+    """Concrete WxH for early loading plate (client lock or scene stock default)."""
+    try:
+        ow, oh = int(rt.w or 0), int(rt.h or 0)
+    except (TypeError, ValueError):
+        ow, oh = 0, 0
+    if ow > 0 and oh > 0:
+        return ow, oh
+    return _resolve_wh(
+        canvas_size=rt.canvas_size,
+        scene_key=str(rt.scene_key or ""),
+        rules=rt.rules or {},
+        scene_frames=list(rt.scene_frames or []),
+        focus_id=str(rt.focus_id or ""),
+    )
+
+
+def _emit_canvas_size_step(
+    rt: Any,
+    *,
+    ow: int,
+    oh: int,
+    design_loading: bool = True,
+    reason: str = "size",
+) -> bool:
+    """SSE: open loading plate + process row「画布尺寸」so shimmer can start early."""
+    if ow <= 0 or oh <= 0:
         return False
-    nodes = getattr(rt, "scene_nodes", None) or []
-    return not any(isinstance(n, dict) and n.get("id") for n in nodes)
+    if str(rt.flags.get("mode") or "") == "ask":
+        return False
+    st = rt.run
+    size = f"{ow}x{oh}"
+    prev = str(rt.flags.get("artboard_size") or "")
+    already = bool(rt.flags.get("artboard_opened")) and prev == size
+    if not already:
+        _emit(
+            {
+                "type": "status",
+                "task_id": st.task_id,
+                "trace_id": st.trace_id,
+                "open_artboard": True,
+                "canvas_width": ow,
+                "canvas_height": oh,
+                "canvas_size": size,
+                "design_loading": bool(design_loading)
+            }
+        )
+        rt.flags["artboard_opened"] = True
+        rt.flags["artboard_size"] = size
+    if not explicit_canvas_size(rt.canvas_size):
+        rt.canvas_size = size
+        rt.w, rt.h = ow, oh
+    elif rt.w <= 0 or rt.h <= 0:
+        rt.w, rt.h = ow, oh
+    # One timeline row per size (skip duplicate same WxH).
+    if prev != size:
+        # FE i18n: explored + canvas_size: → activityCanvasSizeDone
+        _emit(
+            {
+                "type": "activity",
+                "id": f"canvas-size-{st.task_id[:8]}-{size}",
+                "kind": "explored",
+                "status": "done",
+                "stage": "scene",
+                "detail": f"canvas_size:{size}",
+                "summary": size,
+                "index": int(getattr(st, "round", 0) or 0)
+            }
+        )
+        st.push_log(
+            phase="canvas_size",
+            intent=str(rt.classified_intent or st.intent or ""),
+            summary=f"canvas_size {size} ({reason})",
+        )
+    return True
 
 
 def _emit_design_loading_artboard(rt: Any) -> bool:
     """Open artboard + shimmer as design loading (after intent, before paint/action)."""
-    if rt.flags.get("artboard_opened"):
-        return False
     if str(rt.flags.get("mode") or "") == "ask":
         # Ask waits for user confirm — do not spawn a loading plate yet.
         return False
     if not _should_early_open_artboard(rt):
         return False
-    try:
-        ow, oh = int(rt.w or 0), int(rt.h or 0)
-    except (TypeError, ValueError):
-        ow, oh = 0, 0
+    ow, oh = _resolve_loading_wh(rt)
+    return _emit_canvas_size_step(
+        rt, ow=ow, oh=oh, design_loading=True, reason="intent"
+    )
+
+
+def _emit_canvas_size_from_ops(rt: Any, step_ops: list[dict[str, Any]]) -> bool:
+    """Open an artboard only when ops include create_frame.
+
+    Infinite canvas: create_shape / create_text / … do not need a frame plate.
+    """
+    ow, oh = _wh_from_create_frame_ops(step_ops)
     if ow <= 0 or oh <= 0:
         return False
-    st = rt.run
-    size = f"{ow}x{oh}"
-    _emit(
-        {
-            "type": "status",
-            "task_id": st.task_id,
-            "trace_id": st.trace_id,
-            "open_artboard": True,
-            "canvas_width": ow,
-            "canvas_height": oh,
-            "canvas_size": size,
-            "design_loading": True,
-        }
+    return _emit_canvas_size_step(
+        rt, ow=ow, oh=oh, design_loading=True, reason="paint_ops"
     )
-    rt.flags["artboard_opened"] = True
-    # Align paint prompt with the loading plate (avoid auto vs plate mismatch).
-    if not explicit_canvas_size(rt.canvas_size):
-        rt.canvas_size = size
-        rt.w, rt.h = ow, oh
-    st.push_log(
-        phase="design_loading",
-        intent=str(rt.classified_intent or st.intent or ""),
-        summary=f"开画板 loading {size}",
-    )
-    return True
 
 
 def _chat_fallback_text(rt: Any) -> str:
@@ -914,7 +1136,7 @@ async def _stream_llm_text(
                         "from_model": family,
                         "model": new_f,
                         "switch_kind": "vision",
-                        "summary": f"{family} → {new_f}",
+                        "summary": f"{family} → {new_f}"
                     }
                 )
             family = new_f
@@ -935,7 +1157,7 @@ async def _stream_llm_text(
                     "switch_kind": "vision_failed",
                     "images_skipped": True,
                     "error": str(piece),
-                    "summary": "看图不可用，降级为纯文本",
+                    "summary": "看图不可用，降级为纯文本"
                 }
             )
             continue
@@ -1023,7 +1245,7 @@ def _hydrate_log_kwargs(
             "\n".join(f"result_src={u}" for u in (srcs or []))
             or f"filled={n_img} (no src captured)",
             limit=4000,
-        ),
+        )
     }
 
 
@@ -1116,7 +1338,7 @@ def _short_ui_thought(raw: str, *, intent: str) -> str:
             "ask": '确认需求',
             "done": '完成',
             "edit": '编辑画布',
-            "create": '创建内容',
+            "create": '创建内容'
         }.get(intent, '处理中')
     return t[:24]
 
@@ -1332,7 +1554,7 @@ def _fetch_deferred_aesthetics(
             "userRefCount": len(user_ref_urls or []),
             "corpusIds": [],
             "ms": 0,
-            "mode": "error",
+            "mode": "error"
         }
     guidance = str(rag.get("guidance") or "").strip()
     img_urls = [
@@ -1349,7 +1571,7 @@ def _fetch_deferred_aesthetics(
         "corpusIds": list(rag.get("corpusIds") or [])[:8],
         "ms": int(rag.get("ms") or 0),
         "mode": str(rag.get("mode") or ""),
-        "use_user_refs": use_user_refs,
+        "use_user_refs": use_user_refs
     }
 
 
@@ -1588,7 +1810,7 @@ def _ensure_propose_choice_ui(st: AgentRunState) -> dict[str, Any]:
             "options": [
                 {"label": "", "action": "apply"},
                 {"label": "", "action": "dismiss"},
-            ],
+            ]
         }
     elif not any(str(o.get("action") or "") == "apply" for o in ui.get("options") or []):
         # Ops ready but no apply action — keep mode (incl. text); add format slot.
@@ -1691,7 +1913,7 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
         "apply_choice": apply_choice,
         "choice_ui": choice_ui,
         "done": bool(done),
-        "raw_obj": obj,
+        "raw_obj": obj
     }
 
 
@@ -1717,42 +1939,59 @@ def _turn_from_structured(structured: Any) -> dict[str, Any]:
     return _normalize_agent_turn_obj({})
 
 
+def _append_pending_reinject(
+    parts: list[str],
+    details: str,
+    *,
+    rules: dict[str, str] | None,
+    prompt_key: str,
+) -> None:
+    """Append resource details + Admin-editable reinject instruction (if any)."""
+    text = str(details or "").strip()
+    if not text:
+        return
+    parts.append(text)
+    reinject = _prompt_text(rules, prompt_key).strip()
+    if reinject:
+        parts.append(reinject)
+
+
 def _thought_prompt_variables(rt: Any) -> dict[str, str]:
     """Variables for LangChain ChatPromptTemplate (thought turn)."""
     st = rt.run
     if rt.w > 0 and rt.h > 0:
         canvas_size = f"{rt.w}x{rt.h}"
     elif _as_text(rt.canvas_size).strip().lower() in ("", "auto"):
-        canvas_size = (
-            "auto\n" + (rt.size_auto_hint or "SIZE_MODE: auto — 自行选择宽高。")
-        )
+        hint = (rt.size_auto_hint or _prompt_text(rt.rules, "agent.prompt.size_auto")).strip()
+        canvas_size = ("auto\n" + hint) if hint else "auto"
     else:
         canvas_size = _as_text(rt.canvas_size).strip() or "unknown"
 
     pending_parts: list[str] = []
-    if rt.pending_tool_details:
-        pending_parts.append(rt.pending_tool_details)
-        pending_parts.append(
-            "以上 TOOL_DETAILS 为准。现在必须输出 tool_ops（intent 保持 edit/create）；"
-            "将 need_tools 设为 []。禁止改回 intent=chat / ask，禁止空 ops 寒暄。"
-        )
-    if rt.pending_knowledge_details:
-        pending_parts.append(rt.pending_knowledge_details)
-        pending_parts.append(
-            "以上 KNOWLEDGE_DETAILS 为准。写 tool_ops 时使用它们；将 need_knowledge 设为 []。"
-        )
-    if rt.pending_skill_details:
-        pending_parts.append(rt.pending_skill_details)
-        pending_parts.append(
-            "以上 SKILL_DETAILS 为准。按 skill 步骤决策并输出 tool_ops；"
-            "将 need_skills 设为 []。禁止空 ops 寒暄。"
-        )
-    if rt.pending_aesthetics_details:
-        pending_parts.append(rt.pending_aesthetics_details)
-        pending_parts.append(
-            "以上 AESTHETIC_REFS + 附图为准：请看图模仿优秀、超越可用、避开反例。"
-            "将 need_aesthetics 设为 false。"
-        )
+    _append_pending_reinject(
+        pending_parts,
+        rt.pending_tool_details,
+        rules=rt.rules,
+        prompt_key="agent.prompt.pending_tools",
+    )
+    _append_pending_reinject(
+        pending_parts,
+        rt.pending_knowledge_details,
+        rules=rt.rules,
+        prompt_key="agent.prompt.pending_knowledge",
+    )
+    _append_pending_reinject(
+        pending_parts,
+        rt.pending_skill_details,
+        rules=rt.rules,
+        prompt_key="agent.prompt.pending_skills",
+    )
+    _append_pending_reinject(
+        pending_parts,
+        rt.pending_aesthetics_details,
+        rules=rt.rules,
+        prompt_key="agent.prompt.pending_aesthetics",
+    )
     pending_blocks = ("\n\n".join(pending_parts) + "\n\n") if pending_parts else ""
 
     plan_block = ""
@@ -1810,7 +2049,7 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
         "recent_dialogue": recent_dialogue,
         "memory_block": memory_block,
         "error_block": error_block,
-        "edit_context": edit_context,
+        "edit_context": edit_context
     }
 
 
@@ -1919,7 +2158,7 @@ def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: Agen
             "consoleUrl": langfuse_console_url(task_id=task_id, trace_id=lf_trace or None),
             "taskId": task_id,
             "traceId": lf_trace or None,
-            "hint": "在 Langfuse 用 metadata.task_id 搜索本任务",
+            "hint": "在 Langfuse 用 metadata.task_id 搜索本任务"
         }
         _update_task(
             task_id,
@@ -1931,7 +2170,7 @@ def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: Agen
                     "trace_id": state.trace_id,
                     "decision_log": decision.to_log(),
                     "execution_log": exec_log,
-                    "langfuse": langfuse,
+                    "langfuse": langfuse
                 },
                 ensure_ascii=False,
             ),
@@ -1955,6 +2194,82 @@ def _emit(ev: dict[str, Any]) -> None:
         get_stream_writer()(ev)
     except Exception:
         pass
+
+
+def _paint_user_reply(raw: str | None, *, limit: int = 40) -> str:
+    """Short post-paint chat line — never re-emit the decide/thought essay."""
+    text = " ".join(str(raw or "").split()).strip()
+    if not text:
+        return ""
+    banned = (
+        "tool_ops",
+        "create_shape",
+        "create_text",
+        "create_frame",
+        "need_skills",
+        "PaintOps",
+        "schema",
+    )
+    low = text.lower()
+    if any(b.lower() in low for b in banned) or len(text) > limit:
+        return ""
+    return text[:limit]
+
+
+def _emit_deferred_paint_reply(st: AgentRunState, *, ops_sent: bool) -> None:
+    """Stream paint reply only after real tool_ops were pushed to the client."""
+    if not ops_sent:
+        st.reply = ""
+        return
+    text = _paint_user_reply(st.reply)
+    st.reply = text
+    if not text:
+        return
+    _emit({"type": "token", "text": text})
+
+
+async def _llm_ux_reply(
+    rt: Any,
+    *,
+    situation: str,
+    facts: str = "",
+    max_tokens: int = 120,
+) -> str:
+    """Short assistant copy in the user's language — never hardcode locale strings."""
+    prompt = _as_text(getattr(rt, "prompt", "") or "").strip()[:1200]
+    system = (
+        "You write one short assistant message for a design-canvas product. "
+        "Match the language of the user request (English if unclear). "
+        "At most two sentences. No markdown lists, no tool_ops, no JSON."
+    )
+    user = (
+        f"Situation: {situation}\n"
+        f"Facts: {(facts or '(none)').strip()[:800]}\n"
+        f"User request:\n{prompt or '(empty)'}\n"
+        "Write only the assistant reply."
+    )
+    try:
+        _fam, content, used, _host, _think = await _stream_llm_text(
+            model_family=router_model_id(getattr(rt, "rules", None) or {}),
+            system=system,
+            user=user,
+            rules=getattr(rt, "rules", None) or {},
+            max_tokens=max_tokens,
+            live_emit=False,
+        )
+        st = getattr(rt, "run", None)
+        if st is not None and used:
+            try:
+                st.total_tokens += int(used)
+            except Exception:
+                pass
+        text = (content or "").strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'“”":
+            text = text[1:-1].strip()
+        return text[:500]
+    except Exception:
+        _log.exception("llm ux reply failed")
+        return ""
 
 
 def _log_graph_hop(
@@ -2044,6 +2359,8 @@ class AgentRuntime:
     # Upstream intent gate (intent_classify); empty when node absent/skipped.
     classified_intent: str = ""
     classified_reply: str = ""
+    # FE dual-context map (empty_rects / suggested_place / viewport).
+    spatial_summary: dict[str, Any] | None = None
 
 
 class GraphState(TypedDict):
@@ -2151,8 +2468,8 @@ def _preload_triggered_skills(rt: Any) -> None:
             "id": f"skill-preload-{st.task_id[:8]}",
             "kind": "explored",
             "status": "done",
-            "summary": ("已确认设计方法")[:200],
-            "detail": "已确认 UI 生成参数",
+            "stage": "skill_preload",
+            "detail": "skills",
         }
     )
 
@@ -2189,12 +2506,12 @@ async def _node_bootstrap(state: GraphState) -> Command:
                     "max_rounds": rt.max_rounds,
                     "decision_log": rt.decision.to_log(),
                     "execution_log": st.to_execution_log(),
-                    **({"apply_ops": True} if rt.apply_ops else {}),
+                    **({"apply_ops": True} if rt.apply_ops else {})
                 },
                 ensure_ascii=False,
             ),
             "created_at": time.time(),
-            "updated_at": time.time(),
+            "updated_at": time.time()
         },
     )
     _emit(
@@ -2209,7 +2526,7 @@ async def _node_bootstrap(state: GraphState) -> Command:
                 h=rt.h,
                 client_size_locked=explicit_canvas_size(rt.canvas_size),
                 client_canvas_raw=rt.canvas_size,
-            ),
+            )
         }
     )
     _emit(rt.decision.to_event())
@@ -2231,9 +2548,17 @@ async def _node_apply_confirm(state: GraphState) -> Command:
     if not step_ops:
         err = validation_failure_reason(op_errors) if op_errors else "missing_tool_ops"
         st.note_error(err)
-        msg = '方案无法安全执行，请换个说法或再试一次。'
-        st.reply = msg
-        _emit({"type": "token", "text": msg})
+        msg = await _llm_ux_reply(
+            rt,
+            situation=(
+                "The confirmed plan could not be applied safely; ask the user "
+                "to rephrase or try again."
+            ),
+            facts=f"error={err[:120]}",
+        )
+        if msg:
+            st.reply = msg
+            _emit({"type": "token", "text": msg})
         rt.terminal = True
         return Command(update=_bump(rt), goto="__settle__")
 
@@ -2242,6 +2567,9 @@ async def _node_apply_confirm(state: GraphState) -> Command:
         _image_model_from_rules,
     )
 
+    # Size / shimmer before hydrate so the plate is visible while images generate.
+    if _ops_have_create_frame(step_ops):
+        _emit_canvas_size_from_ops(rt, step_ops)
     step_ops, n_img = await _hydrate_tool_ops_images(
         step_ops, limit=6, policy="auto", rules=rt.rules
     )
@@ -2251,22 +2579,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
         st.push_log(**_hydrate_log_kwargs(step_ops, img_mid=img_mid, n_img=n_img))
     paint_ops = list(step_ops)
     if _ops_have_create_frame(step_ops):
-        ow, oh = rt.w, rt.h
-        if ow <= 0 or oh <= 0:
-            ow, oh = _wh_from_create_frame_ops(step_ops)
-        if ow > 0 and oh > 0:
-            _emit(
-                {
-                    "type": "status",
-                    "task_id": st.task_id,
-                    "trace_id": st.trace_id,
-                    "open_artboard": True,
-                    "canvas_width": ow,
-                    "canvas_height": oh,
-                    "canvas_size": f"{ow}x{oh}",
-                }
-            )
-            paint_ops = _strip_create_frame_ops(step_ops)
+        paint_ops = _strip_create_frame_ops(step_ops)
     _emit(
         {
             "type": "tool_ops",
@@ -2276,7 +2589,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
             "skill_key": "react",
             "skill_name": "Design Agent",
             "schema_version": TOOL_OPS_SCHEMA_VERSION,
-            "ops": tool_ops_for_sse(paint_ops),
+            "ops": tool_ops_for_sse(paint_ops)
         }
     )
     for act in _tool_ops_activity_events(
@@ -2288,7 +2601,17 @@ async def _node_apply_confirm(state: GraphState) -> Command:
     st.applied_ops.extend(step_ops)
     st.painted = True
     st.intent = "edit"
-    st.reply = "已按方案更新画布。"
+    reply = await _llm_ux_reply(
+        rt,
+        situation=(
+            "User confirmed a previously proposed canvas plan; ops were just "
+            "applied successfully. Confirm briefly."
+        ),
+        facts=f"applied_ops={len(step_ops)}",
+    )
+    if reply:
+        st.reply = reply
+        _emit({"type": "token", "text": reply})
     st.push_log(
         phase="action",
         ops=[str(o.get("name") or "") for o in step_ops[:20]],
@@ -2296,6 +2619,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
         ops_detail=_ops_for_log(step_ops),
         apply_confirm=True,
         model=st.family or None,
+        reply=(st.reply or "")[:500] or None,
         **({"image_model": img_mid, "images_hydrated": int(n_img)} if n_img and img_mid else {}),
     )
     rt.paint_ops = paint_ops
@@ -2311,7 +2635,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
             "timeout_ms": int(_SCENE_WAIT_SEC * 1000),
         }
     )
-    return Command(update=_bump(rt), goto="__settle__")
+    return Command(update=_bump(rt), goto="observe")
 
 
 async def _node_route(state: GraphState) -> Command:
@@ -2413,7 +2737,7 @@ async def _node_plan(state: GraphState) -> Command:
             "category": "agent",
             "default_model": "doubao",
             "name": "plan",
-            "skill_key": "plan",
+            "skill_key": "plan"
         },
         user_selected_model=rt.user_selected_model,
         run_mode=rt.mode,
@@ -2429,11 +2753,11 @@ async def _node_plan(state: GraphState) -> Command:
             "index": -1,
             "skill_id": None,
             "skill_key": "plan",
-            "skill_name": "短计划",
+            "skill_name": "Plan",
             "category": "agent",
             "model": st.family,
             "model_reason": reason,
-            "trace_id": st.trace_id,
+            "trace_id": st.trace_id
         }
     )
     plan_user = "\n\n".join(
@@ -2474,7 +2798,7 @@ async def _node_plan(state: GraphState) -> Command:
                 "id": "plan-0",
                 "kind": "explored",
                 "status": "done",
-                "summary": '计划：' + " · ".join(st.plan),
+                "summary": '计划：' + " · ".join(st.plan)
             }
         )
     _emit(
@@ -2482,8 +2806,8 @@ async def _node_plan(state: GraphState) -> Command:
             "type": "skill_done",
             "index": -1,
             "skill_key": "plan",
-            "skill_name": "短计划",
-            "tokens": plan_used,
+            "skill_name": "Plan",
+            "tokens": plan_used
         }
     )
     rt.flags["plan_done"] = True
@@ -2499,7 +2823,7 @@ async def _node_model_route(state: GraphState) -> Command:
             "category": "agent",
             "default_model": "doubao",
             "name": "react",
-            "skill_key": "react",
+            "skill_key": "react"
         },
         user_selected_model=rt.user_selected_model,
         run_mode=rt.mode,
@@ -2546,19 +2870,14 @@ async def _node_intent_classify(state: GraphState) -> Command:
         + (f" · {(decision.rationale or '')[:80]}" if decision.rationale else ""),
         model=None,
     )
+    # No Chinese detail — FE i18n via activityThoughtBrief / process labels.
     _emit(
         {
             "type": "activity",
             "id": f"intent-{st.task_id[:8]}",
             "kind": "thought",
             "status": "done",
-            "detail": (
-                "已确认对话意图"
-                if intent == "chat"
-                else "已确认修改范围"
-                if intent == "edit"
-                else "已确认设计需求"
-            ),
+            "stage": intent
         }
     )
     if intent == "chat":
@@ -2567,7 +2886,9 @@ async def _node_intent_classify(state: GraphState) -> Command:
             _emit({"type": "token", "text": reply})
         nxt = "__settle__"
     else:
-        await asyncio.to_thread(_preload_triggered_skills, rt)
+        # Short no-vision adds: skip trigger skill dump (decide can still need_skills).
+        if not _is_lean_paint_turn(rt):
+            await asyncio.to_thread(_preload_triggered_skills, rt)
         # Loading plate + shimmer right after intent (not waiting for paint/action).
         _emit_design_loading_artboard(rt)
         nxt = "design_agent"
@@ -2590,7 +2911,7 @@ async def _node_thought(
             "category": "agent",
             "model": st.family,
             "model_reason": rt.last_reason,
-            "trace_id": st.trace_id,
+            "trace_id": st.trace_id
         }
     )
 
@@ -2648,9 +2969,23 @@ async def _node_thought(
             has_pending_resources=_has_pending_resource_details(rt),
         ):
             tools_hint = "、".join(st.tools_loaded[-6:]) or "已申请工具"
+            retry_tmpl = _prompt_text(rt.rules, "agent.prompt.recover_edit_retry")
+            try:
+                retry_msg = (
+                    retry_tmpl.format(
+                        tools_hint=tools_hint, prior_intent=prior_intent
+                    ).strip()
+                    if retry_tmpl
+                    else ""
+                )
+            except Exception:
+                retry_msg = ""
             st.note_error(
-                f"资源详情已注入（{tools_hint}）。必须立即输出 tool_ops 完成用户请求；"
-                f"保持 intent={prior_intent}，禁止改回 chat/ask。"
+                retry_msg
+                or (
+                    f"资源详情已注入（{tools_hint}）。必须立即输出 tool_ops 完成用户请求；"
+                    f"保持 intent={prior_intent}，禁止改回 chat/ask。"
+                )
             )
             st.intent = prior_intent
             st.push_log(
@@ -2665,9 +3000,8 @@ async def _node_thought(
                     "id": f"recover-edit-{round_i}",
                     "kind": "thought",
                     "status": "done",
-                    "summary": "工具已就绪，继续写出操作",
-                    "detail": "已确认画布操作",
-                }
+                    "summary": "工具已就绪，继续写出操作"
+}
             )
             continue
         break
@@ -2705,9 +3039,9 @@ async def _node_thought(
                 "id": f"thought-{round_i}",
                 "kind": "thought",
                 "status": "done",
-                "detail": "已确认需求",
+
                 # Full model thought for the fold body — not the short SSE label.
-                "body": thought_full or thought,
+                "body": thought_full or thought
             }
         )
 
@@ -2762,7 +3096,7 @@ async def _node_thought(
                     "index": round_i,
                     "skill_key": "react",
                     "skill_name": "Design Agent",
-                    "tokens": used,
+                    "tokens": used
                 }
             )
             return _route_cmd(rt)
@@ -2777,7 +3111,7 @@ async def _node_thought(
                 "index": round_i,
                 "skill_key": "react",
                 "skill_name": "Design Agent",
-                "tokens": used,
+                "tokens": used
             }
         )
         if intent == "ask":
@@ -2794,7 +3128,7 @@ async def _node_thought(
                 "type": "skill_done",
                 "index": round_i,
                 "skill_key": "react",
-                "tokens": used,
+                "tokens": used
             }
         )
         return _route_cmd(rt)
@@ -2823,7 +3157,7 @@ async def _node_thought(
                 "type": "skill_done",
                 "index": round_i,
                 "skill_key": "react",
-                "tokens": used,
+                "tokens": used
             }
         )
         return _route_cmd(rt)
@@ -2855,7 +3189,7 @@ async def _node_thought(
             "index": round_i,
             "skill_key": "react",
             "skill_name": "Design Agent",
-            "tokens": used,
+            "tokens": used
         }
     )
     del use_user_refs  # reserved for aesthetics path via need_*
@@ -2929,9 +3263,9 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"need-knowledge-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("申请知识：" + "、".join(fresh_k))[:200],
-                "detail": "已确认设计参考",
-                "index": round_i,
+                "summary": (", ".join(fresh_k))[:200],
+
+                "index": round_i
             }
         )
     if load_skills:
@@ -2947,9 +3281,9 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"need-skills-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("申请 skill：" + "、".join(fresh_s))[:200],
-                "detail": "已确认 UI 生成参数",
-                "index": round_i,
+                "summary": (", ".join(fresh_s))[:200],
+
+                "index": round_i
             }
         )
     if load_aesthetics:
@@ -2961,8 +3295,8 @@ async def _node_resource(state: GraphState) -> Command:
                 "kind": "explored",
                 "status": "done",
                 "summary": "申请美学样本",
-                "detail": "已确认美学方向",
-                "index": round_i,
+
+                "index": round_i
             }
         )
     if need_tools:
@@ -2977,9 +3311,9 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"need-tools-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("申请工具：" + "、".join(need_tools))[:200],
-                "detail": "已确认可用工具",
-                "index": round_i,
+                "summary": (", ".join(need_tools))[:200],
+
+                "index": round_i
             }
         )
 
@@ -3021,9 +3355,9 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"knowledge-details-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("注入知识：" + "、".join(fresh_k))[:200],
-                "detail": "设计参考已就绪",
-                "index": round_i,
+                "summary": (", ".join(fresh_k))[:200],
+
+                "index": round_i
             }
         )
     sb = bundles.get("skills") if load_skills else None
@@ -3049,9 +3383,9 @@ async def _node_resource(state: GraphState) -> Command:
                     "id": f"skill-details-{round_i}",
                     "kind": "explored",
                     "status": "done",
-                    "summary": ("注入 skill：" + "、".join(fresh_s))[:200],
-                    "detail": "设计方法已就绪",
-                    "index": round_i,
+                    "summary": (", ".join(fresh_s))[:200],
+
+                    "index": round_i
                 }
             )
     tb = bundles.get("tools") if need_tools else None
@@ -3073,9 +3407,9 @@ async def _node_resource(state: GraphState) -> Command:
                 "id": f"tool-details-{round_i}",
                 "kind": "explored",
                 "status": "done",
-                "summary": ("注入工具：" + "、".join(fresh_tools))[:200],
-                "detail": "可用工具已就绪",
-                "index": round_i,
+                "summary": (", ".join(fresh_tools))[:200],
+
+                "index": round_i
             }
         )
     ab = bundles.get("aesthetics") if load_aesthetics else None
@@ -3097,9 +3431,9 @@ async def _node_resource(state: GraphState) -> Command:
                     "id": f"aesthetics-details-{round_i}",
                     "kind": "explored",
                     "status": "done",
-                    "summary": "注入美学参考",
-                    "detail": "美学方向已就绪",
-                    "index": round_i,
+                    "summary": "aesthetics",
+
+                    "index": round_i
                 }
             )
     _emit(
@@ -3107,7 +3441,7 @@ async def _node_resource(state: GraphState) -> Command:
             "type": "skill_done",
             "index": round_i,
             "skill_key": "react",
-            "tokens": rt.last_used,
+            "tokens": rt.last_used
         }
     )
     st.round = round_i + 1
@@ -3141,9 +3475,21 @@ async def _node_propose(state: GraphState) -> Command:
         "",
     )
     detail = (tool_ops_batch_detail(step_ops) or "").strip()
-    model_reply = (rt.turn.get("reply") or "").strip()
-    text = _ask_propose_user_text(model_reply=model_reply, detail=detail)
-    # Keep decide-stage reply if paint left turn.reply empty (Ask confirm path).
+    # Confirm copy is LLM-written; do not reuse paint-stage wording (may claim applied).
+    text = await _llm_ux_reply(
+        rt,
+        situation=(
+            "Ask mode: canvas ops are prepared but NOT applied yet. "
+            "Write a short confirm prompt for the user (what will change + ask to confirm). "
+            "Do not claim anything was already added or applied."
+        ),
+        facts=(detail[:160] if detail else "propose_ops=1"),
+    )
+    if not text:
+        text = _ask_propose_user_text(
+            model_reply=(rt.turn.get("reply") or st.reply or "").strip(),
+            detail=detail,
+        )
     if text:
         st.reply = text
     st.push_log(
@@ -3169,7 +3515,7 @@ async def _node_propose(state: GraphState) -> Command:
             "index": round_i,
             "skill_key": "react",
             "skill_name": "Design Agent",
-            "tokens": rt.last_used,
+            "tokens": rt.last_used
         }
     )
     rt.terminal = True
@@ -3187,6 +3533,9 @@ async def _node_action(state: GraphState) -> Command:
         _image_model_from_rules,
     )
 
+    # Safety net: size/shimmer before hydrate (paint_ops usually already did this).
+    if _ops_have_create_frame(step_ops):
+        _emit_canvas_size_from_ops(rt, step_ops)
     step_ops, n_img = await _hydrate_tool_ops_images(
         step_ops, limit=6, policy="auto", rules=rt.rules
     )
@@ -3197,22 +3546,7 @@ async def _node_action(state: GraphState) -> Command:
         st.push_log(**_hydrate_log_kwargs(step_ops, img_mid=img_mid, n_img=n_img))
     paint_ops = list(step_ops)
     if _ops_have_create_frame(step_ops):
-        ow, oh = rt.w, rt.h
-        if ow <= 0 or oh <= 0:
-            ow, oh = _wh_from_create_frame_ops(step_ops)
-        if ow > 0 and oh > 0:
-            _emit(
-                {
-                    "type": "status",
-                    "task_id": st.task_id,
-                    "trace_id": st.trace_id,
-                    "open_artboard": True,
-                    "canvas_width": ow,
-                    "canvas_height": oh,
-                    "canvas_size": f"{ow}x{oh}",
-                }
-            )
-            paint_ops = _strip_create_frame_ops(step_ops)
+        paint_ops = _strip_create_frame_ops(step_ops)
     rt.paint_ops = paint_ops
     _emit(
         {
@@ -3223,7 +3557,7 @@ async def _node_action(state: GraphState) -> Command:
             "skill_key": "react",
             "skill_name": "Design Agent",
             "schema_version": TOOL_OPS_SCHEMA_VERSION,
-            "ops": tool_ops_for_sse(paint_ops),
+            "ops": tool_ops_for_sse(paint_ops)
         }
     )
     for act in _tool_ops_activity_events(
@@ -3232,8 +3566,16 @@ async def _node_action(state: GraphState) -> Command:
         skill_index=round_i,
     ):
         _emit(act)
-    st.applied_ops.extend(step_ops)
-    st.painted = True
+    ops_sent = bool(paint_ops)
+    # Reply only after real ops were pushed — never claim「已添加」with empty ops.
+    _emit_deferred_paint_reply(st, ops_sent=ops_sent)
+    if ops_sent:
+        st.applied_ops.extend(step_ops)
+        # Tentative until observe confirms op_results — cleared if all ops failed.
+        st.painted = True
+    else:
+        st.painted = False
+        st.reply = ""
     st.push_log(
         phase="action",
         ops=[str(o.get("name") or "") for o in step_ops[:20]],
@@ -3243,10 +3585,20 @@ async def _node_action(state: GraphState) -> Command:
         model=st.family,
         **({"image_model": img_mid, "images_hydrated": int(n_img)} if n_img and img_mid else {}),
     )
-    # Fixed create_agent graph: paint once and settle (no Admin observe loop).
-    return Command(update=_bump(rt), goto="__settle__")
-
-
+    if not ops_sent:
+        return Command(update=_bump(rt), goto="__settle__")
+    # Wait for FE scene_feedback (nodes + per-op ok/fail) before settle / retry.
+    await begin_wait(st.task_id, round_n=round_i)
+    _emit(
+        {
+            "type": "scene_feedback_request",
+            "task_id": st.task_id,
+            "trace_id": st.trace_id,
+            "round": round_i,
+            "timeout_ms": int(_SCENE_WAIT_SEC * 1000),
+        }
+    )
+    return Command(update=_bump(rt), goto="observe")
 
 
 async def _node_observe(
@@ -3266,6 +3618,9 @@ async def _node_observe(
         ][:32]
         rt.scene_nodes = nodes
         rt.scene_frames = frames
+        spatial = snap.get("spatial")
+        if isinstance(spatial, dict):
+            rt.spatial_summary = spatial
         op_failures = [
             r
             for r in (snap.get("op_results") or [])
@@ -3298,14 +3653,14 @@ async def _node_observe(
         )
 
     if rt.skip_loop:
-        # Ask 用户确认后走 apply_confirm→observe：成功应经出边到「结束」，勿硬跳 settle。
+        # Ask confirm apply: feedback landed (or timed out) → finish.
         if st.reply:
             _emit({"type": "token", "text": st.reply})
         rt.terminal = True
         rt.flags["ok"] = True
-        rt.flags["scene_ready"] = False
+        rt.flags["scene_ready"] = bool(snap)
         rt.flags["op_failed"] = False
-        return _route_cmd(rt)
+        return Command(update=_bump(rt), goto="__settle__")
 
     if op_failures:
         fail_notes = "; ".join(
@@ -3313,7 +3668,7 @@ async def _node_observe(
             for r in op_failures[:3]
         )
         all_failed = len(rt.paint_ops) > 0 and len(op_failures) >= len(rt.paint_ops)
-        if all_failed and round_i == 0:
+        if all_failed:
             st.painted = False
         st.note_error(f"op_apply_failed: {fail_notes}")
         st.push_log(
@@ -3331,7 +3686,7 @@ async def _node_observe(
                 "kind": "skipped",
                 "status": "done",
                 "count": len(op_failures),
-                "detail": f"{len(op_failures)} 个操作未生效：{fail_notes}"[:200],
+                "detail": f"ops_failed×{len(op_failures)}: {fail_notes}"[:200],
                 "index": round_i,
             }
         )
@@ -3350,13 +3705,19 @@ async def _node_observe(
             rt.flags["op_failed"] = True
             rt.flags["retry"] = True
             rt.flags["ok"] = False
-            return _route_cmd(rt)
-        corrected = (
-            f'有 {len(op_failures)} 个操作未生效（目标元素可能已被删除）。'
-            "画布已按当前状态处理，可以再说一次要改哪个元素。"
+            # Re-paint with LAST_ERROR in prompt — do not settle as success.
+            return Command(update=_bump(rt), goto="paint_ops")
+        corrected = await _llm_ux_reply(
+            rt,
+            situation=(
+                "Some canvas ops failed to apply (targets may be gone). "
+                "Explain briefly and invite the user to retry on a specific element."
+            ),
+            facts=f"failed={len(op_failures)}; notes={fail_notes[:240]}",
         )
-        st.reply = corrected
-        _emit({"type": "token", "text": corrected})
+        if corrected:
+            st.reply = corrected
+            _emit({"type": "token", "text": corrected})
         _emit(
             {
                 "type": "skill_done",
@@ -3369,39 +3730,13 @@ async def _node_observe(
         rt.flags["ok"] = False
         return Command(update=_bump(rt), goto="__settle__")
 
-    reply = rt.turn.get("reply") or ""
-    if reply:
-        st.reply = reply
-        _emit({"type": "token", "text": reply})
-    _emit(
-        {
-            "type": "skill_done",
-            "index": round_i,
-            "skill_key": "react",
-            "skill_name": "Design Agent",
-            "tokens": rt.last_used,
-        }
-    )
-    # Hand off to verify via edges ? do not set ok/terminal here.
-    preview = ""
-    if isinstance(snap, dict):
-        preview = str(
-            snap.get("preview_url")
-            or snap.get("previewUrl")
-            or snap.get("cover_url")
-            or ""
-        ).strip()
-    rt.verify_preview_url = preview
-    intent = st.intent
+    # Apply confirmed — keep painted; finish turn (no verify loop in fixed graph).
     rt.flags["scene_ready"] = True
     rt.flags["op_failed"] = False
-    rt.flags["ok"] = False
+    rt.flags["ok"] = True
     rt.flags["retry"] = False
-    rt.flags["verify_ok"] = False
-    rt.flags["verify_fail"] = False
-    rt.flags["task_done"] = bool(rt.turn.get("done") or intent == "done")
-    rt.flags["rounds_exhausted"] = bool(st.round + 1 >= rt.max_rounds)
-    return _route_cmd(rt)
+    rt.terminal = True
+    return Command(update=_bump(rt), goto="__settle__")
 
 
 async def _node_verify(state: GraphState) -> Command:
@@ -3488,9 +3823,17 @@ async def _node_clarify(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
     if not st.reply:
-        st.reply = "可以再具体一点吗？"
-        _emit({"type": "token", "text": st.reply})
-    st.push_log(phase="clarify", intent=st.intent or "ask", reply=st.reply[:1000])
+        st.reply = await _llm_ux_reply(
+            rt,
+            situation="Ask one short clarifying question so you can continue the design.",
+        )
+        if st.reply:
+            _emit({"type": "token", "text": st.reply})
+    st.push_log(
+        phase="clarify",
+        intent=st.intent or "ask",
+        reply=(st.reply or "")[:1000] or None,
+    )
     rt.terminal = True
     rt.flags["await_user"] = True
     return _route_cmd(rt)
@@ -3558,7 +3901,7 @@ async def _node_settle(state: GraphState) -> Command:
             **({"choice_ui": st.choice_ui} if st.choice_ui else {}),
             "balance": balance,
             "decision_log": rt.decision.to_log(),
-            "execution_log": exec_payload,
+            "execution_log": exec_payload
         }
     )
     try:
@@ -3580,7 +3923,7 @@ async def _node_settle(state: GraphState) -> Command:
                 "route": "langgraph",
                 "trace_id": st.trace_id,
                 "errors": list(st.errors),
-                "rounds": st.round + 1,
+                "rounds": st.round + 1
             },
             outcome="failed" if failed_attempt else "success",
             chat_only=not st.painted and not failed_attempt,
@@ -3653,7 +3996,7 @@ async def _node_error(state: GraphState) -> Command:
             "message": _user_facing_run_error(err, rules=rt.rules),
             "task_id": st.task_id,
             "trace_id": st.trace_id,
-            "refunded_credits": rt.hold,
+            "refunded_credits": rt.hold
         }
     )
     return Command(update=_bump(rt), goto=END)
@@ -3721,10 +4064,18 @@ async def _node_validate_fail(state: GraphState) -> Command:
         if rt.unsafe_ops_tmpl:
             ask = render_prompt_template(rt.unsafe_ops_tmpl, error=err_frag)
         else:
-            ask = '这次改动我没法安全执行' + err_frag + '。可以换个说法吗？'
-        rt.run.reply = ask
-        rt.run.intent = "ask"
-        _emit({"type": "token", "text": ask})
+            ask = await _llm_ux_reply(
+                rt,
+                situation=(
+                    "The proposed canvas ops could not be applied safely; "
+                    "ask the user to rephrase."
+                ),
+                facts=f"error={err_frag}",
+            )
+        if ask:
+            rt.run.reply = ask
+            rt.run.intent = "ask"
+            _emit({"type": "token", "text": ask})
     return _route_cmd(rt)
 
 
@@ -3752,7 +4103,7 @@ async def _node_design_agent(state: GraphState) -> Command:
             "category": "agent",
             "default_model": "doubao",
             "name": "react",
-            "skill_key": "react",
+            "skill_key": "react"
         },
         user_selected_model=rt.user_selected_model,
         run_mode=rt.mode,
@@ -3776,7 +4127,7 @@ async def _node_design_agent(state: GraphState) -> Command:
                 "category": "agent",
                 "model": st.family,
                 "model_reason": rt.last_reason,
-                "trace_id": st.trace_id,
+                "trace_id": st.trace_id
             }
         )
         lc_system, user_msg = _format_thought_messages(rt)
@@ -3850,7 +4201,7 @@ async def _node_design_agent(state: GraphState) -> Command:
                         "intent": str(rt.classified_intent or st.intent or ""),
                         "round": round_i,
                         "has_images": bool(turn_images),
-                        "stage": "decide",
+                        "stage": "decide"
                     },
                     tags=["design", "lc_design", "design_agent", "decide"],
                 )
@@ -3865,12 +4216,17 @@ async def _node_design_agent(state: GraphState) -> Command:
                     "index": round_i,
                     "skill_key": "react",
                     "skill_name": "Design Agent",
-                    "tokens": 0,
+                    "tokens": 0
                 }
             )
-            fail = "模型输出失败，请重试。"
-            st.reply = fail
-            _emit({"type": "token", "text": fail})
+            fail = await _llm_ux_reply(
+                rt,
+                situation="The design model failed this turn; ask the user to retry.",
+                facts=str(err)[:160],
+            )
+            if fail:
+                st.reply = fail
+                _emit({"type": "token", "text": fail})
             rt.terminal = True
             return Command(update=_bump(rt), goto="__settle__")
 
@@ -3886,7 +4242,8 @@ async def _node_design_agent(state: GraphState) -> Command:
         has_clarify = _turn_has_clarify(turn)
         st.intent = intent
 
-        ui_thought = _ui_thought_text(thought)
+        # Chat fold: readable thought (not protocol dump). Keep off the black reply stream.
+        ui_thought = _ui_thought_text(thought, limit=280)
         if ui_thought:
             _emit({"type": "thinking", "text": ui_thought, "replace": True})
 
@@ -3910,7 +4267,7 @@ async def _node_design_agent(state: GraphState) -> Command:
                 "index": round_i,
                 "skill_key": "react",
                 "skill_name": "Design Agent",
-                "tokens": used_hint,
+                "tokens": used_hint
             }
         )
 
@@ -3937,14 +4294,15 @@ async def _node_design_agent(state: GraphState) -> Command:
                 if want not in ("edit", "create"):
                     want = "create"
                 st.intent = want
+                # Stash only — stream after paint actually sends tool_ops.
                 if reply and len(reply) <= 80:
                     st.reply = reply
-                    _emit({"type": "token", "text": reply})
                 return Command(update=_bump(rt), goto="paint_ops")
             st.round = round_i + 1
             continue
 
         # Ask: intent=ask → wait on user (chips and/or open reply).
+        # Missing-slot clarify is model-owned (ask_system pack), not keyword heuristics.
         if ask_mode and intent == "ask" and reply:
             st.reply = reply
             _emit({"type": "token", "text": reply})
@@ -3971,9 +4329,9 @@ async def _node_design_agent(state: GraphState) -> Command:
             if want not in ("edit", "create"):
                 want = "create" if intent == "create" else "edit"
             st.intent = want
+            # Stash only — stream after paint sends ops (or Ask propose rewrite).
             if reply and len(reply) <= 80:
                 st.reply = reply
-                _emit({"type": "token", "text": reply})
             return Command(update=_bump(rt), goto="paint_ops")
 
         text = reply or _chat_fallback_text(rt)
@@ -4018,7 +4376,7 @@ async def _node_paint_ops(state: GraphState) -> Command:
             "category": "agent",
             "default_model": "doubao",
             "name": "react",
-            "skill_key": "react",
+            "skill_key": "react"
         },
         user_selected_model=rt.user_selected_model,
         run_mode=rt.mode,
@@ -4050,11 +4408,11 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 "index": round_i,
                 "skill_id": None,
                 "skill_key": "paint_ops",
-                "skill_name": "画布落层",
+                "skill_name": "Paint",
                 "category": "agent",
                 "model": st.family,
                 "model_reason": rt.last_reason,
-                "trace_id": st.trace_id,
+                "trace_id": st.trace_id
             }
         )
         _emit(
@@ -4063,8 +4421,8 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 "id": f"paint-ops-{round_i}-{attempt}",
                 "kind": "thought",
                 "status": "running",
-                "detail": "正在生成画布操作",
-                "index": round_i,
+
+                "index": round_i
             }
         )
         system = _paint_ops_system(rt)
@@ -4075,27 +4433,43 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 "Output a non-empty tool_ops array now."
             )
         try:
+            from config.settings import settings as _paint_settings
+
             user_content = build_user_message_content(user_msg, turn_images)
-            structured_out = await ainvoke_structured(
-                schema=PaintOpsSchema,
-                messages=[{"role": "user", "content": user_content}],
-                model=st.family,
-                system=system,
-                source="design",
-                run_name=f"paint_ops:{st.task_id[:8]}",
-                metadata={
-                    "task_id": st.task_id,
-                    "trace_id": st.trace_id,
-                    "user_id": rt.user_id,
-                    "scene": rt.scene_key or "",
-                    "intent": want,
-                    "round": round_i,
-                    "attempt": attempt,
-                    "has_images": bool(turn_images),
-                    "stage": "paint_ops",
-                },
-                tags=["design", "lc_design", "paint_ops"],
+            attempt_sec = float(
+                getattr(_paint_settings, "design_paint_attempt_timeout_sec", 75.0)
+                or 75.0
             )
+            # Bound each LLM call — hanging providers used to burn the full 180s
+            # node timeout before the next empty-ops retry could start.
+            async def _paint_structured() -> dict[str, Any]:
+                return await ainvoke_structured(
+                    schema=PaintOpsSchema,
+                    messages=[{"role": "user", "content": user_content}],
+                    model=st.family,
+                    system=system,
+                    source="design",
+                    run_name=f"paint_ops:{st.task_id[:8]}",
+                    metadata={
+                        "task_id": st.task_id,
+                        "trace_id": st.trace_id,
+                        "user_id": rt.user_id,
+                        "scene": rt.scene_key or "",
+                        "intent": want,
+                        "round": round_i,
+                        "attempt": attempt,
+                        "has_images": bool(turn_images),
+                        "stage": "paint_ops"
+                    },
+                    tags=["design", "lc_design", "paint_ops"],
+                )
+
+            if attempt_sec > 0:
+                structured_out = await asyncio.wait_for(
+                    _paint_structured(), timeout=attempt_sec
+                )
+            else:
+                structured_out = await _paint_structured()
             structured = structured_out.get("structured")
             if hasattr(structured, "model_dump"):
                 raw_obj = structured.model_dump()
@@ -4126,8 +4500,8 @@ async def _node_paint_ops(state: GraphState) -> Command:
                     "type": "skill_done",
                     "index": round_i,
                     "skill_key": "paint_ops",
-                    "skill_name": "画布落层",
-                    "tokens": 0,
+                    "skill_name": "Paint",
+                    "tokens": 0
                 }
             )
             st.round = round_i + 1
@@ -4164,36 +4538,43 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 "type": "skill_done",
                 "index": round_i,
                 "skill_key": "paint_ops",
-                "skill_name": "画布落层",
-                "tokens": used_hint,
+                "skill_name": "Paint",
+                "tokens": used_hint
             }
         )
 
         if step_ops:
-            # Ask clarify already happened in decide; enough info → apply like Agent.
-            if reply:
-                st.reply = reply[:200]
-                _emit({"type": "token", "text": st.reply})
-            elif not st.reply:
-                st.reply = "正在更新画布。"
+            ask_mode = str(rt.flags.get("mode") or "") == "ask"
+            # Open plate only when create_frame is present (infinite canvas otherwise).
+            _emit_canvas_size_from_ops(rt, step_ops)
+            st.reply = _paint_user_reply(reply)
             rt.turn = {
                 "intent": intent,
                 "reply": st.reply,
-                "tool_ops_raw": ops_raw,
+                "tool_ops_raw": ops_raw
             }
+            # Ask: propose for confirm — do not apply yet (confirm copy rewritten in propose).
+            if ask_mode:
+                st.reply = ""
+                return Command(update=_bump(rt), goto="propose")
             return Command(update=_bump(rt), goto="action")
 
         err = validation_failure_reason(op_errors) if op_errors else "missing_tool_ops"
         st.note_error(f"paint_ops: {err}")
         st.round = round_i + 1
 
-    fail = (
-        "改动未落到画布（落层阶段未能生成有效 tool_ops）。"
-        "请再说一次具体操作，例如「在狗旁边加一个矩形」。"
-    )
     st.note_error("paint_ops: retries_exhausted")
-    st.reply = fail
-    _emit({"type": "token", "text": fail})
+    fail = await _llm_ux_reply(
+        rt,
+        situation=(
+            "Paint stage could not produce valid canvas tool_ops after retries; "
+            "ask the user to specify a concrete edit."
+        ),
+        facts="error=missing_or_invalid_tool_ops",
+    )
+    if fail:
+        st.reply = fail
+        _emit({"type": "token", "text": fail})
     rt.flags["await_user"] = True
     rt.terminal = True
     return Command(update=_bump(rt), goto="__settle__")
@@ -4260,7 +4641,7 @@ async def _cleanup_design_thread(graph: Any, thread_id: str) -> None:
 
 
 def _build_lc_design_graph():
-    """Fixed outer graph: memory → intent → decide → paint_ops → action/propose → settle."""
+    """Fixed outer graph: … → paint_ops → action → observe → settle (retry paint on fail)."""
     from config.settings import settings
 
     g = StateGraph(GraphState)
@@ -4272,23 +4653,48 @@ def _build_lc_design_graph():
         "design_agent",
         "paint_ops",
         "action",
+        "observe",
         "propose",
         "__settle__",
         END,
     )
     retry = _design_graph_retry_policy()
     node_timeout = _design_graph_node_timeout()
-    # LLM / IO-heavy nodes: RetryPolicy + TimeoutPolicy. Semantic paint retries stay in-node.
+    # LLM / IO-heavy nodes: RetryPolicy + TimeoutPolicy.
+    # paint_ops already retries empty/invalid ops in-node — do NOT also retry the
+    # whole node on 180s timeout (that alone made "add a rect" take ~7 minutes).
     io_kw: dict[str, Any] = {"destinations": dest, "retry_policy": retry}
     if node_timeout is not None:
         io_kw["timeout"] = node_timeout
+    paint_kw: dict[str, Any] = {
+        "destinations": dest,
+        "retry_policy": RetryPolicy(
+            max_attempts=1,
+            initial_interval=0.5,
+            backoff_factor=2.0,
+            max_interval=8.0,
+        ),
+    }
+    if node_timeout is not None:
+        paint_kw["timeout"] = node_timeout
+    # observe only waits on FE (~12s) — no LLM graph retry.
+    observe_kw: dict[str, Any] = {
+        "destinations": dest,
+        "retry_policy": RetryPolicy(
+            max_attempts=1,
+            initial_interval=0.5,
+            backoff_factor=2.0,
+            max_interval=8.0,
+        ),
+    }
     g.add_node("bootstrap", _node_bootstrap, destinations=dest)
     g.add_node("apply_confirm", _node_apply_confirm, destinations=dest)
     g.add_node("memory", _node_memory, **io_kw)
     g.add_node("intent_classify", _node_intent_classify, **io_kw)
     g.add_node("design_agent", _node_design_agent, **io_kw)
-    g.add_node("paint_ops", _node_paint_ops, **io_kw)
+    g.add_node("paint_ops", _node_paint_ops, **paint_kw)
     g.add_node("action", _node_action, destinations=dest)
+    g.add_node("observe", _node_observe, **observe_kw)
     g.add_node("propose", _node_propose, destinations=dest)
     g.add_node("__settle__", _node_settle, destinations=(END,))
     g.add_edge(START, "bootstrap")
@@ -4334,7 +4740,6 @@ async def run_agent_graph(
 ) -> AsyncIterator[dict[str, Any]]:
     """LangGraph Design Agent — fixed outer graph + create_agent."""
     del reserve_hold_fn
-    del spatial_summary
 
     task_id = str(uuid.uuid4())
     trace_id = str(uuid.uuid4())
@@ -4454,6 +4859,7 @@ async def run_agent_graph(
         defer_tools=defer_tools,
         max_rounds=max_rounds,
         dual_on=_flag_on(rules, "agent.react.dual_sample", "0"),
+        spatial_summary=spatial_summary if isinstance(spatial_summary, dict) else None,
     )
     rt.flags["mode"] = ui_mode
 
@@ -4481,7 +4887,7 @@ async def run_agent_graph(
                 "user_id": user_id,
                 "scene": scene_key or "",
                 "mode": ui_mode,
-                "langgraph_thread_id": thread_id,
+                "langgraph_thread_id": thread_id
             },
             tags=["design", "lc_design"],
             callbacks=[lf_handler] if lf_handler is not None else None,
@@ -4536,7 +4942,7 @@ async def run_agent_graph(
             "message": _user_facing_run_error(err, rules=rules),
             "task_id": task_id,
             "trace_id": trace_id,
-            "refunded_credits": hold,
+            "refunded_credits": hold
         }
     except asyncio.CancelledError:
         # Keep process-local checkpoint so same-worker resume/get_state can continue.
@@ -4569,7 +4975,7 @@ async def run_agent_graph(
             "message": _user_facing_run_error(err, rules=rules),
             "task_id": task_id,
             "trace_id": trace_id,
-            "refunded_credits": hold,
+            "refunded_credits": hold
         }
     finally:
         if not keep_checkpoint:

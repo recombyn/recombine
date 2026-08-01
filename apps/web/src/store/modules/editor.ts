@@ -46,7 +46,8 @@ export type ImageToolPanelKind =
   | 'crop'
   | 'adjust'
   | 'flipRotate'
-  | 'quickEdit';
+  | 'quickEdit'
+  | 'replaceText';
 
 /** On-canvas video tool sessions (trim timeline). Spatial crop reuses image crop panel. */
 export type VideoToolPanelKind = 'trim';

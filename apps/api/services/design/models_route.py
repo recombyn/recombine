@@ -422,88 +422,50 @@ def heuristic_route_lane(
     canvas_node_count: int = 0,
     scene: str | None = None,
 ) -> ModelRouteDecision:
-    """Deterministic fallback when the LLM router is unavailable."""
+    """Deterministic fallback when the LLM router is unavailable.
+
+    Uses only structural signals (images / length / node count / scene) —
+    no prompt keyword lists. Content judgment belongs to the LLM router pack.
+    """
     text = (prompt or "").strip()
     n = len(text)
-    low = text.lower()
+    emptyish = canvas_node_count <= 2
 
-    if has_images and (
-        n >= 20
-        or any(
-            k in text
-            for k in (
-                "参考",
-                "风格",
-                "看图",
-                "附件",
-                "截图",
-                "仿",
-                "match",
-                "style",
-                "reference",
-                "screenshot",
-            )
-        )
-    ):
+    if has_images:
         return ModelRouteDecision(
             lane="vision",
             needs_image_gen=False,
-            rationale="heuristic: images + understand intent",
+            rationale="heuristic: has_images",
         )
-
-    gen_hints = (
-        "生成图",
-        "生图",
-        "ai图",
-        "文生图",
-        "generate image",
-        "text to image",
-        "seedream",
-    )
-    needs_img = any(h in low or h in text for h in gen_hints)
-
-    create_hints = (
-        "从零",
-        "空白",
-        "整页",
-        "多画板",
-        "设计系统",
-        "整站",
-        "dashboard",
-        "design system",
-        "from scratch",
-        "blank",
-    )
-    emptyish = canvas_node_count <= 2
-    if emptyish and (n >= 60 or any(h in low or h in text for h in create_hints)):
+    if emptyish and n >= 60:
         return ModelRouteDecision(
             lane="reasoning",
-            needs_image_gen=needs_img,
-            rationale="heuristic: empty/create-heavy",
+            needs_image_gen=False,
+            rationale="heuristic: empty_canvas+long_prompt",
         )
-    if n >= 220 or any(h in low or h in text for h in create_hints):
+    if n >= 220:
         return ModelRouteDecision(
             lane="reasoning",
-            needs_image_gen=needs_img,
-            rationale="heuristic: long/complex ask",
+            needs_image_gen=False,
+            rationale="heuristic: long_prompt",
         )
     if n < 40 and canvas_node_count > 0:
         return ModelRouteDecision(
             lane="fast",
-            needs_image_gen=needs_img,
-            rationale="heuristic: short edit on existing canvas",
+            needs_image_gen=False,
+            rationale="heuristic: short_prompt+existing_nodes",
         )
     sc = (scene or "").strip().lower()
     if sc in ("website", "mobile") and n >= 80:
         return ModelRouteDecision(
             lane="reasoning",
-            needs_image_gen=needs_img,
-            rationale="heuristic: website/mobile scope",
+            needs_image_gen=False,
+            rationale="heuristic: scene+mid_prompt",
         )
     return ModelRouteDecision(
         lane="standard",
-        needs_image_gen=needs_img,
-        rationale="heuristic: default standard",
+        needs_image_gen=False,
+        rationale="heuristic: default_standard",
     )
 
 
@@ -591,17 +553,13 @@ def heuristic_user_intent(
     *,
     has_images: bool = False,
 ) -> IntentClassifyDecision:
-    """Fallback when the intent LLM is unavailable — prefer create over chat for tasks."""
+    """Fallback when the intent LLM is unavailable.
+
+    Structural only (images / length) — no greeting/task keyword lists.
+    Normal path uses ``agent.prompt.intent_classify``.
+    """
     p = _user_request_core(prompt)
     compact = re.sub(r"\s+", "", p)
-    if re.fullmatch(
-        r"(你好|您好|嗨|哈喽|hi+|hello|hey|在吗|在么)[!！.。?？~～]*",
-        compact,
-        flags=re.I,
-    ):
-        return IntentClassifyDecision(
-            intent="chat", reply="", rationale="heuristic_greet"
-        )
     if has_images or len(compact) >= 4:
         return IntentClassifyDecision(
             intent="create", reply="", rationale="heuristic_task"
