@@ -1,6 +1,6 @@
 /**
  * Image toolbar AI tools — POST /api/v1/image/process
- * (Seedream i2i, or vision decompose for editText).
+ * (Seedream i2i, or vision decompose for editText / editElements).
  */
 
 import { request } from '@/utils/request';
@@ -11,6 +11,7 @@ export type ImageProcessKindApi =
   | 'multiAngle'
   | 'expand'
   | 'editText'
+  | 'editElements'
   | 'vector'
   | 'adjust';
 
@@ -45,7 +46,7 @@ export type ImageProcessResult = {
   text?: string | null;
   kind: string;
   model?: string;
-  /** editText: split layers in source-pixel coords */
+  /** editText / editElements: split layers in source-pixel coords */
   layers?: ImageDecomposeLayer[];
   width?: number;
   height?: number;

@@ -1309,7 +1309,7 @@ const editorSlice = createSlice({
         return;
       }
 
-      // editText: replace placeholder with split layers.
+      // editText / editElements: replace placeholder with split layers (grouped).
       if (Array.isArray(layers) && layers.length > 0) {
         const { document: next, ids } = applyImageDecomposeLayers(state.document, nodeId, layers, {
           sourceWidth,

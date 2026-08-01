@@ -13,8 +13,11 @@ const AI_KINDS = new Set([
   'multiAngle',
   'expand',
   'editText',
+  'editElements',
   'adjust',
 ]);
+
+const DECOMPOSE_KINDS = new Set(['editText', 'editElements']);
 
 function parseMeta(raw: unknown): Record<string, unknown> {
   if (!raw) return {};
@@ -148,7 +151,7 @@ function ImageProcessWatcher() {
         if (cancelled) return;
 
         const layers = Array.isArray(res?.layers) ? res.layers : [];
-        if (layers.length > 0 && kind === 'editText') {
+        if (layers.length > 0 && DECOMPOSE_KINDS.has(kind)) {
           const persisted = await Promise.all(
             layers.map(async (layer: any, i: number) => {
               const src = String(layer?.src || '').trim();
@@ -168,7 +171,11 @@ function ImageProcessWatcher() {
           );
           const warn = Array.isArray(res.warnings) ? res.warnings.filter(Boolean) : [];
           if (warn.length) message.warning(warn[0]);
-          else message.success('文字识别完成');
+          else {
+            message.success(
+              kind === 'editElements' ? '图片分层完成（可单独改主体/文字）' : '文字识别完成'
+            );
+          }
           refreshWallet(dispatch);
           return;
         }
@@ -194,6 +201,7 @@ function ImageProcessWatcher() {
           multiAngle: '多角度生成完成',
           expand: '扩展完成',
           editText: '编辑文字完成',
+          editElements: '图片分层完成',
           vector: '矢量化完成',
           adjust: '调整完成',
         };

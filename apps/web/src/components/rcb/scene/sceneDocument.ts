@@ -1363,6 +1363,7 @@ export type ImageProcessKind =
   | 'removeBg'
   | 'eraser'
   | 'editText'
+  | 'editElements'
   | 'multiAngle'
   | 'moveObject'
   | 'expand'
@@ -1553,8 +1554,9 @@ export type DecomposeLayer = {
 };
 
 /**
- * Replace a process placeholder with split layers (editText).
+ * Replace a process placeholder with split layers (editText / editElements).
  * Layer coords are in source-image pixels; scaled into the placeholder's box.
+ * Result layers share one groupId so the stack still moves as one picture.
  */
 export function applyImageDecomposeLayers(
   doc: any,
@@ -1631,6 +1633,11 @@ export function applyImageDecomposeLayers(
       next = addNodeToDocument(next, id, node);
       ids.push(id);
     }
+  }
+
+  // Keep the stack selectable / movable as one composition.
+  if (ids.length >= 2) {
+    next = groupNodesInDocument(next, ids);
   }
 
   return { document: next, ids };

@@ -2425,6 +2425,7 @@ export function executeDesignTool(
         'removeBg',
         'eraser',
         'editText',
+        'editElements',
         'multiAngle',
         'expand',
         'adjust',
