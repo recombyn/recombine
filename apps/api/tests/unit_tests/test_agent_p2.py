@@ -22,9 +22,15 @@ from services.design.aesthetics.scorer import normalize_need_aesthetics
 
 def test_short_plan_trigger():
     rules_on = {"agent.react.short_plan": "1"}
-    assert _wants_short_plan("做一张完整海报主视觉", rules=rules_on) is True
-    assert _wants_short_plan("你好", rules=rules_on) is False
-    assert _wants_short_plan("加标题", rules={"agent.react.short_plan": "0"}) is False
+    # Length gate only — no content keywords.
+    long_brief = "x" * 40
+    assert _wants_short_plan(long_brief, rules=rules_on) is True
+    assert _wants_short_plan("hi", rules=rules_on) is False
+    assert _wants_short_plan(long_brief, rules={"agent.react.short_plan": "0"}) is False
+    assert _wants_short_plan(
+        "short",
+        rules={"agent.react.short_plan": "1", "agent.react.short_plan_min_chars": "8"},
+    ) is False
 
 
 def test_parse_plan():

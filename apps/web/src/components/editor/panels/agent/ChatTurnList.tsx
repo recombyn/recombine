@@ -197,6 +197,20 @@ export function formatActivityLabel(
       : t('agent.activityUpdated');
   }
   if (ev.kind === 'explored') {
+    // skill-preload emits short tags (skills|tools|…) — never show raw English as the row title.
+    const preloadTag = detail.toLowerCase();
+    if (
+      ev.stage === 'skill_preload' ||
+      preloadTag === 'skills' ||
+      preloadTag === 'tools' ||
+      preloadTag === 'knowledge' ||
+      preloadTag === 'aesthetics'
+    ) {
+      if (preloadTag === 'tools') return t('agent.lookupKindRule');
+      if (preloadTag === 'knowledge') return t('agent.lookupKindKnowledge');
+      if (preloadTag === 'aesthetics') return t('agent.lookupKindAesthetics');
+      return t('agent.lookupKindSkill');
+    }
     if (preferDetail && !detail.startsWith('canvas_size:')) return detail;
     if (ev.stage === 'scene' || detail.startsWith('canvas_size:')) {
       const raw = detail.replace(/^canvas_size:/i, '').trim();
@@ -350,15 +364,49 @@ export function applyThinkingBodyToSteps(
   const ti = items.findIndex((x) => x.id === 'thought-brief');
   if (ti >= 0) items[ti] = thoughtLine;
   else items.push(thoughtLine);
+  // Gray nest line only — do not also mirror into body (that looked like a second copy).
+  const prevBody = (prevStep.body || '').trim();
+  const body =
+    prevBody && prevBody !== merged && !merged.startsWith(prevBody)
+      ? prevStep.body
+      : undefined;
   steps[idx] = {
     ...prevStep,
     id: 'explore-pipeline',
     kind: 'explored',
     items,
-    body: prevStep.body?.trim() ? prevStep.body : merged,
+    body,
     status: prevStep.status,
   };
   return collapseExplorePipelineSteps(steps);
+}
+
+/** True when assistant reply is the same essay already shown in the process fold. */
+export function replyDuplicatesProcessThought(
+  content: string,
+  steps: AssistantStep[] | undefined
+): boolean {
+  const reply = content.replace(/\s+/g, ' ').trim();
+  if (reply.length < 24) return false;
+  for (const s of steps || []) {
+    for (const it of s.items || []) {
+      if (it.id !== 'thought-brief') continue;
+      const thought = String(it.name || it.summary || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!thought) continue;
+      if (reply === thought) return true;
+      if (reply.length >= 40 && thought.includes(reply.slice(0, 40))) return true;
+      if (thought.length >= 40 && reply.includes(thought.slice(0, 40))) return true;
+    }
+    const body = String(s.body || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (body && (reply === body || (body.length >= 40 && reply.includes(body.slice(0, 40))))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function applyAnalysisDeltaToSteps(
@@ -366,11 +414,7 @@ export function applyAnalysisDeltaToSteps(
   piece: string
 ): AssistantStep[] | null {
   const steps = [...stepsIn];
-  let idx = steps.findIndex(
-    (s) =>
-      s.status === 'running' &&
-      /thinking|thought|思考/i.test(String(s.name || ''))
-  );
+  let idx = steps.findIndex((s) => s.status === 'running' && s.kind === 'thought');
   if (idx < 0) idx = steps.findIndex((s) => s.status === 'running');
   if (idx < 0 && steps.length) idx = steps.length - 1;
   if (idx < 0) return null;
@@ -809,9 +853,13 @@ function AssistantTurn({
   const foldable = hasFoldableProcess(assistant);
   const streaming = Boolean(assistant.streaming);
   const processRunning = (assistant.steps || []).some((s) => s.status === 'running');
+  const contentTrim = (assistant.content || '').trim();
   // Process timeline first — don't stream the reply while earlier steps are still running.
+  // Also hide black reply when it duplicates the gray thought already in the fold.
   const showReplyText =
-    Boolean(assistant.content?.trim()) && !(streaming && processRunning);
+    Boolean(contentTrim) &&
+    !(streaming && processRunning) &&
+    !replyDuplicatesProcessThought(contentTrim, assistant.steps);
 
   const showImageGallery =
     Boolean(assistant.images?.length) ||

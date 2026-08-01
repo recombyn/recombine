@@ -93,8 +93,8 @@
       "scenes": "website,mobile,poster",
       "skill_categories": "layout",
       "sort_order": 30,
-      "when_to_use": "字体族选择、对齐方式不清晰时",
-      "body": "字号跨度硬检见 VISUAL_GATES / FE hierarchy。\n字体族：同一设计通常 ≤2；UI 禁用书法/路径美术字作正文。\n对齐：正文左对齐为主；居中仅短标题/英雄区。"
+      "when_to_use": "字体族选择、对齐方式不清晰时；艺术字 vs 真文字选型",
+      "body": "字号跨度硬检见 VISUAL_GATES / FE hierarchy。\n字体族：同一设计通常 ≤2；UI 禁用书法/路径美术字作正文。\n对齐：正文左对齐为主；居中仅短标题/英雄区。\n【艺术字 vs 真文字】特效字形（笔触/分色/立体等）→ create_image 作图；需要可编辑排版的字 → create_text。由模型按效果判断，勿按文案品类写死。"
     },
     {
       "kind": "ia",

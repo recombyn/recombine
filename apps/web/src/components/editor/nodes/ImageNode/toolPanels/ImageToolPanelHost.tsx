@@ -26,6 +26,7 @@ import AdjustToolPanel, {
   parseAdjustValues,
   type AdjustValues,
 } from './AdjustToolPanel';
+import ReplaceTextToolPanel from './ReplaceTextToolPanel';
 
 /** Local erase → right-side cutout node (source image untouched), same pattern as 抠图. */
 async function confirmEraserAsNewNode(opts: {
@@ -352,6 +353,32 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
         }}
         onConfirm={(opts) => {
           writeAdjustAttrs(opts, 'commit');
+          close();
+        }}
+      />
+    );
+  } else if (panel.kind === 'replaceText') {
+    const node = document?.deltaSetLike?.[panel.nodeId];
+    const initialOriginal = String(
+      node?.attrs?.letteringText || node?.attrs?.replaceTextOriginal || ''
+    ).trim();
+    body = (
+      <ReplaceTextToolPanel
+        key={`${panel.nodeId}-replaceText`}
+        initialOriginal={initialOriginal}
+        onCancel={close}
+        onConfirm={(opts) => {
+          dispatch(
+            startImageProcess({
+              sourceId: panel.nodeId,
+              kind: 'replaceText',
+              label: t('editor.imageToolbar.processingReplaceText'),
+              meta: {
+                originalText: opts.originalText,
+                newText: opts.newText,
+              },
+            })
+          );
           close();
         }}
       />

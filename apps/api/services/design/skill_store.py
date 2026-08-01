@@ -804,9 +804,18 @@ def _apply_mutex(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def format_skills_catalog(*, scene: str = "website", user_id: str | None = None) -> str:
     rows = list_runtime_skills(scene=scene, user_id=user_id)
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        header = resolve_prompt_body("agent.prompt.skill_catalog_header").strip()
+    except Exception:
+        header = ""
     lines = [
-        "Skill 目录（need_skills 申请正文；可用 `key` / `ns.key` / `key@版本`；"
-        "简单加形/改色可直接 tool_ops；匹配 triggers 的 skill 会自动注入）："
+        header
+        or (
+            "Skill 目录（need_skills 申请正文；可用 `key` / `ns.key` / `key@版本`；"
+            "简单加形/改色可直接 tool_ops；匹配 triggers 的 skill 会自动注入）："
+        )
     ]
     for r in rows:
         key = str(r.get("skillKey") or "").strip()
@@ -1009,11 +1018,20 @@ def format_skills_details_checked(
             resolved.append(row)
 
     rows = _apply_mutex(resolved)
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        header = resolve_prompt_body("agent.prompt.skill_details_header").strip()
+    except Exception:
+        header = ""
     parts: list[str] = [
-        "以下为按需注入的 Skill 正文。按需采用；与用户明示冲突时以用户为准。"
-        "用完后将 need_skills 设为 []。"
-        "若列出 preferred_tools，优先使用这些 op（必要时可加 align/move 等布局工具）。"
-        "core=系统核心；ext=服务器扩展包；user=用户扩展（权限更严）。"
+        header
+        or (
+            "以下为按需注入的 Skill 正文。按需采用；与用户明示冲突时以用户为准。"
+            "用完后将 need_skills 设为 []。"
+            "若列出 preferred_tools，优先使用这些 op（必要时可加 align/move 等布局工具）。"
+            "core=系统核心；ext=服务器扩展包；user=用户扩展（权限更严）。"
+        )
     ]
     total = len(parts[0])
     used = 0

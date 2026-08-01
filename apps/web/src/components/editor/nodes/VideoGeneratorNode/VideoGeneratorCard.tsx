@@ -142,7 +142,9 @@ function attachSelectionToVideoComposer(opts: {
   selectedNodeIds: string[];
   selectedFrameIds: string[];
   existing: ComposerContext[];
-  setContexts: (next: ComposerContext[]) => void;
+  setContexts: (
+    next: ComposerContext[] | ((prev: ComposerContext[]) => ComposerContext[])
+  ) => void;
   insertChip: (ctx: ComposerContext) => void;
 }): boolean {
   const {
@@ -746,7 +748,9 @@ function VideoGeneratorCard({
         duration,
       };
       // First-frame / style refs — video refs are attachable but never sent as body.images.
-      const refImages = attachments
+      // Canvas 编组 lands as kind:'group' chips (not attachment strip).
+      const refImages = contextsRef.current
+        .filter((c) => c.kind === 'attachment' || c.kind === 'group')
         .map((c) => String(c.dataUrl || c.thumbUrl || '').trim())
         .filter((u) => Boolean(u) && !u.startsWith('data:video/'));
       if (refImages.length) body.images = refImages;
@@ -917,7 +921,7 @@ function VideoGeneratorCard({
                     inputRef.current?.focus();
                   };
                   // If something is already selected, add it now; otherwise enter one-shot pick.
-                  attachSelectionToVideoComposer({
+                  const attached = attachSelectionToVideoComposer({
                     hostNodeId: nodeId,
                     document: doc,
                     selectedNodeIds,
@@ -926,7 +930,9 @@ function VideoGeneratorCard({
                     setContexts,
                     insertChip,
                   });
-                  dispatch(startCanvasAttachPick({ target: pickTarget }));
+                  if (!attached) {
+                    dispatch(startCanvasAttachPick({ target: pickTarget }));
+                  }
                 }}
                 className={composerAttachActionClass(pickingFromCanvas)}
               >

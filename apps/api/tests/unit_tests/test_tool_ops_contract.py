@@ -137,7 +137,8 @@ def test_create_shape_next_to_images_is_not_rewritten_to_update():
     assert ops[0]["args"]["fill"] == "#e0e0e0"
 
 
-def test_create_shape_full_bleed_still_rewrites_onto_shape_plate():
+def test_create_shape_stays_create_even_if_similar_to_existing_plate():
+    """Add-rect must not be rewritten into update_node on the largest shape."""
     raw_ops = [
         {
             "name": "create_shape",
@@ -155,6 +156,5 @@ def test_create_shape_full_bleed_still_rewrites_onto_shape_plate():
     )
     assert not errs
     assert len(ops) == 1
-    assert ops[0]["name"] == "update_node"
-    assert ops[0]["args"]["nodeId"] == "bg"
+    assert ops[0]["name"] == "create_shape"
     assert ops[0]["args"]["fill"] == "#ff0000"

@@ -514,6 +514,8 @@ def ensure_design_prompt_packs() -> None:
                     "agent.prompt.lc_tools_overlay",
                     "agent.prompt.react_system",
                     "agent.prompt.chat_agent_system",
+                    "agent.prompt.ask_system",
+                    "agent.prompt.paint_system",
                 }
             )
             for kind in _FORCE_SYNC_KINDS:
@@ -730,9 +732,13 @@ def soft_delete_prompt_pack(item_id: int) -> bool:
 def format_prompt_pack_block(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
+    header = resolve_prompt_body("agent.prompt.prompt_pack_inject_header").strip()
     parts = [
-        "以下为流程图「提示词」节点注入的规则：只采用与当前任务相关的条目；"
-        "与用户明示冲突时以用户为准。"
+        header
+        or (
+            "以下为流程图「提示词」节点注入的规则：只采用与当前任务相关的条目；"
+            "与用户明示冲突时以用户为准。"
+        )
     ]
     for r in rows:
         label = KIND_LABELS.get(r["kind"], r["kind"])

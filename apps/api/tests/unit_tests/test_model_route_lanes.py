@@ -39,8 +39,9 @@ def test_heuristic_short_edit_is_fast():
 
 
 def test_heuristic_empty_create_is_reasoning():
+    # Structural: empty canvas + long prompt (no content keyword lists).
     d = heuristic_route_lane(
-        "从零设计一整个活动海报多画板",
+        "x" * 60,
         canvas_node_count=0,
     )
     assert d.lane == "reasoning"

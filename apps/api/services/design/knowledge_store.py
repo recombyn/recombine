@@ -237,9 +237,18 @@ def list_for_injection(*, scene: str, skill_category: str) -> list[dict[str, Any
 def format_knowledge_block(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        header = resolve_prompt_body("agent.prompt.knowledge_details_header").strip()
+    except Exception:
+        header = ""
     parts = [
-        "以下为可选设计知识【规范】：按 USER_PROMPT 自行选用，不必套全；"
-        "与用户明示冲突时以用户为准。"
+        header
+        or (
+            "以下为可选设计知识【规范】：按 USER_PROMPT 自行选用，不必套全；"
+            "与用户明示冲突时以用户为准。"
+        )
     ]
     for r in rows:
         label = KIND_LABELS.get(r["kind"], r["kind"])
@@ -256,8 +265,14 @@ def format_knowledge_catalog(*, scene: str = "website") -> str:
     """Short index of enabled knowledge (kinds + titles) for deferred loading."""
     scene_l = str(scene or "website").strip().lower() or "website"
     rows = list_knowledge(enabled=True, ensure=True)
+    try:
+        from services.design.prompt_pack_store import resolve_prompt_body
+
+        header = resolve_prompt_body("agent.prompt.knowledge_catalog_header").strip()
+    except Exception:
+        header = ""
     lines: list[str] = [
-        "设计知识目录（用 need_knowledge: [\"palette\", …] 申请正文）："
+        header or "设计知识目录（用 need_knowledge: [\"palette\", …] 申请正文）："
     ]
     seen_line: set[str] = set()
     for r in rows:

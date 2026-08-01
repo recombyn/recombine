@@ -89,18 +89,44 @@ def _edit_context_block(
             ]
             nodes_for_bg = focused_nodes
             if not focused_nodes:
+                try:
+                    from services.design.prompt_pack_store import resolve_prompt_body
+
+                    empty_tmpl = resolve_prompt_body(
+                        "agent.prompt.focus_empty_frame"
+                    ).strip()
+                except Exception:
+                    empty_tmpl = ""
+                try:
+                    empty_msg = (
+                        empty_tmpl.format(focus=focus).strip() if empty_tmpl else ""
+                    )
+                except Exception:
+                    empty_msg = ""
                 parts.append(
-                    f"FOCUS_FRAME_ID {focus} 在 SCENE_NODES 中无节点（空画板）。"
-                    f"改画板背景色请用 update_frame，frameId={focus} 且带 backgroundColor。"
-                    "不要 update_node 其他画板上的 fill。"
+                    empty_msg
+                    or (
+                        f"FOCUS_FRAME_ID {focus} 在 SCENE_NODES 中无节点（空画板）。"
+                        f"改画板背景色请用 update_frame，frameId={focus} 且带 backgroundColor。"
+                        "不要 update_node 其他画板上的 fill。"
+                    )
                 )
         bg = _bg_candidate_from_nodes(nodes_for_bg)
         if bg:
+            try:
+                from services.design.prompt_pack_store import resolve_prompt_body
+
+                bg_hint = resolve_prompt_body("agent.prompt.bg_candidate_hint").strip()
+            except Exception:
+                bg_hint = ""
             parts.append(
                 "BG_CANDIDATE_NODE_ID: "
                 f"{bg.get('id')} (fill={bg.get('fill') or '?'}; "
                 f"{bg.get('w')}x{bg.get('h')}) — "
-                "改底色/背景色时必须 update_node 此 id，禁止 create_shape 叠新底。"
+                + (
+                    bg_hint
+                    or "改底色/背景色时必须 update_node 此 id，禁止 create_shape 叠新底。"
+                )
             )
     elif include_full_svg and (svg or "").strip():
         parts.append(f"CURRENT_SVG:\n{svg[:18000]}")
