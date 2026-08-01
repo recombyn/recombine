@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.validate import extract_json, extract_json_object
+from services.design.ops.validate import extract_json, extract_json_object
 
 
 def test_extract_json_array():

@@ -15,7 +15,7 @@ from typing import Any
 
 from services.db import connect
 
-_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 _SEED_PATH = _DATA_DIR / "canvas_actions_seed.json"
 
 _actions_cache: list[dict[str, Any]] | None = None

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from services.db import connect
-from services.design.catalog import ensure_design_catalog
+from services.design.readpath.catalog import ensure_design_catalog
 
 _KNOWLEDGE_READY = False
 _KNOWLEDGE_LOCK = threading.RLock()
@@ -16,7 +16,7 @@ _KNOWLEDGE_LOCK = threading.RLock()
 
 def _load_knowledge_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Load kind labels + seed rows from apps/api/data/design_knowledge_seed.json."""
-    path = Path(__file__).resolve().parents[2] / "data" / "design_knowledge_seed.json"
+    path = Path(__file__).resolve().parents[3] / "data" / "design_knowledge_seed.json"
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -86,7 +86,7 @@ def ensure_design_knowledge() -> None:
                 _KNOWLEDGE_READY = False
         now = time.time()
         from services.db import dialect, init_schema
-        from services.design.schema import ensure_design_tables
+        from services.design.admin.schema import ensure_design_tables
 
         init_schema()
         with connect() as conn:
@@ -238,7 +238,7 @@ def format_knowledge_block(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         header = resolve_prompt_body("agent.prompt.knowledge_details_header").strip()
     except Exception:
@@ -266,7 +266,7 @@ def format_knowledge_catalog(*, scene: str = "website") -> str:
     scene_l = str(scene or "website").strip().lower() or "website"
     rows = list_knowledge(enabled=True, ensure=True)
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         header = resolve_prompt_body("agent.prompt.knowledge_catalog_header").strip()
     except Exception:

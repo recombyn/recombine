@@ -11,13 +11,13 @@ import time
 from typing import Any
 
 from services.db import connect
-from services.design.catalog import ensure_design_catalog
+from services.design.readpath.catalog import ensure_design_catalog
 
 # Seed: apps/api/data/design_tokens_seed.json (bump schemaVersion there to upgrade rows).
 
 
 def _load_tokens_seed() -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
-    path = Path(__file__).resolve().parents[2] / "data" / "design_tokens_seed.json"
+    path = Path(__file__).resolve().parents[3] / "data" / "design_tokens_seed.json"
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:

@@ -9,14 +9,14 @@ import time
 from typing import Any
 
 from services.db import connect
-from services.design.blob_codec import (
+from services.design.admin.blob_codec import (
     make_webp_thumb,
     origin_key_from_url,
     pack_emb_blob,
     thumb_data_url,
     unpack_emb_blob,
 )
-from services.design.catalog import ensure_design_catalog
+from services.design.readpath.catalog import ensure_design_catalog
 
 SCENES = frozenset({"website", "mobile", "image", "poster", "drawing"})
 GRADES = frozenset({"good", "ok", "bad"})

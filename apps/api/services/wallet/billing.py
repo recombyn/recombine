@@ -57,7 +57,7 @@ def load_billing_markup(rules: dict[str, Any] | None = None) -> float:
     src = rules or {}
     if not src:
         try:
-            from services.design.admin_store import list_global_rules
+            from services.design.admin.admin_store import list_global_rules
 
             src = {r["ruleKey"]: r["ruleValue"] for r in list_global_rules()}
         except Exception:

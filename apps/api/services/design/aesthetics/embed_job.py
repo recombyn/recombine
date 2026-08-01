@@ -17,7 +17,7 @@ from services.design.aesthetics.views import (
     layout_view,
     load_pil,
 )
-from services.design.quality_sample_store import (
+from services.design.admin.quality_sample_store import (
     get_quality_sample,
     save_embeddings,
     set_embed_status,

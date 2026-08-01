@@ -304,7 +304,7 @@ def analyze_sample_tokens(
     meta: dict[str, Any] | None = sample.get("meta") if isinstance(sample.get("meta"), dict) else None
     if meta is None and sid is not None:
         try:
-            from services.design.quality_sample_store import get_quality_sample
+            from services.design.admin.quality_sample_store import get_quality_sample
 
             full = get_quality_sample(int(sid))
             if isinstance(full, dict):
@@ -582,7 +582,7 @@ def build_aesthetic_token_guidance(
     analyzed: list[dict[str, Any]] = []
     has_user = bool(user_rows)
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         tok_hdr = resolve_prompt_body("agent.prompt.aesthetic_tokens_header").strip()
     except Exception:
@@ -608,7 +608,7 @@ def build_aesthetic_token_guidance(
 
     # Scene design-system baseline (spacing/type/radius/component metrics).
     try:
-        from services.design.token_store import format_token_block, resolve_token_pack
+        from services.design.prompts.token_store import format_token_block, resolve_token_pack
 
         pack = resolve_token_pack(scene=scene)
         block = format_token_block(pack)

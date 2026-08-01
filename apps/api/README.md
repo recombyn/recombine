@@ -52,16 +52,14 @@ Skill 命名空间、ACL、版本 pin、热加载说明见 [data/design_skills/R
 
 ## Design / Admin 相关服务
 
-| 模块 | 职责 |
-|------|------|
-| `services/design/skill_store.py` | Skill 目录、ACL、版本快照、热加载 |
-| `services/design/flow_runtime.py` | 运行时执行已发布图 |
-| `services/design/admin_store.py` | Admin：流程 CRUD、规则、节点模板、动作契约、复盘 |
-| `services/design/dict_store.py` | 字典 |
-| `services/design/knowledge_store.py` | 设计知识 |
-| `services/design/quality_sample_store.py` | 美学样本 |
-| `services/design/agent_controller.py` | Agent 主控 |
-| `services/design/orchestrator.py` | 任务编排 |
+| 包 / 模块 | 职责 |
+|-----------|------|
+| `services/design/runtime/` | Agent 主控、编排、flow 运行时、模型路由 |
+| `services/design/ops/` | tool_ops 契约与校验 |
+| `services/design/prompts/` | Skill、prompt pack、knowledge、token |
+| `services/design/readpath/` | catalog、canvas scene、library |
+| `services/design/admin/` | Admin 存储、字典、美学样本、schema |
+| `services/design/aesthetics/` | 美学 RAG |
 | `services/security.py` | BYOK vault、脱敏、限流相关 |
 | `services/db/backup.py` | 周期性 DB 备份 |
 

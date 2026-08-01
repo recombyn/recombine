@@ -515,8 +515,8 @@ def build_catalog_blocks(
 ) -> list[str]:
     """Format short catalog blocks for thought system prompt."""
     from services.design.aesthetics.scorer import format_aesthetics_catalog
-    from services.design.knowledge_store import format_knowledge_catalog
-    from services.design.tool_ops_contract import format_canvas_tools_catalog
+    from services.design.prompts.knowledge_store import format_knowledge_catalog
+    from services.design.ops.tool_ops_contract import format_canvas_tools_catalog
 
     blocks: list[str] = []
     for src in catalogs:
@@ -530,7 +530,7 @@ def build_catalog_blocks(
 
 
 def build_full_tools_block(rules: dict[str, str] | None) -> str:
-    from services.design.tool_ops_contract import format_canvas_tools_for_model
+    from services.design.ops.tool_ops_contract import format_canvas_tools_for_model
 
     return format_canvas_tools_for_model(rules)
 

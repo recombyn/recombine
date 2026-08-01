@@ -8,14 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from services.db import connect
-from services.design.catalog import ensure_design_catalog
+from services.design.readpath.catalog import ensure_design_catalog
 
 _PACKS_READY = False
 _PACKS_LOCK = threading.RLock()
 
 
 def _load_prompt_packs_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
-    path = Path(__file__).resolve().parents[2] / "data" / "design_prompt_packs_seed.json"
+    path = Path(__file__).resolve().parents[3] / "data" / "design_prompt_packs_seed.json"
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -64,7 +64,7 @@ def db_prompt_body(key: str) -> str:
         if body:
             return body
         try:
-            from services.design.system_prompt_store import is_system_prompt_key
+            from services.design.prompts.system_prompt_store import is_system_prompt_key
 
             if not is_system_prompt_key(kind):
                 return ""
@@ -94,7 +94,7 @@ def resolve_prompt_body(key: str, *, rules: dict[str, str] | None = None) -> str
     if not k:
         return ""
     if rules is not None:
-        from services.design.rules_text import _rule_text
+        from services.design.prompts.rules_text import _rule_text
 
         got = _rule_text(rules, k).strip()
         if got:
@@ -233,7 +233,7 @@ def normalize_pack_type(raw: Any, *, kind: str = "") -> str:
     if t in _PACK_TYPES:
         return t
     try:
-        from services.design.system_prompt_store import is_system_prompt_key
+        from services.design.prompts.system_prompt_store import is_system_prompt_key
 
         if is_system_prompt_key(kind):
             return PACK_TYPE_SYSTEM
@@ -465,7 +465,7 @@ def ensure_design_prompt_packs() -> None:
     with _PACKS_LOCK:
         with connect() as conn:
             try:
-                from services.design.schema import (
+                from services.design.admin.schema import (
                     _ensure_prompt_pack_kind_width,
                     _ensure_prompt_pack_type_column,
                 )
@@ -559,7 +559,7 @@ def list_prompt_pack_bodies_for_system(*, ensure: bool = True) -> dict[str, str]
     """Packs whose kind is a system prompt key → body (Admin 提示词包 is source of truth)."""
     if ensure:
         ensure_design_prompt_packs()
-    from services.design.system_prompt_store import is_system_prompt_key
+    from services.design.prompts.system_prompt_store import is_system_prompt_key
 
     with connect() as conn:
         rows = conn.execute(
@@ -697,7 +697,7 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("upsert failed")
     # Mirror system keys so legacy design_system_prompt readers stay in sync.
     try:
-        from services.design.system_prompt_store import (
+        from services.design.prompts.system_prompt_store import (
             is_system_prompt_key,
             upsert_system_prompt,
         )

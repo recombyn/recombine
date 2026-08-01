@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from services.design.orchestrator import run_design_job
+from services.design.runtime.orchestrator import run_design_job
 
 
 async def collect_design_events(**kwargs: Any) -> list[dict[str, Any]]:

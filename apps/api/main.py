@@ -22,9 +22,9 @@ try:
 except Exception:
     pass
 for _name in (
-    "services.design.orchestrator",
-    "services.design.agent_controller",
-    "services.design.llm_step",
+    "services.design.runtime.orchestrator",
+    "services.design.runtime.agent_controller",
+    "services.design.runtime.llm_step",
     "design.run_api",
     "design.llm_step",
 ):
@@ -72,12 +72,12 @@ def _init_stores() -> None:
     except Exception:
         logger.exception("seed failed")
     try:
-        from services.design.catalog import ensure_design_catalog
+        from services.design.readpath.catalog import ensure_design_catalog
 
         ensure_design_catalog()
         logger.info("design catalog ready")
         try:
-            from services.design.skill_store import start_skills_hot_reload
+            from services.design.prompts.skill_store import start_skills_hot_reload
 
             if start_skills_hot_reload():
                 logger.info("design skills hot reload started")
@@ -97,7 +97,7 @@ def _init_stores() -> None:
     except Exception:
         logger.exception("langfuse configure failed")
     try:
-        from services.design.admin_store import start_usage_optimize_scheduler
+        from services.design.admin.admin_store import start_usage_optimize_scheduler
         start_usage_optimize_scheduler()
         logger.info("usage optimize scheduler started")
     except Exception:
@@ -108,7 +108,7 @@ def _init_stores() -> None:
 
         def _cold_pass() -> None:
             try:
-                from services.design.cold_archive import run_cold_archive
+                from services.design.admin.cold_archive import run_cold_archive
 
                 result = run_cold_archive(retention_days=30, batch=40)
                 logger.info("cold archive startup pass: %s", result)

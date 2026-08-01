@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from services.design.agent_controller import PaintOpsSchema
-from services.design.catalog import ensure_design_catalog
-from services.design.models_route import IntentClassifyDecision
+from services.design.runtime.agent_controller import PaintOpsSchema
+from services.design.readpath.catalog import ensure_design_catalog
+from services.design.runtime.models_route import IntentClassifyDecision
 from tests.design_harness import collect_design_events, events_by_type
 
 TEST_USER = "user_eval_golden"
@@ -27,7 +27,7 @@ def _catalog(tmp_path_factory):
     settings_mod.settings.sqlite_db_path = str(db_path)
     settings_mod.settings.database_url = ""
     import services.db as db_mod
-    import services.design.catalog as catalog_mod
+    import services.design.readpath.catalog as catalog_mod
 
     db_mod._SCHEMA_READY = False
     catalog_mod._CATALOG_READY = False
@@ -37,27 +37,27 @@ def _catalog(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def _wallet(monkeypatch):
     monkeypatch.setattr(
-        "services.design.orchestrator.get_user_tokens",
+        "services.design.runtime.orchestrator.get_user_tokens",
         lambda _uid: 200_000,
     )
     monkeypatch.setattr(
-        "services.design.orchestrator.free_daily_remaining",
+        "services.design.runtime.orchestrator.free_daily_remaining",
         lambda _uid: 0,
     )
     monkeypatch.setattr(
-        "services.design.agent_controller.get_user_tokens",
+        "services.design.runtime.agent_controller.get_user_tokens",
         lambda _uid: 200_000,
     )
     monkeypatch.setattr(
-        "services.design.orchestrator._reserve_design_hold",
+        "services.design.runtime.orchestrator._reserve_design_hold",
         lambda *_a, **_k: (100, False),
     )
     monkeypatch.setattr(
-        "services.design.orchestrator._settle_hold",
+        "services.design.runtime.orchestrator._settle_hold",
         lambda *_a, **_k: 10,
     )
     monkeypatch.setattr(
-        "services.design.orchestrator._refund_hold",
+        "services.design.runtime.orchestrator._refund_hold",
         lambda *_a, **_k: None,
     )
 
@@ -71,11 +71,11 @@ def _run(**kwargs):
 @pytest.mark.integration
 def test_permission_gate_denies_when_broke(monkeypatch):
     monkeypatch.setattr(
-        "services.design.orchestrator.get_user_tokens",
+        "services.design.runtime.orchestrator.get_user_tokens",
         lambda _uid: 0,
     )
     monkeypatch.setattr(
-        "services.design.orchestrator.free_daily_remaining",
+        "services.design.runtime.orchestrator.free_daily_remaining",
         lambda _uid: 0,
     )
     events = _run(prompt="你好")
@@ -103,7 +103,7 @@ def test_react_chat_hello(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "services.design.agent_controller.classify_user_intent",
+        "services.design.runtime.agent_controller.classify_user_intent",
         _classify,
     )
     events = _run(prompt="你好")
@@ -163,11 +163,11 @@ def test_react_edit_emits_tool_ops(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "services.design.agent_controller.classify_user_intent",
+        "services.design.runtime.agent_controller.classify_user_intent",
         _classify,
     )
     monkeypatch.setattr(
-        "services.design.agent_controller._stream_llm_text",
+        "services.design.runtime.agent_controller._stream_llm_text",
         _stream,
     )
     monkeypatch.setattr(

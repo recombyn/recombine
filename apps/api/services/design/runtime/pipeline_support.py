@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from services.design.rules_text import _as_text, _rule_text
+from services.design.prompts.rules_text import _as_text, _rule_text
 
 
 def _json_error_message(text: str) -> str | None:
@@ -98,7 +98,7 @@ def _attached_images_prompt_note(
     if not custom:
         return ""
     try:
-        from services.design.rules_text import render_prompt_template
+        from services.design.prompts.rules_text import render_prompt_template
 
         return render_prompt_template(custom, n=n, max_index=max(0, n - 1))
     except Exception:

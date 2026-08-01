@@ -837,6 +837,7 @@ const ja = {
     contextMenu: {
       addToChat: 'Chat に追加',
       uploadImage: '画像をアップロード',
+      uploadMedia: '画像/動画をアップロード',
       undo: '元に戻す',
       redo: 'やり直す',
       cut: '切り取り',
@@ -876,6 +877,7 @@ const ja = {
       polygon: '多角形',
       star: '星',
       uploadImage: '画像アップロード',
+      uploadMedia: '画像/動画をアップロード',
       imageGenerator: '画像ジェネレーター',
       imageGenerating: '生成中',
       imageGenFail: '画像生成に失敗しました',

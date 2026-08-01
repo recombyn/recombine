@@ -7,9 +7,9 @@ import time
 from typing import Any
 
 from services.db import connect
-from services.design.blob_codec import make_webp_thumb
-from services.design.catalog import ensure_design_catalog
-from services.design.quality_sample_store import upsert_quality_sample
+from services.design.admin.blob_codec import make_webp_thumb
+from services.design.readpath.catalog import ensure_design_catalog
+from services.design.admin.quality_sample_store import upsert_quality_sample
 from services.storage import get_storage, put_bytes
 
 logger = logging.getLogger(__name__)

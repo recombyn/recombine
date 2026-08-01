@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field
 
 from services.auth import get_session
 from services.agent_memory.long_term import insert_long_memory
-from services.design.catalog import ensure_design_catalog, get_catalog_payload
-from services.design.orchestrator import run_design_job
-from services.design.library_store import list_library_items
-from services.design.library_seed import list_public_brushes
-from services.design.rules_text import _safe_print
+from services.design.readpath.catalog import ensure_design_catalog, get_catalog_payload
+from services.design.runtime.orchestrator import run_design_job
+from services.design.readpath.library_store import list_library_items
+from services.design.readpath.library_seed import list_public_brushes
+from services.design.prompts.rules_text import _safe_print
 
 router = APIRouter()
 _log = logging.getLogger("design.run_api")
@@ -112,7 +112,7 @@ def design_catalog() -> dict[str, Any]:
 def design_canvas_tools() -> dict[str, Any]:
     """Public capability table — FE executes ops by the same op_key."""
     ensure_design_catalog()
-    from services.design.tool_ops_contract import list_canvas_tools
+    from services.design.ops.tool_ops_contract import list_canvas_tools
 
     return {"items": list_canvas_tools(enabled_only=True)}
 
@@ -129,7 +129,7 @@ async def design_run(
     client_country = resolve_client_country(request)
 
     async def gen():
-        from services.design.progress_stages import (
+        from services.design.runtime.progress_stages import (
             maybe_advance_stage,
             stage_for_event,
             thought_stage_event,
@@ -342,7 +342,7 @@ async def design_run_scene_feedback(
 ) -> dict[str, Any]:
     """FE posts real canvas inventory after applying tool_ops (between agent rounds)."""
     _require_user(authorization)
-    from services.design.scene_feedback import publish_scene
+    from services.design.runtime.scene_feedback import publish_scene
 
     n = len(body.scene_nodes or [])
     f = len(body.scene_frames or [])

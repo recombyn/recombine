@@ -6,8 +6,8 @@ import json
 from typing import Any
 
 from services.agent_memory.service import memory_service
-from services.design.rules_text import _as_text, _rule_text
-from services.design.svg_patch import svg_content_digest
+from services.design.prompts.rules_text import _as_text, _rule_text
+from services.design.ops.svg_patch import svg_content_digest
 
 
 def _bg_candidate_from_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -90,7 +90,7 @@ def _edit_context_block(
             nodes_for_bg = focused_nodes
             if not focused_nodes:
                 try:
-                    from services.design.prompt_pack_store import resolve_prompt_body
+                    from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
                     empty_tmpl = resolve_prompt_body(
                         "agent.prompt.focus_empty_frame"
@@ -114,7 +114,7 @@ def _edit_context_block(
         bg = _bg_candidate_from_nodes(nodes_for_bg)
         if bg:
             try:
-                from services.design.prompt_pack_store import resolve_prompt_body
+                from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
                 bg_hint = resolve_prompt_body("agent.prompt.bg_candidate_hint").strip()
             except Exception:
