@@ -588,6 +588,12 @@ function SelectionContextToolbar(props: Props): ReactNode {
                   onEraser={() =>
                     dispatch(openImageToolPanel({ nodeId, kind: 'eraser' }))
                   }
+                  onEditElements={() =>
+                    runImageProcess(
+                      'editElements',
+                      t('editor.imageToolbar.processingEditElements')
+                    )
+                  }
                   onMultiAngle={() =>
                     dispatch(openImageToolPanel({ nodeId, kind: 'multiAngle' }))
                   }

@@ -855,11 +855,13 @@ export function isImageProcessRunning(node: any): boolean {
   return Boolean(node) && String(node?.attrs?.processStatus || '') === 'running';
 }
 
-/** Upload/import placeholder — delete is permanent (not restorable via undo). */
+/**
+ * In-flight process placeholder (upload / import / AI tools like editElements).
+ * Delete is permanent — scrubbed from history so Undo cannot revive it; clearing
+ * pendingImageProcessId aborts applying the result (same as upload-in-flight).
+ */
 export function isEphemeralUploadNode(node: any): boolean {
-  if (!isImageProcessRunning(node)) return false;
-  const kind = String(node?.attrs?.processKind || '');
-  return kind === 'upload' || kind === 'import';
+  return isImageProcessRunning(node);
 }
 
 /**
@@ -1363,6 +1365,7 @@ export type ImageProcessKind =
   | 'removeBg'
   | 'eraser'
   | 'editText'
+  | 'editElements'
   | 'multiAngle'
   | 'moveObject'
   | 'expand'
@@ -1553,8 +1556,9 @@ export type DecomposeLayer = {
 };
 
 /**
- * Replace a process placeholder with split layers (editText).
+ * Replace a process placeholder with split layers (editText / editElements).
  * Layer coords are in source-image pixels; scaled into the placeholder's box.
+ * Result layers share one groupId so the stack still moves as one picture.
  */
 export function applyImageDecomposeLayers(
   doc: any,
@@ -1633,6 +1637,11 @@ export function applyImageDecomposeLayers(
       next = addNodeToDocument(next, id, node);
       ids.push(id);
     }
+  }
+
+  // Keep the stack selectable / movable as one composition.
+  if (ids.length >= 2) {
+    next = groupNodesInDocument(next, ids);
   }
 
   return { document: next, ids };

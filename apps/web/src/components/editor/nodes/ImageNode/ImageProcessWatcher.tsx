@@ -2,7 +2,7 @@ import { useEffect, useRef, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { message } from '@/components/base';
 import { processImageTool } from '@/apis/imageTools';
-import { uploadImageFromSrc } from '@/utils/uploadImage';
+import { isUploadAbortError, uploadImageFromSrc } from '@/utils/uploadImage';
 import { fetchWallet } from '@/apis/wallet';
 import { failImageProcess, finishImageProcess } from '@/store/modules/editor';
 import { syncFromServer } from '@/store/modules/wallet';
@@ -13,8 +13,11 @@ const AI_KINDS = new Set([
   'multiAngle',
   'expand',
   'editText',
+  'editElements',
   'adjust',
 ]);
+
+const DECOMPOSE_KINDS = new Set(['editText', 'editElements']);
 
 function parseMeta(raw: unknown): Record<string, unknown> {
   if (!raw) return {};
@@ -101,6 +104,7 @@ function ImageProcessWatcher() {
     if (kind === 'import' || kind === 'upload' || kind === 'eraser') return undefined;
 
     let cancelled = false;
+    const ac = new AbortController();
 
     const fail = (msg: string) => {
       if (cancelled) return;
@@ -148,11 +152,11 @@ function ImageProcessWatcher() {
         if (aspect) processBody.aspect_ratio = aspect;
         const resolution = resolutionFor(kind, liveNode);
         if (resolution) processBody.resolution = resolution;
-        const res = await processImageTool(processBody);
+        const res = await processImageTool(processBody, { signal: ac.signal });
         if (cancelled) return;
 
         const layers = Array.isArray(res?.layers) ? res.layers : [];
-        if (layers.length > 0 && kind === 'editText') {
+        if (layers.length > 0 && DECOMPOSE_KINDS.has(kind)) {
           const persisted = await Promise.all(
             layers.map(async (layer: any, i: number) => {
               const src = String(layer?.src || '').trim();
@@ -172,7 +176,11 @@ function ImageProcessWatcher() {
           );
           const warn = Array.isArray(res.warnings) ? res.warnings.filter(Boolean) : [];
           if (warn.length) message.warning(warn[0]);
-          else message.success('文字识别完成');
+          else {
+            message.success(
+              kind === 'editElements' ? '图片分层完成（可单独改主体/文字）' : '文字识别完成'
+            );
+          }
           refreshWallet(dispatch);
           return;
         }
@@ -198,13 +206,14 @@ function ImageProcessWatcher() {
           multiAngle: '多角度生成完成',
           expand: '扩展完成',
           editText: '编辑文字完成',
+          editElements: '图片分层完成',
           vector: '矢量化完成',
           adjust: '调整完成',
         };
         message.success(labels[kind] || '处理完成');
         refreshWallet(dispatch);
       } catch (err: any) {
-        if (cancelled) return;
+        if (cancelled || isUploadAbortError(err)) return;
         fail(processFailMessage(err));
       }
     };
@@ -212,6 +221,7 @@ function ImageProcessWatcher() {
     void run();
     return () => {
       cancelled = true;
+      ac.abort();
     };
     // Only re-run when a new job id is pending — not on every document edit.
   }, [pendingId, dispatch]);
