@@ -41,7 +41,7 @@ def test_rejects_unknown_node_id():
         scene_nodes=[{"id": "n1"}],
     )
     assert not ops
-    assert any("unknown_id" in e for e in errs)
+    assert any("code=update_node_unknown_id" in e for e in errs)
 
 
 def test_dedupe_by_op_id():
@@ -92,8 +92,8 @@ def test_delete_plus_create_rejected_prefer_update_shape():
         scene_nodes=[{"id": "green1", "type": "rect", "w": 120, "h": 100}],
     )
     assert not ops
-    assert any("prefer_update_node_shapeType" in e for e in errs)
-    assert any("green1" in e for e in errs)
+    assert any("code=prefer_update_node_shapeType" in e for e in errs)
+    assert any("fix=" in e and "green1" in e for e in errs)
     assert any("ellipse" in e for e in errs)
 
 
@@ -109,7 +109,7 @@ def test_create_text_matching_scene_rejected_prefer_update():
         scene_nodes=[{"id": "t1", "type": "text", "text": "Hello"}],
     )
     assert not ops
-    assert any("prefer_update_node" in e for e in errs)
+    assert any("code=prefer_update_node" in e for e in errs)
     assert any("t1" in e for e in errs)
 
 
@@ -123,7 +123,21 @@ def test_update_node_missing_nodeId_not_invented():
         scene_nodes=[{"id": "bg", "type": "rect", "w": 400, "h": 400}],
     )
     assert not ops
-    assert any("update_node_missing_nodeId" in e for e in errs)
+    assert any("code=update_node_missing_nodeId" in e for e in errs)
+
+
+def test_format_op_error_shape():
+    from services.design.tool_ops_contract import format_op_error
+
+    s = format_op_error("demo", fix="do X", detail="why")
+    assert s == "code=demo; fix=do X; detail=why"
+
+
+def test_rejects_unknown_tool_uses_code_format():
+    raw = '{"ops":[{"name":"explode_canvas","args":{}}]}'
+    ops, errs = extract_and_validate_tool_ops(raw)
+    assert not ops
+    assert any("code=tool_not_allowed" in e for e in errs)
 
 
 def test_update_node_accepts_shape_type():

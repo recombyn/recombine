@@ -12,7 +12,20 @@ from services.design.validate import extract_json
 
 logger = logging.getLogger(__name__)
 
-TOOL_OPS_SCHEMA_VERSION = "2026-07-21-v2"
+TOOL_OPS_SCHEMA_VERSION = "2026-08-01-v3"
+
+
+def format_op_error(code: str, *, fix: str = "", detail: str = "") -> str:
+    """Stable error line for LAST_ERROR / paint retry — model can parse code + fix."""
+    code_s = str(code or "invalid_op").strip() or "invalid_op"
+    parts = [f"code={code_s}"]
+    fix_s = str(fix or "").strip()
+    if fix_s:
+        parts.append(f"fix={fix_s}")
+    detail_s = str(detail or "").strip()
+    if detail_s:
+        parts.append(f"detail={detail_s}")
+    return "; ".join(parts)
 
 
 def _tools_from_seed(*, enabled_only: bool = True) -> list[dict[str, Any]]:
@@ -381,65 +394,109 @@ def _validate_single_op(
     scene_frame_ids: set[str] | None = None,
 ) -> str | None:
     if name not in allowed_canvas_tool_keys():
-        return f"tool_not_allowed:{name}"
+        return format_op_error(
+            "tool_not_allowed",
+            fix="use an allowlisted canvas tool name",
+            detail=f"name={name}",
+        )
     if name == "update_node":
         nid = str(args.get("nodeId") or args.get("id") or "").strip()
         if not nid:
-            return "update_node_missing_nodeId"
+            return format_op_error(
+                "update_node_missing_nodeId",
+                fix="re-emit update_node with nodeId from SCENE_NODES",
+            )
         if scene_node_ids is not None and nid not in scene_node_ids:
-            # Allow fill-only heuristic without id only when caller passes no inventory.
-            return f"update_node_unknown_id:{nid}"
+            return format_op_error(
+                "update_node_unknown_id",
+                fix="pick nodeId from SCENE_NODES",
+                detail=f"nodeId={nid}",
+            )
         return None
     if name == "delete_nodes":
         args = _normalize_node_id_list_args(args)
         ids = args.get("nodeIds")
         if not isinstance(ids, list) or not [x for x in ids if str(x).strip()]:
-            return "delete_nodes_missing_nodeIds"
+            return format_op_error(
+                "delete_nodes_missing_nodeIds",
+                fix="re-emit delete_nodes with args.nodeIds=[...]",
+            )
         if scene_node_ids is not None:
             for raw in ids:
                 sid = str(raw).strip()
                 if sid and sid not in scene_node_ids:
-                    return f"delete_nodes_unknown_id:{sid}"
+                    return format_op_error(
+                        "delete_nodes_unknown_id",
+                        fix="use nodeIds from SCENE_NODES",
+                        detail=f"nodeId={sid}",
+                    )
         return None
     if name == "delete_frame":
         fid = str(args.get("frameId") or args.get("id") or "").strip()
         if not fid:
-            return "delete_frame_missing_frameId"
+            return format_op_error(
+                "delete_frame_missing_frameId",
+                fix="re-emit delete_frame with args.frameId from SCENE_FRAMES",
+            )
         if scene_frame_ids is not None and fid not in scene_frame_ids:
-            return f"delete_frame_unknown_id:{fid}"
+            return format_op_error(
+                "delete_frame_unknown_id",
+                fix="pick frameId from SCENE_FRAMES",
+                detail=f"frameId={fid}",
+            )
         return None
     if name == "create_svg" or name == "create_icon":
         svg = str(args.get("svg") or args.get("iconSvg") or args.get("content") or "").strip()
         if not svg:
-            return f"{name}_missing_svg"
+            return format_op_error(
+                f"{name}_missing_svg",
+                fix=f"re-emit {name} with args.svg markup",
+            )
         from services.design.validate import validate_agent_svg_markup
 
         svg_err = validate_agent_svg_markup(svg)
         if svg_err:
-            return f"{name}_{svg_err}"
+            return format_op_error(
+                f"{name}_invalid_svg",
+                fix="pass valid mini SVG markup in args.svg",
+                detail=svg_err,
+            )
         return None
     if name == "create_shape":
         if args.get("shapeType") is None and args.get("type") is None:
-            return "create_shape_missing_shapeType"
+            return format_op_error(
+                "create_shape_missing_shapeType",
+                fix="re-emit create_shape with args.shapeType (rect|ellipse|…)",
+            )
         svg = str(args.get("svg") or args.get("iconSvg") or "").strip()
         if svg:
             from services.design.validate import validate_agent_svg_markup
 
             svg_err = validate_agent_svg_markup(svg)
             if svg_err:
-                return f"create_shape_{svg_err}"
+                return format_op_error(
+                    "create_shape_invalid_svg",
+                    fix="fix svg markup or omit svg",
+                    detail=svg_err,
+                )
         return None
     if name == "create_text":
         if args.get("text") is None and args.get("content") is None:
             if args.get("x") is None or args.get("y") is None:
-                return "create_text_missing_text_or_position"
+                return format_op_error(
+                    "create_text_missing_text_or_position",
+                    fix="re-emit create_text with args.text and x/y",
+                )
         return None
     if name == "create_image":
         has_attach = args.get("attachmentIndex") is not None
         has_url = bool(str(args.get("src") or args.get("url") or "").strip())
         has_gen = bool(str(args.get("genPrompt") or args.get("prompt") or "").strip())
         if not has_attach and not has_url and not has_gen:
-            return "create_image_missing_source"
+            return format_op_error(
+                "create_image_missing_source",
+                fix="re-emit create_image with src, attachmentIndex, or genPrompt",
+            )
         return None
     return None
 
@@ -556,10 +613,13 @@ def _reject_shape_morph_ops(
         return ops, []
     drop = {delete_idxs[0], create_idxs[0]}
     kept = [raw for i, raw in enumerate(ops) if i not in drop]
-    err = (
-        f"prefer_update_node_shapeType: delete_nodes+create_shape morphs z-order; "
-        f"re-emit update_node nodeId={deleted[0]} shapeType={shape_type} "
-        f"(include fill/x/y/width/height as needed)."
+    err = format_op_error(
+        "prefer_update_node_shapeType",
+        fix=(
+            f"re-emit update_node nodeId={deleted[0]} shapeType={shape_type} "
+            f"(include fill/x/y/width/height as needed)"
+        ),
+        detail="delete_nodes+create_shape morphs z-order",
     )
     return kept, [err]
 
@@ -595,8 +655,14 @@ def _reject_create_text_as_edit(
         mid = str(match.get("id") or "")
         used_text_ids.add(mid)
         errors.append(
-            f"prefer_update_node: create_text matches SCENE_NODES id={mid}; "
-            f"re-emit update_node nodeId={mid} with text/fontSize/color (do not create_text)."
+            format_op_error(
+                "prefer_update_node",
+                fix=(
+                    f"re-emit update_node nodeId={mid} with text/fontSize/color "
+                    f"(do not create_text)"
+                ),
+                detail=f"create_text matches SCENE_NODES id={mid}",
+            )
         )
     return kept, errors
 
@@ -628,15 +694,35 @@ def normalize_agent_tool_ops(
 
     max_ops = _max_ops_per_step(rules)
     if len(raw_ops) > max_ops:
-        errors.append(f"too_many_ops:{len(raw_ops)}>{max_ops}")
+        errors.append(
+            format_op_error(
+                "too_many_ops",
+                fix=f"emit at most {max_ops} tool_ops this step",
+                detail=f"{len(raw_ops)}>{max_ops}",
+            )
+        )
         raw_ops = raw_ops[:max_ops]
 
     working: list[dict[str, Any]] = []
     for item in raw_ops:
+        if not isinstance(item, dict):
+            errors.append(
+                format_op_error(
+                    "op_not_object",
+                    fix="each tool_ops item must be {name, args}",
+                )
+            )
+            continue
         name = str(item.get("name") or "").strip()
         args = item.get("args") if isinstance(item.get("args"), dict) else {}
         args = dict(args)
         if not name:
+            errors.append(
+                format_op_error(
+                    "missing_name",
+                    fix="each tool_op needs name + args",
+                )
+            )
             continue
         if name == "create_shape":
             if args.get("shapeType") is None and args.get("type") is not None:
@@ -709,7 +795,12 @@ def normalize_agent_tool_ops(
         final.append(op)
 
     if not final and raw_ops and not errors:
-        errors.append("no_valid_ops_after_filter")
+        errors.append(
+            format_op_error(
+                "no_valid_ops_after_filter",
+                fix="emit non-empty tool_ops with valid name + args",
+            )
+        )
     return final, errors
 
 

@@ -48,6 +48,7 @@ from services.design.tool_ops_contract import (
     format_canvas_tools_catalog,
     format_canvas_tools_details,
     format_canvas_tools_for_model,
+    format_op_error,
     normalize_need_tools,
     tool_ops_activity_events as _tool_ops_activity_events,
     tool_ops_for_sse,
@@ -74,14 +75,88 @@ from services.design.aesthetics.scorer import (
 from services.design.validate import extract_json_object
 from services.design.admin_store import STAGE_RULE_DEFAULTS
 from services.wallet.db import get_user_tokens
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 _log = logging.getLogger(__name__)
+logger = _log
 
 # Defaults when Admin global rules are empty (zero-base).
 _DEFAULT_MAX_ROUNDS = 4
 _DEFAULT_MAX_REFLECT = 1
 _SCENE_WAIT_SEC = 12.0
+
+_PAINT_OP_META_KEYS = frozenset(
+    {
+        "name",
+        "tool",
+        "type",
+        "op",
+        "op_key",
+        "opKey",
+        "args",
+        "properties",
+        "props",
+        "updates",
+        "params",
+        "op_id",
+        "opId",
+    }
+)
+
+
+class PaintToolOp(BaseModel):
+    """LangChain envelope for one canvas op — name + args only (not canvas semantics)."""
+
+    name: str = Field(..., min_length=1)
+    args: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coalesce_flat_op(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        name = (
+            d.get("name")
+            or d.get("tool")
+            or d.get("op")
+            or d.get("op_key")
+            or d.get("opKey")
+            or ""
+        )
+        type_as_name = str(d.get("type") or "").strip()
+        if not str(name or "").strip() and type_as_name in {
+            "create_shape",
+            "create_text",
+            "create_image",
+            "create_frame",
+            "update_node",
+            "delete_nodes",
+            "delete_frame",
+            "create_svg",
+            "create_icon",
+        }:
+            name = type_as_name
+        args = d.get("args")
+        if not isinstance(args, dict):
+            args = {k: v for k, v in d.items() if k not in _PAINT_OP_META_KEYS}
+        else:
+            args = dict(args)
+        for nest_key in ("properties", "props", "updates", "params"):
+            nested = d.get(nest_key)
+            if isinstance(nested, dict):
+                for nk, nv in nested.items():
+                    args.setdefault(nk, nv)
+        if (
+            str(name or "").strip() == "create_shape"
+            and args.get("shapeType") is None
+            and d.get("type") is not None
+            and str(d.get("type")) not in {"create_shape"}
+        ):
+            args.setdefault("shapeType", d.get("type"))
+        return {"name": str(name or "").strip(), "args": args}
 
 
 class AgentTurnSchema(BaseModel):
@@ -90,8 +165,8 @@ class AgentTurnSchema(BaseModel):
     thought: str = ""
     intent: str = "chat"
     reply: str = ""
-    tool_ops: list[Any] = Field(default_factory=list)
-    ops: list[Any] = Field(default_factory=list)
+    tool_ops: list[PaintToolOp] = Field(default_factory=list)
+    ops: list[PaintToolOp] = Field(default_factory=list)
     need_tools: list[Any] = Field(default_factory=list)
     need_knowledge: list[Any] = Field(default_factory=list)
     need_skills: list[Any] = Field(default_factory=list)
@@ -114,6 +189,16 @@ class AgentTurnSchema(BaseModel):
 
     model_config = {"extra": "allow"}
 
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_ops_to_tool_ops(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("tool_ops") and d.get("ops"):
+            d["tool_ops"] = d.get("ops")
+        return d
+
 
 class DecideTurnSchema(BaseModel):
     """Decision stage only — never emits canvas ops (paint_ops node does that)."""
@@ -134,13 +219,32 @@ class DecideTurnSchema(BaseModel):
 
 
 class PaintOpsSchema(BaseModel):
-    """Paint stage only — tool_ops first; short reply optional."""
+    """Paint stage — LangChain validates op envelope; host validates canvas semantics."""
 
-    tool_ops: list[Any] = Field(default_factory=list)
+    tool_ops: list[PaintToolOp] = Field(default_factory=list)
     intent: str = "create"
     reply: str = ""
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_ops_to_tool_ops(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("tool_ops") and d.get("ops"):
+            d["tool_ops"] = d.get("ops")
+        return d
+
+    @field_validator("tool_ops", mode="before")
+    @classmethod
+    def _coerce_tool_ops_list(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            return [value]
+        return value
 
 
 class PlanSchema(BaseModel):
@@ -1008,14 +1112,31 @@ def _placement_errors_for_free_creates(rt: Any, ops: list[dict[str, Any]]) -> li
             continue
         if spw is not None:
             errors.append(
-                f"{name} at world ({int(round(ox))},{int(round(oy))}) is outside viewport_world; "
-                f"re-emit with x={spw['x']} y={spw['y']} from suggested_place_world "
-                f"(omit frameId for free-canvas)."
+                format_op_error(
+                    "placement_outside_viewport",
+                    fix=(
+                        f"re-emit {name} with x={spw['x']} y={spw['y']} "
+                        f"from suggested_place_world (omit frameId for free-canvas)"
+                    ),
+                    detail=(
+                        f"{name} at world ({int(round(ox))},{int(round(oy))}) "
+                        f"outside viewport_world"
+                    ),
+                )
             )
         else:
             errors.append(
-                f"{name} at world ({int(round(ox))},{int(round(oy))}) is outside viewport_world; "
-                f"re-emit create_* with x/y inside the visible camera (omit frameId for free-canvas)."
+                format_op_error(
+                    "placement_outside_viewport",
+                    fix=(
+                        f"re-emit {name} with x/y inside the visible camera "
+                        f"(omit frameId for free-canvas)"
+                    ),
+                    detail=(
+                        f"{name} at world ({int(round(ox))},{int(round(oy))}) "
+                        f"outside viewport_world"
+                    ),
+                )
             )
     return errors[:8]
 
@@ -4544,9 +4665,9 @@ async def _node_paint_ops(state: GraphState) -> Command:
         if attempt > 0:
             user_msg += (
                 "\n\nCRITICAL RETRY: previous tool_ops were empty or invalid. "
-                "If LAST_ERROR mentions viewport_world / suggested_place_world, "
-                "re-emit create_* with those world x/y (omit frameId for free-canvas). "
-                "Output a non-empty tool_ops array now."
+                "Read LAST_ERROR lines (code=…; fix=…) and re-emit tool_ops accordingly. "
+                "If code=placement_outside_viewport, use suggested_place_world x/y "
+                "(omit frameId for free-canvas). Output a non-empty tool_ops array now."
             )
         try:
             from config.settings import settings as _paint_settings

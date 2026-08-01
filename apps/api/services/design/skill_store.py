@@ -1192,6 +1192,8 @@ def filter_ops_by_skill_output_schema(
         return list(ops or []), []
     allowed_ops |= _ALWAYS_ALLOW_OPS
     kept: list[dict[str, Any]] = []
+    from services.design.tool_ops_contract import format_op_error
+
     errs: list[str] = []
     for op in ops or []:
         if not isinstance(op, dict):
@@ -1200,7 +1202,13 @@ def filter_ops_by_skill_output_schema(
         if not name or name in allowed_ops:
             kept.append(op)
             continue
-        errs.append(f"op_not_in_skill_output_schema:{name}")
+        errs.append(
+            format_op_error(
+                "op_not_in_skill_output_schema",
+                fix="omit this op or load a skill that allows it",
+                detail=f"name={name}",
+            )
+        )
     return kept, errs
 
 
@@ -1234,6 +1242,8 @@ def filter_ops_by_skill_allowlist(
     scene: str = "website",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Enforce preferred_tools / custom-skill hard allowlist + output_schema."""
+    from services.design.tool_ops_contract import format_op_error
+
     allow = preferred_tools_allowlist(skill_keys, scene=scene)
     kept: list[dict[str, Any]] = []
     errs: list[str] = []
@@ -1247,7 +1257,13 @@ def filter_ops_by_skill_allowlist(
             if not name or name in allow:
                 kept.append(op)
                 continue
-            errs.append(f"op_not_in_skill_allowlist:{name}")
+            errs.append(
+                format_op_error(
+                    "op_not_in_skill_allowlist",
+                    fix="omit this op or use a preferred_tools skill",
+                    detail=f"name={name}",
+                )
+            )
     kept2, errs2 = filter_ops_by_skill_output_schema(kept, skill_keys=skill_keys, scene=scene)
     return kept2, errs + errs2
 

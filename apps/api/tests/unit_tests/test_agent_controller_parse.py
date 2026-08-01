@@ -5,6 +5,8 @@ from __future__ import annotations
 from services.design.agent_controller import (
     AgentRunState,
     AgentTurnSchema,
+    PaintOpsSchema,
+    PaintToolOp,
     _ask_propose_user_text,
     _chat_fallback_text,
     _ensure_propose_choice_ui,
@@ -32,6 +34,24 @@ def test_normalize_op_key():
         [{"op_key": "create_text", "args": {"text": "Hi"}}]
     )
     assert ops[0]["name"] == "create_text"
+
+
+def test_paint_tool_op_coalesces_flat_and_ops_alias():
+    op = PaintToolOp.model_validate(
+        {"name": "create_shape", "type": "rect", "x": 10, "y": 20, "width": 40, "height": 30}
+    )
+    assert op.name == "create_shape"
+    assert op.args.get("shapeType") == "rect"
+    assert op.args.get("x") == 10
+    painted = PaintOpsSchema.model_validate(
+        {
+            "ops": [{"name": "create_text", "args": {"text": "Hi", "x": 1, "y": 2}}],
+            "intent": "create",
+        }
+    )
+    assert len(painted.tool_ops) == 1
+    assert painted.tool_ops[0].name == "create_text"
+    assert painted.tool_ops[0].args["text"] == "Hi"
 
 
 def test_parse_fenced_json():
@@ -397,8 +417,8 @@ def test_placement_errors_for_offscreen_free_creates():
     errs = _placement_errors_for_free_creates(rt, ops)
     spw = _derive_suggested_place_world(spatial, focus_frame=focus)
     assert errs
-    assert "outside viewport_world" in errs[0]
-    assert "suggested_place_world" in errs[0]
+    assert "code=placement_outside_viewport" in errs[0]
+    assert "fix=" in errs[0] and "suggested_place_world" in errs[0]
     assert spw is not None
     assert f"x={spw['x']}" in errs[0]
     assert f"y={spw['y']}" in errs[0]
