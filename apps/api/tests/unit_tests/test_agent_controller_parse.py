@@ -253,24 +253,47 @@ def test_has_pending_resource_details():
 
 
 def test_heuristic_user_intent_gate():
-    from services.design.runtime.models_route import heuristic_user_intent
+    from services.design.runtime.models_route import (
+        allows_skill_preload,
+        heuristic_user_intent,
+        normalize_intent_decision,
+        normalize_user_intent,
+        paint_ops_intent,
+    )
 
-    # Fallback is structural (length / images) — normal path uses intent LLM pack.
+    # Fallback is structural only — normal path uses intent LLM + tools catalog.
     assert heuristic_user_intent("hi", has_images=False).intent == "chat"
     assert (
         heuristic_user_intent("User request:\nhi", has_images=False).intent == "chat"
     )
-    assert (
-        heuristic_user_intent(
-            "[Attached image 1]\nname: canvas.png\n\nUser request:\nhi",
-            has_images=True,
-        ).intent
-        == "create"
+    img = heuristic_user_intent(
+        "[Attached image 1]\nname: canvas.png\n\nUser request:\nhi",
+        has_images=True,
     )
-    assert (
-        heuristic_user_intent("design a poster please", has_images=True).intent
-        == "create"
+    assert img.intent == "design"
+    assert img.paint_lane == "create"
+    op = heuristic_user_intent("short canvas task text", has_images=False)
+    assert op.intent == "canvas_op"
+    assert op.paint_lane == "create"
+    target = heuristic_user_intent(
+        "[Target element — full node]\n{\"id\":\"x\"}\n\nUser request:\nx",
+        has_images=False,
     )
+    assert target.intent == "canvas_op"
+    assert target.paint_lane == "edit"
+    assert normalize_user_intent("edit") == "canvas_op"
+    assert normalize_user_intent("create") == "canvas_op"
+    assert normalize_intent_decision("create", "", raw_grade="basic") == (
+        "canvas_op",
+        "create",
+    )
+    assert normalize_intent_decision("create", "", raw_grade="design") == (
+        "design",
+        "create",
+    )
+    assert paint_ops_intent("canvas_op", "edit") == "edit"
+    assert not allows_skill_preload(intent="canvas_op")
+    assert allows_skill_preload(intent="design")
 
 
 def test_agent_model_id_prefers_api_model():
@@ -288,7 +311,7 @@ def test_agent_model_id_prefers_api_model():
 
 
 def test_paint_tool_keys_structural_not_shape_specific():
-    """Lean free-canvas add: shape+text only — works for any shapeType, not just rect."""
+    """canvas_op create: shape+text only — no create_frame / update."""
     from types import SimpleNamespace
 
     from services.design.runtime.agent_controller import (
@@ -299,9 +322,10 @@ def test_paint_tool_keys_structural_not_shape_specific():
 
     st = AgentRunState(trace_id="t", task_id="task", goal="add")
     rt = SimpleNamespace(
-        prompt="添加一个绿色圆形到画布",
+        prompt="short add",
         images=[],
-        classified_intent="create",
+        classified_intent="canvas_op",
+        classified_paint_lane="create",
         scene_nodes=[{"id": "n1", "type": "text"}],
         scene_frames=[{"id": "f1", "w": 1280, "h": 720, "is_empty": False}],
         focus_id="f1",
@@ -311,7 +335,34 @@ def test_paint_tool_keys_structural_not_shape_specific():
     keys = _paint_tool_keys_for_turn(rt)
     assert keys == ["create_shape", "create_text"]
     assert "create_frame" not in keys
-    assert "create_image" not in keys
+    assert "update_node" not in keys
+
+
+def test_paint_tool_keys_basic_edit_has_update():
+    from types import SimpleNamespace
+
+    from services.design.runtime.agent_controller import (
+        AgentRunState,
+        _is_lean_paint_turn,
+        _paint_tool_keys_for_turn,
+    )
+
+    st = AgentRunState(trace_id="t", task_id="task", goal="edit")
+    rt = SimpleNamespace(
+        prompt="[Target element]\n{}\n\nUser request:\nx",
+        images=[],
+        classified_intent="canvas_op",
+        classified_paint_lane="edit",
+        scene_nodes=[{"id": "n1", "type": "rect"}],
+        scene_frames=[{"id": "f1", "w": 1280, "h": 720, "is_empty": False}],
+        focus_id="f1",
+        run=st,
+    )
+    assert _is_lean_paint_turn(rt) is True
+    keys = _paint_tool_keys_for_turn(rt)
+    assert "update_node" in keys
+    assert "delete_nodes" in keys
+    assert "create_frame" not in keys
 
 
 def test_paint_tool_keys_empty_canvas_includes_frame():
@@ -321,9 +372,10 @@ def test_paint_tool_keys_empty_canvas_includes_frame():
 
     st = AgentRunState(trace_id="t", task_id="task", goal="new")
     rt = SimpleNamespace(
-        prompt="做一个海报",
+        prompt="design task",
         images=[],
-        classified_intent="create",
+        classified_intent="design",
+        classified_paint_lane="create",
         scene_nodes=[],
         scene_frames=[],
         focus_id="",
@@ -333,6 +385,26 @@ def test_paint_tool_keys_empty_canvas_includes_frame():
     assert keys[0] == "create_frame"
     assert "create_shape" in keys
     assert "create_text" in keys
+
+
+def test_lc_design_needs_canvas_ops_fine_intents():
+    from services.design.runtime.agent_controller import (
+        _is_canvas_work_intent,
+        _lc_design_needs_canvas_ops,
+    )
+
+    assert _is_canvas_work_intent("canvas_op")
+    assert _is_canvas_work_intent("design")
+    assert not _is_canvas_work_intent("chat")
+    assert _lc_design_needs_canvas_ops(
+        classified="canvas_op", turn_intent="chat", has_ops=False
+    )
+    assert _lc_design_needs_canvas_ops(
+        classified="design", turn_intent="create", has_ops=False
+    )
+    assert not _lc_design_needs_canvas_ops(
+        classified="chat", turn_intent="chat", has_ops=False
+    )
 
 
 def test_paint_tool_keys_with_images_includes_create_image():
@@ -359,16 +431,33 @@ def test_paint_tool_keys_with_images_includes_create_image():
     assert "create_image" in keys
 
 
-def test_derive_suggested_place_world_prefers_viewport():
+def test_derive_suggested_place_world_empty_viewport_centers():
     from services.design.runtime.agent_controller import _derive_suggested_place_world
 
     spw = _derive_suggested_place_world(
         {"viewport": {"x": 5000, "y": 2000, "w": 1200, "h": 800}},
-        focus_frame={"id": "f1", "x": 0, "y": 0, "w": 410, "h": 729},
+        focus_frame=None,
     )
     assert spw is not None
-    assert 5000 <= spw["x"] <= 6200
-    assert 2000 <= spw["y"] <= 2800
+    # Roughly camera center.
+    assert 5200 <= spw["x"] <= 5900
+    assert 2100 <= spw["y"] <= 2600
+
+
+def test_derive_suggested_place_world_aligns_beside_content():
+    from services.design.runtime.agent_controller import _derive_suggested_place_world
+
+    # One free-canvas node in the left of the viewport → prefer slot to its right.
+    spw = _derive_suggested_place_world(
+        {
+            "viewport": {"x": 0, "y": 0, "w": 2000, "h": 1200},
+            "focused": [{"id": "a", "x": 100, "y": 200, "w": 400, "h": 300}],
+        },
+        focus_frame=None,
+    )
+    assert spw is not None
+    assert spw["x"] >= 100 + 400  # to the right of existing
+    assert abs(spw["y"] - 200) <= 1  # top-aligned
 
 
 def test_format_spatial_placement_from_focus_frame_alone():

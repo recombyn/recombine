@@ -67,8 +67,6 @@ _ALWAYS_ALLOW_OPS = frozenset(
 )
 
 MAX_SKILL_DETAIL_CHARS = 14000
-_FILE_SKILLS_DIR = Path(__file__).resolve().parents[3] / "data" / "design_skills"
-_SEED_PATH = Path(__file__).resolve().parents[3] / "data" / "design_skills_seed.json"
 _META_NAMES = ("_meta.json", "meta.json")
 _NS_KEY_RE = re.compile(r"^(core|ext|user)[.:/](.+)$", re.IGNORECASE)
 _PIN_RE = re.compile(r"^(.+?)@([0-9]+(?:\.[0-9]+){0,2})$")
@@ -77,8 +75,20 @@ _RUNTIME_SKILL_KEYS: frozenset[str] | None = None
 _RUNTIME_SKILL_INDEX: dict[str, dict[str, Any]] | None = None
 
 
+def _skills_seed_path() -> Path:
+    from config.settings import resolve_data_file
+
+    return resolve_data_file("design_skills_seed.json")
+
+
+def _file_skills_dir() -> Path:
+    from config.settings import resolve_data_dir
+
+    return resolve_data_dir("design_skills")
+
+
 def _load_skills_seed() -> list[dict[str, Any]]:
-    path = _SEED_PATH
+    path = _skills_seed_path()
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -493,7 +503,7 @@ def _resolve_pack_logo(pack_dir: Path, meta: dict[str, Any]) -> str:
             pack_dir / "logo.jpg",
         ]
     )
-    root = _FILE_SKILLS_DIR.resolve()
+    root = _file_skills_dir().resolve()
     for cand in candidates:
         try:
             if not cand.is_file():
@@ -632,7 +642,7 @@ def _load_pack_dir(pack_dir: Path) -> dict[str, Any] | None:
 
 def _load_file_skills() -> list[dict[str, Any]]:
     """Scan data/design_skills/* packs → skill dicts."""
-    root = _FILE_SKILLS_DIR
+    root = _file_skills_dir()
     if not root.is_dir():
         return []
     out: list[dict[str, Any]] = []
@@ -804,19 +814,10 @@ def _apply_mutex(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def format_skills_catalog(*, scene: str = "website", user_id: str | None = None) -> str:
     rows = list_runtime_skills(scene=scene, user_id=user_id)
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
+    from services.design.prompts.prompt_pack_store import render_prompt_body
 
-        header = resolve_prompt_body("agent.prompt.skill_catalog_header").strip()
-    except Exception:
-        header = ""
-    lines = [
-        header
-        or (
-            "Skill 目录（need_skills 申请正文；可用 `key` / `ns.key` / `key@版本`；"
-            "简单加形/改色可直接 tool_ops；匹配 triggers 的 skill 会自动注入）："
-        )
-    ]
+    header = render_prompt_body("agent.prompt.skill_catalog_header").strip()
+    lines = [header] if header else []
     for r in rows:
         key = str(r.get("skillKey") or "").strip()
         if not key:
@@ -836,8 +837,10 @@ def format_skills_catalog(*, scene: str = "website", user_id: str | None = None)
         lines.append(line)
         if len(lines) >= 16:
             break
-    if len(lines) == 1:
-        lines.append("（暂无 runtime skill：Admin「Agent 技能」或 data/design_skills/*/_meta.json + SKILL.md）")
+    if len(lines) <= (1 if header else 0):
+        empty = render_prompt_body("agent.prompt.skill_catalog_empty").strip()
+        if empty:
+            lines.append(empty)
     return "\n".join(lines)
 
 
@@ -1018,22 +1021,11 @@ def format_skills_details_checked(
             resolved.append(row)
 
     rows = _apply_mutex(resolved)
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
+    from services.design.prompts.prompt_pack_store import render_prompt_body
 
-        header = resolve_prompt_body("agent.prompt.skill_details_header").strip()
-    except Exception:
-        header = ""
-    parts: list[str] = [
-        header
-        or (
-            "以下为按需注入的 Skill 正文。按需采用；与用户明示冲突时以用户为准。"
-            "用完后将 need_skills 设为 []。"
-            "若列出 preferred_tools，优先使用这些 op（必要时可加 align/move 等布局工具）。"
-            "core=系统核心；ext=服务器扩展包；user=用户扩展（权限更严）。"
-        )
-    ]
-    total = len(parts[0])
+    header = render_prompt_body("agent.prompt.skill_details_header").strip()
+    parts: list[str] = [header] if header else []
+    total = len(parts[0]) if parts else 0
     used = 0
     for r in rows:
         key = str(r.get("skillKey") or "").strip().lower()
@@ -1060,7 +1052,9 @@ def format_skills_details_checked(
         if neg:
             block += f"\n\nforbid: {neg}"
         if total + len(block) + 2 > max_chars and used > 0:
-            parts.append("…（其余 skill 因上下文预算省略，可下一回合再 need_skills）")
+            trunc = render_prompt_body("agent.prompt.skill_details_truncated").strip()
+            if trunc:
+                parts.append(trunc)
             break
         parts.append(block)
         total += len(block) + 2
@@ -1425,6 +1419,7 @@ def resolve_triggered_skill_keys(
     prompt_chars: int = 0,
     already_loaded: list[str] | None = None,
     max_n: int = 6,
+    aesthetics_triggers_only: bool = False,
 ) -> list[str]:
     loaded = {str(x).strip().lower() for x in (already_loaded or []) if str(x).strip()}
     matched: list[dict[str, Any]] = []
@@ -1435,6 +1430,14 @@ def resolve_triggered_skill_keys(
         rules = row.get("triggers") or []
         if not rules:
             continue
+        if aesthetics_triggers_only:
+            rules = [
+                r
+                for r in rules
+                if isinstance(r, dict) and "need_aesthetics" in r
+            ]
+            if not rules:
+                continue
         if any(
             _rule_matches(
                 rule,
@@ -1675,12 +1678,13 @@ def _upsert_owned_skill(
 def _skills_disk_signature() -> str:
     parts: list[str] = []
     try:
-        if _SEED_PATH.is_file():
-            st = _SEED_PATH.stat()
+        seed_path = _skills_seed_path()
+        if seed_path.is_file():
+            st = seed_path.stat()
             parts.append(f"seed:{st.st_mtime_ns}:{st.st_size}")
     except Exception:
         parts.append("seed:missing")
-    root = _FILE_SKILLS_DIR
+    root = _file_skills_dir()
     if root.is_dir():
         for pack in sorted(p for p in root.iterdir() if p.is_dir()):
             try:

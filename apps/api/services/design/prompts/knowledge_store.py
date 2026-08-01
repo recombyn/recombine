@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 from services.db import connect
@@ -15,8 +14,10 @@ _KNOWLEDGE_LOCK = threading.RLock()
 
 
 def _load_knowledge_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
-    """Load kind labels + seed rows from apps/api/data/design_knowledge_seed.json."""
-    path = Path(__file__).resolve().parents[3] / "data" / "design_knowledge_seed.json"
+    """Load kind labels + seed rows (private overlay → public data/)."""
+    from config.settings import resolve_data_file
+
+    path = resolve_data_file("design_knowledge_seed.json")
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -237,26 +238,21 @@ def list_for_injection(*, scene: str, skill_category: str) -> list[dict[str, Any
 def format_knowledge_block(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
+    from services.design.prompts.prompt_pack_store import render_prompt_body
 
-        header = resolve_prompt_body("agent.prompt.knowledge_details_header").strip()
-    except Exception:
-        header = ""
-    parts = [
-        header
-        or (
-            "以下为可选设计知识【规范】：按 USER_PROMPT 自行选用，不必套全；"
-            "与用户明示冲突时以用户为准。"
-        )
-    ]
+    header = render_prompt_body("agent.prompt.knowledge_details_header").strip()
+    parts = [header] if header else []
     for r in rows:
         label = KIND_LABELS.get(r["kind"], r["kind"])
         title = r.get("title") or label
         when = (r.get("whenToUse") or "").strip()
         head = f"【{label}·{title}】"
         if when:
-            head += f"\n适用：{when}"
+            when_ln = render_prompt_body(
+                "agent.prompt.knowledge_when_line", when=when
+            ).strip()
+            if when_ln:
+                head += f"\n{when_ln}"
         parts.append(f"{head}\n{r.get('body') or ''}".strip())
     return "\n\n".join(parts)
 
@@ -265,15 +261,10 @@ def format_knowledge_catalog(*, scene: str = "website") -> str:
     """Short index of enabled knowledge (kinds + titles) for deferred loading."""
     scene_l = str(scene or "website").strip().lower() or "website"
     rows = list_knowledge(enabled=True, ensure=True)
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
+    from services.design.prompts.prompt_pack_store import render_prompt_body
 
-        header = resolve_prompt_body("agent.prompt.knowledge_catalog_header").strip()
-    except Exception:
-        header = ""
-    lines: list[str] = [
-        header or "设计知识目录（用 need_knowledge: [\"palette\", …] 申请正文）："
-    ]
+    header = render_prompt_body("agent.prompt.knowledge_catalog_header").strip()
+    lines: list[str] = [header] if header else []
     seen_line: set[str] = set()
     for r in rows:
         scenes = str(r.get("scenes") or "all")
@@ -291,8 +282,10 @@ def format_knowledge_catalog(*, scene: str = "website") -> str:
         lines.append(line)
         if len(lines) >= 40:
             break
-    if len(lines) == 1:
-        lines.append("（本场景暂无启用知识）")
+    if len(lines) <= (1 if header else 0):
+        empty = render_prompt_body("agent.prompt.knowledge_catalog_empty").strip()
+        if empty:
+            lines.append(empty)
     return "\n".join(lines)
 
 

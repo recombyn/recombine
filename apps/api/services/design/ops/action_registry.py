@@ -3,20 +3,17 @@
 Each action has type + hint/schema for the model; apply runs on the client.
 This module seeds missing rows into design_canvas_tool (never overwrites non-empty Admin hints).
 
-Seed source: apps/api/data/canvas_actions_seed.json
+Seed source: apps/api/data/public/canvas_actions_seed.json (private overlay wins)
 """
 
 from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from typing import Any
 
+from config.settings import resolve_data_file
 from services.db import connect
-
-_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-_SEED_PATH = _DATA_DIR / "canvas_actions_seed.json"
 
 _actions_cache: list[dict[str, Any]] | None = None
 _stale_checks_cache: dict[str, dict[str, Any]] | None = None
@@ -24,7 +21,7 @@ _stale_checks_cache: dict[str, dict[str, Any]] | None = None
 
 def _load_seed() -> dict[str, Any]:
     try:
-        parsed = json.loads(_SEED_PATH.read_text(encoding="utf-8"))
+        parsed = json.loads(resolve_data_file("canvas_actions_seed.json").read_text(encoding="utf-8"))
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}

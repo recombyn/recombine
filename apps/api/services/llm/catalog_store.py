@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import time
 from typing import Any
 
+from config.settings import resolve_data_file
 from services.db import connect, init_schema
 
 # Where a model may appear in Agent route slots / admin model routes.
@@ -14,14 +14,11 @@ from services.db import connect, init_schema
 # - image: image-gen slot only
 REFERENCE_TYPES = ('text', 'vision', 'image', 'video')
 
-_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-_SEED_PATH = _DATA_DIR / "llm_models_seed.json"
-
 
 def _load_catalog_seed() -> dict[str, Any]:
-    """Load apps/api/data/llm_models_seed.json (models + image presets + tombstones)."""
+    """Load llm_models_seed.json (private overlay → public; models + presets + tombstones)."""
     try:
-        parsed = json.loads(_SEED_PATH.read_text(encoding="utf-8"))
+        parsed = json.loads(resolve_data_file("llm_models_seed.json").read_text(encoding="utf-8"))
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
@@ -49,7 +46,7 @@ def _load_model_seed() -> list[dict[str, Any]]:
 
 
 # Official Ark / OpenRouter image size contracts + model rows:
-# apps/api/data/llm_models_seed.json
+# apps/api/data/public|private/llm_models_seed.json
 IMAGE_LIMIT_PRESETS: dict[str, dict[str, Any]] = _load_image_limit_presets()
 _SEED: list[dict[str, Any]] = _load_model_seed()
 

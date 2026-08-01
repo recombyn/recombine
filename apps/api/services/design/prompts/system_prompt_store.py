@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 from services.db import connect
@@ -35,7 +34,9 @@ def is_system_prompt_key(key: str) -> bool:
 
 def _load_seed_items() -> list[dict[str, Any]]:
     """Metadata + bodies from the single design_prompt_packs_seed.json (system-key kinds)."""
-    path = Path(__file__).resolve().parents[3] / "data" / "design_prompt_packs_seed.json"
+    from config.settings import resolve_data_file
+
+    path = resolve_data_file("design_prompt_packs_seed.json")
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:

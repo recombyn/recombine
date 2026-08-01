@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 _HEX = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b")
 
 
+def _tok_pack(key: str, **variables: Any) -> str:
+    """Admin prompt pack — no hardcoded Chinese fallbacks in this module."""
+    try:
+        from services.design.prompts.prompt_pack_store import render_prompt_body
+
+        return render_prompt_body(key, **variables).strip()
+    except Exception:
+        logger.debug("token pack miss key=%s", key, exc_info=True)
+        return ""
+
+
 def palette_from_image_bytes(data: bytes, *, k: int = 6) -> list[str]:
     """Dominant colors as #RRGGBB via PIL quantize (no OpenCV required)."""
     if not data:
@@ -515,7 +526,11 @@ def format_sample_token_lines(analyzed: dict[str, Any], *, verb: str) -> list[st
         lines.append(f"  {label}: {_fmt_val(val)}")
     comment = (analyzed.get("comment") or "").strip()
     if comment:
-        lines.append(f"  备注：{comment[:200]}")
+        cmt = _tok_pack(
+            "agent.prompt.aesthetic_tokens_comment", comment=comment[:200]
+        )
+        if cmt:
+            lines.append(cmt)
     vs = analyzed.get("visionStructure")
     if isinstance(vs, dict) and vs:
         try:
@@ -530,9 +545,9 @@ def format_sample_token_lines(analyzed: dict[str, Any], *, verb: str) -> list[st
         except Exception:
             logger.debug("format_structure_guidance failed", exc_info=True)
     if not palette and not roles and not layout and not comment and not vs:
-        lines.append(
-            "  （无法抽取色板/布局 — 请使用场景 DESIGN_TOKENS 基线）"
-        )
+        fail = _tok_pack("agent.prompt.aesthetic_tokens_extract_fail")
+        if fail:
+            lines.append(fail)
     return lines
 
 
@@ -581,30 +596,15 @@ def build_aesthetic_token_guidance(
 
     analyzed: list[dict[str, Any]] = []
     has_user = bool(user_rows)
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
-
-        tok_hdr = resolve_prompt_body("agent.prompt.aesthetic_tokens_header").strip()
-    except Exception:
-        tok_hdr = ""
-    lines: list[str] = (
-        [ln for ln in tok_hdr.splitlines() if ln.strip()]
-        if tok_hdr
-        else [
-            "AESTHETIC_DESIGN_TOKENS（运行时已分析 — 必须遵守；不要凭截图瞎猜）：",
-            "在 tool_ops 中使用十六进制色 + 布局度量：fill/color/fontSize/cornerRadius/x/y/width/"
-            "height/padding/gap/margin。对齐 marginPx、gapMin、density、columns、gravity。",
-        ]
+    tok_hdr = _tok_pack("agent.prompt.aesthetic_tokens_header")
+    lines: list[str] = [ln for ln in tok_hdr.splitlines() if ln.strip()]
+    prio = _tok_pack(
+        "agent.prompt.aesthetic_tokens_priority_user"
+        if has_user
+        else "agent.prompt.aesthetic_tokens_priority_corpus"
     )
-    if has_user:
-        lines.append(
-            "优先级：用户参考令牌优先。"
-            "存在用户附件时省略语料优秀/可用；反例仅作规避。"
-        )
-    else:
-        lines.append(
-            "优秀 = 目标布局与配色；可用 = 请超越该基线；反例 = 避开这些模式。"
-        )
+    if prio:
+        lines.append(prio)
 
     # Scene design-system baseline (spacing/type/radius/component metrics).
     try:
@@ -619,36 +619,48 @@ def build_aesthetic_token_guidance(
     except Exception:
         logger.debug("resolve_token_pack failed scene=%s", scene, exc_info=True)
 
-    def _section(rows: list[dict[str, Any]], *, title: str, verb: str) -> None:
+    def _section(rows: list[dict[str, Any]], *, title_key: str, verb: str) -> None:
         if not rows:
             return
+        title = _tok_pack(title_key)
         lines.append("")
-        lines.append(title)
+        if title:
+            lines.append(title)
         for r in rows:
             a = analyze_sample_tokens(r, canvas_w=canvas_w, canvas_h=canvas_h)
             analyzed.append(a)
             lines.extend(format_sample_token_lines(a, verb=verb))
 
+    verb_imitate = _tok_pack("agent.prompt.aesthetic_refs_verb_imitate")
+    verb_surpass = _tok_pack("agent.prompt.aesthetic_refs_verb_surpass")
+    verb_avoid = _tok_pack("agent.prompt.aesthetic_refs_verb_avoid")
+    verb_user = _tok_pack("agent.prompt.aesthetic_tokens_verb_user")
+    verb_secondary = _tok_pack("agent.prompt.aesthetic_tokens_verb_secondary")
+
     if has_user:
         _section(
             user_rows,
-            title="用户参考令牌（主参考 — 优先模仿）：",
-            verb="模仿用户",
+            title_key="agent.prompt.aesthetic_tokens_section_user",
+            verb=verb_user,
         )
         if goods:
             _section(
                 goods,
-                title="语料优秀（次要 — 仅补缺口；勿覆盖用户）：",
-                verb="次要",
+                title_key="agent.prompt.aesthetic_tokens_section_good_secondary",
+                verb=verb_secondary,
             )
     else:
-        _section(goods, title="优秀样本令牌（模仿配色 + 排版）：", verb="模仿")
+        _section(
+            goods,
+            title_key="agent.prompt.aesthetic_tokens_section_good",
+            verb=verb_imitate,
+        )
 
-    _section(mids, title="可用样本令牌（请超越）：", verb="超越")
     _section(
-        bads,
-        title="反例样本令牌（避开 — 勿复用这些配色/布局失败）：",
-        verb="避开",
+        mids, title_key="agent.prompt.aesthetic_tokens_section_ok", verb=verb_surpass
+    )
+    _section(
+        bads, title_key="agent.prompt.aesthetic_tokens_section_bad", verb=verb_avoid
     )
 
     # PRIMARY_OVERRIDE: user refs beat corpus GOOD.
@@ -671,12 +683,18 @@ def build_aesthetic_token_guidance(
                 f"gravity={lay.get('gravity')}"
             )
         if parts:
-            src = "用户参考" if top.get("grade") == "user" else "顶级优秀样本"
-            lines.append(
-                f"主覆盖来自{src}："
-                + "; ".join(parts)
-                + "（除非 USER_PROMPT 另有覆盖）。"
+            src = _tok_pack(
+                "agent.prompt.aesthetic_tokens_src_user"
+                if top.get("grade") == "user"
+                else "agent.prompt.aesthetic_tokens_src_good"
             )
+            ov = _tok_pack(
+                "agent.prompt.aesthetic_tokens_primary_override",
+                src=src,
+                parts="; ".join(parts),
+            )
+            if ov:
+                lines.append(ov)
 
     return "\n".join(lines), analyzed
 

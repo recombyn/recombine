@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -27,10 +28,15 @@ from services.design.readpath.canvas_scene import (
 from services.design.runtime.decision_log import DesignRunDecision
 from services.design.runtime.llm_step import stream_skill_step
 from services.design.runtime.models_route import (
+    CANVAS_WORK_INTENTS,
+    allows_skill_preload,
     clamp_tier,
     classify_user_intent,
     enabled_tiers,
     estimate_task_tier,
+    normalize_intent_decision,
+    normalize_user_intent,
+    paint_ops_intent,
     resolve_model_for_skill,
     router_model_id,
 )
@@ -308,17 +314,19 @@ def _thought_chat_prompt():
     )
 
 
-def _prompt_text(rules: dict[str, str] | None, key: str) -> str:
-    """Prefer Admin/DB (via rules or pack table); local seed only if DB empty."""
+def _prompt_text(
+    rules: dict[str, str] | None, key: str, **variables: Any
+) -> str:
+    """Admin/DB pack → LangChain PromptTemplate (every kind)."""
     try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import render_prompt_body
 
-        return resolve_prompt_body(key, rules=rules)
+        return render_prompt_body(key, rules=rules, **variables)
     except Exception:
         got = _rule_text(rules, key).strip()
-        if got:
-            return got
-        return str(STAGE_RULE_DEFAULTS.get(key) or "").strip()
+        if not got:
+            got = str(STAGE_RULE_DEFAULTS.get(key) or "").strip()
+        return render_prompt_template(got, **variables) if got else ""
 
 
 def _model_display_label(model_id: str) -> str:
@@ -347,11 +355,10 @@ def _resolve_agent_persona(
     low = mid.lower()
     rules = rules or {}
     if not mid or low == "auto":
-        return _rule_text(rules, "agent.persona.auto").strip()
-    tmpl = _rule_text(rules, "agent.persona.locked").strip()
-    if not tmpl:
-        return ""
-    return render_prompt_template(tmpl, model_label=_model_display_label(mid))
+        return _prompt_text(rules, "agent.persona.auto").strip()
+    return _prompt_text(
+        rules, "agent.persona.locked", model_label=_model_display_label(mid)
+    ).strip()
 
 
 @dataclass
@@ -402,12 +409,23 @@ class AgentRunState:
     current_node_id: str = ""
     # Langfuse root trace id when CallbackHandler reports last_trace_id.
     langfuse_trace_id: str = ""
+    # perf_counter start of this run (Admin duration / step t_ms).
+    t0: float = 0.0
+    _last_log_t: float = 0.0
     log: list[dict[str, Any]] = field(default_factory=list)
 
     def push_log(self, **row: Any) -> None:
+        now = time.perf_counter()
         entry = {"round": self.round, **{k: v for k, v in row.items() if v is not None}}
         if self.current_node_id and "node_id" not in entry:
             entry["node_id"] = self.current_node_id
+        if self.t0 > 0:
+            entry.setdefault("t_ms", max(0, int((now - self.t0) * 1000)))
+            if self._last_log_t > 0:
+                entry.setdefault(
+                    "duration_ms", max(0, int((now - self._last_log_t) * 1000))
+                )
+            self._last_log_t = now
         self.log.append(entry)
         if len(self.log) > 180:
             self.log = self.log[-180:]
@@ -485,7 +503,17 @@ class AgentRunState:
             "aesthetics_loaded": bool(self.aesthetics_loaded),
             "flow_id": self.flow_id or None,
             "flow_version": self.flow_version or None,
-            "steps": list(self.log)
+            "total_duration_ms": (
+                max(0, int((time.perf_counter() - self.t0) * 1000))
+                if self.t0 > 0
+                else None
+            ),
+            "path": [
+                str(s.get("phase") or "").strip()
+                for s in self.log
+                if isinstance(s, dict) and str(s.get("phase") or "").strip()
+            ],
+            "steps": list(self.log),
         }
 
 
@@ -746,6 +774,30 @@ def _has_pending_resource_details(rt: Any) -> bool:
     )
 
 
+def _is_canvas_work_intent(raw: str | None) -> bool:
+    s = str(raw or "").strip().lower()
+    if s in CANVAS_WORK_INTENTS:
+        return True
+    # Legacy create|edit still mean "continue to paint".
+    if s in ("create", "edit"):
+        return True
+    return normalize_user_intent(s) in CANVAS_WORK_INTENTS
+
+
+def _resolve_paint_want(rt: Any, turn_intent: str | None = None) -> str:
+    """create|edit for paint validation / tool kit."""
+    t = str(turn_intent or "").strip().lower()
+    if t in ("edit", "create"):
+        return t
+    lane = str(getattr(rt, "classified_paint_lane", None) or "").strip().lower()
+    if lane in ("edit", "create"):
+        return lane
+    return paint_ops_intent(
+        getattr(rt, "classified_intent", None) or getattr(rt.run, "intent", None) or t,
+        lane,
+    )
+
+
 def _should_recover_edit_after_resources(
     *,
     prior_intent: str,
@@ -753,10 +805,10 @@ def _should_recover_edit_after_resources(
     has_ops: bool,
     has_pending_resources: bool,
 ) -> bool:
-    """After TOOL_DETAILS etc., model must not drop edit/create into bare chat."""
+    """After TOOL_DETAILS etc., model must not drop canvas work into bare chat."""
     if has_ops or not has_pending_resources:
         return False
-    if prior_intent not in ("edit", "create"):
+    if not _is_canvas_work_intent(prior_intent):
         return False
     return intent in ("chat", "ask", "done")
 
@@ -776,10 +828,9 @@ def _lc_design_needs_canvas_ops(
     # Real clarify = ask + choices/choice_ui. Ask mode: any intent=ask waits on the user.
     if t == "ask" and (has_clarify or ask_mode):
         return False
-    c = (classified or "").strip().lower()
-    if c in ("edit", "create"):
+    if _is_canvas_work_intent(classified):
         return True
-    return t in ("edit", "create")
+    return _is_canvas_work_intent(t)
 
 
 def _should_route_to_paint(
@@ -814,25 +865,28 @@ def _prompt_compact_len(prompt: str | None) -> int:
 
 
 def _is_lean_paint_turn(rt: Any) -> bool:
-    """Short, no-vision canvas add/edit — slim paint prompt (no content keywords)."""
+    """canvas_op (or short no-vision) turns — slim paint prompt."""
     if bool(getattr(rt, "images", None)):
         return False
+    if normalize_user_intent(getattr(rt, "classified_intent", None)) == "canvas_op":
+        return True
     return _prompt_compact_len(getattr(rt, "prompt", None)) <= _LEAN_PAINT_PROMPT_CHARS
 
 
 def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
-    """Structural paint tool kit — not hard-coded to rect / one shape type.
+    """Structural paint tool kit — not hard-coded to one shape type.
 
-    - Always: create_shape + create_text (covers shapes, paths, labels).
-    - create_frame only when there is no artboard yet / canvas empty.
-    - create_image only when the turn has attachments.
-    - update/delete when edit intent and scene has nodes.
-    - Plus any tools the model already requested via need_tools.
+    - Always: create_shape + create_text.
+    - create_frame: design-grade create on empty / no artboard — not canvas_op adds.
+    - create_image when attachments.
+    - update/delete when paint_lane=edit and scene has nodes.
+    - Plus any tools already requested via need_tools.
     """
     st = rt.run
-    want = str(rt.classified_intent or st.intent or "create").strip().lower()
-    if want not in ("edit", "create"):
-        want = "create"
+    classified = normalize_user_intent(
+        getattr(rt, "classified_intent", None) or st.intent or ""
+    )
+    want = _resolve_paint_want(rt)
     has_images = bool(getattr(rt, "images", None))
     empty = _canvas_is_empty(rt)
     frames = [
@@ -845,7 +899,12 @@ def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
     ]
 
     keys: list[str] = ["create_shape", "create_text"]
-    if want == "create" and (empty or not frames):
+    allow_frame = (
+        classified == "design"
+        and want == "create"
+        and (empty or not frames)
+    )
+    if allow_frame:
         keys.insert(0, "create_frame")
     if has_images:
         keys.append("create_image")
@@ -866,7 +925,7 @@ def _ensure_paint_tool_details(rt: Any) -> None:
     st = rt.run
     keys = _paint_tool_keys_for_turn(rt)
     if not keys:
-        want = str(rt.classified_intent or st.intent or "create").strip().lower()
+        want = _resolve_paint_want(rt, st.intent)
         keys = list(
             _DEFAULT_PAINT_EDIT_TOOLS if want == "edit" else _DEFAULT_PAINT_CREATE_TOOLS
         )
@@ -891,12 +950,9 @@ def _paint_ops_system(rt: Any) -> str:
         if ask_mode
         else "- Do not ask questions.\n"
     )
-    tmpl = _prompt_text(rt.rules, "agent.prompt.paint_system")
+    tmpl = _prompt_text(rt.rules, "agent.prompt.paint_system", ask_rule=ask_rule)
     if tmpl:
-        try:
-            return head + tmpl.format(ask_rule=ask_rule)
-        except Exception:
-            pass
+        return head + tmpl
     return (
         head
         + "You are the canvas PAINT stage of a design editor agent.\n"
@@ -904,12 +960,12 @@ def _paint_ops_system(rt: Any) -> str:
         "Rules:\n"
         "- tool_ops must be a non-empty array; use TOOL_DETAILS `name`/`op_key` exactly.\n"
         "- New poster/page/artboard → create_frame first (with width/height), then children.\n"
-        "- Infinite canvas: add shape/text (添加矩形等) → create_shape/create_text in world "
+        "- Infinite canvas: add shape/text → create_shape/create_text in world "
         "space; do NOT create_frame unless the user asked for a new artboard/page/poster.\n"
-        "- If FOCUS_FRAME_ID is set, prefer placing inside that frame; otherwise free-canvas.\n"
-        "- When the user gives no position: use PLACEMENT.suggested_place_world (or "
-        "suggested_place inside a focused frame). Keep new nodes inside viewport_world.\n"
-        "- Do NOT place free-canvas creates far outside the current viewport.\n"
+        "- Free-canvas create_shape/create_text: WORLD x/y from PLACEMENT.suggested_place_world "
+        "(viewport blank / center). Keep new content inside viewport_world.\n"
+        "- Inside an artboard: pass frameId=FOCUS_FRAME_ID with frame-local x/y.\n"
+        "- Do NOT invent near-origin world x/y when the camera is far away.\n"
         "- CANVAS_SIZE concrete WxH → create_frame must use that size; auto → pick WxH yourself.\n"
         "- intent must be edit or create. reply ≤40 characters (no design essay).\n"
         "- Never say you already added/applied anything; ops are applied by the host after this.\n"
@@ -928,35 +984,156 @@ def _box_num(d: dict[str, Any], *keys: str, default: float = 0.0) -> float:
     return default
 
 
+def _boxes_overlap(a: dict[str, float], b: dict[str, float], *, gap: float = 0.0) -> bool:
+    return not (
+        a["x"] + a["w"] + gap <= b["x"]
+        or b["x"] + b["w"] + gap <= a["x"]
+        or a["y"] + a["h"] + gap <= b["y"]
+        or b["y"] + b["h"] + gap <= a["y"]
+    )
+
+
+def _box_inside(inner: dict[str, float], outer: dict[str, float], *, pad: float = 0.0) -> bool:
+    return (
+        inner["x"] >= outer["x"] + pad
+        and inner["y"] >= outer["y"] + pad
+        and inner["x"] + inner["w"] <= outer["x"] + outer["w"] - pad
+        and inner["y"] + inner["h"] <= outer["y"] + outer["h"] - pad
+    )
+
+
+def _world_occupied_in_viewport(
+    spatial: dict[str, Any],
+    vp: dict[str, float],
+    *,
+    focus_frame: dict[str, Any] | None,
+) -> list[dict[str, float]]:
+    """Occupied world boxes that intersect the camera (for blank-slot search)."""
+    fox = foy = 0.0
+    in_frame = False
+    if isinstance(focus_frame, dict):
+        fox = _box_num(focus_frame, "x")
+        foy = _box_num(focus_frame, "y")
+        in_frame = True
+    out: list[dict[str, float]] = []
+    for n in spatial.get("focused") or []:
+        if not isinstance(n, dict):
+            continue
+        w = _box_num(n, "w", "width")
+        h = _box_num(n, "h", "height")
+        if w <= 1 or h <= 1:
+            continue
+        box = {
+            "x": fox + _box_num(n, "x") if in_frame else _box_num(n, "x"),
+            "y": foy + _box_num(n, "y") if in_frame else _box_num(n, "y"),
+            "w": w,
+            "h": h,
+        }
+        if _boxes_overlap(box, vp, gap=0):
+            out.append(box)
+    for f in spatial.get("peripheral") or []:
+        if not isinstance(f, dict):
+            continue
+        w = _box_num(f, "w", "width")
+        h = _box_num(f, "h", "height")
+        if w <= 1 or h <= 1:
+            continue
+        box = {"x": _box_num(f, "x"), "y": _box_num(f, "y"), "w": w, "h": h}
+        if _boxes_overlap(box, vp, gap=0):
+            out.append(box)
+    if in_frame and _box_num(focus_frame, "w", "width") > 8:
+        fb = {
+            "x": fox,
+            "y": foy,
+            "w": _box_num(focus_frame, "w", "width"),
+            "h": _box_num(focus_frame, "h", "height"),
+        }
+        if _boxes_overlap(fb, vp, gap=0):
+            # Treat the artboard shell as occupied so free-canvas creates sit beside it.
+            out.append(fb)
+    return out
+
+
+def _pick_viewport_blank_slot(
+    vp: dict[str, float],
+    occupied: list[dict[str, float]],
+    *,
+    cw: float,
+    ch: float,
+    gap: float = 24.0,
+) -> dict[str, float]:
+    """Empty viewport → center; else prefer right/below aligned to existing content."""
+    center = {
+        "x": round(vp["x"] + max(gap, (vp["w"] - cw) / 2)),
+        "y": round(vp["y"] + max(gap, (vp["h"] - ch) / 2)),
+        "w": round(cw),
+        "h": round(ch),
+    }
+    if not occupied:
+        return center
+
+    candidates: list[dict[str, float]] = []
+    for o in occupied:
+        candidates.extend(
+            [
+                {"x": o["x"] + o["w"] + gap, "y": o["y"], "w": cw, "h": ch},  # right, top-align
+                {"x": o["x"], "y": o["y"] + o["h"] + gap, "w": cw, "h": ch},  # below, left-align
+                {"x": o["x"] + o["w"] + gap, "y": o["y"] + o["h"] - ch, "w": cw, "h": ch},  # right, bottom-align
+                {"x": o["x"] + o["w"] - cw, "y": o["y"] + o["h"] + gap, "w": cw, "h": ch},  # below, right-align
+            ]
+        )
+    # Union right / below as last spatial fallbacks before center.
+    max_r = max((o["x"] + o["w"] for o in occupied), default=vp["x"])
+    max_b = max((o["y"] + o["h"] for o in occupied), default=vp["y"])
+    min_x = min((o["x"] for o in occupied), default=vp["x"])
+    min_y = min((o["y"] for o in occupied), default=vp["y"])
+    candidates.append({"x": max_r + gap, "y": min_y, "w": cw, "h": ch})
+    candidates.append({"x": min_x, "y": max_b + gap, "w": cw, "h": ch})
+
+    for raw in candidates:
+        slot = {
+            "x": round(raw["x"]),
+            "y": round(raw["y"]),
+            "w": round(cw),
+            "h": round(ch),
+        }
+        if not _box_inside(slot, vp, pad=gap * 0.5):
+            continue
+        if any(_boxes_overlap(slot, o, gap=gap * 0.5) for o in occupied):
+            continue
+        return slot
+    return center
+
+
 def _derive_suggested_place_world(
     spatial: dict[str, Any] | None,
     *,
     focus_frame: dict[str, Any] | None = None,
 ) -> dict[str, float] | None:
-    """Host derives free-canvas place from FE viewport / frame-local slot / focus frame."""
+    """Viewport-first place: blank slot (align if possible) or camera center."""
     spatial = spatial if isinstance(spatial, dict) else {}
-    vp = spatial.get("viewport")
-    if isinstance(vp, dict):
-        vx = _box_num(vp, "x")
-        vy = _box_num(vp, "y")
-        vw = _box_num(vp, "w", "width")
-        vh = _box_num(vp, "h", "height")
+    vp_raw = spatial.get("viewport")
+    if isinstance(vp_raw, dict):
+        vw = _box_num(vp_raw, "w", "width")
+        vh = _box_num(vp_raw, "h", "height")
         if vw > 8 and vh > 8:
-            cw = min(320.0, max(80.0, vw * 0.25))
-            ch = min(200.0, max(80.0, vh * 0.25))
-            return {
-                "x": round(vx + max(24.0, (vw - cw) / 2)),
-                "y": round(vy + max(24.0, (vh - ch) / 2)),
-                "w": round(cw),
-                "h": round(ch),
+            vp = {
+                "x": _box_num(vp_raw, "x"),
+                "y": _box_num(vp_raw, "y"),
+                "w": vw,
+                "h": vh,
             }
+            cw = min(320.0, max(80.0, vw * 0.22))
+            ch = min(240.0, max(80.0, vh * 0.22))
+            occupied = _world_occupied_in_viewport(spatial, vp, focus_frame=focus_frame)
+            return _pick_viewport_blank_slot(vp, occupied, cw=cw, ch=ch)
+
     sp = spatial.get("suggested_place")
     if isinstance(sp, dict) and isinstance(focus_frame, dict):
         fox = _box_num(focus_frame, "x")
         foy = _box_num(focus_frame, "y")
         fw = _box_num(focus_frame, "w", "width")
         fh = _box_num(focus_frame, "h", "height")
-        # Only promote frame-local slots when the focus frame has a world origin.
         if fw > 8 and fh > 8:
             return {
                 "x": round(fox + _box_num(sp, "x")),
@@ -964,7 +1141,7 @@ def _derive_suggested_place_world(
                 "w": round(_box_num(sp, "w", "width", default=320)),
                 "h": round(_box_num(sp, "h", "height", default=200)),
             }
-    # Last resort: center of the focused artboard in world coords.
+    # No camera: center of focused artboard.
     if isinstance(focus_frame, dict):
         fox = _box_num(focus_frame, "x")
         foy = _box_num(focus_frame, "y")
@@ -998,10 +1175,11 @@ def _format_spatial_placement(
     if not spw and not has_vp and not has_sp:
         return ""
     lines: list[str] = [
-        "PLACEMENT (no user position → pick a visible empty slot; stay in viewport):",
-        "- free-canvas create_shape/create_text (omit frameId): use suggested_place_world x/y as WORLD coords.",
-        "- inside FOCUS_FRAME_ID: pass frameId + suggested_place / empty_rects (frame-local).",
-        "- Never invent near-origin x/y when suggested_place_world is far from (0,0).",
+        "PLACEMENT (host-computed; use these numbers — do not invent far-away x/y):",
+        "- Free-canvas create_* (omit frameId): WORLD x/y = suggested_place_world "
+        "(viewport blank slot, or camera center if empty; prefers align to nearby content).",
+        "- Artboard children: frameId=FOCUS_FRAME_ID + frame-local suggested_place / empty_rects.",
+        "- Keep free-canvas creates inside viewport_world.",
     ]
     if has_vp:
         lines.append(
@@ -1068,9 +1246,9 @@ def _create_op_placement_fields(op: dict[str, Any]) -> tuple[Any, Any, str]:
 
 
 def _placement_errors_for_free_creates(rt: Any, ops: list[dict[str, Any]]) -> list[str]:
-    """Reject free-canvas creates outside the camera; model must re-emit with suggested_place_world.
+    """Reject free-canvas creates outside the camera; teach via suggested_place_world.
 
-    Does not mutate ops. Frame-scoped creates (frameId set) are skipped — those use frame-local coords.
+    Does not mutate ops. Frame-scoped creates (frameId set) are skipped.
     """
     if not ops:
         return []
@@ -1092,11 +1270,12 @@ def _placement_errors_for_free_creates(rt: Any, ops: list[dict[str, Any]]) -> li
         0.25 * min(_box_num(view_box, "w", "width"), _box_num(view_box, "h", "height")),
     )
     errors: list[str] = []
+    create_names = ("create_shape", "create_text", "create_image", "create_svg")
     for op in ops:
         if not isinstance(op, dict):
             continue
         name = str(op.get("name") or op.get("op_key") or "").strip()
-        if name not in ("create_shape", "create_text", "create_image"):
+        if name not in create_names:
             continue
         ox_raw, oy_raw, frame_id = _create_op_placement_fields(op)
         if frame_id:
@@ -1116,7 +1295,8 @@ def _placement_errors_for_free_creates(rt: Any, ops: list[dict[str, Any]]) -> li
                     "placement_outside_viewport",
                     fix=(
                         f"re-emit {name} with x={spw['x']} y={spw['y']} "
-                        f"from suggested_place_world (omit frameId for free-canvas)"
+                        f"from suggested_place_world (viewport blank/center; "
+                        f"omit frameId for free-canvas)"
                     ),
                     detail=(
                         f"{name} at world ({int(round(ox))},{int(round(oy))}) "
@@ -1172,11 +1352,31 @@ def _paint_ops_user(rt: Any) -> str:
     return "\n\n".join(p for p in parts if str(p or "").strip())
 
 
-def _slim_failure_steps(steps: list[dict[str, Any]], *, limit: int = 12) -> list[dict[str, Any]]:
-    """Keep a compact trail when paint failed (Langfuse often misses local task ids)."""
+def _clip_admin_step_io(value: Any, *, limit: int) -> Any:
+    if not isinstance(value, str):
+        return value
+    t = value.strip()
+    if not t:
+        return None
+    if len(t) <= limit:
+        return t
+    return t[:limit] + f"\n…[truncated {len(t) - limit} chars]"
+
+
+def _slim_admin_steps(
+    steps: list[dict[str, Any]],
+    *,
+    limit: int = 48,
+    io_limit: int = 2500,
+) -> list[dict[str, Any]]:
+    """Compact Admin 运行监测 trail (path + timing + clipped I/O)."""
     keep_keys = (
         "phase",
+        "node_id",
+        "from_phase",
+        "to_phase",
         "intent",
+        "paint_lane",
         "summary",
         "reply",
         "error",
@@ -1184,19 +1384,60 @@ def _slim_failure_steps(steps: list[dict[str, Any]], *, limit: int = 12) -> list
         "ops_count",
         "tokens",
         "model",
+        "model_reason",
+        "task_tier",
+        "duration_ms",
+        "t_ms",
+        "attempt",
         "need_tools",
         "need_skills",
-        "llm_raw",
+        "need_knowledge",
+        "need_aesthetics",
         "dropped_intent",
+        "thought",
+        "thought_full",
+        "llm_system",
+        "llm_user",
+        "llm_raw",
+        "llm_thinking",
+        "llm_image_urls",
+        "llm_max_tokens",
+        "stage",
+        "images_hydrated",
+        "image_model",
+    )
+    io_keys = frozenset(
+        {
+            "reply",
+            "thought_full",
+            "llm_system",
+            "llm_user",
+            "llm_raw",
+            "llm_thinking",
+        }
     )
     out: list[dict[str, Any]] = []
     for step in list(steps or [])[-limit:]:
         if not isinstance(step, dict):
             continue
-        slim = {k: step[k] for k in keep_keys if k in step and step[k] not in (None, "", [], {})}
+        slim: dict[str, Any] = {}
+        for k in keep_keys:
+            if k not in step or step[k] in (None, "", [], {}):
+                continue
+            v = step[k]
+            if k in io_keys:
+                v = _clip_admin_step_io(v, limit=io_limit)
+                if v is None:
+                    continue
+            slim[k] = v
         if slim:
             out.append(slim)
     return out
+
+
+def _slim_failure_steps(steps: list[dict[str, Any]], *, limit: int = 12) -> list[dict[str, Any]]:
+    """Compat alias — prefer ``_slim_admin_steps``."""
+    return _slim_admin_steps(steps, limit=limit, io_limit=4000)
 
 
 def _should_early_open_artboard(_rt: Any) -> bool:
@@ -1313,11 +1554,25 @@ def _emit_canvas_size_from_ops(rt: Any, step_ops: list[dict[str, Any]]) -> bool:
 
 def _chat_fallback_text(rt: Any) -> str:
     """Render agent.prompt.chat_fallback with persona + prompt slots filled."""
+    rules = getattr(rt, "rules", None)
+    rules_d = rules if isinstance(rules, dict) else None
+    persona = str(getattr(rt, "persona", "") or "").strip()
+    if not persona:
+        persona = _prompt_text(
+            rules_d, "agent.prompt.default_assistant_name"
+        ).strip()
+    prompt = str(getattr(rt, "prompt", "") or "")[:80]
+    out = _prompt_text(
+        rules_d,
+        "agent.prompt.chat_fallback",
+        persona=persona,
+        prompt=prompt,
+    ).strip()
+    if out:
+        return out
     tmpl = str(getattr(rt, "chat_fallback_tmpl", "") or "").strip()
     if not tmpl:
         return ""
-    persona = str(getattr(rt, "persona", "") or "").strip() or "设计助手"
-    prompt = str(getattr(rt, "prompt", "") or "")[:80]
     return render_prompt_template(tmpl, persona=persona, prompt=prompt)
 
 
@@ -2363,7 +2618,7 @@ def _resolve_wh(
 
 
 def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: AgentRunState) -> None:
-    """Persist thin decision + Langfuse pointer. Step traces live in Langfuse, not meta_json."""
+    """Persist decision + slim step path/timing for Admin; full I/O also in Langfuse."""
     try:
         from config.settings import settings
         from services.llm.agent import langfuse_console_url, langfuse_enabled
@@ -2372,12 +2627,17 @@ def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: Agen
         if state.flow_version:
             control = f"langgraph:v{state.flow_version}"
         exec_log = state.to_execution_log()
-        # Success: drop bulky steps (Langfuse holds the timeline).
-        # Paint failed: keep a slim trail — local Langfuse often lacks the task_id.
-        if state.painted:
-            exec_log["steps"] = []
-        else:
-            exec_log["steps"] = _slim_failure_steps(list(state.log or []))
+        # Always keep a clipped trail so Admin Timeline works on success too.
+        # Success uses tighter I/O caps; failures keep more text for local replay.
+        exec_log["steps"] = _slim_admin_steps(
+            list(state.log or []),
+            limit=48,
+            io_limit=4000 if not state.painted else 2000,
+        )
+        if state.t0 > 0:
+            exec_log["total_duration_ms"] = max(
+                0, int((time.perf_counter() - state.t0) * 1000)
+            )
         exec_log["observability"] = "langfuse"
         key_on = langfuse_enabled()
         host = (settings.langfuse_base_url or "https://cloud.langfuse.com").strip().rstrip("/")
@@ -2514,10 +2774,20 @@ def _log_graph_hop(
     to: str,
     **extra: Any,
 ) -> None:
-    """Track current node only. Timeline lives in Langfuse — do not push_log hops."""
-    del to, extra
+    """Record graph hop in Admin step path (from → to)."""
     frm_phase = str(frm or "").strip() or "?"
+    to_phase = str(to or "").strip() or "?"
     st.current_node_id = frm_phase
+    hop: dict[str, Any] = {
+        "phase": "graph",
+        "from_phase": frm_phase,
+        "to_phase": to_phase,
+        "summary": f"{frm_phase} → {to_phase}",
+    }
+    for k, v in extra.items():
+        if v is not None:
+            hop[k] = v
+    st.push_log(**hop)
 
 @dataclass
 class AgentRuntime:
@@ -2541,6 +2811,8 @@ class AgentRuntime:
     hold: int
     free_daily: bool
     t0: float
+    # Must stay None in graph state — durable checkpointer cannot pickle callables.
+    # Real fns live in ``_DESIGN_HOLD_FNS`` (see ``_bind_design_hold_fns``).
     settle_hold_fn: Any
     refund_hold_fn: Any
     apply_ops: list[dict[str, Any]]
@@ -2593,6 +2865,7 @@ class AgentRuntime:
     phase_to_id: dict[str, str] = field(default_factory=dict)
     # Upstream intent gate (intent_classify); empty when node absent/skipped.
     classified_intent: str = ""
+    classified_paint_lane: str = ""
     classified_reply: str = ""
     # FE dual-context map (empty_rects / suggested_place / viewport).
     spatial_summary: dict[str, Any] | None = None
@@ -2603,7 +2876,55 @@ class GraphState(TypedDict):
     tick: NotRequired[int]
 
 
+# Wallet settle/refund callables — process-local by task_id (not in checkpoint).
+_DESIGN_HOLD_FNS: dict[str, tuple[Any, Any]] = {}
+_DESIGN_HOLD_LOCK = threading.Lock()
+
+
+def _bind_design_hold_fns(task_id: str, settle: Any, refund: Any) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    with _DESIGN_HOLD_LOCK:
+        _DESIGN_HOLD_FNS[tid] = (settle, refund)
+
+
+def _unbind_design_hold_fns(task_id: str) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    with _DESIGN_HOLD_LOCK:
+        _DESIGN_HOLD_FNS.pop(tid, None)
+
+
+def _design_settle_hold_fn(rt: AgentRuntime) -> Any:
+    tid = str(rt.run.task_id or "").strip()
+    with _DESIGN_HOLD_LOCK:
+        pair = _DESIGN_HOLD_FNS.get(tid)
+    if pair and callable(pair[0]):
+        return pair[0]
+    fn = getattr(rt, "settle_hold_fn", None)
+    if callable(fn):
+        return fn
+    raise RuntimeError("design settle_hold_fn not bound")
+
+
+def _design_refund_hold_fn(rt: AgentRuntime) -> Any:
+    tid = str(rt.run.task_id or "").strip()
+    with _DESIGN_HOLD_LOCK:
+        pair = _DESIGN_HOLD_FNS.get(tid)
+    if pair and callable(pair[1]):
+        return pair[1]
+    fn = getattr(rt, "refund_hold_fn", None)
+    if callable(fn):
+        return fn
+    raise RuntimeError("design refund_hold_fn not bound")
+
+
 def _bump(rt: AgentRuntime) -> dict[str, Any]:
+    # Never let callables ride into LangGraph checkpoints.
+    rt.settle_hold_fn = None
+    rt.refund_hold_fn = None
     return {"rt": rt, "tick": int(rt.run.round) + len(rt.run.log)}
 
 
@@ -2642,7 +2963,7 @@ def invalidate_agent_graph_cache(flow_id: str | None = None) -> None:
     del flow_id
     global _LC_DESIGN_GRAPH
     _LC_DESIGN_GRAPH = None
-    # Keep process-local checkpointer so in-flight thread_ids stay readable until cleanup.
+    # Shared durable checkpointer (MySQL/Sqlite) is owned by services.llm.agent.
 
 
 
@@ -2658,20 +2979,24 @@ def _canvas_is_empty(rt: Any) -> bool:
 
 
 def _preload_triggered_skills(rt: Any) -> None:
-    """Hard-load skills whose triggers match (empty canvas / images / intent)."""
+    """Hard-load skills whose triggers match — only intent=design.
+
+    canvas_op (tool-catalog ops) must not pull methodology packs.
+    """
     if not rt.defer_tools:
         return
     st = rt.run
-    intent = str(
+    intent = normalize_user_intent(
         getattr(rt, "classified_intent", None) or st.intent or ""
-    ).strip().lower()
-    if intent not in ("edit", "create"):
+    )
+    if not allows_skill_preload(intent=intent):
         return
+    paint_lane = _resolve_paint_want(rt)
     keys = resolve_triggered_skill_keys(
         scene=rt.scene_key or "website",
         empty_canvas=_canvas_is_empty(rt),
         has_images=bool(rt.images),
-        intent=intent,
+        intent=paint_lane if paint_lane in ("create", "edit") else "create",
         prompt_chars=len(str(rt.prompt or "").strip()),
         already_loaded=list(st.skills_loaded or []),
     )
@@ -2954,7 +3279,7 @@ async def _node_memory(state: GraphState) -> Command:
     rt.decision.short_turns = len(rt.mem_short)
     if _wants_short_plan(rt.prompt, rules=rt.rules):
         rt.flags["short_plan_on"] = True
-    return Command(update=_bump(rt), goto="intent_classify")
+    return _goto_cmd(rt, frm="memory", to="intent_classify")
 
 
 async def _node_mode_fork(state: GraphState) -> Command:
@@ -3005,6 +3330,7 @@ async def _node_plan(state: GraphState) -> Command:
         ]
         if p
     )
+    t_plan = time.perf_counter()
     st.family, plan_raw, plan_used, plan_ev, plan_think = await _stream_llm_text(
         model_family=st.family,
         system=rt.plan_system,
@@ -3012,6 +3338,7 @@ async def _node_plan(state: GraphState) -> Command:
         rules=rt.rules,
         max_tokens=512,
     )
+    plan_ms = max(0, int((time.perf_counter() - t_plan) * 1000))
     _flush_host_events(st, plan_ev)
     st.total_tokens += plan_used
     st.plan = _parse_plan(plan_raw)
@@ -3022,6 +3349,7 @@ async def _node_plan(state: GraphState) -> Command:
         model=st.family,
         model_reason=reason,
         task_tier=st.task_tier or None,
+        duration_ms=plan_ms,
         llm_raw=_clip_llm_raw(plan_raw),
         **_thinking_field(plan_think),
         **_llm_io_fields(system=rt.plan_system, user=plan_user, max_tokens=512),
@@ -3074,9 +3402,10 @@ async def _node_model_route(state: GraphState) -> Command:
 
 
 async def _node_intent_classify(state: GraphState) -> Command:
-    """Cheap intent gate: chat → end; edit/create → model_route."""
+    """Cheap intent gate: chat → end; canvas_op → paint; design → decide (+ skills)."""
     rt = state["rt"]
     st = rt.run
+    t_intent = time.perf_counter()
     decision = await classify_user_intent(
         prompt=rt.prompt,
         rules=rt.rules,
@@ -3085,25 +3414,44 @@ async def _node_intent_classify(state: GraphState) -> Command:
         scene=rt.scene_key,
         interaction_mode=str(rt.flags.get("mode") or rt.mode or ""),
     )
-    intent = str(decision.intent or "chat").strip().lower()
-    if intent == "ask":
-        intent = "create"
-    if intent not in ("chat", "edit", "create"):
-        intent = "chat"
+    intent_ms = max(0, int((time.perf_counter() - t_intent) * 1000))
+    intent, paint_lane = normalize_intent_decision(
+        decision.intent, decision.paint_lane
+    )
     reply = (decision.reply or "").strip()
     if intent == "chat" and not reply:
         reply = _chat_fallback_text(rt)
     rt.classified_intent = intent
+    rt.classified_paint_lane = paint_lane
     rt.classified_reply = reply
-    st.intent = intent
+    st.intent = (
+        paint_ops_intent(intent, paint_lane) if intent != "chat" else "chat"
+    )
     rt.flags["intent"] = intent
+    rt.flags["paint_lane"] = paint_lane
     st.push_log(
         phase="intent_classify",
         intent=intent,
+        paint_lane=paint_lane or None,
         reply=(reply[:500] if intent == "chat" else None),
-        summary=f"意图={intent}"
-        + (f" · {(decision.rationale or '')[:80]}" if decision.rationale else ""),
-        model=None,
+        summary=(
+            f"意图={intent}"
+            + (f"/{paint_lane}" if paint_lane else "")
+            + (f" · {(decision.rationale or '')[:80]}" if decision.rationale else "")
+        ),
+        duration_ms=intent_ms,
+        llm_raw=_clip_llm_raw(
+            json.dumps(
+                {
+                    "intent": intent,
+                    "paint_lane": paint_lane,
+                    "rationale": (decision.rationale or "")[:400],
+                    "reply": reply[:400] if intent == "chat" else "",
+                },
+                ensure_ascii=False,
+            ),
+            limit=1200,
+        ),
     )
     # No Chinese detail — FE i18n via activityThoughtBrief / process labels.
     _emit(
@@ -3119,15 +3467,15 @@ async def _node_intent_classify(state: GraphState) -> Command:
         if reply:
             st.reply = reply
             _emit({"type": "token", "text": reply})
-        nxt = "__settle__"
-    else:
-        # Short no-vision adds: skip trigger skill dump (decide can still need_skills).
-        if not _is_lean_paint_turn(rt):
-            await asyncio.to_thread(_preload_triggered_skills, rt)
-        # Loading plate + shimmer right after intent (not waiting for paint/action).
-        _emit_design_loading_artboard(rt)
-        nxt = "design_agent"
-    return Command(update=_bump(rt), goto=nxt)
+        return _goto_cmd(rt, frm="intent_classify", to="__settle__")
+
+    # Methodology packs only for design; canvas_op uses tools directly.
+    await asyncio.to_thread(_preload_triggered_skills, rt)
+    _emit_design_loading_artboard(rt)
+    if intent == "canvas_op":
+        # Achievable via canvas tools — skip decide, paint tool_ops immediately.
+        return _goto_cmd(rt, frm="intent_classify", to="paint_ops")
+    return _goto_cmd(rt, frm="intent_classify", to="design_agent")
 
 
 async def _node_thought(
@@ -3203,25 +3551,17 @@ async def _node_thought(
             has_ops=has_ops_payload,
             has_pending_resources=_has_pending_resource_details(rt),
         ):
-            tools_hint = "、".join(st.tools_loaded[-6:]) or "已申请工具"
-            retry_tmpl = _prompt_text(rt.rules, "agent.prompt.recover_edit_retry")
-            try:
-                retry_msg = (
-                    retry_tmpl.format(
-                        tools_hint=tools_hint, prior_intent=prior_intent
-                    ).strip()
-                    if retry_tmpl
-                    else ""
-                )
-            except Exception:
-                retry_msg = ""
-            st.note_error(
-                retry_msg
-                or (
-                    f"资源详情已注入（{tools_hint}）。必须立即输出 tool_ops 完成用户请求；"
-                    f"保持 intent={prior_intent}，禁止改回 chat/ask。"
-                )
-            )
+            tools_hint = "、".join(st.tools_loaded[-6:]) or _prompt_text(
+                rt.rules, "agent.prompt.tools_loaded_fallback"
+            ).strip()
+            retry_msg = _prompt_text(
+                rt.rules,
+                "agent.prompt.recover_edit_retry",
+                tools_hint=tools_hint,
+                prior_intent=prior_intent,
+            ).strip()
+            if retry_msg:
+                st.note_error(retry_msg)
             st.intent = prior_intent
             st.push_log(
                 phase="recover_edit",
@@ -3290,8 +3630,10 @@ async def _node_thought(
     rt.flags["has_ops"] = has_ops_payload
     rt.flags["no_ops"] = not has_ops_payload
     defer = bool(rt.defer_tools)
-    editable = intent in ("edit", "create")
-    can_skill = intent in ("ask", "edit", "create")
+    editable = _is_canvas_work_intent(intent) or _is_canvas_work_intent(
+        rt.classified_intent
+    )
+    can_skill = intent == "ask" or editable
     rt.flags["need_tools"] = bool(defer and editable and need_tools)
     rt.flags["need_knowledge"] = bool(defer and editable and need_knowledge)
     rt.flags["need_skills"] = bool(defer and can_skill and need_skills)
@@ -3353,7 +3695,11 @@ async def _node_thought(
             rt.flags["await_user"] = True
         return _route_cmd(rt)
 
-    if intent in ("edit", "create") and not has_ops_payload and not wants_fetch:
+    if (
+        (_is_canvas_work_intent(intent) or _is_canvas_work_intent(rt.classified_intent))
+        and not has_ops_payload
+        and not wants_fetch
+    ):
         if reply:
             st.reply = reply
             _emit({"type": "token", "text": reply})
@@ -3441,18 +3787,21 @@ async def _node_resource(state: GraphState) -> Command:
     need_skills = list(turn.get("need_skills") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
     use_user_refs = turn.get("use_user_refs") is True
-    # Hard triggers mid-run (e.g. aesthetics_align when need_aesthetics).
-    for k in resolve_triggered_skill_keys(
-        scene=rt.scene_key or "website",
-        empty_canvas=_canvas_is_empty(rt),
-        has_images=bool(rt.images),
-        intent=str(st.intent or ""),
-        need_aesthetics=need_aesthetics,
-        prompt_chars=len(str(rt.prompt or "").strip()),
-        already_loaded=list(st.skills_loaded or []) + list(need_skills),
-    ):
-        if k not in need_skills:
-            need_skills.append(k)
+    # Only aesthetics-gated hard triggers here — do NOT re-fire broad create/edit packs
+    # (those are intent=design skill_preload or explicit need_skills).
+    if need_aesthetics:
+        for k in resolve_triggered_skill_keys(
+            scene=rt.scene_key or "website",
+            empty_canvas=_canvas_is_empty(rt),
+            has_images=bool(rt.images),
+            intent="create",
+            need_aesthetics=True,
+            prompt_chars=len(str(rt.prompt or "").strip()),
+            already_loaded=list(st.skills_loaded or []) + list(need_skills),
+            aesthetics_triggers_only=True,
+        ):
+            if k not in need_skills:
+                need_skills.append(k)
     # Custom skills cannot unlock knowledge / aesthetics without ACL.
     acl_skills = list(st.skills_loaded or []) + list(need_skills)
     need_knowledge, need_aesthetics, acl_errs = filter_need_resources_by_skill_acl(
@@ -4030,7 +4379,13 @@ async def _node_verify(state: GraphState) -> Command:
         rt.flags.get("task_done")
         or rt.turn.get("done")
         or intent == "done"
-        or (st.painted and intent in ("edit", "create"))
+        or (
+            st.painted
+            and (
+                _is_canvas_work_intent(intent)
+                or _is_canvas_work_intent(rt.classified_intent)
+            )
+        )
         or rt.flags.get("rounds_exhausted")
     )
     if finish:
@@ -4078,7 +4433,7 @@ async def _node_settle(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
     spend = await asyncio.to_thread(
-        rt.settle_hold_fn,
+        _design_settle_hold_fn(rt),
         rt.user_id,
         hold=rt.hold,
         actual_tokens=st.total_tokens,
@@ -4088,10 +4443,21 @@ async def _node_settle(state: GraphState) -> Command:
         images_hydrated=st.images_hydrated,
     )
     has_proposal = bool(st.proposed_ops)
+    settle_intent = (
+        normalize_user_intent(rt.classified_intent)
+        if rt.classified_intent
+        else (st.intent if st.intent in ("edit", "create", "chat") else "chat")
+    )
+    settle_lane = (
+        _resolve_paint_want(rt)
+        if settle_intent in CANVAS_WORK_INTENTS
+        else None
+    )
     rt.decision.apply(
-        intent=st.intent if st.intent in ("edit", "create", "chat") else "chat",
+        intent=settle_intent,
+        paint_lane=settle_lane or None,
         tool_ops_applied=st.painted,
-        edit_in_place=bool(rt.scene_nodes) and st.intent == "edit",
+        edit_in_place=bool(rt.scene_nodes) and settle_lane == "edit",
         is_chitchat=not st.painted
         and not has_proposal
         and st.intent in ("chat", "ask", "done"),
@@ -4177,8 +4543,13 @@ async def _node_settle(state: GraphState) -> Command:
             project_id=rt.project_id,
             medium=rt.mem_medium,
             task_id=st.task_id,
-            intent=st.intent if st.intent in ("edit", "create") else "chat",
-            edit_in_place=bool(rt.scene_nodes) and st.intent == "edit",
+            intent=(
+                normalize_user_intent(rt.classified_intent)
+                if rt.classified_intent
+                else (st.intent if _is_canvas_work_intent(st.intent) else "chat")
+            ),
+            edit_in_place=bool(rt.scene_nodes)
+            and _resolve_paint_want(rt) == "edit",
             blank_artboard=False,
             summary=st.reply[:400],
             tool_ops_applied=st.painted,
@@ -4213,7 +4584,7 @@ async def _node_error(state: GraphState) -> Command:
     err = rt.fatal or "agent_error"
     try:
         await asyncio.to_thread(
-            rt.refund_hold_fn, rt.user_id, rt.hold, task_id=st.task_id
+            _design_refund_hold_fn(rt), rt.user_id, rt.hold, task_id=st.task_id
         )
     except Exception:
         pass
@@ -4395,6 +4766,7 @@ async def _node_design_agent(state: GraphState) -> Command:
         used_hint = 0
         llm_think = ""
         turn: dict[str, Any] = {}
+        t_decide = time.perf_counter()
         try:
             st.family, content, used_hint, llm_ev, llm_think = await _stream_llm_text(
                 model_family=st.family,
@@ -4444,7 +4816,12 @@ async def _node_design_agent(state: GraphState) -> Command:
                 turn["tool_ops_raw"] = None
         except Exception as err:  # noqa: BLE001
             st.note_error(f"design_agent_llm_failed: {err}"[:240])
-            st.push_log(phase="design_agent", error=str(err)[:200], summary="决策回合失败")
+            st.push_log(
+                phase="design_agent",
+                error=str(err)[:200],
+                summary="决策回合失败",
+                duration_ms=max(0, int((time.perf_counter() - t_decide) * 1000)),
+            )
             _emit(
                 {
                     "type": "skill_done",
@@ -4491,8 +4868,12 @@ async def _node_design_agent(state: GraphState) -> Command:
             has_images=bool(turn_images) or None,
             llm_image_urls=_clip_urls(turn_images) if turn_images else None,
             tokens=used_hint or None,
+            duration_ms=max(0, int((time.perf_counter() - t_decide) * 1000)),
             llm_raw=_clip_llm_raw(content, limit=4000),
             **_thinking_field(llm_think),
+            **_llm_io_fields(
+                system=lc_system, user=user_msg, images=turn_images, max_tokens=2048
+            ),
             stage="decide",
             **({"ask_mode": True} if ask_mode else {}),
         )
@@ -4525,10 +4906,7 @@ async def _node_design_agent(state: GraphState) -> Command:
                 has_clarify=False,
                 ask_mode=False,
             ):
-                want = str(rt.classified_intent or intent or "create").strip().lower()
-                if want not in ("edit", "create"):
-                    want = "create"
-                st.intent = want
+                st.intent = _resolve_paint_want(rt, intent)
                 # Stash only — stream after paint actually sends tool_ops.
                 if reply and len(reply) <= 80:
                     st.reply = reply
@@ -4560,10 +4938,7 @@ async def _node_design_agent(state: GraphState) -> Command:
             has_clarify=has_clarify,
             ask_mode=ask_mode,
         ):
-            want = str(rt.classified_intent or intent or "create").strip().lower()
-            if want not in ("edit", "create"):
-                want = "create" if intent == "create" else "edit"
-            st.intent = want
+            st.intent = _resolve_paint_want(rt, intent)
             # Stash only — stream after paint sends ops (or Ask propose rewrite).
             if reply and len(reply) <= 80:
                 st.reply = reply
@@ -4583,10 +4958,7 @@ async def _node_design_agent(state: GraphState) -> Command:
         has_clarify=False,
         ask_mode=False,
     ):
-        want = str(rt.classified_intent or st.intent or "create").strip().lower()
-        if want not in ("edit", "create"):
-            want = "create"
-        st.intent = want
+        st.intent = _resolve_paint_want(rt, st.intent)
         return Command(update=_bump(rt), goto="paint_ops")
 
     rt.terminal = True
@@ -4596,13 +4968,33 @@ async def _node_design_agent(state: GraphState) -> Command:
     return Command(update=_bump(rt), goto="__settle__")
 
 
+async def _await_or_abandon(coro: Any, *, timeout_sec: float, label: str) -> Any:
+    """Wait for an LLM call; abandon if it ignores CancelledError.
+
+    ``asyncio.wait_for`` cancels then *awaits* cleanup. LangChain OpenAI streams
+    often ignore cancel until ``stream_chunk_timeout`` (default 120s), so a
+    nominal 75s paint budget still burned ~120–180s. ``asyncio.wait`` + cancel
+    without awaiting unblocks the paint retry loop immediately.
+    """
+    task = asyncio.create_task(coro)
+    done, _pending = await asyncio.wait({task}, timeout=max(0.1, float(timeout_sec)))
+    if done:
+        return done.pop().result()
+    task.cancel()
+    _log.warning(
+        "%s timed out after %.1fs — abandoned in-flight call (task may still "
+        "drain until provider/stream_chunk_timeout)",
+        label,
+        timeout_sec,
+    )
+    raise TimeoutError(f"{label} timed out after {timeout_sec:.0f}s")
+
+
 async def _node_paint_ops(state: GraphState) -> Command:
     """Dedicated paint stage: structured tool_ops only → action."""
     rt = state["rt"]
     st = rt.run
-    want = str(rt.classified_intent or st.intent or "create").strip().lower()
-    if want not in ("edit", "create"):
-        want = "create"
+    want = _resolve_paint_want(rt, st.intent)
     st.intent = want
 
     st.family, reason = _resolve_and_log_model(
@@ -4635,6 +5027,19 @@ async def _node_paint_ops(state: GraphState) -> Command:
     from services.llm import build_user_message_content
     from services.llm.agent import ainvoke_structured
 
+    lean = _is_lean_paint_turn(rt)
+    _log.info(
+        "paint_ops enter task=%s model=%s lean=%s intent=%s prompt_chars=%s "
+        "images=%s tools=%s",
+        st.task_id[:8],
+        st.family,
+        lean,
+        want,
+        _prompt_compact_len(rt.prompt),
+        len(turn_images or []),
+        list(st.tools_loaded or [])[:8],
+    )
+
     for attempt in range(max_attempts):
         round_i = st.round
         _emit(
@@ -4666,9 +5071,11 @@ async def _node_paint_ops(state: GraphState) -> Command:
             user_msg += (
                 "\n\nCRITICAL RETRY: previous tool_ops were empty or invalid. "
                 "Read LAST_ERROR lines (code=…; fix=…) and re-emit tool_ops accordingly. "
-                "If code=placement_outside_viewport, use suggested_place_world x/y "
-                "(omit frameId for free-canvas). Output a non-empty tool_ops array now."
+                "If code=placement_outside_viewport, re-emit free-canvas create_* with "
+                "x/y from suggested_place_world (viewport blank slot or camera center). "
+                "Output a non-empty tool_ops array now."
             )
+        t_llm = time.perf_counter()
         try:
             from config.settings import settings as _paint_settings
 
@@ -4677,8 +5084,22 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 getattr(_paint_settings, "design_paint_attempt_timeout_sec", 75.0)
                 or 75.0
             )
-            # Bound each LLM call — hanging providers used to burn the full 180s
-            # node timeout before the next empty-ops retry could start.
+            # Inter-chunk stall bound — langchain-openai default is 120s; that alone
+            # made "add a rect" look hung after decide already finished.
+            chunk_sec = min(45.0, attempt_sec) if attempt_sec > 0 else 45.0
+            _log.info(
+                "paint_ops LLM start task=%s attempt=%s/%s model=%s "
+                "sys_chars=%s user_chars=%s timeout=%.0fs chunk_timeout=%.0fs",
+                st.task_id[:8],
+                attempt + 1,
+                max_attempts,
+                st.family,
+                len(system or ""),
+                len(user_msg or ""),
+                attempt_sec,
+                chunk_sec,
+            )
+
             async def _paint_structured() -> dict[str, Any]:
                 return await ainvoke_structured(
                     schema=PaintOpsSchema,
@@ -4699,11 +5120,15 @@ async def _node_paint_ops(state: GraphState) -> Command:
                         "stage": "paint_ops"
                     },
                     tags=["design", "lc_design", "paint_ops"],
+                    timeout=attempt_sec if attempt_sec > 0 else None,
+                    stream_chunk_timeout=chunk_sec,
                 )
 
             if attempt_sec > 0:
-                structured_out = await asyncio.wait_for(
-                    _paint_structured(), timeout=attempt_sec
+                structured_out = await _await_or_abandon(
+                    _paint_structured(),
+                    timeout_sec=attempt_sec,
+                    label=f"paint_ops:{st.task_id[:8]}:a{attempt}",
                 )
             else:
                 structured_out = await _paint_structured()
@@ -4724,13 +5149,33 @@ async def _node_paint_ops(state: GraphState) -> Command:
             content = json.dumps(raw_obj, ensure_ascii=False)[:8000]
             used_hint = max(1, len(content) // 3)
             st.total_tokens += used_hint
+            _log.info(
+                "paint_ops LLM ok task=%s attempt=%s model=%s elapsed=%.2fs "
+                "ops_raw=%s reply_chars=%s",
+                st.task_id[:8],
+                attempt + 1,
+                st.family,
+                time.perf_counter() - t_llm,
+                len(ops_raw) if isinstance(ops_raw, list) else 0,
+                len(reply or ""),
+            )
         except Exception as err:  # noqa: BLE001
+            _log.warning(
+                "paint_ops LLM fail task=%s attempt=%s model=%s err_type=%s err=%s",
+                st.task_id[:8],
+                attempt + 1,
+                st.family,
+                type(err).__name__,
+                str(err)[:240],
+            )
             st.note_error(f"paint_ops_llm_failed: {err}"[:240])
             st.push_log(
                 phase="paint_ops",
                 error=str(err)[:200],
                 summary="落层回合失败",
                 attempt=attempt,
+                duration_ms=max(0, int((time.perf_counter() - t_llm) * 1000)),
+                model=st.family,
             )
             _emit(
                 {
@@ -4764,6 +5209,14 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 step_ops = []
         rt.step_ops = step_ops
         rt.op_errors = list(op_errors or [])
+        if not step_ops:
+            _log.warning(
+                "paint_ops empty/invalid task=%s attempt=%s model=%s errors=%s",
+                st.task_id[:8],
+                attempt + 1,
+                st.family,
+                (op_errors or ["missing_tool_ops"])[:4],
+            )
         st.push_log(
             phase="paint_ops",
             intent=intent,
@@ -4771,9 +5224,13 @@ async def _node_paint_ops(state: GraphState) -> Command:
             model=st.family,
             reply=(reply[:200] if reply else None),
             tokens=used_hint,
+            duration_ms=max(0, int((time.perf_counter() - t_llm) * 1000)),
             llm_raw=_clip_llm_raw(content, limit=4000),
             ops_count=len(step_ops),
             attempt=attempt,
+            **_llm_io_fields(
+                system=system, user=user_msg, images=turn_images, max_tokens=None
+            ),
             **({"errors": _op_errors_for_log(op_errors)} if op_errors else {}),
         )
         _emit(
@@ -4823,7 +5280,6 @@ async def _node_paint_ops(state: GraphState) -> Command:
     return Command(update=_bump(rt), goto="__settle__")
 
 _LC_DESIGN_GRAPH: Any = None
-_LC_DESIGN_CHECKPOINTER: Any = None
 
 
 def _design_thread_id(task_id: str) -> str:
@@ -4852,22 +5308,16 @@ def _design_graph_node_timeout() -> TimeoutPolicy | None:
 
 
 def _get_design_graph_checkpointer() -> Any:
-    """Process-local saver for outer design graph.
+    """Durable LangGraph checkpointer (MySQL → Sqlite → memory).
 
-    AgentRuntime carries settle/refund callables — msgpack cannot encode it.
-    pickle_fallback is OK only in-process; do not persist to MySQL/Sqlite
-    (RCE risk + callables are not durable across workers).
+    Wallet settle/refund callables are bound via ``_bind_design_hold_fns`` and
+    must never sit on ``AgentRuntime`` in checkpointed state.
     """
-    global _LC_DESIGN_CHECKPOINTER
-    if _LC_DESIGN_CHECKPOINTER is not None:
-        return _LC_DESIGN_CHECKPOINTER
-    from langgraph.checkpoint.memory import InMemorySaver
-    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+    from services.llm.agent import checkpointer_backend, get_agent_checkpointer
 
-    _LC_DESIGN_CHECKPOINTER = InMemorySaver(
-        serde=JsonPlusSerializer(pickle_fallback=True)
-    )
-    return _LC_DESIGN_CHECKPOINTER
+    cp = get_agent_checkpointer()
+    _log.info("design graph checkpointer backend=%s", checkpointer_backend())
+    return cp
 
 
 async def _cleanup_design_thread(graph: Any, thread_id: str) -> None:
@@ -5022,6 +5472,7 @@ async def run_agent_graph(
         task_id=task_id,
         goal=prompt,
         reflect_left=max_reflect,
+        t0=float(t0 or 0.0) or time.perf_counter(),
     )
     decision = DesignRunDecision(
         trace_id=trace_id,
@@ -5086,8 +5537,8 @@ async def run_agent_graph(
         hold=hold,
         free_daily=free_daily,
         t0=t0,
-        settle_hold_fn=settle_hold_fn,
-        refund_hold_fn=refund_hold_fn,
+        settle_hold_fn=None,
+        refund_hold_fn=None,
         apply_ops=apply_list,
         w=w,
         h=h,
@@ -5105,6 +5556,7 @@ async def run_agent_graph(
         spatial_summary=spatial_summary if isinstance(spatial_summary, dict) else None,
     )
     rt.flags["mode"] = ui_mode
+    _bind_design_hold_fns(task_id, settle_hold_fn, refund_hold_fn)
 
     graph = await asyncio.to_thread(_lc_design_graph)
     rt.decision.route = "langgraph:create_agent"
@@ -5223,3 +5675,4 @@ async def run_agent_graph(
     finally:
         if not keep_checkpoint:
             await _cleanup_design_thread(graph, thread_id)
+        _unbind_design_hold_fns(task_id)

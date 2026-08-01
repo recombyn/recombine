@@ -56,21 +56,25 @@ def _edit_context_block(
         parts.append(f"CANVAS_ID: {cid}")
     focus = (focus_frame_id or "").strip()
     if focus:
-        parts.append(
-            f"FOCUS_FRAME_ID: {focus}\n"
-            "FOCUS_FRAME_ID 为权威（用户 @ 画板）。"
-            "update_frame / delete_frame 必须使用此精确 id。"
-            "不要按名称挑其他画板——名称可能冲突（如多个「新画板」）。"
-            "绝不要改指向其他 SCENE_FRAMES id。"
-        )
+        from services.design.prompts.prompt_pack_store import render_prompt_body
+
+        focus_blk = render_prompt_body(
+            "agent.prompt.focus_frame_authority", focus=focus
+        ).strip()
+        if focus_blk:
+            parts.append(focus_blk)
+        else:
+            parts.append(f"FOCUS_FRAME_ID: {focus}")
     if scene_frames:
+        from services.design.prompts.prompt_pack_store import render_prompt_body
+
         try:
             raw_frames = json.dumps(scene_frames, ensure_ascii=False)
         except Exception:
             raw_frames = "[]"
+        fr_hdr = render_prompt_body("agent.prompt.scene_frames_header").strip()
         parts.append(
-            "SCENE_FRAMES（画板 id — delete_frame / create 只能用这些 id）：\n"
-            f"{raw_frames[:8000]}"
+            (f"{fr_hdr}\n" if fr_hdr else "") + f"{raw_frames[:8000]}"
         )
     if digest:
         parts.append(f"ACTUAL_CANVAS_DIGEST:\n{digest[:2400]}")
@@ -90,43 +94,32 @@ def _edit_context_block(
             nodes_for_bg = focused_nodes
             if not focused_nodes:
                 try:
-                    from services.design.prompts.prompt_pack_store import resolve_prompt_body
+                    from services.design.prompts.prompt_pack_store import (
+                        render_prompt_body,
+                    )
 
-                    empty_tmpl = resolve_prompt_body(
-                        "agent.prompt.focus_empty_frame"
+                    empty_msg = render_prompt_body(
+                        "agent.prompt.focus_empty_frame", focus=focus
                     ).strip()
                 except Exception:
-                    empty_tmpl = ""
-                try:
-                    empty_msg = (
-                        empty_tmpl.format(focus=focus).strip() if empty_tmpl else ""
-                    )
-                except Exception:
                     empty_msg = ""
-                parts.append(
-                    empty_msg
-                    or (
-                        f"FOCUS_FRAME_ID {focus} 在 SCENE_NODES 中无节点（空画板）。"
-                        f"改画板背景色请用 update_frame，frameId={focus} 且带 backgroundColor。"
-                        "不要 update_node 其他画板上的 fill。"
-                    )
-                )
+                if empty_msg:
+                    parts.append(empty_msg)
         bg = _bg_candidate_from_nodes(nodes_for_bg)
         if bg:
             try:
-                from services.design.prompts.prompt_pack_store import resolve_prompt_body
+                from services.design.prompts.prompt_pack_store import render_prompt_body
 
-                bg_hint = resolve_prompt_body("agent.prompt.bg_candidate_hint").strip()
+                bg_hint = render_prompt_body(
+                    "agent.prompt.bg_candidate_hint"
+                ).strip()
             except Exception:
                 bg_hint = ""
             parts.append(
                 "BG_CANDIDATE_NODE_ID: "
                 f"{bg.get('id')} (fill={bg.get('fill') or '?'}; "
-                f"{bg.get('w')}x{bg.get('h')}) — "
-                + (
-                    bg_hint
-                    or "改底色/背景色时必须 update_node 此 id，禁止 create_shape 叠新底。"
-                )
+                f"{bg.get('w')}x{bg.get('h')})"
+                + (f" — {bg_hint}" if bg_hint else "")
             )
     elif include_full_svg and (svg or "").strip():
         parts.append(f"CURRENT_SVG:\n{svg[:18000]}")

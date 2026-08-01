@@ -1,4 +1,4 @@
-"""Font catalog store — seeded from apps/api/data/fonts_seed.json."""
+"""Font catalog store — seeded from apps/api/data/public/fonts_seed.json."""
 
 from __future__ import annotations
 

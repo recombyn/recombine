@@ -13,11 +13,27 @@ from services.agent_memory.short_term import split_recent_and_older, trim_turns_
 def test_prompt_template_official():
     assert render_prompt_template("A {x} B", x="1") == "A 1 B"
     assert "{" in render_prompt_template('say {"a":1} and {name}', name="n")
+    # Zero-variable bodies still go through LangChain PromptTemplate.
+    assert '{"a":1}' in render_prompt_template('keep {"a":1} literal')
     msgs = ChatPromptTemplate.from_messages(
         [("system", "{system}"), ("human", "{user}")]
     ).format_messages(system="sys Z", user="hi Z")
     assert len(msgs) == 2
     assert "Z" in str(msgs[0].content)
+
+
+def test_render_prompt_body_admin_then_langchain():
+    """All packs: Admin/seed body → LangChain fill (not Hub)."""
+    from services.design.prompts.prompt_pack_store import render_prompt_body
+
+    paint = render_prompt_body(
+        "agent.prompt.paint_system", ask_rule="- Ask mode test.\n"
+    )
+    assert "PAINT" in paint.upper() or "tool_ops" in paint
+    assert "Ask mode test" in paint
+    # Static pack (no placeholders) still renders via LC.
+    intent = render_prompt_body("agent.prompt.intent_classify")
+    assert "canvas_op" in intent or "Intent" in intent or "intent" in intent.lower()
 
 
 def test_structured_json_langchain_then_rescue():

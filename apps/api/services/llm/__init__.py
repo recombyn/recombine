@@ -598,6 +598,7 @@ def build_chat_model(
     stream_usage: bool = True,
     extra_body: Mapping[str, Any] | None = None,
     timeout: float = 180.0,
+    stream_chunk_timeout: float | None = None,
     model_id_override: str | None = None,
     source: str | None = None,
     catalog_model_id: str | None = None,
@@ -608,6 +609,11 @@ def build_chat_model(
 
     Resolves base_url/api_key from ``get_llm_endpoint``, then calls the official
     factory. Optional usage callback writes our billing ledger.
+
+    ``stream_chunk_timeout``: LangChain OpenAI stall detector (seconds between
+    chunks). Structured tool-calls often stream under the hood even when
+    ``streaming=False``; without a bound, a half-open TCP can sit until the
+    library default (120s) before failing.
     """
     from langchain.chat_models import init_chat_model
 
@@ -623,6 +629,11 @@ def build_chat_model(
         "timeout": timeout,
         "max_retries": 0,
     }
+    if stream_chunk_timeout is not None:
+        # None/0 disables in langchain-openai; only pass a positive bound.
+        chunk_sec = float(stream_chunk_timeout)
+        if chunk_sec > 0:
+            kwargs["stream_chunk_timeout"] = chunk_sec
     headers = _default_headers_for(ep)
     if headers:
         kwargs["default_headers"] = headers

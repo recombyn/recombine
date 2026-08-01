@@ -4,18 +4,19 @@ Emits `explored` parent + nested `item` lines for:
 prepare → scene → prompt → model → lookup → validate → ops →
 scene_check → critic → refine → done
 
-Labels / event map: apps/api/data/progress_stages.json
+Labels / event map: apps/api/data/public/progress_stages.json
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 
 def _load_progress_stages() -> tuple[dict[str, str], dict[str, str]]:
-    path = Path(__file__).resolve().parents[3] / "data" / "progress_stages.json"
+    from config.settings import resolve_data_file
+
+    path = resolve_data_file("progress_stages.json")
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:

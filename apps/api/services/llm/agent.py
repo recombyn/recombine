@@ -27,6 +27,14 @@ _CHECKPOINTER_BACKEND: str = ""
 # Keep underlying DB connections alive for process lifetime (from_conn_string closes them).
 _CHECKPOINTER_CONN: Any = None
 
+# Design outer graph state (AgentRuntime / nested dataclasses) — msgpack allowlist.
+# No pickle_fallback: callables must stay out of checkpointed state.
+_CHECKPOINT_MSGPACK_MODULES: tuple[tuple[str, str], ...] = (
+    ("services.design.runtime.agent_controller", "AgentRuntime"),
+    ("services.design.runtime.agent_controller", "AgentRunState"),
+    ("services.design.runtime.decision_log", "DesignRunDecision"),
+)
+
 # Server-executed tools (LangGraph ToolNode / official agent). Canvas ops stay client-side.
 _SERVER_TOOL_NAMES = frozenset({"generate_image"})
 
@@ -330,19 +338,20 @@ def _normalize_messages(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]
 def _chat_agent_system(*, model: str | None = None) -> str:
     """Admin design_global_rule only; always prefix IDENTITY when configured."""
     try:
+        from services.design.prompts.prompt_pack_store import render_prompt_body
         from services.design.readpath.catalog import get_global_rules
-        from services.design.prompts.rules_text import _rule_text, render_prompt_template
 
         rules = get_global_rules() or {}
-        base = _rule_text(rules, "agent.prompt.chat_agent_system").strip()
+        base = render_prompt_body(
+            "agent.prompt.chat_agent_system", rules=rules
+        ).strip()
         mid = (model or "auto").strip() or "auto"
         if mid.lower() == "auto":
-            persona = _rule_text(rules, "agent.persona.auto").strip()
+            persona = render_prompt_body("agent.persona.auto", rules=rules).strip()
         else:
-            tmpl = _rule_text(rules, "agent.persona.locked").strip()
-            persona = (
-                render_prompt_template(tmpl, model_label=mid).strip() if tmpl else ""
-            )
+            persona = render_prompt_body(
+                "agent.persona.locked", rules=rules, model_label=mid
+            ).strip()
         if persona and "IDENTITY:" not in base:
             return f"IDENTITY: {persona}\n\n{base}" if base else f"IDENTITY: {persona}"
         return base
@@ -617,6 +626,16 @@ def _checkpoint_sqlite_path() -> Path:
     return p
 
 
+def _checkpoint_serde() -> Any:
+    """Shared serde for create_agent + design outer graph (no pickle)."""
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    return JsonPlusSerializer(
+        pickle_fallback=False,
+        allowed_msgpack_modules=list(_CHECKPOINT_MSGPACK_MODULES),
+    )
+
+
 def _build_mysql_checkpointer() -> Any | None:
     url = _checkpoint_mysql_url()
     if not url:
@@ -627,7 +646,7 @@ def _build_mysql_checkpointer() -> Any | None:
     global _CHECKPOINTER_CONN
     params = PyMySQLSaver.parse_conn_string(url)
     conn = pymysql.connect(**params, autocommit=True)
-    saver = PyMySQLSaver(conn)
+    saver = PyMySQLSaver(conn, serde=_checkpoint_serde())
     saver.setup()
     _CHECKPOINTER_CONN = conn
     return saver
@@ -651,7 +670,7 @@ def _build_sqlite_checkpointer() -> Any:
             conn.execute("PRAGMA busy_timeout = 30000")
         except Exception:
             pass
-    saver = SqliteSaver(conn)
+    saver = SqliteSaver(conn, serde=_checkpoint_serde())
     saver.setup()
     _CHECKPOINTER_CONN = conn
     return saver
@@ -661,6 +680,7 @@ def get_agent_checkpointer() -> Any:
     """
     Production short-term memory checkpointer (docs: In production → DB saver).
 
+    Shared by ``create_agent`` threads and the design outer ``StateGraph``.
     Priority: MySQL (``langgraph-checkpoint-mysql``, same DB as app) →
     SqliteSaver → InMemorySaver.
     """
@@ -694,7 +714,7 @@ def get_agent_checkpointer() -> Any:
             )
         from langgraph.checkpoint.memory import InMemorySaver
 
-        _CHECKPOINTER = InMemorySaver()
+        _CHECKPOINTER = InMemorySaver(serde=_checkpoint_serde())
         _CHECKPOINTER_BACKEND = "memory"
         return _CHECKPOINTER
 
@@ -882,6 +902,8 @@ async def ainvoke_structured(
     run_name: str | None = None,
     metadata: dict[str, Any] | None = None,
     tags: list[str] | None = None,
+    timeout: float | None = None,
+    stream_chunk_timeout: float | None = None,
 ) -> dict[str, Any]:
     """
     LangChain structured output via ``create_agent(..., response_format=Schema)``.
@@ -894,6 +916,10 @@ async def ainvoke_structured(
 
     Returns ``{\"structured\": Model|dict|None, \"text\": str, \"messages\": list}``.
     Falls back to ``llm.with_structured_output`` if the agent path fails.
+
+    ``timeout`` / ``stream_chunk_timeout`` bound ChatOpenAI (request + inter-chunk
+    stall). Paint passes these so a half-open provider stream cannot burn the
+    full LangGraph node budget (default stream_chunk_timeout is 120s).
     """
     endpoint = get_llm_endpoint(model)
     model_id = _agent_model_id(model, endpoint.model_id)
@@ -907,26 +933,40 @@ async def ainvoke_structured(
         metadata=metadata,
         tags=tags or [source, "structured"],
     )
+    req_timeout = float(timeout) if timeout is not None and float(timeout) > 0 else 180.0
+    chunk_timeout = (
+        float(stream_chunk_timeout)
+        if stream_chunk_timeout is not None and float(stream_chunk_timeout) > 0
+        else None
+    )
 
     # Prefer direct structured output first — create_agent often burns multiple
     # model round-trips (intent_classify hit 6×~4s) for a simple schema fill.
-    try:
-        llm = build_chat_model(
-            endpoint=endpoint,
-            model_id_override=model_id,
-            streaming=False,
-            stream_usage=True,
-            source=source,
-            catalog_model_id=model or model_id,
-        )
-        structured_llm = llm.with_structured_output(schema)
-        got = await structured_llm.ainvoke(lc_messages, config=cfg)
-        return {"structured": got, "text": "", "messages": lc_messages}
-    except Exception as direct_err:
-        _log.debug(
-            "direct with_structured_output failed (%s); falling back to create_agent",
-            type(direct_err).__name__,
-        )
+    #
+    # Use function_calling first: many Doubao-hosted models (e.g. deepseek-v4-flash)
+    # reject response_format=json_schema with HTTP 400, which wasted a full paint
+    # attempt + tokens before the create_agent fallback.
+    llm = build_chat_model(
+        endpoint=endpoint,
+        model_id_override=model_id,
+        streaming=False,
+        stream_usage=True,
+        timeout=req_timeout,
+        stream_chunk_timeout=chunk_timeout,
+        source=source,
+        catalog_model_id=model or model_id,
+    )
+    for method in ("function_calling", "json_schema"):
+        try:
+            structured_llm = llm.with_structured_output(schema, method=method)
+            got = await structured_llm.ainvoke(lc_messages, config=cfg)
+            return {"structured": got, "text": "", "messages": lc_messages}
+        except Exception as direct_err:
+            _log.debug(
+                "with_structured_output(method=%s) failed (%s); trying next",
+                method,
+                type(direct_err).__name__,
+            )
 
     # Fallback: official create_agent + response_format.
     from langgraph.checkpoint.memory import InMemorySaver

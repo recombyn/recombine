@@ -142,15 +142,13 @@ def _canonicalize_op_name(name: str) -> str:
 def format_canvas_tools_for_model(rules: dict[str, str] | None = None) -> str:
     """Capability block for LLM prompts — Action registry (+ schema + hint)."""
     del rules  # allowlist = design_canvas_tool.enabled only
+    from services.design.prompts.prompt_pack_store import render_prompt_body
+
     tools = list_canvas_tools(enabled_only=True)
     if not tools:
-        return (
-            "画布工具：（design_canvas_tool 未配置 — "
-            "请在 Admin 启用 op_key；前端按同一 key 执行）。"
-        )
-    lines: list[str] = [
-        "画布 Action 注册表（op 的 `name`；前端 executeDesignTool 使用同一 key）："
-    ]
+        return render_prompt_body("agent.prompt.tools_registry_empty")
+    head = render_prompt_body("agent.prompt.tools_registry_header")
+    lines: list[str] = [head] if head else []
     for t in tools:
         key = t["op_key"]
         label = (t.get("label") or "").strip()
@@ -169,14 +167,13 @@ def format_canvas_tools_for_model(rules: dict[str, str] | None = None) -> str:
 def format_canvas_tools_catalog(rules: dict[str, str] | None = None) -> str:
     """Short tool index for deferred loading — names + one-line purpose only."""
     del rules
+    from services.design.prompts.prompt_pack_store import render_prompt_body
+
     tools = list_canvas_tools(enabled_only=True)
     if not tools:
-        return (
-            "画布工具目录：（未配置 — 请在 Admin 启用 op_key）。"
-        )
-    lines: list[str] = [
-        "画布工具目录（仅名称；输出 tool_ops 前请先用 need_tools 申请详情）："
-    ]
+        return render_prompt_body("agent.prompt.tools_catalog_empty")
+    head = render_prompt_body("agent.prompt.tools_catalog_header")
+    lines: list[str] = [head] if head else []
     for t in tools:
         key = str(t.get("op_key") or "").strip()
         if not key:
@@ -215,16 +212,10 @@ def format_canvas_tools_details(
         for t in list_canvas_tools(enabled_only=True)
         if t.get("op_key")
     }
-    try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
+    from services.design.prompts.prompt_pack_store import render_prompt_body
 
-        header = resolve_prompt_body("agent.prompt.tool_details_header").strip()
-    except Exception:
-        header = ""
-    lines: list[str] = [
-        header
-        or "TOOL_DETAILS（请用这些 op 的 `name` 写入 tool_ops；不要再申请 need_tools）："
-    ]
+    header = render_prompt_body("agent.prompt.tool_details_header").strip()
+    lines: list[str] = [header] if header else []
     missing: list[str] = []
     for key in wanted:
         t = by_key.get(key)
@@ -237,11 +228,23 @@ def format_canvas_tools_details(
         head = f"### `{key}`" + (f" ({label})" if label else "")
         lines.append(head)
         if hint:
-            lines.append(f"说明：{hint}")
+            ln = render_prompt_body(
+                "agent.prompt.tool_details_hint_line", hint=hint
+            ).strip()
+            if ln:
+                lines.append(ln)
         if schema:
-            lines.append(f"参数：{schema}")
+            ln = render_prompt_body(
+                "agent.prompt.tool_details_args_line", schema=schema
+            ).strip()
+            if ln:
+                lines.append(ln)
     if missing:
-        lines.append("未知工具（已忽略）：" + ", ".join(missing))
+        ln = render_prompt_body(
+            "agent.prompt.tool_details_unknown", keys=", ".join(missing)
+        ).strip()
+        if ln:
+            lines.append(ln)
     return "\n".join(lines)
 
 
