@@ -855,11 +855,13 @@ export function isImageProcessRunning(node: any): boolean {
   return Boolean(node) && String(node?.attrs?.processStatus || '') === 'running';
 }
 
-/** Upload/import placeholder — delete is permanent (not restorable via undo). */
+/**
+ * In-flight process placeholder (upload / import / AI tools like editElements).
+ * Delete is permanent — scrubbed from history so Undo cannot revive it; clearing
+ * pendingImageProcessId aborts applying the result (same as upload-in-flight).
+ */
 export function isEphemeralUploadNode(node: any): boolean {
-  if (!isImageProcessRunning(node)) return false;
-  const kind = String(node?.attrs?.processKind || '');
-  return kind === 'upload' || kind === 'import';
+  return isImageProcessRunning(node);
 }
 
 /**

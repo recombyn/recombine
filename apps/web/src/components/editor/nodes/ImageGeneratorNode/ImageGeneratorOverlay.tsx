@@ -1,6 +1,6 @@
-import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
+import { useMemo, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
-import { RcbOverlayPortal, useRcbCamera, rcbSceneToScreen } from '@/components/rcb';
+import { RcbOverlayPortal } from '@/components/rcb';
 import { isImageGeneratorNode } from '@/components/rcb/scene/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
 import ImageGeneratorCard from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorCard';
@@ -19,7 +19,6 @@ function ImageGeneratorOverlay({
   hidden?: boolean;
   readOnly?: boolean;
 }): ReactNode {
-  const camera = useRcbCamera();
   const selectedNodeIds: string[] = useSelector(
     (state: any) => state.editor.selectedNodeIds || []
   );
@@ -50,19 +49,10 @@ function ImageGeneratorOverlay({
           const { left, top } = nodeLeftTop(document, node);
           const width = Math.max(1, Number(node.width) || 1);
           const height = Math.max(1, Number(node.height) || 1);
-          const z = Math.max(0.05, camera.zoom || 1);
-          const origin = rcbSceneToScreen(camera, left, top);
-          const plateStyle: CSSProperties = {
-            left: origin.x,
-            top: origin.y,
-            width: width * z,
-            height: height * z,
-          };
           return (
             <ImageGeneratorCard
               key={nodeId}
               nodeId={nodeId}
-              plateStyle={plateStyle}
               sceneBox={{ x: left, y: top, width, height }}
               // Title comes from the shared selection label; composer follows it.
               showComposer={
