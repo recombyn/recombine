@@ -1,6 +1,6 @@
 # Scene JSON 规范
 
-与 Web 端 `apps/web/src/core/sceneDocument.js` 保持一致。
+与 Web 编辑器运行时文档及 `packages/scene-schema` 保持一致。
 
 ```json
 {

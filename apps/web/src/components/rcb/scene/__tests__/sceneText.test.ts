@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   measurePlainTextSize,
+  textVisualLines,
   wrapPlainTextLines,
-} from '@/components/rcb/scene/sceneText';
+} from '@/components/rcb/scene/document/sceneText';
 
 /**
  * jsdom often has no Canvas 2D — measureLineWidth falls back to CJK ≈ fontSize.
@@ -29,6 +30,27 @@ describe('wrapPlainTextLines', () => {
   it('respects hard newlines', () => {
     const lines = wrapPlainTextLines('一行\n二行', { fontSize: 14 }, 999);
     expect(lines).toEqual(['一行', '二行']);
+  });
+});
+
+describe('textVisualLines', () => {
+  it('soft-wraps fixed-width boxes (Outline must match paint)', () => {
+    const text = '你好世界测试文字';
+    const fontSize = 14;
+    const lines = textVisualLines(text, { fontSize }, {
+      width: fontSize * 3,
+      autoSize: false,
+    });
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.join('')).toBe(text);
+  });
+
+  it('keeps hug text as hard newlines only', () => {
+    const lines = textVisualLines('你好世界测试文字', { fontSize: 14 }, {
+      width: 40,
+      autoSize: true,
+    });
+    expect(lines).toEqual(['你好世界测试文字']);
   });
 });
 

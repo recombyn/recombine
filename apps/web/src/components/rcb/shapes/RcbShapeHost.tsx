@@ -4,12 +4,12 @@ import {
   createSvgBoard,
   fitInfiniteSvgToContent,
   nodeToSvgElement,
-} from '@/components/rcb/scene/sceneToSvg';
+} from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   blendModeToCss,
   parseBlendMode,
   parseLayerOpacity,
-} from '@/components/rcb/selection/BlendModeControl';
+} from '@/components/rcb/selection/chrome/BlendModeControl';
 import {
   getSharedNodeEls,
   registerShapeHost,

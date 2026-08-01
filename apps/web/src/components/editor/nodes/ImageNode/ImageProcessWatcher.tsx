@@ -73,7 +73,10 @@ function processFailMessage(err: any): string {
   if (status === 402 || detail === 'Insufficient credits' || detail === 'Insufficient tokens')
     return 'Token 不足，请充值后再试';
   if (status === 401) return '请先登录后再使用 AI 工具';
-  if (typeof detail === 'string' && detail.trim()) return detail;
+  const msg = typeof detail === 'string' ? detail : '';
+  if (/timeout/i.test(msg) || err?.code === 'ECONNABORTED')
+    return '图片分层超时，请稍后重试（大图首次加载模型会更慢）';
+  if (msg.trim()) return msg;
   return '图片处理失败';
 }
 

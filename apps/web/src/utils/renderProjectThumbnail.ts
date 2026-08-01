@@ -3,12 +3,12 @@
  * Save path: up to 4 per-element snapshots (not full-page, not raw image src).
  */
 
-import { inlineSvgImages, renderExport } from '@/components/rcb/scene/exportImage';
-import { createSvgBoard, loadSceneOntoSvg } from '@/components/rcb/scene/sceneToSvg';
+import { inlineSvgImages, renderExport } from '@/components/rcb/scene/paint/exportImage';
+import { createSvgBoard, loadSceneOntoSvg } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   isExportableSceneNode,
   listSceneNodes,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import {
   coverDocumentHasContent,
   extractPlazaCoverDocument,

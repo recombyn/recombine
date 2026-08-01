@@ -76,7 +76,7 @@ import {
 import type { ResizeHandle } from '@/components/rcb/selection/resizeGeometry';
 import { cn } from '@/utils/classnames';
 import { fetchProject } from '@/apis/projects';
-import { createEmptyDocument } from '@/components/rcb/scene/sceneDocument';
+import { createEmptyDocument } from '@/components/rcb/scene/document/sceneDocument';
 import {
   getProjectDraft,
   getProjectSession,
@@ -102,7 +102,7 @@ import {
   updateArtboardFrame,
   pushEditorHistory,
 } from '@/store/modules/editor';
-import { listSceneNodes, stackZIndex } from '@/components/rcb/scene/sceneDocument';
+import { listSceneNodes, stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
 import {
   HtmlArtboardFrame,
@@ -114,7 +114,7 @@ import type { ArtboardFrame } from '@/components/rcb/frames/types';
 import CanvasBgPicker from '@/components/editor/chrome/CanvasBgPicker';
 import type { FillPanelValue } from '@/components/editor/panels/FillPanel';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   cssPreviewForGradient,
   DEFAULT_FILL_IMAGE_ADJUST,
@@ -123,7 +123,7 @@ import {
   parseFillType,
   serializeFillGradient,
   type FillType,
-} from '@/components/rcb/scene/sceneFill';
+} from '@/components/rcb/scene/document/sceneFill';
 import WalletAccountChip from '@/components/layout/WalletAccountChip';
 import EditorOnboardingTour from '@/components/editor/chrome/EditorOnboardingTour';
 

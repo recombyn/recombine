@@ -22,7 +22,7 @@ import {
   isEphemeralUploadNode,
   applyImageDecomposeLayers,
   detachImageVariantToNode,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import {
   loadTemplates,
   saveTemplates,
@@ -159,8 +159,133 @@ const initialState = {
   pendingCanvasAttach: null as null | { target: string; payload: string | string[] },
 };
 
+/** Soft cap — prefer bytes over entry count for heavy path docs. */
+const HISTORY_MAX_ENTRIES = 50;
+const HISTORY_MAX_BYTES = 64 * 1024 * 1024;
+
+/** Full-doc snapshot (structural ops) or before-nodes for patch undo. */
+type HistorySnap = { kind: 'snap'; doc: any };
+type HistoryNodes = { kind: 'nodes'; before: Record<string, any> };
+type HistoryEntry = HistorySnap | HistoryNodes;
+
+function isHistoryEntry(x: any): x is HistoryEntry {
+  return Boolean(x && typeof x === 'object' && (x.kind === 'snap' || x.kind === 'nodes'));
+}
+
+/** Accept legacy raw-document entries still sitting in session state. */
+function asHistoryEntry(x: any): HistoryEntry {
+  if (isHistoryEntry(x)) return x;
+  return { kind: 'snap', doc: x };
+}
+
+function cloneNodeForHistory(node: any) {
+  if (!node || typeof node !== 'object') return node;
+  const attrs = node.attrs;
+  return {
+    ...node,
+    attrs: attrs && typeof attrs === 'object' ? { ...attrs } : attrs,
+    children: Array.isArray(node.children) ? [...node.children] : node.children,
+  };
+}
+
+/** Rough node payload; `seenPaths` dedupes shared path strings across the stack. */
+function estimateNodeBytes(node: any, seenPaths?: Set<string>): number {
+  if (!node) return 0;
+  const attrs = node.attrs;
+  if (!attrs) return 128;
+  const path = attrs.path != null ? String(attrs.path) : '';
+  const d = attrs.d != null ? String(attrs.d) : '';
+  let n = 192;
+  if (path) {
+    if (!seenPaths) n += path.length;
+    else if (!seenPaths.has(path)) {
+      seenPaths.add(path);
+      n += path.length;
+    }
+  }
+  if (d && d !== path) {
+    if (!seenPaths) n += d.length;
+    else if (!seenPaths.has(d)) {
+      seenPaths.add(d);
+      n += d.length;
+    }
+  }
+  return n;
+}
+
+function estimateDocumentBytes(doc: any, seenPaths?: Set<string>): number {
+  if (!doc?.deltaSetLike) return 0;
+  let n = 0;
+  for (const id of Object.keys(doc.deltaSetLike)) {
+    n += estimateNodeBytes(doc.deltaSetLike[id], seenPaths);
+  }
+  return n;
+}
+
+function estimateHistoryEntryBytes(entry: any, seenPaths?: Set<string>): number {
+  const e = asHistoryEntry(entry);
+  if (e.kind === 'nodes') {
+    let n = 64;
+    for (const id of Object.keys(e.before)) {
+      n += estimateNodeBytes(e.before[id], seenPaths);
+    }
+    return n;
+  }
+  return estimateDocumentBytes(e.doc, seenPaths);
+}
+
+/**
+ * History snapshot with structural sharing of immutable path strings.
+ * Avoids JSON.parse(JSON.stringify) which dominated edit cost at 5k–10k nodes.
+ */
+function cloneDocumentForHistory(doc: any) {
+  if (!doc) return null;
+  const delta = doc.deltaSetLike || {};
+  const nextDelta: Record<string, unknown> = {};
+  for (const key of Object.keys(delta)) {
+    const node = delta[key];
+    if (!node || typeof node !== 'object') {
+      nextDelta[key] = node;
+      continue;
+    }
+    nextDelta[key] = cloneNodeForHistory(node);
+  }
+  return {
+    ...doc,
+    frames: Array.isArray(doc.frames)
+      ? doc.frames.map((f: any) => (f && typeof f === 'object' ? { ...f } : f))
+      : doc.frames,
+    pages: Array.isArray(doc.pages)
+      ? doc.pages.map((p: any) =>
+          p && typeof p === 'object'
+            ? {
+                ...p,
+                children: Array.isArray(p.children) ? [...p.children] : p.children,
+              }
+            : p
+        )
+      : doc.pages,
+    stackOrder: Array.isArray(doc.stackOrder) ? [...doc.stackOrder] : doc.stackOrder,
+    deltaSetLike: nextDelta,
+  };
+}
+
 function cloneDocument(doc: any) {
-  return doc ? normalizeDocument(JSON.parse(JSON.stringify(doc))) : null;
+  return cloneDocumentForHistory(doc);
+}
+
+function trimHistoryPast(state: typeof initialState) {
+  while (state.historyPast.length > HISTORY_MAX_ENTRIES) state.historyPast.shift();
+  // Dedup path payloads across the stack (COW shares string identity/content).
+  const seen = new Set<string>();
+  let bytes = 0;
+  for (let i = state.historyPast.length - 1; i >= 0; i -= 1) {
+    bytes += estimateHistoryEntryBytes(state.historyPast[i], seen);
+    if (bytes > HISTORY_MAX_BYTES && i > 0) {
+      state.historyPast.splice(0, i);
+      break;
+    }
+  }
 }
 
 /** Stage fill lives on Redux; SvgCanvas view docs force transparent paper for hosts. */
@@ -192,9 +317,38 @@ function preserveStageCanvasMeta(prev: any, incoming: any) {
 
 function pushHistory(state: typeof initialState) {
   if (!state.document) return;
-  state.historyPast.push(cloneDocument(state.document));
-  if (state.historyPast.length > 50) state.historyPast.shift();
+  state.historyPast.push({ kind: 'snap', doc: cloneDocument(state.document) } satisfies HistorySnap);
+  trimHistoryPast(state);
   state.historyFuture = [];
+}
+
+/** Patch undo: store only touched nodes (share path strings with live doc). */
+function pushNodePatchHistory(state: typeof initialState, nodeIds: string[]) {
+  if (!state.document) return;
+  const before: Record<string, any> = {};
+  for (const raw of nodeIds) {
+    const id = String(raw || '');
+    if (!id) continue;
+    const node = state.document.deltaSetLike?.[id];
+    if (!node) continue;
+    before[id] = cloneNodeForHistory(node);
+  }
+  if (!Object.keys(before).length) {
+    pushHistory(state);
+    return;
+  }
+  state.historyPast.push({ kind: 'nodes', before } satisfies HistoryNodes);
+  trimHistoryPast(state);
+  state.historyFuture = [];
+}
+
+function restoreNodesIntoDocument(doc: any, nodes: Record<string, any>) {
+  if (!doc?.deltaSetLike || !nodes) return doc;
+  const nextDelta = { ...doc.deltaSetLike };
+  for (const id of Object.keys(nodes)) {
+    nextDelta[id] = nodes[id];
+  }
+  return { ...doc, deltaSetLike: nextDelta };
 }
 
 function clearSelection(state: typeof initialState) {
@@ -215,15 +369,28 @@ function clearPendingProcessIfNodeGone(state: typeof initialState) {
   }
 }
 
-/** Strip nodes from every history snapshot so Undo cannot revive them. */
+/** Strip nodes from every history entry so Undo cannot revive them. */
 function scrubNodeIdsFromHistory(state: typeof initialState, ids: string[]) {
   if (!ids.length) return;
   const idSet = new Set(ids.map(String));
-  const scrub = (doc: any) => {
-    if (!doc?.deltaSetLike) return doc;
+  const scrub = (raw: any) => {
+    const entry = asHistoryEntry(raw);
+    if (entry.kind === 'nodes') {
+      let changed = false;
+      const before: Record<string, any> = { ...entry.before };
+      for (const id of idSet) {
+        if (id in before) {
+          delete before[id];
+          changed = true;
+        }
+      }
+      return changed ? { kind: 'nodes' as const, before } : entry;
+    }
+    const doc = entry.doc;
+    if (!doc?.deltaSetLike) return entry;
     const hit = ids.some((id) => doc.deltaSetLike[id]);
-    if (!hit) return doc;
-    return removeNodesFromDocument(doc, [...idSet]);
+    if (!hit) return entry;
+    return { kind: 'snap' as const, doc: removeNodesFromDocument(doc, [...idSet]) };
   };
   state.historyPast = state.historyPast.map(scrub);
   state.historyFuture = state.historyFuture.map(scrub);
@@ -388,8 +555,9 @@ const editorSlice = createSlice({
     patchDocumentNode(state, action) {
       const { nodeId, patch, skipHistory } = action.payload || {};
       if (!state.document || !nodeId) return;
-      if (!skipHistory) pushHistory(state);
-      state.document = normalizeDocument(updateNodeInDocument(state.document, nodeId, patch));
+      if (!skipHistory) pushNodePatchHistory(state, [String(nodeId)]);
+      // COW update — skip full JSON normalizeDocument (was 2× clone per edit).
+      state.document = updateNodeInDocument(state.document, nodeId, patch);
       state.dirty = true;
       state.documentPatchToken += 1;
       state.lastPatchedNodeIds = [String(nodeId)];
@@ -399,21 +567,25 @@ const editorSlice = createSlice({
     patchDocumentNodes(state, action) {
       const { patches, skipHistory } = action.payload || {};
       if (!state.document || !Array.isArray(patches) || !patches.length) return;
-      if (!skipHistory) pushHistory(state);
-      let doc = state.document;
       const ids: string[] = [];
+      for (const item of patches) {
+        if (item?.nodeId && item?.patch) ids.push(String(item.nodeId));
+      }
+      if (!skipHistory) pushNodePatchHistory(state, ids);
+      let doc = state.document;
+      const applied: string[] = [];
       for (const item of patches) {
         const nodeId = item?.nodeId;
         const patch = item?.patch;
         if (!nodeId || !patch) continue;
         doc = updateNodeInDocument(doc, nodeId, patch);
-        ids.push(String(nodeId));
+        applied.push(String(nodeId));
       }
-      if (!ids.length) return;
-      state.document = normalizeDocument(doc);
+      if (!applied.length) return;
+      state.document = doc;
       state.dirty = true;
       state.documentPatchToken += 1;
-      state.lastPatchedNodeIds = ids;
+      state.lastPatchedNodeIds = applied;
       syncLibraryOnEdit(state);
     },
     setSelectedNodeId(state, action) {
@@ -1051,9 +1223,26 @@ const editorSlice = createSlice({
     },
     undo(state) {
       if (!state.historyPast.length || !state.document) return;
-      state.historyFuture.unshift(cloneDocument(state.document));
-      state.document = state.historyPast.pop();
-      state.sceneReloadToken += 1;
+      const entry = asHistoryEntry(state.historyPast.pop());
+      if (entry.kind === 'nodes') {
+        const after: Record<string, any> = {};
+        for (const id of Object.keys(entry.before)) {
+          const cur = state.document.deltaSetLike?.[id];
+          if (cur) after[id] = cloneNodeForHistory(cur);
+        }
+        state.historyFuture.unshift({ kind: 'nodes', before: after });
+        state.document = restoreNodesIntoDocument(state.document, entry.before);
+        state.documentPatchToken += 1;
+        state.lastPatchedNodeIds = Object.keys(entry.before);
+      } else {
+        state.historyFuture.unshift({
+          kind: 'snap',
+          doc: cloneDocument(state.document),
+        });
+        state.document = entry.doc;
+        state.sceneReloadToken += 1;
+        state.lastPatchedNodeIds = [];
+      }
       state.dirty = true;
       // Drop selection that pointed at nodes removed by this undo (e.g. detach).
       const ds = state.document?.deltaSetLike || {};
@@ -1064,9 +1253,23 @@ const editorSlice = createSlice({
     },
     redo(state) {
       if (!state.historyFuture.length || !state.document) return;
-      state.historyPast.push(cloneDocument(state.document));
-      state.document = state.historyFuture.shift();
-      state.sceneReloadToken += 1;
+      const entry = asHistoryEntry(state.historyFuture.shift());
+      if (entry.kind === 'nodes') {
+        const before: Record<string, any> = {};
+        for (const id of Object.keys(entry.before)) {
+          const cur = state.document.deltaSetLike?.[id];
+          if (cur) before[id] = cloneNodeForHistory(cur);
+        }
+        state.historyPast.push({ kind: 'nodes', before });
+        state.document = restoreNodesIntoDocument(state.document, entry.before);
+        state.documentPatchToken += 1;
+        state.lastPatchedNodeIds = Object.keys(entry.before);
+      } else {
+        state.historyPast.push({ kind: 'snap', doc: cloneDocument(state.document) });
+        state.document = entry.doc;
+        state.sceneReloadToken += 1;
+        state.lastPatchedNodeIds = [];
+      }
       state.dirty = true;
       const ds = state.document?.deltaSetLike || {};
       const ids = (state.selectedNodeIds || []).filter((id: string) => Boolean(ds[id]));
@@ -1298,7 +1501,7 @@ const editorSlice = createSlice({
       const nodeId = action.payload?.nodeId || state.pendingImageProcessId;
       const nextSrc = action.payload?.src as string | undefined;
       const layers = action.payload?.layers as
-        | import('@/components/rcb/scene/sceneDocument').DecomposeLayer[]
+        | import('@/components/rcb/scene/document/sceneDocument').DecomposeLayer[]
         | undefined;
       const sourceWidth = action.payload?.sourceWidth as number | undefined;
       const sourceHeight = action.payload?.sourceHeight as number | undefined;

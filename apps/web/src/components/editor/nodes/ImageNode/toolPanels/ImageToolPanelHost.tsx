@@ -8,8 +8,8 @@ import {
   startImageProcess,
   type ImageToolPanelKind,
 } from '@/store/modules/editor';
-import { buildNodeAdjustFilterCss } from '@/components/rcb/scene/sceneFill';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { buildNodeAdjustFilterCss } from '@/components/rcb/scene/document/sceneFill';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   RcbOverlayPortal,
   useRcbCamera,
