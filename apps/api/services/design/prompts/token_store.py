@@ -6,18 +6,19 @@ component metrics — not a few prose lines. Injected as named refs for tool_ops
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import time
 from typing import Any
 
 from services.db import connect
 from services.design.readpath.catalog import ensure_design_catalog
 
-# Seed: apps/api/data/design_tokens_seed.json (bump schemaVersion there to upgrade rows).
+# Seed: data/public|private/design_tokens_seed.json (bump schemaVersion to upgrade rows).
 
 
 def _load_tokens_seed() -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
-    path = Path(__file__).resolve().parents[3] / "data" / "design_tokens_seed.json"
+    from config.settings import resolve_data_file
+
+    path = resolve_data_file("design_tokens_seed.json")
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:

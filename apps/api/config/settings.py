@@ -71,8 +71,8 @@ class Settings(BaseSettings):
     # local/dev without MySQL → SqliteSaver at this path; last resort InMemorySaver.
     langgraph_checkpoint_url: str = ""
     langgraph_checkpoint_sqlite_path: str = "storage/langgraph_checkpoints.db"
-    # Outer design graph (AgentRuntime) — process-local checkpoint + LLM node retry/timeout.
-    # Not the same as create_agent chat memory (MySQL/Sqlite above).
+    # Outer design graph — uses the same LangGraph checkpointer as create_agent
+    # (MySQL → Sqlite → memory). Wallet hold fns stay process-local (not in state).
     design_graph_checkpoint: bool = True
     design_graph_retry_attempts: int = 3
     # Per LLM/IO node; 0 disables node TimeoutPolicy.
@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     # Design skills: poll seed JSON + data/design_skills packs for hot reload.
     design_skills_hot_reload: bool = True
     design_skills_hot_reload_interval_sec: float = 2.0
+    # Private seed overlay (gitignored). Empty → apps/api/data/private
+    # (wins over data/public). Relative → apps/api; absolute used as-is.
+    design_data_private_dir: str = ""
 
     # Phase 5: table cells + SAM/LaMa models
     expand_table_cells: bool = True
@@ -183,3 +186,39 @@ class Settings(BaseSettings):
     ses_activate_base_url: str = "https://recombyn.com/activate"
 
 settings = Settings()
+
+
+def api_data_dir() -> Path:
+    """Seed root: apps/api/data (contains public/ + private/)."""
+    return _API_ROOT / "data"
+
+
+def public_data_dir() -> Path:
+    """Tracked / OSS-safe seeds: apps/api/data/public."""
+    return api_data_dir() / "public"
+
+
+def private_data_dir() -> Path:
+    """Local/SaaS seed overlay (not committed). Prefer over public when present."""
+    raw = (settings.design_data_private_dir or "").strip()
+    if raw:
+        p = Path(raw)
+        return p if p.is_absolute() else (_API_ROOT / p)
+    return api_data_dir() / "private"
+
+
+def resolve_data_file(*parts: str) -> Path:
+    """Resolve a seed file: private overlay first, then data/public/."""
+    rel = Path(*parts)
+    priv = private_data_dir() / rel
+    if priv.is_file():
+        return priv
+    return public_data_dir() / rel
+
+
+def resolve_data_dir(*parts: str) -> Path:
+    """Resolve a seed directory: private dir if it exists, else data/public/."""
+    priv = private_data_dir().joinpath(*parts)
+    if priv.is_dir():
+        return priv
+    return public_data_dir().joinpath(*parts)

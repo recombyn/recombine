@@ -12,7 +12,6 @@ import re
 import threading
 import time
 import uuid
-from pathlib import Path
 from typing import Any
 
 from services.design.readpath.catalog import ensure_design_catalog, get_skill
@@ -508,12 +507,11 @@ _AGENT_FLOW_PHASE_MAP_KEY = "agent.flow.phase_map_json"
 _AGENT_FLOW_NODE_TEMPLATES_KEY = "agent.flow.node_templates_json"
 _AGENT_FLOW_ACTION_CONTRACTS_KEY = "agent.flow.action_contracts_json"
 
-_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-
-
 def _load_json_seed(name: str, default: Any) -> Any:
-    """Load seed JSON from apps/api/data/. Source of truth for flow defaults."""
-    path = _DATA_DIR / name
+    """Load seed JSON (private overlay → public data/)."""
+    from config.settings import resolve_data_file
+
+    path = resolve_data_file(name)
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -3354,6 +3352,7 @@ def list_decision_logs(
               json_extract(meta_json, '$.execution_log.flow_id') AS el_flow,
               json_extract(meta_json, '$.execution_log.ops_count') AS ops_count,
               json_extract(meta_json, '$.execution_log.total_tokens') AS total_tokens,
+              json_extract(meta_json, '$.execution_log.total_duration_ms') AS total_duration_ms,
               json_extract(meta_json, '$.execution_log.painted') AS painted,
               json_extract(meta_json, '$.execution_log.task_tier') AS task_tier,
               json_extract(meta_json, '$.execution_log.vision_used') AS vision_used,
@@ -3402,6 +3401,7 @@ def list_decision_logs(
                 ),
                 "opsCount": _json_int(r["ops_count"]),
                 "totalTokens": _json_int(r["total_tokens"]),
+                "durationMs": _json_int(r["total_duration_ms"]),
                 "painted": _json_bool(r["painted"]),
                 "taskTier": _json_scalar(r["task_tier"]),
                 "visionUsed": _json_bool(r["vision_used"]),
@@ -3483,6 +3483,28 @@ def get_decision_log(task_id: str) -> dict[str, Any] | None:
             }
     except Exception:
         pass
+    duration_ms = exec_log.get("total_duration_ms")
+    if duration_ms is None and r["created_at"] and r["updated_at"]:
+        try:
+            duration_ms = max(
+                0, int((float(r["updated_at"]) - float(r["created_at"])) * 1000)
+            )
+        except Exception:
+            duration_ms = None
+    model_calls: list[dict[str, Any]] = []
+    try:
+        from services.llm.usage_log import list_model_usage_for_task
+
+        model_calls = list_model_usage_for_task(tid, limit=40)
+    except Exception:
+        model_calls = []
+    path = exec_log.get("path")
+    if not isinstance(path, list) or not path:
+        path = [
+            str(s.get("phase") or "").strip()
+            for s in list(exec_log.get("steps") or [])
+            if isinstance(s, dict) and str(s.get("phase") or "").strip()
+        ]
     return {
         "taskId": r["id"],
         "traceId": meta.get("trace_id") or decision.get("trace_id") or exec_log.get("trace_id"),
@@ -3505,6 +3527,9 @@ def get_decision_log(task_id: str) -> dict[str, Any] | None:
         ),
         "opsCount": exec_log.get("ops_count"),
         "totalTokens": exec_log.get("total_tokens"),
+        "durationMs": duration_ms,
+        "path": path,
+        "modelCalls": model_calls,
         "painted": exec_log.get("painted"),
         "taskTier": exec_log.get("task_tier"),
         "visionUsed": exec_log.get("vision_used"),

@@ -19,7 +19,7 @@ Host tools can reach MySQL at `127.0.0.1:3306` (same user/password). Change via 
 
 **Dev without Docker MySQL:** leave `DATABASE_URL` empty → SQLite at `storage/recombyn.db`.
 
-Default config (skills, flows, dicts, …) loads from seed JSON under `apps/api/data/` on first API start. See [design_skills/README.md](../apps/api/data/design_skills/README.md) for the skills layout (namespaces `core` / `ext` / `user`, ACL, version pins, hot reload).
+Default config (skills, flows, dicts, …) loads from seed JSON under `apps/api/data/public/` (optional `private/` overlay) on first API start. See [design_skills/README.md](../apps/api/data/public/design_skills/README.md) for the skills layout (namespaces `core` / `ext` / `user`, ACL, version pins, hot reload).
 
 ## Database options
 
@@ -119,4 +119,4 @@ Third-party images you may run alongside (Redis, MySQL, …) keep **their own** 
 - [API README](../apps/api/README.md)
 - [Architecture](./architecture.md)
 - [PostgreSQL switch](./postgres-switch.md)
-- [Design skills packs](../apps/api/data/design_skills/README.md)
+- [Design skills packs](../apps/api/data/public/design_skills/README.md)

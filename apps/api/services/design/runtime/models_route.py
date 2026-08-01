@@ -62,12 +62,36 @@ class ModelRouteDecision(BaseModel):
     )
 
 
-class IntentClassifyDecision(BaseModel):
-    """Narrow intent gate before model_route / main thought."""
+# Gate intents — judged by LLM against the canvas tools catalog.
+USER_INTENTS = ("chat", "canvas_op", "design")
+# Continues into paint / decide (not chat-end).
+CANVAS_WORK_INTENTS = frozenset({"canvas_op", "design"})
+# Paint tool family for canvas_op / design (create_* vs update_*).
+PAINT_LANES = ("create", "edit")
 
-    intent: Literal["chat", "edit", "create"] = Field(
+
+class IntentClassifyDecision(BaseModel):
+    """Narrow intent gate before decide / paint.
+
+    - chat: no canvas work
+    - canvas_op: request is achievable with catalog canvas tools (create_shape,
+      update_node, …) — direct tool path, no methodology skills
+    - design: needs design composition / creative judgment beyond a single tool op
+    """
+
+    intent: Literal["chat", "canvas_op", "design"] = Field(
         default="chat",
-        description="User intent for this turn (chat ends; edit/create continue)",
+        description=(
+            "chat=greet/end; canvas_op=doable via canvas tool catalog; "
+            "design=creative layout/page/poster work"
+        ),
+    )
+    paint_lane: Literal["create", "edit", ""] = Field(
+        default="",
+        description=(
+            "When intent is canvas_op or design: create=add new nodes; "
+            "edit=change existing. Empty when intent=chat."
+        ),
     )
     reply: str = Field(
         default="",
@@ -75,8 +99,67 @@ class IntentClassifyDecision(BaseModel):
     )
     rationale: str = Field(
         default="",
-        description="Short reason for the intent choice",
+        description="Short reason — cite tool names from the catalog when canvas_op",
     )
+
+
+def normalize_paint_lane(raw: str | None, *, intent: str) -> str:
+    if intent == "chat":
+        return ""
+    s = str(raw or "").strip().lower()
+    if s in PAINT_LANES:
+        return s
+    return "create"
+
+
+def normalize_user_intent(raw: str | None) -> str:
+    """Map classifier / legacy labels → chat | canvas_op | design."""
+    s = str(raw or "").strip().lower()
+    if s in USER_INTENTS:
+        return s
+    # Legacy two-axis / create|edit labels.
+    if s in ("create", "edit"):
+        return "canvas_op"
+    if s in ("basic",):
+        return "canvas_op"
+    if s == "ask":
+        return "design"
+    return "chat"
+
+
+def normalize_intent_decision(
+    raw_intent: str | None,
+    raw_lane: str | None = None,
+    *,
+    raw_grade: str | None = None,
+) -> tuple[str, str]:
+    """Return (intent, paint_lane). Accepts legacy work_grade / create|edit."""
+    s = str(raw_intent or "").strip().lower()
+    g = str(raw_grade or "").strip().lower()
+    lane = str(raw_lane or "").strip().lower()
+    if s in ("create", "edit"):
+        # Old primary create|edit + optional work_grade.
+        if g == "design":
+            return "design", normalize_paint_lane(lane or s, intent="design")
+        return "canvas_op", normalize_paint_lane(lane or s, intent="canvas_op")
+    if s == "basic":
+        return "canvas_op", normalize_paint_lane(lane or "create", intent="canvas_op")
+    intent = normalize_user_intent(s)
+    return intent, normalize_paint_lane(lane, intent=intent)
+
+
+def paint_ops_intent(classified: str | None, paint_lane: str | None = None) -> str:
+    """Map gate → paint tool lane (create | edit)."""
+    intent = normalize_user_intent(classified)
+    lane = normalize_paint_lane(paint_lane, intent=intent)
+    if lane in PAINT_LANES:
+        return lane
+    return "create"
+
+
+def allows_skill_preload(*, intent: str) -> bool:
+    """Methodology packs only for design-grade work."""
+    return normalize_user_intent(intent) == "design"
 
 
 def _split_list(raw: str, seps: str = "|;,") -> list[str]:
@@ -632,19 +715,42 @@ def heuristic_user_intent(
     prompt: str,
     *,
     has_images: bool = False,
+    canvas_node_count: int = 0,
 ) -> IntentClassifyDecision:
     """Fallback when the intent LLM is unavailable.
 
-    Structural only (images / length) — no greeting/task keyword lists.
-    Normal path uses ``agent.prompt.intent_classify``.
+    Structural only (images / length / target blob) — no content keyword lists.
+    Normal path uses ``agent.prompt.intent_classify`` + canvas tools catalog.
     """
-    p = _user_request_core(prompt)
+    full = str(prompt or "")
+    p = _user_request_core(full)
     compact = re.sub(r"\s+", "", p)
-    if has_images or len(compact) >= 4:
+    has_target = "[Target element" in full or "Target element —" in full
+    if has_images:
         return IntentClassifyDecision(
-            intent="create", reply="", rationale="heuristic_task"
+            intent="design",
+            paint_lane="edit" if has_target else "create",
+            reply="",
+            rationale="heuristic_images",
         )
-    return IntentClassifyDecision(intent="chat", reply="", rationale="heuristic_short")
+    if has_target:
+        return IntentClassifyDecision(
+            intent="canvas_op",
+            paint_lane="edit",
+            reply="",
+            rationale="heuristic_target",
+        )
+    if len(compact) >= 4:
+        return IntentClassifyDecision(
+            intent="canvas_op",
+            paint_lane="create",
+            reply="",
+            rationale="heuristic_task",
+        )
+    del canvas_node_count
+    return IntentClassifyDecision(
+        intent="chat", paint_lane="", reply="", rationale="heuristic_short"
+    )
 
 
 async def classify_user_intent(
@@ -656,21 +762,34 @@ async def classify_user_intent(
     scene: str | None = None,
     interaction_mode: str | None = None,
 ) -> IntentClassifyDecision:
-    """Cheap structured intent gate. Falls back to ``heuristic_user_intent`` on error."""
-    fallback = heuristic_user_intent(prompt, has_images=has_images)
+    """Cheap structured intent gate. Falls back to ``heuristic_user_intent`` on error.
+
+    Injects the live canvas tools catalog so the model judges canvas_op vs design
+    against real capabilities.
+    """
+    fallback = heuristic_user_intent(
+        prompt, has_images=has_images, canvas_node_count=canvas_node_count
+    )
     mode = str(interaction_mode or "").strip().lower()
+    try:
+        from services.design.ops.tool_ops_contract import format_canvas_tools_catalog
+
+        tools_catalog = format_canvas_tools_catalog(rules)
+    except Exception:
+        tools_catalog = ""
     user_blob = (
         f"scene={scene or 'unknown'}\n"
         f"has_images={bool(has_images)}\n"
         f"canvas_node_count={int(canvas_node_count)}\n"
         f"interaction_mode={mode or 'agent'}\n"
+        f"{tools_catalog}\n\n"
         f"user_prompt:\n{(prompt or '').strip()[:4000]}"
     )
     try:
-        from services.design.prompts.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import render_prompt_body
         from services.llm.agent import ainvoke_structured
 
-        system = resolve_prompt_body(_INTENT_SYSTEM_KEY, rules=rules)
+        system = render_prompt_body(_INTENT_SYSTEM_KEY, rules=rules)
         if not system:
             return fallback
         out = await ainvoke_structured(
@@ -682,24 +801,32 @@ async def classify_user_intent(
         )
         structured = out.get("structured")
         if isinstance(structured, IntentClassifyDecision):
-            decision = structured
+            raw_intent = structured.intent
+            raw_lane = structured.paint_lane
+            rationale = structured.rationale
+            reply = structured.reply
+            raw_grade = None
         elif isinstance(structured, dict):
-            decision = IntentClassifyDecision.model_validate(structured)
+            raw_intent = structured.get("intent")
+            raw_lane = structured.get("paint_lane") or structured.get("paintLane")
+            raw_grade = structured.get("work_grade") or structured.get("workGrade")
+            rationale = structured.get("rationale")
+            reply = structured.get("reply")
         else:
             return fallback
-        intent = str(decision.intent or "").strip().lower()
-        # Legacy / confused models may still emit ask — treat as design continue.
-        if intent == "ask":
-            intent = "create"
-        if intent not in ("chat", "edit", "create"):
+        intent, lane = normalize_intent_decision(
+            raw_intent, raw_lane, raw_grade=raw_grade
+        )
+        if intent not in USER_INTENTS:
             return fallback
-        reply = (decision.reply or "").strip()
+        reply_s = str(reply or "").strip()
         if intent != "chat":
-            reply = ""
+            reply_s = ""
         return IntentClassifyDecision(
             intent=intent,  # type: ignore[arg-type]
-            reply=reply[:500],
-            rationale=(decision.rationale or "").strip() or "llm_intent",
+            paint_lane=lane if intent != "chat" else "",  # type: ignore[arg-type]
+            reply=reply_s[:500],
+            rationale=str(rationale or "").strip() or "llm_intent",
         )
     except Exception:
         return fallback

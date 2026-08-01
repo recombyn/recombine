@@ -1,4 +1,4 @@
-"""Seed fonts + official plaza cases from apps/api/data (not C-end mock)."""
+"""Seed fonts + official plaza cases from apps/api/data/public|private."""
 
 from __future__ import annotations
 
@@ -39,7 +39,21 @@ def _web_public() -> Path:
 
 
 def _api_data() -> Path:
-    return Path(__file__).resolve().parents[1] / "data"
+    from config.settings import api_data_dir
+
+    return api_data_dir()
+
+
+def _resolve_seed_file(*parts: str) -> Path:
+    from config.settings import resolve_data_file
+
+    return resolve_data_file(*parts)
+
+
+def _resolve_seed_dir(*parts: str) -> Path:
+    from config.settings import resolve_data_dir
+
+    return resolve_data_dir(*parts)
 
 
 def _slug(text: str) -> str:
@@ -50,7 +64,7 @@ def _slug(text: str) -> str:
 def seed_fonts() -> int:
     """Insert fonts from fonts_seed.json. Skip families that already exist in DB."""
     init_schema()
-    path = _api_data() / "fonts_seed.json"
+    path = _resolve_seed_file("fonts_seed.json")
     if not path.is_file():
         logger.warning("fonts seed skipped: missing %s", path)
         return 0
@@ -110,7 +124,7 @@ def _default_official_case_entries(data_dir: Path) -> list[dict[str, str]]:
 def seed_official_plaza_cases() -> int:
     """Seed approved plaza_submissions from api/data/official_cases. Skip existing ids."""
     init_schema()
-    data_dir = _api_data() / "official_cases"
+    data_dir = _resolve_seed_dir("official_cases")
     index_path = data_dir / "index.json"
     cases: list[Any] = []
     index_loaded = False

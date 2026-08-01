@@ -7,11 +7,20 @@ from unittest.mock import MagicMock
 from langgraph.types import Command
 
 from services.design.runtime.agent_controller import (
+    AgentRunState,
+    AgentRuntime,
+    _bind_design_hold_fns,
     _build_lc_design_graph,
+    _bump,
     _commit,
+    _design_refund_hold_fn,
+    _design_settle_hold_fn,
     _design_thread_id,
+    _get_design_graph_checkpointer,
+    _unbind_design_hold_fns,
     invalidate_agent_graph_cache,
 )
+from services.design.runtime.decision_log import DesignRunDecision
 from services.design.runtime.flow_runtime import choose_outgoing_edges, eval_edge_condition
 
 
@@ -35,12 +44,95 @@ def test_build_lc_design_graph_nodes():
         "__settle__",
     } <= nodes
     assert "thought" not in nodes
-    # Process-local checkpointer enables thread_id resume / get_state.
+    # Durable checkpointer (MySQL/Sqlite/memory) enables thread_id resume / get_state.
     assert compiled.checkpointer is not None
 
 
 def test_design_thread_id():
     assert _design_thread_id("abc") == "design:abc"
+
+
+def test_design_graph_uses_shared_durable_checkpointer():
+    invalidate_agent_graph_cache()
+    from services.llm.agent import checkpointer_backend, get_agent_checkpointer
+
+    cp = _get_design_graph_checkpointer()
+    assert cp is get_agent_checkpointer()
+    assert checkpointer_backend() in ("mysql", "sqlite", "memory")
+    compiled = _build_lc_design_graph()
+    assert compiled.checkpointer is cp
+
+
+def test_design_hold_fns_bound_outside_checkpoint_state():
+    tid = "hold-unit-1"
+    settled: list[str] = []
+    refunded: list[str] = []
+
+    def settle(*_a, **_k):
+        settled.append("ok")
+        return {"spent": 0}
+
+    def refund(*_a, **_k):
+        refunded.append("ok")
+        return None
+
+    _bind_design_hold_fns(tid, settle, refund)
+    try:
+        run = AgentRunState(trace_id="t", task_id=tid, goal="g")
+        rt = AgentRuntime(
+            user_id="u",
+            mode="agent",
+            prompt="hi",
+            rules={},
+            user_selected_model=None,
+            canvas_id=None,
+            canvas_size=None,
+            scene_key="website",
+            scene_nodes=[],
+            scene_frames=[],
+            focus_id="",
+            images=[],
+            memory_in=None,
+            session_id="s",
+            project_id="p",
+            hold=0,
+            free_daily=False,
+            t0=0.0,
+            settle_hold_fn=settle,
+            refund_hold_fn=refund,
+            apply_ops=[],
+            w=0,
+            h=0,
+            run=run,
+            decision=DesignRunDecision(trace_id="t", task_id=tid),
+        )
+        assert callable(_design_settle_hold_fn(rt))
+        assert callable(_design_refund_hold_fn(rt))
+        upd = _bump(rt)
+        assert upd["rt"].settle_hold_fn is None
+        assert upd["rt"].refund_hold_fn is None
+        # Still resolvable from registry after scrubbing graph state.
+        _design_settle_hold_fn(rt)()
+        _design_refund_hold_fn(rt)()
+        assert settled == ["ok"]
+        assert refunded == ["ok"]
+
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        serde = JsonPlusSerializer(
+            pickle_fallback=False,
+            allowed_msgpack_modules=[
+                ("services.design.runtime.agent_controller", "AgentRuntime"),
+                ("services.design.runtime.agent_controller", "AgentRunState"),
+                ("services.design.runtime.decision_log", "DesignRunDecision"),
+            ],
+        )
+        blob = serde.dumps_typed({"rt": rt, "tick": 1})
+        back = serde.loads_typed(blob)
+        assert back["rt"].run.task_id == tid
+        assert back["rt"].settle_hold_fn is None
+    finally:
+        _unbind_design_hold_fns(tid)
 
 
 def test_commit_has_no_goto():
