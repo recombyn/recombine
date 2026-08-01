@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -157,10 +157,24 @@ def _charge_image(
 
 
 @router.get("/models")
-def get_models() -> dict[str, Any]:
+def get_models(request: Request) -> dict[str, Any]:
     # Keep text/chat and image catalogs separate — FE merges with dedupe.
     # Do not use list_all_models() here or image ids appear twice under models + imageModels.
-    items = list_llm_models()
+    from services.geoip import (
+        filter_catalog_models_for_region,
+        openrouter_allowed_for_country,
+        resolve_client_country,
+    )
+
+    country = resolve_client_country(request)
+    or_ok = openrouter_allowed_for_country(country)
+    items = filter_catalog_models_for_region(list_llm_models(), country=country)
+    image_models = filter_catalog_models_for_region(
+        list_image_models(), country=country
+    )
+    video_models = filter_catalog_models_for_region(
+        list_video_models(), country=country
+    )
     available = True
     try:
         get_llm_endpoint()
@@ -169,8 +183,10 @@ def get_models() -> dict[str, Any]:
     return {
         "models": items,
         "available": available,
-        "imageModels": list_image_models(),
-        "videoModels": list_video_models(),
+        "imageModels": image_models,
+        "videoModels": video_models,
+        "clientRegion": country,
+        "openrouterAvailable": or_ok,
     }
 
 

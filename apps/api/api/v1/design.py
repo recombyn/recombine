@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -120,9 +120,13 @@ def design_canvas_tools() -> dict[str, Any]:
 @router.post("/run")
 async def design_run(
     body: DesignRunIn,
+    request: Request,
     authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     user = _require_user(authorization)
+    from services.geoip import resolve_client_country
+
+    client_country = resolve_client_country(request)
 
     async def gen():
         from services.design.progress_stages import (
@@ -173,6 +177,7 @@ async def design_run(
                     route_overrides=body.route_overrides,
                     apply_ops=body.apply_ops,
                     interaction_mode=body.interaction_mode,
+                    client_country=client_country,
                 ):
                     await queue.put(("ev", ev))
             except Exception as err:  # noqa: BLE001

@@ -825,11 +825,12 @@ def _box_num(d: dict[str, Any], *keys: str, default: float = 0.0) -> float:
 
 
 def _derive_suggested_place_world(
-    spatial: dict[str, Any],
+    spatial: dict[str, Any] | None,
     *,
     focus_frame: dict[str, Any] | None = None,
 ) -> dict[str, float] | None:
-    """Host derives free-canvas place from FE viewport / frame-local slot."""
+    """Host derives free-canvas place from FE viewport / frame-local slot / focus frame."""
+    spatial = spatial if isinstance(spatial, dict) else {}
     vp = spatial.get("viewport")
     if isinstance(vp, dict):
         vx = _box_num(vp, "x")
@@ -849,12 +850,31 @@ def _derive_suggested_place_world(
     if isinstance(sp, dict) and isinstance(focus_frame, dict):
         fox = _box_num(focus_frame, "x")
         foy = _box_num(focus_frame, "y")
-        return {
-            "x": round(fox + _box_num(sp, "x")),
-            "y": round(foy + _box_num(sp, "y")),
-            "w": round(_box_num(sp, "w", "width", default=320)),
-            "h": round(_box_num(sp, "h", "height", default=200)),
-        }
+        fw = _box_num(focus_frame, "w", "width")
+        fh = _box_num(focus_frame, "h", "height")
+        # Only promote frame-local slots when the focus frame has a world origin.
+        if fw > 8 and fh > 8:
+            return {
+                "x": round(fox + _box_num(sp, "x")),
+                "y": round(foy + _box_num(sp, "y")),
+                "w": round(_box_num(sp, "w", "width", default=320)),
+                "h": round(_box_num(sp, "h", "height", default=200)),
+            }
+    # Last resort: center of the focused artboard in world coords.
+    if isinstance(focus_frame, dict):
+        fox = _box_num(focus_frame, "x")
+        foy = _box_num(focus_frame, "y")
+        fw = _box_num(focus_frame, "w", "width")
+        fh = _box_num(focus_frame, "h", "height")
+        if fw > 8 and fh > 8:
+            cw = min(320.0, max(80.0, fw * 0.25))
+            ch = min(200.0, max(80.0, fh * 0.25))
+            return {
+                "x": round(fox + max(24.0, (fw - cw) / 2)),
+                "y": round(foy + max(24.0, (fh - ch) / 2)),
+                "w": round(cw),
+                "h": round(ch),
+            }
     return None
 
 
@@ -863,17 +883,23 @@ def _format_spatial_placement(
     *,
     focus_frame: dict[str, Any] | None = None,
 ) -> str:
-    """Host placement brief — FE supplies viewport + scene facts only."""
-    if not isinstance(spatial, dict) or not spatial:
-        return ""
+    """Host placement brief — concrete numbers the paint model must use."""
+    spatial = spatial if isinstance(spatial, dict) else {}
     spw = _derive_suggested_place_world(spatial, focus_frame=focus_frame)
+    vp = spatial.get("viewport")
+    sp = spatial.get("suggested_place")
+    empties = spatial.get("empty_rects")
+    has_vp = isinstance(vp, dict) and _box_num(vp, "w", "width") > 0
+    has_sp = isinstance(sp, dict) and _box_num(sp, "w", "width") > 0
+    if not spw and not has_vp and not has_sp:
+        return ""
     lines: list[str] = [
         "PLACEMENT (no user position → pick a visible empty slot; stay in viewport):",
-        "- free-canvas create_shape/create_text (omit frameId): use suggested_place_world x/y.",
-        "- inside FOCUS_FRAME_ID: suggested_place / empty_rects are frame-local.",
+        "- free-canvas create_shape/create_text (omit frameId): use suggested_place_world x/y as WORLD coords.",
+        "- inside FOCUS_FRAME_ID: pass frameId + suggested_place / empty_rects (frame-local).",
+        "- Never invent near-origin x/y when suggested_place_world is far from (0,0).",
     ]
-    vp = spatial.get("viewport")
-    if isinstance(vp, dict) and _box_num(vp, "w", "width") > 0:
+    if has_vp:
         lines.append(
             f"- viewport_world: x={vp.get('x')} y={vp.get('y')} "
             f"w={vp.get('w') or vp.get('width')} h={vp.get('h') or vp.get('height')}"
@@ -883,13 +909,11 @@ def _format_spatial_placement(
             f"- suggested_place_world: x={spw['x']} y={spw['y']} "
             f"w={spw['w']} h={spw['h']}"
         )
-    sp = spatial.get("suggested_place")
-    if isinstance(sp, dict) and _box_num(sp, "w", "width") > 0:
+    if has_sp:
         lines.append(
             f"- suggested_place (frame-local): x={sp.get('x')} y={sp.get('y')} "
             f"w={sp.get('w')} h={sp.get('h')}"
         )
-    empties = spatial.get("empty_rects")
     if isinstance(empties, list):
         for i, box in enumerate(empties[:3]):
             if not isinstance(box, dict):
@@ -898,7 +922,102 @@ def _format_spatial_placement(
                 f"- empty_rect[{i}] (frame-local): x={box.get('x')} y={box.get('y')} "
                 f"w={box.get('w')} h={box.get('h')}"
             )
-    return "\n".join(lines) if len(lines) > 3 else ""
+    return "\n".join(lines)
+
+
+def _focus_frame_from_rt(rt: Any) -> dict[str, Any] | None:
+    focus_id = str(getattr(rt, "focus_id", "") or "").strip()
+    if not focus_id:
+        return None
+    for f in getattr(rt, "scene_frames", None) or []:
+        if isinstance(f, dict) and str(f.get("id") or "") == focus_id:
+            return f
+    return None
+
+
+def _point_outside_world_box(
+    x: float,
+    y: float,
+    box: dict[str, Any],
+    *,
+    pad: float = 0.0,
+) -> bool:
+    bx = _box_num(box, "x")
+    by = _box_num(box, "y")
+    bw = _box_num(box, "w", "width")
+    bh = _box_num(box, "h", "height")
+    if bw <= 0 or bh <= 0:
+        return False
+    return (
+        x < bx - pad
+        or y < by - pad
+        or x > bx + bw + pad
+        or y > by + bh + pad
+    )
+
+
+def _create_op_placement_fields(op: dict[str, Any]) -> tuple[Any, Any, str]:
+    """Return (x, y, frameId) from normalized {args} or flat model shape."""
+    args = op.get("args") if isinstance(op.get("args"), dict) else None
+    src = args if args is not None else op
+    return src.get("x"), src.get("y"), str(src.get("frameId") or src.get("frame_id") or "").strip()
+
+
+def _placement_errors_for_free_creates(rt: Any, ops: list[dict[str, Any]]) -> list[str]:
+    """Reject free-canvas creates outside the camera; model must re-emit with suggested_place_world.
+
+    Does not mutate ops. Frame-scoped creates (frameId set) are skipped — those use frame-local coords.
+    """
+    if not ops:
+        return []
+    spatial = (
+        getattr(rt, "spatial_summary", None)
+        if isinstance(getattr(rt, "spatial_summary", None), dict)
+        else {}
+    )
+    focus_frame = _focus_frame_from_rt(rt)
+    spw = _derive_suggested_place_world(spatial, focus_frame=focus_frame)
+    vp = spatial.get("viewport") if isinstance(spatial, dict) else None
+    view_box = vp if isinstance(vp, dict) and _box_num(vp, "w", "width") > 0 else None
+    if view_box is None and isinstance(focus_frame, dict):
+        view_box = focus_frame
+    if view_box is None:
+        return []
+    pad = max(
+        64.0,
+        0.25 * min(_box_num(view_box, "w", "width"), _box_num(view_box, "h", "height")),
+    )
+    errors: list[str] = []
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        name = str(op.get("name") or op.get("op_key") or "").strip()
+        if name not in ("create_shape", "create_text", "create_image"):
+            continue
+        ox_raw, oy_raw, frame_id = _create_op_placement_fields(op)
+        if frame_id:
+            continue
+        if ox_raw is None and oy_raw is None:
+            continue
+        try:
+            ox = float(ox_raw if ox_raw is not None else (spw["x"] if spw else 0))
+            oy = float(oy_raw if oy_raw is not None else (spw["y"] if spw else 0))
+        except (TypeError, ValueError):
+            continue
+        if not _point_outside_world_box(ox, oy, view_box, pad=pad):
+            continue
+        if spw is not None:
+            errors.append(
+                f"{name} at world ({int(round(ox))},{int(round(oy))}) is outside viewport_world; "
+                f"re-emit with x={spw['x']} y={spw['y']} from suggested_place_world "
+                f"(omit frameId for free-canvas)."
+            )
+        else:
+            errors.append(
+                f"{name} at world ({int(round(ox))},{int(round(oy))}) is outside viewport_world; "
+                f"re-emit create_* with x/y inside the visible camera (omit frameId for free-canvas)."
+            )
+    return errors[:8]
 
 
 def _paint_ops_user(rt: Any) -> str:
@@ -906,15 +1025,9 @@ def _paint_ops_user(rt: Any) -> str:
     spatial = (
         getattr(rt, "spatial_summary", None)
         if isinstance(getattr(rt, "spatial_summary", None), dict)
-        else None
+        else {}
     )
-    focus_frame = None
-    focus_id = str(getattr(rt, "focus_id", "") or "").strip()
-    if focus_id:
-        for f in getattr(rt, "scene_frames", None) or []:
-            if isinstance(f, dict) and str(f.get("id") or "") == focus_id:
-                focus_frame = f
-                break
+    focus_frame = _focus_frame_from_rt(rt)
     spatial_hint = _format_spatial_placement(spatial, focus_frame=focus_frame)
     lean = _is_lean_paint_turn(rt)
     # Lean: tools + scene only — drop skill/knowledge/aesthetics essays for short adds.
@@ -2080,10 +2193,11 @@ def _scene_digest(
     if focus_id:
         lines.append(f"FOCUS_FRAME_ID: {focus_id}")
     if frames:
-        lines.append("SCENE_FRAMES:")
+        lines.append("SCENE_FRAMES (world x/y):")
         for f in frames[:16]:
             lines.append(
                 f"- id={f.get('id')} name={f.get('name') or ''} "
+                f"x={f.get('x')} y={f.get('y')} "
                 f"w={f.get('w')} h={f.get('h')} empty={f.get('is_empty')}"
             )
     if nodes:
@@ -4430,6 +4544,8 @@ async def _node_paint_ops(state: GraphState) -> Command:
         if attempt > 0:
             user_msg += (
                 "\n\nCRITICAL RETRY: previous tool_ops were empty or invalid. "
+                "If LAST_ERROR mentions viewport_world / suggested_place_world, "
+                "re-emit create_* with those world x/y (omit frameId for free-canvas). "
                 "Output a non-empty tool_ops array now."
             )
         try:
@@ -4519,6 +4635,12 @@ async def _node_paint_ops(state: GraphState) -> Command:
                 skill_keys=list(st.skills_loaded or []),
                 scene=rt.scene_key or "website",
             )
+        if step_ops:
+            place_errs = _placement_errors_for_free_creates(rt, step_ops)
+            if place_errs:
+                # Do not silently rewrite coords — reject and teach via LAST_ERROR / paint retry.
+                op_errors = list(op_errors or []) + place_errs
+                step_ops = []
         rt.step_ops = step_ops
         rt.op_errors = list(op_errors or [])
         st.push_log(

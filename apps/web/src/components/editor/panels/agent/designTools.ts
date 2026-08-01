@@ -95,16 +95,9 @@ function resolveFrameOpId(
 ): string {
   const focus = String(ctx.targetFrameId || '').trim();
   const fromArgs = String(args.frameId ?? args.id ?? '').trim();
-  if (focus) {
-    if (fromArgs && fromArgs !== focus) {
-      console.warn(
-        '[designTools] frame op retarget blocked',
-        { fromArgs, focus }
-      );
-    }
-    return focus;
-  }
-  return fromArgs;
+  // Honor model frameId when present — do not silently retarget to focus.
+  if (fromArgs) return fromArgs;
+  return focus;
 }
 
 /** Visible scene AABB in world coords (from camera + stage size). */
@@ -1071,6 +1064,58 @@ function resolveCreateXY(
   };
 }
 
+/** Reject creates that would require host geometry rewrite — tell the model via op error. */
+function placementRewriteError(
+  tool: string,
+  args: Record<string, unknown>,
+  placed: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    clamped: boolean;
+    scale: number;
+  }
+): AgentToolResult | null {
+  const hasGeom =
+    args.x != null ||
+    args.y != null ||
+    args.width != null ||
+    args.height != null ||
+    args.w != null ||
+    args.h != null;
+  if (!hasGeom) return null;
+  if (!placed.clamped && !(placed.scale > 0 && placed.scale < 0.999)) return null;
+  return {
+    status: 'error',
+    summary:
+      `${tool}_placement_invalid: host will not clamp/scale; ` +
+      `re-emit x/y/width/height inside the target frame ` +
+      `(refused rewrite → ${Math.round(placed.x)},${Math.round(placed.y)} ` +
+      `${Math.round(placed.width)}×${Math.round(placed.height)}).`,
+    next_actions: [
+      'Use frame-local coords inside FOCUS_FRAME',
+      'Or free-canvas world x/y from suggested_place_world',
+    ],
+  };
+}
+
+function requireCreateXY(
+  tool: string,
+  args: Record<string, unknown>
+): AgentToolResult | null {
+  const hasX = args.x != null && Number.isFinite(Number(args.x));
+  const hasY = args.y != null && Number.isFinite(Number(args.y));
+  if (hasX && hasY) return null;
+  return {
+    status: 'error',
+    summary:
+      `${tool}_missing_xy: provide numeric x and y ` +
+      `(frame-local with frameId, or world coords from suggested_place_world).`,
+    next_actions: ['Re-emit create_* with explicit x and y'],
+  };
+}
+
 const FRAME_GAP = 80;
 const NODE_GAP = 12;
 
@@ -1297,6 +1342,8 @@ function execCreateShape(
   const width = Math.max(1, num(args.width, 120));
   const height = Math.max(1, num(args.height, 80));
   const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+  const missXY = requireCreateXY('create_shape', args);
+  if (missXY) return missXY;
   const svgRaw = args.svg != null ? String(args.svg) : args.iconSvg != null ? String(args.iconSvg) : '';
   // Icon SVG → native svg node (not image, not path conversion).
   if (svgRaw.trim() || mapped === 'svg') {
@@ -1309,6 +1356,8 @@ function execCreateShape(
     }
     const origin = resolveCreateXY(args, target, width, height);
     const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+    const placeErr = placementRewriteError('create_shape', args, placed);
+    if (placeErr) return placeErr;
     const fill = args.fill != null ? String(args.fill) : undefined;
     const { id, node } = createSvgNode({
       x: placed.x,
@@ -1328,7 +1377,7 @@ function execCreateShape(
     pushHistory();
     ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
     return {
-      status: placed.clamped ? 'warning' : 'success',
+      status: 'success',
       summary: `Created svg ${id}`,
       artifacts: { nodeId: id, shapeType: 'svg' },
       next_actions: ['Continue layout or create_text'],
@@ -1338,6 +1387,8 @@ function execCreateShape(
   // Honor model x/y when provided; otherwise center in the target frame.
   const origin = resolveCreateXY(args, target, width, height);
   const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+  const placeErr = placementRewriteError('create_shape', args, placed);
+  if (placeErr) return placeErr;
   if (mapped === 'path' || path) {
     console.info('[create_shape path diag]', {
       source: 'model tool_ops path (pass-through)',
@@ -1428,10 +1479,8 @@ function execCreateShape(
   pushHistory();
   ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
   return {
-    status: placed.clamped ? 'warning' : 'success',
-    summary: placed.clamped
-      ? `Created ${mapped} ${id} (clamped into frame at ${Math.round(placed.x)},${Math.round(placed.y)} ${Math.round(placed.width)}×${Math.round(placed.height)})`
-      : `Created ${mapped} ${id}${path ? ' (path)' : ''}`,
+    status: 'success',
+    summary: `Created ${mapped} ${id}${path ? ' (path)' : ''}`,
     artifacts: { nodeId: id, shapeType: mapped },
     next_actions: ['Continue layout or create_text'],
   };
@@ -1444,7 +1493,9 @@ function execCreateText(
   pushHistory: () => void
 ): AgentToolResult {
 
-  const text = String(args.text ?? '');
+  const text = String(args.text ?? args.content ?? '');
+  const missXY = requireCreateXY('create_text', args);
+  if (missXY) return missXY;
   const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
   // Fixed width+height = label-in-box (button/chip); do not hug content.
   const boxMode = args.width != null && args.height != null;
@@ -1500,12 +1551,8 @@ function execCreateText(
   // Labels must sit on top of buttons — never nudge away from overlapping shapes.
   const textOrigin = resolveCreateXY(args, target, boxW, boxH);
   const placed = fitIntoFrame(target, textOrigin.x, textOrigin.y, boxW, boxH);
-  if (placed.scale > 0 && placed.scale < 0.999 && nextStyle.fontSize != null) {
-    nextStyle.fontSize = Math.max(
-      10,
-      Math.round(Number(nextStyle.fontSize) * placed.scale)
-    );
-  }
+  const placeErr = placementRewriteError('create_text', args, placed);
+  if (placeErr) return placeErr;
   const { id, node } = createTextNode({
     x: placed.x,
     y: placed.y,
@@ -1534,10 +1581,8 @@ function execCreateText(
   pushHistory();
   ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
   return {
-    status: placed.clamped ? 'warning' : 'success',
-    summary: placed.clamped
-      ? `Created text ${id} (clamped ${Math.round(placed.width)}×${Math.round(placed.height)} at ${Math.round(placed.x)},${Math.round(placed.y)})`
-      : `Created text ${id} (${Math.round(placed.width)}×${Math.round(placed.height)})`,
+    status: 'success',
+    summary: `Created text ${id} (${Math.round(placed.width)}×${Math.round(placed.height)})`,
     artifacts: { nodeId: id },
   };
 }
@@ -2183,6 +2228,8 @@ function execCreateSvg(
     const width = Math.max(1, num(args.width, 48));
     const height = Math.max(1, num(args.height, 48));
     const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+    const missXY = requireCreateXY('create_svg', args);
+    if (missXY) return missXY;
     const svgRaw = String(args.svg || args.iconSvg || args.content || '').trim();
     if (!svgRaw) {
       return {
@@ -2193,6 +2240,8 @@ function execCreateSvg(
     }
     const origin = resolveCreateXY(args, target, width, height);
     const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+    const placeErr = placementRewriteError('create_svg', args, placed);
+    if (placeErr) return placeErr;
     const fill = args.fill != null ? String(args.fill) : undefined;
     const { id, node } = createSvgNode({
       x: placed.x,
@@ -2213,7 +2262,7 @@ function execCreateSvg(
     pushHistory();
     ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
     return {
-      status: placed.clamped ? 'warning' : 'success',
+      status: 'success',
       summary: `Created svg ${id}`,
       artifacts: { nodeId: id, shapeType: 'svg' },
       next_actions: ['Continue layout'],
@@ -2229,9 +2278,13 @@ function execCreateImage(
 ): AgentToolResult {
   const width = Math.max(8, num(args.width, 240));
   const height = Math.max(8, num(args.height, 180));
+  const missXY = requireCreateXY('create_image', args);
+  if (missXY) return missXY;
   const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
   const origin = resolveCreateXY(args, target, width, height);
   const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+  const placeErr = placementRewriteError('create_image', args, placed);
+  if (placeErr) return placeErr;
   const userImages = Array.isArray(ctx.userImages) ? ctx.userImages : [];
   const genPrompt = String(args.genPrompt || args.prompt || '').trim();
   let src = '';
@@ -2284,10 +2337,7 @@ function execCreateImage(
   pushHistory();
   ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
   return {
-    status:
-      placed.clamped || (sourceKind === 'placeholder' && Boolean(genPrompt))
-        ? 'warning'
-        : 'success',
+    status: sourceKind === 'placeholder' && Boolean(genPrompt) ? 'warning' : 'success',
     summary: summarizeCreateImage({
       id,
       sourceKind,

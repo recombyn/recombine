@@ -35,6 +35,7 @@ dependencies = [
   "langchain-text-splitters>=0.3.0",
   "langfuse>=3.0.0",
   "cryptography>=42.0.0",
+  "geoip2>=4.8.0",
 ]
 
 [project.optional-dependencies]

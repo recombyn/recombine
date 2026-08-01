@@ -31,6 +31,8 @@ from services.design.models_route import (
     apply_user_route_overrides,
     pin_user_locked_model_routes,
     resolve_model_for_skill,
+    sanitize_model_ref_for_openrouter_region,
+    sanitize_rules_for_openrouter_region,
 )
 from services.design.pipeline_support import (
     _normalize_ref_images,
@@ -174,6 +176,7 @@ async def run_design_job(
     route_overrides: dict[str, Any] | None = None,
     apply_ops: list[dict[str, Any]] | None = None,
     interaction_mode: str | None = None,
+    client_country: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """LangGraph agent loop. Chat vs design from model intent / ops."""
     del is_premium  # reserved
@@ -233,8 +236,18 @@ async def run_design_job(
             exec_trace(t0, "DONE", mode="permission", can_call_llm=False, balance=bal)
             return
 
+        platform_rules = get_global_rules()
+        user_selected_model = sanitize_model_ref_for_openrouter_region(
+            user_selected_model,
+            platform_rules=platform_rules,
+            country=client_country,
+        )
         rules = pin_user_locked_model_routes(
-            apply_user_route_overrides(get_global_rules(), route_overrides),
+            sanitize_rules_for_openrouter_region(
+                apply_user_route_overrides(platform_rules, route_overrides),
+                platform_rules=platform_rules,
+                country=client_country,
+            ),
             user_selected_model,
         )
         free_daily = False
@@ -308,8 +321,18 @@ async def run_design_job(
             reset_byok_user_id(byok_token)
         return
 
+    platform_rules = get_global_rules()
+    user_selected_model = sanitize_model_ref_for_openrouter_region(
+        user_selected_model,
+        platform_rules=platform_rules,
+        country=client_country,
+    )
     rules = pin_user_locked_model_routes(
-        apply_user_route_overrides(get_global_rules(), route_overrides),
+        sanitize_rules_for_openrouter_region(
+            apply_user_route_overrides(platform_rules, route_overrides),
+            platform_rules=platform_rules,
+            country=client_country,
+        ),
         user_selected_model,
     )
 
