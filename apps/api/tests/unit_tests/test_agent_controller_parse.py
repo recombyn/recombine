@@ -292,8 +292,9 @@ def test_heuristic_user_intent_gate():
         "create",
     )
     assert paint_ops_intent("canvas_op", "edit") == "edit"
+    # Skill bodies are never preloaded; catalogs + need_skills only.
     assert not allows_skill_preload(intent="canvas_op")
-    assert allows_skill_preload(intent="design")
+    assert not allows_skill_preload(intent="design")
 
 
 def test_agent_model_id_prefers_api_model():
