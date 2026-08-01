@@ -1,6 +1,6 @@
 # 导入管线
 
-> **产品现状**：对外仅支持**图片导入**。PDF / DOCX 相关步骤为仓库内遗留实现，**不作为正式产品能力**。
+> **产品现状**：对外仅支持**图片导入**。
 
 ## 阶段一：预处理 + 任务队列（图片）
 
@@ -8,8 +8,6 @@
 2. Celery 异步任务（可选）+ Redis 存 job 状态
 3. 图片：归一化为单页图
 4. 页图写入 `storage/results/{job_id}/pages/`
-
-遗留（非产品路径）：PDF 经 `pdf2image` + poppler；DOCX 经 LibreOffice → PDF → 页图。
 
 ## 阶段二：图像算法（页图 → 布局/文字）
 
@@ -23,8 +21,6 @@
 | KMeans | 主色板 `meta.palette` | OpenCV |
 | 轻量 SAM | 区域提案（默认关，需模型） | 可选 |
 | LaMa | 修复/去字（默认关） | 可选 |
-
-数字 PDF 遗留链路：若视觉链路无结果，仍可能回退 `pdfplumber` 文字层（非产品保证）。
 
 坐标会缩放到 `SCENE_TARGET_WIDTH`（默认 794）再写入 Scene。
 
@@ -66,7 +62,6 @@ pip install -e ".[storage]"
 1. OCR/版面结果中的碎文本按行高聚类合并为更少的 textbox（`merge_text_blocks`）
 2. PPStructure 检出的 figure/table：从页图裁剪为 PNG data URL，落入 Scene `image` 节点；裁剪失败的 table 用浅色 `rect` 占位
 3. 多页时按页高垂直拼接到同一画布
-4. `pdfplumber` 回退路径同样经过行合并
 
 `meta.engines` 可能出现：`merge`、`crop`。
 
@@ -90,7 +85,7 @@ LAMA_USE_SAM_MASK=true
 ## 阶段六：联调就绪
 
 - `GET /api/v1/health` 返回 `redis` / `worker` / `ocr` 状态
-- Docker API 镜像含 poppler；`INSTALL_OCR=true docker compose build` 可打入 OCR
+- `INSTALL_OCR=true docker compose build` 可打入 OCR
 - 前端异步 Job 失败或排队过久时自动回退同步导入
 - `make health` / `python scripts/smoke_health.py`
 
@@ -102,8 +97,8 @@ make dev-redis && make dev-api && make dev-worker
 
 ## API
 
-- 同步：`POST /api/v1/import/{pdf,docx,image}`
-- 异步：`POST /api/v1/import/jobs` → `GET /api/v1/import/jobs/{id}`
+- 同步：`POST /api/v1/import/image`
+- 异步：`POST /api/v1/import/jobs` → `GET /api/v1/import/jobs/{id}`（`source_type=image`）
 
 `meta` 字段：`page_images`、`object_keys`、`object_urls`、`palette`、`engines`、`warnings`。
 

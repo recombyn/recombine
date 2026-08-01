@@ -16,25 +16,10 @@ import { getToken } from '@/utils/token';
 
 type Props = {
   setNav: (id: string) => void;
-  onCreate?: () => void;
 };
 
-function MobilePlusIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth={1.5} />
-      <path
-        d="M12 8.5v7M8.5 12h7"
-        stroke="currentColor"
-        strokeWidth={1.5}
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 /** Floating top-right — account chip; mobile also has nav menu after avatar. */
-function HomeTopBar({ setNav, onCreate }: Props) {
+function HomeTopBar({ setNav }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
@@ -51,15 +36,6 @@ function HomeTopBar({ setNav, onCreate }: Props) {
   const mobileNavItems: MenuItemType[] = useMemo(
     () => [
       {
-        key: 'generate',
-        label: (
-          <span className="inline-flex items-center gap-2">
-            <MobilePlusIcon className="h-4 w-4 shrink-0 opacity-80" />
-            {t('home.railAdd')}
-          </span>
-        ),
-      },
-      {
         key: 'home',
         label: (
           <span className="inline-flex items-center gap-2">
@@ -69,20 +45,20 @@ function HomeTopBar({ setNav, onCreate }: Props) {
         ),
       },
       {
-        key: 'mine',
-        label: (
-          <span className="inline-flex items-center gap-2">
-            <HiOutlineFolder className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.5} />
-            {t('home.mine')}
-          </span>
-        ),
-      },
-      {
         key: 'account',
         label: (
           <span className="inline-flex items-center gap-2">
             <HiOutlineUser className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.5} />
             {t('home.account')}
+          </span>
+        ),
+      },
+      {
+        key: 'mine',
+        label: (
+          <span className="inline-flex items-center gap-2">
+            <HiOutlineFolder className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.5} />
+            {t('home.mine')}
           </span>
         ),
       },
@@ -101,10 +77,6 @@ function HomeTopBar({ setNav, onCreate }: Props) {
           offset={8}
           items={mobileNavItems}
           onClick={(key) => {
-            if (key === 'generate') {
-              onCreate?.();
-              return;
-            }
             if (key === 'home' || key === 'mine' || key === 'account') {
               goNav(key);
             }
