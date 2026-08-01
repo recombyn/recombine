@@ -2,17 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, memo
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { GoHome, GoHomeFill } from 'react-icons/go';
+import { GoHome } from 'react-icons/go';
 import {
-  HiFolder,
   HiOutlineBell,
   HiOutlineBookOpen,
   HiOutlineChatBubbleLeftRight,
   HiOutlineFolder,
   HiOutlineUser,
-  HiUser,
 } from 'react-icons/hi2';
-import { Dropdown } from '@/components/base';
+import { Dropdown, Tooltip } from '@/components/base';
 import AppLogo from '@/components/base/AppLogo';
 import { fetchProjects } from '@/apis/projects';
 import HomeHero from '@/components/home/HomeHero';
@@ -52,7 +50,7 @@ const RAIL_STROKE = 1.5;
 const RAIL_HELP_WIKI =
   'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink';
 
-/** Circled + — matches home rail add reference. */
+/** Circled + — rail create action. */
 function RailPlusIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -79,42 +77,45 @@ function RailItem({
   disabled,
   onClick,
   icon,
-  activeIcon,
 }: {
   label: string;
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
   icon: ReactNode;
-  activeIcon?: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      aria-current={active ? 'page' : undefined}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'flex w-full flex-col items-center gap-1 rounded-xl px-1 py-2 transition-colors disabled:opacity-50',
-        active
-          ? 'text-[var(--ink)]'
-          : 'text-[var(--ink)]/55 hover:text-[var(--ink)]'
-      )}
-    >
-      <span className="flex h-10 w-10 items-center justify-center">
-        {active && activeIcon ? activeIcon : icon}
-      </span>
-      <span className="text-[11px] font-medium leading-none tracking-tight">{label}</span>
-    </button>
+    <Tooltip tip={label} placement="right" offset={10}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          'mx-auto flex h-10 w-10 items-center justify-center rounded-full transition-colors disabled:opacity-50',
+          active
+            ? 'bg-[color-mix(in_srgb,var(--ink)_4%,var(--rail))] text-[var(--ink)]'
+            : 'text-[var(--ink)]/55 hover:bg-[color-mix(in_srgb,var(--ink)_2%,var(--rail))] hover:text-[var(--ink)]'
+        )}
+      >
+        {icon}
+      </button>
+    </Tooltip>
   );
 }
 
 function RailLogo() {
   return (
-    <div className="mx-auto flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden>
-      <AppLogo size={22} />
+    <div className="mx-auto flex h-8 w-8 shrink-0 items-center justify-center" aria-hidden>
+      <AppLogo size={26} />
     </div>
+  );
+}
+
+function RailDivider() {
+  return (
+    <div className="mx-auto my-1 h-px w-6 bg-[var(--line)]" aria-hidden />
   );
 }
 
@@ -193,7 +194,7 @@ function RailHelpMenu() {
   );
 }
 
-/** Left rail — logo top, nav vertically centered, help bottom. */
+/** Side rail — logo, Add, nav icons; help (?) stays at the bottom. */
 function HomeSidebar({
   nav,
   setNav,
@@ -233,17 +234,17 @@ function HomeSidebar({
         </div>
       </div>
 
-      {/* Desktop rail — logo top, nav centered, help bottom. */}
+      {/* Desktop rail — top-packed icons; ? help pinned to bottom. */}
       <aside
-        className="pointer-events-none fixed inset-y-0 left-0 z-30 hidden w-[76px] flex-col overflow-visible md:flex"
+        className="pointer-events-none fixed inset-y-0 left-0 z-30 hidden w-[64px] flex-col overflow-visible border-r border-[var(--line)] md:flex"
         aria-label={t('app.name')}
       >
-        <div className="pointer-events-auto flex h-full flex-col items-stretch overflow-visible bg-transparent px-1.5 pb-5 pt-4">
-          <div className="flex shrink-0 justify-center overflow-visible pb-3">
+        <div className="pointer-events-auto flex h-full flex-col items-stretch overflow-visible bg-[var(--rail)] px-2 pb-5 pt-4">
+          <div className="flex shrink-0 justify-center pb-4">
             <RailLogo />
           </div>
           <nav
-            className="flex min-h-0 flex-1 flex-col items-stretch justify-center gap-1"
+            className="flex min-h-0 flex-1 flex-col items-stretch gap-1.5"
             aria-label={t('app.name')}
           >
             <RailItem
@@ -257,21 +258,19 @@ function HomeSidebar({
               active={nav === 'home'}
               onClick={() => goNav('home')}
               icon={<GoHome className="h-[22px] w-[22px]" aria-hidden />}
-              activeIcon={<GoHomeFill className="h-[22px] w-[22px]" aria-hidden />}
-            />
-            <RailItem
-              label={t('home.mine')}
-              active={nav === 'mine'}
-              onClick={() => goNav('mine')}
-              icon={<HiOutlineFolder className="h-5 w-5" strokeWidth={RAIL_STROKE} aria-hidden />}
-              activeIcon={<HiFolder className="h-5 w-5" aria-hidden />}
             />
             <RailItem
               label={t('home.account')}
               active={nav === 'account'}
               onClick={() => goNav('account')}
               icon={<HiOutlineUser className="h-[22px] w-[22px]" strokeWidth={RAIL_STROKE} aria-hidden />}
-              activeIcon={<HiUser className="h-[22px] w-[22px]" aria-hidden />}
+            />
+            <RailDivider />
+            <RailItem
+              label={t('home.mine')}
+              active={nav === 'mine'}
+              onClick={() => goNav('mine')}
+              icon={<HiOutlineFolder className="h-[18px] w-[18px]" strokeWidth={RAIL_STROKE} aria-hidden />}
             />
           </nav>
           <div className="mt-auto flex shrink-0 justify-center pt-3">

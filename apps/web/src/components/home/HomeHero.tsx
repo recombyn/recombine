@@ -4,9 +4,10 @@ import { useTranslation } from 'react-i18next';
 import {
   HiOutlineDevicePhoneMobile,
   HiOutlineFilm,
-  HiOutlineNewspaper,
   HiOutlinePhoto,
+  HiOutlineRectangleStack,
 } from 'react-icons/hi2';
+import type { IconType } from 'react-icons';
 import AppLogo from '@/components/base/AppLogo';
 import { SegmentedControl } from '@/components/base/segmented';
 import HomeAgentComposer, {
@@ -19,12 +20,13 @@ type Props = {
   onSubmit: (payload: HomeAgentSubmitPayload) => void;
 };
 
+/** Same hi2 outline family as AgentComposerShell (strokeWidth 1.75). */
 const CATEGORIES: Array<{
   id: HomeAgentCategory;
-  icon: typeof HiOutlinePhoto;
+  icon: IconType;
   labelKey: string;
 }> = [
-  { id: 'poster', icon: HiOutlineNewspaper, labelKey: 'homeCategories.poster' },
+  { id: 'poster', icon: HiOutlineRectangleStack, labelKey: 'homeCategories.poster' },
   { id: 'mobile', icon: HiOutlineDevicePhoneMobile, labelKey: 'homeCategories.mobile' },
   { id: 'image', icon: HiOutlinePhoto, labelKey: 'homeCategories.image' },
   { id: 'video', icon: HiOutlineFilm, labelKey: 'homeCategories.video' },
@@ -37,11 +39,11 @@ function resolveHeroLang(langRaw: string) {
   return { isZh, isJa };
 }
 
-/** Logo + brand name — same line weight as tagline (Lovart-style). */
+/** Logo mark + brand word — matched to the 30px hero line. */
 function HeroBrandMark({ size }: { size: number }) {
   const { t } = useTranslation();
   return (
-    <span className="inline-flex items-center gap-[0.22em] align-middle">
+    <span className="inline-flex items-center gap-[0.28em] align-middle text-[30px] font-medium leading-none tracking-tight">
       {/* Decorative; brand name follows for screen readers. */}
       <span aria-hidden className="inline-flex">
         <AppLogo size={size} className="translate-y-[0.02em]" />
@@ -95,7 +97,7 @@ function HomeHero({ onSubmit }: Props): ReactNode {
     [t, category]
   );
 
-  const logoPx = 24;
+  const logoPx = 30;
   const prefix = t('app.heroLinePrefix');
   const suffix = t('app.heroLineSuffix');
 
@@ -105,7 +107,7 @@ function HomeHero({ onSubmit }: Props): ReactNode {
         <h1
           className={cn(
             'inline-flex flex-wrap items-center justify-center gap-x-[0.35em] gap-y-1 font-medium text-[var(--ink)]',
-            'text-[26px] leading-[1.3] tracking-[-0.01em] sm:text-[28px] sm:leading-[1.25]',
+            'text-[30px] leading-[1.25] tracking-[-0.01em]',
             (isZh || isJa) && 'tracking-[0.01em]'
           )}
           style={{ fontFamily: 'var(--font-hero)' }}
@@ -116,7 +118,7 @@ function HomeHero({ onSubmit }: Props): ReactNode {
         </h1>
         <p
           className={cn(
-            'mt-5 max-w-[min(100%,36rem)] text-[14px] font-normal leading-[1.6] text-[var(--muted)] sm:text-[15px]',
+            'mt-5 max-w-[min(100%,36rem)] text-[16px] font-normal leading-[1.6] text-[var(--muted)]',
             (isZh || isJa) && 'tracking-[0.02em]'
           )}
         >

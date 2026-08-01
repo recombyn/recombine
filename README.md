@@ -69,18 +69,6 @@ npm run dev:api              # empty DATABASE_URL → SQLite
 npm run dev:web
 ```
 
-## Architecture (high level)
-
-```mermaid
-flowchart LR
-  User[Browser] --> Web[apps/web]
-  Web --> API[apps/api]
-  API --> DB[(MySQL / SQLite / Postgres)]
-  API --> Redis[(Redis)]
-  API --> LLM[LLM providers]
-```
-
-Compose defaults to **MySQL**. Dev often uses **SQLite**. **Postgres** is optional (driver + migrate first).
 ## Repository layout
 
 ```
