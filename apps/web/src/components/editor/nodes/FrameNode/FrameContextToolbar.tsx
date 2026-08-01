@@ -23,8 +23,8 @@ import {
   type ArtboardFrame,
 } from '@/store/modules/editor';
 import Tooltip from '@/components/base/tooltip';
-import { SEL_ICON_BTN, SEL_SIZE_INPUT, SEL_TOOL_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
-import { SelectionToolbarShell } from '@/components/rcb/selection/SelectionToolbarShell';
+import { SEL_ICON_BTN, SEL_SIZE_INPUT, SEL_TOOL_BTN } from '@/components/rcb/selection/chrome/ToolbarValueSlider';
+import { SelectionToolbarShell } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelectionPanel';
 import { cn } from '@/utils/classnames';
 

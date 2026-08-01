@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useDispatch, useSelector, useStore } from 'react-redux';
+import { useTranslation } from 'react-i18next';
 import { message } from '@/components/base';
 import {
   closeImageToolPanel,
+  failImageProcess,
+  finishImageProcess,
   patchDocumentNode,
   pushEditorHistory,
   startImageProcess,
   type ImageToolPanelKind,
 } from '@/store/modules/editor';
-import { buildNodeAdjustFilterCss } from '@/components/rcb/scene/sceneFill';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { buildNodeAdjustFilterCss } from '@/components/rcb/scene/document/sceneFill';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   RcbOverlayPortal,
   useRcbCamera,
   rcbSceneToScreen,
 } from '@/components/rcb';
+import { uploadImageFromSrc } from '@/utils/uploadImage';
 import EraserMaskOverlay, { type EraserMaskOverlayHandle } from './EraserMaskOverlay';
 import EraserToolPanel from './EraserToolPanel';
 import MultiAngleToolPanel from './MultiAngleToolPanel';
@@ -22,6 +26,52 @@ import AdjustToolPanel, {
   parseAdjustValues,
   type AdjustValues,
 } from './AdjustToolPanel';
+
+/** Local erase → right-side cutout node (source image untouched), same pattern as 抠图. */
+async function confirmEraserAsNewNode(opts: {
+  applyErase: (src: string, o?: { uploadKey?: string | null }) => Promise<string>;
+  src: string;
+  uploadKey: string | null;
+  sourceId: string;
+  label: string;
+  dispatch: (action: unknown) => void;
+  getPendingProcessId: () => string | null;
+  /** Called after the loading clone is spawned (close eraser UI). */
+  onSpawned?: () => void;
+}): Promise<void> {
+  const erased = await opts.applyErase(opts.src, { uploadKey: opts.uploadKey });
+  if (!erased || erased === opts.src) {
+    throw new Error('请先在图片上涂抹');
+  }
+  opts.dispatch(
+    startImageProcess({
+      sourceId: opts.sourceId,
+      kind: 'eraser',
+      label: opts.label,
+    })
+  );
+  const processId = opts.getPendingProcessId();
+  if (!processId) throw new Error('橡皮失败');
+  opts.onSpawned?.();
+  try {
+    const uploaded = await uploadImageFromSrc(erased, 'eraser.png');
+    const url = String(uploaded?.url || erased).trim() || erased;
+    opts.dispatch(
+      finishImageProcess({
+        nodeId: processId,
+        src: url,
+        attrs: {
+          cutout: 'true',
+          name: '擦除',
+          ...(uploaded?.key ? { uploadKey: String(uploaded.key) } : {}),
+        },
+      })
+    );
+  } catch (err) {
+    opts.dispatch(failImageProcess({ nodeId: processId }));
+    throw err;
+  }
+}
 
 function panelStyleRight(
   camera: { x: number; y: number; zoom: number },
@@ -55,6 +105,8 @@ function nodeBox(
 /** Host for image tool panels positioned relative to the source image. */
 function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   const dispatch = useDispatch();
+  const store = useStore();
+  const { t } = useTranslation();
   const camera = useRcbCamera();
   const panel = useSelector((s: any) => s.editor.imageToolPanel as null | {
     nodeId: string;
@@ -62,7 +114,7 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   });
   const selectedNodeId = useSelector((s: any) => s.editor.selectedNodeId as string | null);
 
-  const [brushSize, setBrushSize] = useState(40);
+  const [brushSize, setBrushSize] = useState(96);
   const [hasStrokes, setHasStrokes] = useState(false);
   const [eraseBusy, setEraseBusy] = useState(false);
   const maskRef = useRef<EraserMaskOverlayHandle>(null);
@@ -87,12 +139,18 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   }, [document, panel, dispatch]);
 
   useEffect(() => {
-    if (panel?.kind === 'eraser') {
-      setBrushSize(40);
-      setHasStrokes(false);
-      setEraseBusy(false);
-      maskRef.current?.clear();
-    }
+    if (panel?.kind !== 'eraser' || !panel.nodeId) return;
+    const node = document?.deltaSetLike?.[panel.nodeId];
+    const boxNow = nodeBox(document, node);
+    const shortSide = Math.min(boxNow?.width || 0, boxNow?.height || 0);
+    // ~12% of the short side — readable on large plates without maxing the slider.
+    const initial = Math.round(Math.min(280, Math.max(64, shortSide * 0.12 || 96)));
+    setBrushSize(initial);
+    setHasStrokes(false);
+    setEraseBusy(false);
+    maskRef.current?.clear();
+    // Only when opening / switching the eraser target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panel?.kind, panel?.nodeId]);
 
   // Snapshot adjust attrs once when the panel opens (for cancel restore).
@@ -198,36 +256,41 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
         hasStrokes={hasStrokes}
         confirmBusy={eraseBusy}
         onReset={() => {
-          setBrushSize(40);
+          const shortSide = Math.min(box.width, box.height);
+          setBrushSize(Math.round(Math.min(280, Math.max(64, shortSide * 0.12 || 96))));
           maskRef.current?.clear();
           setHasStrokes(false);
         }}
         onCancel={close}
         onConfirm={() => {
           if (!hasStrokes || eraseBusy) return;
-          const node = document?.deltaSetLike?.[panel.nodeId];
+          const sourceId = panel.nodeId;
+          const node = document?.deltaSetLike?.[sourceId];
           const src = String(node?.attrs?.src || '');
           if (!src) {
             message.error('未找到图片');
             return;
           }
+          const applyErase = maskRef.current?.applyErase;
+          if (!applyErase) return;
           setEraseBusy(true);
           void (async () => {
             try {
-              const next = await maskRef.current?.applyErase(src);
-              if (!next || next === src) {
-                message.error('请先在图片上涂抹');
-                return;
-              }
-              dispatch(
-                patchDocumentNode({
-                  nodeId: panel.nodeId,
-                  patch: { attrs: { ...(node?.attrs || {}), src: next } },
-                })
-              );
-              close();
-            } catch {
-              message.error('橡皮失败');
+              await confirmEraserAsNewNode({
+                applyErase,
+                src,
+                uploadKey: String(node?.attrs?.uploadKey || node?.attrs?.key || '') || null,
+                sourceId,
+                label: t('editor.imageToolbar.processingEraser'),
+                dispatch,
+                getPendingProcessId: () =>
+                  (store.getState() as any).editor?.pendingImageProcessId || null,
+                onSpawned: close,
+              });
+              message.success('擦除完成（透明 PNG）');
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : '';
+              message.error(msg && msg !== '橡皮失败' ? msg : '橡皮失败');
             } finally {
               setEraseBusy(false);
             }

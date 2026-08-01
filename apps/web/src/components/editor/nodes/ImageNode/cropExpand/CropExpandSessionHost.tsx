@@ -25,11 +25,11 @@ import {
   startImageProcess,
   type ImageToolPanelKind,
 } from '@/store/modules/editor';
-import { addNodeToDocument, isVideoGeneratorNode } from '@/components/rcb/scene/sceneDocument';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { addNodeToDocument, isVideoGeneratorNode } from '@/components/rcb/scene/document/sceneDocument';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { imageSrcToFile } from '@/utils/uploadImage';
 import { cn } from '@/utils/classnames';
-import { AspectPresetGlyph } from '@/components/rcb/selection/AspectRatioPresetMenu';
+import { AspectPresetGlyph } from '@/components/rcb/selection/chrome/AspectRatioPresetMenu';
 import { imageToolBtn, ImageToolSep } from '../imageToolbarShared';
 import CropExpandOverlay, {
   cropRectForRatio,

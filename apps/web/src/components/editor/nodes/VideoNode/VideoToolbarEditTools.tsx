@@ -10,7 +10,7 @@ import { LuCrop } from 'react-icons/lu';
 import { MdOutlineFlip } from 'react-icons/md';
 import { Dropdown, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown';
-import { captureVideoPosterFrame } from '@/components/rcb/scene/sceneDocument';
+import { captureVideoPosterFrame } from '@/components/rcb/scene/document/sceneDocument';
 import {
   captureFrameFromVideoEl,
   getVideoHoverHost,

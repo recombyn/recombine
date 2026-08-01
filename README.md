@@ -21,22 +21,19 @@
   <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-green.svg" alt="Security" /></a>
 </p>
 
-**Recombyn** is an open-source **canvas editor + AI Design Agent**.  
-Create and edit visual designs on an infinite canvas, talk to an agent that can plan and apply canvas operations, and run everything on your own machine.
+**Recombyn** is an open-source **canvas editor + AI Design Agent** (MIT).  
+Design on an infinite canvas; a LangGraph agent edits layers, shapes, text, and layout through conversation — not one-shot image dumps.
 
-Built **LangGraph-native**: the agent drives the canvas directly — layers, shapes, text, and layout — so you steer design through conversation, not one-shot image dumps.
-
-Self-host in minutes with Docker Compose (**MySQL** + Redis + web + API). MIT-licensed monorepo.  
-Also supported: local **SQLite** (empty `DATABASE_URL`), and **PostgreSQL** via `DATABASE_URL` after you migrate schema — see [docs/postgres-switch.md](docs/postgres-switch.md).
+Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API). Local dev can use **SQLite** (empty `DATABASE_URL`), or **PostgreSQL** — see [docs/postgres-switch.md](docs/postgres-switch.md).
 
 ---
 
 ## Why Recombyn?
 
-- **Visual editor** — Frames, shapes, images, video, text — not just chat that dumps a single image.
-- **LangGraph Agent on the canvas** — AI creates and edits layers, shapes, copy, and layout; conversation controls the board.
-- **Self-host first** — Same stack for local and server; your data stays yours.
-- **Composable** — Skills, flows, and dicts ship as editable seed JSON under `apps/api/data/`.
+- **Real canvas editing** — Frames, shapes, images, video, text; export and share
+- **Agent that paints** — Conversation plans and applies canvas ops, not a single static render
+- **Self-host first** — Same stack locally or on a server; your data stays yours
+- **Composable** — Skills, flows, and dicts ship as editable seed JSON under `apps/api/data/`
 
 ## Core features
 

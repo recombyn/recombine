@@ -36,7 +36,6 @@ _HOST_META_TOOL_NAMES = frozenset(
         "finish",
         "ask_user",
         "request_knowledge",
-        "request_prompt_packs",
         "request_tool_schemas",
         "request_aesthetics",
         "recall_long_term_memory",
@@ -88,14 +87,12 @@ def assemble_turn_from_lc_tools(
     import json as _json
 
     from services.design.knowledge_store import normalize_need_knowledge
-    from services.design.prompt_pack_store import normalize_need_prompts
     from services.design.tool_ops_contract import normalize_need_tools
 
     text = (content or "").strip()
     ops = tool_calls_to_canvas_ops(tool_calls)
     need_tools: list[str] = []
     need_knowledge: list[str] = []
-    need_prompts: list[str] = []
     need_aesthetics = False
     use_user_refs = False
     choices: list[str] = []
@@ -146,12 +143,6 @@ def assemble_turn_from_lc_tools(
             need_knowledge.extend(
                 normalize_need_knowledge(args.get("kinds") or args.get("need_knowledge") or args)
             )
-        elif name == "request_prompt_packs":
-            need_prompts.extend(
-                normalize_need_prompts(
-                    args.get("kinds") or args.get("need_prompts") or args
-                )
-            )
         elif name == "request_aesthetics":
             need_aesthetics = True
             uref = args.get("use_user_refs")
@@ -165,7 +156,6 @@ def assemble_turn_from_lc_tools(
 
     need_tools = normalize_need_tools(need_tools)
     need_knowledge = normalize_need_knowledge(need_knowledge)
-    need_prompts = normalize_need_prompts(need_prompts)
     reply = finish_summary or text
     thought = (text.split("\n")[0] if text else "")[:40] or (
         "编辑画布" if ops else ("确认需求" if asked else "处理中")
@@ -177,7 +167,7 @@ def assemble_turn_from_lc_tools(
             if any(str(o.get("name") or "") in ("create_frame", "create_image") for o in ops)
             else "edit"
         )
-    elif need_tools or need_knowledge or need_prompts or need_aesthetics:
+    elif need_tools or need_knowledge or need_aesthetics:
         intent = "edit"
     elif asked:
         intent = "ask"
@@ -188,7 +178,7 @@ def assemble_turn_from_lc_tools(
 
     if intent in ("chat", "ask", "done") and not ops:
         done = True
-    if need_tools or need_knowledge or need_prompts or need_aesthetics:
+    if need_tools or need_knowledge or need_aesthetics:
         done = False
 
     return {
@@ -198,7 +188,6 @@ def assemble_turn_from_lc_tools(
         "tool_ops_raw": ops or None,
         "need_tools": need_tools,
         "need_knowledge": need_knowledge,
-        "need_prompts": need_prompts,
         "need_aesthetics": need_aesthetics,
         "use_user_refs": use_user_refs,
         "choices": choices,
@@ -240,12 +229,6 @@ def design_thought_langchain_tools() -> list[Any]:
             description="Knowledge kinds (palette/layout/…)",
         )
 
-    class RequestPromptPacksArgs(BaseModel):
-        model_config = ConfigDict(extra="forbid")
-        kinds: list[str] = Field(
-            description="Prompt pack kinds (website/mobile/poster/vision/design_spec/…)",
-        )
-
     class RequestAestheticsArgs(BaseModel):
         model_config = ConfigDict(extra="forbid")
         use_user_refs: bool = Field(
@@ -277,13 +260,6 @@ def design_thought_langchain_tools() -> list[Any]:
             ensure_ascii=False,
         )
 
-    def request_prompt_packs(kinds: list[str]) -> str:
-        """Request scene/vision prompt packs. Runtime injects PROMPT_DETAILS next turn."""
-        return _json.dumps(
-            {"status": "runtime_will_inject", "kinds": kinds},
-            ensure_ascii=False,
-        )
-
     def request_aesthetics(use_user_refs: bool = False) -> str:
         """Request aesthetic reference samples.
 
@@ -310,10 +286,6 @@ def design_thought_langchain_tools() -> list[Any]:
             StructuredTool.from_function(
                 func=request_knowledge,
                 args_schema=RequestKnowledgeArgs,
-            ),
-            StructuredTool.from_function(
-                func=request_prompt_packs,
-                args_schema=RequestPromptPacksArgs,
             ),
             StructuredTool.from_function(
                 func=request_aesthetics,

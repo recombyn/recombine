@@ -20,22 +20,19 @@
   <a href="apps/api"><img src="https://img.shields.io/badge/api-FastAPI%20%2B%20Python-3776AB?logo=python&logoColor=white" alt="Python" /></a>
 </p>
 
-**Recombyn** 是开源的 **画布编辑器 + AI Design Agent**。  
-在无限画布上创作与编辑，用 Agent 规划并落笔改画布，整套可在自己的机器上跑。
+**Recombyn** 是开源的 **画布编辑器 + AI Design Agent**（MIT）。  
+在无限画布上创作；Agent 基于 LangGraph 直接改图层、图形、文字与布局——用对话驱动设计，而不是生成一张死图。
 
-**LangGraph Agent 原生驱动**：AI 可直接操作画布图层、创建图形、修改文字、调整布局，实现「对话操控画布」——不是对话吐一张死图。
-
-几分钟内用 Docker Compose 自托管（**MySQL** + Redis + Web + API）。MIT 协议 monorepo。  
-另支持：本地 **SQLite**（空 `DATABASE_URL`），以及配置 `DATABASE_URL` 后使用 **PostgreSQL**（需先迁移 schema）— 见 [docs/postgres-switch.md](docs/postgres-switch.md)。
+几分钟用 Docker Compose 自托管（默认 **MySQL** + Redis + Web + API）。本地开发可空 `DATABASE_URL` 用 **SQLite**；也可切 **PostgreSQL**（见 [docs/postgres-switch.md](docs/postgres-switch.md)）。
 
 ---
 
 ## 为什么选 Recombyn？
 
-- **可视化编辑** — 画板、形状、图片、视频、文字 — 不只是对话吐一张图
-- **LangGraph 操控画布** — Agent 直接改图层 / 图形 / 文案 / 布局，用对话驱动设计
-- **自托管优先** — 本地与服务器同一套栈，数据在你这边
-- **可组合** — 技能 / 流程 / 字典以 `apps/api/data/` 下种子 JSON 交付，可自行改
+- **真·画布编辑** — 画板、形状、图片、视频、文字，可导出与分享
+- **Agent 落笔改稿** — 对话规划并执行画布操作，不是一次性出图
+- **自托管优先** — 本地 / 服务器同一套栈，数据在你这边
+- **可组合** — 技能、流程、字典以 `apps/api/data/` 种子 JSON 交付，可自行改
 
 ## 核心能力
 

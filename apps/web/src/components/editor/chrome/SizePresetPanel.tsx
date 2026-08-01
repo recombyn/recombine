@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Switch } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
-import { A4_PORTRAIT } from '@/components/rcb/scene/sceneDocument';
+import { A4_PORTRAIT } from '@/components/rcb/scene/document/sceneDocument';
 import { cn } from '@/utils/classnames';
 
 /** Frame / artboard size presets (toolbar dropdown + tabs). */

@@ -6,7 +6,7 @@ import {
   type MultiPolygon,
   type Ring,
 } from 'polygon-clipping';
-import { shapeVertexPoints } from '@/components/rcb/scene/sceneShapes';
+import { shapeVertexPoints } from '@/components/rcb/scene/document/sceneShapes';
 
 export type ShapeBox = {
   left: number;

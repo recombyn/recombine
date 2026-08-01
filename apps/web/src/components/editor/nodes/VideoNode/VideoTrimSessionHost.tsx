@@ -10,13 +10,13 @@ import {
   useRcbCamera,
   useRcbScreenToolbarStyle,
 } from '@/components/rcb';
-import { SELECTION_TOOLBAR_BELOW_BOX_GAP_PX } from '@/components/rcb/selection/SelectionToolbarShell';
+import { SELECTION_TOOLBAR_BELOW_BOX_GAP_PX } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import { ImageToolSep, imageToolBtn } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
-import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { closeVideoToolPanel, setDocument, setSelectedNodeId, setSelectedNodeIds } from '@/store/modules/editor';
-import { addNodeToDocument } from '@/components/rcb/scene/sceneDocument';
+import { addNodeToDocument } from '@/components/rcb/scene/document/sceneDocument';
 import { message, Tooltip } from '@/components/base';
 import { nanoid } from 'nanoid';
 import VideoJsPlayer, {

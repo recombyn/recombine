@@ -5,8 +5,8 @@ import {
   rcbSceneToScreen,
 } from '@/components/rcb';
 import { normalizeHex } from '@/components/base/colorPanel';
-import type { FillGradient } from '@/components/rcb/scene/sceneFill';
-import type { MeshPoint } from '@/components/rcb/scene/sceneDiffuseMesh';
+import type { FillGradient } from '@/components/rcb/scene/document/sceneFill';
+import type { MeshPoint } from '@/components/rcb/scene/document/sceneDiffuseMesh';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 

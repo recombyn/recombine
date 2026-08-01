@@ -1,8 +1,8 @@
 import { useMemo, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { RcbOverlayPortal } from '@/components/rcb';
-import { isImageGeneratorNode } from '@/components/rcb/scene/sceneDocument';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { isImageGeneratorNode } from '@/components/rcb/scene/document/sceneDocument';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import ImageGeneratorCard from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorCard';
 
 /**

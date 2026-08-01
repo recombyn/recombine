@@ -1,25 +1,8 @@
 /**
- * @rcb — recombyn canvas component library
+ * @rcb — canvas UI: camera, tools, selection, frames.
+ * Prefer `import { … } from '@/components/rcb'`.
  *
- * Prefer `@/components/rcb` for UI / camera / tools / selection.
- * Scene domain (document model, fill, effects, SVG I/O) lives under
- * `@/components/rcb/scene/<module>` — not Redux (`store/modules`).
- *
- * Layout helpers (overlay / place APIs):
- * - `rcbAlignInBox(box, size, align, pad?)` — park a control in a box (center, corners, …)
- * - `rcbCenterInBox(box, size, pad?)` — shorthand for center
- * - `rcbCenterOnPoint(point, size)` — place a node centered on a pointer / drop point
- * - `rcbFitImageIntoViewport(natural, viewport, zoom)` — upload size relative to what's on screen
- *
- * @example
- * ```tsx
- * import {
- *   RcbCanvas, RcbSvgDefs, RCB_DEFAULT_CAMERA,
- *   ShapeDrawFeature, SelectionFeature, HtmlArtboardFrame,
- *   useRcbScreenToScene, rcbAlignInBox, rcbCenterOnPoint,
- * } from '@/components/rcb'
- * import { normalizeDocument } from '@/components/rcb/scene/sceneDocument'
- * ```
+ * Layout: `rcbAlignInBox` / `rcbCenterInBox` / `rcbCenterOnPoint` / `rcbFitImageIntoViewport`.
  */
 
 export type { RcbBox, RcbCamera, RcbVec } from './core/types';
@@ -106,12 +89,12 @@ export * from './tools/pencilBrushes';
 export * from './tools/pencilErase';
 export { STAMP_TINT_READY_EVENT, getTintedStampSrc } from './tools/stampTint';
 
-// Selection
+// Selection engine + chrome (toolbars/menus under selection/chrome/)
 export { default as SelectionFeature } from './selection/SelectionFeature';
 export { default as SelectionChrome } from './selection/SelectionChrome';
-export { default as SelectionContextToolbar } from './selection/SelectionContextToolbar';
-export { default as MultiSelectionToolbar } from './selection/MultiSelectionToolbar';
-export { default as CanvasContextMenu } from './selection/CanvasContextMenu';
+export { default as SelectionContextToolbar } from './selection/chrome/SelectionContextToolbar';
+export { default as MultiSelectionToolbar } from './selection/chrome/MultiSelectionToolbar';
+export { default as CanvasContextMenu } from './selection/chrome/CanvasContextMenu';
 export {
   resizeFromHandle,
   rotateBoxesAround,
@@ -122,7 +105,7 @@ export {
 export * from './selection/alignGuides';
 export * from './selection/shapeBoolean';
 export * from './selection/rotateCornerCursor';
-export * from './selection/SelectionToolbarShell';
+export * from './selection/chrome/SelectionToolbarShell';
 
 // Frames
 export { default as HtmlArtboardFrame } from './frames/HtmlArtboardFrame';

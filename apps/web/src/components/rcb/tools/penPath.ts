@@ -379,14 +379,37 @@ export function penSubpathsFromD(d: string): Array<{ anchors: PenAnchor[]; close
       continue;
     }
 
-    const argN =
-      lower === 's' || lower === 'q'
-        ? 4
-        : lower === 't'
-          ? 2
-          : lower === 'a'
-            ? 7
-            : 0;
+    // Quadratic → cubic handles (path-edit only stores cubics).
+    if (lower === 'q') {
+      while (i < tokens.length && !/^[a-zA-Z]$/.test(tokens[i])) {
+        let qx = readNum();
+        let qy = readNum();
+        let x = readNum();
+        let y = readNum();
+        if (qx == null || qy == null || x == null || y == null) break;
+        if (rel) {
+          qx += cx;
+          qy += cy;
+          x += cx;
+          y += cy;
+        }
+        const x1 = cx + (2 / 3) * (qx - cx);
+        const y1 = cy + (2 / 3) * (qy - cy);
+        const x2 = x + (2 / 3) * (qx - x);
+        const y2 = y + (2 / 3) * (qy - y);
+        const prev = ensureAnchor(cx, cy);
+        prev.outX = x1;
+        prev.outY = y1;
+        cx = x;
+        cy = y;
+        const next = ensureAnchor(x, y);
+        next.inX = x2;
+        next.inY = y2;
+      }
+      continue;
+    }
+
+    const argN = lower === 's' ? 4 : lower === 't' ? 2 : lower === 'a' ? 7 : 0;
     if (argN) {
       while (i < tokens.length && !/^[a-zA-Z]$/.test(tokens[i])) {
         for (let k = 0; k < argN; k += 1) readNum();
