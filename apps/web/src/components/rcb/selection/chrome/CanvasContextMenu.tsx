@@ -306,7 +306,7 @@ function CanvasContextMenu({
         />
         <MenuItem
           icon={<HiOutlinePhoto className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.uploadImage')}
+          label={t('editor.contextMenu.uploadMedia')}
           shortcut={`${modLabel}+Shift+I`}
           disabled={Boolean(menu.nodeId)}
           onClick={() => onAction('upload')}

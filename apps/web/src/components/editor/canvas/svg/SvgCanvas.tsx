@@ -2608,7 +2608,7 @@ function SvgCanvas({
     setCtxMenu(null);
 
     if (action === 'upload') {
-      // Empty canvas only ? disabled when right-clicking a node.
+      // Empty canvas only — disabled when right-clicking a node.
       if (hitNodeId) return;
       imagePlaceAtRef.current = placeAt;
       imageInputRef.current?.click();
@@ -3089,6 +3089,15 @@ function SvgCanvas({
         message.error(typeof detail === 'string' ? detail : '视频上传失败');
       }
     })();
+  };
+
+  const onMediaFile = (file: File | null) => {
+    if (!file) return;
+    if (file.type.startsWith('video/')) {
+      onVideoFile(file);
+      return;
+    }
+    onImageFile(file);
   };
 
   /** Document x/y so a box of given size is centered on anchor or viewport. */
@@ -3865,10 +3874,10 @@ function SvgCanvas({
       <input
         ref={imageInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/*"
         className="hidden"
         onChange={(e) => {
-          onImageFile(e.target.files?.[0] || null);
+          onMediaFile(e.target.files?.[0] || null);
           e.target.value = '';
         }}
       />
