@@ -105,6 +105,35 @@ const ROUTE_PRESETS_FALLBACK: Record<
 };
 
 let cachedPresetRules: Record<string, string> | null = null;
+/** From GET /chat/models — null until first fetch. */
+let cachedOpenrouterAvailable: boolean | null = null;
+
+function isOpenRouterModelId(id: string | undefined): boolean {
+  const s = String(id || '').trim().toLowerCase();
+  return s.startsWith('or-') || s.startsWith('openrouter/');
+}
+
+function remapPrefsWithoutOpenRouter(prefs: AgentRoutePrefs): AgentRoutePrefs {
+  const domestic = resolveNamedPreset('economy');
+  const out: AgentRoutePrefs = { ...prefs };
+  for (const key of ['fast', 'standard', 'reasoning', 'vision', 'image'] as const) {
+    if (isOpenRouterModelId(out[key])) {
+      out[key] = domestic[key];
+    }
+  }
+  return out;
+}
+
+function resolvePresetForRegion(
+  name: Exclude<AgentRoutePreset, 'platform' | 'custom'>,
+  rules?: Record<string, string> | null
+): AgentRoutePrefs {
+  const base = resolveNamedPreset(name, rules);
+  if (cachedOpenrouterAvailable === false) {
+    return { ...remapPrefsWithoutOpenRouter(base), preset: name };
+  }
+  return base;
+}
 
 function migrateLegacyRouteKeys(
   raw: Record<string, unknown>
@@ -189,7 +218,7 @@ export function loadAgentRoutePrefs(
     }
     if (preset === 'platform') return { preset: 'platform' };
     if (preset === 'balanced' || preset === 'quality') {
-      return resolveNamedPreset(preset, rules);
+      return resolvePresetForRegion(preset, rules);
     }
     if (preset === 'custom') {
       const migrated = migrateLegacyRouteKeys(parsed);
@@ -221,12 +250,23 @@ export function routeOverridesForApi(
   prefs: AgentRoutePrefs = loadAgentRoutePrefs()
 ): Record<string, string> | null {
   if (!prefs || prefs.preset === 'platform') return null;
-  const base =
+  let base: AgentRoutePrefs =
     prefs.preset === 'economy' ||
     prefs.preset === 'balanced' ||
     prefs.preset === 'quality'
-      ? resolveNamedPreset(prefs.preset)
-      : prefs;
+      ? resolvePresetForRegion(prefs.preset)
+      : { ...prefs };
+  if (cachedOpenrouterAvailable === false) {
+    base = remapPrefsWithoutOpenRouter(base);
+  }
+  // When every lane fell back to domestic Standard, omit overrides (same as platform).
+  if (prefs.preset === 'balanced' || prefs.preset === 'quality') {
+    const platformish = resolveNamedPreset('economy');
+    const sameAsDomestic = (
+      ['fast', 'standard', 'reasoning', 'vision', 'image'] as const
+    ).every((k) => String(base[k] || '') === String(platformish[k] || ''));
+    if (sameAsDomestic) return null;
+  }
   const out: Record<string, string> = {};
   for (const key of ['fast', 'standard', 'reasoning', 'vision', 'image'] as const) {
     const v = String(base[key] || '').trim();
@@ -235,19 +275,33 @@ export function routeOverridesForApi(
   return Object.keys(out).length ? out : null;
 }
 
+/** Cache OpenRouter availability from GET /chat/models (region gate). */
+export function warmOpenrouterAvailability(available: boolean | null | undefined) {
+  if (available == null) return;
+  cachedOpenrouterAvailable = Boolean(available);
+}
+
 /** Warm Admin preset cache (call before send if panel not opened). */
 export async function warmAgentRoutePresetRules(
   rules?: Record<string, string> | null,
 ): Promise<void> {
   if (rules && typeof rules === 'object') {
     cachedPresetRules = rules;
-    return;
+  } else {
+    try {
+      const cat = await fetchDesignCatalog();
+      cachedPresetRules = cat.global_rules || {};
+    } catch {
+      /* keep fallback */
+    }
   }
-  try {
-    const cat = await fetchDesignCatalog();
-    cachedPresetRules = cat.global_rules || {};
-  } catch {
-    /* keep fallback */
+  if (cachedOpenrouterAvailable == null) {
+    try {
+      const res = await listModels();
+      warmOpenrouterAvailability(res?.openrouterAvailable);
+    } catch {
+      /* keep null */
+    }
   }
 }
 
@@ -327,6 +381,9 @@ function AgentRoutePrefsEditor({
   const [textModels, setTextModels] = useState<LlmModel[]>([]);
   const [imageModels, setImageModels] = useState<LlmModel[]>([]);
   const [submenu, setSubmenu] = useState<CompactSubmenu>(null);
+  const [openrouterAvailable, setOpenrouterAvailable] = useState<boolean | null>(
+    cachedOpenrouterAvailable
+  );
   const narrow = useNarrowViewport();
 
   useEffect(() => {
@@ -350,8 +407,12 @@ function AgentRoutePrefsEditor({
     void listModels()
       .then((res) => {
         if (cancelled) return;
+        const orOk = res?.openrouterAvailable !== false;
+        cachedOpenrouterAvailable = orOk;
+        setOpenrouterAvailable(orOk);
         setTextModels(res?.models || []);
         setImageModels(res?.imageModels || []);
+        setRoutePrefs(loadAgentRoutePrefs(cachedPresetRules));
       })
       .catch(() => undefined);
     return () => {
@@ -402,7 +463,7 @@ function AgentRoutePrefsEditor({
       return;
     }
     if (preset === 'balanced' || preset === 'quality') {
-      commit(resolveNamedPreset(preset));
+      commit(resolvePresetForRegion(preset));
       return;
     }
     commit({ preset: 'platform' });
@@ -557,7 +618,10 @@ function AgentRoutePrefsEditor({
                 const title = t(`account.agentRouteCard.${id}.title`);
                 const mult = t(`account.agentRouteCard.${id}.mult`);
                 const badge = t(`account.agentRouteCard.${id}.badge`);
-                const desc = t(`account.agentRouteCard.${id}.desc`);
+                const desc =
+                  openrouterAvailable === false && (id === 'balanced' || id === 'quality')
+                    ? t('account.agentRouteOpenrouterBlocked')
+                    : t(`account.agentRouteCard.${id}.desc`);
                 return (
                   <button
                     key={id}
@@ -836,15 +900,21 @@ function AgentRoutePrefsEditor({
         />
       </div>
 
-      <p className="text-[12px] leading-relaxed text-[var(--muted)]">
-        {routePrefs.preset === 'balanced'
-          ? t('account.agentRouteBalancedNote')
-          : routePrefs.preset === 'quality'
-            ? t('account.agentRouteQualityNote')
-            : routePrefs.preset === 'custom'
-              ? t('account.agentRouteCard.custom.desc')
-              : t('account.agentRoutePlatformNote')}
-      </p>
+      {openrouterAvailable === false ? (
+        <p className="text-[12px] leading-relaxed text-[var(--muted)]">
+          {t('account.agentRouteOpenrouterBlocked')}
+        </p>
+      ) : (
+        <p className="text-[12px] leading-relaxed text-[var(--muted)]">
+          {routePrefs.preset === 'balanced'
+            ? t('account.agentRouteBalancedNote')
+            : routePrefs.preset === 'quality'
+              ? t('account.agentRouteQualityNote')
+              : routePrefs.preset === 'custom'
+                ? t('account.agentRouteCard.custom.desc')
+                : t('account.agentRoutePlatformNote')}
+        </p>
+      )}
 
       {routePrefs.preset === 'custom' ? (
         <div className="space-y-3 rounded-lg bg-[var(--account-main)] p-3 ring-1 ring-[var(--line)]">

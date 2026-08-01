@@ -115,7 +115,13 @@ import { normalizeCanvasSizeChip } from '@/components/editor/chrome/SizePresetPa
 import {
   customProvidersAsModels,
 } from '@/components/editor/panels/agent/customLlmProviders';
-import { routeOverridesForApi, warmAgentRoutePresetRules, loadAgentRoutePrefs, AgentRoutePrefsEditor } from '@/components/editor/panels/agent/AgentModelsPanel';
+import {
+  routeOverridesForApi,
+  warmAgentRoutePresetRules,
+  warmOpenrouterAvailability,
+  loadAgentRoutePrefs,
+  AgentRoutePrefsEditor,
+} from '@/components/editor/panels/agent/AgentModelsPanel';
 import {
   fetchDesignCatalog,
   type DesignCatalog,
@@ -2106,6 +2112,7 @@ function AgentDock({
     listModels()
       .then((res) => {
         if (cancelled) return;
+        warmOpenrouterAvailability(res?.openrouterAvailable);
         const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
         setModels(list);
         setModelsStatus('ready');

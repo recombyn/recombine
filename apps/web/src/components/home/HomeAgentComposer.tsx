@@ -48,6 +48,7 @@ import ModelPickerPanel, {
 import {
   AgentRoutePrefsEditor,
   loadAgentRoutePrefs,
+  warmOpenrouterAvailability,
   routeOverridesForApi,
 } from '@/components/editor/panels/agent/AgentModelsPanel';
 import { cn } from '@/utils/classnames';
@@ -391,6 +392,7 @@ function HomeAgentComposer({
     listModels()
       .then((res) => {
         if (cancelled) return;
+        warmOpenrouterAvailability(res?.openrouterAvailable);
         const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
         setModels(list);
         setModelsStatus('ready');

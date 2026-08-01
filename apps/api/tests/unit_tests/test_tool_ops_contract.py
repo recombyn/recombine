@@ -71,8 +71,8 @@ def test_delete_accepts_node_ids_alias():
     assert ops[0]["args"]["nodeIds"] == ["n1"]
 
 
-def test_delete_plus_create_rewrites_to_update_shape():
-    """Rect→circle morph must keep id / z-order (not delete+create)."""
+def test_delete_plus_create_rejected_prefer_update_shape():
+    """Morph via delete+create is invalid — tell model to use update_node (no silent rewrite)."""
     raw_ops = [
         {"name": "delete_nodes", "args": {"node_ids": ["green1"]}},
         {
@@ -91,12 +91,39 @@ def test_delete_plus_create_rewrites_to_update_shape():
         raw_ops,
         scene_nodes=[{"id": "green1", "type": "rect", "w": 120, "h": 100}],
     )
-    assert not errs
-    assert len(ops) == 1
-    assert ops[0]["name"] == "update_node"
-    assert ops[0]["args"]["nodeId"] == "green1"
-    assert ops[0]["args"]["shapeType"] == "ellipse"
-    assert ops[0]["args"]["fill"] == "#00FF00"
+    assert not ops
+    assert any("prefer_update_node_shapeType" in e for e in errs)
+    assert any("green1" in e for e in errs)
+    assert any("ellipse" in e for e in errs)
+
+
+def test_create_text_matching_scene_rejected_prefer_update():
+    raw_ops = [
+        {
+            "name": "create_text",
+            "args": {"text": "Hello", "x": 10, "y": 20, "fontSize": 24},
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "t1", "type": "text", "text": "Hello"}],
+    )
+    assert not ops
+    assert any("prefer_update_node" in e for e in errs)
+    assert any("t1" in e for e in errs)
+
+
+def test_update_node_missing_nodeId_not_invented():
+    """Do not bind fill-only update_node onto the largest plate."""
+    raw_ops = [
+        {"name": "update_node", "args": {"fill": "#ff0000"}},
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "bg", "type": "rect", "w": 400, "h": 400}],
+    )
+    assert not ops
+    assert any("update_node_missing_nodeId" in e for e in errs)
 
 
 def test_update_node_accepts_shape_type():

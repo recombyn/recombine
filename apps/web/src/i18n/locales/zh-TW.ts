@@ -635,6 +635,8 @@ const zhTW = {
     agentRoutePlatformNote: '目前使用標準版（平台預設）路由，無需額外設定。',
     agentRouteBalancedNote: '目前使用 Pro 路由偏好，依車道自動選用更強模型。',
     agentRouteQualityNote: '目前使用 Max 路由偏好，優先高質量推理與指令跟隨。',
+    agentRouteOpenrouterBlocked:
+      '目前網路無法使用 OpenRouter。Pro / Max 已回退為國內模型（與標準版車道一致）。',
     agentRouteSave: '儲存路由偏好',
     agentRouteSaved: '已儲存',
     notices: {
