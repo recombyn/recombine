@@ -64,6 +64,7 @@ export const Icon: React.FC<IconProps> = ({
     <svg
       className={cn('inline-block shrink-0 text-current', className)}
       style={iconStyle}
+      fill="currentColor"
       aria-hidden="true"
       focusable="false"
     >

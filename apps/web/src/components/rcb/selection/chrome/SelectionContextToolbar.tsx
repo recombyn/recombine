@@ -2,9 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
-  HiOutlineBars3,
-  HiOutlineBars3BottomLeft,
-  HiOutlineBars3BottomRight,
   HiOutlineBold,
   HiOutlineChevronDown,
   HiOutlineCodeBracket,
@@ -15,7 +12,12 @@ import {
   HiOutlineStrikethrough,
   HiOutlineUnderline,
 } from 'react-icons/hi2';
-import { MdFormatOverline } from 'react-icons/md';
+import {
+  MdFormatAlignCenter,
+  MdFormatAlignLeft,
+  MdFormatAlignRight,
+  MdFormatOverline,
+} from 'react-icons/md';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
 import { DropdownPanel, DropdownPanelItem } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
@@ -107,10 +109,12 @@ function Sep() {
   return <div className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />;
 }
 
+/** Solid MD glyphs — outline bars-3 reads too light next to B/I/U. */
 function AlignIcon({ align }: { align: string }) {
-  if (align === 'center') return <HiOutlineBars3 className="h-4 w-4" />;
-  if (align === 'right') return <HiOutlineBars3BottomRight className="h-4 w-4" />;
-  return <HiOutlineBars3BottomLeft className="h-4 w-4" />;
+  const cls = 'h-3.5 w-3.5 text-current';
+  if (align === 'center') return <MdFormatAlignCenter className={cls} />;
+  if (align === 'right') return <MdFormatAlignRight className={cls} />;
+  return <MdFormatAlignLeft className={cls} />;
 }
 
 function DecorationsTriggerIcon({
@@ -122,10 +126,13 @@ function DecorationsTriggerIcon({
   overline: boolean;
   strike: boolean;
 }) {
-  if (underline && !overline && !strike) return <HiOutlineUnderline className="h-3.5 w-3.5" />;
-  if (overline && !underline && !strike) return <MdFormatOverline className="h-3.5 w-3.5" />;
-  if (strike && !underline && !overline) return <HiOutlineStrikethrough className="h-3.5 w-3.5" />;
-  return <HiOutlineUnderline className="h-3.5 w-3.5" />;
+  const cls = 'h-3.5 w-3.5 text-current';
+  if (underline && !overline && !strike) return <HiOutlineUnderline className={cls} strokeWidth={2} />;
+  if (overline && !underline && !strike) return <MdFormatOverline className={cls} />;
+  if (strike && !underline && !overline) {
+    return <HiOutlineStrikethrough className={cls} strokeWidth={2} />;
+  }
+  return <HiOutlineUnderline className={cls} strokeWidth={2} />;
 }
 
 function SelectionContextToolbar(props: Props): ReactNode {
@@ -326,7 +333,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
                       }
                     }}
                   >
-                    <HiOutlineBold className="h-3.5 w-3.5" />
+                    <HiOutlineBold className="h-3.5 w-3.5" strokeWidth={2} />
                   </button>
                 </Tooltip>
               ) : null}
@@ -340,7 +347,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
                     patchTextStyle({ fontStyle: isTextItalic(style) ? 'normal' : 'italic' })
                   }
                 >
-                  <HiOutlineItalic className="h-3.5 w-3.5" />
+                  <HiOutlineItalic className="h-3.5 w-3.5" strokeWidth={2} />
                 </button>
               </Tooltip>
               <div className="relative" data-text-toolbar-menu>
@@ -438,17 +445,17 @@ function SelectionContextToolbar(props: Props): ReactNode {
                         {
                           value: 'left',
                           label: t('editor.imageToolbar.alignLeft'),
-                          Icon: HiOutlineBars3BottomLeft,
+                          Icon: MdFormatAlignLeft,
                         },
                         {
                           value: 'center',
                           label: t('editor.imageToolbar.alignCenter'),
-                          Icon: HiOutlineBars3,
+                          Icon: MdFormatAlignCenter,
                         },
                         {
                           value: 'right',
                           label: t('editor.imageToolbar.alignRight'),
-                          Icon: HiOutlineBars3BottomRight,
+                          Icon: MdFormatAlignRight,
                         },
                       ] as const
                     ).map(({ value, label, Icon }) => (
@@ -461,7 +468,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
                           setAlignOpen(false);
                         }}
                       >
-                        <Icon className="h-4 w-4 shrink-0" />
+                        <Icon className="h-4 w-4 shrink-0 text-[var(--ink)]" />
                         <span className="whitespace-nowrap">{label}</span>
                         {textAlign === value ? (
                           <span className="ml-auto text-[11px] text-[var(--muted)]">✓</span>
