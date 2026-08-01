@@ -139,8 +139,6 @@ def _scenes_from_node(node: dict[str, Any], kind: str) -> str:
     raw = str(inj.get("scenes") or node.get("scenes") or "").strip()
     if raw:
         return raw
-    if kind in ("vision", "design_spec", "aesthetics"):
-        return "all"
     return kind or "all"
 
 
@@ -173,7 +171,7 @@ def list_prompt_nodes_from_flow(*, graph: dict[str, Any] | None = None) -> list[
                     body = str(raw_pack or "").strip()
                     title = KIND_LABELS.get(k, k)
                     when = ""
-                    scenes = "all" if k in ("vision", "design_spec", "aesthetics") else k
+                    scenes = "all"
                 if not body:
                     continue
                 out.append(
@@ -223,7 +221,7 @@ def list_prompt_nodes_from_flow(*, graph: dict[str, Any] | None = None) -> list[
 # so format/catalog no longer advertise them; bridge lives in skill_store.
 _NEED_PROMPT_KINDS = frozenset()
 # Alias used by seed / overlay helpers (legacy kinds still recognized for disable).
-_CORE_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
+RETIRED_NEED_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
 
 PACK_TYPE_NEED = "need"
 PACK_TYPE_SYSTEM = "system"
@@ -365,13 +363,14 @@ def seed_prompt_bank_node(*, x: float = 2280, y: float = 400) -> dict[str, Any]:
 
 
 def _prune_prompt_packs_to_seed(conn: Any, *, now: float) -> None:
-    """Drop obsolete scene packs; ensure one seed row per need_* kind (no wipe of system keys)."""
+    """Drop obsolete scene packs + retired methodology kinds; leave system keys alone."""
     del now
-    if _OBSOLETE_SCENE_KINDS:
-        ph = ",".join("?" for _ in _OBSOLETE_SCENE_KINDS)
+    drop_kinds = set(_OBSOLETE_SCENE_KINDS) | set(RETIRED_NEED_PROMPT_KINDS)
+    if drop_kinds:
+        ph = ",".join("?" for _ in drop_kinds)
         conn.execute(
             f"DELETE FROM design_prompt_pack WHERE kind IN ({ph})",
-            tuple(sorted(_OBSOLETE_SCENE_KINDS)),
+            tuple(sorted(drop_kinds)),
         )
 
     seed_by_kind = {
@@ -514,6 +513,7 @@ def ensure_design_prompt_packs() -> None:
                     "agent.prompt.need_tools_overlay",
                     "agent.prompt.lc_tools_overlay",
                     "agent.prompt.react_system",
+                    "agent.prompt.chat_agent_system",
                 }
             )
             for kind in _FORCE_SYNC_KINDS:
@@ -746,106 +746,8 @@ def format_prompt_pack_block(rows: list[dict[str, Any]]) -> str:
 
 
 def format_prompt_packs_catalog(*, scene: str = "website") -> str:
-    scene_l = str(scene or "website").strip().lower() or "website"
-    rows = list_prompt_packs(enabled=True, pack_type=PACK_TYPE_NEED, ensure=True)
-    lines: list[str] = [
-        "提示词包目录（legacy need_prompts；方法论请用 need_skills）："
-    ]
-    seen_kind: set[str] = set()
-    for r in rows:
-        scenes = str(r.get("scenes") or "all")
-        if not (_csv_has(scenes, scene_l) or _csv_has(scenes, "all")):
-            continue
-        kind = str(r.get("kind") or "").strip()
-        if not kind or kind in seen_kind:
-            continue
-        if kind in _CORE_PROMPT_KINDS:
-            continue
-        seen_kind.add(kind)
-        label = KIND_LABELS.get(kind, kind)
-        title = str(r.get("title") or label).strip()
-        when = str(r.get("whenToUse") or "").strip()
-        line = f"- `{kind}` — {label}·{title}"
-        if when:
-            line += f"（{when[:64]}）"
-        lines.append(line)
-        if len(lines) >= 12:
-            break
-    if len(lines) == 1:
-        return (
-            "提示词包：方法论/看图/美学已迁至 Skill 目录（need_skills）。"
-            "系统协议仍由 type=system 提示词包提供。"
-        )
-    return "\n".join(lines)
-
-
-def normalize_need_prompts(raw: Any, *, max_n: int = 8) -> list[str]:
-    if raw is None or raw is False:
-        return []
-    if raw is True:
-        return ["*"]
-    items: list[Any]
-    if isinstance(raw, str):
-        s = raw.strip()
-        if s.lower() in ("1", "true", "yes", "all", "*"):
-            return ["*"]
-        items = [p.strip() for p in s.replace("；", ",").split(",")]
-    elif isinstance(raw, list):
-        items = raw
-    else:
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        key = str(item or "").strip().lower()
-        if not key or key in seen:
-            continue
-        if key in ("all", "*"):
-            return ["*"]
-        if key.startswith("scene."):
-            key = key[6:]
-        if key.startswith("prompt_"):
-            key = key[7:]
-        seen.add(key)
-        out.append(key)
-        if len(out) >= max_n:
-            break
-    return out
-
-
-def format_prompt_packs_details(*, kinds: list[str], scene: str = "website") -> str:
-    scene_l = str(scene or "website").strip().lower() or "website"
-    wanted = [str(k).strip().lower() for k in (kinds or []) if str(k).strip()]
-    if not wanted:
-        return ""
-    load_all = "*" in wanted
-    wanted_norm = {
-        (k[6:] if k.startswith("scene.") else k[7:] if k.startswith("prompt_") else k)
-        for k in wanted
-        if k != "*"
-    }
-    rows: list[dict[str, Any]] = []
-    seen_kinds: set[str] = set()
-    source = list_prompt_packs(
-        enabled=True,
-        pack_type=PACK_TYPE_NEED if load_all else None,
-        ensure=True,
+    del scene
+    return (
+        "提示词包：方法论/看图/美学已迁至 Skill 目录（need_skills）。"
+        "系统协议由 type=system 提示词包提供；勿再使用 need_prompts。"
     )
-    for r in source:
-        kind = str(r.get("kind") or "").strip().lower()
-        if not is_need_pack(r):
-            continue
-        if load_all:
-            pass
-        elif kind not in wanted_norm:
-            continue
-        scenes = str(r.get("scenes") or "all")
-        if not (_csv_has(scenes, scene_l) or _csv_has(scenes, "all")):
-            continue
-        if kind in seen_kinds:
-            continue
-        seen_kinds.add(kind)
-        rows.append(r)
-        if load_all and len(rows) >= 12:
-            break
-    return format_prompt_pack_block(rows)

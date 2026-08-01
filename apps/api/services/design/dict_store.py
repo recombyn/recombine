@@ -13,7 +13,7 @@ TYPE_CATALOG = "__types__"
 _DICTS_READY = False
 _DICTS_LOCK = threading.RLock()
 # Bump when data/design_dicts_seed.json gains rows (also stored as seed.rev).
-_DICT_SEED_REV = 26
+_DICT_SEED_REV = 28
 _seeded_rev = 0
 # Label lookup cache (resolve_edge_condition is identity — no per-edge DB).
 _EDGE_COND_LABELS: dict[str, str] | None = None
@@ -306,13 +306,20 @@ def _seed_dict_rows(conn: Any, *, now: float) -> None:
             (TYPE_CATALOG, code, label, None, sort_order, now, now),
         )
 
-    # Rev bump: drop obsolete enum codes (e.g. retired prompt_pack_kind scene packs).
+    # Rev bump: drop obsolete enum codes (e.g. retired prompt_pack_kind need packs).
+    # Include every product type from seed even when its item list is empty.
     if force_label_sync:
-        allowed_by_type: dict[str, set[str]] = {}
+        allowed_by_type: dict[str, set[str]] = {
+            str(code): set() for code, _label, _sort in type_defaults if str(code) != TYPE_CATALOG
+        }
         for dict_type, code, _label, _sort in item_defaults:
             allowed_by_type.setdefault(str(dict_type), set()).add(str(code))
         for dict_type, allowed in allowed_by_type.items():
             if not allowed:
+                conn.execute(
+                    "DELETE FROM design_dict WHERE dict_type = ?",
+                    (dict_type,),
+                )
                 continue
             placeholders = ",".join("?" for _ in allowed)
             conn.execute(

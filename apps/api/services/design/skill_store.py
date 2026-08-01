@@ -47,11 +47,8 @@ _SOURCE_TO_NS = {
     SOURCE_ADMIN: NS_USER,
 }
 
-PROMPT_KIND_TO_SKILL: dict[str, str] = {
-    "design_spec": "design_methodology",
-    "vision": "vision_extract",
-    "aesthetics": "aesthetics_align",
-}
+# Retired need_* prompt packs (methodology/vision/aesthetics → Skills). DELETE leftovers on sync.
+RETIRED_NEED_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
 
 # Ops always allowed even when preferred_tools allowlist is active.
 _ALWAYS_ALLOW_OPS = frozenset(
@@ -378,7 +375,7 @@ def _parse_preferred_tools(raw: Any) -> list[str]:
     return [p.strip() for p in s.replace("；", ",").split(",") if p.strip()][:24]
 
 
-_INTERNAL_RESOURCE_KINDS = frozenset({"knowledge", "prompts", "aesthetics", "tools"})
+_INTERNAL_RESOURCE_KINDS = frozenset({"knowledge", "aesthetics", "tools"})
 
 
 def _parse_allowed_resources(raw: Any) -> list[str] | None:
@@ -754,7 +751,6 @@ def resolve_storage_skill_key(raw: str, *, scene: str = "website") -> str | None
         s = s[6:]
     if s.startswith("skill_"):
         s = s[6:]
-    s = PROMPT_KIND_TO_SKILL.get(s, s)
     ns, local = split_namespace_key(s)
     rows = list_runtime_skills(scene=scene, enabled_only=True)
     by_key = {str(r.get("skillKey") or "").strip().lower(): r for r in rows}
@@ -1195,27 +1191,22 @@ def filter_need_resources_by_skill_acl(
     skill_keys: list[str],
     scene: str,
     need_knowledge: list[str],
-    need_prompts: list[str],
     need_aesthetics: bool,
-) -> tuple[list[str], list[str], bool, list[str]]:
+) -> tuple[list[str], bool, list[str]]:
     """Drop internal resource requests blocked by custom-skill ACL."""
     allow = skill_resource_allowlist(skill_keys, scene=scene)
     if allow is None:
-        return list(need_knowledge or []), list(need_prompts or []), bool(need_aesthetics), []
+        return list(need_knowledge or []), bool(need_aesthetics), []
     errs: list[str] = []
     k = list(need_knowledge or [])
-    p = list(need_prompts or [])
     a = bool(need_aesthetics)
     if k and "knowledge" not in allow:
         errs.append("skill_acl_deny:knowledge")
         k = []
-    if p and "prompts" not in allow:
-        errs.append("skill_acl_deny:prompts")
-        p = []
     if a and "aesthetics" not in allow:
         errs.append("skill_acl_deny:aesthetics")
         a = False
-    return k, p, a, errs
+    return k, a, errs
 
 
 def filter_ops_by_skill_allowlist(
@@ -1308,7 +1299,6 @@ def parse_need_skills_with_pins(
             key = key[6:]
         if key.startswith("skill_"):
             key = key[6:]
-        key = PROMPT_KIND_TO_SKILL.get(key, key)
         storage = resolve_storage_skill_key(key, scene=scene) or key
         if known and storage not in known and key not in known and f"core.{key}" not in known:
             # Also accept qualified forms already in known
@@ -1436,28 +1426,6 @@ def resolve_triggered_skill_keys(
     return out
 
 
-def bridge_need_prompts_to_skills(
-    need_prompts: list[str],
-    need_skills: list[str],
-) -> tuple[list[str], list[str]]:
-    skills = list(need_skills or [])
-    prompts: list[str] = []
-    seen_s = set(skills)
-    for k in need_prompts or []:
-        key = str(k or "").strip().lower()
-        mapped = PROMPT_KIND_TO_SKILL.get(key)
-        if mapped:
-            if mapped not in seen_s and "*" not in seen_s:
-                skills.append(mapped)
-                seen_s.add(mapped)
-            continue
-        # Drop unknown legacy methodology kinds; keep other custom packs if any.
-        if key in PROMPT_KIND_TO_SKILL:
-            continue
-        prompts.append(key)
-    return prompts, skills
-
-
 def _triggers_json(item: dict[str, Any]) -> str:
     return json.dumps(_parse_triggers(item.get("triggers")), ensure_ascii=False)
 
@@ -1477,7 +1445,7 @@ def _allowed_resources_json(item: dict[str, Any], *, source: str) -> str | None:
             return json.dumps(["tools"], ensure_ascii=False)
         if source in (SOURCE_SEED, SOURCE_FILE):
             return json.dumps(
-                ["knowledge", "prompts", "aesthetics", "tools"], ensure_ascii=False
+                ["knowledge", "aesthetics", "tools"], ensure_ascii=False
             )
         return None
     return json.dumps(parsed, ensure_ascii=False)
@@ -1541,17 +1509,9 @@ def _upsert_owned_skill(
     next_ver = version
     if row:
         src = _normalize_source(_row_get(row, "source"), default=source)
-        raw_src = str(_row_get(row, "source") or "").strip()
-        raw_trig = _row_get(row, "triggers")
-        if (
-            source == SOURCE_SEED
-            and key in _SEED_BY_KEY
-            and (not raw_src or src == SOURCE_ADMIN)
-            and raw_trig is None
-        ):
-            src = SOURCE_SEED
-        if not raw_src and source == SOURCE_SEED and key in _SEED_BY_KEY:
-            src = SOURCE_SEED
+        # Community seed is cold-start only: never update / never reclaim admin rows.
+        if source == SOURCE_SEED:
+            return
         if src in skip_sources:
             return
         try:
@@ -1621,7 +1581,7 @@ def _upsert_owned_skill(
                 when,
                 preferred_json,
                 allowed_json or json.dumps(
-                    ["knowledge", "prompts", "aesthetics", "tools"]
+                    ["knowledge", "aesthetics", "tools"]
                     if source != SOURCE_ADMIN
                     else ["tools"],
                     ensure_ascii=False,
@@ -1727,7 +1687,7 @@ def ensure_design_skills(*, force: bool = False) -> None:
                 seeded.setdefault("namespace", NS_CORE)
                 seeded.setdefault(
                     "allowed_resources",
-                    ["knowledge", "prompts", "aesthetics", "tools"],
+                    ["knowledge", "aesthetics", "tools"],
                 )
                 _upsert_owned_skill(
                     conn,
@@ -1744,11 +1704,12 @@ def ensure_design_skills(*, force: bool = False) -> None:
                     now=now,
                     skip_sources=_PROTECTED_FROM_FILE,
                 )
-            for kind in PROMPT_KIND_TO_SKILL:
+            # Retired need_* packs (design_spec/vision/aesthetics) → Skills; delete leftovers.
+            for kind in RETIRED_NEED_PROMPT_KINDS:
                 try:
                     conn.execute(
-                        "UPDATE design_prompt_pack SET enabled = 0, updated_at = ? WHERE kind = ?",
-                        (now, kind),
+                        "DELETE FROM design_prompt_pack WHERE kind = ?",
+                        (kind,),
                     )
                 except Exception:
                     pass
