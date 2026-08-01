@@ -4,7 +4,7 @@ import {
   closeShapeStylePanel,
   patchDocumentNode,
 } from '@/store/modules/editor';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -22,8 +22,8 @@ import {
 } from '@/components/editor/nodes/ShapeNode/CornerRadiusPanel';
 import GradientHandlesOverlay from '@/components/editor/nodes/ShapeNode/GradientHandlesOverlay';
 import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesOverlay';
-import { parseStrokeStyle } from '@/components/rcb/scene/sceneStrokeStyle';
-import { supportsSideStroke } from '@/components/rcb/scene/sceneDocument';
+import { parseStrokeStyle } from '@/components/rcb/scene/document/sceneStrokeStyle';
+import { supportsSideStroke } from '@/components/rcb/scene/document/sceneDocument';
 import {
   DEFAULT_FILL_IMAGE_ADJUST,
   fillImageFieldsFromAttrs,
@@ -32,15 +32,22 @@ import {
   serializeFillGradient,
   serializeFillImageAdjust,
   type FillGradient,
-} from '@/components/rcb/scene/sceneFill';
+} from '@/components/rcb/scene/document/sceneFill';
 import {
   resolveStrokeAlign,
   resolveStrokeLinecap,
   resolveStrokeLinejoin,
   boolEffectAttr,
-} from '@/components/rcb/scene/sceneEffects';
-import { supportsFill, supportsCornerRadius } from '@/components/rcb/scene/sceneDocument';
-import { parseClosedPathRings, radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
+} from '@/components/rcb/scene/document/sceneEffects';
+import { supportsFill, supportsCornerRadius } from '@/components/rcb/scene/document/sceneDocument';
+import {
+  cornerVertexCount,
+  isRadiusLinked,
+  parseClosedPathRings,
+  radiiFromAttrs,
+  serializeRadiusVertices,
+  vertexRadiiFromAttrs,
+} from '@/components/rcb/scene/document/sceneRadii';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -171,10 +178,27 @@ function readStrokeSides(attrs: Record<string, unknown> | undefined): StrokeSide
   };
 }
 
-function readStrokeCorners(attrs: Record<string, unknown> | undefined): CornerRadiiValue {
+function readStrokeCorners(
+  attrs: Record<string, unknown> | undefined,
+  vertexCount = 4
+): CornerRadiiValue {
   const r = radiiFromAttrs(attrs);
-  const linked = attrs?.radiusLinked !== false && attrs?.radiusLinked !== 'false';
-  return { tl: r.tl, tr: r.tr, br: r.br, bl: r.bl, linked: Boolean(linked) };
+  const n = Math.max(3, Math.round(vertexCount) || 4);
+  const vertices = vertexRadiiFromAttrs(attrs, n);
+  // Rect: default linked. Multi-corner path/polygon: default unlocked so each
+  // vertex is editable (explicit radiusLinked=true still locks them together).
+  const linked =
+    n === 4
+      ? isRadiusLinked(attrs)
+      : attrs?.radiusLinked === true || attrs?.radiusLinked === 'true';
+  return {
+    tl: r.tl,
+    tr: r.tr,
+    br: r.br,
+    bl: r.bl,
+    linked: Boolean(linked),
+    vertices,
+  };
 }
 
 function readStrokeValue(attrs: Record<string, unknown> | undefined): StrokePanelValue {
@@ -426,7 +450,31 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
     for (const id of panel.nodeIds) {
       const node = document?.deltaSetLike?.[id];
       if (!node || !supportsCornerRadius(node)) continue;
-      // Honor explicit link toggle — do not re-link just because four corners match.
+      const count = cornerVertexCount(node);
+      const vertices =
+        next.vertices && next.vertices.length
+          ? Array.from({ length: count }, (_, i) =>
+              Math.max(
+                0,
+                Math.round(
+                  next.vertices![i] ??
+                    next.vertices![next.vertices!.length - 1] ??
+                    next.tl ??
+                    0
+                )
+              )
+            )
+          : vertexRadiiFromAttrs(
+              {
+                radiusTL: next.tl,
+                radiusTR: next.tr,
+                radiusBR: next.br,
+                radiusBL: next.bl,
+                radiusLinked: next.linked ? 'true' : 'false',
+              },
+              count
+            );
+      // Honor explicit link toggle — do not re-link just because corners match.
       dispatch(
         patchDocumentNode({
           nodeId: id,
@@ -437,6 +485,7 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
               radiusBR: Math.max(0, Math.round(next.br) || 0),
               radiusBL: Math.max(0, Math.round(next.bl) || 0),
               radiusLinked: next.linked ? 'true' : 'false',
+              radiusVertices: serializeRadiusVertices(vertices),
             },
           },
         })
@@ -539,11 +588,15 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
             />
           ) : panel.kind === 'radius' ? (
             <CornerRadiusPanel
-              value={readStrokeCorners(firstAttrs)}
+              value={readStrokeCorners(
+                firstAttrs,
+                firstNode ? cornerVertexCount(firstNode) : 4
+              )}
               onChange={applyRadius}
               title={'圆角'}
               onClose={close}
               max={cornerMax}
+              vertexCount={firstNode ? cornerVertexCount(firstNode) : 4}
             />
           ) : (
             <StrokePanel

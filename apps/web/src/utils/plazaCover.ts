@@ -2,7 +2,7 @@
  * Plaza list / publish covers — active or first artboard (no dedicated「封面」 required).
  */
 
-import { isExportableSceneNode } from '@/components/rcb/scene/sceneDocument';
+import { isExportableSceneNode } from '@/components/rcb/scene/document/sceneDocument';
 
 export const PLAZA_COVER_FRAME_NAME = '封面';
 

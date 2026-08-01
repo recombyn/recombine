@@ -17,10 +17,10 @@ import {
   getPreviewFontFamily,
   loadFontCatalog,
   type FontFamilyNode,
-} from '@/components/rcb/scene/fontCatalog';
+} from '@/components/rcb/scene/document/fontCatalog';
 import { DropdownPanelItem } from '@/components/base';
 import { cn } from '@/utils/classnames';
-import { SEL_TOOL_BTN } from '@/components/rcb/selection/ToolbarValueSlider';
+import { SEL_TOOL_BTN } from '@/components/rcb/selection/chrome/ToolbarValueSlider';
 
 type Props = {
   value: string;
@@ -105,7 +105,7 @@ function FontFamilyPicker({ value, onChange, className }: Props): ReactNode {
         </span>
         <HiOutlineChevronDown
           className={cn(
-            'h-3 w-3 shrink-0 text-[var(--muted)] transition-transform',
+            'h-3 w-3 shrink-0 text-current transition-transform',
             open && 'rotate-180'
           )}
         />

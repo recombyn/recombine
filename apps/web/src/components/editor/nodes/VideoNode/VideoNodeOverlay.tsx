@@ -14,9 +14,9 @@ import {
   isVideoGeneratorNode,
   isVideoNode,
   stackZIndex,
-} from '@/components/rcb/scene/sceneDocument';
-import { radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+} from '@/components/rcb/scene/document/sceneDocument';
+import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import VideoHoverPlayback from './VideoHoverPlayback';
 
 export type VideoGeomOverride = {

@@ -1,5 +1,5 @@
 {
-  "rev": 27,
+  "rev": 28,
   "types": [
     {
       "code": "scene",
@@ -70,24 +70,6 @@
       "code": "system",
       "label": "系统",
       "sortOrder": 20
-    },
-    {
-      "dictType": "prompt_pack_kind",
-      "code": "design_spec",
-      "label": "设计方法论",
-      "sortOrder": 10
-    },
-    {
-      "dictType": "prompt_pack_kind",
-      "code": "vision",
-      "label": "看图抽取",
-      "sortOrder": 20
-    },
-    {
-      "dictType": "prompt_pack_kind",
-      "code": "aesthetics",
-      "label": "美学看图",
-      "sortOrder": 30
     },
     {
       "dictType": "canvas_tool_kind",

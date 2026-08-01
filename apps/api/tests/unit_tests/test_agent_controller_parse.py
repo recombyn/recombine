@@ -231,20 +231,6 @@ def test_has_pending_resource_details():
     assert _has_pending_resource_details(skills)
 
 
-def test_turn_bridges_need_prompts_to_skills():
-    turn = _turn_from_structured(
-        AgentTurnSchema(
-            thought="做海报",
-            intent="create",
-            need_prompts=["design_spec", "vision"],
-            tool_ops=[],
-            done=False,
-        )
-    )
-    assert "design_methodology" in turn["need_skills"]
-    assert "vision_extract" in turn["need_skills"]
-    assert turn["need_prompts"] == []
-
 
 def test_heuristic_user_intent_gate():
     from services.design.models_route import heuristic_user_intent

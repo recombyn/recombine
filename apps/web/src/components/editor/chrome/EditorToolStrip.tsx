@@ -40,8 +40,8 @@ import {
   fitImageSize,
   measureImageNaturalSize,
   prepareVideoUploadPreview,
-} from '@/components/rcb/scene/sceneDocument';
-import { sceneToDocumentCoords } from '@/components/rcb/scene/svgToScene';
+} from '@/components/rcb/scene/document/sceneDocument';
+import { sceneToDocumentCoords } from '@/components/rcb/scene/paint/svgToScene';
 import {
   rcbCenterOnPoint,
   rcbFitImageIntoViewport,

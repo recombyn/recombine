@@ -4,7 +4,7 @@ import { HiOutlineArrowUpTray } from 'react-icons/hi2';
 import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import { uploadImageFile, readFileAsDataUrl } from '@/utils/uploadImage';
-import { measureImageNaturalSize } from '@/components/rcb/scene/sceneDocument';
+import { measureImageNaturalSize } from '@/components/rcb/scene/document/sceneDocument';
 import { finishImageProcess, patchDocumentNode } from '@/store/modules/editor';
 
 type SceneBox = { left: number; top: number; width: number; height: number };

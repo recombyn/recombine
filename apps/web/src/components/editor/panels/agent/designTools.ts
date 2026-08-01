@@ -16,7 +16,7 @@ import {
   updateArtboardFrame,
   type ArtboardFrame,
 } from '@/store/modules/editor';
-import { exportFabricImage } from '@/components/rcb/scene/exportImage';
+import { exportFabricImage } from '@/components/rcb/scene/paint/exportImage';
 import {
   addNodeToDocument,
   createImageNode,
@@ -28,20 +28,25 @@ import {
   reorderNodesInDocument,
   supportsBooleanOp,
   ungroupNodesInDocument,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import {
   buildMarkdownTextAttrs,
   measurePlainTextSize,
   measureWrappedTextSize,
   parseNodeTextStyle,
-} from '@/components/rcb/scene/sceneText';
-import { serializeFillGradient } from '@/components/rcb/scene/sceneFill';
-import { createMeshGrid, type MeshSize } from '@/components/rcb/scene/sceneDiffuseMesh';
-import { isStrokeStyle } from '@/components/rcb/scene/sceneStrokeStyle';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+} from '@/components/rcb/scene/document/sceneText';
+import { serializeFillGradient } from '@/components/rcb/scene/document/sceneFill';
+import { createMeshGrid, type MeshSize } from '@/components/rcb/scene/document/sceneDiffuseMesh';
+import { isStrokeStyle } from '@/components/rcb/scene/document/sceneStrokeStyle';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { computeShapeBoolean, applyBooleanResultPaint, type BoolMode } from '@/components/rcb/selection/shapeBoolean';
 import { nanoid } from '@reduxjs/toolkit';
 import { getAllowedCanvasToolKeys } from '@/components/editor/panels/agent/toolOpsContract';
+import {
+  buildOutlinePathAsync,
+  canOutlineNode,
+  outlineNodePatch,
+} from '@/components/rcb/scene/paint/outlineToPath';
 
 const IMAGE_PLACEHOLDER =
   "data:image/svg+xml," +
@@ -158,6 +163,7 @@ export const FE_ACTION_EXECUTOR_KEYS = [
   'update_node',
   'create_shape',
   'create_text',
+  'outline_text',
   'create_image',
   'create_svg',
   'create_icon',
@@ -187,6 +193,7 @@ export const DESIGN_TOOL_NAMES = [
   'update_frame',
   'create_shape',
   'create_text',
+  'outline_text',
   'create_image',
   'create_svg',
   'create_icon',
@@ -631,13 +638,34 @@ function applyCornerRadii(node: any, args: Record<string, unknown>) {
     applyCornerRadius(node, num(args.cornerRadius));
     return;
   }
+  const attrs: Record<string, unknown> = { ...(node.attrs || {}) };
+  // Multi-corner path / polygon: "12,0,8,…" or number[] → radiusVertices.
+  if (args.radiusVertices != null) {
+    const parts = Array.isArray(args.radiusVertices)
+      ? args.radiusVertices.map((v) => Math.max(0, Math.round(num(v))))
+      : String(args.radiusVertices)
+          .split(/[,\s]+/)
+          .filter(Boolean)
+          .map((v) => Math.max(0, Math.round(num(v))));
+    if (parts.length) {
+      attrs.radiusVertices = parts.join(',');
+      attrs.radiusLinked = parts.every((v) => v === parts[0]) ? 'true' : 'false';
+      if (parts.length >= 4) {
+        attrs.radiusTL = parts[0];
+        attrs.radiusTR = parts[1];
+        attrs.radiusBR = parts[2];
+        attrs.radiusBL = parts[3];
+      }
+      node.attrs = attrs;
+      return;
+    }
+  }
   const has =
     args.radiusTL != null ||
     args.radiusTR != null ||
     args.radiusBR != null ||
     args.radiusBL != null;
   if (!has) return;
-  const attrs: Record<string, unknown> = { ...(node.attrs || {}) };
   if (args.radiusTL != null) attrs.radiusTL = Math.max(0, Math.round(num(args.radiusTL)));
   if (args.radiusTR != null) attrs.radiusTR = Math.max(0, Math.round(num(args.radiusTR)));
   if (args.radiusBR != null) attrs.radiusBR = Math.max(0, Math.round(num(args.radiusBR)));
@@ -693,6 +721,81 @@ function readAgentBoxes(doc: any, nodeIds: string[]): AgentNodeBox[] {
 function parseNodeIds(args: Record<string, unknown>): string[] {
   if (!Array.isArray(args.nodeIds)) return [];
   return [...new Set(args.nodeIds.map((x) => String(x)).filter(Boolean))];
+}
+
+/** nodeIds[] or single nodeId/id (outline_text / image_process style). */
+function parseNodeIdsOrSingle(args: Record<string, unknown>): string[] {
+  const many = parseNodeIds(args);
+  if (many.length) return many;
+  const one = String(args.nodeId || args.id || '').trim();
+  return one ? [one] : [];
+}
+
+async function execOutlineText(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  pushHistory: () => void
+): Promise<AgentToolResult> {
+  const ids = parseNodeIdsOrSingle(args);
+  if (!ids.length) {
+    return {
+      status: 'error',
+      summary: 'outline_text requires nodeId or nodeIds',
+      next_actions: ['Pass text node id from SCENE'],
+    };
+  }
+  // One history snapshot — each patchDocumentNode would otherwise deep-clone
+  // the (now huge) path document again.
+  pushHistory();
+  const outlined: string[] = [];
+  const failed: string[] = [];
+  for (const nodeId of ids) {
+    const doc = ctx.getDocument();
+    const node = doc?.deltaSetLike?.[nodeId];
+    if (!node || !canOutlineNode(node)) {
+      failed.push(nodeId);
+      continue;
+    }
+    const outline = await buildOutlinePathAsync(node);
+    if (!outline?.pathD) {
+      failed.push(nodeId);
+      continue;
+    }
+    const patch = outlineNodePatch(node, outline);
+    ctx.dispatch(
+      patchDocumentNode({
+        nodeId,
+        skipHistory: true,
+        patch: {
+          key: 'shape',
+          x: patch.x,
+          y: patch.y,
+          width: patch.width,
+          height: patch.height,
+          attrs: patch.attrs,
+        },
+      })
+    );
+    outlined.push(nodeId);
+  }
+  if (!outlined.length) {
+    return {
+      status: 'error',
+      summary: `outline_text failed (${failed.join(', ') || 'no valid text'})`,
+      next_actions: [
+        'Ensure node is text with content',
+        'Or create_shape path / create_svg for letterforms',
+      ],
+    };
+  }
+  return {
+    status: failed.length ? 'warning' : 'success',
+    summary: `Outlined ${outlined.length} text node(s) to path${
+      failed.length ? `; skipped ${failed.length}` : ''
+    }`,
+    artifacts: { nodeIds: outlined, failed },
+    next_actions: ['update_node fill/stroke on path', 'boolean_op if combining letterforms'],
+  };
 }
 
 /** Keep new nodes inside the target artboard (models often place outside). */
@@ -1234,7 +1337,9 @@ function execCreateText(
   const baseStyle = parseNodeTextStyle({});
   const nextStyle: Record<string, unknown> = { ...baseStyle };
   if (args.fontSize != null) nextStyle.fontSize = num(args.fontSize, 14);
-  if (args.color != null) nextStyle.fill = String(args.color);
+  // Seed/docs use fill; models also emit color — accept both.
+  const textFill = args.color ?? args.fill ?? args.fillColor;
+  if (textFill != null) nextStyle.fill = String(textFill);
   if (args.fontWeight != null) nextStyle.fontWeight = String(args.fontWeight);
   if (args.fontFamily != null) nextStyle.fontFamily = String(args.fontFamily);
   if (args.fontStyle != null) nextStyle.fontStyle = String(args.fontStyle);
@@ -1323,24 +1428,82 @@ function execCreateText(
   };
 }
 
-function execUpdateNode(
-  args: Record<string, unknown>,
-  ctx: DesignToolContext,
-  doc: any,
-  pushHistory: () => void
-): AgentToolResult {
 
-  const nodeId = String(args.nodeId || args.id || '');
-  if (!nodeId) return { status: 'error', summary: 'nodeId required' };
-  const latest = ctx.getDocument()?.deltaSetLike?.[nodeId];
-  if (!latest) return { status: 'error', summary: `Node not found: ${nodeId}` };
-  const patch: Record<string, unknown> = {};
-  // Inventory uses w/h; update_node contract uses width/height.
+const UPDATE_NODE_STYLE_ARG_KEYS = [
+  'stroke',
+  'borderWidth',
+  'strokeStyle',
+  'strokeAlign',
+  'strokeLinecap',
+  'strokeLinejoin',
+  'strokeOpacity',
+  'strokeSides',
+  'strokeTop',
+  'strokeRight',
+  'strokeBottom',
+  'strokeLeft',
+  'shadowEnabled',
+  'shadowVisible',
+  'shadowColor',
+  'shadowBlur',
+  'shadowX',
+  'shadowY',
+  'cornerRadius',
+  'radiusTL',
+  'radiusTR',
+  'radiusBR',
+  'radiusBL',
+  'radiusVertices',
+  'opacity',
+  'rotation',
+  'flipX',
+  'flipY',
+  'hidden',
+  'locked',
+  'blendMode',
+  'path',
+  'closed',
+  'name',
+  'sides',
+  'text',
+  'fontSize',
+  'fontWeight',
+  'fontFamily',
+  'fontStyle',
+  'textAlign',
+  'lineHeight',
+  'letterSpacing',
+  'textDecoration',
+  'color',
+] as const;
+
+function updateNodeFillTouched(args: Record<string, unknown>): boolean {
+  return (
+    args.fillType != null ||
+    args.fill != null ||
+    args.fillColor != null ||
+    args.backgroundColor != null ||
+    args.fillEnd != null ||
+    args.fillTo != null ||
+    args.gradientAngle != null ||
+    args.meshSize != null ||
+    args.meshPoints != null ||
+    args.fillImageSrc != null ||
+    args.fillOpacity != null
+  );
+}
+
+function patchUpdateNodeGeometry(
+  patch: Record<string, unknown>,
+  args: Record<string, unknown>,
+  latest: any,
+  doc: any,
+  targetFrameId: string | null | undefined
+) {
   const argWidth = args.width ?? args.w;
   const argHeight = args.height ?? args.h;
-  // Faithful apply: geometry / style exactly as backend ops say (no FE policy).
   if (args.x != null && args.y != null) {
-    const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+    const target = targetFrameId ? frameById(doc, targetFrameId) : null;
     const w =
       argWidth != null
         ? Math.max(1, num(argWidth))
@@ -1354,27 +1517,90 @@ function execUpdateNode(
     patch.y = placed.y;
     if (argWidth != null) patch.width = placed.width;
     if (argHeight != null) patch.height = placed.height;
-  } else {
-    if (args.x != null) patch.x = num(args.x);
-    if (args.y != null) patch.y = num(args.y);
-    if (argWidth != null) patch.width = Math.max(1, num(argWidth));
-    if (argHeight != null) patch.height = Math.max(1, num(argHeight));
+    return { argWidth, argHeight };
   }
+  if (args.x != null) patch.x = num(args.x);
+  if (args.y != null) patch.y = num(args.y);
+  if (argWidth != null) patch.width = Math.max(1, num(argWidth));
+  if (argHeight != null) patch.height = Math.max(1, num(argHeight));
+  return { argWidth, argHeight };
+}
+
+function applyUpdateNodeTextPatch(opts: {
+  latest: any;
+  shell: { attrs: Record<string, unknown> };
+  args: Record<string, unknown>;
+  fillRaw: unknown;
+  argWidth: unknown;
+  argHeight: unknown;
+  patch: Record<string, unknown>;
+}) {
+  const { latest, shell, args, fillRaw, argWidth, argHeight, patch } = opts;
+  if (latest.key !== 'text') return;
+  const stylePatch: Record<string, unknown> = {};
+  if (args.fontSize != null) stylePatch.fontSize = num(args.fontSize);
+  if (args.fontWeight != null) stylePatch.fontWeight = String(args.fontWeight);
+  if (args.fontFamily != null) stylePatch.fontFamily = String(args.fontFamily);
+  if (args.fontStyle != null) stylePatch.fontStyle = String(args.fontStyle);
+  if (args.textAlign != null) stylePatch.textAlign = String(args.textAlign);
+  if (args.lineHeight != null) stylePatch.lineHeight = num(args.lineHeight, 1.4);
+  if (args.letterSpacing != null) stylePatch.letterSpacing = num(args.letterSpacing, 0);
+  if (args.textDecoration != null) stylePatch.textDecoration = String(args.textDecoration);
+  if (args.color != null && fillRaw == null) {
+    shell.attrs['fill-color'] = String(args.color);
+    shell.attrs['fill-type'] = 'solid';
+    stylePatch.fill = String(args.color);
+  }
+  if (args.text == null && !Object.keys(stylePatch).length) return;
+  const style = {
+    ...parseNodeTextStyle({ ...(latest.attrs || {}), ...shell.attrs }),
+    ...stylePatch,
+  };
+  const nextText =
+    args.text != null ? String(args.text) : String(latest.attrs?.text || '');
+  Object.assign(shell.attrs, buildMarkdownTextAttrs(nextText, style as any));
+  if (argWidth == null || argHeight == null) {
+    const measured = measurePlainTextSize(nextText, style as any);
+    if (argWidth == null) patch.width = measured.width;
+    if (argHeight == null) patch.height = measured.height;
+  }
+}
+
+function updateNodeStyleArgsTouched(
+  args: Record<string, unknown>,
+  opts: { fillTouched: boolean; shapeTypeRaw: unknown; latest: any }
+): boolean {
+  if (opts.fillTouched) return true;
+  if (opts.shapeTypeRaw != null) return true;
+  if (opts.latest.key === 'image' && args.src != null) return true;
+  return UPDATE_NODE_STYLE_ARG_KEYS.some((k) => args[k] != null);
+}
+
+function execUpdateNode(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  _pushHistory: () => void
+): AgentToolResult {
+  const nodeId = String(args.nodeId || args.id || '');
+  if (!nodeId) return { status: 'error', summary: 'nodeId required' };
+  const latest = ctx.getDocument()?.deltaSetLike?.[nodeId];
+  if (!latest) return { status: 'error', summary: `Node not found: ${nodeId}` };
+
+  const patch: Record<string, unknown> = {};
+  const { argWidth, argHeight } = patchUpdateNodeGeometry(
+    patch,
+    args,
+    latest,
+    doc,
+    ctx.targetFrameId
+  );
 
   const shell = { attrs: { ...(latest.attrs || {}) } as Record<string, unknown> };
   const fillRaw = args.fill ?? args.fillColor ?? args.backgroundColor;
   const fillTypeArg =
     args.fillType != null ? String(args.fillType).toLowerCase() : null;
-  const fillTouched =
-    fillTypeArg != null ||
-    fillRaw != null ||
-    args.fillEnd != null ||
-    args.fillTo != null ||
-    args.gradientAngle != null ||
-    args.meshSize != null ||
-    args.meshPoints != null ||
-    args.fillImageSrc != null ||
-    args.fillOpacity != null;
+  const fillTouched = updateNodeFillTouched(args);
 
   if (fillTouched) {
     applyShapeFill(
@@ -1396,13 +1622,8 @@ function execUpdateNode(
   if (args.borderWidth != null) {
     const bw = num(args.borderWidth);
     shell.attrs['border-width'] = bw;
-    if (bw <= 0) {
-      shell.attrs['stroke-enabled'] = 'false';
-      shell.attrs['stroke-visible'] = 'false';
-    } else {
-      shell.attrs['stroke-enabled'] = 'true';
-      shell.attrs['stroke-visible'] = 'true';
-    }
+    shell.attrs['stroke-enabled'] = bw <= 0 ? 'false' : 'true';
+    shell.attrs['stroke-visible'] = bw <= 0 ? 'false' : 'true';
   }
   applyStrokeExtras(shell, args);
   applyShadow(shell, args);
@@ -1421,7 +1642,7 @@ function execUpdateNode(
   if (args.path != null) shell.attrs.path = String(args.path);
   if (args.closed != null) shell.attrs.closed = truthy(args.closed) ? 'true' : 'false';
   if (args.name != null) shell.attrs.name = String(args.name);
-  // Morph shape in place (rect→circle etc.) — keep id / z-order.
+
   const shapeTypeRaw = args.shapeType ?? args.type;
   if (shapeTypeRaw != null && String(shapeTypeRaw).trim() && latest.key === 'shape') {
     const st = String(shapeTypeRaw).trim().toLowerCase();
@@ -1434,88 +1655,25 @@ function execUpdateNode(
     shell.attrs.src = String(args.src);
   }
 
-  if (latest.key === 'text') {
-    const stylePatch: Record<string, unknown> = {};
-    if (args.fontSize != null) stylePatch.fontSize = num(args.fontSize);
-    if (args.fontWeight != null) stylePatch.fontWeight = String(args.fontWeight);
-    if (args.fontFamily != null) stylePatch.fontFamily = String(args.fontFamily);
-    if (args.fontStyle != null) stylePatch.fontStyle = String(args.fontStyle);
-    if (args.textAlign != null) stylePatch.textAlign = String(args.textAlign);
-    if (args.lineHeight != null) stylePatch.lineHeight = num(args.lineHeight, 1.4);
-    if (args.letterSpacing != null) stylePatch.letterSpacing = num(args.letterSpacing, 0);
-    if (args.textDecoration != null) stylePatch.textDecoration = String(args.textDecoration);
-    if (args.color != null && fillRaw == null) {
-      shell.attrs['fill-color'] = String(args.color);
-      shell.attrs['fill-type'] = 'solid';
-      stylePatch.fill = String(args.color);
-    }
-    if (args.text != null || Object.keys(stylePatch).length) {
-      const style = {
-        ...parseNodeTextStyle({ ...(latest.attrs || {}), ...shell.attrs }),
-        ...stylePatch,
-      };
-      const nextText =
-        args.text != null ? String(args.text) : String(latest.attrs?.text || '');
-      Object.assign(shell.attrs, buildMarkdownTextAttrs(nextText, style as any));
-      if (argWidth == null || argHeight == null) {
-        const measured = measurePlainTextSize(nextText, style as any);
-        if (argWidth == null) patch.width = measured.width;
-        if (argHeight == null) patch.height = measured.height;
-      }
-    }
+  applyUpdateNodeTextPatch({
+    latest,
+    shell,
+    args,
+    fillRaw,
+    argWidth,
+    argHeight,
+    patch,
+  });
+
+  if (
+    updateNodeStyleArgsTouched(args, {
+      fillTouched,
+      shapeTypeRaw,
+      latest,
+    })
+  ) {
+    patch.attrs = shell.attrs;
   }
-
-  // Only patch attrs if something style-related changed (diff vs original).
-  const styleArgsTouched =
-    fillTouched ||
-    args.stroke != null ||
-    args.borderWidth != null ||
-    args.strokeStyle != null ||
-    args.strokeAlign != null ||
-    args.strokeLinecap != null ||
-    args.strokeLinejoin != null ||
-    args.strokeOpacity != null ||
-    args.strokeSides != null ||
-    args.strokeTop != null ||
-    args.strokeRight != null ||
-    args.strokeBottom != null ||
-    args.strokeLeft != null ||
-    args.shadowEnabled != null ||
-    args.shadowVisible != null ||
-    args.shadowColor != null ||
-    args.shadowBlur != null ||
-    args.shadowX != null ||
-    args.shadowY != null ||
-    args.cornerRadius != null ||
-    args.radiusTL != null ||
-    args.radiusTR != null ||
-    args.radiusBR != null ||
-    args.radiusBL != null ||
-    args.opacity != null ||
-    args.rotation != null ||
-    args.flipX != null ||
-    args.flipY != null ||
-    args.hidden != null ||
-    args.locked != null ||
-    args.blendMode != null ||
-    args.path != null ||
-    args.closed != null ||
-    args.name != null ||
-    shapeTypeRaw != null ||
-    args.sides != null ||
-    args.text != null ||
-    args.fontSize != null ||
-    args.fontWeight != null ||
-    args.fontFamily != null ||
-    args.fontStyle != null ||
-    args.textAlign != null ||
-    args.lineHeight != null ||
-    args.letterSpacing != null ||
-    args.textDecoration != null ||
-    args.color != null ||
-    (latest.key === 'image' && args.src != null);
-
-  if (styleArgsTouched) patch.attrs = shell.attrs;
   if (!Object.keys(patch).length) {
     return {
       status: 'warning',
@@ -1607,6 +1765,1038 @@ function execCreateFrame(
   };
 }
 
+function execGetSceneSummary(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  _pushHistory: () => void
+): AgentToolResult {
+  const summary = sceneSummary(doc, ctx.targetFrameId);
+  return {
+    status: 'success',
+    summary: `Scene: ${summary.frames.length} frames, ${summary.nodeCount} nodes`,
+    artifacts: summary,
+  };
+}
+
+function execListCapabilities(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ui = ctx.canvasUi;
+    const keys = [...getAllowedCanvasToolKeys()].sort();
+    const available = [
+      keys.length
+        ? `画布 tool_ops（design_canvas_tool）：${keys.join(' / ')}`
+        : '画布 tool_ops：尚未从 catalog 同步（Admin 维护 design_canvas_tool）',
+      '样式：实色/线性/径向/角度/网格渐变(diffuse)/图片填充、描边虚线、阴影、混合模式、圆角、文字排版',
+      ui?.setZoom || ui?.zoomIn
+        ? '视口：set_viewport（缩放/适应画布）'
+        : null,
+      ui?.setCollabMode
+        ? 'Agent 模式：set_agent_mode（collaborative|milestone|auto）'
+        : null,
+      ui?.setLayersOpen || ui?.setMinimapOpen
+        ? '面板：toggle_editor_panel（layers|minimap|agent_settings）'
+        : null,
+    ].filter(Boolean);
+    return {
+      status: 'success',
+      summary: '已列出 Agent 已接入与暂未接入的画布能力',
+      artifacts: {
+        available,
+        tool_ops: keys,
+        unavailable: UNAVAILABLE_CAPABILITIES,
+        zoom: ui?.getZoom?.() ?? null,
+        collabMode: ui?.getCollabMode?.() ?? null,
+      },
+      next_actions: [
+        '对已接入能力直接调用对应工具',
+        '对暂未接入能力用中文告知用户，并给出手动操作路径；不要假装已执行',
+      ],
+    };
+  
+}
+
+function execSetViewport(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ui = ctx.canvasUi;
+    let action = String(args.action || args.mode || '').toLowerCase();
+    if (!action && truthy(args.fit)) action = 'fit';
+    if (!action && (args.percent != null || args.zoom != null)) action = 'set';
+    if (!ui?.zoomIn && !ui?.setZoom && !ui?.fitView) {
+      return {
+        status: 'error',
+        summary:
+          '缩放暂未接入当前会话。请用左下角缩放条手动调节。',
+      };
+    }
+    if (action === 'zoom_in' || action === 'in') {
+      ui.zoomIn?.();
+      return {
+        status: 'success',
+        summary: `已放大（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
+      };
+    }
+    if (action === 'zoom_out' || action === 'out') {
+      ui.zoomOut?.();
+      return {
+        status: 'success',
+        summary: `已缩小（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
+      };
+    }
+    if (action === 'fit' || action === 'reset' || action === 'fit_view') {
+      if (typeof ui.fitView === 'function') ui.fitView();
+      else ui.setZoom?.(1);
+      return { status: 'success', summary: '已适应/重置画布缩放' };
+    }
+    if (
+      action === 'set' ||
+      action === 'percent' ||
+      args.percent != null ||
+      args.zoom != null
+    ) {
+      let z = 1;
+      if (args.percent != null) z = num(args.percent, 100) / 100;
+      else if (args.zoom != null) {
+        const raw = num(args.zoom, 1);
+        z = raw > 8 ? raw / 100 : raw;
+      }
+      z = Math.min(8, Math.max(0.05, z));
+      if (!ui.setZoom) {
+        return {
+          status: 'error',
+          summary: '当前无法设置精确缩放百分比，请用左下角缩放条。',
+        };
+      }
+      ui.setZoom(z);
+      return { status: 'success', summary: `缩放已设为 ${Math.round(z * 100)}%` };
+    }
+    return {
+      status: 'error',
+      summary: 'set_viewport 需要 action: zoom_in|zoom_out|fit|set（可配 percent）',
+    };
+  
+}
+
+function execSetCanvasBackground(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const color = String(args.color ?? args.backgroundColor ?? args.fill ?? '').trim();
+    const fillType = String(args.fillType || 'solid').toLowerCase();
+    if (!color && fillType === 'solid') {
+      return { status: 'error', summary: 'set_canvas_background 需要 color' };
+    }
+    const allowed = new Set(['solid', 'linear', 'radial', 'angular', 'diffuse', 'image']);
+    const meta: Record<string, unknown> = {
+      backgroundFillType: allowed.has(fillType) ? fillType : 'solid',
+      backgroundColor: color || '#f5f5f5',
+      backgroundOpacity: args.opacity != null ? num(args.opacity, 100) : 100,
+    };
+    if (
+      fillType === 'linear' ||
+      fillType === 'radial' ||
+      fillType === 'angular' ||
+      fillType === 'diffuse'
+    ) {
+      const c0 = color || '#3B82F6';
+      const c1 = String(args.fillEnd ?? c0);
+      const angle = num(args.gradientAngle, fillType === 'angular' ? 0 : 90);
+      if (fillType === 'diffuse') {
+        const meshSize = Math.min(8, Math.max(3, Math.round(num(args.meshSize, 4)))) as MeshSize;
+        const meshPoints = parseMeshPoints(args.meshPoints, meshSize, c0);
+        meta.backgroundGradient = serializeFillGradient({
+          type: 'diffuse',
+          meshSize,
+          meshPoints,
+          colorStops: [
+            { offset: 0, color: meshPoints[0]?.color || c0 },
+            { offset: 1, color: meshPoints[meshPoints.length - 1]?.color || c1 },
+          ],
+        });
+      } else {
+        meta.backgroundGradient = serializeFillGradient({
+          type: fillType as 'linear' | 'radial' | 'angular',
+          angle,
+          cx: 50,
+          cy: 50,
+          r: 70,
+          colorStops: [
+            { offset: 0, color: c0 },
+            { offset: 1, color: c1 },
+          ],
+        });
+      }
+    }
+    if (fillType === 'image' && args.fillImageSrc != null) {
+      meta.backgroundImageSrc = String(args.fillImageSrc);
+      meta.backgroundImageFit = String(args.fillImageFit || 'fill');
+    }
+    ctx.dispatch(setCanvasMeta(meta));
+    return {
+      status: 'success',
+      summary: `画布背景已更新（${fillType}${color ? ` ${color}` : ''}）`,
+      artifacts: meta,
+    };
+  
+}
+
+function execSetAgentMode(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const mode = String(args.mode || '').toLowerCase();
+    if (!['collaborative', 'milestone', 'auto'].includes(mode)) {
+      return {
+        status: 'error',
+        summary: 'mode 须为 collaborative | milestone | auto（对应协作/里程碑/全自动）',
+      };
+    }
+    if (!ctx.canvasUi?.setCollabMode) {
+      return {
+        status: 'error',
+        summary: 'Agent 模式切换暂未注入。请在输入框左侧切换 Agent / 图片生成。',
+      };
+    }
+    ctx.canvasUi.setCollabMode(mode as 'collaborative' | 'milestone' | 'auto');
+    const labels: Record<string, string> = {
+      collaborative: '协作（每阶段确认）',
+      milestone: '里程碑（关键节点确认）',
+      auto: '全自动',
+    };
+    return {
+      status: 'success',
+      summary: `Agent 执行模式已设为「${labels[mode]}」`,
+      artifacts: { mode },
+    };
+  
+}
+
+function execToggleEditorPanel(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const panel = String(args.panel || args.name || '').toLowerCase();
+    const open = args.open == null ? true : args.open === true || args.open === 'true';
+    const ui = ctx.canvasUi;
+    if (panel === 'layers' || panel === 'layer') {
+      if (!ui?.setLayersOpen) {
+        return {
+          status: 'error',
+          summary: '图层面板暂未接入。请点左下角「图层」按钮。',
+        };
+      }
+      ui.setLayersOpen(open);
+      return { status: 'success', summary: open ? '已打开图层面板' : '已关闭图层面板' };
+    }
+    if (panel === 'minimap' || panel === 'map') {
+      if (!ui?.setMinimapOpen) {
+        return {
+          status: 'error',
+          summary: '小地图暂未接入。请点左下角「小地图」按钮。',
+        };
+      }
+      ui.setMinimapOpen(open);
+      return { status: 'success', summary: open ? '已打开小地图' : '已关闭小地图' };
+    }
+    if (panel === 'agent_settings' || panel === 'settings' || panel === 'collab') {
+      if (ui?.openAccountAgent) {
+        ui.openAccountAgent();
+        return { status: 'success', summary: '已打开账户页的 Agent 模型设置' };
+      }
+      return {
+        status: 'error',
+        summary: '请到「管理账户 → Agent」添加第三方模型。',
+      };
+    }
+    if (
+      panel.includes('preview') ||
+      panel.includes('预览') ||
+      panel.includes('share') ||
+      panel.includes('分享')
+    ) {
+      const hit =
+        UNAVAILABLE_CAPABILITIES.find((c) =>
+          panel.includes('share') || panel.includes('分享')
+            ? c.id === 'share'
+            : c.id === 'product_preview'
+        ) || UNAVAILABLE_CAPABILITIES[0];
+      return { status: 'error', summary: hit.hint };
+    }
+    if (panel.includes('export') || panel.includes('导出')) {
+      return {
+        status: 'error',
+        summary:
+          '导出请用 export_canvas（format=png|jpeg|svg），不是 toggle_editor_panel。',
+        next_actions: ['export_canvas'],
+      };
+    }
+    return {
+      status: 'error',
+      summary: 'panel 支持：layers | minimap | agent_settings。其他请 list_capabilities。',
+    };
+  
+}
+
+function execAskUser(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const question = String(args.question || '').trim();
+    if (!question) return { status: 'error', summary: 'question required' };
+    const options = Array.isArray(args.options)
+      ? args.options
+          .map((x) => String(x).trim())
+          .filter((x) => Boolean(x) && x !== '取消')
+          .slice(0, 6)
+      : [];
+    return {
+      status: 'success',
+      summary: question,
+      artifacts: { ask: true, options },
+      next_actions: options.length ? options : ['等待用户回复'],
+    };
+  
+}
+
+function execFinish(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const summary = String(args.summary || '完成');
+    return { status: 'success', summary, artifacts: { done: true } };
+  
+}
+
+function execCreateSvg(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const width = Math.max(1, num(args.width, 48));
+    const height = Math.max(1, num(args.height, 48));
+    const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+    const svgRaw = String(args.svg || args.iconSvg || args.content || '').trim();
+    if (!svgRaw) {
+      return {
+        status: 'error',
+        summary: 'create_svg/create_icon requires args.svg (mini SVG markup).',
+        next_actions: ['Pass args.svg with viewBox 0 0 24 24'],
+      };
+    }
+    const origin = resolveCreateXY(args, target, width, height);
+    const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+    const fill = args.fill != null ? String(args.fill) : undefined;
+    const { id, node } = createSvgNode({
+      x: placed.x,
+      y: placed.y,
+      width: placed.width,
+      height: placed.height,
+      svg: svgRaw,
+      name: String(args.name || 'SVG'),
+      fill,
+    });
+    console.info('[create_svg]', {
+      id,
+      placed,
+      fill,
+      svgHead: svgRaw.slice(0, 160),
+      svgLen: svgRaw.length,
+    });
+    pushHistory();
+    ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
+    return {
+      status: placed.clamped ? 'warning' : 'success',
+      summary: `Created svg ${id}`,
+      artifacts: { nodeId: id, shapeType: 'svg' },
+      next_actions: ['Continue layout'],
+    };
+  
+}
+
+function execCreateImage(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+  const width = Math.max(8, num(args.width, 240));
+  const height = Math.max(8, num(args.height, 180));
+  const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+  const origin = resolveCreateXY(args, target, width, height);
+  const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+  const userImages = Array.isArray(ctx.userImages) ? ctx.userImages : [];
+  const genPrompt = String(args.genPrompt || args.prompt || '').trim();
+  let src = '';
+  let sourceKind: 'attachment' | 'src' | 'placeholder' = 'placeholder';
+  if (args.attachmentIndex != null) {
+    const idx = Math.max(0, Math.floor(num(args.attachmentIndex, 0)));
+    src = userImages[idx] || '';
+    if (!src) {
+      return {
+        status: 'error',
+        summary: `No user attachment at index ${idx} (have ${userImages.length}). Use placeholder or ask user to attach.`,
+        next_actions: ['create_image without attachmentIndex', 'ask_user'],
+      };
+    }
+    sourceKind = 'attachment';
+  } else if (args.src != null && String(args.src).trim()) {
+    src = String(args.src).trim();
+    sourceKind = 'src';
+  } else {
+    // Backend should have hydrated genPrompt → src via Seedream. If we still
+    // land here, show placeholder but keep genPrompt on the node for retry.
+    const kind = String(args.placeholder || 'image').toLowerCase();
+    src = kind === 'avatar' ? AVATAR_PLACEHOLDER : IMAGE_PLACEHOLDER;
+    sourceKind = 'placeholder';
+    if (genPrompt) {
+      console.warn('[create_image] genPrompt without src — hydrate missed?', {
+        genPrompt: genPrompt.slice(0, 120),
+        width: placed.width,
+        height: placed.height,
+      });
+    }
+  }
+  const { id, node } = createImageNode({
+    x: placed.x,
+    y: placed.y,
+    width: placed.width,
+    height: placed.height,
+    src,
+    name: String(args.name || (sourceKind === 'placeholder' ? 'Image Placeholder' : 'Image')),
+    assetKind: 'image',
+  });
+  if (genPrompt && sourceKind === 'placeholder') {
+    node.attrs = { ...(node.attrs || {}), genPrompt };
+  }
+  pushHistory();
+  ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
+  return {
+    status:
+      placed.clamped || (sourceKind === 'placeholder' && Boolean(genPrompt))
+        ? 'warning'
+        : 'success',
+    summary: summarizeCreateImage({
+      id,
+      sourceKind,
+      genPrompt,
+      placed,
+    }),
+    artifacts: { nodeId: id, sourceKind },
+    next_actions: ['Continue layout'],
+  };
+}
+
+function execAlignNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    const rawMode = String(args.mode || args.align || '').trim();
+    const mode = normalizeAlignMode(rawMode);
+    const allowedAlign = new Set([
+      'left',
+      'centerX',
+      'right',
+      'top',
+      'middle',
+      'bottom',
+    ]);
+    if (ids.length < 2) return { status: 'error', summary: 'align_nodes needs at least 2 nodeIds' };
+    if (!allowedAlign.has(mode)) {
+      return { status: 'error', summary: `Unknown align mode: ${mode || '(empty)'}` };
+    }
+    const boxes = readAgentBoxes(doc, ids);
+    if (boxes.length < 2) return { status: 'error', summary: 'Could not resolve node boxes' };
+    const minL = Math.min(...boxes.map((b) => b.left));
+    const maxR = Math.max(...boxes.map((b) => b.left + b.width));
+    const minT = Math.min(...boxes.map((b) => b.top));
+    const maxB = Math.max(...boxes.map((b) => b.top + b.height));
+    const midX = (minL + maxR) / 2;
+    const midY = (minT + maxB) / 2;
+    pushHistory();
+    const alignPatches = boxes.map((b) => {
+      const patch: { x?: number; y?: number } = {};
+      if (mode === 'left') patch.x = minL;
+      else if (mode === 'centerX') patch.x = midX - b.width / 2;
+      else if (mode === 'right') patch.x = maxR - b.width;
+      else if (mode === 'top') patch.y = minT;
+      else if (mode === 'middle') patch.y = midY - b.height / 2;
+      else patch.y = maxB - b.height;
+      return { nodeId: b.id, patch };
+    });
+    ctx.dispatch(patchDocumentNodes({ patches: alignPatches, skipHistory: true }));
+    return {
+      status: 'success',
+      summary: `Aligned ${boxes.length} nodes (${mode})`,
+      artifacts: { nodeIds: boxes.map((b) => b.id), mode },
+    };
+  
+}
+
+function execDistributeNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    const axisRaw = String(args.axis || 'h').toLowerCase();
+    const axis =
+      axisRaw === 'v' || axisRaw === 'vertical' || axisRaw === 'y' ? 'v' : 'h';
+    if (ids.length < 3) return { status: 'error', summary: 'distribute_nodes needs at least 3 nodeIds' };
+    const boxes = readAgentBoxes(doc, ids);
+    if (boxes.length < 3) return { status: 'error', summary: 'Could not resolve node boxes' };
+    const sorted = [...boxes].sort((a, b) => (axis === 'h' ? a.left - b.left : a.top - b.top));
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    pushHistory();
+    const distributePatches: Array<{ nodeId: string; patch: { x?: number; y?: number } }> = [];
+    if (axis === 'h') {
+      const span =
+        last.left + last.width - first.left - sorted.reduce((s, b) => s + b.width, 0);
+      const gap = span / (sorted.length - 1);
+      let x = first.left;
+      sorted.forEach((b, i) => {
+        if (i === 0) {
+          x = b.left + b.width + gap;
+          return;
+        }
+        if (i === sorted.length - 1) return;
+        distributePatches.push({ nodeId: b.id, patch: { x } });
+        x += b.width + gap;
+      });
+    } else {
+      const span =
+        last.top + last.height - first.top - sorted.reduce((s, b) => s + b.height, 0);
+      const gap = span / (sorted.length - 1);
+      let y = first.top;
+      sorted.forEach((b, i) => {
+        if (i === 0) {
+          y = b.top + b.height + gap;
+          return;
+        }
+        if (i === sorted.length - 1) return;
+        distributePatches.push({ nodeId: b.id, patch: { y } });
+        y += b.height + gap;
+      });
+    }
+    if (distributePatches.length) {
+      ctx.dispatch(patchDocumentNodes({ patches: distributePatches, skipHistory: true }));
+    }
+    return {
+      status: 'success',
+      summary: `Distributed ${sorted.length} nodes (${axis})`,
+      artifacts: { nodeIds: sorted.map((b) => b.id), axis },
+    };
+  
+}
+
+function execBooleanOp(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    const mode = String(args.mode || 'union') as BoolMode;
+    if (!['union', 'subtract', 'intersect', 'exclude'].includes(mode)) {
+      return { status: 'error', summary: `Unknown boolean mode: ${mode}` };
+    }
+    if (ids.length < 2) return { status: 'error', summary: 'boolean_op needs at least 2 nodeIds' };
+    const boxes = readAgentBoxes(doc, ids).filter((b) =>
+      supportsBooleanOp(doc?.deltaSetLike?.[b.id])
+    );
+    if (boxes.length < 2) {
+      return {
+        status: 'error',
+        summary: 'Need 2+ closed shapes (not line/arrow/pen/pencil/text/image)',
+      };
+    }
+    const { result, usedFallback } = computeShapeBoolean(boxes, mode);
+    if (!result) {
+      return {
+        status: 'error',
+        summary: mode === 'intersect' ? 'No overlap for intersect' : 'Boolean operation failed',
+      };
+    }
+    const sample = boxes[0];
+    const sampleNode = doc?.deltaSetLike?.[sample.id];
+    const { id, node } = createShapeNode({
+      x: result.x,
+      y: result.y,
+      width: result.width,
+      height: result.height,
+      shapeType: 'path',
+      fill: sample.fill,
+      stroke: sample.stroke,
+      borderWidth: sample.borderWidth,
+      path: result.path,
+      closed: true,
+    });
+    const attrs = node.attrs as Record<string, unknown>;
+    attrs['fill-rule'] = result.fillRule;
+    attrs.closed = 'true';
+    applyBooleanResultPaint(
+      attrs,
+      sampleNode?.attrs as Record<string, unknown> | undefined,
+      { stroke: sample.stroke, borderWidth: sample.borderWidth }
+    );
+    let next = addNodeToDocument(doc, id, node);
+    next = removeNodesFromDocument(next, boxes.map((b) => b.id));
+    pushHistory();
+    ctx.dispatch(setDocument(next));
+    return {
+      status: usedFallback ? 'warning' : 'success',
+      summary: usedFallback
+        ? `Boolean ${mode} → ${id} (bbox fallback)`
+        : `Boolean ${mode} → ${id}`,
+      artifacts: { nodeId: id, mode, removed: boxes.map((b) => b.id) },
+    };
+  
+}
+
+function execReorderNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    const raw = String(args.action || args.order || '').toLowerCase();
+    const actionMap: Record<string, 'front' | 'back' | 'forward' | 'backward'> = {
+      front: 'front',
+      back: 'back',
+      forward: 'forward',
+      backward: 'backward',
+      bring_to_front: 'front',
+      send_to_back: 'back',
+      bring_forward: 'forward',
+      send_backward: 'backward',
+    };
+    const action = actionMap[raw];
+    if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+    if (!action) {
+      return { status: 'error', summary: `Unknown reorder action: ${raw}` };
+    }
+    pushHistory();
+    ctx.dispatch(setDocumentFromCanvas(reorderNodesInDocument(doc, ids, action)));
+    return {
+      status: 'success',
+      summary: `Reordered ${ids.length} node(s) (${action})`,
+      artifacts: { nodeIds: ids, action },
+    };
+  
+}
+
+function execGroupNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    if (ids.length < 2) return { status: 'error', summary: 'group_nodes needs at least 2 nodeIds' };
+    pushHistory();
+    ctx.dispatch(setDocument(groupNodesInDocument(doc, ids)));
+    return {
+      status: 'success',
+      summary: `Grouped ${ids.length} nodes`,
+      artifacts: { nodeIds: ids },
+    };
+  
+}
+
+function execUngroupNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+    pushHistory();
+    ctx.dispatch(setDocument(ungroupNodesInDocument(doc, ids)));
+    return {
+      status: 'success',
+      summary: `Ungrouped ${ids.length} node(s)`,
+      artifacts: { nodeIds: ids },
+    };
+  
+}
+
+function execDuplicateNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+    const ox = num(args.offsetX, 24);
+    const oy = num(args.offsetY, 24);
+    let next = doc;
+    const created: string[] = [];
+    pushHistory();
+    for (const oldId of ids) {
+      const raw = next?.deltaSetLike?.[oldId];
+      if (!raw) continue;
+      const node = JSON.parse(JSON.stringify(raw));
+      const newId = nanoid(10);
+      node.id = newId;
+      node.x = (Number(node.x) || 0) + ox;
+      node.y = (Number(node.y) || 0) + oy;
+      if (node.attrs?.groupId) {
+        const { groupId: _g, ...rest } = node.attrs;
+        node.attrs = rest;
+      }
+      next = addNodeToDocument(next, newId, node);
+      created.push(newId);
+    }
+    if (!created.length) return { status: 'error', summary: 'No nodes duplicated' };
+    ctx.dispatch(setDocument(next));
+    return {
+      status: 'success',
+      summary: `Duplicated ${created.length} node(s)`,
+      artifacts: { nodeIds: created },
+    };
+  
+}
+
+function execFlipNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const ids = parseNodeIds(args);
+    if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+    const axis = String(args.axis || '').toLowerCase();
+    const doX =
+      args.flipX === true ||
+      args.flipX === 'true' ||
+      axis === 'horizontal' ||
+      axis === 'h' ||
+      axis === 'x';
+    const doY =
+      args.flipY === true ||
+      args.flipY === 'true' ||
+      axis === 'vertical' ||
+      axis === 'v' ||
+      axis === 'y';
+    if (!doX && !doY) return { status: 'error', summary: 'Set flipX and/or flipY true' };
+    pushHistory();
+    const flipPatches: Array<{ nodeId: string; patch: { attrs: Record<string, unknown> } }> = [];
+    for (const id of ids) {
+      const node = ctx.getDocument()?.deltaSetLike?.[id];
+      if (!node) continue;
+      const attrs: Record<string, unknown> = {};
+      if (doX) {
+        const cur = node.attrs?.flipX === true || node.attrs?.flipX === 'true';
+        attrs.flipX = cur ? 'false' : 'true';
+      }
+      if (doY) {
+        const cur = node.attrs?.flipY === true || node.attrs?.flipY === 'true';
+        attrs.flipY = cur ? 'false' : 'true';
+      }
+      flipPatches.push({ nodeId: id, patch: { attrs } });
+    }
+    if (flipPatches.length) {
+      ctx.dispatch(patchDocumentNodes({ patches: flipPatches, skipHistory: true }));
+    }
+    return {
+      status: 'success',
+      summary: `Flipped ${ids.length} node(s)`,
+      artifacts: { nodeIds: ids, flipX: doX, flipY: doY },
+    };
+  
+}
+
+function execDeleteNodes(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    if (!ctx.allowDestructive) {
+      return {
+        status: 'error',
+        summary:
+          'delete_nodes blocked: destructive ops require backend-approved allowDestructive.',
+        next_actions: ['create_frame', 'create_shape', 'create_text', 'update_node'],
+      };
+    }
+    const ids = Array.isArray(args.nodeIds)
+      ? args.nodeIds.map((x) => String(x)).filter(Boolean)
+      : [];
+    if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
+    const docNow = ctx.getDocument();
+    const frameIdSet = new Set(listFrames(docNow).map((f) => String(f.id)));
+    const frameIds = ids.filter((id) => frameIdSet.has(id));
+    const nodeIds = ids.filter((id) => !frameIdSet.has(id));
+    // Models often pass artboard id into delete_nodes — remap to frame delete.
+    if (frameIds.length) {
+      const childIds = nodeIdsInsideFrameLocal(docNow, frameIds);
+      const removeIds = [...new Set([...nodeIds, ...childIds])];
+      if (removeIds.length) {
+        ctx.dispatch(setDocument(removeNodesFromDocument(ctx.getDocument(), removeIds)));
+      }
+      ctx.dispatch(removeArtboardFrames(frameIds));
+      return {
+        status: 'success',
+        summary: `Deleted ${frameIds.length} frame(s)` + (removeIds.length ? ` + ${removeIds.length} node(s)` : ''),
+        artifacts: { frameIds, nodeIds: removeIds },
+      };
+    }
+    const before = new Set(
+      ((docNow?.deltaSetLike?.ROOT?.children as string[]) || []).filter(Boolean)
+    );
+    const next = removeNodesFromDocument(docNow, nodeIds);
+    const after = new Set(
+      ((next?.deltaSetLike?.ROOT?.children as string[]) || []).filter(Boolean)
+    );
+    const removed = nodeIds.filter((id) => before.has(id) && !after.has(id));
+    if (!removed.length) {
+      return {
+        status: 'error',
+        summary: 'delete_nodes: no matching scene nodes (use delete_frame for artboards)',
+      };
+    }
+    ctx.dispatch(setDocument(next));
+    return {
+      status: 'success',
+      summary: `Deleted ${removed.length} node(s)`,
+      artifacts: { nodeIds: removed },
+    };
+  
+}
+
+function execDeleteFrame(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    if (!ctx.allowDestructive) {
+      return {
+        status: 'error',
+        summary:
+          'delete_frame blocked: destructive ops require backend-approved allowDestructive.',
+        next_actions: ['delete_nodes', 'update_frame'],
+      };
+    }
+    const fid = resolveFrameOpId(args, ctx);
+    if (!fid) return { status: 'error', summary: 'frameId required' };
+    const docNow = ctx.getDocument();
+    if (!listFrames(docNow).some((f) => String(f.id) === fid)) {
+      return { status: 'error', summary: `frame not found: ${fid}` };
+    }
+    const childIds = nodeIdsInsideFrameLocal(docNow, [fid]);
+    if (childIds.length) {
+      ctx.dispatch(setDocument(removeNodesFromDocument(ctx.getDocument(), childIds)));
+    }
+    ctx.dispatch(removeArtboardFrames([fid]));
+    return {
+      status: 'success',
+      summary: `Deleted frame ${fid}`,
+      artifacts: { frameId: fid, nodeIds: childIds },
+    };
+  
+}
+
+function execUpdateFrame(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const id = resolveFrameOpId(args, ctx);
+    if (!id) return { status: 'error', summary: 'frameId required' };
+    const patch: Partial<ArtboardFrame> = {};
+    if (args.width != null) patch.width = Math.max(40, num(args.width));
+    if (args.height != null) patch.height = Math.max(40, num(args.height));
+    if (args.name != null) patch.name = String(args.name);
+    if (args.backgroundColor != null) {
+      patch.backgroundColor = String(args.backgroundColor || 'transparent');
+    }
+    if (args.locked != null) patch.locked = truthy(args.locked);
+    ctx.dispatch(updateArtboardFrame({ id, patch }));
+    return { status: 'success', summary: `Updated frame ${id}`, artifacts: { frameId: id } };
+  
+}
+
+function execImageProcess(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const nodeId = String(args.nodeId || args.id || '').trim();
+    const kind = String(args.kind || args.processKind || '').trim();
+    const allowed = new Set([
+      'upscale',
+      'removeBg',
+      'eraser',
+      'editText',
+      'editElements',
+      'multiAngle',
+      'expand',
+      'adjust',
+      'crop',
+      'flipRotate',
+      'moveObject',
+      'vector',
+    ]);
+    if (!nodeId) {
+      return {
+        status: 'error',
+        summary: 'image_process requires args.nodeId',
+        next_actions: ['Pass image node id'],
+      };
+    }
+    if (!allowed.has(kind)) {
+      return {
+        status: 'error',
+        summary: `image_process unknown kind=${kind || '(empty)'}`,
+        next_actions: [`Use kind one of: ${[...allowed].join('|')}`],
+      };
+    }
+    const node = doc.deltaSetLike?.[nodeId];
+    if (!node) {
+      return {
+        status: 'error',
+        summary: `image_process: node ${nodeId} not found`,
+        next_actions: ['get_scene_summary'],
+      };
+    }
+    const label = String(args.label || kind);
+    ctx.dispatch(
+      startImageProcess({
+        sourceId: nodeId,
+        kind,
+        label,
+        targetWidth:
+          args.targetWidth != null ? Number(args.targetWidth) : undefined,
+        targetHeight:
+          args.targetHeight != null ? Number(args.targetHeight) : undefined,
+        meta:
+          args.meta && typeof args.meta === 'object'
+            ? (args.meta as Record<string, unknown>)
+            : undefined,
+      })
+    );
+    return {
+      status: 'success',
+      summary: `Started image_process ${kind} on ${nodeId}`,
+      artifacts: { sourceId: nodeId, kind },
+      next_actions: ['Wait for process UI / continue other ops'],
+    };
+  
+}
+
+function execExportCanvas(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+    const formatRaw = String(args.format || 'png').toLowerCase();
+    const format = normalizeExportFormat(formatRaw);
+    const nodeIds = resolveExportNodeIds(args);
+    const multiplier = Math.max(0.25, Math.min(4, Number(args.multiplier) || 1));
+    const filename = String(args.filename || 'export').replace(/[^\w\-]+/g, '_');
+    const ok = exportFabricImage({
+      format,
+      multiplier,
+      filename,
+      selectionOnly: nodeIds.length > 0,
+      nodeIds: nodeIds.length ? nodeIds : undefined,
+      document: doc,
+    });
+    if (!ok) {
+      return {
+        status: 'error',
+        summary: 'export_canvas failed to start (empty selection?)',
+        next_actions: ['Pass nodeIds or export full board'],
+      };
+    }
+    return {
+      status: 'success',
+      summary: `Export started (${format}${nodeIds.length ? `, ${nodeIds.length} nodes` : ', full'})`,
+      artifacts: { format, nodeIds, multiplier },
+    };
+  
+}
+
+function resolveUnknownToolError(name: string): AgentToolResult {
+  return {
+        status: 'error',
+        summary: (() => {
+          const n = String(name || '').toLowerCase();
+          const miss = UNAVAILABLE_CAPABILITIES.find(
+            (c) =>
+              n.includes(c.id) ||
+              n.includes('preview') ||
+              n.includes('share') ||
+              n.includes('zoom') ||
+              n.includes('预览')
+          );
+          if (miss) return miss.hint;
+          return `未知工具: ${name}。请先 list_capabilities；不要假装已执行未接入能力。`;
+        })(),
+        next_actions: ['list_capabilities', ...DESIGN_TOOL_NAMES.slice(0, 8)],
+      };
+}
+
+/**
+ * Async entry — use for outline_text (fontkit). Other ops run sync via executeDesignTool.
+ */
+export async function executeDesignToolAsync(
+  name: string,
+  argsRaw: string,
+  ctx: DesignToolContext
+): Promise<AgentToolResult> {
+  if (name === 'outline_text') {
+    const doc = ctx.getDocument();
+    if (!doc) {
+      return { status: 'error', summary: 'No document open', next_actions: ['Open a project first'] };
+    }
+    const pushHistory = () => {
+      if (!ctx.skipHistory) ctx.dispatch(pushEditorHistory());
+    };
+    try {
+      return await execOutlineText(parseArgs(argsRaw), ctx, pushHistory);
+    } catch (err: any) {
+      return {
+        status: 'error',
+        summary: err?.message || String(err),
+        next_actions: ['Fix arguments and retry'],
+      };
+    }
+  }
+  return executeDesignTool(name, argsRaw, ctx);
+}
+
 export function executeDesignTool(
   name: string,
   argsRaw: string,
@@ -1622,281 +2812,7 @@ export function executeDesignTool(
   };
 
   try {
-    if (name === 'get_scene_summary') {
-      const summary = sceneSummary(doc, ctx.targetFrameId);
-      return {
-        status: 'success',
-        summary: `Scene: ${summary.frames.length} frames, ${summary.nodeCount} nodes`,
-        artifacts: summary,
-      };
-    }
-
-    if (name === 'list_capabilities') {
-      const ui = ctx.canvasUi;
-      const keys = [...getAllowedCanvasToolKeys()].sort();
-      const available = [
-        keys.length
-          ? `画布 tool_ops（design_canvas_tool）：${keys.join(' / ')}`
-          : '画布 tool_ops：尚未从 catalog 同步（Admin 维护 design_canvas_tool）',
-        '样式：实色/线性/径向/角度/网格渐变(diffuse)/图片填充、描边虚线、阴影、混合模式、圆角、文字排版',
-        ui?.setZoom || ui?.zoomIn
-          ? '视口：set_viewport（缩放/适应画布）'
-          : null,
-        ui?.setCollabMode
-          ? 'Agent 模式：set_agent_mode（collaborative|milestone|auto）'
-          : null,
-        ui?.setLayersOpen || ui?.setMinimapOpen
-          ? '面板：toggle_editor_panel（layers|minimap|agent_settings）'
-          : null,
-      ].filter(Boolean);
-      return {
-        status: 'success',
-        summary: '已列出 Agent 已接入与暂未接入的画布能力',
-        artifacts: {
-          available,
-          tool_ops: keys,
-          unavailable: UNAVAILABLE_CAPABILITIES,
-          zoom: ui?.getZoom?.() ?? null,
-          collabMode: ui?.getCollabMode?.() ?? null,
-        },
-        next_actions: [
-          '对已接入能力直接调用对应工具',
-          '对暂未接入能力用中文告知用户，并给出手动操作路径；不要假装已执行',
-        ],
-      };
-    }
-
-    if (name === 'set_viewport') {
-      const ui = ctx.canvasUi;
-      let action = String(args.action || args.mode || '').toLowerCase();
-      if (!action && truthy(args.fit)) action = 'fit';
-      if (!action && (args.percent != null || args.zoom != null)) action = 'set';
-      if (!ui?.zoomIn && !ui?.setZoom && !ui?.fitView) {
-        return {
-          status: 'error',
-          summary:
-            '缩放暂未接入当前会话。请用左下角缩放条手动调节。',
-        };
-      }
-      if (action === 'zoom_in' || action === 'in') {
-        ui.zoomIn?.();
-        return {
-          status: 'success',
-          summary: `已放大（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
-        };
-      }
-      if (action === 'zoom_out' || action === 'out') {
-        ui.zoomOut?.();
-        return {
-          status: 'success',
-          summary: `已缩小（当前约 ${Math.round((ui.getZoom?.() || 1) * 100)}%）`,
-        };
-      }
-      if (action === 'fit' || action === 'reset' || action === 'fit_view') {
-        if (typeof ui.fitView === 'function') ui.fitView();
-        else ui.setZoom?.(1);
-        return { status: 'success', summary: '已适应/重置画布缩放' };
-      }
-      if (
-        action === 'set' ||
-        action === 'percent' ||
-        args.percent != null ||
-        args.zoom != null
-      ) {
-        let z = 1;
-        if (args.percent != null) z = num(args.percent, 100) / 100;
-        else if (args.zoom != null) {
-          const raw = num(args.zoom, 1);
-          z = raw > 8 ? raw / 100 : raw;
-        }
-        z = Math.min(8, Math.max(0.05, z));
-        if (!ui.setZoom) {
-          return {
-            status: 'error',
-            summary: '当前无法设置精确缩放百分比，请用左下角缩放条。',
-          };
-        }
-        ui.setZoom(z);
-        return { status: 'success', summary: `缩放已设为 ${Math.round(z * 100)}%` };
-      }
-      return {
-        status: 'error',
-        summary: 'set_viewport 需要 action: zoom_in|zoom_out|fit|set（可配 percent）',
-      };
-    }
-
-    if (name === 'set_canvas_background') {
-      const color = String(args.color ?? args.backgroundColor ?? args.fill ?? '').trim();
-      const fillType = String(args.fillType || 'solid').toLowerCase();
-      if (!color && fillType === 'solid') {
-        return { status: 'error', summary: 'set_canvas_background 需要 color' };
-      }
-      const allowed = new Set(['solid', 'linear', 'radial', 'angular', 'diffuse', 'image']);
-      const meta: Record<string, unknown> = {
-        backgroundFillType: allowed.has(fillType) ? fillType : 'solid',
-        backgroundColor: color || '#f5f5f5',
-        backgroundOpacity: args.opacity != null ? num(args.opacity, 100) : 100,
-      };
-      if (
-        fillType === 'linear' ||
-        fillType === 'radial' ||
-        fillType === 'angular' ||
-        fillType === 'diffuse'
-      ) {
-        const c0 = color || '#3B82F6';
-        const c1 = String(args.fillEnd ?? c0);
-        const angle = num(args.gradientAngle, fillType === 'angular' ? 0 : 90);
-        if (fillType === 'diffuse') {
-          const meshSize = Math.min(8, Math.max(3, Math.round(num(args.meshSize, 4)))) as MeshSize;
-          const meshPoints = parseMeshPoints(args.meshPoints, meshSize, c0);
-          meta.backgroundGradient = serializeFillGradient({
-            type: 'diffuse',
-            meshSize,
-            meshPoints,
-            colorStops: [
-              { offset: 0, color: meshPoints[0]?.color || c0 },
-              { offset: 1, color: meshPoints[meshPoints.length - 1]?.color || c1 },
-            ],
-          });
-        } else {
-          meta.backgroundGradient = serializeFillGradient({
-            type: fillType as 'linear' | 'radial' | 'angular',
-            angle,
-            cx: 50,
-            cy: 50,
-            r: 70,
-            colorStops: [
-              { offset: 0, color: c0 },
-              { offset: 1, color: c1 },
-            ],
-          });
-        }
-      }
-      if (fillType === 'image' && args.fillImageSrc != null) {
-        meta.backgroundImageSrc = String(args.fillImageSrc);
-        meta.backgroundImageFit = String(args.fillImageFit || 'fill');
-      }
-      ctx.dispatch(setCanvasMeta(meta));
-      return {
-        status: 'success',
-        summary: `画布背景已更新（${fillType}${color ? ` ${color}` : ''}）`,
-        artifacts: meta,
-      };
-    }
-
-    if (name === 'set_agent_mode') {
-      const mode = String(args.mode || '').toLowerCase();
-      if (!['collaborative', 'milestone', 'auto'].includes(mode)) {
-        return {
-          status: 'error',
-          summary: 'mode 须为 collaborative | milestone | auto（对应协作/里程碑/全自动）',
-        };
-      }
-      if (!ctx.canvasUi?.setCollabMode) {
-        return {
-          status: 'error',
-          summary: 'Agent 模式切换暂未注入。请在输入框左侧切换 Agent / 图片生成。',
-        };
-      }
-      ctx.canvasUi.setCollabMode(mode as 'collaborative' | 'milestone' | 'auto');
-      const labels: Record<string, string> = {
-        collaborative: '协作（每阶段确认）',
-        milestone: '里程碑（关键节点确认）',
-        auto: '全自动',
-      };
-      return {
-        status: 'success',
-        summary: `Agent 执行模式已设为「${labels[mode]}」`,
-        artifacts: { mode },
-      };
-    }
-
-    if (name === 'toggle_editor_panel') {
-      const panel = String(args.panel || args.name || '').toLowerCase();
-      const open = args.open == null ? true : args.open === true || args.open === 'true';
-      const ui = ctx.canvasUi;
-      if (panel === 'layers' || panel === 'layer') {
-        if (!ui?.setLayersOpen) {
-          return {
-            status: 'error',
-            summary: '图层面板暂未接入。请点左下角「图层」按钮。',
-          };
-        }
-        ui.setLayersOpen(open);
-        return { status: 'success', summary: open ? '已打开图层面板' : '已关闭图层面板' };
-      }
-      if (panel === 'minimap' || panel === 'map') {
-        if (!ui?.setMinimapOpen) {
-          return {
-            status: 'error',
-            summary: '小地图暂未接入。请点左下角「小地图」按钮。',
-          };
-        }
-        ui.setMinimapOpen(open);
-        return { status: 'success', summary: open ? '已打开小地图' : '已关闭小地图' };
-      }
-      if (panel === 'agent_settings' || panel === 'settings' || panel === 'collab') {
-        if (ui?.openAccountAgent) {
-          ui.openAccountAgent();
-          return { status: 'success', summary: '已打开账户页的 Agent 模型设置' };
-        }
-        return {
-          status: 'error',
-          summary: '请到「管理账户 → Agent」添加第三方模型。',
-        };
-      }
-      if (
-        panel.includes('preview') ||
-        panel.includes('预览') ||
-        panel.includes('share') ||
-        panel.includes('分享')
-      ) {
-        const hit =
-          UNAVAILABLE_CAPABILITIES.find((c) =>
-            panel.includes('share') || panel.includes('分享')
-              ? c.id === 'share'
-              : c.id === 'product_preview'
-          ) || UNAVAILABLE_CAPABILITIES[0];
-        return { status: 'error', summary: hit.hint };
-      }
-      if (panel.includes('export') || panel.includes('导出')) {
-        return {
-          status: 'error',
-          summary:
-            '导出请用 export_canvas（format=png|jpeg|svg），不是 toggle_editor_panel。',
-          next_actions: ['export_canvas'],
-        };
-      }
-      return {
-        status: 'error',
-        summary: 'panel 支持：layers | minimap | agent_settings。其他请 list_capabilities。',
-      };
-    }
-
-    if (name === 'ask_user') {
-      const question = String(args.question || '').trim();
-      if (!question) return { status: 'error', summary: 'question required' };
-      const options = Array.isArray(args.options)
-        ? args.options
-            .map((x) => String(x).trim())
-            .filter((x) => Boolean(x) && x !== '取消')
-            .slice(0, 6)
-        : [];
-      return {
-        status: 'success',
-        summary: question,
-        artifacts: { ask: true, options },
-        next_actions: options.length ? options : ['等待用户回复'],
-      };
-    }
-
-    if (name === 'finish') {
-      const summary = String(args.summary || '完成');
-      return { status: 'success', summary, artifacts: { done: true } };
-    }
-
-    // Free-canvas is allowed: create_shape/create_text/create_image work without artboards.
-    // When a target frame was requested but is gone, still block so the agent can recover.
+    // When a target frame was requested but is gone, block creates.
     if (
       ctx.targetFrameId &&
       (name === 'create_shape' ||
@@ -1915,616 +2831,73 @@ export function executeDesignTool(
       }
     }
 
-    if (name === 'create_svg' || name === 'create_icon') {
-      const width = Math.max(1, num(args.width, 48));
-      const height = Math.max(1, num(args.height, 48));
-      const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-      const svgRaw = String(args.svg || args.iconSvg || args.content || '').trim();
-      if (!svgRaw) {
+    switch (name) {
+      case 'outline_text':
         return {
           status: 'error',
-          summary: `${name} requires args.svg (mini SVG markup).`,
-          next_actions: ['Pass args.svg with viewBox 0 0 24 24'],
+          summary: 'outline_text must run via executeDesignToolAsync',
+          next_actions: ['Retry through agent tool_ops pipeline'],
         };
-      }
-      const origin = resolveCreateXY(args, target, width, height);
-      const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
-      const fill = args.fill != null ? String(args.fill) : undefined;
-      const { id, node } = createSvgNode({
-        x: placed.x,
-        y: placed.y,
-        width: placed.width,
-        height: placed.height,
-        svg: svgRaw,
-        name: String(args.name || 'SVG'),
-        fill,
-      });
-      console.info('[create_svg]', {
-        id,
-        placed,
-        fill,
-        svgHead: svgRaw.slice(0, 160),
-        svgLen: svgRaw.length,
-      });
-      pushHistory();
-      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
-      return {
-        status: placed.clamped ? 'warning' : 'success',
-        summary: `Created svg ${id}`,
-        artifacts: { nodeId: id, shapeType: 'svg' },
-        next_actions: ['Continue layout'],
-      };
+      case 'get_scene_summary':
+        return execGetSceneSummary(args, ctx, doc, pushHistory);
+      case 'list_capabilities':
+        return execListCapabilities(args, ctx, doc, pushHistory);
+      case 'set_viewport':
+        return execSetViewport(args, ctx, doc, pushHistory);
+      case 'set_canvas_background':
+        return execSetCanvasBackground(args, ctx, doc, pushHistory);
+      case 'set_agent_mode':
+        return execSetAgentMode(args, ctx, doc, pushHistory);
+      case 'toggle_editor_panel':
+        return execToggleEditorPanel(args, ctx, doc, pushHistory);
+      case 'ask_user':
+        return execAskUser(args, ctx, doc, pushHistory);
+      case 'finish':
+        return execFinish(args, ctx, doc, pushHistory);
+      case 'create_svg':
+        return execCreateSvg(args, ctx, doc, pushHistory);
+      case 'create_icon':
+        return execCreateSvg(args, ctx, doc, pushHistory);
+      case 'create_shape':
+        return execCreateShape(args, ctx, doc, pushHistory);
+      case 'create_image':
+        return execCreateImage(args, ctx, doc, pushHistory);
+      case 'create_text':
+        return execCreateText(args, ctx, doc, pushHistory);
+      case 'update_node':
+        return execUpdateNode(args, ctx, doc, pushHistory);
+      case 'align_nodes':
+        return execAlignNodes(args, ctx, doc, pushHistory);
+      case 'distribute_nodes':
+        return execDistributeNodes(args, ctx, doc, pushHistory);
+      case 'boolean_op':
+        return execBooleanOp(args, ctx, doc, pushHistory);
+      case 'reorder_nodes':
+        return execReorderNodes(args, ctx, doc, pushHistory);
+      case 'group_nodes':
+        return execGroupNodes(args, ctx, doc, pushHistory);
+      case 'ungroup_nodes':
+        return execUngroupNodes(args, ctx, doc, pushHistory);
+      case 'duplicate_nodes':
+        return execDuplicateNodes(args, ctx, doc, pushHistory);
+      case 'flip_nodes':
+        return execFlipNodes(args, ctx, doc, pushHistory);
+      case 'delete_nodes':
+        return execDeleteNodes(args, ctx, doc, pushHistory);
+      case 'delete_frame':
+        return execDeleteFrame(args, ctx, doc, pushHistory);
+      case 'update_frame':
+        return execUpdateFrame(args, ctx, doc, pushHistory);
+      case 'create_frame':
+        return execCreateFrame(args, ctx, doc, pushHistory);
+      case 'image_process':
+        return execImageProcess(args, ctx, doc, pushHistory);
+      case 'export_canvas':
+        return execExportCanvas(args, ctx, doc, pushHistory);
+      default:
+        return resolveUnknownToolError(name);
     }
 
-    if (name === 'create_shape') {
-      return execCreateShape(args, ctx, doc, pushHistory);
-    }
-
-    if (name === 'create_image') {
-      const width = Math.max(8, num(args.width, 240));
-      const height = Math.max(8, num(args.height, 180));
-      const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
-      const origin = resolveCreateXY(args, target, width, height);
-      const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
-      const userImages = Array.isArray(ctx.userImages) ? ctx.userImages : [];
-      const genPrompt = String(args.genPrompt || args.prompt || '').trim();
-      let src = '';
-      let sourceKind: 'attachment' | 'src' | 'placeholder' = 'placeholder';
-      if (args.attachmentIndex != null) {
-        const idx = Math.max(0, Math.floor(num(args.attachmentIndex, 0)));
-        src = userImages[idx] || '';
-        if (!src) {
-          return {
-            status: 'error',
-            summary: `No user attachment at index ${idx} (have ${userImages.length}). Use placeholder or ask user to attach.`,
-            next_actions: ['create_image without attachmentIndex', 'ask_user'],
-          };
-        }
-        sourceKind = 'attachment';
-      } else if (args.src != null && String(args.src).trim()) {
-        src = String(args.src).trim();
-        sourceKind = 'src';
-      } else {
-        // Backend should have hydrated genPrompt → src via Seedream. If we still
-        // land here, show placeholder but keep genPrompt on the node for retry.
-        const kind = String(args.placeholder || 'image').toLowerCase();
-        src =
-          kind === 'avatar'
-            ? AVATAR_PLACEHOLDER
-            : IMAGE_PLACEHOLDER;
-        sourceKind = 'placeholder';
-        if (genPrompt) {
-          console.warn('[create_image] genPrompt without src — hydrate missed?', {
-            genPrompt: genPrompt.slice(0, 120),
-            width: placed.width,
-            height: placed.height,
-          });
-        }
-      }
-      const { id, node } = createImageNode({
-        x: placed.x,
-        y: placed.y,
-        width: placed.width,
-        height: placed.height,
-        src,
-        name: String(args.name || (sourceKind === 'placeholder' ? 'Image Placeholder' : 'Image')),
-        assetKind: 'image',
-      });
-      if (genPrompt && sourceKind === 'placeholder') {
-        node.attrs = { ...(node.attrs || {}), genPrompt };
-      }
-      pushHistory();
-      ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), id, node)));
-      return {
-        status: placed.clamped || (sourceKind === 'placeholder' && Boolean(genPrompt))
-          ? 'warning'
-          : 'success',
-        summary: summarizeCreateImage({
-          id,
-          sourceKind,
-          genPrompt,
-          placed,
-        }),
-        artifacts: { nodeId: id, sourceKind },
-        next_actions: ['Continue layout'],
-      };
-    }
-
-    if (name === 'create_text') {
-      return execCreateText(args, ctx, doc, pushHistory);
-    }
-
-    if (name === 'update_node') {
-      return execUpdateNode(args, ctx, doc, pushHistory);
-    }
-
-    if (name === 'align_nodes') {
-      const ids = parseNodeIds(args);
-      const rawMode = String(args.mode || args.align || '').trim();
-      const mode = normalizeAlignMode(rawMode);
-      const allowedAlign = new Set([
-        'left',
-        'centerX',
-        'right',
-        'top',
-        'middle',
-        'bottom',
-      ]);
-      if (ids.length < 2) return { status: 'error', summary: 'align_nodes needs at least 2 nodeIds' };
-      if (!allowedAlign.has(mode)) {
-        return { status: 'error', summary: `Unknown align mode: ${mode || '(empty)'}` };
-      }
-      const boxes = readAgentBoxes(doc, ids);
-      if (boxes.length < 2) return { status: 'error', summary: 'Could not resolve node boxes' };
-      const minL = Math.min(...boxes.map((b) => b.left));
-      const maxR = Math.max(...boxes.map((b) => b.left + b.width));
-      const minT = Math.min(...boxes.map((b) => b.top));
-      const maxB = Math.max(...boxes.map((b) => b.top + b.height));
-      const midX = (minL + maxR) / 2;
-      const midY = (minT + maxB) / 2;
-      pushHistory();
-      const alignPatches = boxes.map((b) => {
-        const patch: { x?: number; y?: number } = {};
-        if (mode === 'left') patch.x = minL;
-        else if (mode === 'centerX') patch.x = midX - b.width / 2;
-        else if (mode === 'right') patch.x = maxR - b.width;
-        else if (mode === 'top') patch.y = minT;
-        else if (mode === 'middle') patch.y = midY - b.height / 2;
-        else patch.y = maxB - b.height;
-        return { nodeId: b.id, patch };
-      });
-      ctx.dispatch(patchDocumentNodes({ patches: alignPatches, skipHistory: true }));
-      return {
-        status: 'success',
-        summary: `Aligned ${boxes.length} nodes (${mode})`,
-        artifacts: { nodeIds: boxes.map((b) => b.id), mode },
-      };
-    }
-
-    if (name === 'distribute_nodes') {
-      const ids = parseNodeIds(args);
-      const axisRaw = String(args.axis || 'h').toLowerCase();
-      const axis =
-        axisRaw === 'v' || axisRaw === 'vertical' || axisRaw === 'y' ? 'v' : 'h';
-      if (ids.length < 3) return { status: 'error', summary: 'distribute_nodes needs at least 3 nodeIds' };
-      const boxes = readAgentBoxes(doc, ids);
-      if (boxes.length < 3) return { status: 'error', summary: 'Could not resolve node boxes' };
-      const sorted = [...boxes].sort((a, b) => (axis === 'h' ? a.left - b.left : a.top - b.top));
-      const first = sorted[0];
-      const last = sorted[sorted.length - 1];
-      pushHistory();
-      const distributePatches: Array<{ nodeId: string; patch: { x?: number; y?: number } }> = [];
-      if (axis === 'h') {
-        const span =
-          last.left + last.width - first.left - sorted.reduce((s, b) => s + b.width, 0);
-        const gap = span / (sorted.length - 1);
-        let x = first.left;
-        sorted.forEach((b, i) => {
-          if (i === 0) {
-            x = b.left + b.width + gap;
-            return;
-          }
-          if (i === sorted.length - 1) return;
-          distributePatches.push({ nodeId: b.id, patch: { x } });
-          x += b.width + gap;
-        });
-      } else {
-        const span =
-          last.top + last.height - first.top - sorted.reduce((s, b) => s + b.height, 0);
-        const gap = span / (sorted.length - 1);
-        let y = first.top;
-        sorted.forEach((b, i) => {
-          if (i === 0) {
-            y = b.top + b.height + gap;
-            return;
-          }
-          if (i === sorted.length - 1) return;
-          distributePatches.push({ nodeId: b.id, patch: { y } });
-          y += b.height + gap;
-        });
-      }
-      if (distributePatches.length) {
-        ctx.dispatch(patchDocumentNodes({ patches: distributePatches, skipHistory: true }));
-      }
-      return {
-        status: 'success',
-        summary: `Distributed ${sorted.length} nodes (${axis})`,
-        artifacts: { nodeIds: sorted.map((b) => b.id), axis },
-      };
-    }
-
-    if (name === 'boolean_op') {
-      const ids = parseNodeIds(args);
-      const mode = String(args.mode || 'union') as BoolMode;
-      if (!['union', 'subtract', 'intersect', 'exclude'].includes(mode)) {
-        return { status: 'error', summary: `Unknown boolean mode: ${mode}` };
-      }
-      if (ids.length < 2) return { status: 'error', summary: 'boolean_op needs at least 2 nodeIds' };
-      const boxes = readAgentBoxes(doc, ids).filter((b) =>
-        supportsBooleanOp(doc?.deltaSetLike?.[b.id])
-      );
-      if (boxes.length < 2) {
-        return {
-          status: 'error',
-          summary: 'Need 2+ closed shapes (not line/arrow/pen/pencil/text/image)',
-        };
-      }
-      const { result, usedFallback } = computeShapeBoolean(boxes, mode);
-      if (!result) {
-        return {
-          status: 'error',
-          summary: mode === 'intersect' ? 'No overlap for intersect' : 'Boolean operation failed',
-        };
-      }
-      const sample = boxes[0];
-      const sampleNode = doc?.deltaSetLike?.[sample.id];
-      const { id, node } = createShapeNode({
-        x: result.x,
-        y: result.y,
-        width: result.width,
-        height: result.height,
-        shapeType: 'path',
-        fill: sample.fill,
-        stroke: sample.stroke,
-        borderWidth: sample.borderWidth,
-        path: result.path,
-        closed: true,
-      });
-      const attrs = node.attrs as Record<string, unknown>;
-      attrs['fill-rule'] = result.fillRule;
-      attrs.closed = 'true';
-      applyBooleanResultPaint(
-        attrs,
-        sampleNode?.attrs as Record<string, unknown> | undefined,
-        { stroke: sample.stroke, borderWidth: sample.borderWidth }
-      );
-      let next = addNodeToDocument(doc, id, node);
-      next = removeNodesFromDocument(next, boxes.map((b) => b.id));
-      pushHistory();
-      ctx.dispatch(setDocument(next));
-      return {
-        status: usedFallback ? 'warning' : 'success',
-        summary: usedFallback
-          ? `Boolean ${mode} → ${id} (bbox fallback)`
-          : `Boolean ${mode} → ${id}`,
-        artifacts: { nodeId: id, mode, removed: boxes.map((b) => b.id) },
-      };
-    }
-
-    if (name === 'reorder_nodes') {
-      const ids = parseNodeIds(args);
-      const raw = String(args.action || args.order || '').toLowerCase();
-      const actionMap: Record<string, 'front' | 'back' | 'forward' | 'backward'> = {
-        front: 'front',
-        back: 'back',
-        forward: 'forward',
-        backward: 'backward',
-        bring_to_front: 'front',
-        send_to_back: 'back',
-        bring_forward: 'forward',
-        send_backward: 'backward',
-      };
-      const action = actionMap[raw];
-      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
-      if (!action) {
-        return { status: 'error', summary: `Unknown reorder action: ${raw}` };
-      }
-      pushHistory();
-      ctx.dispatch(setDocumentFromCanvas(reorderNodesInDocument(doc, ids, action)));
-      return {
-        status: 'success',
-        summary: `Reordered ${ids.length} node(s) (${action})`,
-        artifacts: { nodeIds: ids, action },
-      };
-    }
-
-    if (name === 'group_nodes') {
-      const ids = parseNodeIds(args);
-      if (ids.length < 2) return { status: 'error', summary: 'group_nodes needs at least 2 nodeIds' };
-      pushHistory();
-      ctx.dispatch(setDocument(groupNodesInDocument(doc, ids)));
-      return {
-        status: 'success',
-        summary: `Grouped ${ids.length} nodes`,
-        artifacts: { nodeIds: ids },
-      };
-    }
-
-    if (name === 'ungroup_nodes') {
-      const ids = parseNodeIds(args);
-      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
-      pushHistory();
-      ctx.dispatch(setDocument(ungroupNodesInDocument(doc, ids)));
-      return {
-        status: 'success',
-        summary: `Ungrouped ${ids.length} node(s)`,
-        artifacts: { nodeIds: ids },
-      };
-    }
-
-    if (name === 'duplicate_nodes') {
-      const ids = parseNodeIds(args);
-      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
-      const ox = num(args.offsetX, 24);
-      const oy = num(args.offsetY, 24);
-      let next = doc;
-      const created: string[] = [];
-      pushHistory();
-      for (const oldId of ids) {
-        const raw = next?.deltaSetLike?.[oldId];
-        if (!raw) continue;
-        const node = JSON.parse(JSON.stringify(raw));
-        const newId = nanoid(10);
-        node.id = newId;
-        node.x = (Number(node.x) || 0) + ox;
-        node.y = (Number(node.y) || 0) + oy;
-        if (node.attrs?.groupId) {
-          const { groupId: _g, ...rest } = node.attrs;
-          node.attrs = rest;
-        }
-        next = addNodeToDocument(next, newId, node);
-        created.push(newId);
-      }
-      if (!created.length) return { status: 'error', summary: 'No nodes duplicated' };
-      ctx.dispatch(setDocument(next));
-      return {
-        status: 'success',
-        summary: `Duplicated ${created.length} node(s)`,
-        artifacts: { nodeIds: created },
-      };
-    }
-
-    if (name === 'flip_nodes') {
-      const ids = parseNodeIds(args);
-      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
-      const axis = String(args.axis || '').toLowerCase();
-      const doX =
-        args.flipX === true ||
-        args.flipX === 'true' ||
-        axis === 'horizontal' ||
-        axis === 'h' ||
-        axis === 'x';
-      const doY =
-        args.flipY === true ||
-        args.flipY === 'true' ||
-        axis === 'vertical' ||
-        axis === 'v' ||
-        axis === 'y';
-      if (!doX && !doY) return { status: 'error', summary: 'Set flipX and/or flipY true' };
-      pushHistory();
-      const flipPatches: Array<{ nodeId: string; patch: { attrs: Record<string, unknown> } }> = [];
-      for (const id of ids) {
-        const node = ctx.getDocument()?.deltaSetLike?.[id];
-        if (!node) continue;
-        const attrs: Record<string, unknown> = {};
-        if (doX) {
-          const cur = node.attrs?.flipX === true || node.attrs?.flipX === 'true';
-          attrs.flipX = cur ? 'false' : 'true';
-        }
-        if (doY) {
-          const cur = node.attrs?.flipY === true || node.attrs?.flipY === 'true';
-          attrs.flipY = cur ? 'false' : 'true';
-        }
-        flipPatches.push({ nodeId: id, patch: { attrs } });
-      }
-      if (flipPatches.length) {
-        ctx.dispatch(patchDocumentNodes({ patches: flipPatches, skipHistory: true }));
-      }
-      return {
-        status: 'success',
-        summary: `Flipped ${ids.length} node(s)`,
-        artifacts: { nodeIds: ids, flipX: doX, flipY: doY },
-      };
-    }
-
-    if (name === 'delete_nodes') {
-      if (!ctx.allowDestructive) {
-        return {
-          status: 'error',
-          summary:
-            'delete_nodes blocked: destructive ops require backend-approved allowDestructive.',
-          next_actions: ['create_frame', 'create_shape', 'create_text', 'update_node'],
-        };
-      }
-      const ids = Array.isArray(args.nodeIds)
-        ? args.nodeIds.map((x) => String(x)).filter(Boolean)
-        : [];
-      if (!ids.length) return { status: 'error', summary: 'nodeIds required' };
-      const docNow = ctx.getDocument();
-      const frameIdSet = new Set(listFrames(docNow).map((f) => String(f.id)));
-      const frameIds = ids.filter((id) => frameIdSet.has(id));
-      const nodeIds = ids.filter((id) => !frameIdSet.has(id));
-      // Models often pass artboard id into delete_nodes — remap to frame delete.
-      if (frameIds.length) {
-        const childIds = nodeIdsInsideFrameLocal(docNow, frameIds);
-        const removeIds = [...new Set([...nodeIds, ...childIds])];
-        if (removeIds.length) {
-          ctx.dispatch(setDocument(removeNodesFromDocument(ctx.getDocument(), removeIds)));
-        }
-        ctx.dispatch(removeArtboardFrames(frameIds));
-        return {
-          status: 'success',
-          summary: `Deleted ${frameIds.length} frame(s)` + (removeIds.length ? ` + ${removeIds.length} node(s)` : ''),
-          artifacts: { frameIds, nodeIds: removeIds },
-        };
-      }
-      const before = new Set(
-        ((docNow?.deltaSetLike?.ROOT?.children as string[]) || []).filter(Boolean)
-      );
-      const next = removeNodesFromDocument(docNow, nodeIds);
-      const after = new Set(
-        ((next?.deltaSetLike?.ROOT?.children as string[]) || []).filter(Boolean)
-      );
-      const removed = nodeIds.filter((id) => before.has(id) && !after.has(id));
-      if (!removed.length) {
-        return {
-          status: 'error',
-          summary: 'delete_nodes: no matching scene nodes (use delete_frame for artboards)',
-        };
-      }
-      ctx.dispatch(setDocument(next));
-      return {
-        status: 'success',
-        summary: `Deleted ${removed.length} node(s)`,
-        artifacts: { nodeIds: removed },
-      };
-    }
-
-    if (name === 'delete_frame') {
-      if (!ctx.allowDestructive) {
-        return {
-          status: 'error',
-          summary:
-            'delete_frame blocked: destructive ops require backend-approved allowDestructive.',
-          next_actions: ['delete_nodes', 'update_frame'],
-        };
-      }
-      const fid = resolveFrameOpId(args, ctx);
-      if (!fid) return { status: 'error', summary: 'frameId required' };
-      const docNow = ctx.getDocument();
-      if (!listFrames(docNow).some((f) => String(f.id) === fid)) {
-        return { status: 'error', summary: `frame not found: ${fid}` };
-      }
-      const childIds = nodeIdsInsideFrameLocal(docNow, [fid]);
-      if (childIds.length) {
-        ctx.dispatch(setDocument(removeNodesFromDocument(ctx.getDocument(), childIds)));
-      }
-      ctx.dispatch(removeArtboardFrames([fid]));
-      return {
-        status: 'success',
-        summary: `Deleted frame ${fid}`,
-        artifacts: { frameId: fid, nodeIds: childIds },
-      };
-    }
-
-    // Optional: resize target frame
-    if (name === 'update_frame') {
-      const id = resolveFrameOpId(args, ctx);
-      if (!id) return { status: 'error', summary: 'frameId required' };
-      const patch: Partial<ArtboardFrame> = {};
-      if (args.width != null) patch.width = Math.max(40, num(args.width));
-      if (args.height != null) patch.height = Math.max(40, num(args.height));
-      if (args.name != null) patch.name = String(args.name);
-      if (args.backgroundColor != null) {
-        patch.backgroundColor = String(args.backgroundColor || 'transparent');
-      }
-      if (args.locked != null) patch.locked = truthy(args.locked);
-      ctx.dispatch(updateArtboardFrame({ id, patch }));
-      return { status: 'success', summary: `Updated frame ${id}`, artifacts: { frameId: id } };
-    }
-
-    if (name === 'create_frame') {
-      return execCreateFrame(args, ctx, doc, pushHistory);
-    }
-
-    if (name === 'image_process') {
-      const nodeId = String(args.nodeId || args.id || '').trim();
-      const kind = String(args.kind || args.processKind || '').trim();
-      const allowed = new Set([
-        'upscale',
-        'removeBg',
-        'eraser',
-        'editText',
-        'editElements',
-        'multiAngle',
-        'expand',
-        'adjust',
-        'crop',
-        'flipRotate',
-        'moveObject',
-        'vector',
-      ]);
-      if (!nodeId) {
-        return {
-          status: 'error',
-          summary: 'image_process requires args.nodeId',
-          next_actions: ['Pass image node id'],
-        };
-      }
-      if (!allowed.has(kind)) {
-        return {
-          status: 'error',
-          summary: `image_process unknown kind=${kind || '(empty)'}`,
-          next_actions: [`Use kind one of: ${[...allowed].join('|')}`],
-        };
-      }
-      const node = doc.deltaSetLike?.[nodeId];
-      if (!node) {
-        return {
-          status: 'error',
-          summary: `image_process: node ${nodeId} not found`,
-          next_actions: ['get_scene_summary'],
-        };
-      }
-      const label = String(args.label || kind);
-      ctx.dispatch(
-        startImageProcess({
-          sourceId: nodeId,
-          kind,
-          label,
-          targetWidth:
-            args.targetWidth != null ? Number(args.targetWidth) : undefined,
-          targetHeight:
-            args.targetHeight != null ? Number(args.targetHeight) : undefined,
-          meta:
-            args.meta && typeof args.meta === 'object'
-              ? (args.meta as Record<string, unknown>)
-              : undefined,
-        })
-      );
-      return {
-        status: 'success',
-        summary: `Started image_process ${kind} on ${nodeId}`,
-        artifacts: { sourceId: nodeId, kind },
-        next_actions: ['Wait for process UI / continue other ops'],
-      };
-    }
-
-    if (name === 'export_canvas') {
-      const formatRaw = String(args.format || 'png').toLowerCase();
-      const format = normalizeExportFormat(formatRaw);
-      const nodeIds = resolveExportNodeIds(args);
-      const multiplier = Math.max(0.25, Math.min(4, Number(args.multiplier) || 1));
-      const filename = String(args.filename || 'export').replace(/[^\w\-]+/g, '_');
-      const ok = exportFabricImage({
-        format,
-        multiplier,
-        filename,
-        selectionOnly: nodeIds.length > 0,
-        nodeIds: nodeIds.length ? nodeIds : undefined,
-        document: doc,
-      });
-      if (!ok) {
-        return {
-          status: 'error',
-          summary: 'export_canvas failed to start (empty selection?)',
-          next_actions: ['Pass nodeIds or export full board'],
-        };
-      }
-      return {
-        status: 'success',
-        summary: `Export started (${format}${nodeIds.length ? `, ${nodeIds.length} nodes` : ', full'})`,
-        artifacts: { format, nodeIds, multiplier },
-      };
-    }
-
-    return {
-      status: 'error',
-      summary: (() => {
-        const n = String(name || '').toLowerCase();
-        const miss = UNAVAILABLE_CAPABILITIES.find(
-          (c) =>
-            n.includes(c.id) ||
-            n.includes('preview') ||
-            n.includes('share') ||
-            n.includes('zoom') ||
-            n.includes('预览')
-        );
-        if (miss) return miss.hint;
-        return `未知工具: ${name}。请先 list_capabilities；不要假装已执行未接入能力。`;
-      })(),
-      next_actions: ['list_capabilities', ...DESIGN_TOOL_NAMES.slice(0, 8)],
-    };
   } catch (err: any) {
     return {
       status: 'error',

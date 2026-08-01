@@ -14,9 +14,9 @@ import {
   type DesignSvgPatch,
   type RunDesignJobBody,
 } from '@/apis/design';
-import { removeNodesFromDocument, groupNodesInDocument } from '@/components/rcb/scene/sceneDocument';
-import { scalePathData } from '@/components/rcb/scene/pathScale';
-import { maxRadius, radiiFromAttrs } from '@/components/rcb/scene/sceneRadii';
+import { removeNodesFromDocument, groupNodesInDocument } from '@/components/rcb/scene/document/sceneDocument';
+import { scalePathData } from '@/components/rcb/scene/document/pathScale';
+import { maxRadius, radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import {
   applyClientFrameHints,
   applyMemoryPatch,
@@ -25,7 +25,12 @@ import {
   type MemoryPatch,
   type TaskState,
 } from '@/components/editor/panels/agent/agentMemory';
-import { executeDesignTool, nextArtboardOrigin, type CanvasUiBridge } from '@/components/editor/panels/agent/designTools';
+import {
+  executeDesignTool,
+  executeDesignToolAsync,
+  nextArtboardOrigin,
+  type CanvasUiBridge,
+} from '@/components/editor/panels/agent/designTools';
 import {
   dedupeToolOpsById,
   filterAllowedToolOps,
@@ -36,8 +41,8 @@ import {
   setDocument,
   updateArtboardFrame,
 } from '@/store/modules/editor';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
-import { parseNodeText, parseNodeTextStyle } from '@/components/rcb/scene/sceneText';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { parseNodeText, parseNodeTextStyle } from '@/components/rcb/scene/document/sceneText';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const SKIP_TAGS = new Set([
@@ -434,7 +439,15 @@ function nodeToInventoryItem(
   };
   const name = attrs.name != null ? String(attrs.name).trim() : '';
   if (name) item.name = name;
-  if (path) item.path = path;
+  // Truncate huge outline paths in SCENE — full `d` blows context + clone cost.
+  const SCENE_PATH_MAX = 480;
+  if (path) {
+    if (path.length > SCENE_PATH_MAX) {
+      item.path = `${path.slice(0, SCENE_PATH_MAX)}…(/*${path.length} chars; use update_node path sparingly*/)`;
+    } else {
+      item.path = path;
+    }
+  }
   if (attrs.closed != null) {
     item.closed = attrs.closed === true || attrs.closed === 'true';
   }
@@ -870,7 +883,7 @@ export type ToolOpResult = {
   error?: string;
 };
 
-function applyAgentToolOps(opts: {
+async function applyAgentToolOps(opts: {
   ops: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
   dispatch: Dispatch;
   getDocument: () => any;
@@ -882,7 +895,7 @@ function applyAgentToolOps(opts: {
   /** Cross-chunk dedupe when SSE replays the same op_id. */
   appliedOpIds?: Set<string>;
   canvasUi?: CanvasUiBridge | null;
-}): {
+}): Promise<{
   created: number;
   updated: number;
   deleted: number;
@@ -890,7 +903,7 @@ function applyAgentToolOps(opts: {
   frameId: string | null;
   /** Per-op truth for scene_feedback — backend must not assume success. */
   opResults: ToolOpResult[];
-} {
+}> {
   const { ops, dispatch, getDocument, frameId, signal, userImages, appliedOpIds } =
     opts;
   const toolCtx = {
@@ -953,7 +966,7 @@ function applyAgentToolOps(opts: {
         path: args.path != null ? String(args.path) : '',
       });
     }
-    const res = executeDesignTool(name, JSON.stringify(args), toolCtx);
+    const res = await executeDesignToolAsync(name, JSON.stringify(args), toolCtx);
     if (name === 'create_frame' && res.status !== 'error') {
       const fid = String(res.artifacts?.frameId || '').trim();
       if (fid) {
@@ -990,10 +1003,16 @@ function applyAgentToolOps(opts: {
       continue;
     }
     opResults.push({ op_id: opId, name, ok: true });
-    if (name === 'update_node') {
+    if (name === 'update_node' || name === 'outline_text') {
       updated += 1;
-      const nid = String(args.nodeId || args.id || '');
-      if (nid) nodeIds.push(nid);
+      const outlined = Array.isArray(res.artifacts?.nodeIds)
+        ? (res.artifacts!.nodeIds as unknown[]).map((x) => String(x)).filter(Boolean)
+        : [];
+      if (outlined.length) nodeIds.push(...outlined);
+      else {
+        const nid = String(args.nodeId || args.id || '');
+        if (nid) nodeIds.push(nid);
+      }
     } else if (name === 'delete_nodes') {
       deleted += 1;
     } else if (name === 'delete_frame') {
@@ -1293,6 +1312,189 @@ function isInsideSkipped(el: Element): boolean {
 
 type ToolOp = { name: 'create_shape' | 'create_text' | 'create_image'; args: Record<string, unknown> };
 
+type SvgElGeom = {
+  el: SVGGraphicsElement;
+  tag: string;
+  bb: { x: number; y: number; width: number; height: number };
+  dec: { angle: number; scaleX: number; scaleY: number };
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number | undefined;
+  fill: string;
+  stroke: string;
+  borderWidth: number;
+  opacity: number;
+  name: string | undefined;
+};
+
+function toolOpFromRect(g: SvgElGeom): ToolOp {
+  const rx = Math.max(
+    0,
+    numAttr(g.el, 'rx', numAttr(g.el, 'ry', 0)) * Math.abs(g.dec.scaleX)
+  );
+  return {
+    name: 'create_shape',
+    args: {
+      shapeType: 'rect',
+      x: g.x,
+      y: g.y,
+      width: g.w,
+      height: g.h,
+      fill: g.fill,
+      stroke: g.stroke === 'transparent' ? undefined : g.stroke,
+      borderWidth: g.stroke === 'transparent' ? 0 : g.borderWidth,
+      cornerRadius: rx > 0 ? Math.round(rx) : undefined,
+      rotation: g.rotation,
+      opacity: g.opacity,
+      name: g.name || '矩形',
+    },
+  };
+}
+
+function toolOpFromCircle(g: SvgElGeom): ToolOp {
+  return {
+    name: 'create_shape',
+    args: {
+      shapeType: 'circle',
+      x: g.x,
+      y: g.y,
+      width: g.w,
+      height: g.h,
+      fill: g.fill,
+      stroke: g.stroke === 'transparent' ? undefined : g.stroke,
+      borderWidth: g.stroke === 'transparent' ? 0 : g.borderWidth,
+      rotation: g.rotation,
+      opacity: g.opacity,
+      name: g.name || '圆形',
+    },
+  };
+}
+
+function toolOpFromLine(g: SvgElGeom): ToolOp {
+  return {
+    name: 'create_shape',
+    args: {
+      shapeType: 'line',
+      x: g.x,
+      y: g.y,
+      width: Math.max(g.w, 1),
+      height: Math.max(g.h, 8),
+      stroke: g.stroke === 'transparent' ? '#333333' : g.stroke,
+      borderWidth: Math.max(1, g.borderWidth),
+      rotation: g.rotation,
+      opacity: g.opacity,
+      name: g.name || '直线',
+    },
+  };
+}
+
+function toolOpFromPath(g: SvgElGeom): ToolOp | null {
+  let d = '';
+  if (g.tag === 'path') {
+    d = String(g.el.getAttribute('d') || '').trim();
+  } else {
+    const pts = String(g.el.getAttribute('points') || '')
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number)
+      .filter((n) => Number.isFinite(n));
+    if (pts.length >= 4) {
+      const parts: string[] = [];
+      for (let i = 0; i < pts.length; i += 2) {
+        parts.push(`${i === 0 ? 'M' : 'L'} ${pts[i]} ${pts[i + 1]}`);
+      }
+      if (g.tag === 'polygon') parts.push('Z');
+      d = parts.join(' ');
+    }
+  }
+  if (!d) return null;
+  let local = translatePathData(d, -g.bb.x, -g.bb.y);
+  if (Math.abs(g.dec.scaleX - 1) > 0.01 || Math.abs(g.dec.scaleY - 1) > 0.01) {
+    local = scalePathData(local, Math.abs(g.dec.scaleX), Math.abs(g.dec.scaleY));
+  }
+  const closed =
+    g.tag === 'polygon' || /\bz\s*$/i.test(d.trim()) || g.fill !== 'transparent';
+  const strokeIsNone = g.stroke === 'transparent';
+  return {
+    name: 'create_shape',
+    args: {
+      shapeType: 'path',
+      x: g.x,
+      y: g.y,
+      width: g.w,
+      height: g.h,
+      path: local,
+      closed,
+      fill: closed ? g.fill : 'transparent',
+      // Keep SVG paint as-is — never invent #333 borders for fill-only paths.
+      stroke: strokeIsNone ? 'transparent' : g.stroke,
+      borderWidth: strokeIsNone ? 0 : g.borderWidth,
+      rotation: g.rotation,
+      opacity: g.opacity,
+      name: g.name || '路径',
+    },
+  };
+}
+
+function toolOpFromText(g: SvgElGeom): ToolOp | null {
+  const text = String(g.el.textContent || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  let fontSize = 14;
+  let fontFamily = 'Alibaba PuHuiTi';
+  let fontWeight = 'normal';
+  let textAnchor = 'start';
+  try {
+    const cs = getComputedStyle(g.el);
+    fontSize = Math.max(8, parseFloat(cs.fontSize) || 14);
+    fontFamily =
+      String(cs.fontFamily || fontFamily)
+        .split(',')[0]
+        ?.replace(/['"]/g, '')
+        .trim() || fontFamily;
+    fontWeight = String(cs.fontWeight || 'normal');
+    textAnchor = String(g.el.getAttribute('text-anchor') || 'start');
+  } catch {
+    fontSize = Math.max(8, numAttr(g.el, 'font-size', 14));
+  }
+  return {
+    name: 'create_text',
+    args: {
+      text,
+      x: g.x,
+      y: g.y,
+      width: Math.max(g.w, Math.ceil(fontSize * text.length * 0.6)),
+      height: Math.max(g.h, Math.ceil(fontSize * 1.4)),
+      fontSize: Math.round(fontSize * Math.abs(g.dec.scaleY) * 10) / 10,
+      color: g.fill === 'transparent' ? '#333333' : g.fill,
+      fontFamily,
+      fontWeight: /bold|700|800|900/i.test(fontWeight) ? 'bold' : 'normal',
+      textAlign: textAnchor === 'middle' ? 'center' : textAnchor === 'end' ? 'right' : 'left',
+      name: g.name || '文字',
+    },
+  };
+}
+
+function toolOpFromImage(g: SvgElGeom): ToolOp | null {
+  const href =
+    g.el.getAttribute('href') ||
+    g.el.getAttributeNS('http://www.w3.org/1999/xlink', 'href') ||
+    '';
+  if (!href) return null;
+  return {
+    name: 'create_image',
+    args: {
+      x: g.x,
+      y: g.y,
+      width: g.w,
+      height: g.h,
+      src: href,
+      name: g.name || '图片',
+    },
+  };
+}
+
 function elementToToolOp(el: SVGGraphicsElement, root: SVGSVGElement): ToolOp | null {
   const tag = el.tagName.toLowerCase().replace(/^.*:/, '');
   if (SKIP_TAGS.has(tag) || tag === 'svg' || tag === 'g' || tag === 'use') return null;
@@ -1306,180 +1508,42 @@ function elementToToolOp(el: SVGGraphicsElement, root: SVGSVGElement): ToolOp | 
   const dec = m ? decomposeMatrix(m) : { angle: 0, scaleX: 1, scaleY: 1 };
   const topLeft = m ? mapPoint(m, bb.x, bb.y) : { x: bb.x, y: bb.y };
   // Local to artboard — executeDesignTool.fitIntoFrame promotes to world when frame is offset.
-  const x = Math.round(topLeft.x);
-  const y = Math.round(topLeft.y);
-  const w = Math.max(1, Math.round(bb.width * Math.abs(dec.scaleX)));
-  const h = Math.max(1, Math.round(bb.height * Math.abs(dec.scaleY)));
-  const rotation = Math.abs(dec.angle) < 0.5 ? undefined : Math.round(dec.angle * 10) / 10;
-  const fill = paintOf(el, 'fill');
-  const stroke = paintOf(el, 'stroke');
-  const borderWidth = strokeWidthOf(el);
-  const opacity = opacityOf(el);
-  const name = el.getAttribute('id') || undefined;
+  const g: SvgElGeom = {
+    el,
+    tag,
+    bb,
+    dec,
+    x: Math.round(topLeft.x),
+    y: Math.round(topLeft.y),
+    w: Math.max(1, Math.round(bb.width * Math.abs(dec.scaleX))),
+    h: Math.max(1, Math.round(bb.height * Math.abs(dec.scaleY))),
+    rotation: Math.abs(dec.angle) < 0.5 ? undefined : Math.round(dec.angle * 10) / 10,
+    fill: paintOf(el, 'fill'),
+    stroke: paintOf(el, 'stroke'),
+    borderWidth: strokeWidthOf(el),
+    opacity: opacityOf(el),
+    name: el.getAttribute('id') || undefined,
+  };
 
-  if (tag === 'rect') {
-    const rx = Math.max(0, numAttr(el, 'rx', numAttr(el, 'ry', 0)) * Math.abs(dec.scaleX));
-    return {
-      name: 'create_shape',
-      args: {
-        shapeType: 'rect',
-        x,
-        y,
-        width: w,
-        height: h,
-        fill,
-        stroke: stroke === 'transparent' ? undefined : stroke,
-        borderWidth: stroke === 'transparent' ? 0 : borderWidth,
-        cornerRadius: rx > 0 ? Math.round(rx) : undefined,
-        rotation,
-        opacity,
-        name: name || '矩形',
-      },
-    };
+  switch (tag) {
+    case 'rect':
+      return toolOpFromRect(g);
+    case 'circle':
+    case 'ellipse':
+      return toolOpFromCircle(g);
+    case 'line':
+      return toolOpFromLine(g);
+    case 'path':
+    case 'polygon':
+    case 'polyline':
+      return toolOpFromPath(g);
+    case 'text':
+      return toolOpFromText(g);
+    case 'image':
+      return toolOpFromImage(g);
+    default:
+      return null;
   }
-
-  if (tag === 'circle' || tag === 'ellipse') {
-    return {
-      name: 'create_shape',
-      args: {
-        shapeType: 'circle',
-        x,
-        y,
-        width: w,
-        height: h,
-        fill,
-        stroke: stroke === 'transparent' ? undefined : stroke,
-        borderWidth: stroke === 'transparent' ? 0 : borderWidth,
-        rotation,
-        opacity,
-        name: name || '圆形',
-      },
-    };
-  }
-
-  if (tag === 'line') {
-    return {
-      name: 'create_shape',
-      args: {
-        shapeType: 'line',
-        x,
-        y,
-        width: Math.max(w, 1),
-        height: Math.max(h, 8),
-        stroke: stroke === 'transparent' ? '#333333' : stroke,
-        borderWidth: Math.max(1, borderWidth),
-        rotation,
-        opacity,
-        name: name || '直线',
-      },
-    };
-  }
-
-  if (tag === 'path' || tag === 'polygon' || tag === 'polyline') {
-    let d = '';
-    if (tag === 'path') {
-      d = String(el.getAttribute('d') || '').trim();
-    } else {
-      const pts = String(el.getAttribute('points') || '')
-        .trim()
-        .split(/[\s,]+/)
-        .map(Number)
-        .filter((n) => Number.isFinite(n));
-      if (pts.length >= 4) {
-        const parts: string[] = [];
-        for (let i = 0; i < pts.length; i += 2) {
-          parts.push(`${i === 0 ? 'M' : 'L'} ${pts[i]} ${pts[i + 1]}`);
-        }
-        if (tag === 'polygon') parts.push('Z');
-        d = parts.join(' ');
-      }
-    }
-    if (!d) return null;
-    let local = translatePathData(d, -bb.x, -bb.y);
-    if (Math.abs(dec.scaleX - 1) > 0.01 || Math.abs(dec.scaleY - 1) > 0.01) {
-      local = scalePathData(local, Math.abs(dec.scaleX), Math.abs(dec.scaleY));
-    }
-    const closed = tag === 'polygon' || /\bz\s*$/i.test(d.trim()) || fill !== 'transparent';
-    const strokeIsNone = stroke === 'transparent';
-    return {
-      name: 'create_shape',
-      args: {
-        shapeType: 'path',
-        x,
-        y,
-        width: w,
-        height: h,
-        path: local,
-        closed,
-        fill: closed ? fill : 'transparent',
-        // Keep SVG paint as-is — never invent #333 borders for fill-only paths.
-        stroke: strokeIsNone ? 'transparent' : stroke,
-        borderWidth: strokeIsNone ? 0 : borderWidth,
-        rotation,
-        opacity,
-        name: name || '路径',
-      },
-    };
-  }
-
-  if (tag === 'text') {
-    const text = String(el.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!text) return null;
-    let fontSize = 14;
-    let fontFamily = 'Alibaba PuHuiTi';
-    let fontWeight = 'normal';
-    let textAnchor = 'start';
-    try {
-      const cs = getComputedStyle(el);
-      fontSize = Math.max(8, parseFloat(cs.fontSize) || 14);
-      fontFamily =
-        String(cs.fontFamily || fontFamily)
-          .split(',')[0]
-          ?.replace(/['"]/g, '')
-          .trim() || fontFamily;
-      fontWeight = String(cs.fontWeight || 'normal');
-      textAnchor = String(el.getAttribute('text-anchor') || 'start');
-    } catch {
-      fontSize = Math.max(8, numAttr(el, 'font-size', 14));
-    }
-    return {
-      name: 'create_text',
-      args: {
-        text,
-        x,
-        y,
-        width: Math.max(w, Math.ceil(fontSize * text.length * 0.6)),
-        height: Math.max(h, Math.ceil(fontSize * 1.4)),
-        fontSize: Math.round(fontSize * Math.abs(dec.scaleY) * 10) / 10,
-        color: fill === 'transparent' ? '#333333' : fill,
-        fontFamily,
-        fontWeight: /bold|700|800|900/i.test(fontWeight) ? 'bold' : 'normal',
-        textAlign: textAnchor === 'middle' ? 'center' : textAnchor === 'end' ? 'right' : 'left',
-        name: name || '文字',
-      },
-    };
-  }
-
-  if (tag === 'image') {
-    const href =
-      el.getAttribute('href') ||
-      el.getAttributeNS('http://www.w3.org/1999/xlink', 'href') ||
-      '';
-    if (!href) return null;
-    return {
-      name: 'create_image',
-      args: {
-        x,
-        y,
-        width: w,
-        height: h,
-        src: href,
-        name: name || '图片',
-      },
-    };
-  }
-
-  return null;
 }
 
 function designSvgToToolOps(svg: string, size: { width: number; height: number }): ToolOp[] {
@@ -2712,7 +2776,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         }
       }
       try {
-        const applied = applyAgentToolOps({
+        const applied = await applyAgentToolOps({
           ops: paintOps,
           dispatch: params.dispatch,
           getDocument: params.getDocument,
@@ -2909,11 +2973,11 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
 
   try {
     const onStreamEvent = (ev: DesignJobEvent) => {
-        if (ev.type === 'status') {
+      switch (ev.type) {
+        case 'status':
           handleStreamStatus(ev);
           return;
-        }
-        if (ev.type === 'permission') {
+        case 'permission': {
           // End empty Thinking pill; do NOT divert to chat-only when LLM may run.
           clearProcessPill();
           if (!ev.can_call_llm) {
@@ -2929,23 +2993,21 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           });
           return;
         }
-        if (ev.type === 'thinking' && ev.text) {
-          params.onEvent({
-            type: 'thinking',
-            text: ev.text,
-            ...(ev.replace ? { replace: true } : {}),
-          });
-          return;
-        }
-        if (ev.type === 'token' && ev.text) {
-          params.onEvent({ type: 'token', text: ev.text });
-          return;
-        }
-        if (ev.type === 'chat_done') {
-          // Ask proposals also finish without paint — do NOT wipe proposedOps / choices.
-          if (pendingDone?.proposedOps?.length) {
-            return;
+        case 'thinking':
+          if (ev.text) {
+            params.onEvent({
+              type: 'thinking',
+              text: ev.text,
+              ...(ev.replace ? { replace: true } : {}),
+            });
           }
+          return;
+        case 'token':
+          if (ev.text) params.onEvent({ type: 'token', text: ev.text });
+          return;
+        case 'chat_done': {
+          // Ask proposals also finish without paint — do NOT wipe proposedOps / choices.
+          if (pendingDone?.proposedOps?.length) return;
           // Model returned reply-only — clear Thought / Explored chrome.
           chatDiverted = true;
           pendingDone = {
@@ -2956,44 +3018,35 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           params.onEvent({ type: 'chat' });
           return;
         }
-        if (ev.type === 'analysis_delta' && ev.text) {
-          params.onEvent({ type: 'analysis_delta', text: ev.text });
+        case 'analysis_delta':
+          if (ev.text) params.onEvent({ type: 'analysis_delta', text: ev.text });
           return;
-        }
-        if (ev.type === 'analysis' && ev.text) {
-          params.onEvent({ type: 'analysis', text: ev.text });
+        case 'analysis':
+          if (ev.text) params.onEvent({ type: 'analysis', text: ev.text });
           return;
-        }
-        if (ev.type === 'skill_start') {
+        case 'skill_start':
           handleStreamSkillStart(ev);
           return;
-        }
-        if (ev.type === 'skill_progress') {
+        case 'skill_progress':
           handleStreamSkillProgress(ev);
           return;
-        }
-        if (ev.type === 'activity') {
+        case 'activity':
           handleStreamActivity(ev);
           return;
-        }
-        if (ev.type === 'tool_ops') {
+        case 'tool_ops':
           handleStreamToolOps(ev);
           return;
-        }
-        if (ev.type === 'scene_feedback_request') {
+        case 'scene_feedback_request':
           handleStreamSceneFeedback(ev);
           return;
-        }
-        if (ev.type === 'skill_done') {
+        case 'skill_done':
           handleStreamSkillDone(ev);
           return;
-        }
-        if (ev.type === 'svg_delta') {
+        case 'svg_delta':
           if (!toolOpsApplied) paintSvgProgressive(ev.svg, ev.svg_patch);
           if (typeof ev.index === 'number') emitPhase(ev.index + 1, params.scene || 'design');
           return;
-        }
-        if (ev.type === 'critique_start') {
+        case 'critique_start': {
           const label = `Critique ${ev.round}`;
           if (!labels.includes(label)) labels.push(label);
           params.onEvent({
@@ -3005,7 +3058,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           emitPhase(Math.max(0, labels.length - 1), 'critique');
           return;
         }
-        if (ev.type === 'critique_done') {
+        case 'critique_done':
           params.onEvent({
             type: 'activity',
             id: `critique-${ev.round}`,
@@ -3014,13 +3067,10 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           });
           emitPhase(labels.length, 'critique');
           return;
-        }
-        if (ev.type === 'replan') {
+        case 'replan':
           // Dynamic skip: labels may shrink; just log, no UI needed.
           return;
-        }
-        if (ev.type === 'subgoals') {
-          // Surface as analysis text so user sees task decomposition.
+        case 'subgoals':
           if (ev.goals?.length) {
             params.onEvent({
               type: 'analysis_delta',
@@ -3028,8 +3078,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
             });
           }
           return;
-        }
-        if (ev.type === 'memory_patch') {
+        case 'memory_patch':
           emitMemory(
             {
               medium: (ev.medium || {}) as MemoryPatch['medium'],
@@ -3038,14 +3087,15 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
             live.frameId || params.targetFrameId || null
           );
           return;
-        }
-        if (ev.type === 'result') {
+        case 'result':
           handleStreamResult(ev);
           return;
-        }
-        if (ev.type === 'error') {
+        case 'error':
           params.onEvent({ type: 'error', message: ev.message || 'design_failed' });
-        }
+          return;
+        default:
+          return;
+      }
     };
 
     await runDesignJob(buildRunDesignJobBody(params, runMode), {

@@ -15,8 +15,8 @@ import {
   withMirroredHandles,
   type PenAnchor,
 } from './penPath';
-import { nodeLeftTop } from '../scene/sceneToSvg';
-import { normalizePathDForEdit } from '../scene/outlineToPath';
+import { nodeLeftTop } from '../scene/paint/sceneToSvg';
+import { normalizePathDForEdit } from '../scene/paint/outlineToPath';
 import RcbSceneOverlaySvg from '../canvas/RcbSceneOverlaySvg';
 
 type HandleSide = 'in' | 'out';

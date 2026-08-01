@@ -9,7 +9,7 @@ import {
   resolveLinearCoords,
   type FillGradient,
   type FillStop,
-} from '@/components/rcb/scene/sceneFill';
+} from '@/components/rcb/scene/document/sceneFill';
 import { normalizeHex } from '@/components/base/colorPanel';
 
 type SceneBox = { left: number; top: number; width: number; height: number };

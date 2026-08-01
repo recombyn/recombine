@@ -3,7 +3,7 @@
  * Dependency-free for the rcb core.
  */
 
-import { nodeLeftTop } from '../scene/sceneToSvg';
+import { nodeLeftTop } from '../scene/paint/sceneToSvg';
 
 export type RcbSpatialItem = {
   id: string;

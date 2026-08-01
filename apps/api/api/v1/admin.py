@@ -1198,13 +1198,18 @@ class DesignSkillIn(BaseModel):
 def admin_design_skills(
     q: str | None = Query(default=None),
     enabled: bool | None = Query(default=None),
+    source: str | None = Query(
+        default=None,
+        description="Optional source filter: seed | file | admin. Default: all.",
+    ),
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     from services.design.admin_store import list_admin_skills
     from services.design.skill_store import ensure_design_skills
 
     ensure_design_skills()
-    return {"items": list_admin_skills(q=q, enabled=enabled)}
+    src = str(source).strip().lower() if source and str(source).strip() else None
+    return {"items": list_admin_skills(q=q, enabled=enabled, source=src)}
 
 
 @router.put("/design/skills")
@@ -1229,7 +1234,10 @@ def admin_delete_design_skill(
     from services.design.admin_store import soft_delete_skill
     from services.design.skill_store import invalidate_skill_key_cache
 
-    ok = soft_delete_skill(skill_id)
+    try:
+        ok = soft_delete_skill(skill_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
     invalidate_skill_key_cache()
@@ -1240,7 +1248,7 @@ def admin_delete_design_skill(
 def admin_resync_design_skills(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Re-run seed + file skill sync (never overwrites source=admin)."""
+    """Re-run seed (insert-only) + file skill sync; never overwrites source=admin."""
     from services.design.skill_store import ensure_design_skills, list_runtime_skills
 
     ensure_design_skills(force=True)

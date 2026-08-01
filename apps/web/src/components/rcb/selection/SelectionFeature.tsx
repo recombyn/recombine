@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { nodeLeftTop } from '@/components/rcb/scene/sceneToSvg';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import ImageReplaceCornerButton from '@/components/editor/nodes/ImageNode/ImageReplaceCornerButton';
 import ImageVariantsOverlay from '@/components/editor/nodes/ImageNode/ImageVariantsOverlay';
 import VideoReplaceCornerButton from '@/components/editor/nodes/VideoNode/VideoReplaceCornerButton';
@@ -26,9 +26,9 @@ import {
   type SceneBox,
 } from './alignGuides';
 import SelectionChrome from './SelectionChrome';
-import SelectionContextToolbar from './SelectionContextToolbar';
-import MultiSelectionToolbar from './MultiSelectionToolbar';
-import NodeTitleLabel from './NodeTitleLabel';
+import SelectionContextToolbar from './chrome/SelectionContextToolbar';
+import MultiSelectionToolbar from './chrome/MultiSelectionToolbar';
+import NodeTitleLabel from './chrome/NodeTitleLabel';
 import SpacingInspectOverlay, {
   boxesInvolvedInGuides,
   computeMoveMarginResult,
@@ -37,10 +37,11 @@ import SpacingInspectOverlay, {
 } from './SpacingInspectOverlay';
 import { resizeFromHandle, rotateBoxesAround, scaleBoxesToUnion, unionOfBoxes, type ResizeHandle } from './resizeGeometry';
 import {
+  HEAVY_PATH_D_CHARS,
   pathStrokeHitsSceneBox,
   resizeStrokeByEndpoint,
   strokeEndpointsFromBox,
-} from '@/components/rcb/scene/sceneShapes';
+} from '@/components/rcb/scene/document/sceneShapes';
 import {
   expandSelectionWithGroups,
   isImageGeneratorNode,
@@ -49,16 +50,16 @@ import {
   isNodeLocked,
   listImageVariantUrls,
   supportsFill,
-} from '@/components/rcb/scene/sceneDocument';
-import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/sceneEffects';
-import { geometryIndicatorPathD, isEditablePathNode } from '@/components/rcb/scene/outlineToPath';
+} from '@/components/rcb/scene/document/sceneDocument';
+import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/document/sceneEffects';
+import { geometryIndicatorPathD, isEditablePathNode } from '@/components/rcb/scene/paint/outlineToPath';
 import { patchDocumentNode, setDevHoverNodeId } from '@/store/modules/editor';
 import {
   measureWrappedTextSize,
   parseNodeText,
   parseNodeTextStyle,
-} from '@/components/rcb/scene/sceneText';
-import type { TextResizeMode } from '@/components/rcb/scene/svgToScene';
+} from '@/components/rcb/scene/document/sceneText';
+import type { TextResizeMode } from '@/components/rcb/scene/paint/svgToScene';
 
 const CORNER_HANDLES = new Set<ResizeHandle>(['nw', 'ne', 'sw', 'se']);
 
@@ -169,11 +170,10 @@ function textResizeModeForHandle(handle: ResizeHandle): TextResizeMode {
 
 /**
  * Aspect lock while resizing.
- * - Multi-select / group: lock if any image is selected (unless a node was
- *   explicitly unlocked via the toolbar chain); Shift inverts.
- * - Single text corners: lock by default (Shift unlocks).
- * - Single image/video: `attrs.lockAspect` (default on) locks; Shift temporarily inverts.
- * - Other single nodes: free by default (Shift locks), unless `lockAspect` is set.
+ * - Toolbar lock and Shift are OR'd: Shift reinforces proportional scale,
+ *   and never unlocks when the chain icon is already on (avoids fight with lock).
+ * - Single text corners: proportional by default; Shift allows free resize.
+ * - Image/video default locked; other nodes free unless `lockAspect` is set.
  */
 function nodeAspectLockDefault(key: string | undefined): boolean {
   return key === 'image' || key === 'video';
@@ -186,6 +186,11 @@ function readNodeAspectLocked(node: any): boolean {
   return nodeAspectLockDefault(node?.key);
 }
 
+/** Persist lock OR Shift — Shift adds constraint, does not toggle it off. */
+function combineAspectLock(locked: boolean, shiftKey: boolean) {
+  return locked || shiftKey;
+}
+
 function resolveLockAspect(
   document: any,
   origins: Array<{ nodeId: string }>,
@@ -196,9 +201,9 @@ function resolveLockAspect(
   if (origins.length === 1) {
     const node = document?.deltaSetLike?.[origins[0].nodeId];
     const key = node?.key;
+    // Text corners: default scale; Shift temporarily unlocks for free reshape.
     if (key === 'text' && CORNER_HANDLES.has(handle)) return !shiftKey;
-    const locked = readNodeAspectLocked(node);
-    return shiftKey ? !locked : locked;
+    return combineAspectLock(readNodeAspectLocked(node), shiftKey);
   }
   // Multi / group: lock when selection includes images/videos (unless explicitly unlocked).
   const nodes = origins
@@ -212,7 +217,7 @@ function resolveLockAspect(
     !hasExplicitUnlock && nodes.some((n) => n.key === 'image' || n.key === 'video')
       ? true
       : nodes.length > 0 && nodes.every((n) => readNodeAspectLocked(n));
-  return shiftKey ? !allLocked : allLocked;
+  return combineAspectLock(allLocked, shiftKey);
 }
 
 /** Remasure text height for L/R wrap so chrome hugs wrapped lines while dragging. */
@@ -529,6 +534,309 @@ type DragState = {
   skipSelectOnUp?: boolean;
 };
 
+/** Shared seed for blank / pointing_canvas / move / resize / rotate drags. */
+function makeDragSeed(
+  mode: DragState['mode'],
+  e: { clientX: number; clientY: number },
+  p: { x: number; y: number },
+  extras?: Partial<DragState>
+): DragState {
+  return {
+    mode,
+    startX: e.clientX,
+    startY: e.clientY,
+    sceneX0: p.x,
+    sceneY0: p.y,
+    origins: [],
+    union: { left: p.x, top: p.y, width: 1, height: 1 },
+    ...extras,
+  };
+}
+
+function isSelectionOriginsLocked(
+  document: any,
+  origins: Array<{ nodeId: string }> | null | undefined
+): boolean {
+  if (!origins?.length) return false;
+  const frames = Array.isArray(document?.frames) ? document.frames : [];
+  return origins.some((o) => {
+    const fid = parseFrameSelId(o.nodeId);
+    if (fid) return Boolean(frames.find((x: any) => x?.id === fid)?.locked);
+    return isNodeLocked(document?.deltaSetLike?.[o.nodeId]);
+  });
+}
+
+function isRecentNodeDoubleTap(
+  prev: { id: string; t: number; x: number; y: number } | null,
+  hitId: string,
+  e: { clientX: number; clientY: number },
+  ms = 400,
+  distPx = 10
+): boolean {
+  if (!prev || prev.id !== hitId) return false;
+  return Date.now() - prev.t < ms && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < distPx;
+}
+
+function buildMoveOriginsForHit(opts: {
+  document: any;
+  hitId: string;
+  selectedIds: string[];
+  expandedHit: string[];
+  liveOriginsNow: Array<{ nodeId: string; box: SceneBox }> | null | undefined;
+  getNodeBox: (id: string) => SceneBox | null | undefined;
+  fallbackPoint: { x: number; y: number };
+}): { origins: Array<{ nodeId: string; box: SceneBox }>; union: SceneBox } {
+  const { document, hitId, selectedIds, expandedHit, liveOriginsNow, getNodeBox, fallbackPoint } =
+    opts;
+  const moveNodeIds = expandSelectionWithGroups(
+    document,
+    selectedIds.includes(hitId) ? selectedIds.filter((id) => !parseFrameSelId(id)) : expandedHit
+  );
+  const frameOrigins =
+    selectedIds.includes(hitId) && liveOriginsNow
+      ? liveOriginsNow.filter((o) => parseFrameSelId(o.nodeId))
+      : [];
+  const origins = [
+    ...moveNodeIds
+      .map((id) => {
+        const box = liveOriginsNow?.find((o) => o.nodeId === id)?.box || getNodeBox(id);
+        return box ? { nodeId: id, box: { ...box } } : null;
+      })
+      .filter(Boolean),
+    ...frameOrigins.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })),
+  ] as Array<{ nodeId: string; box: SceneBox }>;
+  const union = unionOfBoxes(origins.map((o) => o.box)) || {
+    left: fallbackPoint.x,
+    top: fallbackPoint.y,
+    width: 1,
+    height: 1,
+  };
+  return { origins, union };
+}
+
+function filterMarqueeContentHits(document: any, rawHits: string[], frameHitSet: Set<string>) {
+  return rawHits.filter((id) => {
+    const plateFrame = frameForFullBleedPlate(document, id);
+    if (!plateFrame) return true;
+    if (frameHitSet.has(plateFrame)) return true;
+    return rawHits.some((other) => other !== id && !frameForFullBleedPlate(document, other));
+  });
+}
+
+function commitMarqueeSelection(opts: {
+  contentHits: string[];
+  frameHits: string[];
+  rawHits: string[];
+  shiftKey: boolean;
+  onSelectMixed?: (
+    nodeIds: string[],
+    frameIds: string[],
+    opts?: { additive?: boolean }
+  ) => void;
+  onSelectFrames?: (ids: string[]) => void;
+  onSelectFrame?: (id: string | null) => void;
+  onSelect: (ids: string[], opts?: { additive?: boolean }) => void;
+}) {
+  const {
+    contentHits,
+    frameHits,
+    rawHits,
+    shiftKey,
+    onSelectMixed,
+    onSelectFrames,
+    onSelectFrame,
+    onSelect,
+  } = opts;
+  if (!contentHits.length && !frameHits.length) {
+    onSelect(rawHits, { additive: shiftKey });
+    return;
+  }
+  if (onSelectMixed) {
+    onSelectMixed(contentHits, frameHits, { additive: shiftKey });
+    return;
+  }
+  if (frameHits.length && !contentHits.length) {
+    if (onSelectFrames) onSelectFrames(frameHits);
+    else if (onSelectFrame) onSelectFrame(frameHits[0]);
+    return;
+  }
+  onSelect(contentHits.length ? contentHits : rawHits, { additive: shiftKey });
+}
+
+type MoveSnapContext = {
+  document: any;
+  union: SceneBox;
+  dx: number;
+  dy: number;
+  originIds: string[];
+  isGridMode: boolean;
+  disableGrid: boolean;
+  gridSize: number;
+  snapThreshold: number;
+  queryNodeIdsInRect?: (box: SceneBox) => string[];
+  listNodeIds: () => string[];
+  getNodeBox: (id: string) => SceneBox | null | undefined;
+  /** Move preview skips hidden nodes in the spatial fallback. */
+  skipHiddenInFallback?: boolean;
+};
+
+function computeMovedUnion(ctx: MoveSnapContext): {
+  nextUnion: SceneBox;
+  sdx: number;
+  sdy: number;
+  guides: AlignGuide[];
+  others: SceneBox[];
+  frames: SceneBox[];
+} {
+  let nextUnion = {
+    ...ctx.union,
+    left: ctx.union.left + ctx.dx,
+    top: ctx.union.top + ctx.dy,
+  };
+  if (ctx.isGridMode && !ctx.disableGrid) {
+    nextUnion = snapBoxToGrid(nextUnion, ctx.gridSize);
+  }
+  const others = siblingGuideBoxesNear(
+    ctx.document,
+    ctx.originIds,
+    nextUnion,
+    ctx.snapThreshold,
+    ctx.queryNodeIdsInRect,
+    () =>
+      ctx
+        .listNodeIds()
+        .filter((id) => {
+          if (ctx.originIds.includes(id)) return false;
+          if (ctx.skipHiddenInFallback && isNodeHidden(ctx.document?.deltaSetLike?.[id])) {
+            return false;
+          }
+          return true;
+        })
+        .map((id) => ctx.getNodeBox(id))
+        .filter(Boolean) as SceneBox[]
+  );
+  const frames = frameGuideBoxes(ctx.document);
+  const snapped = snapBoxToGuides(nextUnion, others, frames, ctx.snapThreshold, {
+    edgeBoxes: movingGuideBoxes(nextUnion, ctx.document, ctx.originIds),
+  });
+  nextUnion = { ...snapped.box };
+  return {
+    nextUnion,
+    sdx: nextUnion.left - ctx.union.left,
+    sdy: nextUnion.top - ctx.union.top,
+    guides: snapped.guides,
+    others,
+    frames,
+  };
+}
+
+type ResizeSnapContext = {
+  document: any;
+  drag: DragState;
+  dx: number;
+  dy: number;
+  shiftKey: boolean;
+  isGridMode: boolean;
+  disableGrid: boolean;
+  gridSize: number;
+  snapThreshold: number;
+  queryNodeIdsInRect?: (box: SceneBox) => string[];
+  listNodeIds: () => string[];
+  getNodeBox: (id: string) => SceneBox | null | undefined;
+  skipHiddenInFallback?: boolean;
+};
+
+function computeResizedUnion(ctx: ResizeSnapContext): {
+  next: SceneBox;
+  guides: AlignGuide[];
+  others: SceneBox[];
+  frames: SceneBox[];
+  textMode: TextResizeMode | undefined;
+  lockAspect: boolean;
+} {
+  const handle = ctx.drag.handle!;
+  const lockAspect = resolveLockAspect(ctx.document, ctx.drag.origins, handle, ctx.shiftKey);
+  let next = resizeFromHandle(ctx.drag.union, handle, ctx.dx, ctx.dy, ctx.drag.angle0 || 0, {
+    lockAspect,
+    aspectRatio: ctx.drag.aspectRatio,
+  });
+  if (ctx.isGridMode && !ctx.disableGrid) {
+    next = snapResizeToGrid(next, handle, ctx.gridSize, 8, {
+      lockAspect,
+      aspectRatio: ctx.drag.aspectRatio,
+    });
+  }
+  const originIds = ctx.drag.origins.map((o) => o.nodeId);
+  const others = siblingGuideBoxesNear(
+    ctx.document,
+    originIds,
+    next,
+    ctx.snapThreshold,
+    ctx.queryNodeIdsInRect,
+    () =>
+      ctx
+        .listNodeIds()
+        .filter((id) => {
+          if (originIds.includes(id)) return false;
+          if (ctx.skipHiddenInFallback && isNodeHidden(ctx.document?.deltaSetLike?.[id])) {
+            return false;
+          }
+          return true;
+        })
+        .map((id) => ctx.getNodeBox(id))
+        .filter(Boolean) as SceneBox[]
+  );
+  const frames = frameGuideBoxes(ctx.document);
+  const snapped = snapResizeToGuides(next, handle, others, frames, ctx.snapThreshold, 8, {
+    edgeBoxes: movingGuideBoxes(next, ctx.document, originIds),
+    lockAspect,
+    aspectRatio: ctx.drag.aspectRatio,
+  });
+  next = {
+    ...snapped.box,
+    width: Math.max(1, snapped.box.width),
+    height: Math.max(1, snapped.box.height),
+  };
+  const textMode =
+    ctx.drag.origins.length === 1 &&
+    ctx.document?.deltaSetLike?.[ctx.drag.origins[0].nodeId]?.key === 'text'
+      ? textResizeModeForHandle(handle)
+      : undefined;
+  if (textMode === 'wrap') {
+    next = applyTextWrapHeight(ctx.document, ctx.drag.origins[0].nodeId, next);
+  }
+  return { next, guides: snapped.guides, others, frames, textMode, lockAspect };
+}
+
+function computeRotateDelta(
+  drag: DragState,
+  p: { x: number; y: number },
+  shiftKey: boolean
+): { next: number; delta: number } {
+  const now = (Math.atan2(p.y - drag.center!.y, p.x - drag.center!.x) * 180) / Math.PI;
+  let next = (drag.angle0 || 0) + (now - drag.pointerAngle0!);
+  if (shiftKey) next = Math.round(next / 15) * 15;
+  return { next, delta: next - (drag.angle0 || 0) };
+}
+
+function strokeEndpointBox(
+  drag: DragState,
+  document: any,
+  sceneX: number,
+  sceneY: number
+): { next: SceneBox; angle: number; strokeId: string } | null {
+  const strokeId = drag.origins.length === 1 ? drag.origins[0].nodeId : '';
+  if (!strokeId || !drag.handle) return null;
+  if (!isStrokeShapeType(readNodeShapeType(document, strokeId))) return null;
+  if (drag.handle !== 'e' && drag.handle !== 'w') return null;
+  const placed = resizeStrokeByEndpoint(drag.union, drag.angle0 || 0, drag.handle, sceneX, sceneY);
+  return {
+    strokeId,
+    angle: placed.angle,
+    next: { left: placed.x, top: placed.y, width: placed.width, height: placed.height },
+  };
+}
+
 function readNodeAngle(document: any, nodeId: string) {
   const node = document?.deltaSetLike?.[nodeId];
   const n = Number(node?.attrs?.angle);
@@ -822,7 +1130,10 @@ function SelectionFeature({
       }
     };
 
-    const onHoverMove = (e: PointerEvent) => {
+    let hoverRaf = 0;
+    let pending: PointerEvent | null = null;
+
+    const runHoverHit = (e: PointerEvent) => {
       if (dragRef.current) {
         applyHover(null);
         return;
@@ -863,11 +1174,31 @@ function SelectionFeature({
       applyHover(hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY }));
     };
 
-    const onLeave = () => applyHover(null);
+    const onHoverMove = (e: PointerEvent) => {
+      pending = e;
+      if (hoverRaf) return;
+      hoverRaf = requestAnimationFrame(() => {
+        hoverRaf = 0;
+        const next = pending;
+        pending = null;
+        if (next) runHoverHit(next);
+      });
+    };
+
+    const onLeave = () => {
+      pending = null;
+      if (hoverRaf) {
+        cancelAnimationFrame(hoverRaf);
+        hoverRaf = 0;
+      }
+      applyHover(null);
+    };
 
     window.addEventListener('pointermove', onHoverMove, { passive: true });
     window.addEventListener('blur', onLeave);
     return () => {
+      pending = null;
+      if (hoverRaf) cancelAnimationFrame(hoverRaf);
       window.removeEventListener('pointermove', onHoverMove);
       window.removeEventListener('blur', onLeave);
     };
@@ -919,23 +1250,11 @@ function SelectionFeature({
       const liveUnionNow = liveUnionRef.current;
       const liveOriginsNow = liveOriginsRef.current;
       const liveAngleNow = liveAngleRef.current;
-
-      const selectionIsLocked = () => {
-        if (!liveOriginsNow?.length) return false;
-        const frames = Array.isArray(document?.frames) ? document.frames : [];
-        return liveOriginsNow.some((o) => {
-          const fid = parseFrameSelId(o.nodeId);
-          if (fid) {
-            const f = frames.find((x: any) => x?.id === fid);
-            return Boolean(f?.locked);
-          }
-          return isNodeLocked(document?.deltaSetLike?.[o.nodeId]);
-        });
-      };
+      const lockedSelection = isSelectionOriginsLocked(document, liveOriginsNow);
 
       const rotateEl = target.closest('[data-sel-handle="rotate"]') as HTMLElement | null;
       if (rotateEl && liveUnionNow && liveOriginsNow?.length) {
-        if (readOnly || selectionIsLocked()) return;
+        if (readOnly || lockedSelection) return;
         e.preventDefault();
         e.stopPropagation();
         const center = {
@@ -948,12 +1267,7 @@ function SelectionFeature({
             ? readNodeAngle(document, liveOriginsNow[0].nodeId)
             : 0);
         const pointerAngle0 = (Math.atan2(p.y - center.y, p.x - center.x) * 180) / Math.PI;
-        dragRef.current = {
-          mode: 'rotate',
-          startX: e.clientX,
-          startY: e.clientY,
-          sceneX0: p.x,
-          sceneY0: p.y,
+        dragRef.current = makeDragSeed('rotate', e, p, {
           origins: liveOriginsNow.map((o) => ({
             nodeId: o.nodeId,
             box: { ...o.box },
@@ -963,7 +1277,7 @@ function SelectionFeature({
           angle0,
           center,
           pointerAngle0,
-        };
+        });
         setTransformingNotify(true);
         capture(e.pointerId);
         return;
@@ -971,16 +1285,11 @@ function SelectionFeature({
 
       const resizeEl = target.closest('[data-sel-handle="resize"]') as HTMLElement | null;
       if (resizeEl && liveUnionNow && liveOriginsNow?.length) {
-        if (readOnly || selectionIsLocked()) return;
+        if (readOnly || lockedSelection) return;
         e.preventDefault();
         e.stopPropagation();
         const handle = (resizeEl.getAttribute('data-resize') || 'se') as ResizeHandle;
-        dragRef.current = {
-          mode: 'resize',
-          startX: e.clientX,
-          startY: e.clientY,
-          sceneX0: p.x,
-          sceneY0: p.y,
+        dragRef.current = makeDragSeed('resize', e, p, {
           origins: liveOriginsNow.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })),
           union: { ...liveUnionNow },
           handle,
@@ -990,7 +1299,7 @@ function SelectionFeature({
               ? liveAngleNow || readNodeAngle(document, liveOriginsNow[0].nodeId)
               : 0,
           aspectRatio: liveUnionNow.width / Math.max(1, liveUnionNow.height),
-        };
+        });
         setTransformingNotify(true);
         capture(e.pointerId);
         return;
@@ -998,19 +1307,14 @@ function SelectionFeature({
 
       const beginMoveSelection = () => {
         if (readOnly || !liveUnionNow || !liveOriginsNow?.length) return false;
-        if (selectionIsLocked()) return false;
+        if (lockedSelection) return false;
         e.preventDefault();
         e.stopPropagation();
         const origins = liveOriginsNow.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } }));
-        dragRef.current = {
-          mode: 'move',
-          startX: e.clientX,
-          startY: e.clientY,
-          sceneX0: p.x,
-          sceneY0: p.y,
+        dragRef.current = makeDragSeed('move', e, p, {
           origins,
           union: { ...liveUnionNow },
-        };
+        });
         setLiveOrigins(origins);
         setLiveUnion(liveUnionNow);
         setTransformingNotify(true);
@@ -1057,24 +1361,14 @@ function SelectionFeature({
             : null);
         if (hitId && !plateFrameId) {
           // Do NOT call onSelectFrame(null) here — during pick that clears pick mode.
-          const expandedHit = expandSelectionWithGroups(document, [hitId]);
-          onSelect(expandedHit);
+          onSelect(expandSelectionWithGroups(document, [hitId]));
         } else if (frameUnder) {
           onSelectFrame?.(frameUnder);
         } else {
           // Truly empty canvas — exit pick mode.
           onSelect([]);
         }
-        dragRef.current = {
-          mode: 'blank',
-          skipSelectOnUp: true,
-          startX: e.clientX,
-          startY: e.clientY,
-          sceneX0: p.x,
-          sceneY0: p.y,
-          origins: [],
-          union: { left: p.x, top: p.y, width: 1, height: 1 },
-        };
+        dragRef.current = makeDragSeed('blank', e, p, { skipSelectOnUp: true });
         capture(e.pointerId);
         return;
       }
@@ -1104,15 +1398,7 @@ function SelectionFeature({
           onSelectFrame?.(null);
           onSelect([]);
         }
-        dragRef.current = {
-          mode: 'pointing_canvas',
-          startX: e.clientX,
-          startY: e.clientY,
-          sceneX0: p.x,
-          sceneY0: p.y,
-          origins: [],
-          union: { left: p.x, top: p.y, width: 1, height: 1 },
-        };
+        dragRef.current = makeDragSeed('pointing_canvas', e, p);
         marqueeLog('treat plate as empty → pointing_canvas');
         capture(e.pointerId);
         return;
@@ -1120,33 +1406,21 @@ function SelectionFeature({
 
       // Shape under pointer — select (if needed) then move. Never start a marquee on a shape.
       if (hitId) {
-        if (readOnly) {
-          // Preview / Dev inspect: select only (no move). Select on down so Inspect fills immediately.
-          e.preventDefault();
-          e.stopPropagation();
-          const additive = e.shiftKey;
-          const expandedHit = expandSelectionWithGroups(document, [hitId]);
-          onSelectFrame?.(null);
-          onSelect(expandedHit, { additive });
-          dragRef.current = {
-            mode: 'blank',
-            startX: e.clientX,
-            startY: e.clientY,
-            sceneX0: p.x,
-            sceneY0: p.y,
-            origins: [],
-            union: { left: p.x, top: p.y, width: 1, height: 1 },
-          };
-          capture(e.pointerId);
-          return;
-        }
         e.preventDefault();
         e.stopPropagation();
         const additive = e.shiftKey;
-        // Clicking any group member selects / moves the whole group.
-        // Expand here (not only in onSelect) so pointerdown→move uses full origins
-        // before Redux selection catches up.
         const expandedHit = expandSelectionWithGroups(document, [hitId]);
+
+        if (readOnly) {
+          // Preview / Dev inspect: select only (no move).
+          onSelectFrame?.(null);
+          onSelect(expandedHit, { additive });
+          dragRef.current = makeDragSeed('blank', e, p);
+          capture(e.pointerId);
+          return;
+        }
+
+        // Expand on down so pointerdown→move uses full group origins before Redux catches up.
         if (!selectedIds.includes(hitId)) {
           // Do not open text edit on pointerdown — a single click's up would
           // otherwise count as a second tap and enter edit immediately.
@@ -1156,103 +1430,42 @@ function SelectionFeature({
         }
         // Shift-add only: wait for pointer-up; don't start a translate.
         if (additive && !selectedIds.includes(hitId)) {
-          dragRef.current = {
-            mode: 'blank',
-            startX: e.clientX,
-            startY: e.clientY,
-            sceneX0: p.x,
-            sceneY0: p.y,
-            origins: [],
-            union: { left: p.x, top: p.y, width: 1, height: 1 },
-          };
+          dragRef.current = makeDragSeed('blank', e, p);
           capture(e.pointerId);
           return;
         }
-        // Keep frames already in the live selection when dragging a selected node.
-        const moveNodeIds = expandSelectionWithGroups(
+
+        const { origins, union } = buildMoveOriginsForHit({
           document,
-          selectedIds.includes(hitId) ? selectedIds.filter((id) => !parseFrameSelId(id)) : expandedHit
-        );
-        const frameOrigins =
-          selectedIds.includes(hitId) && liveOriginsNow
-            ? liveOriginsNow.filter((o) => parseFrameSelId(o.nodeId))
-            : [];
-        const origins = [
-          ...moveNodeIds
-            .map((id) => {
-              const box =
-                liveOriginsNow?.find((o) => o.nodeId === id)?.box || getNodeBox(id);
-              return box ? { nodeId: id, box: { ...box } } : null;
-            })
-            .filter(Boolean),
-          ...frameOrigins.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })),
-        ] as Array<{ nodeId: string; box: SceneBox }>;
-        const union = unionOfBoxes(origins.map((o) => o.box)) || {
-          left: p.x,
-          top: p.y,
-          width: 1,
-          height: 1,
-        };
+          hitId,
+          selectedIds,
+          expandedHit,
+          liveOriginsNow,
+          getNodeBox,
+          fallbackPoint: p,
+        });
         if (!origins.length) return;
+
         // Second click of a double-click: do not start a translate.
-        const prevTap = lastNodeTapRef.current;
-        const nowTap = Date.now();
-        if (
-          prevTap &&
-          prevTap.id === hitId &&
-          nowTap - prevTap.t < 400 &&
-          Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) < 10
-        ) {
+        if (isRecentNodeDoubleTap(lastNodeTapRef.current, hitId, e)) {
           lastNodeTapRef.current = null;
-          dragRef.current = {
-            mode: 'blank',
-            startX: e.clientX,
-            startY: e.clientY,
-            sceneX0: p.x,
-            sceneY0: p.y,
-            origins: [],
-            union: { left: p.x, top: p.y, width: 1, height: 1 },
-          };
+          dragRef.current = makeDragSeed('blank', e, p);
           capture(e.pointerId);
           return;
         }
-        lastNodeTapRef.current = { id: hitId, t: nowTap, x: e.clientX, y: e.clientY };
+        lastNodeTapRef.current = { id: hitId, t: Date.now(), x: e.clientX, y: e.clientY };
+
         // Keep chrome rotation in sync — transforming flips chromeAngle onto liveAngle.
         if (origins.length === 1 && !parseFrameSelId(origins[0].nodeId)) {
           setLiveAngle(readNodeAngle(document, origins[0].nodeId));
         }
         // Locked layers stay selectable but cannot start a drag.
-        if (
-          origins.some((o) => {
-            const fid = parseFrameSelId(o.nodeId);
-            if (fid) {
-              const frames = Array.isArray(document?.frames) ? document.frames : [];
-              return Boolean(frames.find((x: any) => x?.id === fid)?.locked);
-            }
-            return isNodeLocked(document?.deltaSetLike?.[o.nodeId]);
-          })
-        ) {
-          dragRef.current = {
-            mode: 'blank',
-            startX: e.clientX,
-            startY: e.clientY,
-            sceneX0: p.x,
-            sceneY0: p.y,
-            origins: [],
-            union: { left: p.x, top: p.y, width: 1, height: 1 },
-          };
+        if (isSelectionOriginsLocked(document, origins)) {
+          dragRef.current = makeDragSeed('blank', e, p);
           capture(e.pointerId);
           return;
         }
-        dragRef.current = {
-          mode: 'move',
-          startX: e.clientX,
-          startY: e.clientY,
-          sceneX0: p.x,
-          sceneY0: p.y,
-          origins,
-          union,
-        };
+        dragRef.current = makeDragSeed('move', e, p, { origins, union });
         setLiveOrigins(origins);
         setLiveUnion(union);
         setTransformingNotify(true);
@@ -1264,27 +1477,14 @@ function SelectionFeature({
       // Soft-click on artboard selects the frame (on pointerup). Frame move is via title label
       // or by dragging inside an existing selection union (handled above).
       e.preventDefault();
-      if (
-        !readOnly &&
-        selectionHasFrame &&
-        pointInLiveUnion &&
-        beginMoveSelection()
-      ) {
+      if (!readOnly && selectionHasFrame && pointInLiveUnion && beginMoveSelection()) {
         return;
       }
       if (!e.shiftKey) {
         onSelectFrame?.(null);
         onSelect([]);
       }
-      dragRef.current = {
-        mode: 'pointing_canvas',
-        startX: e.clientX,
-        startY: e.clientY,
-        sceneX0: p.x,
-        sceneY0: p.y,
-        origins: [],
-        union: { left: p.x, top: p.y, width: 1, height: 1 },
-      };
+      dragRef.current = makeDragSeed('pointing_canvas', e, p);
       marqueeLog('empty → pointing_canvas');
       capture(e.pointerId);
     };
@@ -1322,10 +1522,7 @@ function SelectionFeature({
       if (drag.mode === 'rotate' && drag.center && drag.pointerAngle0 != null) {
         // Soft-click on rotate knob — ignore OS pointer jitter.
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) return;
-        const now = (Math.atan2(p.y - drag.center.y, p.x - drag.center.x) * 180) / Math.PI;
-        let next = (drag.angle0 || 0) + (now - drag.pointerAngle0);
-        if (e.shiftKey) next = Math.round(next / 15) * 15;
-        const delta = next - (drag.angle0 || 0);
+        const { next, delta } = computeRotateDelta(drag, p, e.shiftKey);
         setLiveAngle(next);
         if (drag.origins.length === 1) {
           onAnglePreview?.(drag.origins[0].nodeId, next);
@@ -1362,55 +1559,27 @@ function SelectionFeature({
       if (drag.mode === 'move') {
         // Ignore snap jitter until the pointer actually moves (protects dblclick).
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) return;
-        let nextUnion = {
-          ...drag.union,
-          left: drag.union.left + dx,
-          top: drag.union.top + dy,
-        };
-        // Grid first; align guides may still pull off-grid when nearby.
-        // Ctrl/Cmd temporarily disables grid snap.
-        if (isGridMode && !e.ctrlKey && !e.metaKey) {
-          nextUnion = snapBoxToGrid(nextUnion, gridSize);
-        }
-        const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxesNear(
+        // Grid first; align guides may still pull off-grid. Ctrl/Cmd disables grid.
+        const { nextUnion, sdx, sdy, guides, others, frames } = computeMovedUnion({
           document,
-          excludeIds,
-          nextUnion,
+          union: drag.union,
+          dx,
+          dy,
+          originIds: drag.origins.map((o) => o.nodeId),
+          isGridMode,
+          disableGrid: e.ctrlKey || e.metaKey,
+          gridSize,
           snapThreshold,
           queryNodeIdsInRect,
-          () =>
-            listNodeIds()
-              .filter(
-                (id) =>
-                  !excludeIds.includes(id) &&
-                  !isNodeHidden(document?.deltaSetLike?.[id])
-              )
-              .map((id) => getNodeBox(id))
-              .filter(Boolean) as SceneBox[]
-        );
-        const frames = frameGuideBoxes(document);
-        const edgeBoxes = movingGuideBoxes(
-          nextUnion,
-          document,
-          excludeIds
-        );
-        const snapped = snapBoxToGuides(nextUnion, others, frames, snapThreshold, {
-          edgeBoxes,
+          listNodeIds,
+          getNodeBox,
+          skipHiddenInFallback: true,
         });
         // Keep exact snapped visual edges — integer rounding in geometry commits
         // breaks flush align when stroke outset is *.5 (odd border-width).
-        nextUnion = { ...snapped.box };
-        setGuides(snapped.guides);
-        // Distance tips are a kind of guide — show nearest gaps whenever
-        // align/gap guides fire (not only when gap ≤ snap threshold).
-        if (snapped.guides.length) {
-          // Only measure / highlight objects that actually snapped (图1),
-          // not every nearby frame on all four sides (图2 clutter).
-          const related = boxesInvolvedInGuides(snapped.guides, [
-            ...others,
-            ...frames,
-          ]);
+        setGuides(guides);
+        if (guides.length) {
+          const related = boxesInvolvedInGuides(guides, [...others, ...frames]);
           const margin = computeMoveMarginResult(nextUnion, related, []);
           setMoveMargins(margin.measures);
           setMoveHighlights(margin.highlights);
@@ -1418,15 +1587,9 @@ function SelectionFeature({
           setMoveMargins([]);
           setMoveHighlights([]);
         }
-        const sdx = nextUnion.left - drag.union.left;
-        const sdy = nextUnion.top - drag.union.top;
         const nextOrigins = drag.origins.map((o) => ({
           nodeId: o.nodeId,
-          box: {
-            ...o.box,
-            left: o.box.left + sdx,
-            top: o.box.top + sdy,
-          },
+          box: { ...o.box, left: o.box.left + sdx, top: o.box.top + sdy },
         }));
         setLiveUnion(nextUnion);
         setLiveOrigins(nextOrigins);
@@ -1446,104 +1609,48 @@ function SelectionFeature({
         // Soft-click on a handle must not resize: at 3% zoom, 2px jitter ≈ 60+
         // scene units and snap threshold is huge (8/zoom), so the box jumps.
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) return;
-        const strokeId = drag.origins.length === 1 ? drag.origins[0].nodeId : '';
-        const strokeType = strokeId ? readNodeShapeType(document, strokeId) : '';
-        if (
-          strokeId &&
-          isStrokeShapeType(strokeType) &&
-          (drag.handle === 'e' || drag.handle === 'w')
-        ) {
-          // Free endpoint: opposite end fixed → length + angle together.
-          const placed = resizeStrokeByEndpoint(
-            drag.union,
-            drag.angle0 || 0,
-            drag.handle,
-            p.x,
-            p.y
-          );
-          const next = {
-            left: placed.x,
-            top: placed.y,
-            width: placed.width,
-            height: placed.height,
-          };
+        const stroke = strokeEndpointBox(drag, document, p.x, p.y);
+        if (stroke) {
           setGuides([]);
-          setLiveUnion(next);
-          setLiveOrigins([{ nodeId: strokeId, box: next }]);
-          setLiveAngle(placed.angle);
+          setLiveUnion(stroke.next);
+          setLiveOrigins([{ nodeId: stroke.strokeId, box: stroke.next }]);
+          setLiveAngle(stroke.angle);
           onGeometryPreview?.([
             {
-              nodeId: strokeId,
-              left: next.left,
-              top: next.top,
-              width: next.width,
-              height: next.height,
+              nodeId: stroke.strokeId,
+              left: stroke.next.left,
+              top: stroke.next.top,
+              width: stroke.next.width,
+              height: stroke.next.height,
             },
           ]);
-          onAnglePreview?.(strokeId, placed.angle);
+          onAnglePreview?.(stroke.strokeId, stroke.angle);
           return;
         }
-        const lockAspect = resolveLockAspect(document, drag.origins, drag.handle, e.shiftKey);
-        let next = resizeFromHandle(drag.union, drag.handle, dx, dy, drag.angle0 || 0, {
-          lockAspect,
-          aspectRatio: drag.aspectRatio,
-        });
-        if (isGridMode && !e.ctrlKey && !e.metaKey) {
-          next = snapResizeToGrid(next, drag.handle, gridSize, 8, {
-            lockAspect,
-            aspectRatio: drag.aspectRatio,
-          });
-        }
-        const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxesNear(
+        const { next, guides, others, frames, textMode } = computeResizedUnion({
           document,
-          excludeIds,
-          next,
+          drag,
+          dx,
+          dy,
+          shiftKey: e.shiftKey,
+          isGridMode,
+          disableGrid: e.ctrlKey || e.metaKey,
+          gridSize,
           snapThreshold,
           queryNodeIdsInRect,
-          () =>
-            listNodeIds()
-              .filter(
-                (id) =>
-                  !excludeIds.includes(id) &&
-                  !isNodeHidden(document?.deltaSetLike?.[id])
-              )
-              .map((id) => getNodeBox(id))
-              .filter(Boolean) as SceneBox[]
-        );
-        const frames = frameGuideBoxes(document);
-        // Snap + spacing labels against every sibling / frame (no type filter).
-        const edgeBoxes = movingGuideBoxes(next, document, excludeIds);
-        const snapped = snapResizeToGuides(next, drag.handle, others, frames, snapThreshold, 8, {
-          edgeBoxes,
-          lockAspect,
-          aspectRatio: drag.aspectRatio,
+          listNodeIds,
+          getNodeBox,
+          skipHiddenInFallback: true,
         });
-        next = {
-          ...snapped.box,
-          width: Math.max(1, snapped.box.width),
-          height: Math.max(1, snapped.box.height),
-        };
-        setGuides(snapped.guides);
-        if (snapped.guides.length) {
-          const related = boxesInvolvedInGuides(snapped.guides, [
-            ...others,
-            ...frames,
-          ]);
+        setGuides(guides);
+        if (guides.length) {
+          const related = boxesInvolvedInGuides(guides, [...others, ...frames]);
           const margin = computeMoveMarginResult(next, related, []);
           setMoveMargins(margin.measures);
           setMoveHighlights(margin.highlights);
         } else {
           setMoveMargins([]);
           setMoveHighlights([]);
-        }
-        const textMode =
-          drag.origins.length === 1 &&
-          document?.deltaSetLike?.[drag.origins[0].nodeId]?.key === 'text'
-            ? textResizeModeForHandle(drag.handle)
-            : undefined;
-        if (textMode === 'wrap') {
-          next = applyTextWrapHeight(document, drag.origins[0].nodeId, next);
         }
         if (drag.origins.length === 1) {
           setLiveUnion(next);
@@ -1630,40 +1737,27 @@ function SelectionFeature({
           endTransform();
           return;
         }
-        const candidates =
-          queryNodeIdsInRect?.(box) ?? listNodeIds();
+        const candidates = queryNodeIdsInRect?.(box) ?? listNodeIds();
         const rawHits = candidates.filter((id) =>
           nodeHitsMarquee(document, id, box, getNodeBox, toScene)
         );
         const frameHits = framesHittingMarquee(document, box).map((f) => f.id);
-        const frameHitSet = new Set(frameHits);
-        // Full-bleed background plate: keep when artboard is brushed, or when other
-        // content is also hit (so Select-all / delete clears the overlapping plate).
-        const contentHits = rawHits.filter((id) => {
-          const plateFrame = frameForFullBleedPlate(document, id);
-          if (!plateFrame) return true;
-          if (frameHitSet.has(plateFrame)) return true;
-          return rawHits.some(
-            (other) => other !== id && !frameForFullBleedPlate(document, other)
-          );
+        // Full-bleed plate: keep when artboard brushed, or other non-plate content hit.
+        const contentHits = filterMarqueeContentHits(document, rawHits, new Set(frameHits));
+        marqueeLog(
+          contentHits.length || frameHits.length ? 'marquee up → mixed' : 'marquee up → fallback',
+          { box, contentHits, frameHits, rawHits }
+        );
+        commitMarqueeSelection({
+          contentHits,
+          frameHits,
+          rawHits,
+          shiftKey: e.shiftKey,
+          onSelectMixed,
+          onSelectFrames,
+          onSelectFrame,
+          onSelect,
         });
-        // Artboards are just another selectable rect — combine with nodes in one selection.
-        if (contentHits.length || frameHits.length) {
-          marqueeLog('marquee up → mixed', { box, contentHits, frameHits });
-          if (onSelectMixed) {
-            onSelectMixed(contentHits, frameHits, { additive: e.shiftKey });
-          } else if (frameHits.length && !contentHits.length) {
-            if (onSelectFrames) onSelectFrames(frameHits);
-            else if (onSelectFrame) onSelectFrame(frameHits[0]);
-          } else {
-            onSelect(contentHits.length ? contentHits : rawHits, { additive: e.shiftKey });
-          }
-          endTransform();
-          return;
-        }
-        // Plate-only / empty brush.
-        marqueeLog('marquee up → fallback', { box, rawHits });
-        onSelect(rawHits, { additive: e.shiftKey });
         endTransform();
         return;
       }
@@ -1697,10 +1791,7 @@ function SelectionFeature({
           endTransform();
           return;
         }
-        const now = (Math.atan2(p.y - drag.center.y, p.x - drag.center.x) * 180) / Math.PI;
-        let next = (drag.angle0 || 0) + (now - drag.pointerAngle0);
-        if (e.shiftKey) next = Math.round(next / 15) * 15;
-        const delta = next - (drag.angle0 || 0);
+        const { next, delta } = computeRotateDelta(drag, p, e.shiftKey);
         setLiveAngle(next);
         if (drag.origins.length === 1) {
           onAngleCommit?.(drag.origins[0].nodeId, next);
@@ -1752,37 +1843,21 @@ function SelectionFeature({
           endTransform();
           return;
         }
-        let nextUnion = {
-          ...drag.union,
-          left: drag.union.left + dx,
-          top: drag.union.top + dy,
-        };
-        if (isGridMode && !e.ctrlKey && !e.metaKey) {
-          nextUnion = snapBoxToGrid(nextUnion, gridSize);
-        }
-        const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxesNear(
+        const { nextUnion, sdx, sdy } = computeMovedUnion({
           document,
-          excludeIds,
-          nextUnion,
+          union: drag.union,
+          dx,
+          dy,
+          originIds: drag.origins.map((o) => o.nodeId),
+          isGridMode,
+          disableGrid: e.ctrlKey || e.metaKey,
+          gridSize,
           snapThreshold,
           queryNodeIdsInRect,
-          () =>
-            listNodeIds()
-              .filter((id) => !excludeIds.includes(id))
-              .map((id) => getNodeBox(id))
-              .filter(Boolean) as SceneBox[]
-        );
-        const snapped = snapBoxToGuides(
-          nextUnion,
-          others,
-          frameGuideBoxes(document),
-          snapThreshold,
-          { edgeBoxes: movingGuideBoxes(nextUnion, document, excludeIds) }
-        );
-        nextUnion = { ...snapped.box };
-        const sdx = nextUnion.left - drag.union.left;
-        const sdy = nextUnion.top - drag.union.top;
+          listNodeIds,
+          getNodeBox,
+          skipHiddenInFallback: false,
+        });
         const patches = drag.origins.map((o) => ({
           nodeId: o.nodeId,
           left: o.box.left + sdx,
@@ -1813,88 +1888,42 @@ function SelectionFeature({
           endTransform();
           return;
         }
-        const strokeId = drag.origins.length === 1 ? drag.origins[0].nodeId : '';
-        const strokeType = strokeId ? readNodeShapeType(document, strokeId) : '';
-        if (
-          strokeId &&
-          isStrokeShapeType(strokeType) &&
-          (drag.handle === 'e' || drag.handle === 'w')
-        ) {
-          const placed = resizeStrokeByEndpoint(
-            drag.union,
-            drag.angle0 || 0,
-            drag.handle,
-            p.x,
-            p.y
-          );
-          const next = {
-            left: placed.x,
-            top: placed.y,
-            width: placed.width,
-            height: placed.height,
-          };
-          setLiveUnion(next);
-          setLiveOrigins([{ nodeId: strokeId, box: next }]);
-          setLiveAngle(placed.angle);
+        const stroke = strokeEndpointBox(drag, document, p.x, p.y);
+        if (stroke) {
+          setLiveUnion(stroke.next);
+          setLiveOrigins([{ nodeId: stroke.strokeId, box: stroke.next }]);
+          setLiveAngle(stroke.angle);
           lastTextClickRef.current = null;
           // Bake angle into documentRef first so geometry rebuild reads attrs.angle;
           // one history entry via onGeometryCommit (do not patch angle into Redux first).
-          onAnglePreview?.(strokeId, placed.angle);
+          onAnglePreview?.(stroke.strokeId, stroke.angle);
           onGeometryCommit([
             {
-              nodeId: strokeId,
-              left: next.left,
-              top: next.top,
-              width: next.width,
-              height: next.height,
+              nodeId: stroke.strokeId,
+              left: stroke.next.left,
+              top: stroke.next.top,
+              width: stroke.next.width,
+              height: stroke.next.height,
             },
           ]);
           endTransform();
           return;
         }
-        const lockAspect = resolveLockAspect(document, drag.origins, drag.handle, e.shiftKey);
-        let next = resizeFromHandle(drag.union, drag.handle, dx, dy, drag.angle0 || 0, {
-          lockAspect,
-          aspectRatio: drag.aspectRatio,
-        });
-        if (isGridMode && !e.ctrlKey && !e.metaKey) {
-          next = snapResizeToGrid(next, drag.handle, gridSize, 8, {
-            lockAspect,
-            aspectRatio: drag.aspectRatio,
-          });
-        }
-        const excludeIds = drag.origins.map((o) => o.nodeId);
-        const others = siblingGuideBoxesNear(
+        const { next, textMode } = computeResizedUnion({
           document,
-          excludeIds,
-          next,
+          drag,
+          dx,
+          dy,
+          shiftKey: e.shiftKey,
+          isGridMode,
+          disableGrid: e.ctrlKey || e.metaKey,
+          gridSize,
           snapThreshold,
           queryNodeIdsInRect,
-          () =>
-            listNodeIds()
-              .filter((id) => !excludeIds.includes(id))
-              .map((id) => getNodeBox(id))
-              .filter(Boolean) as SceneBox[]
-        );
-        const frames = frameGuideBoxes(document);
-        const snapped = snapResizeToGuides(next, drag.handle, others, frames, snapThreshold, 8, {
-          edgeBoxes: movingGuideBoxes(next, document, excludeIds),
-          lockAspect,
-          aspectRatio: drag.aspectRatio,
+          listNodeIds,
+          getNodeBox,
+          skipHiddenInFallback: false,
         });
-        next = {
-          ...snapped.box,
-          width: Math.max(1, snapped.box.width),
-          height: Math.max(1, snapped.box.height),
-        };
-        const textMode =
-          drag.origins.length === 1 &&
-          document?.deltaSetLike?.[drag.origins[0].nodeId]?.key === 'text'
-            ? textResizeModeForHandle(drag.handle)
-            : undefined;
-        if (textMode === 'wrap') {
-          next = applyTextWrapHeight(document, drag.origins[0].nodeId, next);
-        }
         if (drag.origins.length === 1) {
           setLiveUnion(next);
           setLiveOrigins([{ nodeId: drag.origins[0].nodeId, box: next }]);
@@ -2040,16 +2069,7 @@ function SelectionFeature({
       const origins = liveOriginsRef.current;
       const union = liveUnionRef.current;
       if (!origins?.length || !union) return;
-      const docFrames = Array.isArray(document?.frames) ? document.frames : [];
-      if (
-        origins.some((o) => {
-          const fid = parseFrameSelId(o.nodeId);
-          if (fid) return Boolean(docFrames.find((x: any) => x?.id === fid)?.locked);
-          return isNodeLocked(document?.deltaSetLike?.[o.nodeId]);
-        })
-      ) {
-        return;
-      }
+      if (isSelectionOriginsLocked(document, origins)) return;
 
       e.preventDefault();
       const step = isGridMode
@@ -2168,10 +2188,15 @@ function SelectionFeature({
     if (!node) return [];
     const box = getNodeBox(id);
     if (!box) return [];
-    const pathD = geometryIndicatorPathD(node, {
-      width: box.width,
-      height: box.height,
-    });
+    const rawPath = String(node.attrs?.path || node.attrs?.d || '');
+    // Outlined text: don't paint a second full multi-glyph path on hover.
+    const pathD =
+      rawPath.length >= HEAVY_PATH_D_CHARS
+        ? `M 0 0 H ${Math.max(1, box.width)} V ${Math.max(1, box.height)} H 0 Z`
+        : geometryIndicatorPathD(node, {
+            width: box.width,
+            height: box.height,
+          });
     if (!pathD) return [];
     return [
       {

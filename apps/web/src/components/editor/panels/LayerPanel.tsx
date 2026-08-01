@@ -28,7 +28,7 @@ import {
   isNodeLocked,
   listSceneNodes,
   parseStackKey,
-} from '@/components/rcb/scene/sceneDocument';
+} from '@/components/rcb/scene/document/sceneDocument';
 import { cn } from '@/utils/classnames';
 import {
   patchDocumentNode,

@@ -22,7 +22,7 @@ import {
 } from '@/components/rcb';
 import SvgCanvas from '@/components/editor/canvas/svg/SvgCanvas';
 import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
-import { stackZIndex } from '@/components/rcb/scene/sceneDocument';
+import { stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
 import { Dropdown, Tooltip } from '@/components/base';
@@ -35,7 +35,7 @@ import {
   setWorkspaceMode,
   type ArtboardFrame,
 } from '@/store/modules/editor';
-import { normalizeDocument } from '@/components/rcb/scene/sceneDocument';
+import { normalizeDocument } from '@/components/rcb/scene/document/sceneDocument';
 import { fetchShareApi, type ShareDto } from '@/apis/shares';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
