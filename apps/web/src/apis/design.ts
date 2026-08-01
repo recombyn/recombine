@@ -134,7 +134,7 @@ export type DesignJobEvent =
       type: 'activity';
       id?: string;
       kind?: 'thought' | 'added' | 'updated' | 'explored' | 'skipped' | 'tool';
-      status?: 'running' | 'done';
+      status?: 'running' | 'done' | 'error';
       count?: number;
       detail?: string;
       skillName?: string;
