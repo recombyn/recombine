@@ -6,13 +6,13 @@ from unittest.mock import MagicMock
 
 from langgraph.types import Command
 
-from services.design.agent_controller import (
+from services.design.runtime.agent_controller import (
     _build_lc_design_graph,
     _commit,
     _design_thread_id,
     invalidate_agent_graph_cache,
 )
-from services.design.flow_runtime import choose_outgoing_edges, eval_edge_condition
+from services.design.runtime.flow_runtime import choose_outgoing_edges, eval_edge_condition
 
 
 def test_and_edge_condition():
@@ -54,7 +54,7 @@ def test_commit_has_no_goto():
 
 
 def test_label_is_not_edge_condition():
-    from services.design.flow_runtime import _edge_condition
+    from services.design.runtime.flow_runtime import _edge_condition
 
     edge = {
         "id": "e_mode_agent",

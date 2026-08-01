@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from services.design.admin_store import STAGE_RULE_DEFAULTS, ensure_stage_rules
-from services.design.catalog import ensure_design_catalog, get_global_rules
-from services.design.decision_log import probe_has_target_chip
-from services.design.canvas_scene import resolve_agent_scene
+from services.design.admin.admin_store import STAGE_RULE_DEFAULTS, ensure_stage_rules
+from services.design.readpath.catalog import ensure_design_catalog, get_global_rules
+from services.design.runtime.decision_log import probe_has_target_chip
+from services.design.readpath.canvas_scene import resolve_agent_scene
 
 
 @pytest.fixture(scope="module", autouse=True)

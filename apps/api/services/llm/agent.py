@@ -86,8 +86,8 @@ def assemble_turn_from_lc_tools(
     """
     import json as _json
 
-    from services.design.knowledge_store import normalize_need_knowledge
-    from services.design.tool_ops_contract import normalize_need_tools
+    from services.design.prompts.knowledge_store import normalize_need_knowledge
+    from services.design.ops.tool_ops_contract import normalize_need_tools
 
     text = (content or "").strip()
     ops = tool_calls_to_canvas_ops(tool_calls)
@@ -330,8 +330,8 @@ def _normalize_messages(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]
 def _chat_agent_system(*, model: str | None = None) -> str:
     """Admin design_global_rule only; always prefix IDENTITY when configured."""
     try:
-        from services.design.catalog import get_global_rules
-        from services.design.rules_text import _rule_text, render_prompt_template
+        from services.design.readpath.catalog import get_global_rules
+        from services.design.prompts.rules_text import _rule_text, render_prompt_template
 
         rules = get_global_rules() or {}
         base = _rule_text(rules, "agent.prompt.chat_agent_system").strip()

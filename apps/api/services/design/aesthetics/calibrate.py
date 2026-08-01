@@ -5,14 +5,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from services.design.admin_store import list_global_rules, upsert_global_rule
+from services.design.admin.admin_store import list_global_rules, upsert_global_rule
 from services.design.aesthetics.scorer import (
     DEFAULT_THRESHOLD,
     _blend,
     _bytes_to_vec,
     _cosine,
 )
-from services.design.quality_sample_store import list_ready_embeddings
+from services.design.admin.quality_sample_store import list_ready_embeddings
 
 logger = logging.getLogger(__name__)
 

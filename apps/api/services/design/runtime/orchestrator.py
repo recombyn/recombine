@@ -16,35 +16,35 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from services.agent_memory.service import memory_service
-from services.design.canvas_scene import (
+from services.design.readpath.canvas_scene import (
     parse_size as _parse_size,
     scene_key as _scene_key,
 )
-from services.design.catalog import get_global_rules
-from services.design.decision_log import (
+from services.design.readpath.catalog import get_global_rules
+from services.design.runtime.decision_log import (
     DesignRunDecision,
     focus_frame_from_medium,
     probe_has_target_chip,
 )
-from services.design.llm_step import stream_skill_step
-from services.design.models_route import (
+from services.design.runtime.llm_step import stream_skill_step
+from services.design.runtime.models_route import (
     apply_user_route_overrides,
     pin_user_locked_model_routes,
     resolve_model_for_skill,
     sanitize_model_ref_for_openrouter_region,
     sanitize_rules_for_openrouter_region,
 )
-from services.design.pipeline_support import (
+from services.design.runtime.pipeline_support import (
     _normalize_ref_images,
     _user_facing_run_error,
 )
-from services.design.prompt_build import (
+from services.design.prompts.prompt_build import (
     _edit_context_block,
     _finalize_memory_patch,
 )
-from services.design.rules_text import _as_text, _rule_text, _stage, exec_trace
-from services.design.task_store import _insert_task, _lock_layers, _update_task
-from services.design.tool_ops_contract import (
+from services.design.prompts.rules_text import _as_text, _rule_text, _stage, exec_trace
+from services.design.admin.task_store import _insert_task, _lock_layers, _update_task
+from services.design.ops.tool_ops_contract import (
     TOOL_OPS_SCHEMA_VERSION,
     extract_and_validate_tool_ops,
     format_canvas_tools_for_model,
@@ -285,7 +285,7 @@ async def run_design_job(
             medium if isinstance(medium, dict) else None,
         )
 
-        from services.design.agent_controller import run_agent_graph
+        from services.design.runtime.agent_controller import run_agent_graph
         from services.llm import reset_byok_user_id, set_byok_user_id
 
         byok_token = set_byok_user_id(user_id)

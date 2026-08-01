@@ -5,7 +5,7 @@ import threading
 import time
 from typing import Any
 from services.db import connect, dialect
-from services.design.schema import ensure_design_tables
+from services.design.admin.schema import ensure_design_tables
 
 # Catalog of dict types lives as rows under this reserved dict_type.
 TYPE_CATALOG = "__types__"

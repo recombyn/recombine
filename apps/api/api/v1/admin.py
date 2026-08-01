@@ -51,7 +51,7 @@ from services.llm.catalog_store import (
     list_admin_models,
     upsert_model,
 )
-from services.design.dict_store import (
+from services.design.admin.dict_store import (
     delete_dict_type,
     hard_delete_dict,
     list_dict_types,
@@ -60,17 +60,17 @@ from services.design.dict_store import (
     upsert_dict,
     upsert_dict_type,
 )
-from services.design.knowledge_store import (
+from services.design.prompts.knowledge_store import (
     list_knowledge,
     soft_delete_knowledge,
     upsert_knowledge,
 )
-from services.design.prompt_pack_store import (
+from services.design.prompts.prompt_pack_store import (
     list_prompt_packs,
     soft_delete_prompt_pack,
     upsert_prompt_pack,
 )
-from services.design.quality_sample_store import (
+from services.design.admin.quality_sample_store import (
     get_quality_sample,
     hard_delete_quality_sample,
     list_quality_samples,
@@ -79,14 +79,14 @@ from services.design.quality_sample_store import (
     soft_delete_quality_sample,
     upsert_quality_sample,
 )
-from services.design.library_store import (
+from services.design.readpath.library_store import (
     hard_delete_library_item,
     list_library_items,
     soft_delete_library_item,
     upsert_library_item,
 )
-from services.design.content_pack import resync_design_content
-from services.design.admin_store import (
+from services.design.prompts.content_pack import resync_design_content
+from services.design.admin.admin_store import (
     apply_optimize_patch,
     clear_decision_logs,
     dismiss_optimize_patch,
@@ -99,8 +99,8 @@ from services.design.admin_store import (
     upsert_canvas_tool,
     upsert_global_rule,
 )
-from services.design.catalog import get_global_rules
-from services.design.stage_review_store import list_stage_reviews
+from services.design.readpath.catalog import get_global_rules
+from services.design.admin.stage_review_store import list_stage_reviews
 
 router = APIRouter()
 
@@ -681,11 +681,11 @@ _RUNTIME_SETTING_KEYS = frozenset(
 def admin_design_runtime_settings(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.admin_store import (
+    from services.design.admin.admin_store import (
         STAGE_RULE_DESCRIPTIONS,
         ensure_stage_rules,
     )
-    from services.design.system_prompt_store import ensure_system_prompts
+    from services.design.prompts.system_prompt_store import ensure_system_prompts
 
     ensure_stage_rules()
     ensure_system_prompts()
@@ -712,7 +712,7 @@ def admin_upsert_design_runtime_setting(
     body: RuntimeSettingIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.system_prompt_store import is_system_prompt_key
+    from services.design.prompts.system_prompt_store import is_system_prompt_key
 
     key = (body.key or "").strip()
     if is_system_prompt_key(key):
@@ -747,7 +747,7 @@ def admin_design_system_prompts(
     enabled: bool | None = Query(default=True),
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.system_prompt_store import list_system_prompts
+    from services.design.prompts.system_prompt_store import list_system_prompts
 
     return {
         "items": list_system_prompts(
@@ -761,7 +761,7 @@ def admin_upsert_design_system_prompt(
     body: SystemPromptIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.system_prompt_store import upsert_system_prompt
+    from services.design.prompts.system_prompt_store import upsert_system_prompt
 
     try:
         item = upsert_system_prompt(
@@ -1204,8 +1204,8 @@ def admin_design_skills(
     ),
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.admin_store import list_admin_skills
-    from services.design.skill_store import ensure_design_skills
+    from services.design.admin.admin_store import list_admin_skills
+    from services.design.prompts.skill_store import ensure_design_skills
 
     ensure_design_skills()
     src = str(source).strip().lower() if source and str(source).strip() else None
@@ -1217,7 +1217,7 @@ def admin_upsert_design_skill(
     body: DesignSkillIn,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.admin_store import upsert_skill
+    from services.design.admin.admin_store import upsert_skill
 
     try:
         item = upsert_skill(body.model_dump())
@@ -1231,8 +1231,8 @@ def admin_delete_design_skill(
     skill_id: int,
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    from services.design.admin_store import soft_delete_skill
-    from services.design.skill_store import invalidate_skill_key_cache
+    from services.design.admin.admin_store import soft_delete_skill
+    from services.design.prompts.skill_store import invalidate_skill_key_cache
 
     try:
         ok = soft_delete_skill(skill_id)
@@ -1249,7 +1249,7 @@ def admin_resync_design_skills(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     """Re-run seed (insert-only) + file skill sync; never overwrites source=admin."""
-    from services.design.skill_store import ensure_design_skills, list_runtime_skills
+    from services.design.prompts.skill_store import ensure_design_skills, list_runtime_skills
 
     ensure_design_skills(force=True)
     return {"ok": True, "runtimeCount": len(list_runtime_skills())}
@@ -1398,7 +1398,7 @@ def admin_quality_samples_coverage(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     """Per-scene ready+good counts vs MIN_GOOD_READY_PER_SCENE (pre-draw vision readiness)."""
-    from services.design.quality_sample_store import count_ready_good_by_scene
+    from services.design.admin.quality_sample_store import count_ready_good_by_scene
 
     return count_ready_good_by_scene()
 
@@ -1469,7 +1469,7 @@ def admin_quality_sample_thumb(
     _admin: SessionUser = Depends(require_admin),
 ):
     from fastapi.responses import Response
-    from services.design.quality_sample_store import get_quality_sample_thumb
+    from services.design.admin.quality_sample_store import get_quality_sample_thumb
 
     raw = get_quality_sample_thumb(sample_id)
     if not raw:
@@ -1484,7 +1484,7 @@ def admin_run_cold_archive(
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     """Archive old design_task.result_svg + chat_messages.thinking into design_cold_blob."""
-    from services.design.cold_archive import run_cold_archive
+    from services.design.admin.cold_archive import run_cold_archive
 
     return run_cold_archive(retention_days=retentionDays, batch=batch)
 

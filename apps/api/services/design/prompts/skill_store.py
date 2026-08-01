@@ -805,7 +805,7 @@ def _apply_mutex(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def format_skills_catalog(*, scene: str = "website", user_id: str | None = None) -> str:
     rows = list_runtime_skills(scene=scene, user_id=user_id)
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         header = resolve_prompt_body("agent.prompt.skill_catalog_header").strip()
     except Exception:
@@ -1019,7 +1019,7 @@ def format_skills_details_checked(
 
     rows = _apply_mutex(resolved)
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         header = resolve_prompt_body("agent.prompt.skill_details_header").strip()
     except Exception:
@@ -1192,7 +1192,7 @@ def filter_ops_by_skill_output_schema(
         return list(ops or []), []
     allowed_ops |= _ALWAYS_ALLOW_OPS
     kept: list[dict[str, Any]] = []
-    from services.design.tool_ops_contract import format_op_error
+    from services.design.ops.tool_ops_contract import format_op_error
 
     errs: list[str] = []
     for op in ops or []:
@@ -1242,7 +1242,7 @@ def filter_ops_by_skill_allowlist(
     scene: str = "website",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Enforce preferred_tools / custom-skill hard allowlist + output_schema."""
-    from services.design.tool_ops_contract import format_op_error
+    from services.design.ops.tool_ops_contract import format_op_error
 
     allow = preferred_tools_allowlist(skill_keys, scene=scene)
     kept: list[dict[str, Any]] = []
@@ -1710,7 +1710,7 @@ def ensure_design_skills(*, force: bool = False) -> None:
             return
         now = time.time()
         from services.db import dialect, init_schema
-        from services.design.schema import ensure_design_tables
+        from services.design.admin.schema import ensure_design_tables
 
         init_schema()
         mysql = dialect() == "mysql"

@@ -18,7 +18,7 @@ from services.llm import (
     to_lc_messages,
     usage_blob_from_chunk,
 )
-from services.design.models_route import (
+from services.design.runtime.models_route import (
     ensure_vision_model,
     model_supports_vision,
     resolve_vision_model,

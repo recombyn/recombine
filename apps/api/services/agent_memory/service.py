@@ -17,7 +17,7 @@ from services.agent_memory.short_term import (
     load_short_term_from_session,
 )
 
-from services.design.rules_text import _safe_print
+from services.design.prompts.rules_text import _safe_print
 
 logger = logging.getLogger(__name__)
 

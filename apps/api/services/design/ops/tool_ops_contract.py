@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any
 
-from services.design.validate import extract_json
+from services.design.ops.validate import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def format_op_error(code: str, *, fix: str = "", detail: str = "") -> str:
 def _tools_from_seed(*, enabled_only: bool = True) -> list[dict[str, Any]]:
     """Cold-start / unit-test fallback when design_canvas_tool is empty."""
     try:
-        from services.design.action_registry import default_canvas_actions
+        from services.design.ops.action_registry import default_canvas_actions
     except Exception:
         return []
     out: list[dict[str, Any]] = []
@@ -216,7 +216,7 @@ def format_canvas_tools_details(
         if t.get("op_key")
     }
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         header = resolve_prompt_body("agent.prompt.tool_details_header").strip()
     except Exception:
@@ -452,7 +452,7 @@ def _validate_single_op(
                 f"{name}_missing_svg",
                 fix=f"re-emit {name} with args.svg markup",
             )
-        from services.design.validate import validate_agent_svg_markup
+        from services.design.ops.validate import validate_agent_svg_markup
 
         svg_err = validate_agent_svg_markup(svg)
         if svg_err:
@@ -470,7 +470,7 @@ def _validate_single_op(
             )
         svg = str(args.get("svg") or args.get("iconSvg") or "").strip()
         if svg:
-            from services.design.validate import validate_agent_svg_markup
+            from services.design.ops.validate import validate_agent_svg_markup
 
             svg_err = validate_agent_svg_markup(svg)
             if svg_err:

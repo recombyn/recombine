@@ -667,7 +667,7 @@ async def classify_user_intent(
         f"user_prompt:\n{(prompt or '').strip()[:4000]}"
     )
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
         from services.llm.agent import ainvoke_structured
 
         system = resolve_prompt_body(_INTENT_SYSTEM_KEY, rules=rules)
@@ -738,7 +738,7 @@ async def classify_model_route(
         f"user_prompt:\n{(prompt or '').strip()[:4000]}"
     )
     try:
-        from services.design.rules_text import _rule_text
+        from services.design.prompts.rules_text import _rule_text
         from services.llm.agent import ainvoke_structured
 
         router_system = _rule_text(rules, _ROUTER_SYSTEM_KEY).strip()

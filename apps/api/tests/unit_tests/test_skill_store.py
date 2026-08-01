@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.skill_store import (
+from services.design.prompts.skill_store import (
     NS_CORE,
     NS_EXT,
     NS_USER,
@@ -145,7 +145,7 @@ def test_file_skill_loader_returns_list():
 
 
 def test_parse_pack_version_semver():
-    from services.design.skill_store import _parse_pack_version
+    from services.design.prompts.skill_store import _parse_pack_version
 
     label, n = _parse_pack_version("1.0.0")
     assert label == "1.0.0"
@@ -164,7 +164,7 @@ def test_namespace_split_and_qualify(monkeypatch):
     assert qualify_skill_key(NS_USER, "my_brand") == "user.my_brand"
     assert resolve_storage_skill_key("core.design_methodology") == "design_methodology"
     # OSS no longer ships ext file packs; stub one row so ns.ext resolve stays covered.
-    from services.design import skill_store as skill_mod
+    from services.design.prompts import skill_store as skill_mod
 
     monkeypatch.setattr(
         skill_mod,

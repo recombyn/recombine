@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from services.db import connect
-from services.design.catalog import ensure_design_catalog
+from services.design.readpath.catalog import ensure_design_catalog
 
 # Seed: apps/api/data/design_tokens_seed.json (bump schemaVersion there to upgrade rows).
 

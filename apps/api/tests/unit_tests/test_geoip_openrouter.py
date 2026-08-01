@@ -26,7 +26,7 @@ def test_filter_catalog_drops_openrouter_in_cn(monkeypatch):
 
 
 def test_sanitize_rules_replaces_openrouter_lanes(monkeypatch):
-    from services.design.models_route import sanitize_rules_for_openrouter_region
+    from services.design.runtime.models_route import sanitize_rules_for_openrouter_region
 
     monkeypatch.setenv("CLIENT_COUNTRY_OVERRIDE", "")
     platform = {
@@ -57,7 +57,7 @@ def test_sanitize_rules_replaces_openrouter_lanes(monkeypatch):
 
 
 def test_sanitize_rules_keeps_openrouter_outside_cn():
-    from services.design.models_route import sanitize_rules_for_openrouter_region
+    from services.design.runtime.models_route import sanitize_rules_for_openrouter_region
 
     platform = {
         "precheck.model_threshold": "fast->doubao-seed-2-1-turbo;standard->deepseek-v4-flash",
