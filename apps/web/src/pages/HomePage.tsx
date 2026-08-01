@@ -401,9 +401,9 @@ function HomePage() {
         importing={importing}
         onCreate={handleCreate}
       />
-      {/* Full-bleed column — left rail is position:fixed and must not reserve flow space. */}
+      {/* Full-bleed column — side rail is position:fixed and must not reserve flow space. */}
       <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
-        <HomeTopBar setNav={setNav} onCreate={handleCreate} />
+        <HomeTopBar setNav={setNav} />
         <HomeTemplateList
           nav={nav}
           setNav={setNav}

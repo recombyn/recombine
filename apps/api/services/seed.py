@@ -113,6 +113,7 @@ def seed_official_plaza_cases() -> int:
     data_dir = _api_data() / "official_cases"
     index_path = data_dir / "index.json"
     cases: list[Any] = []
+    index_loaded = False
     if index_path.is_file():
         try:
             index = json.loads(index_path.read_text(encoding="utf-8"))
@@ -121,14 +122,16 @@ def seed_official_plaza_cases() -> int:
             index = None
         if isinstance(index, dict) and isinstance(index.get("cases"), list):
             cases = index["cases"]
+            index_loaded = True
     else:
         logger.warning("plaza cases seed: missing %s — using file fallback", index_path)
 
-    if not cases:
+    # Empty cases in a valid index means "do not seed" (not file fallback).
+    if not cases and not index_loaded:
         cases = _default_official_case_entries(data_dir)
         if cases:
             logger.warning(
-                "plaza cases seed: index cases empty — seeding %s file(s) from titles map",
+                "plaza cases seed: index missing — seeding %s file(s) from titles map",
                 len(cases),
             )
     if not cases:
