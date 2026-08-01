@@ -68,7 +68,7 @@ def pack_vec(vec: Any) -> bytes:
     if vec is None:
         return b""
     try:
-        from services.design.blob_codec import pack_emb_blob
+        from services.design.admin.blob_codec import pack_emb_blob
 
         return pack_emb_blob(vec.tobytes(order="C"))
     except Exception:
@@ -77,7 +77,7 @@ def pack_vec(vec: Any) -> bytes:
 
 def unpack_vec(blob: Any) -> Any | None:
     try:
-        from services.design.blob_codec import unpack_emb_blob
+        from services.design.admin.blob_codec import unpack_emb_blob
     except Exception:
         return None
     raw = unpack_emb_blob(blob)

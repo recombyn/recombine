@@ -120,7 +120,7 @@ def upload_user_file(
     thumb_key = ""
     if mime.startswith("image/"):
         try:
-            from services.design.blob_codec import make_webp_thumb
+            from services.design.admin.blob_codec import make_webp_thumb
             import base64
 
             thumb = make_webp_thumb(data, max_edge=512, quality=70)

@@ -891,7 +891,7 @@ def init_schema() -> None:
             _ensure_projects_thumbnail_custom(conn, mysql=mysql)
             _ensure_projects_thumbnail_key_wide(conn, mysql=mysql)
             _ensure_agent_memory_tables(conn, mysql=mysql)
-            from services.design.schema import ensure_design_tables
+            from services.design.admin.schema import ensure_design_tables
             from services.llm.catalog_store import ensure_llm_models_table
             from services.llm.usage_log import ensure_model_usage_table
 
@@ -900,7 +900,7 @@ def init_schema() -> None:
             ensure_model_usage_table(conn, mysql=mysql)
         _SCHEMA_READY = True
         try:
-            from services.design.seed import seed_design_catalog_if_empty
+            from services.design.readpath.seed import seed_design_catalog_if_empty
 
             seed_design_catalog_if_empty()
         except Exception:

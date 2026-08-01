@@ -35,7 +35,7 @@ def is_system_prompt_key(key: str) -> bool:
 
 def _load_seed_items() -> list[dict[str, Any]]:
     """Metadata + bodies from the single design_prompt_packs_seed.json (system-key kinds)."""
-    path = Path(__file__).resolve().parents[2] / "data" / "design_prompt_packs_seed.json"
+    path = Path(__file__).resolve().parents[3] / "data" / "design_prompt_packs_seed.json"
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -203,7 +203,7 @@ def list_system_prompts(
     ensure: bool = True,
 ) -> list[dict[str, Any]]:
     if ensure:
-        from services.design.catalog import catalog_ready, ensure_design_catalog
+        from services.design.readpath.catalog import catalog_ready, ensure_design_catalog
 
         if not catalog_ready():
             ensure_design_catalog()
@@ -239,13 +239,13 @@ def get_system_prompt_bodies(*, ensure: bool = True) -> dict[str, str]:
     ``design_system_prompt`` for keys not yet migrated.
     """
     if ensure:
-        from services.design.catalog import catalog_ready, ensure_design_catalog
+        from services.design.readpath.catalog import catalog_ready, ensure_design_catalog
 
         if not catalog_ready():
             ensure_design_catalog()
         ensure_system_prompts()
         try:
-            from services.design.prompt_pack_store import ensure_design_prompt_packs
+            from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
 
             ensure_design_prompt_packs()
         except Exception:
@@ -253,7 +253,7 @@ def get_system_prompt_bodies(*, ensure: bool = True) -> dict[str, str]:
 
     out: dict[str, str] = {}
     try:
-        from services.design.prompt_pack_store import list_prompt_pack_bodies_for_system
+        from services.design.prompts.prompt_pack_store import list_prompt_pack_bodies_for_system
 
         out.update(list_prompt_pack_bodies_for_system(ensure=False))
     except Exception:
@@ -287,7 +287,7 @@ def upsert_system_prompt(
     sort_order: int | None = None,
     enabled: bool | None = None,
 ) -> dict[str, Any]:
-    from services.design.catalog import catalog_ready, ensure_design_catalog
+    from services.design.readpath.catalog import catalog_ready, ensure_design_catalog
 
     if not catalog_ready():
         ensure_design_catalog()
@@ -349,7 +349,7 @@ def upsert_system_prompt(
                 ),
             )
         else:
-            from services.design.prompt_pack_store import seed_prompt_body
+            from services.design.prompts.prompt_pack_store import seed_prompt_body
 
             next_body = "" if body is None else str(body)
             if not next_body:

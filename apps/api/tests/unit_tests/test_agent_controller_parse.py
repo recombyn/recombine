@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from services.design.agent_controller import (
+from services.design.runtime.agent_controller import (
     AgentRunState,
     AgentTurnSchema,
+    PaintOpsSchema,
+    PaintToolOp,
     _ask_propose_user_text,
     _chat_fallback_text,
     _ensure_propose_choice_ui,
@@ -32,6 +34,24 @@ def test_normalize_op_key():
         [{"op_key": "create_text", "args": {"text": "Hi"}}]
     )
     assert ops[0]["name"] == "create_text"
+
+
+def test_paint_tool_op_coalesces_flat_and_ops_alias():
+    op = PaintToolOp.model_validate(
+        {"name": "create_shape", "type": "rect", "x": 10, "y": 20, "width": 40, "height": 30}
+    )
+    assert op.name == "create_shape"
+    assert op.args.get("shapeType") == "rect"
+    assert op.args.get("x") == 10
+    painted = PaintOpsSchema.model_validate(
+        {
+            "ops": [{"name": "create_text", "args": {"text": "Hi", "x": 1, "y": 2}}],
+            "intent": "create",
+        }
+    )
+    assert len(painted.tool_ops) == 1
+    assert painted.tool_ops[0].name == "create_text"
+    assert painted.tool_ops[0].args["text"] == "Hi"
 
 
 def test_parse_fenced_json():
@@ -162,7 +182,7 @@ def test_lc_design_needs_canvas_ops_blocks_narrate_only():
 
 
 def test_should_route_to_paint():
-    from services.design.agent_controller import _should_route_to_paint
+    from services.design.runtime.agent_controller import _should_route_to_paint
 
     assert _should_route_to_paint(
         classified="create", turn_intent="chat", has_clarify=False
@@ -233,7 +253,7 @@ def test_has_pending_resource_details():
 
 
 def test_heuristic_user_intent_gate():
-    from services.design.models_route import heuristic_user_intent
+    from services.design.runtime.models_route import heuristic_user_intent
 
     # Fallback is structural (length / images) — normal path uses intent LLM pack.
     assert heuristic_user_intent("hi", has_images=False).intent == "chat"
@@ -271,7 +291,7 @@ def test_paint_tool_keys_structural_not_shape_specific():
     """Lean free-canvas add: shape+text only — works for any shapeType, not just rect."""
     from types import SimpleNamespace
 
-    from services.design.agent_controller import (
+    from services.design.runtime.agent_controller import (
         AgentRunState,
         _is_lean_paint_turn,
         _paint_tool_keys_for_turn,
@@ -297,7 +317,7 @@ def test_paint_tool_keys_structural_not_shape_specific():
 def test_paint_tool_keys_empty_canvas_includes_frame():
     from types import SimpleNamespace
 
-    from services.design.agent_controller import AgentRunState, _paint_tool_keys_for_turn
+    from services.design.runtime.agent_controller import AgentRunState, _paint_tool_keys_for_turn
 
     st = AgentRunState(trace_id="t", task_id="task", goal="new")
     rt = SimpleNamespace(
@@ -318,7 +338,7 @@ def test_paint_tool_keys_empty_canvas_includes_frame():
 def test_paint_tool_keys_with_images_includes_create_image():
     from types import SimpleNamespace
 
-    from services.design.agent_controller import (
+    from services.design.runtime.agent_controller import (
         AgentRunState,
         _is_lean_paint_turn,
         _paint_tool_keys_for_turn,
@@ -340,7 +360,7 @@ def test_paint_tool_keys_with_images_includes_create_image():
 
 
 def test_derive_suggested_place_world_prefers_viewport():
-    from services.design.agent_controller import _derive_suggested_place_world
+    from services.design.runtime.agent_controller import _derive_suggested_place_world
 
     spw = _derive_suggested_place_world(
         {"viewport": {"x": 5000, "y": 2000, "w": 1200, "h": 800}},
@@ -352,7 +372,7 @@ def test_derive_suggested_place_world_prefers_viewport():
 
 
 def test_format_spatial_placement_from_focus_frame_alone():
-    from services.design.agent_controller import _format_spatial_placement
+    from services.design.runtime.agent_controller import _format_spatial_placement
 
     text = _format_spatial_placement(
         None,
@@ -368,7 +388,7 @@ def test_format_spatial_placement_from_focus_frame_alone():
 def test_placement_errors_for_offscreen_free_creates():
     from types import SimpleNamespace
 
-    from services.design.agent_controller import (
+    from services.design.runtime.agent_controller import (
         _derive_suggested_place_world,
         _placement_errors_for_free_creates,
     )
@@ -397,8 +417,8 @@ def test_placement_errors_for_offscreen_free_creates():
     errs = _placement_errors_for_free_creates(rt, ops)
     spw = _derive_suggested_place_world(spatial, focus_frame=focus)
     assert errs
-    assert "outside viewport_world" in errs[0]
-    assert "suggested_place_world" in errs[0]
+    assert "code=placement_outside_viewport" in errs[0]
+    assert "fix=" in errs[0] and "suggested_place_world" in errs[0]
     assert spw is not None
     assert f"x={spw['x']}" in errs[0]
     assert f"y={spw['y']}" in errs[0]
@@ -409,7 +429,7 @@ def test_placement_errors_for_offscreen_free_creates():
 def test_placement_errors_skip_framed_creates():
     from types import SimpleNamespace
 
-    from services.design.agent_controller import _placement_errors_for_free_creates
+    from services.design.runtime.agent_controller import _placement_errors_for_free_creates
 
     rt = SimpleNamespace(
         spatial_summary={"viewport": {"x": 4800, "y": 1200, "w": 1400, "h": 900}},
@@ -427,7 +447,7 @@ def test_placement_errors_skip_framed_creates():
 
 
 def test_scene_digest_includes_frame_world_xy():
-    from services.design.agent_controller import _scene_digest
+    from services.design.runtime.agent_controller import _scene_digest
 
     text = _scene_digest(
         [],

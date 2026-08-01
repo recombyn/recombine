@@ -18,7 +18,7 @@ from services.design.aesthetics.views import (
     layout_view,
     load_pil,
 )
-from services.design.quality_sample_store import list_ready_embeddings
+from services.design.admin.quality_sample_store import list_ready_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ _TOWER_HARD_RATIO = 0.92
 
 def _load_threshold() -> float:
     try:
-        from services.design.admin_store import list_global_rules
+        from services.design.admin.admin_store import list_global_rules
 
         rules = {r["ruleKey"]: r["ruleValue"] for r in list_global_rules()}
         raw = (rules.get("aesthetics.score_threshold") or "").strip()
@@ -47,7 +47,7 @@ def _load_threshold() -> float:
 def _bytes_to_vec(raw: bytes | None):
     import numpy as np
 
-    from services.design.blob_codec import unpack_emb_blob
+    from services.design.admin.blob_codec import unpack_emb_blob
 
     if not raw:
         return None
@@ -496,7 +496,7 @@ def retrieve_aesthetic_refs(
     # The next thought turn attaches imageUrls and the model should look at them.
     if has_user:
         try:
-            from services.design.prompt_pack_store import resolve_prompt_body
+            from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
             user_hdr = resolve_prompt_body("agent.prompt.aesthetic_refs_user").strip()
         except Exception:
@@ -576,7 +576,7 @@ def format_aesthetic_refs_block(
         return out_lines
 
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         corpus_hdr = resolve_prompt_body("agent.prompt.aesthetic_refs_corpus").strip()
     except Exception:
@@ -637,7 +637,7 @@ def format_aesthetics_catalog(*, scene: str = "website") -> str:
     counts = {"good": 0, "ok": 0, "bad": 0}
     try:
         from services.db import connect
-        from services.design.catalog import ensure_design_catalog
+        from services.design.readpath.catalog import ensure_design_catalog
 
         ensure_design_catalog()
         with connect() as conn:
@@ -658,7 +658,7 @@ def format_aesthetics_catalog(*, scene: str = "website") -> str:
     except Exception:
         logger.exception("aesthetics catalog count failed scene=%s", sc)
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         tmpl = resolve_prompt_body("agent.prompt.aesthetic_catalog").strip()
     except Exception:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.tool_ops_contract import (
+from services.design.ops.tool_ops_contract import (
     extract_streaming_tool_ops,
     tool_ops_activity_counts,
 )

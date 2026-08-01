@@ -17,16 +17,16 @@ from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
 from services.agent_memory.service import memory_service
-from services.design.canvas_scene import (
+from services.design.readpath.canvas_scene import (
     early_status_canvas_fields,
     explicit_canvas_size,
     parse_size as _parse_size,
     resolve_agent_scene,
     scene_key as _scene_key,
 )
-from services.design.decision_log import DesignRunDecision
-from services.design.llm_step import stream_skill_step
-from services.design.models_route import (
+from services.design.runtime.decision_log import DesignRunDecision
+from services.design.runtime.llm_step import stream_skill_step
+from services.design.runtime.models_route import (
     clamp_tier,
     classify_user_intent,
     enabled_tiers,
@@ -34,30 +34,31 @@ from services.design.models_route import (
     resolve_model_for_skill,
     router_model_id,
 )
-from services.design.pipeline_support import (
+from services.design.runtime.pipeline_support import (
     _normalize_ref_images,
     _user_facing_run_error,
 )
-from services.design.prompt_build import _edit_context_block, _finalize_memory_patch
-from services.design.rules_text import _as_text, _rule_text, exec_trace, render_prompt_template
-from services.design.scene_feedback import begin_wait, wait_for_scene
-from services.design.task_store import _insert_task, _update_task
-from services.design.tool_ops_contract import (
+from services.design.prompts.prompt_build import _edit_context_block, _finalize_memory_patch
+from services.design.prompts.rules_text import _as_text, _rule_text, exec_trace, render_prompt_template
+from services.design.runtime.scene_feedback import begin_wait, wait_for_scene
+from services.design.admin.task_store import _insert_task, _update_task
+from services.design.ops.tool_ops_contract import (
     TOOL_OPS_SCHEMA_VERSION,
     extract_and_validate_tool_ops,
     format_canvas_tools_catalog,
     format_canvas_tools_details,
     format_canvas_tools_for_model,
+    format_op_error,
     normalize_need_tools,
     tool_ops_activity_events as _tool_ops_activity_events,
     tool_ops_for_sse,
     validation_failure_reason,
 )
-from services.design.knowledge_store import (
+from services.design.prompts.knowledge_store import (
     format_knowledge_details,
     normalize_need_knowledge,
 )
-from services.design.skill_store import (
+from services.design.prompts.skill_store import (
     filter_ops_by_skill_allowlist,
     filter_need_resources_by_skill_acl,
     format_skills_catalog,
@@ -71,17 +72,91 @@ from services.design.aesthetics.scorer import (
     parse_use_user_refs,
     retrieve_aesthetic_refs,
 )
-from services.design.validate import extract_json_object
-from services.design.admin_store import STAGE_RULE_DEFAULTS
+from services.design.ops.validate import extract_json_object
+from services.design.admin.admin_store import STAGE_RULE_DEFAULTS
 from services.wallet.db import get_user_tokens
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 _log = logging.getLogger(__name__)
+logger = _log
 
 # Defaults when Admin global rules are empty (zero-base).
 _DEFAULT_MAX_ROUNDS = 4
 _DEFAULT_MAX_REFLECT = 1
 _SCENE_WAIT_SEC = 12.0
+
+_PAINT_OP_META_KEYS = frozenset(
+    {
+        "name",
+        "tool",
+        "type",
+        "op",
+        "op_key",
+        "opKey",
+        "args",
+        "properties",
+        "props",
+        "updates",
+        "params",
+        "op_id",
+        "opId",
+    }
+)
+
+
+class PaintToolOp(BaseModel):
+    """LangChain envelope for one canvas op — name + args only (not canvas semantics)."""
+
+    name: str = Field(..., min_length=1)
+    args: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coalesce_flat_op(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        name = (
+            d.get("name")
+            or d.get("tool")
+            or d.get("op")
+            or d.get("op_key")
+            or d.get("opKey")
+            or ""
+        )
+        type_as_name = str(d.get("type") or "").strip()
+        if not str(name or "").strip() and type_as_name in {
+            "create_shape",
+            "create_text",
+            "create_image",
+            "create_frame",
+            "update_node",
+            "delete_nodes",
+            "delete_frame",
+            "create_svg",
+            "create_icon",
+        }:
+            name = type_as_name
+        args = d.get("args")
+        if not isinstance(args, dict):
+            args = {k: v for k, v in d.items() if k not in _PAINT_OP_META_KEYS}
+        else:
+            args = dict(args)
+        for nest_key in ("properties", "props", "updates", "params"):
+            nested = d.get(nest_key)
+            if isinstance(nested, dict):
+                for nk, nv in nested.items():
+                    args.setdefault(nk, nv)
+        if (
+            str(name or "").strip() == "create_shape"
+            and args.get("shapeType") is None
+            and d.get("type") is not None
+            and str(d.get("type")) not in {"create_shape"}
+        ):
+            args.setdefault("shapeType", d.get("type"))
+        return {"name": str(name or "").strip(), "args": args}
 
 
 class AgentTurnSchema(BaseModel):
@@ -90,8 +165,8 @@ class AgentTurnSchema(BaseModel):
     thought: str = ""
     intent: str = "chat"
     reply: str = ""
-    tool_ops: list[Any] = Field(default_factory=list)
-    ops: list[Any] = Field(default_factory=list)
+    tool_ops: list[PaintToolOp] = Field(default_factory=list)
+    ops: list[PaintToolOp] = Field(default_factory=list)
     need_tools: list[Any] = Field(default_factory=list)
     need_knowledge: list[Any] = Field(default_factory=list)
     need_skills: list[Any] = Field(default_factory=list)
@@ -114,6 +189,16 @@ class AgentTurnSchema(BaseModel):
 
     model_config = {"extra": "allow"}
 
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_ops_to_tool_ops(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("tool_ops") and d.get("ops"):
+            d["tool_ops"] = d.get("ops")
+        return d
+
 
 class DecideTurnSchema(BaseModel):
     """Decision stage only — never emits canvas ops (paint_ops node does that)."""
@@ -134,13 +219,32 @@ class DecideTurnSchema(BaseModel):
 
 
 class PaintOpsSchema(BaseModel):
-    """Paint stage only — tool_ops first; short reply optional."""
+    """Paint stage — LangChain validates op envelope; host validates canvas semantics."""
 
-    tool_ops: list[Any] = Field(default_factory=list)
+    tool_ops: list[PaintToolOp] = Field(default_factory=list)
     intent: str = "create"
     reply: str = ""
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_ops_to_tool_ops(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("tool_ops") and d.get("ops"):
+            d["tool_ops"] = d.get("ops")
+        return d
+
+    @field_validator("tool_ops", mode="before")
+    @classmethod
+    def _coerce_tool_ops_list(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            return [value]
+        return value
 
 
 class PlanSchema(BaseModel):
@@ -207,7 +311,7 @@ def _thought_chat_prompt():
 def _prompt_text(rules: dict[str, str] | None, key: str) -> str:
     """Prefer Admin/DB (via rules or pack table); local seed only if DB empty."""
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         return resolve_prompt_body(key, rules=rules)
     except Exception:
@@ -1008,14 +1112,31 @@ def _placement_errors_for_free_creates(rt: Any, ops: list[dict[str, Any]]) -> li
             continue
         if spw is not None:
             errors.append(
-                f"{name} at world ({int(round(ox))},{int(round(oy))}) is outside viewport_world; "
-                f"re-emit with x={spw['x']} y={spw['y']} from suggested_place_world "
-                f"(omit frameId for free-canvas)."
+                format_op_error(
+                    "placement_outside_viewport",
+                    fix=(
+                        f"re-emit {name} with x={spw['x']} y={spw['y']} "
+                        f"from suggested_place_world (omit frameId for free-canvas)"
+                    ),
+                    detail=(
+                        f"{name} at world ({int(round(ox))},{int(round(oy))}) "
+                        f"outside viewport_world"
+                    ),
+                )
             )
         else:
             errors.append(
-                f"{name} at world ({int(round(ox))},{int(round(oy))}) is outside viewport_world; "
-                f"re-emit create_* with x/y inside the visible camera (omit frameId for free-canvas)."
+                format_op_error(
+                    "placement_outside_viewport",
+                    fix=(
+                        f"re-emit {name} with x/y inside the visible camera "
+                        f"(omit frameId for free-canvas)"
+                    ),
+                    detail=(
+                        f"{name} at world ({int(round(ox))},{int(round(oy))}) "
+                        f"outside viewport_world"
+                    ),
+                )
             )
     return errors[:8]
 
@@ -1620,7 +1741,7 @@ def _fetch_deferred_skills(
     input_args: dict[str, Any] | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    from services.design.skill_store import format_skills_details_checked
+    from services.design.prompts.skill_store import format_skills_details_checked
 
     details, errs = format_skills_details_checked(
         keys=keys,
@@ -1994,7 +2115,7 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
     need_knowledge = normalize_need_knowledge(
         obj.get("need_knowledge") or obj.get("needKnowledge")
     )
-    from services.design.skill_store import parse_need_skills_with_pins
+    from services.design.prompts.skill_store import parse_need_skills_with_pins
 
     need_skills, skill_version_pins, skill_input_args, skill_parse_errs = (
         parse_need_skills_with_pins(obj.get("need_skills") or obj.get("needSkills"))
@@ -2676,7 +2797,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
         rt.terminal = True
         return Command(update=_bump(rt), goto="__settle__")
 
-    from services.design.image_hydrate import (
+    from services.design.ops.image_hydrate import (
         _hydrate_tool_ops_images,
         _image_model_from_rules,
     )
@@ -3576,7 +3697,7 @@ async def _node_propose(state: GraphState) -> Command:
     st = rt.run
     step_ops = rt.step_ops
     round_i = st.round
-    from services.design.tool_ops_contract import tool_ops_batch_detail
+    from services.design.ops.tool_ops_contract import tool_ops_batch_detail
 
     st.proposed_ops = tool_ops_for_sse(step_ops)
     ui = _ensure_propose_choice_ui(st)
@@ -3642,7 +3763,7 @@ async def _node_action(state: GraphState) -> Command:
     st = rt.run
     step_ops = rt.step_ops
     round_i = st.round
-    from services.design.image_hydrate import (
+    from services.design.ops.image_hydrate import (
         _hydrate_tool_ops_images,
         _image_model_from_rules,
     )
@@ -4152,7 +4273,7 @@ async def _node_hydrate(state: GraphState) -> Command:
     st = rt.run
     step_ops = list(rt.step_ops)
     if step_ops:
-        from services.design.image_hydrate import (
+        from services.design.ops.image_hydrate import (
             _hydrate_tool_ops_images,
             _image_model_from_rules,
         )
@@ -4544,9 +4665,9 @@ async def _node_paint_ops(state: GraphState) -> Command:
         if attempt > 0:
             user_msg += (
                 "\n\nCRITICAL RETRY: previous tool_ops were empty or invalid. "
-                "If LAST_ERROR mentions viewport_world / suggested_place_world, "
-                "re-emit create_* with those world x/y (omit frameId for free-canvas). "
-                "Output a non-empty tool_ops array now."
+                "Read LAST_ERROR lines (code=…; fix=…) and re-emit tool_ops accordingly. "
+                "If code=placement_outside_viewport, use suggested_place_world x/y "
+                "(omit frameId for free-canvas). Output a non-empty tool_ops array now."
             )
         try:
             from config.settings import settings as _paint_settings

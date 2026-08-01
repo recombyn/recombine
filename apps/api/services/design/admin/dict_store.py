@@ -5,7 +5,7 @@ import threading
 import time
 from typing import Any
 from services.db import connect, dialect
-from services.design.schema import ensure_design_tables
+from services.design.admin.schema import ensure_design_tables
 
 # Catalog of dict types lives as rows under this reserved dict_type.
 TYPE_CATALOG = "__types__"
@@ -29,7 +29,7 @@ def _invalidate_edge_condition_label_cache() -> None:
 def _dicts_data_path():
     from pathlib import Path
 
-    return Path(__file__).resolve().parents[2] / "data" / "design_dicts_seed.json"
+    return Path(__file__).resolve().parents[3] / "data" / "design_dicts_seed.json"
 
 
 def _load_dicts_seed() -> dict:

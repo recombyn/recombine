@@ -357,8 +357,8 @@ def ensure_library_seed() -> None:
 
 
 def list_public_brushes() -> list[dict[str, Any]]:
-    from services.design.catalog import ensure_design_catalog
-    from services.design.library_store import _pub
+    from services.design.readpath.catalog import ensure_design_catalog
+    from services.design.readpath.library_store import _pub
 
     ensure_design_catalog()
     ensure_library_seed()

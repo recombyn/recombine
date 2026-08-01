@@ -22,7 +22,7 @@ _POLL_MAX_S = 600.0
 
 def _admin_video_default() -> str:
     try:
-        from services.design.catalog import get_global_rules
+        from services.design.readpath.catalog import get_global_rules
 
         return (get_global_rules().get("assets.video_default_model") or "").strip()
     except Exception:

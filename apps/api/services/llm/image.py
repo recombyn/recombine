@@ -93,7 +93,7 @@ _DEFAULT_IMAGE_MODEL = "doubao-seedream-5-0-lite"
 def _admin_image_default() -> str:
     """Admin global rule assets.image_default_model (falls back to env)."""
     try:
-        from services.design.catalog import get_global_rules
+        from services.design.readpath.catalog import get_global_rules
 
         return (get_global_rules().get("assets.image_default_model") or "").strip()
     except Exception:

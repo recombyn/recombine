@@ -15,7 +15,7 @@ from typing import Any
 
 
 def _load_progress_stages() -> tuple[dict[str, str], dict[str, str]]:
-    path = Path(__file__).resolve().parents[2] / "data" / "progress_stages.json"
+    path = Path(__file__).resolve().parents[3] / "data" / "progress_stages.json"
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:

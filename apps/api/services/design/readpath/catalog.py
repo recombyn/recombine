@@ -7,9 +7,9 @@ import threading
 from typing import Any
 
 from services.db import connect, init_schema
-from services.design.schema import ensure_design_tables
-from services.design.seed import seed_design_catalog_if_empty
-from services.design.content_pack import resync_design_content
+from services.design.admin.schema import ensure_design_tables
+from services.design.readpath.seed import seed_design_catalog_if_empty
+from services.design.prompts.content_pack import resync_design_content
 from services.db import dialect
 
 _ENSURE_LOCK = threading.RLock()
@@ -43,11 +43,11 @@ def ensure_design_catalog(*, force: bool = False) -> None:
             resync_design_content(force=False)
             # Library brush cover refresh is slow on remote MySQL — only run from
             # brush/library endpoints via ensure_library_seed(), not on every catalog boot.
-            from services.design.knowledge_store import ensure_design_knowledge
-            from services.design.prompt_pack_store import ensure_design_prompt_packs
-            from services.design.action_registry import ensure_action_registry
-            from services.design.system_prompt_store import ensure_system_prompts
-            from services.design.skill_store import ensure_design_skills
+            from services.design.prompts.knowledge_store import ensure_design_knowledge
+            from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
+            from services.design.ops.action_registry import ensure_action_registry
+            from services.design.prompts.system_prompt_store import ensure_system_prompts
+            from services.design.prompts.skill_store import ensure_design_skills
 
             ensure_design_knowledge()
             ensure_design_prompt_packs()
@@ -136,7 +136,7 @@ def get_global_rules() -> dict[str, str]:
             ).fetchall()
     out = {str(r["rule_key"]): str(r["rule_value"]) for r in rows}
     try:
-        from services.design.system_prompt_store import get_system_prompt_bodies
+        from services.design.prompts.system_prompt_store import get_system_prompt_bodies
 
         # ensure=False: catalog / stage bootstrap may already be mid-flight.
         for key, body in get_system_prompt_bodies(ensure=False).items():
@@ -194,7 +194,7 @@ def get_refine_skill(
 
 def list_scene_codes() -> list[str]:
     try:
-        from services.design.dict_store import list_dicts
+        from services.design.admin.dict_store import list_dicts
         items = list_dicts(dict_type="scene", enabled=True)
         codes = [i["code"] for i in items if i.get("code") and i["code"] != "all"]
         if codes:
@@ -205,8 +205,8 @@ def list_scene_codes() -> list[str]:
 
 
 def get_catalog_payload() -> dict[str, Any]:
-    from services.design.library_store import list_library_items
-    from services.design.tool_ops_contract import list_canvas_tools
+    from services.design.readpath.library_store import list_library_items
+    from services.design.ops.tool_ops_contract import list_canvas_tools
 
     # Bootstrap belongs at process startup / admin — not on every skill SELECT.
     ensure_design_catalog()
@@ -233,8 +233,8 @@ def get_catalog_payload() -> dict[str, Any]:
 
     return {
         "scenes": scene_codes,
-        "sceneLabels": {i["code"]: i["label"] for i in __import__("services.design.dict_store", fromlist=["list_dicts"]).list_dicts(dict_type="scene", enabled=True)},
-        "categoryLabels": {i["code"]: i["label"] for i in __import__("services.design.dict_store", fromlist=["list_dicts"]).list_dicts(dict_type="skill_category", enabled=True)},
+        "sceneLabels": {i["code"]: i["label"] for i in __import__("services.design.admin.dict_store", fromlist=["list_dicts"]).list_dicts(dict_type="scene", enabled=True)},
+        "categoryLabels": {i["code"]: i["label"] for i in __import__("services.design.admin.dict_store", fromlist=["list_dicts"]).list_dicts(dict_type="skill_category", enabled=True)},
         "models": [
             {"id": "auto", "label": "Auto"},
             {"id": "doubao", "label": "Doubao"},
