@@ -61,18 +61,27 @@ def _pub_skill(r: Any) -> dict[str, Any]:
     return base
 
 
-def list_admin_skills(*, q: str | None = None, enabled: bool | None = None) -> list[dict[str, Any]]:
+def list_admin_skills(
+    *,
+    q: str | None = None,
+    enabled: bool | None = None,
+    source: str | None = None,
+) -> list[dict[str, Any]]:
+    """List skills for Admin UI (seed + file + admin). Optional ``source`` filter."""
     ensure_design_catalog()
     where = ["1=1"]
     params: list[Any] = []
+    if source is not None and str(source).strip():
+        where.append("source = ?")
+        params.append(str(source).strip().lower())
     if enabled is True:
         where.append("enabled = 1")
     elif enabled is False:
         where.append("enabled = 0")
     if q and q.strip():
         like = f"%{q.strip()}%"
-        where.append("(name LIKE ? OR category LIKE ? OR scenes LIKE ?)")
-        params.extend([like, like, like])
+        where.append("(name LIKE ? OR category LIKE ? OR scenes LIKE ? OR skill_key LIKE ?)")
+        params.extend([like, like, like, like])
     sql = (
         "SELECT * FROM design_skill WHERE "
         + " AND ".join(where)
@@ -95,6 +104,8 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
         NS_EXT,
         NS_USER,
         SOURCE_ADMIN,
+        SOURCE_FILE,
+        SOURCE_SEED,
         _CORE_RESERVED_KEYS,
         qualify_skill_key,
         save_skill_revision,
@@ -105,17 +116,6 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
 
     skill_key = payload.get("skillKey") or payload.get("skill_key")
     skill_key = str(skill_key).strip() if skill_key else None
-    namespace = str(payload.get("namespace") or NS_USER).strip().lower() or NS_USER
-    if namespace in (NS_CORE, NS_EXT):
-        raise ValueError("admin skills must use namespace=user")
-    namespace = NS_USER
-    if skill_key:
-        ns_prefix, local = split_namespace_key(skill_key)
-        if ns_prefix == NS_CORE or local in _CORE_RESERVED_KEYS:
-            raise ValueError(f"core skill key reserved: {local or skill_key}")
-        if ns_prefix == NS_EXT:
-            raise ValueError("user skill cannot use ext namespace")
-        skill_key = qualify_skill_key(NS_USER, local or skill_key)
     category = str(payload.get("category") or "layout").strip() or "layout"
     prompt_positive = str(payload.get("promptPositive") or payload.get("prompt_positive") or "")
     prompt_negative = payload.get("promptNegative") or payload.get("prompt_negative")
@@ -166,8 +166,6 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
         version = int(payload.get("version") or 0)
     except (TypeError, ValueError):
         version = 0
-    # Admin writes always become source=admin (seed/file will not overwrite).
-    source = SOURCE_ADMIN
     sort_weight = int(payload.get("sortWeight") or payload.get("sort_weight") or 0)
     scenes = str(payload.get("scenes") or "all").strip() or "all"
     default_model = str(payload.get("defaultModel") or payload.get("default_model") or "doubao")
@@ -188,40 +186,61 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         locales_json = None
 
-    meta_errs = validate_skill_meta(
-        {
-            "skill_key": skill_key or f"user.{name}",
-            "name": name,
-            "prompt_positive": prompt_positive,
-            "preferred_tools": preferred_raw,
-            "allowed_resources": resources_raw if resources_raw is not None else ["tools"],
-            "input_schema": in_schema_obj,
-            "output_schema": out_schema_obj,
-            "namespace": namespace,
-        },
-        source=SOURCE_ADMIN,
-    )
-    if meta_errs and not sid:
-        # New skills must pass; updates may omit body when only toggling flags.
-        if "prompt_positive_required" in meta_errs and not prompt_positive:
-            raise ValueError("; ".join(meta_errs))
-        if any(e for e in meta_errs if e != "prompt_positive_required"):
-            raise ValueError("; ".join(meta_errs))
-
     with connect() as conn:
         if sid:
             # Bump version on admin edit unless explicitly set higher.
             cur = conn.execute(
-                "SELECT version, skill_key FROM design_skill WHERE id = ?",
+                "SELECT version, skill_key, source, namespace FROM design_skill WHERE id = ?",
                 (int(sid),),
             ).fetchone()
+            if not cur:
+                raise ValueError("skill not found")
+            existing_source = str(cur["source"] or "").strip().lower() or SOURCE_ADMIN
+            existing_key = str(cur["skill_key"] or "").strip()
+            existing_ns = str(cur["namespace"] or "").strip().lower()
+            # Editing seed/file: keep source + key + namespace (ops can customize body).
+            # Seed sync is insert-only, so these edits are not reclaimed.
+            if existing_source in (SOURCE_SEED, SOURCE_FILE):
+                source = existing_source
+                skill_key = existing_key or skill_key
+                namespace = existing_ns or (NS_CORE if existing_source == SOURCE_SEED else NS_EXT)
+                meta_source = existing_source
+            else:
+                source = SOURCE_ADMIN
+                namespace = NS_USER
+                if skill_key:
+                    ns_prefix, local = split_namespace_key(skill_key)
+                    if ns_prefix == NS_CORE or local in _CORE_RESERVED_KEYS:
+                        raise ValueError(f"core skill key reserved: {local or skill_key}")
+                    if ns_prefix == NS_EXT:
+                        raise ValueError("user skill cannot use ext namespace")
+                    skill_key = qualify_skill_key(NS_USER, local or skill_key)
+                elif existing_key:
+                    skill_key = existing_key
+                meta_source = SOURCE_ADMIN
+            meta_errs = validate_skill_meta(
+                {
+                    "skill_key": skill_key or existing_key or f"user.{name}",
+                    "name": name,
+                    "prompt_positive": prompt_positive,
+                    "preferred_tools": preferred_raw,
+                    "allowed_resources": resources_raw if resources_raw is not None else ["tools"],
+                    "input_schema": in_schema_obj,
+                    "output_schema": out_schema_obj,
+                    "namespace": namespace,
+                },
+                source=meta_source,
+            )
+            if meta_errs:
+                if "prompt_positive_required" in meta_errs and not prompt_positive:
+                    raise ValueError("; ".join(meta_errs))
+                if any(e for e in meta_errs if e != "prompt_positive_required"):
+                    raise ValueError("; ".join(meta_errs))
             try:
                 cur_ver = int((cur["version"] if cur else 0) or 0)
             except Exception:
                 cur_ver = 0
             next_ver = version if version > cur_ver else cur_ver + 1
-            if not skill_key and cur:
-                skill_key = str(cur["skill_key"] or "").strip() or None
             conn.execute(
                 """
                 UPDATE design_skill SET
@@ -266,8 +285,32 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
                 except Exception:
                     pass
         else:
+            # New rows are always ops skills (user.* / admin).
+            source = SOURCE_ADMIN
+            namespace = NS_USER
             if not skill_key:
                 raise ValueError("skillKey required")
+            ns_prefix, local = split_namespace_key(skill_key)
+            if ns_prefix == NS_CORE or local in _CORE_RESERVED_KEYS:
+                raise ValueError(f"core skill key reserved: {local or skill_key}")
+            if ns_prefix == NS_EXT:
+                raise ValueError("user skill cannot use ext namespace")
+            skill_key = qualify_skill_key(NS_USER, local or skill_key)
+            meta_errs = validate_skill_meta(
+                {
+                    "skill_key": skill_key,
+                    "name": name,
+                    "prompt_positive": prompt_positive,
+                    "preferred_tools": preferred_raw,
+                    "allowed_resources": resources_raw if resources_raw is not None else ["tools"],
+                    "input_schema": in_schema_obj,
+                    "output_schema": out_schema_obj,
+                    "namespace": namespace,
+                },
+                source=SOURCE_ADMIN,
+            )
+            if meta_errs:
+                raise ValueError("; ".join(meta_errs))
             cur = conn.execute(
                 """
                 INSERT INTO design_skill (
@@ -313,9 +356,20 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def soft_delete_skill(skill_id: int) -> bool:
-    """Remove skill row from Admin list (hard delete)."""
+    """Remove skill row from Admin list (hard delete). Seed/file rows are protected."""
     ensure_design_catalog()
+    from services.design.skill_store import SOURCE_FILE, SOURCE_SEED
+
     with connect() as conn:
+        row = conn.execute(
+            "SELECT source FROM design_skill WHERE id = ?",
+            (int(skill_id),),
+        ).fetchone()
+        if not row:
+            return False
+        src = str(row["source"] or "").strip().lower()
+        if src in (SOURCE_SEED, SOURCE_FILE):
+            raise ValueError("cannot delete seed/file skill via admin")
         cur = conn.execute(
             "DELETE FROM design_skill WHERE id = ?",
             (int(skill_id),),
@@ -900,69 +954,35 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             for n in seed_nodes
             if str(n.get("id") or "").startswith("prompt_")
         }
-        # Prefer longer Admin bodies from bank split / existing nodes.
-        for kind, pack in packs_from_bank.items():
-            body = str(pack.get("body") or "").strip()
-            if not body:
-                continue
-            # Only fold bank packs that are still core methodology nodes.
-            from services.design.prompt_pack_store import _CORE_PROMPT_KINDS as _CORE_KINDS
+        del packs_from_bank, seed_by_kind
 
-            if kind not in _CORE_KINDS:
-                continue
-            nid = f"prompt_{kind}"
-            hit = next((n for n in nodes if str(n.get("id") or "") == nid), None)
-            if hit is None:
-                if kind in seed_by_kind:
-                    base = dict(seed_by_kind[kind])
-                else:
-                    base = {
-                        "id": nid,
-                        "label": str(pack.get("title") or _PACK_LABELS.get(kind, kind)),
-                        "description": str(pack.get("whenToUse") or ""),
-                        "kind": "prompt",
-                        "capability": "prompt",
-                        "phaseKey": nid,
-                        "configRef": f"pack.{kind}",
-                        "inject": {
-                            "mode": "details",
-                            "source": "prompt",
-                            "scenes": str(pack.get("scenes") or "all"),
-                        },
-                        "x": 2280,
-                        "y": 80,
-                    }
-                base["id"] = nid
-                base["promptText"] = body
-                base["label"] = str(pack.get("title") or base.get("label") or kind)
-                base["description"] = str(pack.get("whenToUse") or base.get("description") or "")
-                base.pop("promptPacks", None)
-                nodes.append(base)
-                ids.add(nid)
-                changed = True
-            elif len(body) >= len(str(hit.get("promptText") or "")):
-                hit["promptText"] = body
-                hit.pop("promptPacks", None)
-                changed = True
-
-        for sn in seed_nodes:
-            sid = str(sn.get("id") or "")
-            if not sid or sid in ids:
-                continue
-            nodes.append(dict(sn))
-            ids.add(sid)
-            changed = True
-
-        # Drop obsolete scene-category prompt nodes (website/poster/ecommerce…).
-        # Methodology is prompt_design_spec; LLM self-analyzes type + media.
-        _KEEP_PROMPT = {
+        # Drop retired methodology prompt nodes (now Skills).
+        _DROP_PROMPT = {
             "prompt_design_spec",
             "prompt_vision",
             "prompt_aesthetics",
+        }
+        _KEEP_PROMPT = {
             "prompt_react",
             "prompt_plan",
             "prompt_ask",
         }
+        drop_retired = {
+            str(n.get("id") or "")
+            for n in nodes
+            if str(n.get("id") or "") in _DROP_PROMPT
+        }
+        if drop_retired:
+            nodes[:] = [n for n in nodes if str(n.get("id") or "") not in drop_retired]
+            edges[:] = [
+                e
+                for e in edges
+                if str(e.get("source") or "") not in drop_retired
+                and str(e.get("target") or "") not in drop_retired
+            ]
+            ids -= drop_retired
+            changed = True
+
         drop_scene = {
             str(n.get("id") or "")
             for n in nodes
@@ -981,54 +1001,6 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             ]
             ids -= drop_scene
             changed = True
-
-        # Refresh core prompt bodies from seed when still empty or older short stubs.
-        for sn in seed_nodes:
-            sid = str(sn.get("id") or "")
-            hit = next((n for n in nodes if str(n.get("id") or "") == sid), None)
-            if hit is None:
-                continue
-            seed_body = str(sn.get("promptText") or "")
-            cur = str(hit.get("promptText") or "")
-            if seed_body and (not cur or ("## 1. 任务" not in cur and "自分析任务类型" not in cur) and sid == "prompt_design_spec"):
-                hit["promptText"] = seed_body
-                hit["label"] = sn.get("label") or hit.get("label")
-                hit["description"] = sn.get("description") or hit.get("description")
-                changed = True
-            elif sid == "prompt_vision" and seed_body and (
-                "知识库" in cur
-                or "领域判断" in cur
-                or "顶栏" in cur
-                or "底栏" in cur
-                or "勿套某一品类" in cur
-                or "空间分区" not in cur
-            ):
-                hit["promptText"] = seed_body
-                hit["description"] = sn.get("description") or hit.get("description")
-                changed = True
-            elif sid == "prompt_aesthetics" and seed_body and (
-                "短评" in cur or "设计令牌" in cur
-            ):
-                hit["promptText"] = seed_body
-                hit["description"] = sn.get("description") or hit.get("description")
-                changed = True
-            elif sid == "prompt_design_spec" and seed_body and "## 1. 任务" in seed_body:
-                # Sync when draft still has meta fluff or older stubs.
-                stale = (
-                    "## 1. 任务" not in cur
-                    or "成稿自检" not in cur
-                    or "不要依赖「网站" in cur
-                    or "分类永远盖不全" in cur
-                    or "雏菊" in cur
-                    or "#4EA8DE" in cur
-                    or "晴空蓝" in cur
-                    or len(seed_body) > len(cur) + 50
-                )
-                if stale:
-                    hit["promptText"] = seed_body
-                    hit["label"] = sn.get("label") or "设计方法论"
-                    hit["description"] = sn.get("description") or hit.get("description")
-                    changed = True
 
         # LLM/Agent: prompts live on dedicated prompt nodes, not on the model card.
         for n in nodes:
@@ -1291,14 +1263,12 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
         # thought / ask → parallel on need_*（三条独立：工具 / 提示词 / 美学；提示词不绑美学）
         for eid, cond, pri in (
             ("e6_tools", "need_tools&no_ops", 10),
-            ("e6_prompt", "need_prompts&no_ops", 12),
             ("e6_aes", "need_aesthetics&no_ops", 13),
         ):
             _ensure_edge(eid, "thought", "parallel", cond, priority=pri)
         if "ask_thought" in ids:
             for eid, cond, pri in (
                 ("e_ask_res_tools", "need_tools&no_ops", 7),
-                ("e_ask_res_prompt", "need_prompts&no_ops", 9),
                 ("e_ask_res_aes", "need_aesthetics&no_ops", 10),
             ):
                 _ensure_edge(eid, "ask_thought", "parallel", cond, priority=pri)
@@ -1310,7 +1280,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                     continue
                 eid = str(e.get("id") or "")
                 cond = str(e.get("condition") or "").strip()
-                if eid in ("e_ask_res_tools", "e_ask_res_prompt", "e_ask_res_aes"):
+                if eid in ("e_ask_res_tools", "e_ask_res_aes"):
                     continue
                 if cond in ("need_aesthetics&no_ops", "need_aesthetics", "需要美学且无操作"):
                     # Orphan duplicate aesthetics wire — drop (canonical is e_ask_res_aes).
@@ -1358,6 +1328,20 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
         _ensure_edge("e_aes_join", "aesthetics_details", "resource_join", "", priority=10, is_default=True)
         _ensure_edge("e_tools_join", "tool_details", "resource_join", "", priority=10, is_default=True)
 
+
+        # Drop retired need_prompts flow edges (methodology → skills).
+        before_e = len(edges)
+        edges[:] = [
+            e
+            for e in edges
+            if "need_prompts" not in str(e.get("condition") or "")
+            and str(e.get("id") or "")
+            not in ("e6_prompt", "e_ask_res_prompt")
+        ]
+        if len(edges) != before_e:
+            edge_ids = {str(e.get("id") or "") for e in edges}
+            changed = True
+
         # Scene / pack「提示词」nodes: wire into main path parallel → prompt_* → join.
         par_n = next((n for n in nodes if str(n.get("id") or "") == "parallel"), None)
         px = float((par_n or {}).get("x") or (tx + 280))
@@ -1374,8 +1358,10 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
             pid = str(pn.get("id") or "")
             if not pid:
                 continue
-            # Prompt packs share need_prompts — not need_aesthetics (方法论/看图也可单独申请).
-            lane_cond = "need_prompts"
+            # Methodology prompt packs retired — skip skill-migrated node ids.
+            if pid in ("prompt_design_spec", "prompt_vision", "prompt_aesthetics"):
+                continue
+            lane_cond = ""
             has_in = any(
                 str(e.get("source") or "") == "parallel" and str(e.get("target") or "") == pid
                 for e in edges
@@ -1515,7 +1501,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                 changed = True
             if not has_in:
                 _ensure_prompt_edge(
-                    f"e_par_{pid}", "parallel", pid, "need_prompts", priority=20 + i
+                    f"e_par_{pid}", "parallel", pid, "", priority=20 + i
                 )
             else:
                 # Repair empty/legacy labels so 提示词 lane ≠ 美学.
@@ -1526,7 +1512,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
                         and str(e.get("condition") or "").strip()
                         in ("", "need_aesthetics", "need_aesthetics&no_ops")
                     ):
-                        e["condition"] = "need_prompts"
+                        e["condition"] = ""
                         changed = True
             if not has_out:
                 _ensure_prompt_edge(

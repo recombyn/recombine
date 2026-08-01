@@ -6,13 +6,11 @@ from services.design.skill_store import (
     NS_CORE,
     NS_EXT,
     NS_USER,
-    PROMPT_KIND_TO_SKILL,
     SOURCE_ADMIN,
     SOURCE_SEED,
     _apply_mutex,
     _load_file_skills,
     _rule_matches,
-    bridge_need_prompts_to_skills,
     ensure_design_skills,
     filter_need_resources_by_skill_acl,
     filter_ops_by_skill_allowlist,
@@ -38,25 +36,7 @@ def setup_function() -> None:
     ensure_design_skills(force=True)
 
 
-def test_normalize_need_skills_maps_legacy_prompt_kinds():
-    assert normalize_need_skills(["design_spec", "vision"]) == [
-        "design_methodology",
-        "vision_extract",
-    ]
 
-
-def test_bridge_need_prompts_to_skills():
-    prompts, skills = bridge_need_prompts_to_skills(
-        ["design_spec", "custom_pack"],
-        ["canvas_edit"],
-    )
-    assert "design_methodology" in skills
-    assert "canvas_edit" in skills
-    assert prompts == ["custom_pack"]
-
-
-def test_prompt_kind_map_complete():
-    assert PROMPT_KIND_TO_SKILL["aesthetics"] == "aesthetics_align"
 
 
 def test_skills_catalog_and_details_roundtrip():
@@ -158,19 +138,10 @@ def test_filter_ops_allowlist():
     assert any("explode_canvas" in e for e in errs)
 
 
-def test_file_skill_example_brand_loaded():
+def test_file_skill_loader_returns_list():
+    """OSS ships no ext file packs by default (demo pack removed)."""
     files = _load_file_skills()
-    by_key = {str(x.get("skill_key")): x for x in files}
-    assert "example_brand" in by_key
-    pack = by_key["example_brand"]
-    assert pack.get("name") == "示例品牌规范"
-    assert pack.get("pack_version") == "1.0.0"
-    assert pack.get("namespace") == NS_EXT
-    assert pack.get("logo") == "example_brand/example_brand-logo.svg"
-    assert (pack.get("locales") or {}).get("zh-CN", {}).get("displayName") == "示例品牌规范"
-    assert "主色" in str(pack.get("prompt_positive") or "")
-    catalog = format_skills_catalog(scene="website")
-    assert "example_brand" in catalog
+    assert isinstance(files, list)
 
 
 def test_parse_pack_version_semver():
@@ -233,15 +204,13 @@ def test_validate_against_schema_required():
 
 def test_custom_skill_acl_platform_open():
     assert skill_resource_allowlist(["design_methodology"], scene="website") is None
-    k, p, a, errs = filter_need_resources_by_skill_acl(
+    k, a, errs = filter_need_resources_by_skill_acl(
         skill_keys=["design_methodology"],
         scene="website",
         need_knowledge=["ui"],
-        need_prompts=["x"],
         need_aesthetics=True,
     )
     assert k == ["ui"]
-    assert p == ["x"]
     assert a is True
     assert errs == []
 
@@ -249,3 +218,38 @@ def test_custom_skill_acl_platform_open():
 def test_hot_reload_signature_stable():
     reload_skills_if_disk_changed()
     assert reload_skills_if_disk_changed() is False
+
+
+def test_seed_sync_does_not_overwrite_existing_rows():
+    """Community seed is cold-start only: never updates existing rows."""
+    from services.db import connect
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT prompt_positive, source FROM design_skill WHERE skill_key = ?",
+            ("design_methodology",),
+        ).fetchone()
+        assert row is not None
+        before = str(row["prompt_positive"] or "")
+        assert str(row["source"] or "") == SOURCE_SEED
+        conn.execute(
+            "UPDATE design_skill SET prompt_positive = ? WHERE skill_key = ?",
+            ("OPS_CUSTOM_BODY", "design_methodology"),
+        )
+        conn.commit()
+
+    reset_skills_ready_for_tests()
+    ensure_design_skills(force=True)
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT prompt_positive, source FROM design_skill WHERE skill_key = ?",
+            ("design_methodology",),
+        ).fetchone()
+        assert str(row["source"] or "") == SOURCE_SEED
+        assert str(row["prompt_positive"] or "") == "OPS_CUSTOM_BODY"
+        conn.execute(
+            "UPDATE design_skill SET prompt_positive = ? WHERE skill_key = ?",
+            (before, "design_methodology"),
+        )
+        conn.commit()

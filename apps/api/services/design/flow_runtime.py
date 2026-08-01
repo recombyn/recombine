@@ -371,14 +371,14 @@ def default_inject_for_node(node: dict[str, Any]) -> dict[str, Any] | None:
     table: dict[str, dict[str, Any]] = {
         "thought": {
             "mode": "catalog",
-            "catalogs": ["canvas_tools", "knowledge", "prompt", "aesthetics"],
+            "catalogs": ["canvas_tools", "knowledge", "aesthetics"],
             "deferDetails": True,
             "specs": ["agent.prompt.react_system"],
             "validate": ["json_contract"],
         },
         "dual_sample": {
             "mode": "catalog",
-            "catalogs": ["canvas_tools", "knowledge", "prompt", "aesthetics"],
+            "catalogs": ["canvas_tools", "knowledge", "aesthetics"],
             "deferDetails": True,
         },
         "plan": {"mode": "none", "specs": ["agent.prompt.plan_system"]},
@@ -389,8 +389,6 @@ def default_inject_for_node(node: dict[str, Any]) -> dict[str, Any] | None:
         "memory": {"mode": "details", "source": "memory"},
         "need_knowledge": {"mode": "catalog", "source": "knowledge"},
         "knowledge_details": {"mode": "details", "source": "knowledge"},
-        "need_prompts": {"mode": "catalog", "source": "prompt"},
-        "prompt_details": {"mode": "details", "source": "prompt"},
         "need_aesthetics": {"mode": "catalog", "source": "aesthetics"},
         "aesthetics_details": {
             "mode": "details",
@@ -440,7 +438,6 @@ def catalogs_from_need_edge_conditions(conditions: list[str]) -> list[str]:
         c = str(raw or "")
         for token, src in (
             ("need_tools", "canvas_tools"),
-            ("need_prompts", "prompt"),
             ("need_aesthetics", "aesthetics"),
             ("need_knowledge", "knowledge"),
         ):
@@ -519,7 +516,6 @@ def build_catalog_blocks(
     """Format short catalog blocks for thought system prompt."""
     from services.design.aesthetics.scorer import format_aesthetics_catalog
     from services.design.knowledge_store import format_knowledge_catalog
-    from services.design.prompt_pack_store import format_prompt_packs_catalog
     from services.design.tool_ops_contract import format_canvas_tools_catalog
 
     blocks: list[str] = []
@@ -528,8 +524,6 @@ def build_catalog_blocks(
             blocks.append(format_canvas_tools_catalog(rules))
         elif src == "knowledge":
             blocks.append(format_knowledge_catalog(scene=scene))
-        elif src == "prompt":
-            blocks.append(format_prompt_packs_catalog(scene=scene))
         elif src == "aesthetics":
             blocks.append(format_aesthetics_catalog(scene=scene))
     return [b for b in blocks if b]
