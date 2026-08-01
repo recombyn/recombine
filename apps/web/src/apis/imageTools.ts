@@ -57,11 +57,15 @@ export type ImageProcessResult = {
 };
 
 /** Run an image toolbar tool on the API (Seedream i2i or local rembg / OCR). */
-export const processImageTool = (data: ImageProcessBody) =>
+export const processImageTool = (
+  data: ImageProcessBody,
+  opts?: { signal?: AbortSignal }
+) =>
   request<ImageProcessResult>({
     url: '/api/v1/image/process',
     method: 'post',
     data,
+    signal: opts?.signal,
     // Local rembg may download weights on first run; Seedream i2i can also be slow.
     timeout: 180000,
   });

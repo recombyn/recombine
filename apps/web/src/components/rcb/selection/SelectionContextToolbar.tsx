@@ -452,9 +452,6 @@ function SelectionContextToolbar(props: Props): ReactNode {
                       t('editor.imageToolbar.processingEditElements')
                     )
                   }
-                  onEditText={() =>
-                    runImageProcess('editText', t('editor.imageToolbar.processingEditText'))
-                  }
                   onMultiAngle={() =>
                     dispatch(openImageToolPanel({ nodeId, kind: 'multiAngle' }))
                   }

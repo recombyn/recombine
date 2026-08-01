@@ -2,7 +2,7 @@ import { useEffect, useRef, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { message } from '@/components/base';
 import { processImageTool } from '@/apis/imageTools';
-import { uploadImageFromSrc } from '@/utils/uploadImage';
+import { isUploadAbortError, uploadImageFromSrc } from '@/utils/uploadImage';
 import { fetchWallet } from '@/apis/wallet';
 import { failImageProcess, finishImageProcess } from '@/store/modules/editor';
 import { syncFromServer } from '@/store/modules/wallet';
@@ -100,6 +100,7 @@ function ImageProcessWatcher() {
     if (kind === 'import' || kind === 'upload') return undefined;
 
     let cancelled = false;
+    const ac = new AbortController();
 
     const fail = (msg: string) => {
       if (cancelled) return;
@@ -147,7 +148,7 @@ function ImageProcessWatcher() {
         if (aspect) processBody.aspect_ratio = aspect;
         const resolution = resolutionFor(kind, liveNode);
         if (resolution) processBody.resolution = resolution;
-        const res = await processImageTool(processBody);
+        const res = await processImageTool(processBody, { signal: ac.signal });
         if (cancelled) return;
 
         const layers = Array.isArray(res?.layers) ? res.layers : [];
@@ -208,7 +209,7 @@ function ImageProcessWatcher() {
         message.success(labels[kind] || '处理完成');
         refreshWallet(dispatch);
       } catch (err: any) {
-        if (cancelled) return;
+        if (cancelled || isUploadAbortError(err)) return;
         fail(processFailMessage(err));
       }
     };
@@ -216,6 +217,7 @@ function ImageProcessWatcher() {
     void run();
     return () => {
       cancelled = true;
+      ac.abort();
     };
     // Only re-run when a new job id is pending — not on every document edit.
   }, [pendingId, dispatch]);

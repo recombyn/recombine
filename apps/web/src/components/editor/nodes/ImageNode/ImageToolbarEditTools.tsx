@@ -1,6 +1,6 @@
 import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineCube, HiOutlineDocumentText, HiOutlineSquare2Stack } from 'react-icons/hi2';
+import { HiOutlineCube, HiOutlineSquare2Stack } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
 import { cn } from '@/utils/classnames';
 import ImageUpscaleMenu, { type UpscalePreset } from './ImageUpscaleMenu';
@@ -14,13 +14,11 @@ function Tool({
   onClick,
   children,
   active,
-  badge,
 }: {
   label: string;
   onClick?: () => void;
   children: ReactNode;
   active?: boolean;
-  badge?: string;
 }) {
   return (
     <button
@@ -29,14 +27,7 @@ function Tool({
       onClick={onClick}
     >
       {children}
-      <span className="inline-flex items-center gap-1">
-        {label}
-        {badge ? (
-          <span className="rounded px-1 py-px text-[10px] font-medium leading-none text-[#3B82F6] bg-[#EFF6FF] ring-1 ring-inset ring-[#BFDBFE]">
-            {badge}
-          </span>
-        ) : null}
-      </span>
+      <span>{label}</span>
     </button>
   );
 }
@@ -46,7 +37,6 @@ function ImageToolbarEditTools({
   onUpscale,
   onRemoveBg,
   onEraser,
-  onEditText,
   onEditElements,
   onMultiAngle,
   previewSlot,
@@ -55,7 +45,6 @@ function ImageToolbarEditTools({
   onUpscale: (preset: UpscalePreset) => void;
   onRemoveBg: (mode: RemoveBgMode) => void;
   onEraser: () => void;
-  onEditText?: () => void;
   onEditElements?: () => void;
   onMultiAngle: () => void;
   previewSlot?: ReactNode;
@@ -71,17 +60,8 @@ function ImageToolbarEditTools({
         <LuEraser className="h-4 w-4" />
       </Tool>
       {onEditElements ? (
-        <Tool
-          label={t('editor.imageToolbar.editElements')}
-          badge="Beta"
-          onClick={onEditElements}
-        >
+        <Tool label={t('editor.imageToolbar.editElements')} onClick={onEditElements}>
           <HiOutlineSquare2Stack className="h-4 w-4" />
-        </Tool>
-      ) : null}
-      {onEditText ? (
-        <Tool label={t('editor.imageToolbar.editText')} onClick={onEditText}>
-          <HiOutlineDocumentText className="h-4 w-4" />
         </Tool>
       ) : null}
       <Tool label={t('editor.imageToolbar.multiAngle')} onClick={onMultiAngle}>
