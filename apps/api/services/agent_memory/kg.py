@@ -241,7 +241,7 @@ def _skill_by_key(skill_key: str) -> dict[str, Any] | None:
     if not key:
         return None
     try:
-        from services.design.catalog import list_skills
+        from services.design.readpath.catalog import list_skills
 
         for sk in list_skills():
             if str(sk.get("skill_key") or "").strip().lower() == key:
@@ -348,7 +348,7 @@ async def extract_triples_via_skill(
         'Return JSON: {"triples":[{"s":"scene:...","p":"...","o":"..."}]}'
     )
     try:
-        from services.design.llm_step import complete_skill_step
+        from services.design.runtime.llm_step import complete_skill_step
 
         out, _tokens_used = await complete_skill_step(
             model_family=extract_model,

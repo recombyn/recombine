@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from services.design.agent_controller import (
+from services.design.runtime.agent_controller import (
     _parse_agent_turn,
     _parse_plan,
     _score_ops_candidate,
     _wants_short_plan,
 )
-from services.design.tool_ops_contract import (
+from services.design.ops.tool_ops_contract import (
     format_canvas_tools_catalog,
     format_canvas_tools_details,
     normalize_need_tools,
 )
-from services.design.knowledge_store import (
+from services.design.prompts.knowledge_store import (
     format_knowledge_catalog,
     normalize_need_knowledge,
 )

@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from services.db import connect, dialect
-from services.design.schema import ensure_design_tables
+from services.design.admin.schema import ensure_design_tables
 
 CONTENT_VERSION = "2026-07-23-v103"
 CONTENT_VERSION_KEY = "content_pack_version"

@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from services.design.catalog import ensure_design_catalog, get_skill
+from services.design.readpath.catalog import ensure_design_catalog, get_skill
 from services.db import connect
 
 _log = logging.getLogger("design.admin_store")
@@ -25,7 +25,7 @@ _STAGE_RULES_READY = False
 
 def _pub_skill(r: Any) -> dict[str, Any]:
     """Admin skill row → API dict (runtime fields from skill_store._pub + admin extras)."""
-    from services.design.skill_store import _pub
+    from services.design.prompts.skill_store import _pub
 
     base = _pub(r)
     base.pop("_localKey", None)
@@ -99,7 +99,7 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
     name = str(payload.get("name") or "").strip()
     if not name:
         raise ValueError("name required")
-    from services.design.skill_store import (
+    from services.design.prompts.skill_store import (
         NS_CORE,
         NS_EXT,
         NS_USER,
@@ -345,7 +345,7 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
                 except Exception:
                     pass
         try:
-            from services.design.skill_store import invalidate_skill_key_cache
+            from services.design.prompts.skill_store import invalidate_skill_key_cache
 
             invalidate_skill_key_cache()
         except Exception:
@@ -358,7 +358,7 @@ def upsert_skill(payload: dict[str, Any]) -> dict[str, Any]:
 def soft_delete_skill(skill_id: int) -> bool:
     """Remove skill row from Admin list (hard delete). Seed/file rows are protected."""
     ensure_design_catalog()
-    from services.design.skill_store import SOURCE_FILE, SOURCE_SEED
+    from services.design.prompts.skill_store import SOURCE_FILE, SOURCE_SEED
 
     with connect() as conn:
         row = conn.execute(
@@ -434,7 +434,7 @@ def upsert_global_rule(
     key = (rule_key or "").strip()
     if not key:
         raise ValueError("ruleKey required")
-    from services.design.system_prompt_store import (
+    from services.design.prompts.system_prompt_store import (
         ensure_system_prompts,
         is_system_prompt_key,
         upsert_system_prompt,
@@ -916,7 +916,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
 
     # Split prompt_bank → independent prompt_* nodes; never merge packs into one bank.
     try:
-        from services.design.prompt_pack_store import (
+        from services.design.prompts.prompt_pack_store import (
             seed_prompt_overlay_nodes,
             seed_prompt_bank_node,
             KIND_LABELS as _PACK_LABELS,
@@ -1521,7 +1521,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
 
     # Edge condition 规范: wire field stores dict ``code`` only.
     # Display names stay on the frontend (dict label lookup by code).
-    from services.design.dict_store import resolve_edge_condition
+    from services.design.admin.dict_store import resolve_edge_condition
 
     for e in edges:
         cond_raw = str(e.get("condition") or "").strip()
@@ -1548,7 +1548,7 @@ def _normalize_agent_flow_graph(graph: dict[str, Any] | None) -> tuple[dict[str,
 
     # Seed inject bindings for known phases when missing.
     try:
-        from services.design.flow_runtime import default_inject_for_node, normalize_inject
+        from services.design.runtime.flow_runtime import default_inject_for_node, normalize_inject
 
         for n in nodes:
             existing = n.get("inject")
@@ -2507,7 +2507,7 @@ def publish_agent_flow(flow_id: str, *, note: str = "") -> dict[str, Any] | None
         _save_flows_catalog(items)
         # Invalidate LangGraph cache if present
         try:
-            from services.design.agent_controller import invalidate_agent_graph_cache
+            from services.design.runtime.agent_controller import invalidate_agent_graph_cache
 
             invalidate_agent_graph_cache(fid)
         except Exception:
@@ -2626,7 +2626,7 @@ def test_run_agent_flow(*, flow_id: str, prompt: str = "") -> dict[str, Any]:
     Walk uses flow_runtime (parallel fan-out + AND/OR join). Without a schedule
     context, explore_all=True so exclusive branches still surface for validation.
     """
-    from services.design.flow_runtime import walk_agent_flow
+    from services.design.runtime.flow_runtime import walk_agent_flow
 
     item = get_agent_flow(flow_id)
     if not item:
@@ -2776,7 +2776,7 @@ def test_run_agent_flow(*, flow_id: str, prompt: str = "") -> dict[str, Any]:
 def list_canvas_tools_admin() -> list[dict[str, Any]]:
     """All canvas tool rows (including disabled) for Admin."""
     ensure_design_catalog()
-    from services.design.tool_ops_contract import list_canvas_tools
+    from services.design.ops.tool_ops_contract import list_canvas_tools
 
     return list_canvas_tools(enabled_only=False)
 
@@ -3291,7 +3291,7 @@ def list_decision_logs(
     q: str | None = None,
 ) -> dict[str, Any]:
     """Admin list: light fields only (no full meta_json / LLM IO blobs)."""
-    from services.design.catalog import catalog_ready, ensure_design_catalog
+    from services.design.readpath.catalog import catalog_ready, ensure_design_catalog
 
     if not catalog_ready():
         ensure_design_catalog()
@@ -3423,7 +3423,7 @@ def list_decision_logs(
 
 def get_decision_log(task_id: str) -> dict[str, Any] | None:
     """Full decision/execution payload for one task (detail drawer)."""
-    from services.design.catalog import catalog_ready, ensure_design_catalog
+    from services.design.readpath.catalog import catalog_ready, ensure_design_catalog
 
     if not catalog_ready():
         ensure_design_catalog()
@@ -3518,7 +3518,7 @@ def get_decision_log(task_id: str) -> dict[str, Any] | None:
 
 def clear_decision_logs() -> dict[str, Any]:
     """Strip decision_log / execution_log from all design_task.meta_json (fresh 运行复盘)."""
-    from services.design.catalog import catalog_ready, ensure_design_catalog
+    from services.design.readpath.catalog import catalog_ready, ensure_design_catalog
 
     if not catalog_ready():
         ensure_design_catalog()
@@ -3632,7 +3632,7 @@ def ensure_stage_rules() -> None:
             now = time.time()
             rows = conn.execute("SELECT rule_key FROM design_global_rule").fetchall()
             existing = {str(r["rule_key"]) for r in rows}
-            from services.design.system_prompt_store import is_system_prompt_key
+            from services.design.prompts.system_prompt_store import is_system_prompt_key
 
             for key, val in merged_defaults.items():
                 if key in existing:

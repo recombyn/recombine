@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from services.db import connect
-from services.design.catalog import ensure_design_catalog
+from services.design.readpath.catalog import ensure_design_catalog
 
 
 def insert_stage_review(row: dict[str, Any]) -> None:

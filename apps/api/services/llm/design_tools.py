@@ -215,7 +215,7 @@ def _doc_first_line(fn: Any) -> str:
 def _canvas_rows_for_tools() -> list[dict[str, Any]]:
     """Enabled Admin canvas tools; fall back to action_registry seed defaults."""
     try:
-        from services.design.tool_ops_contract import list_canvas_tools
+        from services.design.ops.tool_ops_contract import list_canvas_tools
 
         rows = list_canvas_tools(enabled_only=True)
         if rows:
@@ -223,7 +223,7 @@ def _canvas_rows_for_tools() -> list[dict[str, Any]]:
     except Exception:
         pass
     try:
-        from services.design.action_registry import default_canvas_actions
+        from services.design.ops.action_registry import default_canvas_actions
 
         out: list[dict[str, Any]] = []
         for a in default_canvas_actions():

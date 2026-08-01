@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from services.db import connect
-from services.design.blob_codec import pack_text_blob
+from services.design.admin.blob_codec import pack_text_blob
 
 logger = logging.getLogger(__name__)
 

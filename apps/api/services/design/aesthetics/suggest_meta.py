@@ -6,16 +6,16 @@ import logging
 import re
 from typing import Any
 
-from services.design.admin_store import list_global_rules
+from services.design.admin.admin_store import list_global_rules
 from services.design.aesthetics.structure_extract import (
     build_vision_structure_system,
     load_structure_schema,
     normalize_structure,
     validate_vision_structure,
 )
-from services.design.llm_step import complete_skill_step
-from services.design import models_route as design_models_route
-from services.design.validate import extract_json_object
+from services.design.runtime.llm_step import complete_skill_step
+from services.design.runtime import models_route as design_models_route
+from services.design.ops.validate import extract_json_object
 
 logger = logging.getLogger(__name__)
 

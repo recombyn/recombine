@@ -69,7 +69,7 @@ def assistant_facing_text(text: str, *, max_chars: int = 800) -> str:
         return ""
     if "{" in t[:2] or '"intent"' in t[:200] or '"reply"' in t[:200]:
         try:
-            from services.design.validate import extract_json_object
+            from services.design.ops.validate import extract_json_object
 
             obj = extract_json_object(t) or {}
             reply = str(obj.get("reply") or "").strip()

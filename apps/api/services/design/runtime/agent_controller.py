@@ -17,16 +17,16 @@ from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
 from services.agent_memory.service import memory_service
-from services.design.canvas_scene import (
+from services.design.readpath.canvas_scene import (
     early_status_canvas_fields,
     explicit_canvas_size,
     parse_size as _parse_size,
     resolve_agent_scene,
     scene_key as _scene_key,
 )
-from services.design.decision_log import DesignRunDecision
-from services.design.llm_step import stream_skill_step
-from services.design.models_route import (
+from services.design.runtime.decision_log import DesignRunDecision
+from services.design.runtime.llm_step import stream_skill_step
+from services.design.runtime.models_route import (
     clamp_tier,
     classify_user_intent,
     enabled_tiers,
@@ -34,15 +34,15 @@ from services.design.models_route import (
     resolve_model_for_skill,
     router_model_id,
 )
-from services.design.pipeline_support import (
+from services.design.runtime.pipeline_support import (
     _normalize_ref_images,
     _user_facing_run_error,
 )
-from services.design.prompt_build import _edit_context_block, _finalize_memory_patch
-from services.design.rules_text import _as_text, _rule_text, exec_trace, render_prompt_template
-from services.design.scene_feedback import begin_wait, wait_for_scene
-from services.design.task_store import _insert_task, _update_task
-from services.design.tool_ops_contract import (
+from services.design.prompts.prompt_build import _edit_context_block, _finalize_memory_patch
+from services.design.prompts.rules_text import _as_text, _rule_text, exec_trace, render_prompt_template
+from services.design.runtime.scene_feedback import begin_wait, wait_for_scene
+from services.design.admin.task_store import _insert_task, _update_task
+from services.design.ops.tool_ops_contract import (
     TOOL_OPS_SCHEMA_VERSION,
     extract_and_validate_tool_ops,
     format_canvas_tools_catalog,
@@ -54,11 +54,11 @@ from services.design.tool_ops_contract import (
     tool_ops_for_sse,
     validation_failure_reason,
 )
-from services.design.knowledge_store import (
+from services.design.prompts.knowledge_store import (
     format_knowledge_details,
     normalize_need_knowledge,
 )
-from services.design.skill_store import (
+from services.design.prompts.skill_store import (
     filter_ops_by_skill_allowlist,
     filter_need_resources_by_skill_acl,
     format_skills_catalog,
@@ -72,8 +72,8 @@ from services.design.aesthetics.scorer import (
     parse_use_user_refs,
     retrieve_aesthetic_refs,
 )
-from services.design.validate import extract_json_object
-from services.design.admin_store import STAGE_RULE_DEFAULTS
+from services.design.ops.validate import extract_json_object
+from services.design.admin.admin_store import STAGE_RULE_DEFAULTS
 from services.wallet.db import get_user_tokens
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -311,7 +311,7 @@ def _thought_chat_prompt():
 def _prompt_text(rules: dict[str, str] | None, key: str) -> str:
     """Prefer Admin/DB (via rules or pack table); local seed only if DB empty."""
     try:
-        from services.design.prompt_pack_store import resolve_prompt_body
+        from services.design.prompts.prompt_pack_store import resolve_prompt_body
 
         return resolve_prompt_body(key, rules=rules)
     except Exception:
@@ -1741,7 +1741,7 @@ def _fetch_deferred_skills(
     input_args: dict[str, Any] | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    from services.design.skill_store import format_skills_details_checked
+    from services.design.prompts.skill_store import format_skills_details_checked
 
     details, errs = format_skills_details_checked(
         keys=keys,
@@ -2115,7 +2115,7 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
     need_knowledge = normalize_need_knowledge(
         obj.get("need_knowledge") or obj.get("needKnowledge")
     )
-    from services.design.skill_store import parse_need_skills_with_pins
+    from services.design.prompts.skill_store import parse_need_skills_with_pins
 
     need_skills, skill_version_pins, skill_input_args, skill_parse_errs = (
         parse_need_skills_with_pins(obj.get("need_skills") or obj.get("needSkills"))
@@ -2797,7 +2797,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
         rt.terminal = True
         return Command(update=_bump(rt), goto="__settle__")
 
-    from services.design.image_hydrate import (
+    from services.design.ops.image_hydrate import (
         _hydrate_tool_ops_images,
         _image_model_from_rules,
     )
@@ -3697,7 +3697,7 @@ async def _node_propose(state: GraphState) -> Command:
     st = rt.run
     step_ops = rt.step_ops
     round_i = st.round
-    from services.design.tool_ops_contract import tool_ops_batch_detail
+    from services.design.ops.tool_ops_contract import tool_ops_batch_detail
 
     st.proposed_ops = tool_ops_for_sse(step_ops)
     ui = _ensure_propose_choice_ui(st)
@@ -3763,7 +3763,7 @@ async def _node_action(state: GraphState) -> Command:
     st = rt.run
     step_ops = rt.step_ops
     round_i = st.round
-    from services.design.image_hydrate import (
+    from services.design.ops.image_hydrate import (
         _hydrate_tool_ops_images,
         _image_model_from_rules,
     )
@@ -4273,7 +4273,7 @@ async def _node_hydrate(state: GraphState) -> Command:
     st = rt.run
     step_ops = list(rt.step_ops)
     if step_ops:
-        from services.design.image_hydrate import (
+        from services.design.ops.image_hydrate import (
             _hydrate_tool_ops_images,
             _image_model_from_rules,
         )

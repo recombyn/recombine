@@ -5,8 +5,8 @@ from __future__ import annotations
 from langchain_core.prompts import ChatPromptTemplate
 from unittest.mock import patch
 
-from services.design.rules_text import render_prompt_template
-from services.design.validate import extract_json
+from services.design.prompts.rules_text import render_prompt_template
+from services.design.ops.validate import extract_json
 from services.agent_memory.short_term import split_recent_and_older, trim_turns_by_chars
 
 
@@ -67,7 +67,7 @@ def test_splitter_embeddings_and_format_document():
 
 
 def test_parse_plan_from_structured_schema():
-    from services.design.agent_controller import PlanSchema, _parse_plan
+    from services.design.runtime.agent_controller import PlanSchema, _parse_plan
 
     steps = _parse_plan(PlanSchema(plan=["建画板", "加标题", "配色"]))
     assert steps == ["建画板", "加标题", "配色"]
