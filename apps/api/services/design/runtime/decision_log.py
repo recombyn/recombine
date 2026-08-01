@@ -30,7 +30,8 @@ class DesignRunDecision:
     short_turns: int = 0
     content_pack_version: str | None = None
     # Layer ③ outcome (updated through run)
-    intent: str | None = None
+    intent: str | None = None  # chat | canvas_op | design
+    paint_lane: str | None = None  # create | edit (when canvas work)
     edit_in_place: bool | None = None
     blank_artboard: bool | None = None
     tool_ops_applied: bool | None = None

@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
+from config.settings import resolve_data_file
 from services.db import connect
 from services.design.readpath.catalog import ensure_design_catalog
 
@@ -15,7 +15,7 @@ _PACKS_LOCK = threading.RLock()
 
 
 def _load_prompt_packs_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
-    path = Path(__file__).resolve().parents[3] / "data" / "design_prompt_packs_seed.json"
+    path = resolve_data_file("design_prompt_packs_seed.json")
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -89,7 +89,7 @@ def seed_prompt_body(key: str) -> str:
 
 
 def resolve_prompt_body(key: str, *, rules: dict[str, str] | None = None) -> str:
-    """DB / rules first; local seed only if both empty."""
+    """DB / rules first; local seed only if both empty. Raw body (no variable fill)."""
     k = str(key or "").strip()
     if not k:
         return ""
@@ -103,6 +103,25 @@ def resolve_prompt_body(key: str, *, rules: dict[str, str] | None = None) -> str
     if got:
         return got
     return seed_prompt_body(k)
+
+
+def render_prompt_body(
+    key: str,
+    *,
+    rules: dict[str, str] | None = None,
+    **variables: Any,
+) -> str:
+    """Admin/DB pack → LangChain ``PromptTemplate`` render (all kinds).
+
+    Data source stays ``design_prompt_pack`` / seed / rules; LC only fills
+    ``{placeholders}``. Packs without variables still pass through LC.
+    """
+    from services.design.prompts.rules_text import render_prompt_template
+
+    body = resolve_prompt_body(key, rules=rules)
+    if not body:
+        return ""
+    return render_prompt_template(body, **variables)
 
 
 def _csv_has(csv: str, token: str) -> bool:
@@ -516,6 +535,76 @@ def ensure_design_prompt_packs() -> None:
                     "agent.prompt.chat_agent_system",
                     "agent.prompt.ask_system",
                     "agent.prompt.paint_system",
+                    # Fine-grained chat|canvas_op|design — keep DB pack in sync with seed.
+                    "agent.prompt.intent_classify",
+                    # Aesthetic inject / gate copy — no hardcoded Chinese in scorer.
+                    "agent.prompt.aesthetic_refs_user",
+                    "agent.prompt.aesthetic_refs_corpus",
+                    "agent.prompt.aesthetic_refs_clip_fallback",
+                    "agent.prompt.aesthetic_refs_section_good",
+                    "agent.prompt.aesthetic_refs_section_ok",
+                    "agent.prompt.aesthetic_refs_section_bad",
+                    "agent.prompt.aesthetic_refs_empty_ok",
+                    "agent.prompt.aesthetic_refs_empty_bad",
+                    "agent.prompt.aesthetic_refs_empty_bad_user",
+                    "agent.prompt.aesthetic_refs_footer",
+                    "agent.prompt.aesthetic_refs_vision_hint",
+                    "agent.prompt.aesthetic_refs_no_image_hint",
+                    "agent.prompt.aesthetic_refs_bad_item",
+                    "agent.prompt.aesthetic_refs_verb_imitate",
+                    "agent.prompt.aesthetic_refs_verb_surpass",
+                    "agent.prompt.aesthetic_refs_verb_avoid",
+                    "agent.prompt.aesthetic_catalog",
+                    "agent.prompt.aesthetic_gap_ref",
+                    "agent.prompt.aesthetic_gap_ref_comment",
+                    "agent.prompt.aesthetic_gap_layout_detail",
+                    "agent.prompt.aesthetic_gap_layout_hint",
+                    "agent.prompt.aesthetic_gap_color_detail",
+                    "agent.prompt.aesthetic_gap_color_hint",
+                    "agent.prompt.aesthetic_gap_aesthetic_detail",
+                    "agent.prompt.aesthetic_gap_aesthetic_hint",
+                    "agent.prompt.aesthetic_gap_score_detail",
+                    "agent.prompt.aesthetic_gap_score_hint",
+                    "agent.prompt.tools_registry_header",
+                    "agent.prompt.tools_registry_empty",
+                    "agent.prompt.tools_catalog_header",
+                    "agent.prompt.tools_catalog_empty",
+                    "agent.prompt.tool_details_header",
+                    "agent.prompt.tool_details_hint_line",
+                    "agent.prompt.tool_details_args_line",
+                    "agent.prompt.tool_details_unknown",
+                    "agent.prompt.skill_catalog_header",
+                    "agent.prompt.skill_catalog_empty",
+                    "agent.prompt.skill_details_header",
+                    "agent.prompt.skill_details_truncated",
+                    "agent.prompt.knowledge_catalog_header",
+                    "agent.prompt.knowledge_catalog_empty",
+                    "agent.prompt.knowledge_details_header",
+                    "agent.prompt.knowledge_when_line",
+                    "agent.prompt.focus_frame_authority",
+                    "agent.prompt.focus_empty_frame",
+                    "agent.prompt.scene_frames_header",
+                    "agent.prompt.bg_candidate_hint",
+                    "agent.prompt.prompt_pack_inject_header",
+                    "agent.prompt.prompt_packs_retired_catalog",
+                    "agent.prompt.aesthetic_tokens_header",
+                    "agent.prompt.aesthetic_tokens_priority_user",
+                    "agent.prompt.aesthetic_tokens_priority_corpus",
+                    "agent.prompt.aesthetic_tokens_section_user",
+                    "agent.prompt.aesthetic_tokens_section_good_secondary",
+                    "agent.prompt.aesthetic_tokens_section_good",
+                    "agent.prompt.aesthetic_tokens_section_ok",
+                    "agent.prompt.aesthetic_tokens_section_bad",
+                    "agent.prompt.aesthetic_tokens_comment",
+                    "agent.prompt.aesthetic_tokens_extract_fail",
+                    "agent.prompt.aesthetic_tokens_primary_override",
+                    "agent.prompt.aesthetic_tokens_src_user",
+                    "agent.prompt.aesthetic_tokens_src_good",
+                    "agent.prompt.aesthetic_tokens_verb_user",
+                    "agent.prompt.aesthetic_tokens_verb_secondary",
+                    "agent.prompt.default_assistant_name",
+                    "agent.prompt.tools_loaded_fallback",
+                    "agent.prompt.recover_edit_retry",
                 }
             )
             for kind in _FORCE_SYNC_KINDS:
@@ -732,28 +821,23 @@ def soft_delete_prompt_pack(item_id: int) -> bool:
 def format_prompt_pack_block(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
-    header = resolve_prompt_body("agent.prompt.prompt_pack_inject_header").strip()
-    parts = [
-        header
-        or (
-            "以下为流程图「提示词」节点注入的规则：只采用与当前任务相关的条目；"
-            "与用户明示冲突时以用户为准。"
-        )
-    ]
+    header = render_prompt_body("agent.prompt.prompt_pack_inject_header").strip()
+    parts = [header] if header else []
     for r in rows:
         label = KIND_LABELS.get(r["kind"], r["kind"])
         title = r.get("title") or label
         when = (r.get("whenToUse") or "").strip()
         head = f"【{label}·{title}】"
         if when:
-            head += f"\n适用：{when}"
+            when_ln = render_prompt_body(
+                "agent.prompt.knowledge_when_line", when=when
+            ).strip()
+            if when_ln:
+                head += f"\n{when_ln}"
         parts.append(f"{head}\n{r.get('body') or ''}".strip())
     return "\n\n".join(parts)
 
 
 def format_prompt_packs_catalog(*, scene: str = "website") -> str:
     del scene
-    return (
-        "提示词包：方法论/看图/美学已迁至 Skill 目录（need_skills）。"
-        "系统协议由 type=system 提示词包提供；勿再使用 need_prompts。"
-    )
+    return render_prompt_body("agent.prompt.prompt_packs_retired_catalog")

@@ -736,6 +736,62 @@ def list_model_usage(
     }
 
 
+def list_model_usage_for_task(task_id: str, *, limit: int = 40) -> list[dict[str, Any]]:
+    """Model calls for one design task (Admin 运行监测 drawer)."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        return []
+    ensure_model_usage_table()
+    lim = max(1, min(100, int(limit or 40)))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, created_at, source, provider, catalog_model_id, api_model,
+                   status, latency_ms, prompt_tokens, completion_tokens, total_tokens,
+                   image_count, cost_cny, error, meta_json
+            FROM model_usage
+            WHERE task_id = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (tid, lim),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows or []:
+        d = dict(r)
+        meta = None
+        raw_meta = d.get("meta_json")
+        if isinstance(raw_meta, str) and raw_meta.strip():
+            try:
+                parsed = json.loads(raw_meta)
+                if isinstance(parsed, dict):
+                    meta = parsed
+            except Exception:
+                meta = None
+        via_v, kind_v = _meta_fields(meta)
+        out.append(
+            {
+                "id": d.get("id"),
+                "createdAt": d.get("created_at"),
+                "source": d.get("source"),
+                "provider": d.get("provider"),
+                "catalogModelId": d.get("catalog_model_id"),
+                "apiModel": d.get("api_model"),
+                "status": d.get("status"),
+                "latencyMs": d.get("latency_ms"),
+                "promptTokens": d.get("prompt_tokens"),
+                "completionTokens": d.get("completion_tokens"),
+                "totalTokens": d.get("total_tokens"),
+                "imageCount": d.get("image_count"),
+                "costCny": d.get("cost_cny"),
+                "via": via_v,
+                "kind": kind_v,
+                "error": d.get("error"),
+            }
+        )
+    return out
+
+
 def summarize_model_usage(
     *,
     ts_from: float | None = None,

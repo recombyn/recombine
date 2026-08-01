@@ -26,17 +26,15 @@ def _rule_text(rules: dict[str, Any] | None, key: str, default: str = "") -> str
 
 
 def render_prompt_template(template: str, **variables: Any) -> str:
-    """
-    Fill Admin rule strings via LangChain ``PromptTemplate``.
+    """Fill Admin / pack strings via LangChain ``PromptTemplate``.
 
-    Escapes literal JSON braces so ``{var}`` placeholders still work.
+    Always goes through LC (including zero-variable bodies). Literal JSON
+    braces are escaped; only ``{name}`` keys present in ``variables`` are filled.
     """
-    text = template or ""
-    if not text or not variables:
-        return text
-    keys = [k for k in variables if f"{{{k}}}" in text]
-    if not keys:
-        return text
+    text = str(template or "")
+    if not text:
+        return ""
+    keys = [k for k in variables if f"{{{k}}}" in text] if variables else []
     try:
         from langchain_core.prompts import PromptTemplate
 
@@ -46,10 +44,12 @@ def render_prompt_template(template: str, **variables: Any) -> str:
         escaped = escaped.replace("{", "{{").replace("}", "}}")
         for k in keys:
             escaped = escaped.replace(f"__LC_VAR_{k}__", f"{{{k}}}")
-        return PromptTemplate(template=escaped, input_variables=keys).format(
+        return PromptTemplate(template=escaped, input_variables=list(keys)).format(
             **{k: variables[k] for k in keys}
         )
     except Exception:
+        if not keys:
+            return text
         out = text
         for k in keys:
             out = out.replace(f"{{{k}}}", str(variables[k]))

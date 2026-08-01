@@ -27,9 +27,9 @@ def _invalidate_edge_condition_label_cache() -> None:
 
 
 def _dicts_data_path():
-    from pathlib import Path
+    from config.settings import resolve_data_file
 
-    return Path(__file__).resolve().parents[3] / "data" / "design_dicts_seed.json"
+    return resolve_data_file("design_dicts_seed.json")
 
 
 def _load_dicts_seed() -> dict:

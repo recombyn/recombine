@@ -92,6 +92,10 @@ apps/web/public/ffmpeg/
 # Local infra not published with OSS (keep on disk only)
 infra/langfuse/
 
+# SaaS / private design seeds (overlay on apps/api/data/)
+apps/api/data/private/**
+!apps/api/data/private/README.md
+
 # local sqlite sidecars
 apps/api/storage/*.db-shm
 apps/api/storage/*.db-wal
