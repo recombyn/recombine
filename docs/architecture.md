@@ -29,6 +29,8 @@ Design Agent 的可配置内容（默认图、节点模板、动作契约、字�
 
 数据库：SQLite / MySQL / PostgreSQL（见 [postgres-switch.md](./postgres-switch.md)）；SQLite 默认 WAL，可选周期备份。
 
+LangGraph 短时 checkpoint：见 [postgres-switch.md · LangGraph checkpointer](./postgres-switch.md#langgraph-checkpointer-design-agent--create_agent)。
+
 ## 导入数据流
 
 ```
