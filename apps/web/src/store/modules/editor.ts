@@ -469,8 +469,9 @@ const editorSlice = createSlice({
       syncLibraryOnEdit(state);
     },
     /**
-     * Delete nodes / artboards. Upload/import placeholders are permanent:
-     * scrubbed from history so Ctrl+Z cannot bring them back.
+     * Delete nodes / artboards. In-flight process placeholders (upload / AI) are
+     * permanent: scrubbed from history so Ctrl+Z cannot bring them back, and
+     * pendingImageProcessId is cleared so the watcher stops applying results.
      */
     removeDocumentNodes(state, action) {
       if (!state.document) return;
@@ -1249,6 +1250,7 @@ const editorSlice = createSlice({
       const ids = (state.selectedNodeIds || []).filter((id: string) => Boolean(ds[id]));
       state.selectedNodeIds = ids;
       state.selectedNodeId = ids[0] || null;
+      clearPendingProcessIfNodeGone(state);
       syncLibraryOnEdit(state);
     },
     redo(state) {
@@ -1275,6 +1277,7 @@ const editorSlice = createSlice({
       const ids = (state.selectedNodeIds || []).filter((id: string) => Boolean(ds[id]));
       state.selectedNodeIds = ids;
       state.selectedNodeId = ids[0] || null;
+      clearPendingProcessIfNodeGone(state);
       syncLibraryOnEdit(state);
     },
     setActiveTool(state, action) {
@@ -1512,7 +1515,7 @@ const editorSlice = createSlice({
         return;
       }
 
-      // editText: replace placeholder with split layers.
+      // editText / editElements: replace placeholder with split layers (grouped).
       if (Array.isArray(layers) && layers.length > 0) {
         const { document: next, ids } = applyImageDecomposeLayers(state.document, nodeId, layers, {
           sourceWidth,

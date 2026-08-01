@@ -21,6 +21,7 @@ export const IMAGE_TOOL_TOKEN_COST = {
   multiAngle: 30,
   expand: 30,
   editText: 20,
+  editElements: 30,
   vector: 20,
   adjust: 20,
 } as const;

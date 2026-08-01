@@ -52,8 +52,6 @@ import {
   captureVideoPosterFrame,
   clearImageProcessAttrs,
   expandSelectionWithGroups,
-  fitImageSize,
-  measureImageNaturalSize,
 } from '@/components/rcb/scene/document/sceneDocument';
 import {
   clearCanvasAttachPick,
@@ -71,9 +69,7 @@ import store from '@/store';
 
 type Props = {
   nodeId: string;
-  /** Screen-space box for the SVG plate (preview area). */
-  plateStyle: CSSProperties;
-  /** Current scene plate size — used to keep center when promoting. */
+  /** Scene plate box — composer anchors under it; promote keeps document geometry. */
   sceneBox: { x: number; y: number; width: number; height: number };
   /** Composer only shows while the generator node is selected. */
   showComposer?: boolean;
@@ -358,7 +354,6 @@ function attachSelectionToImageComposer(opts: {
 
 function ImageGeneratorCard({
   nodeId,
-  plateStyle,
   sceneBox,
   showComposer = true,
   disabled,
@@ -677,30 +672,12 @@ function ImageGeneratorCard({
       const src = urls[0] || '';
       if (!src) throw new Error(t('editor.tools.imageGenEmpty'));
 
-      let width = sceneBox.width;
-      let height = sceneBox.height;
-      try {
-        const natural = await measureImageNaturalSize(src);
-        const fitted = fitImageSize(
-          natural.width,
-          natural.height,
-          Math.max(sceneBox.width, sceneBox.height)
-        );
-        width = fitted.width;
-        height = fitted.height;
-      } catch {
-        /* keep plate size */
-      }
-      const cx = sceneBox.x + sceneBox.width / 2;
-      const cy = sceneBox.y + sceneBox.height / 2;
+      // Promote in place — keep the generator plate's document x/y/size so the
+      // result appears exactly where the plate was (sceneBox is origin-relative).
       dispatch(
         finishImageGenerator({
           nodeId,
           src,
-          width,
-          height,
-          x: Math.round(cx - width / 2),
-          y: Math.round(cy - height / 2),
           name: t('editor.tools.imageGenerator'),
           variants: urls,
           genPrompt: text,
@@ -789,16 +766,6 @@ function ImageGeneratorCard({
 
   return (
     <>
-      {sending ? (
-        <div
-          className="pointer-events-none absolute z-[31] flex items-center justify-center"
-          style={plateStyle}
-          aria-hidden
-        >
-          <span className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--line)] border-t-[var(--ink)]" />
-        </div>
-      ) : null}
-
       {showComposer ? (
         <div
           data-image-generator

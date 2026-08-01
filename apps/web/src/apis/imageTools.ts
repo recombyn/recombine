@@ -1,6 +1,6 @@
 /**
  * Image toolbar AI tools — POST /api/v1/image/process
- * (Seedream i2i, or vision decompose for editText).
+ * (Seedream i2i, or vision decompose for editText / editElements).
  */
 
 import { request } from '@/utils/request';
@@ -11,6 +11,7 @@ export type ImageProcessKindApi =
   | 'multiAngle'
   | 'expand'
   | 'editText'
+  | 'editElements'
   | 'vector'
   | 'adjust';
 
@@ -45,7 +46,7 @@ export type ImageProcessResult = {
   text?: string | null;
   kind: string;
   model?: string;
-  /** editText: split layers in source-pixel coords */
+  /** editText / editElements: split layers in source-pixel coords */
   layers?: ImageDecomposeLayer[];
   width?: number;
   height?: number;
@@ -56,11 +57,15 @@ export type ImageProcessResult = {
 };
 
 /** Run an image toolbar tool on the API (Seedream i2i or local rembg / OCR). */
-export const processImageTool = (data: ImageProcessBody) =>
+export const processImageTool = (
+  data: ImageProcessBody,
+  opts?: { signal?: AbortSignal }
+) =>
   request<ImageProcessResult>({
     url: '/api/v1/image/process',
     method: 'post',
     data,
+    signal: opts?.signal,
     // Local rembg may download weights on first run; Seedream i2i can also be slow.
     timeout: 180000,
   });

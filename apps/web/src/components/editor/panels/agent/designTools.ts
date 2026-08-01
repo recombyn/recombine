@@ -2897,6 +2897,7 @@ export function executeDesignTool(
       default:
         return resolveUnknownToolError(name);
     }
+
   } catch (err: any) {
     return {
       status: 'error',
