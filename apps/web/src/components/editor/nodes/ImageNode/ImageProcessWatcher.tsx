@@ -97,7 +97,8 @@ function ImageProcessWatcher() {
     const doc = documentRef.current;
     const node = doc?.deltaSetLike?.[pendingId];
     const kind = String(node?.attrs?.processKind || '');
-    if (kind === 'import' || kind === 'upload') return undefined;
+    // Local eraser finishes via ImageToolPanelHost (spawn + upload); do not auto-clear.
+    if (kind === 'import' || kind === 'upload' || kind === 'eraser') return undefined;
 
     let cancelled = false;
 

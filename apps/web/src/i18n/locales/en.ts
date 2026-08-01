@@ -993,6 +993,7 @@ const en = {
       opacity: 'Opacity',
       processingUpscale: 'Upscaling…',
       processingRemoveBg: 'Removing background…',
+      processingEraser: 'Erasing…',
       processingEditText: 'Editing text…',
       cornerRadius: 'Corner radius',
       bold: 'Bold',

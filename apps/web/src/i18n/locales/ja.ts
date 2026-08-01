@@ -924,6 +924,7 @@ const ja = {
       opacity: '不透明度',
       processingUpscale: '拡大中…',
       processingRemoveBg: '背景除去中…',
+      processingEraser: '消去中…',
       processingEditText: 'テキスト編集中…',
       cornerRadius: '角丸',
       bold: '太字',
