@@ -158,8 +158,9 @@ def paint_ops_intent(classified: str | None, paint_lane: str | None = None) -> s
 
 
 def allows_skill_preload(*, intent: str) -> bool:
-    """Methodology packs only for design-grade work."""
-    return normalize_user_intent(intent) == "design"
+    """Legacy hook — skill bodies are never preloaded; model uses catalogs + need_skills."""
+    del intent
+    return False
 
 
 def _split_list(raw: str, seps: str = "|;,") -> list[str]:
@@ -819,6 +820,14 @@ async def classify_user_intent(
         )
         if intent not in USER_INTENTS:
             return fallback
+        intent, lane, rationale_s = _prefer_canvas_op_when_overpromoted(
+            intent,
+            lane,
+            rationale=str(rationale or "").strip(),
+            fallback=fallback,
+            has_images=has_images,
+            prompt=prompt,
+        )
         reply_s = str(reply or "").strip()
         if intent != "chat":
             reply_s = ""
@@ -826,10 +835,40 @@ async def classify_user_intent(
             intent=intent,  # type: ignore[arg-type]
             paint_lane=lane if intent != "chat" else "",  # type: ignore[arg-type]
             reply=reply_s[:500],
-            rationale=str(rationale or "").strip() or "llm_intent",
+            rationale=rationale_s or "llm_intent",
         )
     except Exception:
         return fallback
+
+
+# Matches design_methodology min_prompt_chars — short asks stay on tool path.
+_DESIGN_UPGRADE_MIN_CHARS = 24
+
+
+def _prefer_canvas_op_when_overpromoted(
+    intent: str,
+    lane: str,
+    *,
+    rationale: str,
+    fallback: IntentClassifyDecision,
+    has_images: bool,
+    prompt: str,
+) -> tuple[str, str, str]:
+    """Demote design→canvas_op when the LLM over-promotes a short tool ask.
+
+    Without this, website-scene single ops (add rect) pull methodology skill
+    preload + decide, which is slow and unnecessary.
+    """
+    if intent != "design" or has_images or fallback.intent != "canvas_op":
+        return intent, lane, rationale
+    compact = re.sub(r"\s+", "", _user_request_core(prompt))
+    if len(compact) >= _DESIGN_UPGRADE_MIN_CHARS:
+        return intent, lane, rationale
+    out_lane = lane or fallback.paint_lane or "create"
+    note = (rationale or "llm_intent").strip()
+    if "demote_canvas_op" not in note:
+        note = (note + "; demote_canvas_op").strip("; ")
+    return "canvas_op", out_lane, note
 
 
 async def classify_model_route(
