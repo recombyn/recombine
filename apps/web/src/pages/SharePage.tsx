@@ -165,7 +165,8 @@ function SharePage() {
           setMissing(true);
           return;
         }
-        if (s.viewerCanEdit) {
+        // Only edit-ACL links jump into the editor. View / download stay here.
+        if (s.permission === 'edit' && s.viewerCanEdit) {
           // Owner → live project when known; collaborators stay on the share doc.
           const isOwner = Boolean(viewerId && s.ownerId === viewerId);
           const src = String(s.sourceProjectId || '').trim();
