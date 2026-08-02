@@ -1,4 +1,11 @@
-import { type CSSProperties, type ReactNode, memo } from 'react';
+import {
+  useRef,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  memo,
+} from 'react';
 import {
   RcbOverlayPortal,
   useRcbCamera,
@@ -7,6 +14,67 @@ import {
 import { rcbScreenPxToScene } from '../../core/math';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import { cn } from '@/utils/classnames';
+
+/** Interactive chrome controls inside canvas overlays (toolbars / generators / menus). */
+const CHROME_ACTION_SEL =
+  'button:not([disabled]), [role="button"]:not([aria-disabled="true"]), [role="menuitem"]:not([aria-disabled="true"])';
+
+function chromeActionFromEvent(
+  target: EventTarget | null,
+  root: EventTarget & HTMLElement
+): HTMLElement | null {
+  const el = (target as HTMLElement | null)?.closest?.(CHROME_ACTION_SEL) as HTMLElement | null;
+  if (!el || !root.contains(el)) return null;
+  return el;
+}
+
+/**
+ * Same activation path as canvas node hits: pointer down/up.
+ * `element.click()` runs existing onClick handlers; only the following real
+ * click (after a synthetic activate) is suppressed — not every button click.
+ */
+export function useChromePointerActivate() {
+  const armedRef = useRef<HTMLElement | null>(null);
+  const suppressBrowserClickRef = useRef(false);
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLElement>) => {
+    e.stopPropagation();
+    e.nativeEvent.stopImmediatePropagation?.();
+    suppressBrowserClickRef.current = false;
+    if (e.button !== 0) {
+      armedRef.current = null;
+      return;
+    }
+    armedRef.current = chromeActionFromEvent(e.target, e.currentTarget);
+  };
+
+  const onPointerUp = (e: ReactPointerEvent<HTMLElement>) => {
+    const armed = armedRef.current;
+    armedRef.current = null;
+    if (!armed || e.button !== 0) return;
+    if (chromeActionFromEvent(e.target, e.currentTarget) !== armed) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressBrowserClickRef.current = true;
+    armed.click();
+  };
+
+  const onPointerCancel = () => {
+    armedRef.current = null;
+    suppressBrowserClickRef.current = false;
+  };
+
+  const onClickCapture = (e: ReactMouseEvent<HTMLElement>) => {
+    if (!suppressBrowserClickRef.current) return;
+    // Programmatic `.click()` is detail 0 — let it reach the button onClick.
+    if (e.detail === 0) return;
+    suppressBrowserClickRef.current = false;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  return { onPointerDown, onPointerUp, onPointerCancel, onClickCapture };
+}
 
 /**
  * Title row above frame (must stay in sync with HtmlArtboardFrame).
@@ -60,14 +128,12 @@ export function useSelectionToolbarPlacement(opts: {
   const aboveGap = rcbScreenPxToScene(toolbarAboveClearancePx(hasTitle), zoom);
   const belowGap = rcbScreenPxToScene(SELECTION_TOOLBAR_BELOW_BOX_GAP_PX, zoom);
   const box = opts.box;
-
-  const preferAbove = Boolean(box) && box!.top >= aboveGap;
+  const preferAbove = Boolean(box) && box.top >= aboveGap;
   const left = box ? box.left + box.width / 2 : 0;
-  const top = box
-    ? preferAbove
-      ? box.top - aboveGap
-      : box.top + box.height + belowGap
-    : 0;
+  let top = 0;
+  if (box) {
+    top = preferAbove ? box.top - aboveGap : box.top + box.height + belowGap;
+  }
 
   const style = useRcbScreenToolbarStyle({
     left,
@@ -104,6 +170,7 @@ function SelectionToolbarShell({
   zIndexClassName = 'z-30',
 }: ShellProps) {
   const { style } = useSelectionToolbarPlacement({ box, hasTitleLabel });
+  const chromePointer = useChromePointerActivate();
   if (!box) return null;
 
   return (
@@ -113,10 +180,7 @@ function SelectionToolbarShell({
         {...(isFrameToolbar ? { 'data-frame-toolbar': true } : {})}
         className={cn('pointer-events-auto absolute overflow-visible', zIndexClassName)}
         style={style}
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          e.nativeEvent.stopImmediatePropagation?.();
-        }}
+        {...chromePointer}
       >
         <FloatingToolbar bare={bare} className={className}>
           {children}

@@ -9,8 +9,13 @@ export type { RcbBox, RcbCamera, RcbVec } from './core/types';
 export { RCB_DEFAULT_CAMERA } from './core/types';
 export {
   rcbClampZoom,
+  rcbCameraScreenOffset,
+  rcbViewportMetrics,
+  rcbClientToStageLocal,
   rcbSceneToScreen,
   rcbScreenToScene,
+  rcbClientDeltaToScene,
+  rcbResolveViewportEl,
   rcbScreenPxToScene,
   rcbZoomAtPoint,
   rcbFitCamera,

@@ -263,7 +263,7 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
           setHasStrokes(false);
         }}
         onCancel={close}
-        onConfirm={() => {
+        onConfirm={async () => {
           if (!hasStrokes || eraseBusy) return;
           const sourceId = panel.nodeId;
           const node = document?.deltaSetLike?.[sourceId];
@@ -275,27 +275,25 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
           const applyErase = maskRef.current?.applyErase;
           if (!applyErase) return;
           setEraseBusy(true);
-          void (async () => {
-            try {
-              await confirmEraserAsNewNode({
-                applyErase,
-                src,
-                uploadKey: String(node?.attrs?.uploadKey || node?.attrs?.key || '') || null,
-                sourceId,
-                label: t('editor.imageToolbar.processingEraser'),
-                dispatch,
-                getPendingProcessId: () =>
-                  (store.getState() as any).editor?.pendingImageProcessId || null,
-                onSpawned: close,
-              });
-              message.success('擦除完成（透明 PNG）');
-            } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : '';
-              message.error(msg && msg !== '橡皮失败' ? msg : '橡皮失败');
-            } finally {
-              setEraseBusy(false);
-            }
-          })();
+          try {
+            await confirmEraserAsNewNode({
+              applyErase,
+              src,
+              uploadKey: String(node?.attrs?.uploadKey || node?.attrs?.key || '') || null,
+              sourceId,
+              label: t('editor.imageToolbar.processingEraser'),
+              dispatch,
+              getPendingProcessId: () =>
+                (store.getState() as any).editor?.pendingImageProcessId || null,
+              onSpawned: close,
+            });
+            message.success('擦除完成（透明 PNG）');
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : '';
+            message.error(msg && msg !== '橡皮失败' ? msg : '橡皮失败');
+          } finally {
+            setEraseBusy(false);
+          }
         }}
       />
     );

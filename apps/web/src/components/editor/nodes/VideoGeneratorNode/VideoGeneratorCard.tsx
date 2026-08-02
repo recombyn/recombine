@@ -19,7 +19,10 @@ import {
   useRcbCamera,
   useRcbScreenToolbarStyle,
 } from '@/components/rcb';
-import { SELECTION_TOOLBAR_BELOW_BOX_GAP_PX } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
+import {
+  SELECTION_TOOLBAR_BELOW_BOX_GAP_PX,
+  useChromePointerActivate,
+} from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import AgentComposerInput, {
   chipBaseKey,
   parseAtMentionQuery,
@@ -382,6 +385,7 @@ function VideoGeneratorCard({
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { zoom } = useRcbCamera();
+  const chromePointer = useChromePointerActivate();
   const inputRef = useRef<AgentComposerHandle | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -870,10 +874,7 @@ function VideoGeneratorCard({
             'shadow-[0_8px_28px_rgba(15,23,42,0.12)]'
           )}
           style={composerStyle}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            e.nativeEvent.stopImmediatePropagation?.();
-          }}
+          {...chromePointer}
         >
           {/* Reference images occupy their own row, using the chat attachment chip. */}
           <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5">

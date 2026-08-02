@@ -398,18 +398,16 @@ function TemplateGrid({
             onToggle={() => toggle(item.id)}
             onRename={() => setRenameTarget(item)}
             onCommitRename={(name) => commitRenameFor(item, name)}
-            onDelete={() => {
+            onDelete={async () => {
               const id = item.id;
-              void (async () => {
-                try {
-                  await removeProjectFromCloud(id);
-                  dispatch(deleteTemplate(id));
-                  setSelected((prev) => prev.filter((x) => x !== id));
-                  message.destructive(t('common.delete'));
-                } catch {
-                  message.error(t('home.batchDeleteFailed'));
-                }
-              })();
+              try {
+                await removeProjectFromCloud(id);
+                dispatch(deleteTemplate(id));
+                setSelected((prev) => prev.filter((x) => x !== id));
+                message.destructive(t('common.delete'));
+              } catch {
+                message.error(t('home.batchDeleteFailed'));
+              }
             }}
           />
         ))}

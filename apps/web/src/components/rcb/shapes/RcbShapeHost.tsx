@@ -100,7 +100,7 @@ function RcbShapeHost({
     let cancelled = false;
     registerShapeHost({ nodeId, root, layer, el: null });
 
-    void (async () => {
+    async function mountShape() {
       const n = document.deltaSetLike?.[nodeId];
       try {
         const el = await nodeToSvgElement(root, layer, document, n, nodeId);
@@ -136,7 +136,8 @@ function RcbShapeHost({
       } catch (err) {
         console.error('RcbShapeHost mount failed', nodeId, err);
       }
-    })();
+    }
+    mountShape();
 
     return () => {
       cancelled = true;
