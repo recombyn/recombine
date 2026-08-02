@@ -355,7 +355,7 @@ function HomeTemplateList({
     const gen = ++projectsFetchGen.current;
     setProjectsReady(false);
     setProjectsLoadingMore(false);
-    void (async () => {
+    async function loadProjects() {
       // Wait for editor leave-flush (doc + cover) so list thumbs are not one revision behind.
       try {
         await flushCurrentProjectNow({ force: true });
@@ -379,7 +379,8 @@ function HomeTemplateList({
       } finally {
         if (!cancelled && gen === projectsFetchGen.current) setProjectsReady(true);
       }
-    })();
+    }
+    loadProjects();
     return () => {
       cancelled = true;
     };
@@ -390,7 +391,7 @@ function HomeTemplateList({
     const nextPage = projectsPage + 1;
     const gen = projectsFetchGen.current;
     setProjectsLoadingMore(true);
-    void (async () => {
+    async function loadNextPage() {
       try {
         const res = await fetchProjects({ page: nextPage, pageSize: PROJECT_PAGE_SIZE });
         if (gen !== projectsFetchGen.current) return;
@@ -403,7 +404,8 @@ function HomeTemplateList({
       } finally {
         if (gen === projectsFetchGen.current) setProjectsLoadingMore(false);
       }
-    })();
+    }
+    loadNextPage();
   }, [
     authed,
     dispatch,

@@ -3027,7 +3027,7 @@ function AgentDock({
             queueMicrotask(() => inputRef.current?.focusEnd());
           };
           if (attachable.length || frameId) {
-            void (async () => {
+            async function attachSelection() {
               if (attachable.length) {
                 await applyCanvasAttachPayload({
                   document: doc,
@@ -3050,7 +3050,8 @@ function AgentDock({
                   imagesOnly,
                 });
               }
-            })();
+            }
+            attachSelection();
           } else {
             dispatch(
               startCanvasAttachPick({

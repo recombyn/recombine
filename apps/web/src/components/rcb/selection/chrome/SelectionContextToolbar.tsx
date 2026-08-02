@@ -494,35 +494,33 @@ function SelectionContextToolbar(props: Props): ReactNode {
                     type="button"
                     aria-label="Outline"
                     className={SEL_ICON_BTN}
-                    onClick={() => {
-                      void (async () => {
-                        const hide = message.loading('Outlining…', 0);
-                        try {
-                          const outline = await buildOutlinePathAsync(node);
-                          if (!outline?.pathD) {
-                            message.error('Outline failed');
-                            return;
-                          }
-                          const patch = outlineNodePatch(node, outline);
-                          dispatch(
-                            patchDocumentNode({
-                              nodeId,
-                              patch: {
-                                key: 'shape',
-                                x: patch.x,
-                                y: patch.y,
-                                width: patch.width,
-                                height: patch.height,
-                                attrs: patch.attrs,
-                              },
-                            })
-                          );
-                          requestEnterPathEdit(nodeId, outline.pathD);
-                          message.success('Outlined');
-                        } finally {
-                          hide();
+                    onClick={async () => {
+                      const hide = message.loading('Outlining…', 0);
+                      try {
+                        const outline = await buildOutlinePathAsync(node);
+                        if (!outline?.pathD) {
+                          message.error('Outline failed');
+                          return;
                         }
-                      })();
+                        const patch = outlineNodePatch(node, outline);
+                        dispatch(
+                          patchDocumentNode({
+                            nodeId,
+                            patch: {
+                              key: 'shape',
+                              x: patch.x,
+                              y: patch.y,
+                              width: patch.width,
+                              height: patch.height,
+                              attrs: patch.attrs,
+                            },
+                          })
+                        );
+                        requestEnterPathEdit(nodeId, outline.pathD);
+                        message.success('Outlined');
+                      } finally {
+                        hide();
+                      }
                     }}
                   >
                     <TbVectorBezier className="h-4 w-4" />

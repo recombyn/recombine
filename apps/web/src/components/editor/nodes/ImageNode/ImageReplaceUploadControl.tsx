@@ -48,15 +48,14 @@ function ImageReplaceUploadControl({
     onLoadingChange?.(loading);
   }, [loading, onLoadingChange]);
 
-  const onFile = (file: File | null) => {
+  const onFile = async (file: File | null) => {
     if (!file || !file.type.startsWith('image/') || loading) return;
     const targetId = nodeId;
     const keepWidth = Math.max(1, Math.round(boxRef.current.width));
     setLoading(true);
 
-    void (async () => {
-      try {
-        const preview = await readFileAsDataUrl(file);
+    try {
+      const preview = await readFileAsDataUrl(file);
         const naturalPreview = await measureImageNaturalSize(preview);
         const previewH = Math.max(
           1,
@@ -129,7 +128,6 @@ function ImageReplaceUploadControl({
       } finally {
         if (aliveRef.current && nodeIdRef.current === targetId) setLoading(false);
       }
-    })();
   };
 
   return (

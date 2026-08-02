@@ -8,7 +8,13 @@ import {
   useRcbCamera,
   useRcbOverlayRoot,
   useRcbScreenToScene,
+  useRcbViewportEl,
 } from '@/components/rcb/camera/context';
+import {
+  rcbClientDeltaToScene,
+  rcbResolveViewportEl,
+  rcbViewportMetrics,
+} from '@/components/rcb/core/math';
 import { logEdgeSamples, sampleBoxEdges } from '@/components/rcb/core/dprDebug';
 import { cn } from '@/utils/classnames';
 import AlignGuidesOverlay, { type AlignGuide } from './AlignGuidesOverlay';
@@ -118,7 +124,7 @@ function ShapeIndicatorOverlay({
   );
 }
 
-/** World-layer rect outline — page stroke = screenPx / zoom. */
+/** World-layer rect outline ??page stroke = screenPx / zoom. */
 function WorldHairlineBox({
   box,
   color,
@@ -189,7 +195,7 @@ function readNodeAspectLocked(node: any): boolean {
   return nodeAspectLockDefault(node?.key);
 }
 
-/** Persist lock OR Shift — Shift adds constraint, does not toggle it off. */
+/** Persist lock OR Shift ??Shift adds constraint, does not toggle it off. */
 function combineAspectLock(locked: boolean, shiftKey: boolean) {
   return locked || shiftKey;
 }
@@ -262,7 +268,7 @@ function boxesIntersect(a: SceneBox, b: SceneBox) {
   );
 }
 
-/** Frame AABB ∩ marquee — same idea as selecting a rectangle. Locked frames are skipped. */
+/** Frame AABB ??marquee ??same idea as selecting a rectangle. Locked frames are skipped. */
 function framesHittingMarquee(doc: any, marquee: SceneBox): Array<{ id: string; area: number }> {
   const frames = Array.isArray(doc?.frames) ? doc.frames : [];
   const out: Array<{ id: string; area: number }> = [];
@@ -294,7 +300,7 @@ export function parseFrameSelId(selId: string): string | null {
   return selId.startsWith(FRAME_SEL_PREFIX) ? selId.slice(FRAME_SEL_PREFIX.length) : null;
 }
 
-/** Near-full-bleed artboard plate — must not block marquee (looks empty but hits as a shape). */
+/** Near-full-bleed artboard plate ??must not block marquee (looks empty but hits as a shape). */
 function frameForFullBleedPlate(doc: any, nodeId: string): string | null {
   const node = doc?.deltaSetLike?.[nodeId];
   if (!node || node.key !== 'shape') return null;
@@ -374,7 +380,7 @@ function pointInBox(x: number, y: number, box: SceneBox, pad = 0) {
 }
 
 /**
- * Marquee hit — match click semantics per type:
+ * Marquee hit ??match click semantics per type:
  * - rect / geo / text / image: AABB (same as click)
  * - pen / pencil / path: stroke/path sampling (click uses ink, not empty AABB gaps)
  * - line / arrow: shaft endpoints / mid
@@ -416,7 +422,7 @@ function nodeHitsMarquee(
     return boxesIntersect(marquee, box);
   }
 
-  // rect / ellipse / text / image / other geo — AABB like click.
+  // rect / ellipse / text / image / other geo ??AABB like click.
   return boxesIntersect(marquee, box);
 }
 
@@ -445,7 +451,7 @@ type GeometryPatch = {
 
 type SelectionFeatureProps = {
   enabled: boolean;
-  /** Share/preview: select + Dev annotations only — no move/resize/edit. */
+  /** Share/preview: select + Dev annotations only ??no move/resize/edit. */
   readOnly?: boolean;
   document: any;
   selectedNodeIds: string[];
@@ -504,14 +510,14 @@ type SelectionFeatureProps = {
   /** Fires when move / resize / rotate starts or ends (for hiding node titles). */
   onTransformingChange?: (transforming: boolean) => void;
   /**
-   * Composer "Add from canvas" pick mode — clicks attach via onSelect and must
+   * Composer "Add from canvas" pick mode ??clicks attach via onSelect and must
    * not start a move (already-selected hits would otherwise skip onSelect).
    */
   attachPickActive?: boolean;
 };
 
 /**
- * `dragDistanceSquared` default — screen px² before a
+ * `dragDistanceSquared` default ??screen px? before a
  * pointing_canvas gesture becomes brushing (marquee).
  */
 const DRAG_DISTANCE_SQUARED = 16;
@@ -535,6 +541,16 @@ type DragState = {
    * Skip pointerup onSelect so one-shot clearPick does not steal node selection.
    */
   skipSelectOnUp?: boolean;
+  /** Visual/layout scale at pointerdown (from rcbViewportMetrics). */
+  scaleX?: number;
+  scaleY?: number;
+  /**
+   * Continuously updated from pointerdown/move.
+   * End events (up/cancel) must not supply geometry ? their clientX/Y can be 0,0.
+   */
+  currentClientX: number;
+  currentClientY: number;
+  currentShift?: boolean;
 };
 
 /** Shared seed for blank / pointing_canvas / move / resize / rotate drags. */
@@ -542,18 +558,41 @@ function makeDragSeed(
   mode: DragState['mode'],
   e: { clientX: number; clientY: number },
   p: { x: number; y: number },
-  extras?: Partial<DragState>
+  extras?: Partial<DragState>,
+  viewport?: HTMLElement | null
 ): DragState {
+  const m = viewport ? rcbViewportMetrics(viewport) : null;
   return {
     mode,
     startX: e.clientX,
     startY: e.clientY,
     sceneX0: p.x,
     sceneY0: p.y,
+    scaleX: m?.scaleX ?? 1,
+    scaleY: m?.scaleY ?? 1,
+    currentClientX: e.clientX,
+    currentClientY: e.clientY,
     origins: [],
     union: { left: p.x, top: p.y, width: 1, height: 1 },
     ...extras,
   };
+}
+
+/** Scene point / delta from pointerdown ??stable if stage rect jitters mid-gesture. */
+function sceneFromClientGesture(
+  drag: Pick<DragState, 'sceneX0' | 'sceneY0' | 'startX' | 'startY' | 'scaleX' | 'scaleY'>,
+  zoom: number,
+  clientX: number,
+  clientY: number
+) {
+  const d = rcbClientDeltaToScene(
+    zoom,
+    clientX - drag.startX,
+    clientY - drag.startY,
+    drag.scaleX ?? 1,
+    drag.scaleY ?? 1
+  );
+  return { x: drag.sceneX0 + d.x, y: drag.sceneY0 + d.y, dx: d.x, dy: d.y };
 }
 
 function isSelectionOriginsLocked(
@@ -899,7 +938,7 @@ function siblingGuideBoxesNear(
     const fromDoc = nodeGuideBoxesForIds(document, [...idSet], { excludeIds });
     if (fromDoc.length) return fromDoc;
   }
-  // Inside a frame with no siblings yet — empty is OK (still snap to the frame).
+  // Inside a frame with no siblings yet ??empty is OK (still snap to the frame).
   if (containing.length) return [];
   return siblingGuideBoxes(document, excludeIds, fallback);
 }
@@ -976,6 +1015,7 @@ function SelectionFeature({
   attachPickActive = false,
 }: SelectionFeatureProps) {
   const overlayRoot = useRcbOverlayRoot();
+  const viewportEl = useRcbViewportEl();
   const toScene = useRcbScreenToScene();
   const camera = useRcbCamera();
   const zoom = Math.max(0.05, camera.zoom || 1);
@@ -986,8 +1026,8 @@ function SelectionFeature({
     (s: any) => (s.editor.workspaceMode || 'design') as 'design' | 'dev'
   );
   const gridSize = getDocumentGridSize(document);
-  /** Infinite paper is 0×0 — listen on the stage so empty artboard clicks select. */
-  const hitEl = stageEl || paperEl;
+  /** Prefer live context viewport ??prop stageEl can go stale after resize remounts. */
+  const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
   const dispatch = useDispatch();
   const shapeStylePanel = useSelector(
     (s: any) => s.editor.shapeStylePanel as null | { kind: string }
@@ -1006,7 +1046,7 @@ function SelectionFeature({
   const onTransformingChangeRef = useRef(onTransformingChange);
   onTransformingChangeRef.current = onTransformingChange;
 
-  // Keep pointer handlers stable — document identity churn must not tear down window listeners mid-marquee.
+  // Keep pointer handlers stable ??document identity churn must not tear down window listeners mid-marquee.
   const documentRef = useRef(document);
   const getNodeBoxRef = useRef(getNodeBox);
   const listNodeIdsRef = useRef(listNodeIds);
@@ -1047,14 +1087,14 @@ function SelectionFeature({
   const [guides, setGuides] = useState<AlignGuide[]>([]);
   /** Margin labels while moving / arrow-nudging (fig.1 pink). */
   const [moveMargins, setMoveMargins] = useState<SpacingMeasure[] | null>(null);
-  /** Neighbor boxes currently driving distance tips — orange outline like MasterGo. */
+  /** Neighbor boxes currently driving distance tips ??orange outline like MasterGo. */
   const [moveHighlights, setMoveHighlights] = useState<SceneBox[]>([]);
   /** Hide chrome/toolbars while move / resize / rotate is in progress. */
   const [transforming, setTransforming] = useState(false);
   /** Dev inspect: node under pointer (annotations follow mouse). */
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
   const hoverNodeIdRef = useRef<string | null>(null);
-  /** Preview / Dev: previous single selection — click A then B shows A↔B spacing. */
+  /** Preview / Dev: previous single selection ??click A then B shows A?B spacing. */
   const [inspectPairNodeId, setInspectPairNodeId] = useState<string | null>(null);
   const prevInspectSelRef = useRef<string | null>(null);
 
@@ -1251,7 +1291,7 @@ function SelectionFeature({
 
     /**
      * Second completed soft-click (pointerup, no drag) on the same text opens edit.
-     * Must not run on pointerdown — otherwise one click (down+up) looks like a double-tap.
+     * Must not run on pointerdown ??otherwise one click (down+up) looks like a double-tap.
      */
     const tryOpenTextEdit = (id: string) => {
       if (readOnly) return false;
@@ -1286,6 +1326,13 @@ function SelectionFeature({
       )
         return;
 
+      const seed = (
+        mode: DragState['mode'],
+        ev: { clientX: number; clientY: number },
+        pt: { x: number; y: number },
+        extras?: Partial<DragState>
+      ) => makeDragSeed(mode, ev, pt, extras, hitEl);
+
       const p = toScene(e.clientX, e.clientY);
       const liveUnionNow = liveUnionRef.current;
       const liveOriginsNow = liveOriginsRef.current;
@@ -1307,7 +1354,7 @@ function SelectionFeature({
             ? readNodeAngle(document, liveOriginsNow[0].nodeId)
             : 0);
         const pointerAngle0 = (Math.atan2(p.y - center.y, p.x - center.x) * 180) / Math.PI;
-        dragRef.current = makeDragSeed('rotate', e, p, {
+        dragRef.current = seed('rotate', e, p, {
           origins: liveOriginsNow.map((o) => ({
             nodeId: o.nodeId,
             box: { ...o.box },
@@ -1329,7 +1376,7 @@ function SelectionFeature({
         e.preventDefault();
         e.stopPropagation();
         const handle = (resizeEl.getAttribute('data-resize') || 'se') as ResizeHandle;
-        dragRef.current = makeDragSeed('resize', e, p, {
+        dragRef.current = seed('resize', e, p, {
           origins: liveOriginsNow.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })),
           union: { ...liveUnionNow },
           handle,
@@ -1351,7 +1398,7 @@ function SelectionFeature({
         e.preventDefault();
         e.stopPropagation();
         const origins = liveOriginsNow.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } }));
-        dragRef.current = makeDragSeed('move', e, p, {
+        dragRef.current = seed('move', e, p, {
           origins,
           union: { ...liveUnionNow },
         });
@@ -1400,20 +1447,20 @@ function SelectionFeature({
                 .find((fid): fid is string => Boolean(fid))
             : null);
         if (hitId && !plateFrameId) {
-          // Do NOT call onSelectFrame(null) here — during pick that clears pick mode.
+          // Do NOT call onSelectFrame(null) here ??during pick that clears pick mode.
           onSelect(expandSelectionWithGroups(document, [hitId]));
         } else if (frameUnder) {
           onSelectFrame?.(frameUnder);
         } else {
-          // Truly empty canvas — exit pick mode.
+          // Truly empty canvas ??exit pick mode.
           onSelect([]);
         }
-        dragRef.current = makeDragSeed('blank', e, p, { skipSelectOnUp: true });
+        dragRef.current = seed('blank', e, p, { skipSelectOnUp: true });
         capture(e.pointerId);
         return;
       }
 
-      // Clicking a selected artboard (or its plate) moves the whole selection — like a rect.
+      // Clicking a selected artboard (or its plate) moves the whole selection ??like a rect.
       if (
         !readOnly &&
         selectionHasFrame &&
@@ -1431,20 +1478,20 @@ function SelectionFeature({
         if ((emptyOrSelectedPlate || selectedNodeHit) && beginMoveSelection()) return;
       }
 
-      // Full-bleed background plate looks empty — start marquee, don't drag the plate.
+      // Full-bleed background plate looks empty ??start marquee, don't drag the plate.
       if (hitId && plateFrameId) {
         e.preventDefault();
         if (!e.shiftKey && !readOnly) {
           onSelectFrame?.(null);
           onSelect([]);
         }
-        dragRef.current = makeDragSeed('pointing_canvas', e, p);
-        marqueeLog('treat plate as empty → pointing_canvas');
+        dragRef.current = seed('pointing_canvas', e, p);
+        marqueeLog('treat plate as empty ??pointing_canvas');
         capture(e.pointerId);
         return;
       }
 
-      // Shape under pointer — select (if needed) then move. Never start a marquee on a shape.
+      // Shape under pointer ??select (if needed) then move. Never start a marquee on a shape.
       if (hitId) {
         e.preventDefault();
         e.stopPropagation();
@@ -1455,14 +1502,14 @@ function SelectionFeature({
           // Preview / Dev inspect: select only (no move).
           onSelectFrame?.(null);
           onSelect(expandedHit, { additive });
-          dragRef.current = makeDragSeed('blank', e, p);
+          dragRef.current = seed('blank', e, p);
           capture(e.pointerId);
           return;
         }
 
-        // Expand on down so pointerdown→move uses full group origins before Redux catches up.
+        // Expand on down so pointerdown?move uses full group origins before Redux catches up.
         if (!selectedIds.includes(hitId)) {
-          // Do not open text edit on pointerdown — a single click's up would
+          // Do not open text edit on pointerdown ??a single click's up would
           // otherwise count as a second tap and enter edit immediately.
           lastTextClickRef.current = null;
           onSelectFrame?.(null);
@@ -1470,7 +1517,7 @@ function SelectionFeature({
         }
         // Shift-add only: wait for pointer-up; don't start a translate.
         if (additive && !selectedIds.includes(hitId)) {
-          dragRef.current = makeDragSeed('blank', e, p);
+          dragRef.current = seed('blank', e, p);
           capture(e.pointerId);
           return;
         }
@@ -1489,23 +1536,23 @@ function SelectionFeature({
         // Second click of a double-click: do not start a translate.
         if (isRecentNodeDoubleTap(lastNodeTapRef.current, hitId, e)) {
           lastNodeTapRef.current = null;
-          dragRef.current = makeDragSeed('blank', e, p);
+          dragRef.current = seed('blank', e, p);
           capture(e.pointerId);
           return;
         }
         lastNodeTapRef.current = { id: hitId, t: Date.now(), x: e.clientX, y: e.clientY };
 
-        // Keep chrome rotation in sync — transforming flips chromeAngle onto liveAngle.
+        // Keep chrome rotation in sync ??transforming flips chromeAngle onto liveAngle.
         if (origins.length === 1 && !parseFrameSelId(origins[0].nodeId)) {
           setLiveAngle(readNodeAngle(document, origins[0].nodeId));
         }
         // Locked layers stay selectable but cannot start a drag.
         if (isSelectionOriginsLocked(document, origins)) {
-          dragRef.current = makeDragSeed('blank', e, p);
+          dragRef.current = seed('blank', e, p);
           capture(e.pointerId);
           return;
         }
-        dragRef.current = makeDragSeed('move', e, p, { origins, union });
+        dragRef.current = seed('move', e, p, { origins, union });
         setLiveOrigins(origins);
         setLiveUnion(union);
         setTransformingNotify(true);
@@ -1513,7 +1560,7 @@ function SelectionFeature({
         return;
       }
 
-      // Empty canvas / artboard interior → PointingCanvas → marquee after drag threshold.
+      // Empty canvas / artboard interior ??PointingCanvas ??marquee after drag threshold.
       // Soft-click on artboard selects the frame (on pointerup). Frame move is via title label
       // or by dragging inside an existing selection union (handled above).
       e.preventDefault();
@@ -1524,14 +1571,17 @@ function SelectionFeature({
         onSelectFrame?.(null);
         onSelect([]);
       }
-      dragRef.current = makeDragSeed('pointing_canvas', e, p);
-      marqueeLog('empty → pointing_canvas');
+      dragRef.current = seed('pointing_canvas', e, p);
+      marqueeLog('empty ??pointing_canvas');
       capture(e.pointerId);
     };
 
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag) return;
+      drag.currentClientX = e.clientX;
+      drag.currentClientY = e.clientY;
+      drag.currentShift = e.shiftKey;
       const clientDistSq =
         (e.clientX - drag.startX) ** 2 + (e.clientY - drag.startY) ** 2;
       if (drag.mode === 'blank') {
@@ -1541,18 +1591,24 @@ function SelectionFeature({
         }
         return;
       }
-      // PointingCanvas → Brushing only after dragDistanceSquared.
+      // PointingCanvas ??Brushing only after dragDistanceSquared.
       if (drag.mode === 'pointing_canvas') {
         if (readOnly || clientDistSq < DRAG_DISTANCE_SQUARED) return;
         drag.mode = 'marquee';
-        const p0 = toScene(e.clientX, e.clientY);
+        const p0 = sceneFromClientGesture(drag, zoom, e.clientX, e.clientY);
         setMarquee(normalizeBox(drag.sceneX0, drag.sceneY0, p0.x, p0.y));
         marqueeLog('enter marquee', { clientDistSq });
         return;
       }
-      const p = toScene(e.clientX, e.clientY);
-      const dx = p.x - drag.sceneX0;
-      const dy = p.y - drag.sceneY0;
+      // Client-delta keeps the selection under the pointer when the stage rect
+      // shifts (mobile chrome / small-viewport reflow). Rotate still needs an
+      // absolute scene point for atan2 around the pivot.
+      const gesture = sceneFromClientGesture(drag, zoom, e.clientX, e.clientY);
+      const dx = gesture.dx;
+      const dy = gesture.dy;
+      const abs = toScene(e.clientX, e.clientY);
+      const p =
+        drag.mode === 'rotate' ? abs : { x: gesture.x, y: gesture.y };
 
       if (drag.mode === 'marquee') {
         setMarquee(normalizeBox(drag.sceneX0, drag.sceneY0, p.x, p.y));
@@ -1560,7 +1616,7 @@ function SelectionFeature({
       }
 
       if (drag.mode === 'rotate' && drag.center && drag.pointerAngle0 != null) {
-        // Soft-click on rotate knob — ignore OS pointer jitter.
+        // Soft-click on rotate knob ??ignore OS pointer jitter.
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) return;
         const { next, delta } = computeRotateDelta(drag, p, e.shiftKey);
         setLiveAngle(next);
@@ -1615,7 +1671,7 @@ function SelectionFeature({
           getNodeBox,
           skipHiddenInFallback: true,
         });
-        // Keep exact snapped visual edges — integer rounding in geometry commits
+        // Keep exact snapped visual edges ??integer rounding in geometry commits
         // breaks flush align when stroke outset is *.5 (odd border-width).
         setGuides(guides);
         if (guides.length) {
@@ -1646,7 +1702,7 @@ function SelectionFeature({
       }
 
       if (drag.mode === 'resize' && drag.handle) {
-        // Soft-click on a handle must not resize: at 3% zoom, 2px jitter ≈ 60+
+        // Soft-click on a handle must not resize: at 3% zoom, 2px jitter ??60+
         // scene units and snap threshold is huge (8/zoom), so the box jumps.
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) return;
         const stroke = strokeEndpointBox(drag, document, p.x, p.y);
@@ -1745,11 +1801,19 @@ function SelectionFeature({
         /* ignore */
       }
 
-      const p = toScene(e.clientX, e.clientY);
-      const dx = p.x - drag.sceneX0;
-      const dy = p.y - drag.sceneY0;
+      // End events are lifecycle-only; geometry uses last down/move client point.
+      const clientX = drag.currentClientX;
+      const clientY = drag.currentClientY;
+      const shiftKey = drag.currentShift ?? e.shiftKey;
+      const gesture = sceneFromClientGesture(drag, zoom, clientX, clientY);
+      const dx = gesture.dx;
+      const dy = gesture.dy;
+      const p =
+        drag.mode === 'move' || drag.mode === 'resize' || drag.mode === 'marquee'
+          ? { x: gesture.x, y: gesture.y }
+          : toScene(clientX, clientY);
       const clientDistSq =
-        (e.clientX - drag.startX) ** 2 + (e.clientY - drag.startY) ** 2;
+        (clientX - drag.startX) ** 2 + (clientY - drag.startY) ** 2;
 
       const endTransform = () => setTransformingNotify(false);
 
@@ -1758,9 +1822,10 @@ function SelectionFeature({
         setMarquee(null);
         lastTextClickRef.current = null;
         // Selection already cleared on pointerdown.
-        // Soft-click inside an artboard → select that frame.
+        // Soft-click inside an artboard ??select that frame.
         if (!readOnly) {
-          const frameId = hitTestFrame?.(p.x, p.y);
+          const abs = toScene(clientX, clientY);
+          const frameId = hitTestFrame?.(abs.x, abs.y);
           if (frameId) onSelectFrame?.(frameId);
         }
         endTransform();
@@ -1771,7 +1836,7 @@ function SelectionFeature({
         const box = normalizeBox(drag.sceneX0, drag.sceneY0, p.x, p.y);
         setMarquee(null);
         lastTextClickRef.current = null;
-        // Still under threshold somehow — treat as click, not brush.
+        // Still under threshold somehow ??treat as click, not brush.
         if (clientDistSq < DRAG_DISTANCE_SQUARED) {
           marqueeLog('marquee aborted (under threshold)');
           endTransform();
@@ -1785,14 +1850,14 @@ function SelectionFeature({
         // Full-bleed plate: keep when artboard brushed, or other non-plate content hit.
         const contentHits = filterMarqueeContentHits(document, rawHits, new Set(frameHits));
         marqueeLog(
-          contentHits.length || frameHits.length ? 'marquee up → mixed' : 'marquee up → fallback',
+          contentHits.length || frameHits.length ? 'marquee up ??mixed' : 'marquee up ??fallback',
           { box, contentHits, frameHits, rawHits }
         );
         commitMarqueeSelection({
           contentHits,
           frameHits,
           rawHits,
-          shiftKey: e.shiftKey,
+          shiftKey,
           onSelectMixed,
           onSelectFrames,
           onSelectFrame,
@@ -1803,7 +1868,7 @@ function SelectionFeature({
       }
 
       if (drag.mode === 'blank') {
-        // Attach-pick already applied on pointerdown — do not onSelect on up
+        // Attach-pick already applied on pointerdown ??do not onSelect on up
         // (one-shot clearPick flips attachPickActive off before up; selecting
         // here would steal focus from the host node / double-add chips).
         if (
@@ -1811,19 +1876,19 @@ function SelectionFeature({
           !attachPickActive &&
           clientDistSq <= DRAG_DISTANCE_SQUARED
         ) {
-          const id = hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY });
+          const id = hitTest(p.x, p.y, { clientX, clientY });
           if (id && tryOpenTextEdit(id)) {
             endTransform();
             return;
           }
-          if (id) onSelect([id], { additive: e.shiftKey });
+          if (id) onSelect([id], { additive: shiftKey });
         }
         endTransform();
         return;
       }
 
       if (drag.mode === 'rotate' && drag.center && drag.pointerAngle0 != null) {
-        // Soft-click: restore start pose — do not apply angle jitter.
+        // Soft-click: restore start pose ??do not apply angle jitter.
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) {
           setLiveAngle(drag.angle0 || 0);
           setLiveUnion({ ...drag.union });
@@ -1831,7 +1896,7 @@ function SelectionFeature({
           endTransform();
           return;
         }
-        const { next, delta } = computeRotateDelta(drag, p, e.shiftKey);
+        const { next, delta } = computeRotateDelta(drag, p, shiftKey);
         setLiveAngle(next);
         if (drag.origins.length === 1) {
           onAngleCommit?.(drag.origins[0].nodeId, next);
@@ -1868,8 +1933,8 @@ function SelectionFeature({
 
       if (drag.mode === 'move') {
         // Soft-click: never leave liveUnion on a snap-only nudge while the
-        // document stays put — that desyncs chrome from the shape (worst at
-        // 3%/800% where 8px snap ≈ huge / visible scene delta).
+        // document stays put ??that desyncs chrome from the shape (worst at
+        // 3%/800% where 8px snap ??huge / visible scene delta).
         if (clientDistSq <= DRAG_DISTANCE_SQUARED) {
           setGuides([]);
           setMoveMargins(null);
@@ -1954,7 +2019,7 @@ function SelectionFeature({
           drag,
           dx,
           dy,
-          shiftKey: e.shiftKey,
+          shiftKey,
           isGridMode,
           disableGrid: e.ctrlKey || e.metaKey,
           gridSize,
@@ -2010,7 +2075,7 @@ function SelectionFeature({
       }
       const p = toScene(e.clientX, e.clientY);
       let hit = hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY });
-      // Selection chrome covers the glyph — fall back to the single selected node.
+      // Selection chrome covers the glyph ??fall back to the single selected node.
       if (!hit && target?.closest?.('[data-sel-box]')) {
         const ids = liveOriginsRef.current?.map((o) => o.nodeId) || [];
         if (ids.length === 1) hit = ids[0];
@@ -2034,8 +2099,8 @@ function SelectionFeature({
       }
     };
 
-    // Chrome lives in the unscaled overlay — also listen there for resize/rotate / dblclick.
-    // Infinite paper is 0×0; stage receives empty artboard / shape clicks.
+    // Chrome lives in the unscaled overlay ??also listen there for resize/rotate / dblclick.
+    // Infinite paper is 0?0; stage receives empty artboard / shape clicks.
     hitEl.addEventListener('pointerdown', onDown);
     overlayRoot?.addEventListener('pointerdown', onDown);
     hitEl.addEventListener('dblclick', onDblClick);
@@ -2057,6 +2122,7 @@ function SelectionFeature({
     readOnly,
     attachPickActive,
     hitEl,
+    viewportEl,
     paperEl,
     overlayRoot,
     artboard,
@@ -2077,13 +2143,15 @@ function SelectionFeature({
     listNodeIds,
     queryNodeIdsInRect,
     toScene,
+    zoom,
+    camera,
     snapThreshold,
     isGridMode,
     gridSize,
   ]);
 
   /** Arrow keys nudge selection 1px (Shift = 10px) and show margin labels.
-   *  Grid mode: step = gridSize (Shift = 5×). */
+   *  Grid mode: step = gridSize (Shift = 5?). */
   useEffect(() => {
     if (!enabled || suppressChrome || readOnly) return undefined;
     let hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2211,13 +2279,12 @@ function SelectionFeature({
     if (mode === 'resize' && isStrokeShapeType(readNodeShapeType(document, id))) {
       return liveAngle;
     }
-    // Move / box-resize: always use stored angle — avoids click flash when liveAngle lags at 0.
+    // Move / box-resize: always use stored angle ??avoids click flash when liveAngle lags at 0.
     return fromDoc;
   })();
 
   /**
-   * Hover baseline only. Selected shapes use SelectionChrome box stroke —
-   * drawing both stacks a second blue path on top of white knobs (looks hollow).
+   * Hover baseline only. Selected shapes use SelectionChrome box stroke ??   * drawing both stacks a second blue path on top of white knobs (looks hollow).
    */
   const shapeIndicators = (() => {
     if (!enabled || suppressChrome || transforming) return [];
@@ -2253,7 +2320,7 @@ function SelectionFeature({
 
   const selectedSingleId = selectedNodeIds.length === 1 ? selectedNodeIds[0] : null;
 
-  // DPR seam diagnostics — opt-in: window.__RCB_DPR_DEBUG__ = true
+  // DPR seam diagnostics ??opt-in: window.__RCB_DPR_DEBUG__ = true
   useEffect(() => {
     if (!enabled) return;
     if (typeof window === 'undefined') return;
@@ -2321,7 +2388,7 @@ function SelectionFeature({
   // Frames often sit off-screen; measuring to their edge draws a pink gap across
   // empty dotted canvas and looks like a phantom guide. Frame margins still show
   // while dragging via computeMoveMarginResult(containers).
-  // Skip hidden layers — same phantom-guide issue when measuring into empty space.
+  // Skip hidden layers ??same phantom-guide issue when measuring into empty space.
   const spacingOthers =
     selectedBox && !pairBox
       ? (listNodeIds()
@@ -2444,7 +2511,7 @@ function SelectionFeature({
       ))}
 
       {/* Gate on selection: after deselect, Redux clears first but liveUnion
-          lags one frame — without this, line chrome briefly falls back to AABB box.
+          lags one frame ??without this, line chrome briefly falls back to AABB box.
           Image/video generator: blue stroke only (same #3388ff as hover), no resize knobs. */}
       {liveUnion && !suppressChrome && selectionCount > 0 ? (
         <SelectionChrome
@@ -2460,7 +2527,7 @@ function SelectionFeature({
           edgeHandles={
             selectedIsImageGen || selectedIsVideoGen
               ? 'none'
-              : // Video scrubber sits on the bottom edge — keep L/R only so the S handle
+              : // Video scrubber sits on the bottom edge ??keep L/R only so the S handle
                 // does not steal pointer events from the playback bar.
               selectedIsVideo || (!lineChrome && singleNodeData?.key === 'text')
                 ? 'horizontal'

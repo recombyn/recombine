@@ -285,7 +285,7 @@ function SkillsLibraryPanel(): ReactNode {
     let cancelled = false;
     setLoadingMine(true);
     setLoadingOfficial(true);
-    void (async () => {
+    async function loadSkills() {
       try {
         const res = await fetchDesignSkills({ manage: true });
         if (cancelled) return;
@@ -300,7 +300,8 @@ function SkillsLibraryPanel(): ReactNode {
           setLoadingOfficial(false);
         }
       }
-    })();
+    }
+    loadSkills();
     return () => {
       cancelled = true;
     };

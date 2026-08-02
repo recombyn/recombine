@@ -1,9 +1,11 @@
 import { useEffect, useRef, memo } from 'react';
 import {
+  rcbResolveViewportEl,
   rcbScreenToScene,
 } from '../core/math';
 import {
   useRcbCamera,
+  useRcbViewportEl,
 } from '../camera/context';
 
 function clientToPaperScene(
@@ -46,6 +48,7 @@ function BucketFillFeature({
   onFill,
 }: Props) {
   const camera = useRcbCamera();
+  const viewportEl = useRcbViewportEl();
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
   const hitRef = useRef(hitTest);
@@ -54,11 +57,12 @@ function BucketFillFeature({
   onFillRef.current = onFill;
 
   useEffect(() => {
-    const hitEl = stageEl || paperEl;
+    const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
     if (!enabled || !hitEl) return undefined;
 
     const toScene = (clientX: number, clientY: number) => {
-      if (stageEl) return rcbScreenToScene(cameraRef.current, stageEl, clientX, clientY);
+      const stage = rcbResolveViewportEl(viewportEl, stageEl);
+      if (stage) return rcbScreenToScene(cameraRef.current, stage, clientX, clientY);
       return clientToPaperScene(paperEl, artboard, clientX, clientY);
     };
 
@@ -84,7 +88,7 @@ function BucketFillFeature({
     return () => {
       hitEl.removeEventListener('pointerdown', onDown, true);
     };
-  }, [enabled, paperEl, stageEl, artboard]);
+  }, [enabled, paperEl, stageEl, viewportEl, artboard]);
 
   // Keep fillColor in the dependency list for future cursor tint; unused for hit logic.
   void fillColor;
