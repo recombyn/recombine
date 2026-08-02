@@ -34,8 +34,9 @@ import {
 import { message } from '@/components/base';
 import { getToken } from '@/utils/token';
 
-/** Me profile feed — 2 cols phone, 3 cols iPad+, denser on wide desktop. */
-const ME_FLOW_COLUMNS = 'w-full columns-2 gap-4 md:columns-3 2xl:columns-4';
+/** Me profile feed — same scale as Skills: 2 → 3 → 4 → 5 (2xl). */
+const ME_FLOW_COLUMNS =
+  'w-full columns-2 gap-4 md:columns-3 lg:columns-4 2xl:columns-5';
 
 /** Edit-profile icon (person + pencil) — stroke follows currentColor. */
 function ProfileEditIcon({ className }: { className?: string }) {

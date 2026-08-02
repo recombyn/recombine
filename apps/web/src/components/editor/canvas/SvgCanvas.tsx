@@ -1,30 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   addNodeToDocument,
   createImageNode,
   createShapeNode,
-  createSvgNode,
   createTextNode,
   expandSelectionWithGroups,
   fitImageSize,
-  canAttachNodeToChat,
   groupNodesInDocument,
-  readNodeGroupId,
   isNodeHidden,
   isNodeLocked,
   measureImageNaturalSize,
   prepareVideoUploadPreview,
-  pasteClipboardIntoDocument,
   removeNodesFromDocument,
   reorderNodesInDocument,
   listSceneNodes,
   resolveSelectionNodeIds,
   nodeIdsInsideFrames,
   selectionSharedGroupId,
-  snapshotNodesForClipboard,
-  snapshotFramesForClipboard,
-  clipboardNodesBounds,
   supportsFill,
   ungroupNodesInDocument,
   updateNodeInDocument,
@@ -43,11 +36,6 @@ import {
   purgeOrphanSceneNodes,
 } from '@/components/rcb/scene/paint/sceneToSvg';
 import { patchNodesGeometry, sceneToDocumentCoords } from '@/components/rcb/scene/paint/svgToScene';
-import {
-  DEFAULT_TEXT_BOX_WIDTH,
-  measurePlainTextSize,
-  measureWrappedTextSize,
-} from '@/components/rcb/scene/document/sceneText';
 import { strokeCenterlineToFilledOutline } from '@/components/rcb/scene/paint/outlineToPath';
 import { computeShapeBoolean, type ShapeBox } from '@/components/rcb/selection/shapeBoolean';
 import {
@@ -76,9 +64,7 @@ import {
   getShapeHost,
   listShapeHosts,
   rcbFitImageIntoViewport,
-  rcbResolveViewportEl,
   rcbScreenToScene,
-  type RcbCamera,
   type SvgBoardHandle,
 } from '@/components/rcb';
 import {
@@ -87,15 +73,10 @@ import {
   finishNodeUpload,
   isUploadAbortError,
   uploadImageFile,
-  uploadImageFromSrc,
   readFileAsDataUrl,
   waitForImageReady,
 } from '@/utils/uploadImage';
 import store from '@/store';
-import {
-  dataTransferHasChatImage,
-  readChatImageDragUrl,
-} from '@/utils/chatImageDrag';
 import { message } from '@/components/base';
 import { exportFabricImage, exportCropSlots, type ExportImageFormat } from '@/components/rcb/scene/paint/exportImage';
 import { useTranslation } from 'react-i18next';
@@ -136,7 +117,36 @@ import {
   setGridMode,
 } from '@/store/modules/editor';
 import { requestProjectFlush } from '@/components/editor/useProjectCloudSync';
+import {
+  canCollabRedo,
+  canCollabUndo,
+  collabRedo,
+  collabUndo,
+  getCollabUndoEpoch,
+  getCollabViewEpoch,
+  isCollabActive,
+  isCollabViewOnly,
+  subscribeCollabUndo,
+  subscribeCollabView,
+} from '@/components/editor/collab/collabRuntime';
 import SvgPaper from './SvgPaper';
+import { pointerToWorld, type ArtboardRect } from './pointerToWorld';
+import { createDragWriteCoalescer } from './dragWriteCoalescer';
+import {
+  attachPickFilterOpts,
+  ctxMenuSeedFrameIds,
+  ctxMenuSeedNodeIds,
+  filterChatAttachNodeIds,
+  frameForFullBleedPlate,
+  resolveAttachPickPayload,
+} from './attachPick';
+import {
+  useCanvasClipboard,
+  type CanvasClipboardApi,
+} from './clipboard/useCanvasClipboard';
+import { useCanvasContextMenu } from './contextMenu/useCanvasContextMenu';
+import { useChatImageDrop } from './drop/useChatImageDrop';
+import { useCanvasHotkeys } from './keyboard/useCanvasHotkeys';
 import {
   SelectionFeature,
   ShapeDrawFeature,
@@ -170,408 +180,10 @@ import {
   useRcbOverlayRoot,
   useRcbViewportEl,
 } from '@/components/rcb';
-type ArtboardRect = { x?: number; y?: number; width: number; height: number };
-
-function pointerToWorld(
-  camera: RcbCamera,
-  opts: {
-    stageEl?: HTMLElement | null;
-    paperEl?: HTMLElement | null;
-    viewportEl?: HTMLElement | null;
-    artboard?: ArtboardRect;
-  },
-  clientX: number,
-  clientY: number
-): { x: number; y: number } {
-  // Prefer a connected stage — EditorPage stageEl can go stale after resize remounts.
-  const stage = rcbResolveViewportEl(opts.viewportEl, opts.stageEl);
-  if (stage) return rcbScreenToScene(camera, stage, clientX, clientY);
-  if (opts.paperEl && opts.artboard) {
-    const rect = opts.paperEl.getBoundingClientRect();
-    if (!rect.width || !rect.height) return { x: 0, y: 0 };
-    const w = Math.max(1, opts.artboard.width);
-    const h = Math.max(1, opts.artboard.height);
-    const ox = Number(opts.artboard.x) || 0;
-    const oy = Number(opts.artboard.y) || 0;
-    return {
-      x: ox + ((clientX - rect.left) / rect.width) * w,
-      y: oy + ((clientY - rect.top) / rect.height) * h,
-    };
-  }
-  return { x: 0, y: 0 };
-}
-
-function looksLikeSvgMarkup(text: string): boolean {
-  const t = String(text || '').trim();
-  if (!t) return false;
-  if (/^data:image\/svg\+xml/i.test(t)) return true;
-  if (/^<\?xml[\s\S]*?<svg[\s>]/i.test(t)) return true;
-  return /^<svg[\s>]/i.test(t);
-}
-
-function decodeClipboardSvgText(raw: string): string {
-  const t = String(raw || '').trim();
-  if (!t) return '';
-  if (/^data:image\/svg\+xml/i.test(t)) {
-    const comma = t.indexOf(',');
-    const payload = comma >= 0 ? t.slice(comma + 1) : '';
-    const header = comma >= 0 ? t.slice(0, comma) : '';
-    try {
-      return header.toLowerCase().includes(';base64')
-        ? decodeURIComponent(escape(atob(payload)))
-        : decodeURIComponent(payload.replace(/\+/g, ' '));
-    } catch {
-      return '';
-    }
-  }
-  return t;
-}
-
-/** Size SVG icon from viewBox / width / height attrs (default 48, soft-cap 280). */
-function measureSvgMarkupSize(markup: string): { width: number; height: number; svg: string } {
-  const trimmed = String(markup || '').trim();
-  const svg = /^<svg[\s>]/i.test(trimmed)
-    ? trimmed
-    : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${trimmed}</svg>`;
-  let vbW = 24;
-  let vbH = 24;
-  try {
-    const doc = new DOMParser().parseFromString(
-      /^<svg[\s>]/i.test(svg)
-        ? svg
-        : `<svg xmlns="http://www.w3.org/2000/svg">${svg}</svg>`,
-      'image/svg+xml'
-    );
-    const root = doc.querySelector('svg');
-    if (root && !doc.querySelector('parsererror')) {
-      const vb = String(root.getAttribute('viewBox') || '')
-        .trim()
-        .split(/[\s,]+/)
-        .map(Number);
-      if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
-        vbW = vb[2];
-        vbH = vb[3];
-      } else {
-        const wAttr = Number.parseFloat(String(root.getAttribute('width') || ''));
-        const hAttr = Number.parseFloat(String(root.getAttribute('height') || ''));
-        if (wAttr > 0 && hAttr > 0) {
-          vbW = wAttr;
-          vbH = hAttr;
-        }
-      }
-    }
-  } catch {
-    /* keep defaults */
-  }
-  const fitted = fitImageSize(vbW, vbH, 280);
-  return {
-    width: Math.max(16, fitted.width),
-    height: Math.max(16, fitted.height),
-    svg,
-  };
-}
-
-type SystemPastePayload =
-  | { kind: 'image'; file: File }
-  | { kind: 'video'; file: File }
-  | { kind: 'svg'; markup: string }
-  | { kind: 'text'; text: string };
-
-function fileLooksLikeSvg(file: File): boolean {
-  const type = (file.type || '').toLowerCase();
-  if (type.includes('svg')) return true;
-  return /\.svg$/i.test(file.name || '');
-}
-
-/** Prefer image/video → SVG markup → plain text from a ClipboardEvent / ClipboardItem list. */
-async function readSystemPastePayload(
-  data: DataTransfer | null | undefined
-): Promise<SystemPastePayload | null> {
-  if (!data) return null;
-
-  const fromItems: File[] = [];
-  try {
-    for (const item of Array.from(data.items || [])) {
-      if (item.kind !== 'file') continue;
-      const f = item.getAsFile();
-      if (f) fromItems.push(f);
-    }
-  } catch {
-    /* ignore */
-  }
-  const files = fromItems.length ? fromItems : Array.from(data.files || []);
-  for (const file of files) {
-    if (fileLooksLikeSvg(file)) {
-      try {
-        const markup = decodeClipboardSvgText(await file.text());
-        if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
-      } catch {
-        /* fall through to image upload */
-      }
-    }
-    const mime = (file.type || '').toLowerCase();
-    if (mime.startsWith('image/')) {
-      return { kind: 'image', file };
-    }
-    if (mime.startsWith('video/')) {
-      return { kind: 'video', file };
-    }
-  }
-
-  const plain = String(data.getData('text/plain') || '').trim();
-  if (plain) {
-    const markup = decodeClipboardSvgText(plain);
-    if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
-    return { kind: 'text', text: plain };
-  }
-
-  const html = String(data.getData('text/html') || '');
-  if (html) {
-    const m = html.match(/<svg[\s\S]*?<\/svg>/i);
-    if (m?.[0] && looksLikeSvgMarkup(m[0])) {
-      return { kind: 'svg', markup: m[0] };
-    }
-  }
-
-  return null;
-}
-
-function fingerprintSystemPaste(payload: SystemPastePayload | null | undefined): string {
-  if (!payload) return '';
-  if (payload.kind === 'image' || payload.kind === 'video') {
-    const f = payload.file;
-    return `${payload.kind}:${f.type}:${f.size}:${f.name}:${f.lastModified}`;
-  }
-  if (payload.kind === 'svg') {
-    const m = payload.markup;
-    return `svg:${m.length}:${m.slice(0, 96)}:${m.slice(-48)}`;
-  }
-  const t = payload.text;
-  return `text:${t.length}:${t.slice(0, 96)}:${t.slice(-48)}`;
-}
-
-async function readSystemPasteFromNavigator(): Promise<SystemPastePayload | null> {
-  const clip = navigator.clipboard;
-  if (!clip) return null;
-
-  if (typeof clip.read === 'function') {
-    try {
-      const items = await clip.read();
-      for (const item of items) {
-        const types = item.types || [];
-        const svgType = types.find((t) => t.includes('svg'));
-        if (svgType) {
-          const blob = await item.getType(svgType);
-          const markup = decodeClipboardSvgText(await blob.text());
-          if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
-        }
-        const imageType = types.find((t) => t.startsWith('image/') && !t.includes('svg'));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const ext = imageType.includes('jpeg') || imageType.includes('jpg') ? 'jpg' : 'png';
-          return {
-            kind: 'image',
-            file: new File([blob], `paste.${ext}`, { type: imageType }),
-          };
-        }
-        const videoType = types.find((t) => t.startsWith('video/'));
-        if (videoType) {
-          const blob = await item.getType(videoType);
-          let ext = 'mp4';
-          if (videoType.includes('webm')) ext = 'webm';
-          else if (videoType.includes('quicktime')) ext = 'mov';
-          return {
-            kind: 'video',
-            file: new File([blob], `paste.${ext}`, { type: videoType }),
-          };
-        }
-        if (types.includes('text/plain')) {
-          const blob = await item.getType('text/plain');
-          const plain = String(await blob.text()).trim();
-          if (!plain) continue;
-          const markup = decodeClipboardSvgText(plain);
-          if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
-          return { kind: 'text', text: plain };
-        }
-      }
-    } catch {
-      /* permission / unsupported — try readText */
-    }
-  }
-
-  if (typeof clip.readText === 'function') {
-    try {
-      const plain = String(await clip.readText()).trim();
-      if (!plain) return null;
-      const markup = decodeClipboardSvgText(plain);
-      if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
-      return { kind: 'text', text: plain };
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
-type FrameGeomLive = { id: string; x: number; y: number; width: number; height: number };
-
-/**
- * Coalesce high-frequency drag writes (frame Redux + video live geom) to one rAF.
- * Keeps pointer-move SVG preview immediate; only Redux/React state is throttled.
- */
-function createDragWriteCoalescer(apply: (batch: {
-  frames: FrameGeomLive[];
-  videoGeom?: Record<string, VideoGeomOverride> | null;
-}) => void) {
-  let raf = 0;
-  const pendingFrames = new Map<string, FrameGeomLive>();
-  /** Latest intended video overrides (kept after flush for merge-on-move). */
-  let pendingVideo: Record<string, VideoGeomOverride> | null = null;
-  let videoDirty = false;
-
-  const runFlush = () => {
-    raf = 0;
-    const frames = [...pendingFrames.values()];
-    pendingFrames.clear();
-    const flushVideo = videoDirty;
-    videoDirty = false;
-    if (!frames.length && !flushVideo) return;
-    apply({
-      frames,
-      videoGeom: flushVideo ? pendingVideo : undefined,
-    });
-  };
-
-  return {
-    queueFrames(frames: FrameGeomLive[]) {
-      for (const f of frames) pendingFrames.set(f.id, f);
-      if (!raf) raf = requestAnimationFrame(runFlush);
-    },
-    queueVideoGeom(next: Record<string, VideoGeomOverride> | null) {
-      pendingVideo = next;
-      videoDirty = true;
-      if (!raf) raf = requestAnimationFrame(runFlush);
-    },
-    getPendingVideoGeom() {
-      return pendingVideo;
-    },
-    /** Drop pending work without applying (commit owns the final document). */
-    cancel() {
-      if (raf) {
-        cancelAnimationFrame(raf);
-        raf = 0;
-      }
-      pendingFrames.clear();
-      pendingVideo = null;
-      videoDirty = false;
-    },
-  };
-}
-
 const EMPTY_NODE_IDS: string[] = [];
-
-/** Near-full-bleed rect covering an artboard — treat click as frame select. */
-function frameForFullBleedPlate(doc: any, nodeId: string): { id: string } | null {
-  const node = doc?.deltaSetLike?.[nodeId];
-  if (!node || node.key !== 'shape') return null;
-  const shapeType = String(node.attrs?.shapeType || 'rect');
-  if (shapeType !== 'rect') return null;
-  const frames = Array.isArray(doc?.frames) ? doc.frames : [];
-  if (!frames.length) return null;
-  const { left, top } = nodeLeftTop(doc, node);
-  const w = Math.max(1, Number(node.width) || 1);
-  const h = Math.max(1, Number(node.height) || 1);
-  const area = w * h;
-  for (const f of frames) {
-    if (!f?.id) continue;
-    const fx = Number(f.x) || 0;
-    const fy = Number(f.y) || 0;
-    const fw = Math.max(1, Number(f.width) || 1);
-    const fh = Math.max(1, Number(f.height) || 1);
-    const frameArea = fw * fh;
-    const ow = Math.max(0, Math.min(left + w, fx + fw) - Math.max(left, fx));
-    const oh = Math.max(0, Math.min(top + h, fy + fh) - Math.max(top, fy));
-    const overlap = ow * oh;
-    if (overlap >= frameArea * 0.9 && area >= frameArea * 0.85) {
-      return { id: String(f.id) };
-    }
-  }
-  return null;
-}
-
-/** Drop generator plates + process-shimmer (+ videos when images-only) from attach targets. */
-function filterChatAttachNodeIds(
-  doc: any,
-  ids: string[],
-  opts?: { imagesOnly?: boolean }
-): string[] {
-  const delta = doc?.deltaSetLike || {};
-  return ids.filter((id) => canAttachNodeToChat(delta[id], opts));
-}
-
-/** Prefer live selection; fall back to the node under the context menu. */
-function ctxMenuSeedNodeIds(selectedIds: string[], menuNodeId?: string | null): string[] {
-  if (selectedIds.length) return selectedIds;
-  if (menuNodeId) return [menuNodeId];
-  return [];
-}
-
-/** Prefer live artboard selection; fall back to the frame under the context menu. */
-function ctxMenuSeedFrameIds(selectedFrameIds: string[], menuFrameId?: string | null): string[] {
-  if (selectedFrameIds.length) return selectedFrameIds;
-  if (menuFrameId) return [menuFrameId];
-  return [];
-}
-
-type AttachPickOpts = { imagesOnly?: boolean };
-
-/** Resolve a pick click into an attach payload, or null if empty / only blocked nodes. */
-function resolveAttachPickPayload(
-  doc: any,
-  nodeIds: string[],
-  frameId?: string | null,
-  opts?: AttachPickOpts
-): { payload: string | string[]; blockedOnly: boolean } | null {
-  const raw = (nodeIds || []).filter(Boolean);
-  // Ungrouped media: attach that file alone. Grouped members expand to the whole 编组
-  // so the composer can attach one composite (not peel siblings into separate thumbs).
-  if (raw.length === 1) {
-    const hitId = raw[0]!;
-    const hit = doc?.deltaSetLike?.[hitId];
-    if (!readNodeGroupId(hit)) {
-      const src = String(hit?.attrs?.src || '').trim();
-      const mediaKey = hit?.key === 'video' || hit?.key === 'image';
-      if (
-        mediaKey &&
-        src &&
-        canAttachNodeToChat(hit, opts) &&
-        !(opts?.imagesOnly && hit?.key === 'video')
-      ) {
-        return { payload: hitId, blockedOnly: false };
-      }
-    }
-  }
-  const seed = expandSelectionWithGroups(doc, raw);
-  const attachable = filterChatAttachNodeIds(doc, seed, opts);
-  if (attachable.length) {
-    return {
-      payload: attachable.length === 1 ? attachable[0]! : attachable,
-      blockedOnly: false,
-    };
-  }
-  if (seed.length) return { payload: '', blockedOnly: true };
-  const fid = String(frameId || '').trim();
-  if (fid) return { payload: `frame:${fid}`, blockedOnly: false };
-  return null;
-}
-
-function attachPickFilterOpts(
-  pick: null | { target: string; accept?: 'image' | 'media' }
-): AttachPickOpts | undefined {
-  return pick?.accept === 'image' ? { imagesOnly: true } : undefined;
-}
 
 type SvgCanvasProps = {
   document: any;
@@ -625,6 +237,10 @@ function SvgCanvas({
   const { t } = useTranslation();
   const camera = useRcbCamera();
   const viewportEl = useRcbViewportEl();
+  useSyncExternalStore(subscribeCollabView, getCollabViewEpoch, getCollabViewEpoch);
+  const collabViewOnly = isCollabViewOnly();
+  // Collab share viewers: block mutations while still allowing pan/zoom/select chrome.
+  readOnly = Boolean(readOnly || collabViewOnly);
   const activeTool = useSelector((s: any) => s.editor.activeTool);
   const shapeKind = useSelector((s: any) => s.editor.shapeKind);
   const pendingImageSrc = useSelector((s: any) => s.editor.pendingImageSrc);
@@ -664,8 +280,11 @@ function SvgCanvas({
     () => null
   );
   const [stampTintEpoch, setStampTintEpoch] = useState(0);
-  const canUndo = useSelector((s: any) => (s.editor.historyPast?.length || 0) > 0);
-  const canRedo = useSelector((s: any) => (s.editor.historyFuture?.length || 0) > 0);
+  const reduxCanUndo = useSelector((s: any) => (s.editor.historyPast?.length || 0) > 0);
+  const reduxCanRedo = useSelector((s: any) => (s.editor.historyFuture?.length || 0) > 0);
+  useSyncExternalStore(subscribeCollabUndo, getCollabUndoEpoch, getCollabUndoEpoch);
+  const canUndo = isCollabActive() ? canCollabUndo() : reduxCanUndo;
+  const canRedo = isCollabActive() ? canCollabRedo() : reduxCanRedo;
   const isGridMode = useSelector((s: any) => Boolean(s.editor.isGridMode));
   const imageToolPanelKind = useSelector((s: any) => s.editor.imageToolPanel?.kind as string | undefined);
   const shapeStylePanel = useSelector((s: any) => s.editor.shapeStylePanel as null | { kind: string });
@@ -2342,364 +1961,35 @@ function SvgCanvas({
     [dispatch]
   );
 
-  const copySelected = useCallback((nodeIds?: string[], frameIds?: string[]) => {
-    const doc = documentRef.current;
-    if (!doc) return false;
-    let nodes = nodeIds ? [...nodeIds] : [...selectedIdsRef.current];
-    let frames = frameIds ? [...frameIds] : [...selectedFrameIdsRef.current];
-    if (!frames.length && !nodes.length && activeFrameIdRef.current) {
-      frames = [activeFrameIdRef.current];
-    }
-    // Same as delete: artboard copy includes content whose center lies inside.
-    if (frames.length) {
-      nodes = [...new Set([...nodes, ...nodeIdsInsideFrames(doc, frames)])];
-    }
-    const nodeSnap = nodes.length ? snapshotNodesForClipboard(doc, nodes) : null;
-    const frameSnap = snapshotFramesForClipboard(doc, frames);
-    if (!nodeSnap?.nodes?.length && !frameSnap.length) return false;
-    clipboardRef.current = {
-      nodes: nodeSnap?.nodes || [],
-      ...(frameSnap.length ? { frames: frameSnap } : {}),
-    };
-    internalClipboardAtRef.current = performance.now();
-    return true;
-  }, []);
 
-  const cutSelected = useCallback(
-    (nodeIds?: string[], frameIds?: string[]) => {
-      const nodes = nodeIds ? [...nodeIds] : [...selectedIdsRef.current];
-      let frames = frameIds ? [...frameIds] : [...selectedFrameIdsRef.current];
-      if (!frames.length && !nodes.length && activeFrameIdRef.current) {
-        frames = [activeFrameIdRef.current];
-      }
-      if (!copySelected(nodes, frames)) return;
-      deleteCanvasSelection({ nodeIds: nodes, frameIds: frames });
-    },
-    [copySelected, deleteCanvasSelection]
-  );
-
-  const pasteClipboard = useCallback(
-    (opts?: { anchor?: { x: number; y: number } }) => {
-      const doc = documentRef.current;
-      const payload = clipboardRef.current;
-      if (!doc || readOnly) return;
-      if (!payload?.nodes?.length && !payload?.frames?.length) return;
-      const { document: next, ids: newIds, frameIds: newFrameIds } = pasteClipboardIntoDocument(
-        doc,
-        payload,
-        {
-          offsetX: 24,
-          offsetY: 24,
-          anchor: opts?.anchor,
-        }
-      );
-      if (!newIds.length && !newFrameIds.length) return;
-      documentRef.current = next;
-      dispatch(setDocument(next));
-      dispatch(setMixedSelection({ nodeIds: newIds, frameIds: newFrameIds }));
-    },
-    [dispatch, readOnly]
-  );
-
-  /** Duplicate selection to the right with a 16px gap (nodes + artboards). */
-  const duplicateSelected = useCallback(
-    (nodeIds?: string[], frameIds?: string[]) => {
-      const doc = documentRef.current;
-      if (!doc || readOnly) return;
-      let nodes = nodeIds ? [...nodeIds] : [...selectedIdsRef.current];
-      let frames = frameIds ? [...frameIds] : [...selectedFrameIdsRef.current];
-      if (!frames.length && !nodes.length && activeFrameIdRef.current) {
-        frames = [activeFrameIdRef.current];
-      }
-      if (frames.length) {
-        nodes = [...new Set([...nodes, ...nodeIdsInsideFrames(doc, frames)])];
-      }
-      const nodeSnap = nodes.length ? snapshotNodesForClipboard(doc, nodes) : null;
-      const frameSnap = snapshotFramesForClipboard(doc, frames);
-      if (!nodeSnap?.nodes?.length && !frameSnap.length) return;
-      const snap: SceneClipboardPayload = {
-        nodes: nodeSnap?.nodes || [],
-        ...(frameSnap.length ? { frames: frameSnap } : {}),
-      };
-      const bounds = clipboardNodesBounds(snap);
-      const gap = 16;
-      const { document: next, ids: newIds, frameIds: newFrameIds } = pasteClipboardIntoDocument(
-        doc,
-        snap,
-        {
-          offsetX: (bounds?.width ?? 0) + gap,
-          offsetY: 0,
-        }
-      );
-      if (!newIds.length && !newFrameIds.length) return;
-      documentRef.current = next;
-      dispatch(setDocument(next));
-      dispatch(setMixedSelection({ nodeIds: newIds, frameIds: newFrameIds }));
-    },
-    [dispatch, readOnly]
-  );
-
-  // Context menu: prefer right-button down; fall back to `contextmenu`
-  // (DevTools / some setups never fire pointerdown button=2).
-  useEffect(() => {
-    const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
-    if (readOnly || !hitEl) return undefined;
-
-    const skipSel =
-      '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar]';
-    // Generators / quick-edit reuse data-sel-toolbar so selection ignores them,
-    // but they are scene content and must still open the canvas context menu.
-    const sceneComposerSel =
-      '[data-image-generator],[data-video-generator],[data-image-quick-edit]';
-
-    let openedAt = 0;
-    let lastClientX = Number.NaN;
-    let lastClientY = Number.NaN;
-
-    const isBogusClient = (clientX: number, clientY: number) =>
-      !Number.isFinite(clientX) ||
-      !Number.isFinite(clientY) ||
-      (clientX <= 2 && clientY <= 2);
-
-    const clientInStage = (clientX: number, clientY: number) => {
-      const r = hitEl.getBoundingClientRect();
-      return (
-        clientX >= r.left &&
-        clientX <= r.right &&
-        clientY >= r.top &&
-        clientY <= r.bottom
-      );
-    };
-
-    const isChromeTarget = (target: EventTarget | null) => {
-      const el = target as HTMLElement | null;
-      if (!el?.closest) return false;
-      if (el.closest(sceneComposerSel)) return false;
-      return Boolean(el.closest(skipSel));
-    };
-
-    const noteClient = (clientX: number, clientY: number) => {
-      if (isBogusClient(clientX, clientY) || !clientInStage(clientX, clientY)) return;
-      lastClientX = clientX;
-      lastClientY = clientY;
-    };
-
-    const openMenuAt = (clientX: number, clientY: number) => {
-      const p = pointerToWorld(
-        camera,
-        { viewportEl, stageEl, paperEl, artboard },
-        clientX,
-        clientY
-      );
-      const id = hitTest(p.x, p.y, { clientX, clientY });
-      const selected = selectedIdsRef.current;
-      if (id && !selected.includes(id)) {
-        dispatch(setSelectedNodeIds([id]));
-        dispatch(setSelectedNodeId(id));
-      }
-      let frameId: string | null = activeFrameIdRef.current;
-      if (!id) {
-        const frames = Array.isArray(documentRef.current?.frames)
-          ? documentRef.current.frames
-          : [];
-        for (let i = frames.length - 1; i >= 0; i -= 1) {
-          const f = frames[i];
-          if (!f || f.hidden) continue;
-          const fx = Number(f.x) || 0;
-          const fy = Number(f.y) || 0;
-          const fw = Math.max(1, Number(f.width) || 1);
-          const fh = Math.max(1, Number(f.height) || 1);
-          if (p.x >= fx && p.x <= fx + fw && p.y >= fy && p.y <= fy + fh) {
-            frameId = String(f.id);
-            // Only switch to frame selection when nothing is already selected —
-            // keeps layer actions available for the current node selection
-            // (including hidden layers that hit-test skips).
-            if (!selected.length && !selectedFrameIdsRef.current.includes(frameId)) {
-              dispatch(setActiveFrameId(frameId));
-              dispatch(setSelectedNodeIds([]));
-              dispatch(setSelectedNodeId(null));
-            }
-            break;
-          }
-        }
-      }
-      setCtxMenu({
-        clientX,
-        clientY,
-        sceneX: p.x,
-        sceneY: p.y,
-        nodeId: id || (selected.length === 1 ? selected[0] : null),
-        frameId,
-      });
-    };
-
-    const openFromRightButton = (
-      clientX: number,
-      clientY: number,
-      target: EventTarget | null,
-      opts?: { allowOutsideStage?: boolean }
-    ) => {
-      if (performance.now() - openedAt < 400) return false;
-      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
-      if (!opts?.allowOutsideStage && !clientInStage(clientX, clientY)) return false;
-      if (isChromeTarget(target)) return false;
-      openedAt = performance.now();
-      openMenuAt(clientX, clientY);
-      return true;
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      noteClient(e.clientX, e.clientY);
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      noteClient(e.clientX, e.clientY);
-      if (e.button !== 2) return;
-      if (!clientInStage(e.clientX, e.clientY)) return;
-      // Block native menu on the stage even when chrome skips opening ours.
-      e.preventDefault();
-      e.stopPropagation();
-      openFromRightButton(e.clientX, e.clientY, e.target);
-    };
-
-    const onMouseDown = (e: MouseEvent) => {
-      noteClient(e.clientX, e.clientY);
-      if (e.button !== 2) return;
-      if (!clientInStage(e.clientX, e.clientY)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openFromRightButton(e.clientX, e.clientY, e.target);
-    };
-
-    const onContextMenu = (e: MouseEvent) => {
-      const stageOk = clientInStage(e.clientX, e.clientY);
-      const hasLast = !isBogusClient(lastClientX, lastClientY);
-      const bogus = isBogusClient(e.clientX, e.clientY);
-      // Only the canvas stage (or synthetic (1,1) after a stage hover).
-      if (!stageOk && !(bogus && hasLast)) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      if (isChromeTarget(e.target)) return;
-
-      let clientX = bogus ? lastClientX : e.clientX;
-      let clientY = bogus ? lastClientY : e.clientY;
-      if (isBogusClient(clientX, clientY)) {
-        const r = hitEl.getBoundingClientRect();
-        clientX = r.left + r.width / 2;
-        clientY = r.top + r.height / 2;
-      }
-      openFromRightButton(clientX, clientY, e.target, {
-        allowOutsideStage: bogus && hasLast,
-      });
-    };
-
-    window.addEventListener('pointermove', onPointerMove, { capture: true });
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    window.addEventListener('mousedown', onMouseDown, { capture: true });
-    window.addEventListener('contextmenu', onContextMenu, { capture: true });
-    return () => {
-      window.removeEventListener('pointermove', onPointerMove, true);
-      window.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('mousedown', onMouseDown, true);
-      window.removeEventListener('contextmenu', onContextMenu, true);
-    };
-  }, [
-    paperEl,
-    stageEl,
+  useCanvasContextMenu({
+    readOnly,
+    camera,
+    artboard,
     viewportEl,
-    camera,
-    readOnly,
-    artboard,
-    hitTest,
-    dispatch,
-  ]);
-
-  // Drag chat gallery images onto the canvas → placeholder + upload.
-  useEffect(() => {
-    const hitEl = stageEl || paperEl;
-    if (readOnly || !hitEl) return undefined;
-
-    const onDragOver = (e: DragEvent) => {
-      if (!dataTransferHasChatImage(e.dataTransfer)) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    };
-
-    const onDrop = async (e: DragEvent) => {
-      const url = readChatImageDragUrl(e.dataTransfer);
-      if (!url) return;
-      e.preventDefault();
-      e.stopPropagation();
-      try {
-        const natural = await measureImageNaturalSize(url);
-        const { width, height } = imageSizeForViewport(natural);
-        const world = pointerToWorld(
-          camera,
-          { viewportEl, stageEl, paperEl, artboard },
-          e.clientX,
-          e.clientY
-        );
-        const placed = rcbCenterOnPoint(world, { width, height });
-        const latest = documentRef.current;
-        if (!latest) return;
-        const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
-        dispatch(
-          startImageUploadPlaceholder({
-            src: url,
-            width,
-            height,
-            x: origin.x,
-            y: origin.y,
-            label: '上传中',
-            name: 'Image',
-          })
-        );
-        finishToSelect();
-        const spawnedId = String(
-          (store.getState() as any).editor?.pendingImageProcessId || ''
-        );
-        const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
-        try {
-          const uploaded = await uploadImageFromSrc(url, 'chat-image.png', { signal });
-          if (signal?.aborted) return;
-          const remoteReady = await waitForImageReady(uploaded.url, { signal });
-          if (signal?.aborted) return;
-          dispatch(
-            finishImageProcess({
-              nodeId: spawnedId || undefined,
-              // Keep local preview until the remote URL is fully decoded.
-              ...(remoteReady ? { src: uploaded.url } : {}),
-              attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
-            })
-          );
-        } finally {
-          finishNodeUpload(spawnedId);
-        }
-      } catch (err: any) {
-        if (isUploadAbortError(err)) return;
-        dispatch(failImageProcess({}));
-        const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
-        message.error(typeof detail === 'string' ? detail : '图片上传失败');
-      }
-    };
-
-    hitEl.addEventListener('dragover', onDragOver);
-    hitEl.addEventListener('drop', onDrop);
-    return () => {
-      hitEl.removeEventListener('dragover', onDragOver);
-      hitEl.removeEventListener('drop', onDrop);
-    };
-  }, [
-    artboard,
-    camera,
-    dispatch,
-    imageSizeForViewport,
-    paperEl,
-    readOnly,
     stageEl,
-  ]);
+    paperEl,
+    documentRef,
+    selectedIdsRef,
+    selectedFrameIdsRef,
+    activeFrameIdRef,
+    hitTest,
+    setCtxMenu,
+  });
+
+  useChatImageDrop({
+    readOnly,
+    camera,
+    artboard,
+    viewportEl,
+    stageEl,
+    paperEl,
+    documentRef,
+    imageSizeForViewport,
+    finishToSelect,
+  });
+
+  const clipboardApiRef = useRef<CanvasClipboardApi | null>(null);
 
   const runCtxAction = (action: CtxAction) => {
     let ids = selectedIdsRef.current;
@@ -2786,27 +2076,29 @@ function SvgCanvas({
       return;
     }
     if (action === 'undo') {
-      dispatch(undo());
+      if (!collabUndo()) dispatch(undo());
       return;
     }
     if (action === 'redo') {
-      dispatch(redo());
+      if (!collabRedo()) dispatch(redo());
       return;
     }
     if (action === 'copy') {
-      copySelected(ids, frameIdsForAction);
+      clipboardApiRef.current?.copySelected(ids, frameIdsForAction);
       return;
     }
     if (action === 'cut') {
-      cutSelected(ids, frameIdsForAction);
+      clipboardApiRef.current?.cutSelected(ids, frameIdsForAction);
       return;
     }
     if (action === 'paste') {
-      void pasteFromOsOrInternal(placeAt ? { anchor: placeAt } : undefined);
+      void clipboardApiRef.current?.pasteFromOsOrInternal(
+        placeAt ? { anchor: placeAt } : undefined
+      );
       return;
     }
     if (action === 'duplicate') {
-      duplicateSelected(ids, frameIdsForAction);
+      clipboardApiRef.current?.duplicateSelected(ids, frameIdsForAction);
       return;
     }
     if (action === 'delete') {
@@ -3185,441 +2477,48 @@ function SvgCanvas({
     onImageFile(file);
   };
 
-  const insertPastedText = useCallback(
-    (text: string, anchor?: { x: number; y: number } | null) => {
-      const doc = documentRef.current;
-      const content = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      if (!doc || readOnly || !content.trim()) return false;
-      // Cap paste width so a long single line does not span the whole artboard.
-      const boardW = Math.max(0, Number(artboard?.width) || 0);
-      const maxW = Math.max(
-        DEFAULT_TEXT_BOX_WIDTH,
-        Math.min(480, boardW > 0 ? Math.round(boardW * 0.5) : 420)
-      );
-      const natural = measurePlainTextSize(content);
-      const wrap = natural.width > maxW;
-      const box = wrap
-        ? measureWrappedTextSize(content, {}, maxW)
-        : { width: natural.width, height: natural.height };
-      const origin =
-        placeOriginForSize({ width: box.width, height: box.height }, anchor) || {
-          x: 40,
-          y: 40,
-        };
-      const { id, node } = createTextNode({
-        x: origin.x,
-        y: origin.y,
-        text: content,
-        width: box.width,
-        height: box.height,
-        autoSize: !wrap,
-      });
-      const next = addNodeToDocument(doc, id, node);
-      documentRef.current = next;
-      dispatch(setDocument(next));
-      dispatch(setSelectedNodeIds([id]));
-      dispatch(setSelectedNodeId(id));
-      finishToSelect();
-      return true;
-    },
-    [artboard?.width, dispatch, placeOriginForSize, readOnly]
-  );
 
-  const insertPastedSvg = useCallback(
-    (markup: string, anchor?: { x: number; y: number } | null) => {
-      const doc = documentRef.current;
-      if (!doc || readOnly) return false;
-      const decoded = decodeClipboardSvgText(markup);
-      if (!looksLikeSvgMarkup(decoded)) return false;
-      const { width, height, svg } = measureSvgMarkupSize(decoded);
-      const origin = placeOriginForSize({ width, height }, anchor) || { x: 40, y: 40 };
-      const { id, node } = createSvgNode({
-        x: origin.x,
-        y: origin.y,
-        width,
-        height,
-        svg,
-        name: 'SVG',
-      });
-      const next = addNodeToDocument(doc, id, node);
-      documentRef.current = next;
-      dispatch(setDocument(next));
-      dispatch(setSelectedNodeIds([id]));
-      dispatch(setSelectedNodeId(id));
-      finishToSelect();
-      return true;
-    },
-    [dispatch, placeOriginForSize, readOnly]
-  );
+  const clipboardApi = useCanvasClipboard({
+    readOnly,
+    artboardWidth: artboard?.width,
+    documentRef,
+    selectedIdsRef,
+    selectedFrameIdsRef,
+    activeFrameIdRef,
+    clipboardRef,
+    internalClipboardAtRef,
+    osClipboardMetaRef,
+    imagePlaceAtRef,
+    deleteCanvasSelection,
+    placeOriginForSize,
+    finishToSelect,
+    onImageFile,
+    onVideoFile,
+  });
+  clipboardApiRef.current = clipboardApi;
 
-  const pasteSystemPayload = useCallback(
-    async (
-      payload: SystemPastePayload,
-      opts?: { anchor?: { x: number; y: number } | null }
-    ): Promise<boolean> => {
-      if (readOnly) return false;
-      const anchor = opts?.anchor ?? null;
-      if (payload.kind === 'text') return insertPastedText(payload.text, anchor);
-      if (payload.kind === 'svg') return insertPastedSvg(payload.markup, anchor);
-      if (payload.kind === 'image') {
-        if (fileLooksLikeSvg(payload.file)) {
-          try {
-            const markup = decodeClipboardSvgText(await payload.file.text());
-            if (looksLikeSvgMarkup(markup)) return insertPastedSvg(markup, anchor);
-          } catch {
-            /* fall through to raster upload */
-          }
-        }
-        imagePlaceAtRef.current = anchor;
-        onImageFile(payload.file);
-        return true;
-      }
-      if (payload.kind === 'video') {
-        imagePlaceAtRef.current = anchor;
-        onVideoFile(payload.file);
-        return true;
-      }
-      return false;
-    },
-    [insertPastedSvg, insertPastedText, readOnly]
-  );
-
-  /** Prefer the more recently updated source: canvas nodes vs OS clipboard. */
-  const pasteFromOsOrInternal = useCallback(
-    async (opts?: {
-      anchor?: { x: number; y: number } | null;
-      data?: DataTransfer | null;
-    }) => {
-      if (readOnly) return;
-      const hasInternal = Boolean(
-        clipboardRef.current?.nodes?.length || clipboardRef.current?.frames?.length
-      );
-      const fromEvent = await readSystemPastePayload(opts?.data ?? null);
-      const fromNav =
-        !fromEvent && !opts?.data ? await readSystemPasteFromNavigator() : null;
-      const system = fromEvent || fromNav;
-
-      if (system) {
-        const fp = fingerprintSystemPaste(system);
-        if (fp && fp !== osClipboardMetaRef.current.fingerprint) {
-          osClipboardMetaRef.current = { fingerprint: fp, at: performance.now() };
-        } else if (fp && !osClipboardMetaRef.current.at) {
-          // First time we see this OS payload in-session.
-          osClipboardMetaRef.current = { fingerprint: fp, at: performance.now() };
-        }
-      }
-
-      const preferInternal =
-        hasInternal &&
-        (!system ||
-          internalClipboardAtRef.current >= osClipboardMetaRef.current.at);
-
-      if (preferInternal) {
-        pasteClipboard(opts?.anchor ? { anchor: opts.anchor } : undefined);
-        return;
-      }
-
-      if (system) {
-        const ok = await pasteSystemPayload(system, { anchor: opts?.anchor });
-        if (ok) return;
-      }
-
-      // System payload missing/failed — fall back to in-app nodes if any.
-      if (hasInternal) {
-        pasteClipboard(opts?.anchor ? { anchor: opts.anchor } : undefined);
-      }
-    },
-    [pasteClipboard, pasteSystemPayload, readOnly]
-  );
-
-  // Keyboard (zoom shortcuts delegate to parent camera when callbacks provided)
-  useEffect(() => {
-    const isTypingTarget = (t: HTMLElement | null) =>
-      Boolean(
-        t &&
-          (t.tagName === 'INPUT' ||
-            t.tagName === 'TEXTAREA' ||
-            t.isContentEditable ||
-            t.closest?.(
-              '[data-fill-panel], [data-color-panel], [data-select-dropdown], [data-frame-label], [data-text-inline-editor]'
-            ))
-      );
-
-    /** Agent dock / image-generator / quick-edit prompt editors. */
-    const isComposerTarget = (t: HTMLElement | null) =>
-      Boolean(
-        t?.closest?.(
-          '[data-agent-composer], [data-image-generator], [data-video-generator], [data-image-quick-edit]'
-        )
-      );
-
-    const composerPromptText = (t: HTMLElement | null) => {
-      const el =
-        (t?.closest?.('[data-agent-composer]') as HTMLElement | null) ||
-        (t
-          ?.closest?.('[data-image-generator], [data-video-generator], [data-image-quick-edit]')
-          ?.querySelector?.('[data-agent-composer]') as HTMLElement | null);
-      return (el?.innerText || '').replace(/\u200b/g, '').trim();
-    };
-
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      const target = e.target as HTMLElement | null;
-      const typing = isTypingTarget(target);
-      const inComposer = isComposerTarget(target);
-
-      if (e.key === 'Escape' && canvasAttachPickRef.current) {
-        e.preventDefault();
-        dispatch(clearCanvasAttachPick());
-        return;
-      }
-
-      if (mod && (e.key === '=' || e.key === '+')) {
-        e.preventDefault();
-        onZoomIn?.();
-      }
-      if (mod && e.key === '-') {
-        e.preventDefault();
-        onZoomOut?.();
-      }
-      if (mod && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        dispatch(undo());
-      }
-      if (mod && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        dispatch(redo());
-      }
-      if (mod && e.key.toLowerCase() === 'a' && activeTool === 'select' && !typing) {
-        e.preventDefault();
-        const doc = documentRef.current;
-        const nodeIds = listNodeIds();
-        const frameIds = (Array.isArray(doc?.frames) ? doc.frames : [])
-          .filter((f: any) => f?.id && !f.locked)
-          .map((f: any) => String(f.id));
-        onSelectMixed(nodeIds, frameIds);
-      }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'i') {
-        e.preventDefault();
-        imagePlaceAtRef.current = null;
-        imageInputRef.current?.click();
-      }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'h' && !typing && !readOnly) {
-        const ids = selectedIdsRef.current;
-        const frameIds = selectedFrameIdsRef.current;
-        const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIds).filter(
-          (id) => !isGeneratorNode(documentRef.current?.deltaSetLike?.[id])
-        );
-        if (!targetIds.length) return;
-        e.preventDefault();
-        runCtxActionRef.current('toggleHidden');
-        return;
-      }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'k' && !typing && !readOnly) {
-        const ids = selectedIdsRef.current;
-        const frameIds = selectedFrameIdsRef.current;
-        const lockableNodes = ids.filter(
-          (id) => !isGeneratorNode(documentRef.current?.deltaSetLike?.[id])
-        );
-        if (!lockableNodes.length && !frameIds.length && !activeFrameIdRef.current) return;
-        // Generator-only selection: do not lock via shortcut.
-        if (ids.length && !lockableNodes.length && !frameIds.length) return;
-        e.preventDefault();
-        runCtxActionRef.current('toggleLocked');
-        return;
-      }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && !typing) {
-        const clearAfterAddToChat = () => {
-          dispatch(setSelectedNodeIds([]));
-          dispatch(setSelectedNodeId(null));
-          dispatch(setSelectedFrameIds([]));
-          dispatch(setActiveFrameId(null));
-        };
-        const attachable = filterChatAttachNodeIds(
-          documentRef.current,
-          resolveSelectionNodeIds(
-            documentRef.current,
-            selectedIdsRef.current,
-            selectedFrameIdsRef.current
-          )
-        );
-        if (attachable.length > 1) {
-          e.preventDefault();
-          onAddToChat?.(attachable);
-          clearAfterAddToChat();
-          return;
-        }
-        const id = attachable[0];
-        if (id) {
-          e.preventDefault();
-          onAddToChat?.(id);
-          clearAfterAddToChat();
-          return;
-        }
-        // Selection is only generator / shimmer — do not fall through to artboard.
-        if (selectedIdsRef.current.length || selectedFrameIdsRef.current.length) return;
-        if (activeFrameIdRef.current) {
-          e.preventDefault();
-          onAddToChat?.(`frame:${activeFrameIdRef.current}`);
-          clearAfterAddToChat();
-        }
-      }
-      if (mod && !typing && !readOnly) {
-        const k = e.key.toLowerCase();
-        if (k === 'c') {
-          const ids = selectedIdsRef.current;
-          const frameIds = selectedFrameIdsRef.current;
-          if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
-          e.preventDefault();
-          copySelected(ids, frameIds);
-          return;
-        }
-        if (k === 'x') {
-          const ids = selectedIdsRef.current;
-          const frameIds = selectedFrameIdsRef.current;
-          if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
-          e.preventDefault();
-          cutSelected(ids, frameIds);
-          return;
-        }
-        if (k === 'v') {
-          // System paste (image / text / SVG) is handled by the `paste` listener.
-          // Do not preventDefault here or clipboardData is lost.
-          return;
-        }
-        if (k === 'd') {
-          const ids = selectedIdsRef.current;
-          const frameIds = selectedFrameIdsRef.current;
-          if (!ids.length && !frameIds.length && !activeFrameIdRef.current) return;
-          e.preventDefault();
-          duplicateSelected(ids, frameIds);
-          return;
-        }
-        if (k === 'g') {
-          const ids = selectedIdsRef.current;
-          const frameIds = selectedFrameIdsRef.current;
-          const targetIds = resolveSelectionNodeIds(documentRef.current, ids, frameIds);
-          if (targetIds.length < 2) return;
-          e.preventDefault();
-          if (e.shiftKey) {
-            runCtxActionRef.current('ungroup');
-          } else {
-            runCtxActionRef.current('group');
-          }
-          return;
-        }
-      }
-      // Delete removes canvas selection. Backspace never does (text editing only).
-      if (e.key === 'Delete' && !readOnly) {
-        // Fill / color panels handle Delete for gradient stops etc.
-        if (target?.closest?.('[data-fill-panel], [data-color-panel]')) return;
-        // Prompt has text → keep Delete for forward-delete in the editor.
-        if (inComposer && composerPromptText(target)) return;
-        // Other inputs / inline editors (not composers).
-        if (typing && !inComposer) return;
-        // Empty composer (placeholder only) or canvas focus → delete selection.
-        const ids = selectedIdsRef.current;
-        const frameIds = selectedFrameIdsRef.current;
-        if (ids.length || frameIds.length || activeFrameIdRef.current) {
-          e.preventDefault();
-          deleteCanvasSelection();
-        }
-      }
-      if (e.key === ']' || e.key === '[') {
-        const ids = resolveSelectionNodeIds(
-          documentRef.current,
-          selectedIdsRef.current,
-          selectedFrameIdsRef.current
-        );
-        if (!ids.length) return;
-        e.preventDefault();
-        if (e.key === ']' && mod) reorderLayer('forward', ids);
-        else if (e.key === ']') reorderLayer('front', ids);
-        else if (e.key === '[' && mod) reorderLayer('backward', ids);
-        else reorderLayer('back', ids);
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [
-    onZoomIn,
-    onZoomOut,
-    dispatch,
+  useCanvasHotkeys({
     readOnly,
     activeTool,
-    onSelect,
+    documentRef,
+    selectedIdsRef,
+    selectedFrameIdsRef,
+    activeFrameIdRef,
+    canvasAttachPickRef,
+    imagePlaceAtRef,
+    imageInputRef,
+    runCtxActionRef,
+    onZoomIn,
+    onZoomOut,
     onSelectMixed,
     listNodeIds,
     deleteCanvasSelection,
     reorderLayer,
-    copySelected,
-    cutSelected,
-    pasteClipboard,
-    pasteFromOsOrInternal,
-    duplicateSelected,
+    copySelected: clipboardApi.copySelected,
+    cutSelected: clipboardApi.cutSelected,
+    duplicateSelected: clipboardApi.duplicateSelected,
     onAddToChat,
-  ]);
-
-  // System clipboard: paste images/videos (auto-upload), SVG icons, or plain text onto the canvas.
-  useEffect(() => {
-    if (readOnly) return undefined;
-
-    const isTypingTarget = (t: HTMLElement | null) => {
-      if (!t) return false;
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) {
-        return true;
-      }
-      return Boolean(
-        t.closest?.(
-          '[data-fill-panel], [data-color-panel], [data-select-dropdown], [data-frame-label], [data-text-inline-editor], [data-agent-composer]'
-        )
-      );
-    };
-
-    const onPaste = (e: ClipboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (isTypingTarget(target)) return;
-
-      const hasInternal = Boolean(
-        clipboardRef.current?.nodes?.length || clipboardRef.current?.frames?.length
-      );
-      const data = e.clipboardData;
-      // Peek synchronously so we know whether to claim the event.
-      let likelyOs = false;
-      if (data) {
-        if (data.files?.length) likelyOs = true;
-        else {
-          try {
-            for (const item of Array.from(data.items || [])) {
-              if (
-                item.kind === 'file' ||
-                item.type.startsWith('image/') ||
-                item.type.startsWith('video/')
-              ) {
-                likelyOs = true;
-                break;
-              }
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-        if (!likelyOs) {
-          const plain = String(data.getData('text/plain') || '').trim();
-          if (plain) likelyOs = true;
-        }
-      }
-
-      if (!likelyOs && !hasInternal) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-      void pasteFromOsOrInternal({ data });
-    };
-
-    window.addEventListener('paste', onPaste, true);
-    return () => window.removeEventListener('paste', onPaste, true);
-  }, [pasteFromOsOrInternal, readOnly]);
+  });
 
   const bgType = parseFillType(document?.backgroundFillType);
   const bgOpacity = Number(document?.backgroundOpacity ?? 100);

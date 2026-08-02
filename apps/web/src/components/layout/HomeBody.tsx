@@ -471,7 +471,7 @@ function HomeTemplateList({
               onLoadMore={mineScrollLoad ? loadMoreProjects : undefined}
               onCreate={onCreate}
               createDisabled={importing}
-              gridClassName="grid w-full grid-cols-2 gap-4 xl:grid-cols-3 2xl:grid-cols-4"
+              gridClassName="grid w-full grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5"
             />
           </div>
         </main>

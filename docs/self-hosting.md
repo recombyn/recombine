@@ -8,6 +8,7 @@ Run the full product on your own machine or server with Docker Compose (or local
 |-------|---------|
 | Web editor | http://localhost:3000 |
 | API | http://localhost:8000 (`/docs`) |
+| Collab (Yjs WS) | via web proxy `ws://localhost:3000/collab/…` |
 | **MySQL 8** | compose service + volume `mysql_data` |
 | Redis | Celery / queues |
 
@@ -100,6 +101,27 @@ docker compose up -d mysql redis
 # DATABASE_URL=mysql://recombyn:recombyn@127.0.0.1:3306/recombyn
 ```
 
+## Canvas multiplayer (Yjs / WSS)
+
+Compose runs `apps/collab` and nginx proxies `/collab/` → the WS server. Browsers connect with the URL from API `COLLAB_PUBLIC_WS_URL`.
+
+| Env | Where | Example |
+|-----|--------|---------|
+| `COLLAB_TOKEN_SECRET` | api + collab (same value) | long random string |
+| `COLLAB_PUBLIC_WS_URL` | api | local: `ws://localhost:3000/collab` · prod: `wss://your.domain/collab` |
+| `VITE_COLLAB_ENABLED` | web **build arg** | `true` to ship Live UI |
+
+**Local compose (HTTP):** leave defaults — Live uses `ws://localhost:3000/collab`.
+
+**Public HTTPS:** terminate TLS in front of port 3000 (Caddy / cloud LB / extra nginx). Then set:
+
+```bash
+COLLAB_TOKEN_SECRET='…strong…'
+COLLAB_PUBLIC_WS_URL=wss://your.domain/collab
+```
+
+Rebuild web if you change `VITE_COLLAB_ENABLED`. Dev without Docker: `npm run dev:collab` + API `COLLAB_PUBLIC_WS_URL=ws://127.0.0.1:1234`.
+
 ## Security checklist before public deploy
 
 1. Never commit `apps/api/.env`.
@@ -109,7 +131,7 @@ docker compose up -d mysql redis
 5. Change `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` (and matching `DATABASE_URL`).
 6. Set strong secrets for Google / SES / S3 if enabled.
 7. Restrict CORS (`CORS_ORIGINS`) to your real origins.
-8. Put TLS in front (Nginx / Caddy); see `deploy/nginx/`.
+8. Put TLS in front (Nginx / Caddy); see `deploy/nginx/`. For collab, public URL must be `wss://…` and `COLLAB_TOKEN_SECRET` must not stay the dev default.
 9. Confirm DB backups (`DB_BACKUP_*`) or cloud automated backups.
 
 ## License & commercial model
