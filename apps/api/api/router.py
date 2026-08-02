@@ -6,6 +6,7 @@ from api.v1 import (
     auth,
     chat,
     chat_sessions,
+    collab,
     design,
     fonts,
     health,
@@ -34,6 +35,7 @@ api_router.include_router(notices.router, prefix="/notices", tags=["notices"])
 api_router.include_router(plaza.router, prefix="/plaza", tags=["plaza"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
 api_router.include_router(shares.router, prefix="/shares", tags=["shares"])
+api_router.include_router(collab.router, prefix="/collab", tags=["collab"])
 api_router.include_router(fonts.router, prefix="/fonts", tags=["fonts"])
 api_router.include_router(assets.router, prefix="/assets", tags=["assets"])
 api_router.include_router(uploads.router, prefix="/uploads", tags=["uploads"])

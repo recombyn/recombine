@@ -23,6 +23,11 @@ import {
 import { withReturnTo } from '@/utils/authReturnTo';
 import { store } from '@/store';
 import { useProjectCloudSync, flushCurrentProjectNow } from '@/components/editor/useProjectCloudSync';
+import {
+  CollabPresenceBar,
+  CollabRoomProvider,
+} from '@/components/editor/collab/CollabRoomProvider';
+import { isCollabActive } from '@/components/editor/collab/collabRuntime';
 import type { ComposerContext } from '@/components/editor/panels/AgentComposerInput';
 import AgentDock from '@/components/editor/panels/AgentDock';
 import DevPropertiesPanel, {
@@ -52,7 +57,7 @@ import ImageToolPanelHost from '@/components/editor/nodes/ImageNode/toolPanels/I
 import ShapeStylePanelHost from '@/components/editor/nodes/ShapeNode/ShapeStylePanelHost';
 import VideoTrimSessionHost from '@/components/editor/nodes/VideoNode/VideoTrimSessionHost';
 import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesOverlay';
-import SvgCanvas from '@/components/editor/canvas/svg/SvgCanvas';
+import SvgCanvas from '@/components/editor/canvas/SvgCanvas';
 import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
 import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
 import EditorShortcutsPanel from '@/components/editor/chrome/EditorShortcutsPanel';
@@ -744,9 +749,11 @@ function EditorPage() {
   );
 
   // Persist share-edit sessions back to the shares API (not projects).
+  // When a Yjs room is active, CollabRoomProvider owns the debounced write.
   const shareSaveTimer = useRef<number | null>(null);
   useEffect(() => {
     if (!currentId?.startsWith('share_') || !document) return undefined;
+    if (isCollabActive()) return undefined;
     if (shareSaveTimer.current) window.clearTimeout(shareSaveTimer.current);
     const id = currentId;
     shareSaveTimer.current = window.setTimeout(() => {
@@ -1511,6 +1518,7 @@ function EditorPage() {
   const projectName = currentTemplate?.name || t('home.untitled');
 
   return (
+    <CollabRoomProvider stageEl={stageEl} camera={camera}>
     <div
       className={cn(
         'relative flex h-screen flex-col overflow-hidden',
@@ -1598,6 +1606,7 @@ function EditorPage() {
                   {t('editor.share')}
                 </button>
               </Tooltip>
+              <CollabPresenceBar />
               <WalletAccountChip />
               {!agentOpen ? (
                 <button
@@ -2104,6 +2113,7 @@ function EditorPage() {
         }}
       />
     </div>
+    </CollabRoomProvider>
   );
 }
 

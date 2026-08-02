@@ -122,18 +122,17 @@ const PAD = 8;
 /**
  * Menu is `position: fixed` on document.body — use viewport client coords.
  * Keep the click anchor; only shift when the panel would overflow.
- * Cap height so a tall menu scrolls instead of pinning to the corner.
+ * No scrollbars: reposition to fit the natural size (overflow hidden).
  */
 function clampFixedMenuPos(opts: {
   left: number;
   top: number;
   menuW: number;
   menuH: number;
-}): { left: number; top: number; maxHeight: number } {
+}): { left: number; top: number } {
   const viewW = Math.max(1, window.innerWidth);
   const viewH = Math.max(1, window.innerHeight);
-  const maxHeight = Math.max(120, viewH - PAD * 2);
-  const h = Math.min(Math.max(1, opts.menuH), maxHeight);
+  const h = Math.max(1, opts.menuH);
   const w = Math.min(Math.max(1, opts.menuW), Math.max(1, viewW - PAD * 2));
   let left = opts.left;
   let top = opts.top;
@@ -141,7 +140,7 @@ function clampFixedMenuPos(opts: {
   if (left < PAD) left = PAD;
   if (top + h > viewH - PAD) top = viewH - PAD - h;
   if (top < PAD) top = PAD;
-  return { left, top, maxHeight };
+  return { left, top };
 }
 
 function MenuItem({
@@ -284,7 +283,7 @@ function CanvasContextMenu({
   const hideEnabled = canToggleHidden ?? hasNode;
   const lockEnabled = canToggleLocked ?? layerEnabled;
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   useLayoutEffect(() => {
     if (!menu) {
@@ -319,11 +318,10 @@ function CanvasContextMenu({
       <div
         ref={panelRef}
         data-ctx-menu
-        className="fixed z-[70] min-w-[200px] overflow-y-auto overflow-x-visible rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
+        className="fixed z-[70] min-w-[200px] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
         style={{
           left: pos?.left ?? menu.clientX,
           top: pos?.top ?? menu.clientY,
-          maxHeight: pos?.maxHeight,
         }}
         {...chromePointer}
       >

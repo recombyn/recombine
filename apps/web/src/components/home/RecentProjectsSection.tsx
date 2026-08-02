@@ -16,8 +16,9 @@ import { cn } from '@/utils/classnames';
 
 const RECENT_HOME_LIMIT = 4;
 
-/** Home recent — 1 col on phone; 2 cols from iPad (md). */
-const DEFAULT_RECENT_GRID = 'grid w-full grid-cols-1 gap-4 md:grid-cols-2';
+/** Home recent — 1 → 2 → 4 → 5 (2xl fullscreen). */
+const DEFAULT_RECENT_GRID =
+  'grid w-full grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5';
 
 type ProjectItem = {
   id: string;

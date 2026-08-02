@@ -5,9 +5,9 @@ import {
   useScrollLoadMore,
 } from '@/components/home/InfiniteScroll';
 
-/** Default plaza / inspiration waterfall — denser than Me profile. */
+/** Default plaza / inspiration waterfall — same column scale as Me / Skills. */
 export const FLOW_COLUMNS_CLASS =
-  'w-full columns-2 gap-4 md:columns-3 lg:columns-5';
+  'w-full columns-2 gap-4 md:columns-3 lg:columns-4 2xl:columns-5';
 
 /** Each card in a CSS-columns flow must avoid breaking across columns. */
 export const FLOW_ITEM_CLASS = 'mb-5 break-inside-avoid';
