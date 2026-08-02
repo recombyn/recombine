@@ -57,10 +57,12 @@ data/design_skills/<key>/
 
 | Layer | Owns |
 |-------|------|
-| Prompt packs (`design_prompt_packs_seed.json`) | Protocol only: JSON shape, intent, when to `need_*` |
+| Prompt packs (`design_prompt_packs_seed.json`) | Protocol only: JSON shape, intent, when to `need_*`；runtime 经 `host.require_prompt_pack` / `assemble_stage_system` 注入，缺 pack 不硬编码兜底 |
 | Core skills (this seed) | Engine playbooks: create steps, vision, edit, image boundary |
 | Admin skills (`user.*`) | Product workflows + **layout ops** (`user.layout_ops`) |
 | Knowledge | Numeric/encyclopedia detail (banner sizes, icon rules, palette) |
+
+Runtime 调用链与 `prompts/` / `runtime/` 边界见仓库 [docs/design-agent-runtime.md](../../../../docs/design-agent-runtime.md)。
 
 Designer workflow skills（需求整理 / 交互体验 / 视觉规范 / 交付表达 / 落层操作）走 **Admin**（`source=admin` / `user.*`），不要放进本目录。
 

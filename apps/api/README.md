@@ -54,7 +54,7 @@ Skill 命名空间、ACL、版本 pin、热加载说明见 [data/design_skills/R
 
 | 包 / 模块 | 职责 |
 |-----------|------|
-| `services/design/runtime/` | Agent 主控、编排、flow 运行时、模型路由 |
+| `services/design/runtime/` | 编排 + LangGraph 运行时（见下） |
 | `services/design/ops/` | tool_ops 契约与校验 |
 | `services/design/prompts/` | Skill、prompt pack、knowledge、token |
 | `services/design/readpath/` | catalog、canvas scene、library |
@@ -62,6 +62,28 @@ Skill 命名空间、ACL、版本 pin、热加载说明见 [data/design_skills/R
 | `services/design/aesthetics/` | 美学 RAG |
 | `services/security.py` | BYOK vault、脱敏、限流相关 |
 | `services/db/backup.py` | 周期性 DB 备份 |
+
+### Design Agent 调用链
+
+```text
+api/v1/design.py  POST /run
+  → orchestrator.run_design_job      # 权限 / hold / rules
+      → design_run.design_stream     # 公开 facade
+          → graph.build.run_agent_graph
+```
+
+| 模块 | 职责 |
+|------|------|
+| `runtime/orchestrator.py` | HTTP 侧入口：门禁后调 `design_stream` |
+| `runtime/design_run.py` | Facade：`design_stream` + host 再导出 |
+| `runtime/host/` | Prompt 组装、放置、ops 校验、资源加载 |
+| `runtime/graph/` | StateGraph、nodes、SSE / turn / paint / scene 辅助 |
+| `runtime/agent_controller.py` | 兼容 shim（测试 / serde），非主路径 |
+| `runtime/models_route.py` · `llm_step.py` | 选模与单步 LLM |
+| `runtime/scene_feedback.py` | FE 回传画布快照 |
+| `prompts/*_store.py` | 内容库（pack / skill / knowledge / token） |
+
+完整约定见仓库 [docs/design-agent-runtime.md](../../docs/design-agent-runtime.md)。
 
 Admin HTTP 前缀：`/api/v1/admin/...`（需管理员会话）。
 

@@ -246,6 +246,50 @@ PACK_TYPE_NEED = "need"
 PACK_TYPE_SYSTEM = "system"
 _PACK_TYPES = frozenset({PACK_TYPE_NEED, PACK_TYPE_SYSTEM})
 
+# Graph / product stages — Admin filter + seed ``usedBy``.
+PROMPT_PACK_STAGES = (
+    "bootstrap",
+    "memory",
+    "intent",
+    "decide",
+    "paint",
+    "apply",
+    "observe",
+    "settle",
+    "orchestrator",
+    "resources",
+    "aesthetics",
+    "precheck",
+    "persona",
+    "legacy",
+)
+_PROMPT_PACK_STAGES = frozenset(PROMPT_PACK_STAGES)
+
+
+def normalize_used_by(raw: Any) -> list[str]:
+    """CSV / list → ordered unique stage codes."""
+    parts: list[str] = []
+    if isinstance(raw, (list, tuple)):
+        parts = [str(x or "").strip().lower() for x in raw]
+    else:
+        parts = [
+            p.strip().lower()
+            for p in str(raw or "").replace(";", ",").split(",")
+            if p.strip()
+        ]
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        if p not in _PROMPT_PACK_STAGES or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def used_by_csv(raw: Any) -> str:
+    return ",".join(normalize_used_by(raw))
+
 
 def normalize_pack_type(raw: Any, *, kind: str = "") -> str:
     t = str(raw or "").strip().lower()
@@ -302,6 +346,16 @@ def _pub(r: Any) -> dict[str, Any]:
     except Exception:
         raw_type = ""
     pack_type = normalize_pack_type(raw_type, kind=kind)
+    raw_used = ""
+    try:
+        raw_used = str(r["used_by"] or "")
+    except Exception:
+        raw_used = ""
+    # Fall back to seed metadata when DB column empty.
+    if not raw_used.strip():
+        seed_item = _SEED_BY_KIND.get(kind) or {}
+        raw_used = seed_item.get("usedBy") or seed_item.get("used_by") or ""
+    used_by = normalize_used_by(raw_used)
     return {
         "id": int(r["id"]),
         "kind": kind,
@@ -310,6 +364,7 @@ def _pub(r: Any) -> dict[str, Any]:
         "body": str(r["body"] or ""),
         "whenToUse": str(r["when_to_use"] or ""),
         "scenes": str(r["scenes"] or "all"),
+        "usedBy": used_by,
         "sortOrder": int(r["sort_order"] or 0),
         "enabled": bool(int(r["enabled"] or 0)),
         "updatedAt": int(float(r["updated_at"]) * 1000) if r["updated_at"] else None,
@@ -487,12 +542,14 @@ def ensure_design_prompt_packs() -> None:
                 from services.design.admin.schema import (
                     _ensure_prompt_pack_kind_width,
                     _ensure_prompt_pack_type_column,
+                    _ensure_prompt_pack_used_by_column,
                 )
                 from services.db import dialect
 
                 mysql = dialect() == "mysql"
                 _ensure_prompt_pack_kind_width(conn, mysql=mysql)
                 _ensure_prompt_pack_type_column(conn, mysql=mysql)
+                _ensure_prompt_pack_used_by_column(conn, mysql=mysql)
             except Exception:
                 pass
             _prune_prompt_packs_to_seed(conn, now=now)
@@ -507,11 +564,13 @@ def ensure_design_prompt_packs() -> None:
                     continue
                 title = str(item.get("title") or KIND_LABELS.get(kind, kind)).strip() or kind
                 pack_type = normalize_pack_type(item.get("type"), kind=kind)
+                used_by = used_by_csv(item.get("usedBy") or item.get("used_by"))
                 conn.execute(
                     """
                     INSERT INTO design_prompt_pack
-                    (kind, pack_type, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    (kind, pack_type, title, body, when_to_use, scenes, used_by,
+                     sort_order, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         kind,
@@ -520,6 +579,7 @@ def ensure_design_prompt_packs() -> None:
                         str(item.get("body") or ""),
                         str(item.get("when_to_use") or ""),
                         str(item.get("scenes") or "all"),
+                        used_by,
                         int(item.get("sort_order") or 0),
                         now,
                         now,
@@ -534,7 +594,11 @@ def ensure_design_prompt_packs() -> None:
                     "agent.prompt.react_system",
                     "agent.prompt.chat_agent_system",
                     "agent.prompt.ask_system",
+                    "agent.prompt.agent_system",
                     "agent.prompt.paint_system",
+                    "agent.prompt.paint_retry",
+                    "agent.prompt.ux_reply_system",
+                    "agent.prompt.ask_propose_situation",
                     # Fine-grained chat|canvas_op|design — keep DB pack in sync with seed.
                     "agent.prompt.intent_classify",
                     # Aesthetic inject / gate copy — no hardcoded Chinese in scorer.
@@ -611,6 +675,9 @@ def ensure_design_prompt_packs() -> None:
                 item = _SEED_BY_KIND.get(kind)
                 if not item:
                     continue
+                body = str(item.get("body") or "")
+                when = str(item.get("when_to_use") or "")
+                title = str(item.get("title") or kind)
                 conn.execute(
                     """
                     UPDATE design_prompt_pack
@@ -618,13 +685,36 @@ def ensure_design_prompt_packs() -> None:
                         updated_at = ?
                     WHERE kind = ?
                     """,
-                    (
-                        str(item.get("body") or ""),
-                        str(item.get("when_to_use") or ""),
-                        str(item.get("title") or kind),
-                        now,
-                        kind,
-                    ),
+                    (body, when, title, now, kind),
+                )
+                # Keep legacy design_system_prompt in sync for FORCE_SYNC kinds.
+                try:
+                    conn.execute(
+                        """
+                        UPDATE design_system_prompt
+                        SET body = ?, description = CASE
+                                WHEN description IS NULL OR description = '' THEN ?
+                                ELSE description
+                            END,
+                            updated_at = ?
+                        WHERE prompt_key = ?
+                        """,
+                        (body, when, now, kind),
+                    )
+                except Exception:
+                    pass
+            # Sync used_by from seed (stage metadata; seed is source of truth).
+            for kind, item in _SEED_BY_KIND.items():
+                csv = used_by_csv(item.get("usedBy") or item.get("used_by"))
+                if not csv:
+                    continue
+                conn.execute(
+                    """
+                    UPDATE design_prompt_pack
+                    SET used_by = ?, updated_at = ?
+                    WHERE kind = ? AND COALESCE(used_by, '') != ?
+                    """,
+                    (csv, now, kind, csv),
                 )
             # Backfill empty pack_type from seed / kind inference (never overwrite Admin-set values).
             for row in conn.execute(
@@ -670,6 +760,7 @@ def list_prompt_packs(
     *,
     kind: str | None = None,
     pack_type: str | None = None,
+    used_by: str | None = None,
     enabled: bool | None = True,
     ensure: bool = True,
 ) -> list[dict[str, Any]]:
@@ -677,6 +768,9 @@ def list_prompt_packs(
     type_filter = str(pack_type or "").strip().lower() or None
     if type_filter and type_filter not in _PACK_TYPES:
         type_filter = None
+    stage_filter = str(used_by or "").strip().lower() or None
+    if stage_filter and stage_filter not in _PROMPT_PACK_STAGES:
+        stage_filter = None
     flow_rows = list_prompt_nodes_from_flow()
     if flow_rows:
         rows = flow_rows
@@ -688,6 +782,12 @@ def list_prompt_packs(
                 for r in rows
                 if normalize_pack_type(r.get("type"), kind=str(r.get("kind") or ""))
                 == type_filter
+            ]
+        if stage_filter:
+            rows = [
+                r
+                for r in rows
+                if stage_filter in normalize_used_by(r.get("usedBy") or r.get("used_by"))
             ]
         if enabled is False:
             return []
@@ -712,7 +812,10 @@ def list_prompt_packs(
             f"SELECT * FROM design_prompt_pack{where} ORDER BY sort_order ASC, id ASC",
             tuple(params),
         ).fetchall()
-    return [_pub(r) for r in rows]
+    out = [_pub(r) for r in rows]
+    if stage_filter:
+        out = [r for r in out if stage_filter in (r.get("usedBy") or [])]
+    return out
 
 
 def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
@@ -727,6 +830,14 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("kind, title, body required")
     when = str(payload.get("whenToUse") or payload.get("when_to_use") or "").strip()
     scenes = str(payload.get("scenes") or "all").strip()[:128] or "all"
+    used_by = used_by_csv(
+        payload.get("usedBy")
+        if payload.get("usedBy") is not None
+        else payload.get("used_by")
+    )
+    if not used_by:
+        seed_item = _SEED_BY_KIND.get(kind) or {}
+        used_by = used_by_csv(seed_item.get("usedBy") or seed_item.get("used_by"))
     sort_order = int(payload.get("sortOrder") or payload.get("sort_order") or 0)
     enabled = 1 if payload.get("enabled", True) else 0
     pack_type = normalize_pack_type(
@@ -738,7 +849,7 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
             conn.execute(
                 """
                 UPDATE design_prompt_pack SET kind=?, pack_type=?, title=?, body=?, when_to_use=?, scenes=?,
-                sort_order=?, enabled=?, updated_at=? WHERE id=?
+                used_by=?, sort_order=?, enabled=?, updated_at=? WHERE id=?
                 """,
                 (
                     kind,
@@ -747,6 +858,7 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
                     body,
                     when,
                     scenes,
+                    used_by,
                     sort_order,
                     enabled,
                     now,
@@ -761,8 +873,9 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
             cur = conn.execute(
                 """
                 INSERT INTO design_prompt_pack
-                (kind, pack_type, title, body, when_to_use, scenes, sort_order, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (kind, pack_type, title, body, when_to_use, scenes, used_by,
+                 sort_order, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     kind,
@@ -771,6 +884,7 @@ def upsert_prompt_pack(payload: dict[str, Any]) -> dict[str, Any]:
                     body,
                     when,
                     scenes,
+                    used_by,
                     sort_order,
                     enabled,
                     now,

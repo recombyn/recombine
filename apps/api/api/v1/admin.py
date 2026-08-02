@@ -1125,6 +1125,7 @@ class DesignPromptPackIn(BaseModel):
     body: str = Field(..., min_length=1)
     whenToUse: str = ""
     scenes: str = Field(default="all", max_length=128)
+    usedBy: list[str] | None = None
     sortOrder: int = 0
     enabled: bool = True
 
@@ -1133,11 +1134,14 @@ class DesignPromptPackIn(BaseModel):
 def admin_design_prompt_packs(
     kind: str | None = None,
     type: str | None = Query(default=None, alias="type"),
+    usedBy: str | None = Query(default=None, alias="usedBy"),
     enabled: bool | None = Query(default=None),
     _admin: SessionUser = Depends(require_admin),
 ) -> dict[str, Any]:
     return {
-        "items": list_prompt_packs(kind=kind, pack_type=type, enabled=enabled)
+        "items": list_prompt_packs(
+            kind=kind, pack_type=type, used_by=usedBy, enabled=enabled
+        )
     }
 
 
