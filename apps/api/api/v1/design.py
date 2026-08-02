@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -293,6 +293,27 @@ class DesignRunIn(BaseModel):
         default=None,
         description="agent | ask — Ask proposes / clarifies before painting",
     )
+    skill_refs: list[str] | None = Field(
+        default=None,
+        description="User-pinned skill keys/ids from / picker chips (hard-load)",
+    )
+
+
+class UserSkillIn(BaseModel):
+    id: int | None = None
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    whenToUse: str | None = Field(default=None, max_length=2000)
+    promptPositive: str = Field(..., min_length=1, max_length=120_000)
+    promptNegative: str | None = Field(default=None, max_length=40_000)
+    skillKey: str | None = Field(default=None, max_length=64)
+    logo: str | None = Field(default=None, max_length=512)
+    category: str | None = Field(default=None, max_length=64)
+    enabled: bool = True
+
+
+class UserSkillEnabledIn(BaseModel):
+    enabled: bool
 
 
 class SceneFeedbackIn(BaseModel):
@@ -317,6 +338,105 @@ def design_canvas_tools() -> dict[str, Any]:
     from services.design.ops.tool_ops_contract import list_canvas_tools
 
     return {"items": list_canvas_tools(enabled_only=True)}
+
+
+@router.get("/skills")
+def design_skills_picker(
+    scene: str | None = None,
+    mine: bool = Query(default=False),
+    manage: bool = Query(default=False),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Skills for `/` picker, mine list, or toolbox (`manage=true`, includes disabled)."""
+    user = _require_user(authorization)
+    from services.design.prompts.skill_store import (
+        list_my_skills,
+        list_skills_for_manage,
+        list_skills_for_picker,
+    )
+
+    scene_l = (scene or "website").strip() or "website"
+    if manage:
+        return {"items": list_skills_for_manage(user_id=user.id, scene=scene_l)}
+    if mine:
+        return {"items": list_my_skills(user_id=user.id)}
+    return {"items": list_skills_for_picker(user_id=user.id, scene=scene_l)}
+
+
+@router.post("/skills")
+def design_skills_upsert(
+    body: UserSkillIn,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    from services.design.prompts.skill_store import upsert_end_user_skill
+
+    try:
+        item = upsert_end_user_skill(user_id=user.id, payload=body.model_dump())
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return {"item": item}
+
+
+@router.post("/skills/import")
+async def design_skills_import_zip(
+    file: UploadFile = File(..., description="Skill pack .zip (_meta.json + SKILL.md)"),
+    overwrite: bool = Form(default=False),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Upload a skill pack zip — scan, optional overwrite, then save as user skill."""
+    user = _require_user(authorization)
+    from services.design.prompts.skill_store import import_end_user_skill_zip
+
+    raw = await file.read()
+    try:
+        result = import_end_user_skill_zip(
+            user_id=user.id,
+            filename=file.filename or "skill.zip",
+            raw=raw,
+            overwrite=bool(overwrite),
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return result
+
+
+@router.patch("/skills/{skill_id}/enabled")
+def design_skills_set_enabled(
+    skill_id: int,
+    body: UserSkillEnabledIn,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Per-user on/off for toolbox switches (official via prefs; mine via row+pref)."""
+    user = _require_user(authorization)
+    from services.design.prompts.skill_store import set_user_skill_enabled
+
+    try:
+        item = set_user_skill_enabled(
+            user_id=user.id, skill_id=skill_id, enabled=bool(body.enabled)
+        )
+    except ValueError as err:
+        detail = str(err)
+        code = 404 if detail == "skill not found" else 400
+        raise HTTPException(status_code=code, detail=detail) from err
+    return {"item": item}
+
+
+@router.delete("/skills/{skill_id}")
+def design_skills_delete(
+    skill_id: int,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    from services.design.prompts.skill_store import delete_end_user_skill
+
+    try:
+        ok = delete_end_user_skill(user_id=user.id, skill_id=skill_id)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    if not ok:
+        raise HTTPException(status_code=404, detail="skill not found")
+    return {"ok": True}
 
 
 @router.post("/run")
@@ -368,6 +488,7 @@ async def design_run(
                     apply_ops=body.apply_ops,
                     interaction_mode=body.interaction_mode,
                     client_country=client_country,
+                    skill_refs=body.skill_refs,
                 ):
                     await queue.put(("ev", ev))
             except Exception as err:  # noqa: BLE001

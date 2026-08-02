@@ -2092,6 +2092,8 @@ export type RunDesignAgentParams = {
   routeOverrides?: Record<string, string> | null;
   /** Ask confirm: skip LLM and apply these ops (agent mode). */
   applyOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }> | null;
+  /** User-pinned skill keys/ids from `/` chips. */
+  skillRefs?: string[] | null;
 };
 
 /** Map agent params → POST /design/run body (omit empty optional fields). */
@@ -2132,6 +2134,9 @@ function buildRunDesignJobBody(
   if (params.memory) body.memory = params.memory;
   if (params.applyOps?.length) {
     body.apply_ops = params.applyOps as Array<Record<string, unknown>>;
+  }
+  if (params.skillRefs?.length) {
+    body.skill_refs = params.skillRefs.map((x) => String(x).trim()).filter(Boolean);
   }
   return body;
 }

@@ -14,14 +14,14 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Source--Available-orange.svg" alt="Recombyn Open Source License" /></a>
   <a href="docs/self-hosting.md"><img src="https://img.shields.io/badge/self--host-Docker%20Compose-2496ED?logo=docker&logoColor=white" alt="Self-host" /></a>
   <a href="apps/web"><img src="https://img.shields.io/badge/web-React%20%2B%20TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="apps/api"><img src="https://img.shields.io/badge/api-FastAPI%20%2B%20Python-3776AB?logo=python&logoColor=white" alt="Python" /></a>
   <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-green.svg" alt="Security" /></a>
 </p>
 
-**Recombyn** is an open-source **canvas editor + AI Design Agent** (MIT).  
+**Recombyn** is a **canvas editor + AI Design Agent** (source-available).  
 Design on an infinite canvas; a LangGraph agent edits layers, shapes, text, and layout through conversation — not one-shot image dumps.
 
 Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API). Local dev can use **SQLite** (empty `DATABASE_URL`), or **PostgreSQL** — see [docs/postgres-switch.md](docs/postgres-switch.md).
@@ -101,9 +101,15 @@ e2e/               Playwright
 
 ## License & model
 
-[MIT](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
+[Recombyn Open Source License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-Individuals can self-host for free. We plan to offer **hosted Cloud** and enterprise support later — the MIT core stays open (same shape as many OSS + Cloud products).
+Apache License 2.0 with additional conditions (same shape as [Breatic](https://github.com/orime-org/breatic)):
+
+- **Personal / private self-host** — free
+- **Internal org use** — permitted
+- **Public-facing deployment** of Recombyn as a service (paid or free) — **requires enterprise / commercial authorization** (`licensing@recombyn.com`)
+
+See [LICENSE](./LICENSE) for the full text.
 
 ## Star us on GitHub ⭐
 

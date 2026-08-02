@@ -61,6 +61,16 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
         ){engine}
         """,
         f"""
+        CREATE TABLE IF NOT EXISTS design_user_skill_pref (
+            id {pk},
+            user_id VARCHAR(64) NOT NULL,
+            skill_key VARCHAR(64) NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at DOUBLE NOT NULL,
+            UNIQUE(user_id, skill_key)
+        ){engine}
+        """,
+        f"""
         CREATE TABLE IF NOT EXISTS design_skill_group (
             id {pk},
             name VARCHAR(128) NOT NULL,
@@ -362,6 +372,7 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
     _ensure_design_skill_key_column(conn, mysql=mysql)
     _ensure_design_skill_runtime_columns(conn, mysql=mysql)
     _ensure_design_skill_revision_table(conn, mysql=mysql)
+    _ensure_design_user_skill_pref_table(conn, mysql=mysql)
     _ensure_canvas_tool_kind_column(conn, mysql=mysql)
     _ensure_canvas_tool_args_schema_column(conn, mysql=mysql)
     _ensure_global_rule_meta_columns(conn, mysql=mysql)
@@ -665,6 +676,41 @@ def _ensure_design_skill_revision_table(conn: Any, *, mysql: bool) -> None:
             if not mysql
             else "CREATE INDEX idx_design_skill_rev_key_ver "
             "ON design_skill_revision(skill_key, version)"
+        )
+    except Exception:
+        pass
+
+
+def _ensure_design_user_skill_pref_table(conn: Any, *, mysql: bool) -> None:
+    """Per-user enable/disable overlay for official (and any) skills."""
+    pk = "BIGINT PRIMARY KEY AUTO_INCREMENT" if mysql else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    engine = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" if mysql else ""
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS design_user_skill_pref (
+                id {pk},
+                user_id VARCHAR(64) NOT NULL,
+                skill_key VARCHAR(64) NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at DOUBLE NOT NULL,
+                UNIQUE(user_id, skill_key)
+            ){engine}
+            """
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_design_user_skill_pref_user "
+            "ON design_user_skill_pref(user_id)"
+            if not mysql
+            else "CREATE INDEX idx_design_user_skill_pref_user "
+            "ON design_user_skill_pref(user_id)"
         )
     except Exception:
         pass

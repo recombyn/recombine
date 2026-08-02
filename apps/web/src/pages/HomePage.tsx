@@ -401,8 +401,12 @@ function HomePage() {
         importing={importing}
         onCreate={handleCreate}
       />
-      {/* Full-bleed column — side rail is position:fixed and must not reserve flow space. */}
-      <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
+      {/*
+        Rail is position:fixed (does not take flow width). Reserve the same 64px on md+
+        so hero/composer center in the remaining column — otherwise left gap looks tighter
+        than the right by exactly the rail width.
+      */}
+      <div className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden md:pl-[64px]">
         <HomeTopBar setNav={setNav} />
         <HomeTemplateList
           nav={nav}

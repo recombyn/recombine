@@ -58,7 +58,9 @@ import { message } from '@/components/base';
 import {
   chipBaseKey,
   parseAtMentionQuery,
+  parseSlashSkillQuery,
   stripTrailingAtQuery,
+  stripTrailingSlashQuery,
   buildComposerContext,
   enrichComposerContextThumb,
   rasterizeNodesToPngDataUrl,
@@ -66,6 +68,8 @@ import {
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
+import { fetchDesignSkills, type DesignSkillCard } from '@/apis/design';
+import AgentDockHeader from '@/components/editor/panels/agent/AgentDockHeader';
 import {
   runDesignAgent,
   resolveDesignTargetFrame,
@@ -91,7 +95,6 @@ import {
   type TaskState,
 } from '@/components/editor/panels/agent/agentMemory';
 import AgentMessageList from '@/components/editor/panels/agent/AgentMessageList';
-import AgentDockHeader from '@/components/editor/panels/agent/AgentDockHeader';
 import AgentDockComposerFooter from '@/components/editor/panels/agent/AgentDockComposerFooter';
 import AgentDockResizeHandle from '@/components/editor/panels/agent/AgentDockResizeHandle';
 import {
@@ -1322,6 +1325,146 @@ function canvasSizeFromChip(chipNorm: string): string | undefined {
   return undefined;
 }
 
+function pickModelWithFallback(
+  pool: LlmModel[],
+  selectedId: string,
+  fallbackId: string
+): LlmModel | undefined {
+  return (
+    pool.find((m) => m.id === selectedId) ||
+    pool.find((m) => m.id === fallbackId) ||
+    pool[0]
+  );
+}
+
+function clampComposerImageCount(n: number): 1 | 2 | 3 | 4 {
+  return Math.max(1, Math.min(4, Math.round(n) || 1)) as 1 | 2 | 3 | 4;
+}
+
+function modelButtonTitle(
+  modelId: string,
+  models: LlmModel[],
+  fallbackLabel: string,
+  t: (key: string) => string
+): string {
+  if (modelId === 'auto') return modelDescription(AUTO_MODEL, t);
+  const m = models.find((x) => x.id === modelId);
+  if (!m) return fallbackLabel;
+  return `${m.label || m.id} — ${modelDescription(m, t)}`;
+}
+
+function modelButtonLabel(
+  modelId: string,
+  selected: LlmModel | undefined,
+  fallbackLabel: string,
+  t: (key: string) => string
+): string {
+  if (modelId === 'auto') return t('agent.autoToggle');
+  return selected?.label || fallbackLabel;
+}
+
+function interactionModeLabel(
+  mode: ComposerInteractionMode,
+  t: (key: string) => string
+): string {
+  if (mode === 'image') return t('agent.interactionImage');
+  if (mode === 'video') return t('agent.interactionVideo');
+  return t('agent.interactionAgent');
+}
+
+function buildImageModeControls(opts: {
+  active: boolean;
+  models: LlmModel[];
+  modelId: string;
+  modelsStatus: 'idle' | 'loading' | 'ready' | 'error';
+  resolution: string;
+  aspectRatio: string;
+  imageCount: 1 | 2 | 3 | 4;
+  modelOpen: boolean;
+  onResolutionChange: (r: string) => void;
+  onAspectRatioChange: (r: string) => void;
+  onImageCountChange: (n: number) => void;
+  onModelOpenChange: (open: boolean) => void;
+  onPickModel: (id: string) => void;
+}): ImageModeComposerControls | null {
+  if (!opts.active) return null;
+  const pool = opts.models.filter((m) => isImageKind(m));
+  const selected =
+    pickModelWithFallback(pool, opts.modelId, FREE_IMAGE_MODEL_ID) ||
+    ({ id: opts.modelId || FREE_IMAGE_MODEL_ID } as LlmModel);
+  return {
+    resolution: opts.resolution,
+    aspectRatio: opts.aspectRatio,
+    imageCount: opts.imageCount,
+    onResolutionChange: opts.onResolutionChange,
+    onAspectRatioChange: opts.onAspectRatioChange,
+    onImageCountChange: (n) => opts.onImageCountChange(clampComposerImageCount(n)),
+    imageLimits: modelImageLimits(selected),
+    creditCost: estimateImageCredits(selected, opts.imageCount, opts.resolution),
+    modelLabel: String(selected.label || opts.modelId || FREE_IMAGE_MODEL_ID),
+    modelIcon: (
+      <ModelBrandIcon model={selected} className="h-3.5 w-3.5 shrink-0" />
+    ),
+    modelOpen: opts.modelOpen,
+    onModelOpenChange: opts.onModelOpenChange,
+    modelPanel: (
+      <ModelPickerPanel
+        tab="image"
+        models={opts.models}
+        selectedId={opts.modelId}
+        status={opts.modelsStatus}
+        onPick={opts.onPickModel}
+      />
+    ),
+  };
+}
+
+function buildVideoModeControls(opts: {
+  active: boolean;
+  models: LlmModel[];
+  modelId: string;
+  modelsStatus: 'idle' | 'loading' | 'ready' | 'error';
+  resolution: string;
+  aspectRatio: string;
+  duration: number;
+  modelOpen: boolean;
+  onResolutionChange: (r: string) => void;
+  onAspectRatioChange: (r: string) => void;
+  onDurationChange: (d: number) => void;
+  onModelOpenChange: (open: boolean) => void;
+  onPickModel: (id: string) => void;
+}): VideoModeComposerControls | null {
+  if (!opts.active) return null;
+  const pool = opts.models.filter((m) => isVideoKind(m));
+  const selected =
+    pickModelWithFallback(pool, opts.modelId, DEFAULT_VIDEO_MODEL_ID) ||
+    ({ id: opts.modelId || DEFAULT_VIDEO_MODEL_ID } as LlmModel);
+  return {
+    resolution: opts.resolution,
+    aspectRatio: opts.aspectRatio,
+    duration: opts.duration,
+    onResolutionChange: opts.onResolutionChange,
+    onAspectRatioChange: opts.onAspectRatioChange,
+    onDurationChange: opts.onDurationChange,
+    creditCost: estimateVideoCredits(selected),
+    modelLabel: String(selected.label || opts.modelId || DEFAULT_VIDEO_MODEL_ID),
+    modelIcon: (
+      <ModelBrandIcon model={selected} className="h-3.5 w-3.5 shrink-0" />
+    ),
+    modelOpen: opts.modelOpen,
+    onModelOpenChange: opts.onModelOpenChange,
+    modelPanel: (
+      <ModelPickerPanel
+        tab="video"
+        models={opts.models}
+        selectedId={opts.modelId}
+        status={opts.modelsStatus}
+        onPick={opts.onPickModel}
+      />
+    ),
+  };
+}
+
 function buildImageGenRequestBody(opts: {
   prompt: string;
   canPickModel: boolean;
@@ -1399,6 +1542,7 @@ type SendChipContext = {
   mentionNodeIds: string[];
   attachedImages: string[];
   mentionImageSrcs: string[];
+  skillRefs: string[];
 };
 
 function collectSendChipContext(chips: ComposerContext[]): SendChipContext {
@@ -1441,7 +1585,26 @@ function collectSendChipContext(chips: ComposerContext[]): SendChipContext {
     })
     .map((c) => String(c.dataUrl || c.thumbUrl || '').trim())
     .filter(Boolean);
-  return { frameChip, chipFrameId, mentionNodeIds, attachedImages, mentionImageSrcs };
+  const skillRefs = [
+    ...new Set(
+      chips
+        .filter((c) => c.kind === 'skill')
+        .map((c) => {
+          const base = chipBaseKey(c.key);
+          if (base.startsWith('skill:')) return base.slice(6);
+          return String(c.payload || base).trim();
+        })
+        .filter(Boolean)
+    ),
+  ];
+  return {
+    frameChip,
+    chipFrameId,
+    mentionNodeIds,
+    attachedImages,
+    mentionImageSrcs,
+    skillRefs,
+  };
 }
 
 function resolveImageGenPlan(opts: {
@@ -1953,6 +2116,9 @@ function AgentDock({
   const [modelPanelOpen, setModelPanelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  const [skillPanelOpen, setSkillPanelOpen] = useState(false);
+  const [skillQuery, setSkillQuery] = useState('');
+  const [skillCatalog, setSkillCatalog] = useState<DesignSkillCard[]>([]);
   /** Context chips in the composer (right-click 添加到 Chat + file attachments). */
   const [contextChips, setContextChips] = useState<ComposerContext[]>([]);
   const contextChipsRef = useRef<ComposerContext[]>([]);
@@ -3091,6 +3257,7 @@ function AgentDock({
       mentionNodeIds,
       attachedImages,
       mentionImageSrcs,
+      skillRefs,
     } = collectSendChipContext(contextChips);
     // Build API prompt while chips still exist — clearing first drops [Target element]
     // so the backend never sees @ and may create a new artboard instead of edit/delete.
@@ -3472,6 +3639,7 @@ function AgentDock({
         spatialSummary: spatialSummary || undefined,
         focusFrameId: targetFrameId || undefined,
         seedLiveNodeIds: seedLiveNodeIds.length ? seedLiveNodeIds : undefined,
+        skillRefs: skillRefs.length ? skillRefs : undefined,
         images: sendImages.length ? sendImages : undefined,
         sessionId,
         projectId: chatScopeId || '__none__',
@@ -3711,19 +3879,54 @@ function AgentDock({
     setModelPanelOpen(false);
     setMentionPanelOpen(false);
     setMentionQuery('');
+    setSkillPanelOpen(false);
+    setSkillQuery('');
   };
 
-  /** `@` opens canvas attach picker (not the model list). */
-  const maybeOpenMentionFromAt = (value: string) => {
+  const slashTriggerIndex = (value: string): number => {
+    for (let i = value.length - 1; i >= 0; i -= 1) {
+      if (value[i] !== '/') continue;
+      if (/\s/.test(value.slice(i + 1))) return -1;
+      if (i > 0 && !/\s/.test(value[i - 1]!)) continue;
+      return i;
+    }
+    return -1;
+  };
+
+  /** `@` attachments or `/` skills — prefer the later trigger. */
+  const maybeOpenComposerMentions = (value: string) => {
     if (onlyImageInteraction) {
       setMentionPanelOpen(false);
       setMentionQuery('');
+      setSkillPanelOpen(false);
+      setSkillQuery('');
       return;
     }
-    const parsed = parseAtMentionQuery(value);
-    if (parsed.open) setModelPanelOpen(false);
-    setMentionQuery(parsed.query);
-    setMentionPanelOpen(parsed.open);
+    const at = parseAtMentionQuery(value);
+    const slash = parseSlashSkillQuery(value);
+    const atIdx = at.open ? value.lastIndexOf('@') : -1;
+    const slashIdx = slash.open ? slashTriggerIndex(value) : -1;
+    const preferSkill = slash.open && (!at.open || slashIdx > atIdx);
+    if (preferSkill) {
+      setModelPanelOpen(false);
+      setMentionPanelOpen(false);
+      setMentionQuery('');
+      setSkillQuery(slash.query);
+      setSkillPanelOpen(true);
+      return;
+    }
+    if (at.open) {
+      setModelPanelOpen(false);
+      setSkillPanelOpen(false);
+      setSkillQuery('');
+      setMentionQuery(at.query);
+      setMentionPanelOpen(true);
+      return;
+    }
+    setMentionPanelOpen(false);
+    setMentionQuery('');
+    setSkillPanelOpen(false);
+    setSkillQuery('');
   };
 
   const mentionItems = useMemo((): MentionAttachItem[] => {
@@ -3736,6 +3939,33 @@ function AgentDock({
         : {}),
     }));
   }, [contextChips, t]);
+
+  const skillMentionItems = useMemo((): MentionAttachItem[] => {
+    const mineLabel = t('agent.skillsMine');
+    const officialLabel = t('agent.skillsOfficial');
+    return skillCatalog.map((s) => ({
+      id: String(s.skillKey || s.id),
+      label: s.name,
+      hint: s.whenToUse || s.description || undefined,
+      group: s.mine ? mineLabel : officialLabel,
+      ...(s.logo ? { thumbUrl: s.logo } : {}),
+    }));
+  }, [skillCatalog, t]);
+
+  useEffect(() => {
+    if (!skillPanelOpen) return;
+    let cancelled = false;
+    void fetchDesignSkills()
+      .then((res) => {
+        if (!cancelled) setSkillCatalog(res.items || []);
+      })
+      .catch(() => {
+        if (!cancelled) setSkillCatalog([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [skillPanelOpen]);
 
   const pickMentionAttach = (pickId: string) => {
     const attachments = contextChipsRef.current.filter((c) => c.kind === 'attachment');
@@ -3765,14 +3995,39 @@ function AgentDock({
     });
   };
 
+  const pickSkillMention = (pickId: string) => {
+    const skill = skillCatalog.find(
+      (s) => String(s.skillKey || s.id) === pickId || String(s.id) === pickId
+    );
+    if (!skill) return;
+    const key = String(skill.skillKey || skill.id);
+    const ctx: ComposerContext = {
+      key: `skill:${key}`,
+      label: skill.name,
+      kind: 'skill',
+      payload: key,
+      ...(skill.logo ? { thumbUrl: skill.logo } : {}),
+    };
+    pinnedContextKeysRef.current.add(ctx.key);
+    contextDismissedKeyRef.current = null;
+    if (editingUserId) setEditDraft(stripTrailingSlashQuery);
+    else setInput(stripTrailingSlashQuery);
+    setSkillPanelOpen(false);
+    setSkillQuery('');
+    queueMicrotask(() => {
+      inputRef.current?.insertContextAtCaret(ctx);
+      inputRef.current?.focus();
+    });
+  };
+
   const onInputChange = (value: string) => {
     setInput(value);
-    maybeOpenMentionFromAt(value);
+    maybeOpenComposerMentions(value);
   };
 
   const onEditDraftChange = (value: string) => {
     setEditDraft(value);
-    maybeOpenMentionFromAt(value);
+    maybeOpenComposerMentions(value);
   };
 
   const applyInteractionMode = (mode: ComposerInteractionMode) => {
@@ -3821,6 +4076,7 @@ function AgentDock({
     if (!onlyImageInteraction) return;
     setModelPanelOpen(false);
     setMentionPanelOpen(false);
+    setSkillPanelOpen(false);
     setImageModelPanelOpen(false);
     setVideoModelPanelOpen(false);
   }, [onlyImageInteraction]);
@@ -3842,6 +4098,24 @@ function AgentDock({
   });
   const mentionDismiss = useDismiss(mentionFloating.context);
   const mentionIx = useInteractions([mentionDismiss]);
+
+  const skillFloating = useFloating({
+    open: skillPanelOpen,
+    onOpenChange: (open) => {
+      setSkillPanelOpen(open);
+      if (!open) setSkillQuery('');
+    },
+    placement: 'bottom-start',
+    strategy: 'fixed',
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(6),
+      flip({ padding: 12, fallbackPlacements: ['top-start', 'bottom-end', 'top-end'] }),
+      shift({ padding: 12 }),
+    ],
+  });
+  const skillDismiss = useDismiss(skillFloating.context);
+  const skillIx = useInteractions([skillDismiss]);
 
   /** Anchor attach picker to the `@` glyph / caret — not the whole composer chrome. */
   useLayoutEffect(() => {
@@ -3866,6 +4140,28 @@ function AgentDock({
     mentionFloating.update,
   ]);
 
+  useLayoutEffect(() => {
+    if (!skillPanelOpen) return;
+    const editor =
+      (window.document.querySelector('[data-agent-composer]') as HTMLElement | null) ||
+      undefined;
+    skillFloating.refs.setPositionReference({
+      contextElement: editor,
+      getBoundingClientRect: () =>
+        inputRef.current?.getSlashMentionAnchorRect?.() ??
+        editor?.getBoundingClientRect() ??
+        new DOMRect(),
+    });
+    void skillFloating.update();
+  }, [
+    skillPanelOpen,
+    skillQuery,
+    input,
+    editDraft,
+    skillFloating.refs,
+    skillFloating.update,
+  ]);
+
   if (!open) return null;
 
   const composerPlaceholder = resolveComposerPlaceholder(t, {
@@ -3875,110 +4171,50 @@ function AgentDock({
     hasContextChips: contextChips.length > 0,
   });
 
-  const imageModels = models.filter((m) => isImageKind(m));
-  const videoModels = models.filter((m) => isVideoKind(m));
-  const imageModeSelectedModel =
-    imageModels.find((m) => m.id === model) ||
-    imageModels.find((m) => m.id === FREE_IMAGE_MODEL_ID) ||
-    imageModels[0];
-  const imageModeControls: ImageModeComposerControls | null = isImageInteraction
-    ? {
-        resolution: imageResolution,
-        aspectRatio: imageGenAspectRatio,
-        imageCount: imageGenCountSetting,
-        onResolutionChange: (r) => setImageResolution(r as typeof imageResolution),
-        onAspectRatioChange: (r) => setImageGenAspectRatio(r as typeof imageGenAspectRatio),
-        onImageCountChange: (n) =>
-          setImageGenCountSetting(
-            Math.max(1, Math.min(4, Math.round(n) || 1)) as 1 | 2 | 3 | 4
-          ),
-        imageLimits: modelImageLimits(imageModeSelectedModel),
-        creditCost: estimateImageCredits(
-          imageModeSelectedModel,
-          imageGenCountSetting,
-          imageResolution
-        ),
-        modelLabel: String(
-          imageModeSelectedModel?.label || model || FREE_IMAGE_MODEL_ID
-        ),
-        modelIcon: (
-          <ModelBrandIcon
-            model={imageModeSelectedModel || { id: model || FREE_IMAGE_MODEL_ID }}
-            className="h-3.5 w-3.5 shrink-0"
-          />
-        ),
-        modelOpen: imageModelPanelOpen,
-        onModelOpenChange: setImageModelPanelOpen,
-        modelPanel: (
-          <ModelPickerPanel
-            tab="image"
-            models={models}
-            selectedId={model}
-            status={modelsStatus}
-            onPick={(id) => {
-              setModel(id);
-              setComposerMode('image');
-              setImageModelPanelOpen(false);
-            }}
-          />
-        ),
-      }
-    : null;
+  const imageModeControls = buildImageModeControls({
+    active: isImageInteraction,
+    models,
+    modelId: model,
+    modelsStatus,
+    resolution: imageResolution,
+    aspectRatio: imageGenAspectRatio,
+    imageCount: imageGenCountSetting,
+    modelOpen: imageModelPanelOpen,
+    onResolutionChange: (r) => setImageResolution(r as typeof imageResolution),
+    onAspectRatioChange: (r) => setImageGenAspectRatio(r as typeof imageGenAspectRatio),
+    onImageCountChange: (n) => setImageGenCountSetting(clampComposerImageCount(n)),
+    onModelOpenChange: setImageModelPanelOpen,
+    onPickModel: (id) => {
+      setModel(id);
+      setComposerMode('image');
+      setImageModelPanelOpen(false);
+    },
+  });
 
-  const videoModeSelectedModel =
-    videoModels.find((m) => m.id === model) ||
-    videoModels.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID) ||
-    videoModels[0];
-  const videoModeControls: VideoModeComposerControls | null = isVideoInteraction
-    ? {
-        resolution: videoResolution,
-        aspectRatio: videoGenAspectRatio,
-        duration: videoGenDuration,
-        onResolutionChange: (r) => setVideoResolution(r),
-        onAspectRatioChange: (r) => setVideoGenAspectRatio(r),
-        onDurationChange: (d) =>
-          setVideoGenDuration(Math.max(1, Math.round(d) || DEFAULT_VIDEO_DURATION)),
-        creditCost: estimateVideoCredits(videoModeSelectedModel),
-        modelLabel: String(
-          videoModeSelectedModel?.label || model || DEFAULT_VIDEO_MODEL_ID
-        ),
-        modelIcon: (
-          <ModelBrandIcon
-            model={videoModeSelectedModel || { id: model || DEFAULT_VIDEO_MODEL_ID }}
-            className="h-3.5 w-3.5 shrink-0"
-          />
-        ),
-        modelOpen: videoModelPanelOpen,
-        onModelOpenChange: setVideoModelPanelOpen,
-        modelPanel: (
-          <ModelPickerPanel
-            tab="video"
-            models={models}
-            selectedId={model}
-            status={modelsStatus}
-            onPick={(id) => {
-              setModel(id);
-              setComposerMode('video');
-              setVideoModelPanelOpen(false);
-            }}
-          />
-        ),
-      }
-    : null;
+  const videoModeControls = buildVideoModeControls({
+    active: isVideoInteraction,
+    models,
+    modelId: model,
+    modelsStatus,
+    resolution: videoResolution,
+    aspectRatio: videoGenAspectRatio,
+    duration: videoGenDuration,
+    modelOpen: videoModelPanelOpen,
+    onResolutionChange: setVideoResolution,
+    onAspectRatioChange: setVideoGenAspectRatio,
+    onDurationChange: (d) =>
+      setVideoGenDuration(Math.max(1, Math.round(d) || DEFAULT_VIDEO_DURATION)),
+    onModelOpenChange: setVideoModelPanelOpen,
+    onPickModel: (id) => {
+      setModel(id);
+      setComposerMode('video');
+      setVideoModelPanelOpen(false);
+    },
+  });
 
   const modelButtonProps = {
-    title:
-      model === 'auto'
-        ? modelDescription(AUTO_MODEL, t)
-        : (() => {
-            const m = models.find((x) => x.id === model);
-            if (!m) return selectedModelLabel;
-            return `${m.label || m.id} — ${modelDescription(m, t)}`;
-          })(),
-    label:
-      model === 'auto'
-        ? t('agent.autoToggle')
-        : selectedModel?.label || selectedModelLabel,
+    title: modelButtonTitle(model, models, selectedModelLabel, t),
+    label: modelButtonLabel(model, selectedModel, selectedModelLabel, t),
     open: modelPanelOpen,
     onOpenChange: (next: boolean) => {
       if (next) {
@@ -3991,20 +4227,14 @@ function AgentDock({
     panel: (
       <AgentRoutePrefsEditor
         compact
-        modeLabel={
-          interactionMode === 'image'
-            ? t('agent.interactionImage')
-            : interactionMode === 'video'
-              ? t('agent.interactionVideo')
-              : t('agent.interactionAgent')
-        }
+        modeLabel={interactionModeLabel(interactionMode, t)}
       />
     ),
     icon: <Icon name="editor-model-cube" width={16} height={16} />,
   };
 
   const escapeComposer = (opts?: { cancelEdit?: boolean }) => {
-    if (mentionPanelOpen || modelPanelOpen) {
+    if (mentionPanelOpen || skillPanelOpen || modelPanelOpen) {
       closePopovers();
       return;
     }
@@ -4161,6 +4391,25 @@ function AgentDock({
               items={mentionItems}
               query={mentionQuery}
               onPick={pickMentionAttach}
+            />
+          </div>
+        </FloatingPortal>
+      ) : null}
+
+      {!historyOpen && skillPanelOpen ? (
+        <FloatingPortal>
+          <div
+            ref={skillFloating.refs.setFloating}
+            style={skillFloating.floatingStyles as CSSProperties}
+            className="z-[80]"
+            {...skillIx.getFloatingProps()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <MentionAttachPanel
+              variant="skill"
+              items={skillMentionItems}
+              query={skillQuery}
+              onPick={pickSkillMention}
             />
           </div>
         </FloatingPortal>
