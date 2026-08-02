@@ -8,24 +8,36 @@ from typing import Any
 
 from langgraph.types import Command
 
-from services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
+from services.design.ops.tool_ops_contract import (
+    tool_ops_activity_events as _tool_ops_activity_events,
+    tool_ops_for_sse,
+    validation_failure_reason,
+)
+from services.design.runtime.graph.state import (
+    AgentRunState,
+    AgentRuntime,
+    GraphState,
+    _SCENE_WAIT_SEC,
+)
 from services.design.runtime.graph.support import (
     _ask_propose_user_text,
     _bump,
+    _commit,
     _emit,
     _emit_canvas_size_from_ops,
     _emit_deferred_paint_reply,
     _ensure_propose_choice_ui,
+    _goto_cmd,
     _hydrate_log_kwargs,
     _llm_ux_reply,
     _ops_for_log,
     _ops_have_create_frame,
+    _persist_progress,
     _prompt_text,
     _strip_create_frame_ops,
+    _validate_ops_payload,
 )
-from services.design.runtime.graph.support import _goto_cmd
-from services.design.runtime.graph.support import _commit
-from services.design.runtime.graph.support import _persist_progress
+from services.design.runtime.scene_feedback import begin_wait
 
 
 async def _node_apply_confirm(state: GraphState) -> Command:

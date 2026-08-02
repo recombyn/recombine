@@ -6,24 +6,37 @@ import json
 import time
 from typing import Any
 
+import logging
+
+from langgraph.graph import END
 from langgraph.types import Command
 
+from services.design.admin.task_store import _update_task
+from services.design.prompts.prompt_build import _finalize_memory_patch
+from services.design.prompts.rules_text import exec_trace
 from services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
 from services.design.runtime.graph.support import (
     _bump,
+    _commit,
     _emit,
+    _goto_cmd,
     _is_canvas_work_intent,
+    _persist_progress,
     _persist_task_meta,
     _resolve_paint_want,
 )
-from services.design.runtime.graph.support import _goto_cmd
-from services.design.runtime.graph.support import _commit
-from services.design.runtime.graph.support import _persist_progress
+from services.design.runtime.models_route import CANVAS_WORK_INTENTS, normalize_user_intent
+from services.wallet.db import get_user_tokens
+
+_log = logging.getLogger(__name__)
 
 
 async def _node_settle(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
+    # Lazy import — build.py imports nodes; avoid cycle.
+    from services.design.runtime.graph.build import _design_settle_hold_fn
+
     spend = await asyncio.to_thread(
         _design_settle_hold_fn(rt),
         rt.user_id,

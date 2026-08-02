@@ -8,14 +8,16 @@ from typing import Any
 
 from langgraph.types import Command
 
+from services.agent_memory.service import memory_service
+from services.design.runtime.graph.nodes.bootstrap import _apply_task_route_flags
 from services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
 from services.design.runtime.graph.support import (
+    _bump,
     _clip_llm_raw,
+    _commit,
     _goto_cmd,
+    _persist_progress,
 )
-from services.design.runtime.graph.support import _bump
-from services.design.runtime.graph.support import _commit
-from services.design.runtime.graph.support import _persist_progress
 
 
 async def _node_memory(state: GraphState) -> Command:

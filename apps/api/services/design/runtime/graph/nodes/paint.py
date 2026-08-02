@@ -8,15 +8,26 @@ from typing import Any
 
 from langgraph.types import Command
 
-from services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
+import logging
+
+from services.design.ops.tool_ops_contract import validation_failure_reason
+from services.design.prompts.rules_text import _as_text
+from services.design.runtime.graph.state import (
+    AgentRunState,
+    AgentRuntime,
+    GraphState,
+    PaintOpsSchema,
+)
 from services.design.runtime.graph.support import (
     _bump,
     _clip_llm_raw,
+    _commit,
     _emit,
     _emit_canvas_size_from_ops,
     _emit_design_loading_artboard,
     _emit_tool_ops_validation_ui,
     _ensure_paint_tool_details,
+    _goto_cmd,
     _is_lean_paint_turn,
     _llm_io_fields,
     _llm_ux_reply,
@@ -24,13 +35,16 @@ from services.design.runtime.graph.support import (
     _paint_ops_system,
     _paint_ops_user,
     _paint_user_reply,
+    _persist_progress,
     _prompt_compact_len,
+    _require_prompt_pack,
     _resolve_and_log_model,
     _resolve_paint_want,
+    _stream_llm_text,
 )
-from services.design.runtime.graph.support import _goto_cmd
-from services.design.runtime.graph.support import _commit
-from services.design.runtime.graph.support import _persist_progress
+from services.design.runtime.host import validate_paint_ops
+
+_log = logging.getLogger(__name__)
 
 
 async def _await_or_abandon(coro: Any, *, timeout_sec: float, label: str) -> Any:
