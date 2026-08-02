@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineQuestionMarkCircle } from 'react-icons/hi2';
+import { HiOutlinePlus, HiOutlineQuestionMarkCircle } from 'react-icons/hi2';
 import { Button, Dialog, message, Switch, Tooltip } from '@/components/base';
 import {
   deleteDesignUserSkill,
@@ -26,12 +26,40 @@ const DEFAULT_SKILL_GRID =
   'grid w-full grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
 
 /** Loading placeholders only — not real totals (API count unknown until fetch). */
-const SKILL_SKELETON_MINE = 2;
+const SKILL_SKELETON_MINE = 1;
 /** ~one row on the 2xl 5-col grid. */
 const SKILL_SKELETON_OFFICIAL = 5;
 
 const SKILL_CARD_SHELL =
   'w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3 text-left shadow-[0_2px_10px_rgba(15,23,42,0.06)]';
+
+/** Dashed “Upload skill” tile — first cell in Mine grid (like New project). */
+function UploadSkillCard({
+  label,
+  disabled = false,
+  onClick,
+}: {
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        SKILL_CARD_SHELL,
+        'flex min-h-[88px] flex-col items-center justify-center gap-1.5 border-dashed shadow-none',
+        'transition hover:border-[var(--muted)] hover:bg-[var(--accent-soft)] hover:shadow-none',
+        'disabled:opacity-50'
+      )}
+    >
+      <HiOutlinePlus className="h-7 w-7 text-[var(--muted)]" strokeWidth={1.5} />
+      <span className="text-[13px] font-medium text-[var(--ink)]">{label}</span>
+    </button>
+  );
+}
 
 function formatSkillUpdatedAt(ts: number | null | undefined, locale: string): string {
   if (!ts) return '—';
@@ -63,10 +91,12 @@ function SkillCardSkeleton(): ReactNode {
 function SkillGroupSkeleton({
   title,
   count,
+  leading,
   gridClassName = DEFAULT_SKILL_GRID,
 }: {
   title: string;
   count: number;
+  leading?: ReactNode;
   gridClassName?: string;
 }): ReactNode {
   return (
@@ -75,6 +105,7 @@ function SkillGroupSkeleton({
         {title}
       </h3>
       <div className={gridClassName}>
+        {leading}
         {Array.from({ length: count }, (_, i) => (
           <SkillCardSkeleton key={`sk-${i}`} />
         ))}
@@ -168,6 +199,7 @@ function SkillGroup({
   onDelete,
   onToggle,
   onPreview,
+  leading,
   gridClassName = DEFAULT_SKILL_GRID,
 }: {
   title: string;
@@ -179,13 +211,17 @@ function SkillGroup({
   onDelete: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
   onPreview: (row: DesignSkillCard) => void;
+  /** First cell (e.g. upload tile in Mine). */
+  leading?: ReactNode;
   /** Per-group grid; mine / official can differ if needed. */
   gridClassName?: string;
 }): ReactNode {
-  const body = !rows.length ? (
+  const showGrid = Boolean(leading) || rows.length > 0;
+  const body = !showGrid ? (
     <p className="text-[13px] text-[var(--muted)]">{emptyText}</p>
   ) : (
     <div className={gridClassName}>
+      {leading}
       {rows.map((row) => (
         <SkillCard
           key={row.id}
@@ -363,35 +399,34 @@ function SkillsLibraryPanel(): ReactNode {
     }
   };
 
+  const uploadTile = (
+    <UploadSkillCard
+      label={t('agent.skillsUpload')}
+      disabled={scanning}
+      onClick={() => fileRef.current?.click()}
+    />
+  );
+
   return (
     <div className="w-full min-w-0 space-y-5">
-      <header className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <h1 className="truncate text-[18px] font-semibold tracking-tight text-[var(--ink)]">
-            {t('home.skillsTitle')}
-          </h1>
-          <Tooltip
-            tip={t('home.skillsHint')}
-            placement="bottom"
-            offset={8}
-            popupClassName="h-auto max-w-[280px] whitespace-normal py-2 leading-[1.4]"
-          >
-            <button
-              type="button"
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--muted)] transition-colors hover:bg-[var(--canvas)] hover:text-[var(--ink)]"
-              aria-label={t('home.skillsHint')}
-            >
-              <HiOutlineQuestionMarkCircle className="h-[18px] w-[18px]" strokeWidth={1.5} />
-            </button>
-          </Tooltip>
-        </div>
-        <button
-          type="button"
-          className="shrink-0 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-1.5 text-[13px] font-medium text-[var(--ink)] transition hover:bg-[var(--canvas)]"
-          onClick={() => fileRef.current?.click()}
+      <header className="flex min-w-0 items-center gap-1.5">
+        <h1 className="truncate text-[18px] font-semibold tracking-tight text-[var(--ink)]">
+          {t('home.skillsTitle')}
+        </h1>
+        <Tooltip
+          tip={t('home.skillsHint')}
+          placement="bottom"
+          offset={8}
+          popupClassName="h-auto max-w-[280px] whitespace-normal py-2 leading-[1.4]"
         >
-          {t('agent.skillsUpload')}
-        </button>
+          <button
+            type="button"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--muted)] transition-colors hover:bg-[var(--canvas)] hover:text-[var(--ink)]"
+            aria-label={t('home.skillsHint')}
+          >
+            <HiOutlineQuestionMarkCircle className="h-[18px] w-[18px]" strokeWidth={1.5} />
+          </button>
+        </Tooltip>
         <input
           ref={fileRef}
           type="file"
@@ -403,7 +438,11 @@ function SkillsLibraryPanel(): ReactNode {
 
       <div className="space-y-6">
         {loadingMine ? (
-          <SkillGroupSkeleton title={t('agent.skillsMine')} count={SKILL_SKELETON_MINE} />
+          <SkillGroupSkeleton
+            title={t('agent.skillsMine')}
+            count={SKILL_SKELETON_MINE}
+            leading={uploadTile}
+          />
         ) : (
           <SkillGroup
             title={t('agent.skillsMine')}
@@ -415,6 +454,7 @@ function SkillsLibraryPanel(): ReactNode {
             onDelete={(id) => void onDelete(id)}
             onToggle={(id, enabled) => void onToggleMine(id, enabled)}
             onPreview={setPreview}
+            leading={uploadTile}
           />
         )}
         {loadingOfficial ? (
