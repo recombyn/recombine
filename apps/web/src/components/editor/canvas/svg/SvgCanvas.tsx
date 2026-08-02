@@ -88,6 +88,7 @@ import {
   uploadImageFile,
   uploadImageFromSrc,
   readFileAsDataUrl,
+  waitForImageReady,
 } from '@/utils/uploadImage';
 import store from '@/store';
 import {
@@ -2549,10 +2550,13 @@ function SvgCanvas({
           try {
             const uploaded = await uploadImageFromSrc(url, 'chat-image.png', { signal });
             if (signal?.aborted) return;
+            const remoteReady = await waitForImageReady(uploaded.url, { signal });
+            if (signal?.aborted) return;
             dispatch(
               finishImageProcess({
                 nodeId: spawnedId || undefined,
-                src: uploaded.url,
+                // Keep local preview until the remote URL is fully decoded.
+                ...(remoteReady ? { src: uploaded.url } : {}),
                 attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
               })
             );
@@ -2994,10 +2998,13 @@ function SvgCanvas({
         try {
           const uploaded = await uploadImageFile(file, { signal });
           if (signal?.aborted) return;
+          const remoteReady = await waitForImageReady(uploaded.url, { signal });
+          if (signal?.aborted) return;
           dispatch(
             finishImageProcess({
               nodeId: spawnedId || undefined,
-              src: uploaded.url,
+              // Keep local preview until the remote URL is fully decoded.
+              ...(remoteReady ? { src: uploaded.url } : {}),
               attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
             })
           );
