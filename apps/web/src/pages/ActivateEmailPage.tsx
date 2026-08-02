@@ -26,7 +26,7 @@ function ActivateEmailPage() {
       setError(t('auth.linkInvalid') || 'Invalid login link');
       return;
     }
-    void (async () => {
+    async function activateLink() {
       try {
         const res = await activateEmailLink({ id: token });
         dispatch(
@@ -52,7 +52,8 @@ function ActivateEmailPage() {
             : '';
         setError(detail || t('auth.linkInvalid') || 'Invalid or expired login link');
       }
-    })();
+    }
+    activateLink();
   }, [dispatch, id, navigate, t]);
 
   return (

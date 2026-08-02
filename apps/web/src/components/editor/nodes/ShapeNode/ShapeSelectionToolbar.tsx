@@ -198,35 +198,33 @@ function ShapeSelectionToolbar({
     );
   };
 
-  const applyOutline = () => {
-    void (async () => {
-      const hide = message.loading('轮廓化中…', 0);
-      try {
-        const outline = await buildOutlinePathAsync(node);
-        if (!outline?.pathD) {
-          message.error('轮廓化失败');
-          return;
-        }
-        const patch = outlineNodePatch(node, outline);
-        dispatch(
-          patchDocumentNode({
-            nodeId,
-            patch: {
-              key: 'shape',
-              x: patch.x,
-              y: patch.y,
-              width: patch.width,
-              height: patch.height,
-              attrs: patch.attrs,
-            },
-          })
-        );
-        requestEnterPathEdit(nodeId, outline.pathD);
-        message.success('已轮廓化');
-      } finally {
-        hide();
+  const applyOutline = async () => {
+    const hide = message.loading('轮廓化中…', 0);
+    try {
+      const outline = await buildOutlinePathAsync(node);
+      if (!outline?.pathD) {
+        message.error('轮廓化失败');
+        return;
       }
-    })();
+      const patch = outlineNodePatch(node, outline);
+      dispatch(
+        patchDocumentNode({
+          nodeId,
+          patch: {
+            key: 'shape',
+            x: patch.x,
+            y: patch.y,
+            width: patch.width,
+            height: patch.height,
+            attrs: patch.attrs,
+          },
+        })
+      );
+      requestEnterPathEdit(nodeId, outline.pathD);
+      message.success('已轮廓化');
+    } finally {
+      hide();
+    }
   };
 
   const openStyle = (kind: 'fill' | 'stroke' | 'radius') => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, memo } from 'react';
 import type { RcbCamera } from '../core/types';
+import { rcbClientDeltaToScene, rcbResolveViewportEl, rcbScreenToScene, rcbViewportMetrics } from '../core/math';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
 import {
   resizeFromHandle,
@@ -45,11 +46,7 @@ function clientToWorld(
   clientX: number,
   clientY: number
 ) {
-  const r = stageEl.getBoundingClientRect();
-  return {
-    x: (clientX - r.left - camera.x) / camera.zoom,
-    y: (clientY - r.top - camera.y) / camera.zoom,
-  };
+  return rcbScreenToScene(camera, stageEl, clientX, clientY);
 }
 
 function hitFrame(frames: ArtboardFrame[], x: number, y: number): ArtboardFrame | null {
@@ -93,6 +90,10 @@ type DragState =
       originY: number;
       pointerX0: number;
       pointerY0: number;
+      clientX0: number;
+      clientY0: number;
+      scaleX: number;
+      scaleY: number;
       started: boolean;
     }
   | {
@@ -102,6 +103,10 @@ type DragState =
       union: SceneBox;
       pointerX0: number;
       pointerY0: number;
+      clientX0: number;
+      clientY0: number;
+      scaleX: number;
+      scaleY: number;
       aspectRatio: number;
       /** Persisted aspect lock at pointer-down (Shift OR's with lock while dragging). */
       aspectLocked: boolean;
@@ -149,7 +154,8 @@ function FrameMoveFeature({
   onClearSelectionRef.current = onClearSelection;
 
   useEffect(() => {
-    if (!enabled || !stageEl) return undefined;
+    const liveStage = rcbResolveViewportEl(stageEl);
+    if (!enabled || !liveStage) return undefined;
 
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
@@ -164,7 +170,8 @@ function FrameMoveFeature({
         e.preventDefault();
         e.stopPropagation();
         onSelect(f.id);
-        const p = clientToWorld(stageEl, cameraRef.current, e.clientX, e.clientY);
+        const p = clientToWorld(liveStage, cameraRef.current, e.clientX, e.clientY);
+        const metrics = rcbViewportMetrics(liveStage);
         dragRef.current = {
           kind: 'resize',
           id: f.id,
@@ -177,6 +184,10 @@ function FrameMoveFeature({
           },
           pointerX0: p.x,
           pointerY0: p.y,
+          clientX0: e.clientX,
+          clientY0: e.clientY,
+          scaleX: metrics.scaleX,
+          scaleY: metrics.scaleY,
           aspectRatio: f.width / Math.max(1, f.height),
           aspectLocked: Boolean(f.lockAspect),
           started: false,
@@ -186,7 +197,7 @@ function FrameMoveFeature({
 
       if (target?.closest?.(SKIP_SELECTOR)) return;
 
-      const p = clientToWorld(stageEl, cameraRef.current, e.clientX, e.clientY);
+      const p = clientToWorld(liveStage, cameraRef.current, e.clientX, e.clientY);
       if (hitContent(p.x, p.y, { clientX: e.clientX, clientY: e.clientY })) return;
 
       const frame = hitFrame(framesRef.current, p.x, p.y);
@@ -222,9 +233,14 @@ function FrameMoveFeature({
         }
         return;
       }
-      const p = clientToWorld(stageEl, cameraRef.current, e.clientX, e.clientY);
-      const dx = p.x - drag.pointerX0;
-      const dy = p.y - drag.pointerY0;
+      // Client-delta — avoids drift when stage rect jitters mid-gesture.
+      const { x: dx, y: dy } = rcbClientDeltaToScene(
+        cameraRef.current.zoom,
+        e.clientX - drag.clientX0,
+        e.clientY - drag.clientY0,
+        drag.scaleX,
+        drag.scaleY
+      );
       const zoom = Math.max(0.05, cameraRef.current.zoom);
 
       if (drag.kind === 'move') {
@@ -267,27 +283,25 @@ function FrameMoveFeature({
       );
     };
 
+    // Soft-click deselect: move already drops the drag past threshold, so a
+    // surviving deselect drag is always a click. Ignore cancel (no clear).
     const onUp = (e: PointerEvent) => {
       const drag = dragRef.current;
       if (drag?.kind === 'deselect') {
         dragRef.current = null;
-        const distSq =
-          (e.clientX - drag.clientX0) ** 2 + (e.clientY - drag.clientY0) ** 2;
-        if (distSq <= DRAG_DISTANCE_SQUARED) {
-          onClearSelectionRef.current?.();
-        }
+        if (e.type === 'pointerup') onClearSelectionRef.current?.();
         return;
       }
       if (drag && 'started' in drag && drag.started) onDraggingChangeRef.current?.(null);
       dragRef.current = null;
     };
 
-    stageEl.addEventListener('pointerdown', onDown, true);
+    liveStage.addEventListener('pointerdown', onDown, true);
     window.addEventListener('pointermove', onMoveWin);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     return () => {
-      stageEl.removeEventListener('pointerdown', onDown, true);
+      liveStage.removeEventListener('pointerdown', onDown, true);
       window.removeEventListener('pointermove', onMoveWin);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);

@@ -245,7 +245,7 @@ function pickColorWithLoupe(): Promise<string | null> {
       overlay.remove();
     }
 
-    void (async () => {
+    async function initLoupe() {
       bitmap = await captureStageBitmap();
       if (!bitmap) {
         finish(null);
@@ -261,7 +261,8 @@ function pickColorWithLoupe(): Promise<string | null> {
       window.addEventListener('keydown', onKey, true);
       // Seed loupe at current pointer if possible.
       paintLoupe(window.innerWidth / 2, window.innerHeight / 2);
-    })();
+    }
+    initLoupe();
   });
 }
 

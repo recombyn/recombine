@@ -210,32 +210,30 @@ function ImageQuickEditComposer({
     setContexts((prev) => prev.filter((c) => c.key !== key));
   };
 
-  const onPickRef = (e: ChangeEvent<HTMLInputElement>) => {
+  const onPickRef = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith('image/'));
     e.target.value = '';
     if (!files.length) return;
-    void (async () => {
-      const results = await Promise.all(
-        files.map(async (file, i) => {
-          try {
-            const dataUrl = await readFileAsDataUrl(file);
-            return {
-              key: `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
-              kind: 'attachment' as const,
-              label: file.name || 'image',
-              payload: dataUrl,
-              dataUrl,
-              thumbUrl: dataUrl,
-            } satisfies ComposerContext;
-          } catch {
-            return null;
-          }
-        })
-      );
-      const next = results.filter(Boolean) as ComposerContext[];
-      if (!next.length) return;
-      setContexts((prev) => [...prev, ...next]);
-    })();
+    const results = await Promise.all(
+      files.map(async (file, i) => {
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          return {
+            key: `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
+            kind: 'attachment' as const,
+            label: file.name || 'image',
+            payload: dataUrl,
+            dataUrl,
+            thumbUrl: dataUrl,
+          } satisfies ComposerContext;
+        } catch {
+          return null;
+        }
+      })
+    );
+    const next = results.filter(Boolean) as ComposerContext[];
+    if (!next.length) return;
+    setContexts((prev) => [...prev, ...next]);
   };
 
   const onGenerate = async () => {

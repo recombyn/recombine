@@ -76,6 +76,7 @@ import {
   getShapeHost,
   listShapeHosts,
   rcbFitImageIntoViewport,
+  rcbResolveViewportEl,
   rcbScreenToScene,
   type RcbCamera,
   type SvgBoardHandle,
@@ -167,18 +168,24 @@ import CanvasContextMenu, {
 import {
   useRcbCamera,
   useRcbOverlayRoot,
+  useRcbViewportEl,
 } from '@/components/rcb';
-
-
 type ArtboardRect = { x?: number; y?: number; width: number; height: number };
 
 function pointerToWorld(
   camera: RcbCamera,
-  opts: { stageEl?: HTMLElement | null; paperEl?: HTMLElement | null; artboard?: ArtboardRect },
+  opts: {
+    stageEl?: HTMLElement | null;
+    paperEl?: HTMLElement | null;
+    viewportEl?: HTMLElement | null;
+    artboard?: ArtboardRect;
+  },
   clientX: number,
   clientY: number
 ): { x: number; y: number } {
-  if (opts.stageEl) return rcbScreenToScene(camera, opts.stageEl, clientX, clientY);
+  // Prefer a connected stage — EditorPage stageEl can go stale after resize remounts.
+  const stage = rcbResolveViewportEl(opts.viewportEl, opts.stageEl);
+  if (stage) return rcbScreenToScene(camera, stage, clientX, clientY);
   if (opts.paperEl && opts.artboard) {
     const rect = opts.paperEl.getBoundingClientRect();
     if (!rect.width || !rect.height) return { x: 0, y: 0 };
@@ -370,11 +377,9 @@ async function readSystemPasteFromNavigator(): Promise<SystemPastePayload | null
         const videoType = types.find((t) => t.startsWith('video/'));
         if (videoType) {
           const blob = await item.getType(videoType);
-          const ext = videoType.includes('webm')
-            ? 'webm'
-            : videoType.includes('quicktime')
-              ? 'mov'
-              : 'mp4';
+          let ext = 'mp4';
+          if (videoType.includes('webm')) ext = 'webm';
+          else if (videoType.includes('quicktime')) ext = 'mov';
           return {
             kind: 'video',
             file: new File([blob], `paste.${ext}`, { type: videoType }),
@@ -619,6 +624,7 @@ function SvgCanvas({
   const dispatch = useDispatch();
   const { t } = useTranslation();
   const camera = useRcbCamera();
+  const viewportEl = useRcbViewportEl();
   const activeTool = useSelector((s: any) => s.editor.activeTool);
   const shapeKind = useSelector((s: any) => s.editor.shapeKind);
   const pendingImageSrc = useSelector((s: any) => s.editor.pendingImageSrc);
@@ -755,8 +761,7 @@ function SvgCanvas({
     }
   }, []);
   documentRef.current = document;
-  selectedIdsRef.current =
-    selectedNodeIds?.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
+  selectedIdsRef.current = ctxMenuSeedNodeIds(selectedNodeIds || [], selectedNodeId);
   activeFrameIdRef.current = activeFrameId;
   selectedFrameIdsRef.current = selectedFrameIds;
 
@@ -1865,32 +1870,30 @@ function SvgCanvas({
   );
 
   const placeImageAt = useCallback(
-    (src: string, x: number, y: number) => {
+    async (src: string, x: number, y: number) => {
       if (readOnly) return;
-      void (async () => {
-        try {
-          const natural = await measureImageNaturalSize(src);
-          const { width, height } = imageSizeForViewport(natural);
-          const latest = documentRef.current;
-          if (!latest) return;
-          const placed = rcbCenterOnPoint({ x, y }, { width, height });
-          const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
-          const { id, node } = createImageNode({
-            x: origin.x,
-            y: origin.y,
-            width: placed.width,
-            height: placed.height,
-            src,
-          });
-          dispatch(setDocument(addNodeToDocument(latest, id, node)));
-          dispatch(setSelectedNodeId(id));
-          dispatch(setPendingImageSrc(null));
-          finishToSelect();
-        } catch {
-          dispatch(setPendingImageSrc(null));
-          finishToSelect();
-        }
-      })();
+      try {
+        const natural = await measureImageNaturalSize(src);
+        const { width, height } = imageSizeForViewport(natural);
+        const latest = documentRef.current;
+        if (!latest) return;
+        const placed = rcbCenterOnPoint({ x, y }, { width, height });
+        const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
+        const { id, node } = createImageNode({
+          x: origin.x,
+          y: origin.y,
+          width: placed.width,
+          height: placed.height,
+          src,
+        });
+        dispatch(setDocument(addNodeToDocument(latest, id, node)));
+        dispatch(setSelectedNodeId(id));
+        dispatch(setPendingImageSrc(null));
+        finishToSelect();
+      } catch {
+        dispatch(setPendingImageSrc(null));
+        finishToSelect();
+      }
     },
     [dispatch, imageSizeForViewport, readOnly]
   );
@@ -1912,7 +1915,7 @@ function SvgCanvas({
     const center = view && (stageEl || paperEl)
       ? pointerToWorld(
           camera,
-          { stageEl, paperEl, artboard },
+          { viewportEl, stageEl, paperEl, artboard },
           view.left + view.width / 2,
           view.top + view.height / 2
         )
@@ -1924,6 +1927,7 @@ function SvgCanvas({
     paperH,
     paperEl,
     stageEl,
+    viewportEl,
     camera,
     overlayRoot,
     artboard,
@@ -2435,25 +2439,48 @@ function SvgCanvas({
     [dispatch, readOnly]
   );
 
-  // Context menu: infinite paper is 0×0 — listen on stage (same as SelectionFeature).
+  // Context menu: prefer right-button pointer/mouse down (real client coords).
+  // DevTools / some browsers fire only `contextmenu` at (1,1) with no button-2 down.
   useEffect(() => {
-    const hitEl = stageEl || paperEl;
+    const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
     if (readOnly || !hitEl) return undefined;
 
     const skipSel =
       '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar]';
 
-    const onCtx = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target?.closest?.(skipSel)) return;
-      // Ignore right-clicks outside the canvas stage (e.g. side panels).
-      if (stageEl && target && !stageEl.contains(target) && target !== stageEl) return;
+    let lastClientX = Number.NaN;
+    let lastClientY = Number.NaN;
+    let suppressCtxUntil = 0;
 
-      e.preventDefault();
-      e.stopPropagation();
+    const clientInStage = (clientX: number, clientY: number) => {
+      const r = hitEl.getBoundingClientRect();
+      return (
+        clientX >= r.left &&
+        clientX <= r.right &&
+        clientY >= r.top &&
+        clientY <= r.bottom
+      );
+    };
 
-      const p = pointerToWorld(camera, { stageEl, paperEl, artboard }, e.clientX, e.clientY);
-      const id = hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY });
+    /** Synthetic contextmenu often reports (0,0) or (1,1) — not a real click. */
+    const isBogusClient = (clientX: number, clientY: number) =>
+      !Number.isFinite(clientX) ||
+      !Number.isFinite(clientY) ||
+      (clientX <= 2 && clientY <= 2);
+
+    const isChromeTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      return Boolean(el?.closest?.(skipSel));
+    };
+
+    const openMenuAt = (clientX: number, clientY: number) => {
+      const p = pointerToWorld(
+        camera,
+        { viewportEl, stageEl, paperEl, artboard },
+        clientX,
+        clientY
+      );
+      const id = hitTest(p.x, p.y, { clientX, clientY });
       const selected = selectedIdsRef.current;
       if (id && !selected.includes(id)) {
         dispatch(setSelectedNodeIds([id]));
@@ -2485,21 +2512,105 @@ function SvgCanvas({
           }
         }
       }
-      const menuNodeId =
-        id || (selected.length === 1 ? selected[0] : null);
       setCtxMenu({
-        clientX: e.clientX,
-        clientY: e.clientY,
+        clientX,
+        clientY,
         sceneX: p.x,
         sceneY: p.y,
-        nodeId: menuNodeId,
+        nodeId: id || (selected.length === 1 ? selected[0] : null),
         frameId,
       });
     };
 
-    hitEl.addEventListener('contextmenu', onCtx);
-    return () => hitEl.removeEventListener('contextmenu', onCtx);
-  }, [paperEl, stageEl, camera, readOnly, artboard, hitTest, dispatch]);
+    const noteClient = (clientX: number, clientY: number) => {
+      if (!clientInStage(clientX, clientY) || isBogusClient(clientX, clientY)) return;
+      lastClientX = clientX;
+      lastClientY = clientY;
+    };
+
+    const openFromRightButton = (
+      clientX: number,
+      clientY: number,
+      target: EventTarget | null
+    ) => {
+      if (performance.now() < suppressCtxUntil) return false;
+      if (isBogusClient(clientX, clientY)) return false;
+      if (!clientInStage(clientX, clientY)) return false;
+      if (isChromeTarget(target)) return false;
+      noteClient(clientX, clientY);
+      suppressCtxUntil = performance.now() + 500;
+      openMenuAt(clientX, clientY);
+      return true;
+    };
+
+    // Track hover by geometry (target may be outside roots when portals / overlays move).
+    const onPointerMove = (e: PointerEvent) => {
+      noteClient(e.clientX, e.clientY);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      noteClient(e.clientX, e.clientY);
+      if (e.button !== 2) return;
+      if (openFromRightButton(e.clientX, e.clientY, e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    // Some environments deliver right-click via mouse events without pointerdown button=2.
+    const onMouseDown = (e: MouseEvent) => {
+      noteClient(e.clientX, e.clientY);
+      if (e.button !== 2) return;
+      if (openFromRightButton(e.clientX, e.clientY, e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    const onCtx = (e: MouseEvent) => {
+      if (isChromeTarget(e.target)) return;
+      // Accept when click is on-stage, or when event coords are bogus but we have a last hover.
+      const eventOnStage = clientInStage(e.clientX, e.clientY);
+      const hasLast = !isBogusClient(lastClientX, lastClientY);
+      if (!eventOnStage && !hasLast) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (performance.now() < suppressCtxUntil) return;
+
+      const bogus = isBogusClient(e.clientX, e.clientY);
+      let clientX = bogus ? lastClientX : e.clientX;
+      let clientY = bogus ? lastClientY : e.clientY;
+      if (isBogusClient(clientX, clientY)) {
+        // Last resort: stage center (better than pinning to 1,1).
+        const r = hitEl.getBoundingClientRect();
+        clientX = r.left + r.width / 2;
+        clientY = r.top + r.height / 2;
+      }
+      openMenuAt(clientX, clientY);
+    };
+
+    // Window capture: right-click coords survive even when target path is odd.
+    window.addEventListener('pointermove', onPointerMove, { capture: true });
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    window.addEventListener('mousedown', onMouseDown, { capture: true });
+    hitEl.addEventListener('contextmenu', onCtx, { capture: true });
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('mousedown', onMouseDown, true);
+      hitEl.removeEventListener('contextmenu', onCtx, true);
+    };
+  }, [
+    paperEl,
+    stageEl,
+    viewportEl,
+    camera,
+    readOnly,
+    artboard,
+    hitTest,
+    dispatch,
+  ]);
 
   // Drag chat gallery images onto the canvas → placeholder + upload.
   useEffect(() => {
@@ -2512,64 +2623,62 @@ function SvgCanvas({
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
     };
 
-    const onDrop = (e: DragEvent) => {
+    const onDrop = async (e: DragEvent) => {
       const url = readChatImageDragUrl(e.dataTransfer);
       if (!url) return;
       e.preventDefault();
       e.stopPropagation();
-      void (async () => {
+      try {
+        const natural = await measureImageNaturalSize(url);
+        const { width, height } = imageSizeForViewport(natural);
+        const world = pointerToWorld(
+          camera,
+          { viewportEl, stageEl, paperEl, artboard },
+          e.clientX,
+          e.clientY
+        );
+        const placed = rcbCenterOnPoint(world, { width, height });
+        const latest = documentRef.current;
+        if (!latest) return;
+        const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
+        dispatch(
+          startImageUploadPlaceholder({
+            src: url,
+            width,
+            height,
+            x: origin.x,
+            y: origin.y,
+            label: '上传中',
+            name: 'Image',
+          })
+        );
+        finishToSelect();
+        const spawnedId = String(
+          (store.getState() as any).editor?.pendingImageProcessId || ''
+        );
+        const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
         try {
-          const natural = await measureImageNaturalSize(url);
-          const { width, height } = imageSizeForViewport(natural);
-          const world = pointerToWorld(
-            camera,
-            { stageEl, paperEl, artboard },
-            e.clientX,
-            e.clientY
-          );
-          const placed = rcbCenterOnPoint(world, { width, height });
-          const latest = documentRef.current;
-          if (!latest) return;
-          const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
+          const uploaded = await uploadImageFromSrc(url, 'chat-image.png', { signal });
+          if (signal?.aborted) return;
+          const remoteReady = await waitForImageReady(uploaded.url, { signal });
+          if (signal?.aborted) return;
           dispatch(
-            startImageUploadPlaceholder({
-              src: url,
-              width,
-              height,
-              x: origin.x,
-              y: origin.y,
-              label: '上传中',
-              name: 'Image',
+            finishImageProcess({
+              nodeId: spawnedId || undefined,
+              // Keep local preview until the remote URL is fully decoded.
+              ...(remoteReady ? { src: uploaded.url } : {}),
+              attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
             })
           );
-          finishToSelect();
-          const spawnedId = String(
-            (store.getState() as any).editor?.pendingImageProcessId || ''
-          );
-          const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
-          try {
-            const uploaded = await uploadImageFromSrc(url, 'chat-image.png', { signal });
-            if (signal?.aborted) return;
-            const remoteReady = await waitForImageReady(uploaded.url, { signal });
-            if (signal?.aborted) return;
-            dispatch(
-              finishImageProcess({
-                nodeId: spawnedId || undefined,
-                // Keep local preview until the remote URL is fully decoded.
-                ...(remoteReady ? { src: uploaded.url } : {}),
-                attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
-              })
-            );
-          } finally {
-            finishNodeUpload(spawnedId);
-          }
-        } catch (err: any) {
-          if (isUploadAbortError(err)) return;
-          dispatch(failImageProcess({}));
-          const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
-          message.error(typeof detail === 'string' ? detail : '图片上传失败');
+        } finally {
+          finishNodeUpload(spawnedId);
         }
-      })();
+      } catch (err: any) {
+        if (isUploadAbortError(err)) return;
+        dispatch(failImageProcess({}));
+        const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
+        message.error(typeof detail === 'string' ? detail : '图片上传失败');
+      }
     };
 
     hitEl.addEventListener('dragover', onDragOver);
@@ -2589,26 +2698,23 @@ function SvgCanvas({
   ]);
 
   const runCtxAction = (action: CtxAction) => {
-    const ids =
-      selectedIdsRef.current.length > 0
-        ? selectedIdsRef.current
-        : ctxMenu?.nodeId
-          ? [ctxMenu.nodeId]
-          : [];
-    const placeAt =
-      ctxMenu && Number.isFinite(ctxMenu.sceneX)
-        ? { x: ctxMenu.sceneX, y: ctxMenu.sceneY }
-        : null;
+    let ids = selectedIdsRef.current;
+    if (!ids.length && ctxMenu?.nodeId) ids = [ctxMenu.nodeId];
+
+    let placeAt: { x: number; y: number } | null = null;
+    if (ctxMenu && Number.isFinite(ctxMenu.sceneX) && Number.isFinite(ctxMenu.sceneY)) {
+      placeAt = { x: ctxMenu.sceneX, y: ctxMenu.sceneY };
+    }
+
     const hitNodeId = ctxMenu?.nodeId ?? null;
     const menuFrameId = ctxMenu?.frameId || activeFrameIdRef.current;
     // Only expand via artboards that are actually in the selection (or the
     // frame under the context-menu cursor). Do not use activeFrameId alone —
     // that would pull unrelated board content into group / lock / export.
-    const frameIdsForAction = selectedFrameIdsRef.current.length
-      ? selectedFrameIdsRef.current
-      : ctxMenu?.frameId
-        ? [String(ctxMenu.frameId)]
-        : [];
+    let frameIdsForAction = selectedFrameIdsRef.current;
+    if (!frameIdsForAction.length && ctxMenu?.frameId) {
+      frameIdsForAction = [String(ctxMenu.frameId)];
+    }
     setCtxMenu(null);
 
     if (action === 'upload') {
@@ -2625,7 +2731,7 @@ function SvgCanvas({
         dispatch(setSelectedFrameIds([]));
         dispatch(setActiveFrameId(null));
       };
-      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const seedNodes = ctxMenuSeedNodeIds(ids, hitNodeId);
       const expanded = resolveSelectionNodeIds(
         documentRef.current,
         seedNodes,
@@ -2700,11 +2806,11 @@ function SvgCanvas({
       return;
     }
     if (action === 'delete') {
-      const frameIds = selectedFrameIdsRef.current.length
-        ? selectedFrameIdsRef.current
-        : !ids.length && (menuFrameId || activeFrameIdRef.current)
-          ? [String(menuFrameId || activeFrameIdRef.current)]
-          : [];
+      let frameIds = selectedFrameIdsRef.current;
+      if (!frameIds.length && !ids.length) {
+        const fid = menuFrameId || activeFrameIdRef.current;
+        if (fid) frameIds = [String(fid)];
+      }
       deleteCanvasSelection({ nodeIds: ids, frameIds });
       return;
     }
@@ -2714,7 +2820,7 @@ function SvgCanvas({
       return;
     }
     if (action === 'toggleHidden') {
-      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const seedNodes = ctxMenuSeedNodeIds(ids, hitNodeId);
       // Frame-only selection has no hide target (artboards are not scene nodes).
       if (!seedNodes.length) return;
       const targetIds = resolveSelectionNodeIds(
@@ -2744,7 +2850,7 @@ function SvgCanvas({
       return;
     }
     if (action === 'toggleLocked') {
-      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const seedNodes = ctxMenuSeedNodeIds(ids, hitNodeId);
       const targetIds = seedNodes.length
         ? resolveSelectionNodeIds(documentRef.current, seedNodes, frameIdsForAction).filter(
             (id) => !isGeneratorNode(documentRef.current?.deltaSetLike?.[id])
@@ -2801,7 +2907,7 @@ function SvgCanvas({
     }
     if (action === 'exportMp4' || action === 'exportMp3') {
       const doc = documentRef.current;
-      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const seedNodes = ctxMenuSeedNodeIds(ids, hitNodeId);
       const targetIds = resolveSelectionNodeIds(
         doc,
         seedNodes,
@@ -2826,7 +2932,7 @@ function SvgCanvas({
         ),
         0
       );
-      void (async () => {
+      const exportSelectedVideos = async () => {
         try {
           for (const node of videoNodes) {
             const attrs = node?.attrs || {};
@@ -2865,14 +2971,16 @@ function SvgCanvas({
             )
           );
         }
-      })();
+      };
+      exportSelectedVideos();
       return;
     }
     if (action === 'exportPng' || action === 'exportJpg' || action === 'exportSvg') {
-      const format: ExportImageFormat =
-        action === 'exportJpg' ? 'jpeg' : action === 'exportSvg' ? 'svg' : 'png';
+      let format: ExportImageFormat = 'png';
+      if (action === 'exportJpg') format = 'jpeg';
+      else if (action === 'exportSvg') format = 'svg';
       const doc = documentRef.current;
-      const seedNodes = ids.length > 0 ? ids : hitNodeId ? [hitNodeId] : [];
+      const seedNodes = ctxMenuSeedNodeIds(ids, hitNodeId);
       // Mixed / node selection: export expanded nodes. Frame-only keeps crop export
       // so artboard background is preserved.
       if (seedNodes.length) {
@@ -2938,175 +3046,6 @@ function SvgCanvas({
   const runCtxActionRef = useRef(runCtxAction);
   runCtxActionRef.current = runCtxAction;
 
-  const onImageFile = (file: File | null) => {
-    if (!file) return;
-    void (async () => {
-      const at = imagePlaceAtRef.current;
-      imagePlaceAtRef.current = null;
-      try {
-        const preview = await readFileAsDataUrl(file);
-        const natural = await measureImageNaturalSize(preview);
-        const { width, height } = imageSizeForViewport(natural);
-        let x: number | undefined;
-        let y: number | undefined;
-        if (at) {
-          const placed = rcbCenterOnPoint({ x: at.x, y: at.y }, { width, height });
-          const latest = documentRef.current;
-          if (latest) {
-            const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
-            x = origin.x;
-            y = origin.y;
-          }
-        } else {
-          // Viewport center (same as pendingImageSrc auto-place).
-          const view =
-            overlayRoot?.getBoundingClientRect() ||
-            paperEl?.parentElement?.getBoundingClientRect() ||
-            null;
-          if (view && (stageEl || paperEl)) {
-            const center = pointerToWorld(
-              camera,
-              { stageEl, paperEl, artboard },
-              view.left + view.width / 2,
-              view.top + view.height / 2
-            );
-            const placed = rcbCenterOnPoint(center, { width, height });
-            const latest = documentRef.current;
-            if (latest) {
-              const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
-              x = origin.x;
-              y = origin.y;
-            }
-          }
-        }
-        dispatch(
-          startImageUploadPlaceholder({
-            src: preview,
-            width,
-            height,
-            x,
-            y,
-            label: '上传中',
-            name: file.name?.replace(/\.[^.]+$/, '') || 'Image',
-          })
-        );
-        finishToSelect();
-        const spawnedId = String(
-          (store.getState() as any).editor?.pendingImageProcessId || ''
-        );
-        const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
-        try {
-          const uploaded = await uploadImageFile(file, { signal });
-          if (signal?.aborted) return;
-          const remoteReady = await waitForImageReady(uploaded.url, { signal });
-          if (signal?.aborted) return;
-          dispatch(
-            finishImageProcess({
-              nodeId: spawnedId || undefined,
-              // Keep local preview until the remote URL is fully decoded.
-              ...(remoteReady ? { src: uploaded.url } : {}),
-              attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
-            })
-          );
-        } finally {
-          finishNodeUpload(spawnedId);
-        }
-      } catch (err: any) {
-        if (isUploadAbortError(err)) return;
-        dispatch(failImageProcess({}));
-        const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
-        message.error(typeof detail === 'string' ? detail : '图片上传失败');
-      }
-    })();
-  };
-
-  const onVideoFile = (file: File | null) => {
-    if (!file) return;
-    void (async () => {
-      const at = imagePlaceAtRef.current;
-      imagePlaceAtRef.current = null;
-      try {
-        const prepared = await prepareVideoUploadPreview(file);
-        const { width, height } = imageSizeForViewport({
-          width: prepared.width,
-          height: prepared.height,
-        });
-        let x: number | undefined;
-        let y: number | undefined;
-        if (at) {
-          const placed = rcbCenterOnPoint({ x: at.x, y: at.y }, { width, height });
-          const latest = documentRef.current;
-          if (latest) {
-            const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
-            x = origin.x;
-            y = origin.y;
-          }
-        } else {
-          const view =
-            overlayRoot?.getBoundingClientRect() ||
-            paperEl?.parentElement?.getBoundingClientRect() ||
-            null;
-          if (view && (stageEl || paperEl)) {
-            const center = pointerToWorld(
-              camera,
-              { stageEl, paperEl, artboard },
-              view.left + view.width / 2,
-              view.top + view.height / 2
-            );
-            const placed = rcbCenterOnPoint(center, { width, height });
-            const latest = documentRef.current;
-            if (latest) {
-              const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
-              x = origin.x;
-              y = origin.y;
-            }
-          }
-        }
-        dispatch(
-          startVideoUploadPlaceholder({
-            src: prepared.preview,
-            poster: prepared.poster,
-            width,
-            height,
-            x,
-            y,
-            label: '上传中',
-            name: prepared.name,
-            duration: prepared.duration,
-          })
-        );
-        finishToSelect();
-        const uploaded = await uploadImageFile(file);
-        dispatch(
-          finishImageProcess({
-            src: uploaded.url,
-            attrs: {
-              ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
-              ...(prepared.poster ? { poster: prepared.poster } : {}),
-              ...(Number.isFinite(prepared.duration) && prepared.duration > 0
-                ? { duration: prepared.duration }
-                : {}),
-              assetKind: 'video',
-            },
-          })
-        );
-      } catch (err: any) {
-        dispatch(failImageProcess({}));
-        const detail = err?.response?.data?.detail || err?.message || '视频上传失败';
-        message.error(typeof detail === 'string' ? detail : '视频上传失败');
-      }
-    })();
-  };
-
-  const onMediaFile = (file: File | null) => {
-    if (!file) return;
-    if (file.type.startsWith('video/')) {
-      onVideoFile(file);
-      return;
-    }
-    onImageFile(file);
-  };
-
   /** Document x/y so a box of given size is centered on anchor or viewport. */
   const placeOriginForSize = useCallback(
     (
@@ -3126,7 +3065,7 @@ function SvgCanvas({
       if (view && (stageEl || paperEl)) {
         const center = pointerToWorld(
           camera,
-          { stageEl, paperEl, artboard },
+          { viewportEl, stageEl, paperEl, artboard },
           view.left + view.width / 2,
           view.top + view.height / 2
         );
@@ -3135,8 +3074,112 @@ function SvgCanvas({
       }
       return { x: 40, y: 40 };
     },
-    [artboard, camera, overlayRoot, paperEl, stageEl]
+    [artboard, camera, overlayRoot, paperEl, stageEl, viewportEl]
   );
+
+  const onImageFile = async (file: File | null) => {
+    if (!file) return;
+    const at = imagePlaceAtRef.current;
+    imagePlaceAtRef.current = null;
+    try {
+      const preview = await readFileAsDataUrl(file);
+      const natural = await measureImageNaturalSize(preview);
+      const { width, height } = imageSizeForViewport(natural);
+      const origin = placeOriginForSize({ width, height }, at);
+      dispatch(
+        startImageUploadPlaceholder({
+          src: preview,
+          width,
+          height,
+          x: origin?.x,
+          y: origin?.y,
+          label: '上传中',
+          name: file.name?.replace(/\.[^.]+$/, '') || 'Image',
+        })
+      );
+      finishToSelect();
+      const spawnedId = String(
+        (store.getState() as any).editor?.pendingImageProcessId || ''
+      );
+      const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
+      try {
+        const uploaded = await uploadImageFile(file, { signal });
+        if (signal?.aborted) return;
+        const remoteReady = await waitForImageReady(uploaded.url, { signal });
+        if (signal?.aborted) return;
+        dispatch(
+          finishImageProcess({
+            nodeId: spawnedId || undefined,
+            // Keep local preview until the remote URL is fully decoded.
+            ...(remoteReady ? { src: uploaded.url } : {}),
+            attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
+          })
+        );
+      } finally {
+        finishNodeUpload(spawnedId);
+      }
+    } catch (err: any) {
+      if (isUploadAbortError(err)) return;
+      dispatch(failImageProcess({}));
+      const detail = err?.response?.data?.detail || err?.message || '图片上传失败';
+      message.error(typeof detail === 'string' ? detail : '图片上传失败');
+    }
+  };
+
+  const onVideoFile = async (file: File | null) => {
+    if (!file) return;
+    const at = imagePlaceAtRef.current;
+    imagePlaceAtRef.current = null;
+    try {
+      const prepared = await prepareVideoUploadPreview(file);
+      const { width, height } = imageSizeForViewport({
+        width: prepared.width,
+        height: prepared.height,
+      });
+      const origin = placeOriginForSize({ width, height }, at);
+      dispatch(
+        startVideoUploadPlaceholder({
+          src: prepared.preview,
+          poster: prepared.poster,
+          width,
+          height,
+          x: origin?.x,
+          y: origin?.y,
+          label: '上传中',
+          name: prepared.name,
+          duration: prepared.duration,
+        })
+      );
+      finishToSelect();
+      const uploaded = await uploadImageFile(file);
+      dispatch(
+        finishImageProcess({
+          src: uploaded.url,
+          attrs: {
+            ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
+            ...(prepared.poster ? { poster: prepared.poster } : {}),
+            ...(Number.isFinite(prepared.duration) && prepared.duration > 0
+              ? { duration: prepared.duration }
+              : {}),
+            assetKind: 'video',
+          },
+        })
+      );
+    } catch (err: any) {
+      dispatch(failImageProcess({}));
+      const detail = err?.response?.data?.detail || err?.message || '视频上传失败';
+      message.error(typeof detail === 'string' ? detail : '视频上传失败');
+    }
+  };
+
+  const onMediaFile = (file: File | null) => {
+    if (!file) return;
+    if (file.type.startsWith('video/')) {
+      onVideoFile(file);
+      return;
+    }
+    onImageFile(file);
+  };
 
   const insertPastedText = useCallback(
     (text: string, anchor?: { x: number; y: number } | null) => {
@@ -3517,16 +3560,17 @@ function SvgCanvas({
   useEffect(() => {
     if (readOnly) return undefined;
 
-    const isTypingTarget = (t: HTMLElement | null) =>
-      Boolean(
-        t &&
-          (t.tagName === 'INPUT' ||
-            t.tagName === 'TEXTAREA' ||
-            t.isContentEditable ||
-            t.closest?.(
-              '[data-fill-panel], [data-color-panel], [data-select-dropdown], [data-frame-label], [data-text-inline-editor], [data-agent-composer]'
-            ))
+    const isTypingTarget = (t: HTMLElement | null) => {
+      if (!t) return false;
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) {
+        return true;
+      }
+      return Boolean(
+        t.closest?.(
+          '[data-fill-panel], [data-color-panel], [data-select-dropdown], [data-frame-label], [data-text-inline-editor], [data-agent-composer]'
+        )
       );
+    };
 
     const onPaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -3675,10 +3719,9 @@ function SvgCanvas({
   // Select / inspect: Dev+readOnly (share preview) still needs hit-test + spacing overlays.
   // Path-edit owns the pointer (anchors / draft pen) — do not let SelectionFeature
   // clear selection on empty click (that unmounts path-edit and looks like “auto exit”).
-  const selectMode =
-    (activeTool === 'select' || activeTool === 'scale') &&
-    (!readOnly || workspaceMode === 'dev') &&
-    !editingPenId;
+  const selectToolActive = activeTool === 'select' || activeTool === 'scale';
+  const selectAllowed = !readOnly || workspaceMode === 'dev';
+  const selectMode = selectToolActive && selectAllowed && !editingPenId;
   const shapeMode = !readOnly && activeTool === 'shape';
   const textMode = !readOnly && activeTool === 'text';
   const imageMode = !readOnly && activeTool === 'image';

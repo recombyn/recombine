@@ -379,7 +379,7 @@ function CropExpandSessionHost({ document }: { document: any }): ReactNode {
     }
 
     setBusy(true);
-    void (async () => {
+    async function applyCrop() {
       try {
         const uploadKey = String(node?.attrs?.uploadKey || node?.attrs?.key || '').trim() || null;
         const nextSrc = await cropImageToDataUrl(
@@ -402,7 +402,8 @@ function CropExpandSessionHost({ document }: { document: any }): ReactNode {
         message.error(detail ? `裁剪失败：${detail}` : '裁剪失败');
         setBusy(false);
       }
-    })();
+    }
+    applyCrop();
   };
 
   return (

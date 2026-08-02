@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, type CSSProperties, type ReactNode, memo } from 'react';
 import { createPortal } from 'react-dom';
-import { rcbSceneToScreen } from '../core/math';
+import { rcbSceneToScreen, rcbScreenToScene } from '../core/math';
 import { RCB_DEFAULT_CAMERA, type RcbCamera, type RcbVec } from '../core/types';
 
 export const RcbCameraContext = createContext<RcbCamera>(RCB_DEFAULT_CAMERA);
@@ -46,17 +46,13 @@ export function useRcbDevicePixelRatio(): number {
 export function useRcbScreenToScene(): (clientX: number, clientY: number) => RcbVec {
   const camera = useRcbCamera();
   const viewportEl = useRcbViewportEl();
+  const dpr = useRcbDevicePixelRatio();
   return useCallback(
     (clientX: number, clientY: number) => {
       if (!viewportEl) return { x: 0, y: 0 };
-      const rect = viewportEl.getBoundingClientRect();
-      const z = Math.max(0.05, camera.zoom || 1);
-      return {
-        x: (clientX - rect.left - camera.x) / z,
-        y: (clientY - rect.top - camera.y) / z,
-      };
+      return rcbScreenToScene(camera, viewportEl, clientX, clientY, dpr);
     },
-    [camera.x, camera.y, camera.zoom, viewportEl]
+    [camera, viewportEl, dpr]
   );
 }
 
@@ -67,7 +63,8 @@ export function useRcbScreenToolbarStyle(opts: {
   anchor?: 'bottom' | 'top';
 }): CSSProperties {
   const camera = useRcbCamera();
-  const { x, y } = rcbSceneToScreen(camera, opts.left, opts.top);
+  const dpr = useRcbDevicePixelRatio();
+  const { x, y } = rcbSceneToScreen(camera, opts.left, opts.top, dpr);
   const anchor = opts.anchor ?? 'bottom';
   return useMemo(
     () => ({

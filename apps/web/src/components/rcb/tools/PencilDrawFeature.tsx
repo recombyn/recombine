@@ -14,10 +14,14 @@ import {
 } from './pencilBrushes';
 import { getTintedStampSrc } from './stampTint';
 import {
+  rcbClientDeltaToScene,
+  rcbResolveViewportEl,
   rcbScreenToScene,
+  rcbViewportMetrics,
 } from '../core/math';
 import {
   useRcbCamera,
+  useRcbViewportEl,
 } from '../camera/context';
 import {
   type RcbCamera as CanvasCamera,
@@ -63,8 +67,9 @@ function clientToDrawScene(
   clientX: number,
   clientY: number
 ) {
-  // Prefer the full viewport stage so drawing works outside the finite SVG paper.
-  if (opts.stageEl) return rcbScreenToScene(opts.camera, opts.stageEl, clientX, clientY);
+  // Prefer a *connected* stage — prop can go stale after resize remounts.
+  const stage = rcbResolveViewportEl(opts.stageEl);
+  if (stage) return rcbScreenToScene(opts.camera, stage, clientX, clientY);
   return clientToPaperScene(opts.paperEl, opts.artboard, clientX, clientY);
 }
 
@@ -153,9 +158,12 @@ function PencilDrawFeature({
   onErase,
 }: PencilDrawFeatureProps) {
   const camera = useRcbCamera();
+  const viewportEl = useRcbViewportEl();
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
   const pts = useRef<{ x: number; y: number; pressure?: number }[]>([]);
+  const lastClientRef = useRef<{ x: number; y: number } | null>(null);
+  const strokeScaleRef = useRef({ scaleX: 1, scaleY: 1 });
   const drawing = useRef(false);
   const previewPathRef = useRef<SVGPathElement | null>(null);
   const previewStampsRef = useRef<SVGGElement | null>(null);
@@ -179,9 +187,10 @@ function PencilDrawFeature({
   eraseTargetsRef.current = eraseTargets;
   onEraseRef.current = onErase;
 
+  const liveStage = rcbResolveViewportEl(viewportEl, stageEl);
   const toScene = (clientX: number, clientY: number) =>
     clientToDrawScene(
-      { stageEl, paperEl, artboard, camera: cameraRef.current },
+      { stageEl: liveStage, paperEl, artboard, camera: cameraRef.current },
       clientX,
       clientY
     );
@@ -279,7 +288,7 @@ function PencilDrawFeature({
   };
 
   useEffect(() => {
-    const hitEl = stageEl || paperEl;
+    const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
     if (!enabled || !hitEl) return undefined;
 
     const onDown = (e: PointerEvent) => {
@@ -289,9 +298,12 @@ function PencilDrawFeature({
       if (t?.closest?.('[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-image-tool-panel],[data-shape-style-panel]')) {
         return;
       }
+      const metrics = rcbViewportMetrics(hitEl);
+      strokeScaleRef.current = { scaleX: metrics.scaleX, scaleY: metrics.scaleY };
       const p = toScene(e.clientX, e.clientY);
       const pressure = pressureRef.current ? pointerPressure(e) : undefined;
       drawing.current = true;
+      lastClientRef.current = { x: e.clientX, y: e.clientY };
       pts.current = [pressure != null ? { ...p, pressure } : p];
       if (eraseModeRef.current) {
         paintTipCursor(p);
@@ -305,12 +317,31 @@ function PencilDrawFeature({
       e.stopPropagation();
     };
 
+    const sampleScenePoint = (e: PointerEvent) => {
+      const lastPt = pts.current[pts.current.length - 1];
+      const lastClient = lastClientRef.current;
+      if (drawing.current && lastPt && lastClient) {
+        const { scaleX, scaleY } = strokeScaleRef.current;
+        const d = rcbClientDeltaToScene(
+          cameraRef.current.zoom,
+          e.clientX - lastClient.x,
+          e.clientY - lastClient.y,
+          scaleX,
+          scaleY
+        );
+        lastClientRef.current = { x: e.clientX, y: e.clientY };
+        return { x: lastPt.x + d.x, y: lastPt.y + d.y };
+      }
+      lastClientRef.current = { x: e.clientX, y: e.clientY };
+      return toScene(e.clientX, e.clientY);
+    };
+
     const onMove = (e: PointerEvent) => {
       if (!drawing.current) {
         paintTipCursor(toScene(e.clientX, e.clientY));
         return;
       }
-      const p = toScene(e.clientX, e.clientY);
+      const p = sampleScenePoint(e);
       const pressure = pressureRef.current ? pointerPressure(e) : undefined;
       const pt = pressure != null ? { ...p, pressure } : p;
       if (eraseModeRef.current) {
@@ -338,6 +369,7 @@ function PencilDrawFeature({
     const finishStroke = (e: PointerEvent, commit: boolean) => {
       if (!drawing.current) return;
       drawing.current = false;
+      lastClientRef.current = null;
       try {
         hitEl.releasePointerCapture?.(e.pointerId);
       } catch {
@@ -420,7 +452,7 @@ function PencilDrawFeature({
       window.removeEventListener('pointercancel', onCancel);
       paintTipCursor(null);
     };
-  }, [enabled, stageEl, paperEl, artboard, onCommit]);
+  }, [enabled, stageEl, paperEl, viewportEl, artboard, onCommit, liveStage]);
 
   useEffect(() => {
     if (!eraseMode) {

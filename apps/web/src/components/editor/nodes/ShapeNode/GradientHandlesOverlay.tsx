@@ -116,8 +116,11 @@ function GradientHandlesOverlay({
 
   const toLocal = (clientX: number, clientY: number, el: HTMLElement) => {
     const rect = el.getBoundingClientRect();
-    const sx = (clientX - rect.left) / z;
-    const sy = (clientY - rect.top) / z;
+    if (!(rect.width > 0) || !(rect.height > 0)) return { x: 0, y: 0 };
+    // Normalize by the painted box — more stable than /zoom when CSS width
+    // rounds differently from `box * z` on small / fractional viewports.
+    const sx = ((clientX - rect.left) / rect.width) * w;
+    const sy = ((clientY - rect.top) / rect.height) * h;
     return unrotateLocal(sx, sy, w, h, angle);
   };
 
