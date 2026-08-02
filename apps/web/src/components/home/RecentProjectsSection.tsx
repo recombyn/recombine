@@ -16,6 +16,9 @@ import { cn } from '@/utils/classnames';
 
 const RECENT_HOME_LIMIT = 4;
 
+/** Home recent — 1 col on phone; 2 cols from iPad (md). */
+const DEFAULT_RECENT_GRID = 'grid w-full grid-cols-1 gap-4 md:grid-cols-2';
+
 type ProjectItem = {
   id: string;
   name?: string;
@@ -32,6 +35,8 @@ type Props = {
   disabled?: boolean;
   onCreate: () => void;
   onViewAll: () => void;
+  /** Override this section's grid only. */
+  gridClassName?: string;
 };
 
 function sortRecentProjects(projects: ProjectItem[]): ProjectItem[] {
@@ -51,6 +56,7 @@ function RecentProjectsSection({
   disabled = false,
   onCreate,
   onViewAll,
+  gridClassName = DEFAULT_RECENT_GRID,
 }: Props): ReactNode {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -97,9 +103,6 @@ function RecentProjectsSection({
     }
   };
 
-  const gridClass =
-    'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
-
   return (
     <section className="w-full min-w-0">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -115,7 +118,7 @@ function RecentProjectsSection({
         </button>
       </div>
 
-      <div className={cn(gridClass, 'w-full')}>
+      <div className={cn(gridClassName, 'w-full')}>
         <NewProjectCard disabled={disabled} onClick={onCreate} />
 
         {loading

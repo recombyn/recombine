@@ -34,6 +34,9 @@ import {
 import { message } from '@/components/base';
 import { getToken } from '@/utils/token';
 
+/** Me profile feed only — 2 cols on phone / iPad (not plaza density). */
+const ME_FLOW_COLUMNS = 'w-full columns-2 gap-4 xl:columns-3 2xl:columns-4';
+
 /** Edit-profile icon (person + pencil) — stroke follows currentColor. */
 function ProfileEditIcon({ className }: { className?: string }) {
   return (
@@ -543,6 +546,7 @@ function MePage({ onOpenCase }: Props): ReactNode {
                 onLoadMore={loadMorePublished}
                 isEmpty={publishedAll.length === 0}
                 empty={<EmptyState hint={t('me.emptyPublished')} />}
+                columnsClassName={ME_FLOW_COLUMNS}
               >
                 {publishedSlice.map((c) => (
                   <InspirationCaseCard
@@ -577,6 +581,7 @@ function MePage({ onOpenCase }: Props): ReactNode {
                 onLoadMore={loadMoreLiked}
                 isEmpty={liked.length === 0}
                 empty={<EmptyState hint={t('me.emptyLiked')} />}
+                columnsClassName={ME_FLOW_COLUMNS}
               >
                 {liked.map((c) => (
                   <InspirationCaseCard

@@ -2001,7 +2001,9 @@ function EditorPage() {
               if (!isMobileViewport) setAgentOpen(false);
             }}
             floating={isMobileViewport}
-            allowedInteractionModes={isMobileViewport ? ['image'] : undefined}
+            allowedInteractionModes={
+              isMobileViewport ? ['image', 'video'] : undefined
+            }
             draftPrompt={agentDraft}
             autoSubmitDraft={agentAutoSubmit}
             draftAttachments={agentDraftAttachments}
