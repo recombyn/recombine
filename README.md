@@ -33,7 +33,7 @@ Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API)
 - **Real canvas editing** — Frames, shapes, images, video, text; export and share
 - **Agent that paints** — Conversation plans and applies canvas ops, not a single static render
 - **Self-host first** — Same stack locally or on a server; your data stays yours
-- **Composable** — Skills, flows, and dicts ship as editable seed JSON under `apps/api/data/public/`
+- **Composable** — Infra seeds + a minimal prompt-pack baseline under `apps/api/data/public/` (full product packs optional via `data/private/` or Admin)
 
 ## Core features
 
