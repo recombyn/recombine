@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Source--Available-orange.svg" alt="Recombyn Open Source License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Source--Available-orange.svg" alt="Recombyn Source Available License" /></a>
   <a href="docs/self-hosting.md"><img src="https://img.shields.io/badge/self--host-Docker%20Compose-2496ED?logo=docker&logoColor=white" alt="Self-host" /></a>
   <a href="apps/web"><img src="https://img.shields.io/badge/web-React%20%2B%20TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="apps/api"><img src="https://img.shields.io/badge/api-FastAPI%20%2B%20Python-3776AB?logo=python&logoColor=white" alt="Python" /></a>
@@ -101,13 +101,13 @@ e2e/               Playwright
 
 ## License & model
 
-[Recombyn Open Source License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
+[Recombyn Source Available License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-Apache License 2.0 with additional conditions:
+Source-available terms (not OSI open source):
 
 - **Personal / private self-host** — free
 - **Internal org use** — permitted
-- **Public-facing deployment** of Recombyn as a service (paid or free) — **requires enterprise / commercial authorization** (`licensing@recombyn.com`)
+- **Hosted / managed service** of Recombyn to third parties (paid or free) — **requires commercial authorization** (`702680355@qq.com`)
 
 See [LICENSE](./LICENSE) for the full text.
 
