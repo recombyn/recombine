@@ -20,7 +20,7 @@ import {
   zoomAtPoint,
   type RcbCamera as CanvasCamera,
 } from '@/components/rcb';
-import SvgCanvas from '@/components/editor/canvas/svg/SvgCanvas';
+import SvgCanvas from '@/components/editor/canvas/SvgCanvas';
 import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
 import { stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';

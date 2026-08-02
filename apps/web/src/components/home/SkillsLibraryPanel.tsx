@@ -21,9 +21,9 @@ import {
 } from '@/apis/design';
 import { cn } from '@/utils/classnames';
 
-/** Skills toolbox — 2 cols on phone; denser from lg. */
+/** Skills toolbox — same scale as Me / projects: 2 → 3 → 4 → 5 (2xl). */
 const DEFAULT_SKILL_GRID =
-  'grid w-full grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
+  'grid w-full grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5';
 
 /** Loading placeholders only — not real totals (API count unknown until fetch). */
 const SKILL_SKELETON_MINE = 1;
