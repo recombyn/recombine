@@ -9,9 +9,11 @@ apps/api/data/
 
 | Location | Git | Role |
 |----------|-----|------|
-| `data/public/` | Tracked | Public stubs + infra (`canvas_actions`, fonts, stages, …) |
-| `data/private/` | Not in git | Full prompts / skills / knowledge / tokens / models / cases |
+| `data/public/` | Tracked | OSS baseline + infra (`canvas_actions`, fonts, stages, minimal prompt packs, …) |
+| `data/private/` | Not in git | Full product prompts / skills / knowledge / tokens / models / cases |
 
 Loaders use `resolve_data_file` / `resolve_data_dir`: **private wins** when the path exists.
+
+`design_prompt_packs_seed.json` in **public** is a **minimal English runnable baseline** (enough for Agent cold start). Tuned product packs stay in **private** or Admin.
 
 Create `data/private/` locally (or on the SaaS host) and drop seed JSON there — same filenames as under `public/`. Optional: `DESIGN_DATA_PRIVATE_DIR` (absolute, or relative to `apps/api`).
