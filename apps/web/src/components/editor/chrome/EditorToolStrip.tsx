@@ -24,7 +24,14 @@ import { RiVideoAiLine } from 'react-icons/ri';
 import { Dropdown, Tooltip, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
-import { uploadImageFile, readFileAsDataUrl, beginNodeUpload, finishNodeUpload, isUploadAbortError } from '@/utils/uploadImage';
+import {
+  uploadImageFile,
+  readFileAsDataUrl,
+  beginNodeUpload,
+  finishNodeUpload,
+  isUploadAbortError,
+  waitForImageReady,
+} from '@/utils/uploadImage';
 import store from '@/store';
 import {
   setActiveTool,
@@ -491,10 +498,12 @@ function EditorToolStrip({
       try {
         const uploaded = await uploadImageFile(file, { signal });
         if (signal?.aborted) return;
+        const remoteReady = await waitForImageReady(uploaded.url, { signal });
+        if (signal?.aborted) return;
         dispatch(
           finishImageProcess({
             nodeId: spawnedId || undefined,
-            src: uploaded.url,
+            ...(remoteReady ? { src: uploaded.url } : {}),
             attrs: uploaded.key ? { uploadKey: uploaded.key } : undefined,
           })
         );
