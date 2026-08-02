@@ -184,9 +184,10 @@ function ShareDialog({ open, onClose }: Props) {
   const [selectedInvite, setSelectedInvite] = useState<DirectoryUser | null>(null);
   const [inviting, setInviting] = useState(false);
   const searchTimer = useRef<number | null>(null);
-  const creatingRef = useRef(false);
   /** StrictMode remounts effects once in dev — avoid duplicate toasts per open. */
   const noDocWarnedRef = useRef(false);
+  /** Share one in-flight create across StrictMode remount (dev double-invoke). */
+  const createShareInflightRef = useRef<Promise<{ share: ShareDto }> | null>(null);
 
   const url = record && linkEnabled ? shareUrl(record.id) : '';
 
@@ -223,37 +224,40 @@ function ShareDialog({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) {
       setRecord(null);
+      setBusy(false);
       setTab('share');
       setPublishPhase('confirm');
       setPublishing(false);
       setInviteQuery('');
       setSearchHits([]);
       setSelectedInvite(null);
-      creatingRef.current = false;
       noDocWarnedRef.current = false;
+      createShareInflightRef.current = null;
       return;
     }
     if (!document) {
       setRecord(null);
+      setBusy(false);
       if (!noDocWarnedRef.current) {
         noDocWarnedRef.current = true;
         message.warning(t('editor.shareNoDocument'));
       }
       return;
     }
-    if (creatingRef.current) return;
-    creatingRef.current = true;
     let cancelled = false;
     setBusy(true);
-    void createShareApi({
-      document,
-      name: projectName,
-      permission: 'preview',
-      sourceProjectId: currentId || undefined,
-      editorUserIds: [],
-      viewerUserIds: [],
-      linkPublic: false,
-    })
+    if (!createShareInflightRef.current) {
+      createShareInflightRef.current = createShareApi({
+        document,
+        name: projectName,
+        permission: 'preview',
+        sourceProjectId: currentId || undefined,
+        editorUserIds: [],
+        viewerUserIds: [],
+        linkPublic: false,
+      });
+    }
+    void createShareInflightRef.current
       .then((res) => {
         if (cancelled) return;
         const s = res.share;
@@ -264,14 +268,14 @@ function ShareDialog({ open, onClose }: Props) {
         setViewerIds(Array.isArray(s.viewerUserIds) ? s.viewerUserIds : []);
       })
       .catch(() => {
-        if (!cancelled) {
-          setRecord(null);
-          message.error(t('editor.shareCopyFailed'));
-        }
+        if (cancelled) return;
+        createShareInflightRef.current = null;
+        setRecord(null);
+        setLinkEnabled(false);
+        message.error(t('editor.shareCopyFailed'));
       })
       .finally(() => {
         if (!cancelled) setBusy(false);
-        creatingRef.current = false;
       });
     return () => {
       cancelled = true;
