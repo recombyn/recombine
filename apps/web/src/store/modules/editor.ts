@@ -869,6 +869,121 @@ const editorSlice = createSlice({
     clearEditorDirty(state) {
       state.dirty = false;
     },
+    /**
+     * Apply a remote Yjs scene snapshot. No history push, no dirty flag —
+     * collab room owns live truth; persistence is handled by CollabRoomProvider.
+     */
+    applyCollabDocument(state, action) {
+      if (!action.payload) return;
+      state.document = normalizeDocument(
+        preserveStageCanvasMeta(state.document, action.payload)
+      );
+      state.dirty = false;
+      state.sceneReloadToken += 1;
+      if (
+        state.pendingImageProcessId &&
+        !state.document?.deltaSetLike?.[state.pendingImageProcessId]
+      ) {
+        state.pendingImageProcessId = null;
+      }
+      syncLibraryOnEdit(state);
+    },
+    /**
+     * Granular remote Yjs apply: COW node/frame/meta patches without full remount
+     * when possible. Payload shape matches `CollabSceneDiff` from sceneYBridge.
+     */
+    applyCollabScenePatch(state, action) {
+      const patch = action.payload;
+      if (!patch || !state.document) return;
+      if (patch.mode === 'full' && patch.scene) {
+        state.document = normalizeDocument(
+          preserveStageCanvasMeta(state.document, patch.scene)
+        );
+        state.dirty = false;
+        state.sceneReloadToken += 1;
+        state.documentPatchToken += 1;
+        state.lastPatchedNodeIds = [];
+        if (
+          state.pendingImageProcessId &&
+          !state.document?.deltaSetLike?.[state.pendingImageProcessId]
+        ) {
+          state.pendingImageProcessId = null;
+        }
+        syncLibraryOnEdit(state);
+        return;
+      }
+
+      let doc: any = state.document;
+      const touched: string[] = [];
+
+      if (patch.meta && typeof patch.meta === 'object') {
+        doc = { ...doc, ...patch.meta };
+      }
+
+      const delta = { ...(doc.deltaSetLike || {}) };
+      const upsertNodes =
+        patch.upsertNodes && typeof patch.upsertNodes === 'object' ? patch.upsertNodes : {};
+      for (const [id, node] of Object.entries(upsertNodes)) {
+        if (!id || id === 'ROOT' || !node || typeof node !== 'object') continue;
+        delta[id] = node;
+        touched.push(String(id));
+      }
+      for (const raw of Array.isArray(patch.removeNodeIds) ? patch.removeNodeIds : []) {
+        const id = String(raw || '');
+        if (!id || id === 'ROOT') continue;
+        if (id in delta) {
+          delete delta[id];
+          touched.push(id);
+        }
+      }
+
+      if (Array.isArray(patch.pageChildren)) {
+        const children = patch.pageChildren.map(String);
+        const pageId = String(doc.activePageId || doc.pages?.[0]?.id || 'page');
+        delta.ROOT = { ...(delta.ROOT || {}), children };
+        const pages = Array.isArray(doc.pages) ? [...doc.pages] : [{ id: pageId, children }];
+        if (pages[0]) pages[0] = { ...pages[0], id: pageId, children };
+        else pages.push({ id: pageId, children });
+        doc = { ...doc, pages, activePageId: pageId };
+      }
+
+      if (Array.isArray(patch.stackOrder)) {
+        doc = { ...doc, stackOrder: patch.stackOrder.map(String) };
+      }
+
+      const frameById = new Map<string, any>();
+      for (const frame of Array.isArray(doc.frames) ? doc.frames : []) {
+        if (frame?.id) frameById.set(String(frame.id), frame);
+      }
+      const upsertFrames =
+        patch.upsertFrames && typeof patch.upsertFrames === 'object' ? patch.upsertFrames : {};
+      for (const [id, frame] of Object.entries(upsertFrames)) {
+        if (!id || !frame || typeof frame !== 'object') continue;
+        frameById.set(String(id), frame);
+      }
+      for (const raw of Array.isArray(patch.removeFrameIds) ? patch.removeFrameIds : []) {
+        frameById.delete(String(raw || ''));
+      }
+      if (
+        Object.keys(upsertFrames).length ||
+        (Array.isArray(patch.removeFrameIds) && patch.removeFrameIds.length)
+      ) {
+        doc = { ...doc, frames: [...frameById.values()] };
+      }
+
+      doc = { ...doc, deltaSetLike: delta };
+      state.document = doc;
+      state.dirty = false;
+      state.documentPatchToken += 1;
+      state.lastPatchedNodeIds = touched;
+      if (
+        state.pendingImageProcessId &&
+        !state.document?.deltaSetLike?.[state.pendingImageProcessId]
+      ) {
+        state.pendingImageProcessId = null;
+      }
+      syncLibraryOnEdit(state);
+    },
     importDocument(state, action) {
       const payload = action.payload || {};
       const source: TemplateSource =
@@ -1738,6 +1853,8 @@ export const {
   renameTemplate,
   persistCurrent,
   clearEditorDirty,
+  applyCollabDocument,
+  applyCollabScenePatch,
   importDocument,
   mergeImportedDocument,
   startImportPlaceholder,

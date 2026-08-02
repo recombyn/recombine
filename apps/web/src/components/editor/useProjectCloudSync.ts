@@ -34,6 +34,7 @@ import {
   markProjectDraftSynced,
   putProjectDraft,
 } from '@/components/editor/projectDraftStore';
+import { isCollabActive } from '@/components/editor/collab/collabRuntime';
 
 const DEBOUNCE_MS = 800;
 /** Coalesce rapid Ctrl/⌘+S into one flush. */
@@ -457,6 +458,14 @@ export function useProjectCloudSync() {
 
       // Logged out: local draft is enough — clear dirty.
       if (!getToken()) {
+        const after = store.getState().editor as { document: unknown };
+        if (after.document === pushedDoc) dispatch(clearEditorDirty());
+        return;
+      }
+
+      // Live Yjs room owns cloud document writes (debounced PUT in CollabRoomProvider).
+      // Still keep local draft + allow force leave-flush.
+      if (isCollabActive() && !force) {
         const after = store.getState().editor as { document: unknown };
         if (after.document === pushedDoc) dispatch(clearEditorDirty());
         return;

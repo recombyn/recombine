@@ -161,7 +161,7 @@ function ProjectBatchBottomBar(props: ProjectBatchControlsProps) {
 
 /** Projects library default — override via `gridClassName` per call site. */
 const DEFAULT_PROJECTS_GRID =
-  'grid w-full grid-cols-2 gap-4 xl:grid-cols-3 2xl:grid-cols-4';
+  'grid w-full grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5';
 
 function TemplateGrid({
   templates,
