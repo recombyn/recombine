@@ -102,8 +102,61 @@ async def _node_bootstrap(state: GraphState) -> Command:
         return _goto_cmd(rt, frm="bootstrap", to="apply_confirm")
     rt.flags["mode"] = rt.flags.get("mode") or "agent"
     _apply_task_route_flags(rt)
+    await _hydrate_pinned_skills(rt)
     await _persist_progress(rt)
     return _goto_cmd(rt, frm="bootstrap", to="memory")
+
+
+async def _hydrate_pinned_skills(rt: AgentRuntime) -> None:
+    """Hard-load `/` chip skill refs into system + skills_loaded (ACL-scoped)."""
+    refs = list(rt.flags.get("skill_refs") or [])
+    if not refs:
+        return
+    from services.design.prompts.skill_store import (
+        format_skills_details_checked,
+        resolve_accessible_skill_keys,
+    )
+
+    keys = await asyncio.to_thread(
+        resolve_accessible_skill_keys,
+        user_id=str(rt.user_id or ""),
+        refs=refs,
+        scene=rt.scene_key or "website",
+    )
+    if not keys:
+        return
+    details, errs = await asyncio.to_thread(
+        format_skills_details_checked,
+        keys=keys,
+        scene=rt.scene_key or "website",
+        user_id=str(rt.user_id or "") or None,
+    )
+    st = rt.run
+    if errs:
+        st.push_log(phase="skill_pin_validate", errors=list(errs)[:8])
+    if details:
+        pin_block = "PINNED_SKILLS (user selected — follow these):\n" + details
+        rt.system = ((rt.system or "").rstrip() + "\n\n" + pin_block).strip()
+        rt.pending_skill_details = "SKILL_DETAILS:\n" + details
+    for k in keys:
+        if k not in st.skills_loaded:
+            st.skills_loaded.append(k)
+    st.push_log(
+        phase="skill_pin",
+        need_skills=list(keys),
+        detail_chars=len(details or ""),
+        summary="用户选定 skill：" + "、".join(keys),
+    )
+    _emit(
+        {
+            "type": "activity",
+            "id": "skill-pin",
+            "kind": "explored",
+            "status": "done",
+            "summary": (", ".join(keys))[:200],
+            "index": 0,
+        }
+    )
 
 
 def _apply_task_route_flags(rt: AgentRuntime) -> None:

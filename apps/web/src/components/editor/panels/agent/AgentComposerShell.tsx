@@ -18,14 +18,13 @@ import {
   HiOutlineBolt,
   HiOutlineViewfinderCircle,
   HiOutlineDocument,
-  HiOutlineChatBubbleLeft,
   HiOutlinePhoto,
   HiOutlineFilm,
   HiOutlinePlay,
   HiOutlinePlus,
   HiOutlineXMark,
 } from 'react-icons/hi2';
-import { LuInfinity } from 'react-icons/lu';
+import { LuInfinity, LuMessageSquare } from 'react-icons/lu';
 import { Dropdown, DropdownPanel, DropdownPanelItem } from '@/components/base';
 import { Icon } from '@/components/base/icon';
 import Tooltip from '@/components/base/tooltip';
@@ -771,7 +770,7 @@ function interactionModeIcon(mode: ComposerInteractionMode): ReactNode {
     return <HiOutlinePhoto className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
   }
   if (mode === 'ask') {
-    return <HiOutlineChatBubbleLeft className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
+    return <LuMessageSquare className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />;
   }
   return <LuInfinity className="h-4 w-4 shrink-0" strokeWidth={2.25} />;
 }
@@ -789,7 +788,7 @@ function buildInteractionModeOptions(
     {
       key: 'ask',
       label: t('agent.interactionAsk'),
-      icon: <HiOutlineChatBubbleLeft className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
+      icon: <LuMessageSquare className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />,
     },
     {
       key: 'image',

@@ -14,13 +14,13 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Source--Available-orange.svg" alt="Recombyn Open Source License" /></a>
   <a href="docs/self-hosting.md"><img src="https://img.shields.io/badge/self--host-Docker%20Compose-2496ED?logo=docker&logoColor=white" alt="Self-host" /></a>
   <a href="apps/web"><img src="https://img.shields.io/badge/web-React%20%2B%20TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="apps/api"><img src="https://img.shields.io/badge/api-FastAPI%20%2B%20Python-3776AB?logo=python&logoColor=white" alt="Python" /></a>
 </p>
 
-**Recombyn** 是开源的 **画布编辑器 + AI Design Agent**（MIT）。  
+**Recombyn** 是 **画布编辑器 + AI Design Agent**（源码可得 / source-available）。  
 在无限画布上创作；Agent 基于 LangGraph 直接改图层、图形、文字与布局——用对话驱动设计，而不是生成一张死图。
 
 几分钟用 Docker Compose 自托管（默认 **MySQL** + Redis + Web + API）。本地开发可空 `DATABASE_URL` 用 **SQLite**；也可切 **PostgreSQL**（见 [docs/postgres-switch.md](docs/postgres-switch.md)）。
@@ -86,9 +86,15 @@ e2e/               Playwright
 - Issue / PR 模板见 `.github/`
 ## 协议
 
-[MIT](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
+[Recombyn Open Source License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-个人可免费自托管；后续计划提供 **Cloud 托管与企业服务**，核心保持 MIT 开源。
+基于 Apache License 2.0 的附加条件协议（参考 [Breatic](https://github.com/orime-org/breatic)）：
+
+- **个人 / 私有自托管** — 免费
+- **单一组织内部使用** — 允许
+- **对外公开部署** Recombyn 本身作为服务（无论收费与否）— **需企业授权**（`licensing@recombyn.com`）
+
+完整条款见 [LICENSE](./LICENSE)。
 
 ## 帮忙点个 ⭐ Star
 

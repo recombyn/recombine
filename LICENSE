@@ -1,21 +1,148 @@
-MIT License
+Recombyn Open Source License
 
-Copyright (c) 2026 Recombyn contributors
+License Version 1.0 - Effective 2026-08-02
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Recombyn is licensed under a modified version of the Apache License 2.0,
+with the additional conditions set forth below. In case of conflict
+between this document and the Apache License 2.0, the terms of this
+document prevail.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. NO PUBLIC-FACING DEPLOYMENT
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You MAY NOT deploy Recombyn itself, or a substantially similar
+platform derived from Recombyn, such that it is accessible to
+users outside the operator's organization over a public network --
+whether paid or free of charge.
+
+This restriction applies regardless of monetization model,
+including but not limited to: paid subscriptions, per-use fees,
+advertising, data collection in exchange for access, lead
+generation, or any other direct or indirect benefit derived from
+public access to Recombyn.
+
+Permitted uses (not restricted by this clause):
+
+a. Internal deployment within a single organization -- including
+   multi-workspace or multi-user setups for that organization's
+   employees, members, or contractors.
+
+b. Self-hosting for individual or private-group use -- personal
+   instances, or instances shared within a private community
+   (e.g., a household, study group, or invite-only team) that is
+   not publicly advertised or open to general sign-up.
+
+c. Building, deploying, or selling applications, content, or
+   services produced with Recombyn -- as opposed to offering
+   Recombyn itself as the service.
+
+"Organization" interpretation. For the purposes of this clause,
+"a single organization" includes a legal entity and its
+wholly-owned subsidiaries and affiliates, as interpreted in good
+faith. The Producer reserves the right to challenge
+interpretations that, in its reasonable judgment, are structured
+to evade this clause (for example: shell companies, or nominally
+separate entities under common control, used to operate what is
+effectively a public-facing service).
+
+For licensing inquiries regarding public-facing deployment or
+enterprise authorization, contact: licensing@recombyn.com
+
+2. LOGO AND COPYRIGHT PRESERVATION
+
+You MAY NOT remove, obscure, or modify the Recombyn logo,
+trademark, or copyright notice in any part of the software,
+including but not limited to the console UI, application UI,
+generated artifacts, and documentation. This applies to ALL
+components of Recombyn, not only frontend code.
+
+3. PROSPECTIVE LICENSE REVISIONS ONLY
+
+The Producer of Recombyn ("the Producer") may publish revised
+versions of this license from time to time. Each revision is
+assigned an effective date.
+
+License changes apply ONLY PROSPECTIVELY. Any change applies only
+to code committed to the Recombyn repository on or after the
+revised license's effective date. Code committed prior to that
+date remains licensed under the version of this license in effect
+at the time of its commit.
+
+This means a contributor's past contribution CANNOT be
+retroactively relicensed under stricter (or more permissive)
+terms. To determine the applicable license version for any given
+piece of code, consult the commit date in the official Recombyn
+repository.
+
+4. CONTRIBUTOR AGREEMENT
+
+By submitting a contribution to Recombyn, you:
+
+a. License your contribution under the version of this license
+   in effect at the TIME OF YOUR SUBMISSION, as determined by
+   the commit date.
+
+b. Grant the Producer a perpetual, worldwide, non-exclusive,
+   royalty-free license to use, reproduce, modify, and
+   distribute your contribution under that license version.
+
+Per Clause 3, your past contribution will NEVER be retroactively
+subject to stricter terms; future license revisions govern only
+future contributions.
+
+5. AI-GENERATED CONTENT DISCLAIMER
+
+Recombyn is a tool for AI-assisted design and content creation.
+The Producer makes NO WARRANTY regarding the accuracy, legality,
+originality, or safety of content generated by or through Recombyn.
+
+Operators and end users of Recombyn (including instances deployed
+under Clause 1's permitted uses) are SOLELY RESPONSIBLE for:
+
+a. Ensuring generated content complies with applicable law,
+   including copyright, trademark, privacy, data protection,
+   defamation, and content-moderation regulations in their
+   jurisdiction;
+
+b. Obtaining any necessary rights or licenses for inputs
+   supplied to Recombyn (e.g., reference images, user data) and
+   for the downstream use of outputs;
+
+c. Implementing appropriate content moderation and safety
+   measures for the context of use.
+
+Contributors to Recombyn code are not liable for content generated
+by users of deployed instances.
+
+6. TRADEMARK
+
+"Recombyn" and the Recombyn logo are trademarks of the Producer
+(whether formally registered or not). This license grants you
+rights to the software only; it does NOT grant you rights to use
+these trademarks.
+
+You MAY NOT:
+
+a. Use "Recombyn" or the Recombyn logo as -- or as part of -- the
+   name of any derivative work, fork, product, service, or
+   organization;
+
+b. Use the Recombyn name or logo in a way that suggests
+   endorsement by, affiliation with, or origin from the Producer
+   when no such relationship exists;
+
+c. Register domain names, social media handles, application
+   names, or project names that incorporate "Recombyn" or
+   confusingly similar terms.
+
+NOMINATIVE FAIR USE IS PERMITTED -- for example, stating "this
+service is built on Recombyn," "compatible with Recombyn," or
+"unofficial fork of Recombyn v1.0" -- provided it does not imply
+endorsement or confuse the origin of the work.
+
+FALLBACK TERMS (APACHE LICENSE 2.0)
+
+Apart from the additional conditions above, all other rights and
+restrictions follow the Apache License 2.0. Full text:
+http://www.apache.org/licenses/LICENSE-2.0
+
+Copyright 2026 Recombyn contributors
