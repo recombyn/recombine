@@ -45,10 +45,6 @@ def _wallet(monkeypatch):
         lambda _uid: 0,
     )
     monkeypatch.setattr(
-        "services.design.runtime.agent_controller.get_user_tokens",
-        lambda _uid: 200_000,
-    )
-    monkeypatch.setattr(
         "services.design.runtime.orchestrator._reserve_design_hold",
         lambda *_a, **_k: (100, False),
     )
@@ -103,7 +99,7 @@ def test_react_chat_hello(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "services.design.runtime.agent_controller.classify_user_intent",
+        "services.design.runtime.graph.nodes.intent.classify_user_intent",
         _classify,
     )
     events = _run(prompt="你好")
@@ -119,33 +115,20 @@ def test_react_chat_hello(monkeypatch):
 
 @pytest.mark.integration
 def test_react_edit_emits_tool_ops(monkeypatch):
-    """edit → decide → paint_ops structured tool_ops → action SSE."""
+    """canvas_op → paint_ops (skip decide) → structured tool_ops → action SSE."""
 
     async def _classify(**_kwargs: Any) -> IntentClassifyDecision:
-        return IntentClassifyDecision(intent="edit", reply="", rationale="edit title")
-
-    async def _stream(
-        *,
-        model_family: str,
-        system: str,
-        user: str,
-        rules: dict[str, str],
-        images: list[str] | None = None,
-        max_tokens: int = 1024,
-        enable_thinking: bool = False,
-        live_emit: bool = False,
-    ) -> tuple[str, str, int, list[dict[str, Any]], str]:
-        del system, user, rules, images, max_tokens, enable_thinking, live_emit
-        content = (
-            '{"thought":"加标题","intent":"edit","reply":"好",'
-            '"need_tools":[],"need_skills":[],"tool_ops":[]}'
+        return IntentClassifyDecision(
+            intent="canvas_op",
+            paint_lane="create",
+            reply="",
+            rationale="create_text for title",
         )
-        return model_family, content, 12, [], ""
 
     async def _structured(**_kwargs: Any) -> dict[str, Any]:
         return {
             "structured": PaintOpsSchema(
-                intent="edit",
+                intent="create",
                 reply="已添加标题",
                 tool_ops=[
                     {
@@ -163,12 +146,8 @@ def test_react_edit_emits_tool_ops(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "services.design.runtime.agent_controller.classify_user_intent",
+        "services.design.runtime.graph.nodes.intent.classify_user_intent",
         _classify,
-    )
-    monkeypatch.setattr(
-        "services.design.runtime.agent_controller._stream_llm_text",
-        _stream,
     )
     monkeypatch.setattr(
         "services.llm.agent.ainvoke_structured",
