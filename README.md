@@ -24,20 +24,22 @@
 **Recombyn** is a **canvas editor + AI Design Agent** (source-available).  
 Design on an infinite canvas; a LangGraph agent edits layers, shapes, text, and layout through conversation — not one-shot image dumps.
 
-Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API). Local dev can use **SQLite** (empty `DATABASE_URL`), or **PostgreSQL** — see [docs/postgres-switch.md](docs/postgres-switch.md).
+Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API + **Yjs collab**). Local dev can use **SQLite** (empty `DATABASE_URL`), or **PostgreSQL** — see [docs/postgres-switch.md](docs/postgres-switch.md).
 
 ---
 
 ## Why Recombyn?
 
 - **Real canvas editing** — Frames, shapes, images, video, text; export and share
+- **Live multiplayer** — Yjs sync for the same project (cursors, selection, undo); share view-only or edit
 - **Agent that paints** — Conversation plans and applies canvas ops, not a single static render
 - **Self-host first** — Same stack locally or on a server; your data stays yours
-- **Composable** — Infra seeds + a minimal prompt-pack baseline under `apps/api/data/public/` (full product packs optional via `data/private/` or Admin)
+- **Composable** — Infra seeds + prompt packs + **5 core Agent skills** under `apps/api/data/public/` (full product packs optional via `data/private/` or Admin)
 
 ## Core features
 
 - **Visual editor** — selection, layers, fills, export, share
+- **Realtime collab** — Yjs WebSocket room (`apps/collab`); Live bar in the editor; WSS via nginx `/collab/`
 - **Design Agent** — LangGraph tools / skills; create, edit, and chat with streaming UI
 - **Image import** — local images → editable canvas nodes
 - **Plaza & projects** — inspiration feed and saved work (API)
@@ -66,14 +68,18 @@ docker compose up -d redis   # or: mysql redis
 npm install
 cp apps/api/.env.example apps/api/.env
 npm run dev:api              # empty DATABASE_URL → SQLite
+npm run dev:collab           # Yjs WS on :1234 (optional; Vite DEV defaults collab on)
 npm run dev:web
 ```
+
+Canvas Live / WSS setup: **[docs/self-hosting.md § Canvas multiplayer](docs/self-hosting.md#canvas-multiplayer-yjs--wss)** · [apps/collab/README.md](apps/collab/README.md)
 
 ## Repository layout
 
 ```
-apps/web/          React canvas + Agent UI
-apps/api/          FastAPI — Scene, Agent, plaza, wallet
+apps/web/          React canvas + Agent UI + Yjs client
+apps/api/          FastAPI — Scene, Agent, plaza, wallet, collab tokens
+apps/collab/       Yjs WebSocket server (y-websocket)
 apps/docs/         Help / legal site
 packages/          Shared builders & schemas
 docs/              Architecture + self-hosting

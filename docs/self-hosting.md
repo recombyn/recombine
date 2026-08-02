@@ -8,7 +8,8 @@ Run the full product on your own machine or server with Docker Compose (or local
 |-------|---------|
 | Web editor | http://localhost:3000 |
 | API | http://localhost:8000 (`/docs`) |
-| Collab (Yjs WS) | via web proxy `ws://localhost:3000/collab/…` |
+| Collab (Yjs WS) | compose `collab` · browser via `ws://localhost:3000/collab/…` (prod: `wss://`) |
+| Agent seeds | prompt packs + **5 core skills** from `apps/api/data/public/` |
 | **MySQL 8** | compose service + volume `mysql_data` |
 | Redis | Celery / queues |
 
@@ -25,7 +26,8 @@ Default config loads from seed JSON under `apps/api/data/public/` (optional `pri
 | Seed | Public (git) | Notes |
 |------|--------------|--------|
 | Prompt packs | Minimal English baseline | Enough to avoid `missing prompt pack` on Agent; replace via Admin or `data/private/design_prompt_packs_seed.json` for production quality |
-| Skills / knowledge / tokens / models | Often stub or infra-only | Full product content → `data/private/` (gitignored) |
+| Skills (core) | 5 core playbooks | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` — Agent can create & edit out of the box |
+| Knowledge / tokens / models / cases | Often stub or infra-only | Full product content → `data/private/` (gitignored) |
 | Canvas actions, fonts, dicts, stages | Shipped in public | |
 
 See [data/README.md](../apps/api/data/README.md) and [design_skills/README.md](../apps/api/data/public/design_skills/README.md) (namespaces `core` / `ext` / `user`, ACL, hot reload).
