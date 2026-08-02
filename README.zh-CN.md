@@ -88,7 +88,7 @@ e2e/               Playwright
 
 [Recombyn Open Source License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-基于 Apache License 2.0 的附加条件协议（参考 [Breatic](https://github.com/orime-org/breatic)）：
+基于 Apache License 2.0 的附加条件协议：
 
 - **个人 / 私有自托管** — 免费
 - **单一组织内部使用** — 允许
