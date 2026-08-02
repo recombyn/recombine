@@ -15,7 +15,7 @@ export const SUPPORTED_LANGS = [
 
 export type DocsLang = (typeof SUPPORTED_LANGS)[number]['code']
 
-export const DEFAULT_LANG: DocsLang = 'zh-CN'
+export const DEFAULT_LANG: DocsLang = 'en'
 
 const resources = {
   en: { common: en },

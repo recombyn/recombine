@@ -111,7 +111,7 @@ export function normalizePath(pathname: string): string {
   return p
 }
 
-const FALLBACK_ORDER: DocsLang[] = ['zh-CN', 'en', 'zh-TW', 'ja']
+const FALLBACK_ORDER: DocsLang[] = ['en', 'zh-CN', 'zh-TW', 'ja']
 
 export function getDocMarkdown(pathname: string, locale: DocsLang): string | undefined {
   const path = normalizePath(pathname)
