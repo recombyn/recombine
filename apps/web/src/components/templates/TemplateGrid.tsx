@@ -159,6 +159,10 @@ function ProjectBatchBottomBar(props: ProjectBatchControlsProps) {
   );
 }
 
+/** Projects library default — override via `gridClassName` per call site. */
+const DEFAULT_PROJECTS_GRID =
+  'grid w-full grid-cols-2 gap-4 xl:grid-cols-3 2xl:grid-cols-4';
+
 function TemplateGrid({
   templates,
   title,
@@ -171,6 +175,7 @@ function TemplateGrid({
   onLoadMore,
   onCreate,
   createDisabled = false,
+  gridClassName = DEFAULT_PROJECTS_GRID,
 }: {
   templates: any[];
   title: string;
@@ -184,6 +189,8 @@ function TemplateGrid({
   onLoadMore?: () => void;
   onCreate?: () => void;
   createDisabled?: boolean;
+  /** Per-page grid; do not reuse other modules' breakpoints. */
+  gridClassName?: string;
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -196,8 +203,6 @@ function TemplateGrid({
   const [deleting, setDeleting] = useState(false);
   const [plazaByProject, setPlazaByProject] = useState<Record<string, PlazaSubmissionDto>>({});
 
-  const gridClass =
-    'grid w-full grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5';
   const handleLoadMore = onLoadMore ?? (() => undefined);
   const reloadPlaza = async (signal?: { cancelled: boolean }) => {
     if (!user?.id) {
@@ -367,7 +372,7 @@ function TemplateGrid({
         loadingMore={loadingMore}
         hasMore={hasMore}
         onLoadMore={handleLoadMore}
-        gridClassName={gridClass}
+        gridClassName={gridClassName}
         skeleton={
           <>
             {onCreate ? (
