@@ -3,7 +3,7 @@ import { useDispatch } from 'react-redux';
 import { HiOutlineArrowUpTray } from 'react-icons/hi2';
 import { message } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
-import { uploadImageFile, readFileAsDataUrl } from '@/utils/uploadImage';
+import { uploadImageFile, readFileAsDataUrl, waitForImageReady } from '@/utils/uploadImage';
 import { measureImageNaturalSize } from '@/components/rcb/scene/document/sceneDocument';
 import { finishImageProcess, patchDocumentNode } from '@/store/modules/editor';
 
@@ -83,10 +83,14 @@ function ImageReplaceUploadControl({
         const src = uploaded.url;
         if (!aliveRef.current || nodeIdRef.current !== targetId) return;
 
+        const remoteReady = await waitForImageReady(src);
+        if (!aliveRef.current || nodeIdRef.current !== targetId) return;
+
         let naturalW = Number(uploaded.width) || 0;
         let naturalH = Number(uploaded.height) || 0;
         if (!(naturalW > 0 && naturalH > 0)) {
-          const natural = await measureImageNaturalSize(src);
+          // Prefer already-decoded remote; fall back to local preview size.
+          const natural = await measureImageNaturalSize(remoteReady ? src : preview);
           naturalW = natural.width;
           naturalH = natural.height;
         }
@@ -102,7 +106,7 @@ function ImageReplaceUploadControl({
         dispatch(
           finishImageProcess({
             nodeId: targetId,
-            src,
+            ...(remoteReady ? { src } : {}),
             attrs: {
               assetKind,
               ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
