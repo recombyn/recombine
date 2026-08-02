@@ -23,20 +23,22 @@
 **Recombyn** 是 **画布编辑器 + AI Design Agent**（源码可得 / source-available）。  
 在无限画布上创作；Agent 基于 LangGraph 直接改图层、图形、文字与布局——用对话驱动设计，而不是生成一张死图。
 
-几分钟用 Docker Compose 自托管（默认 **MySQL** + Redis + Web + API）。本地开发可空 `DATABASE_URL` 用 **SQLite**；也可切 **PostgreSQL**（见 [docs/postgres-switch.md](docs/postgres-switch.md)）。
+几分钟用 Docker Compose 自托管（默认 **MySQL** + Redis + Web + API + **Yjs 协作**）。本地开发可空 `DATABASE_URL` 用 **SQLite**；也可切 **PostgreSQL**（见 [docs/postgres-switch.md](docs/postgres-switch.md)）。
 
 ---
 
 ## 为什么选 Recombyn？
 
 - **真·画布编辑** — 画板、形状、图片、视频、文字，可导出与分享
+- **实时多人协作** — 同一项目 Yjs 同步（光标、选区、撤销）；分享可只读或可编辑
 - **Agent 落笔改稿** — 对话规划并执行画布操作，不是一次性出图
 - **自托管优先** — 本地 / 服务器同一套栈，数据在你这边
-- **可组合** — `apps/api/data/public/` 含基建种子 + 最小可跑提示词包；完整产品内容可放 `data/private/` 或 Admin
+- **可组合** — `apps/api/data/public/` 含基建种子 + 提示词包 + **5 个核心 Agent Skill**；完整产品内容可放 `data/private/` 或 Admin
 
 ## 核心能力
 
 - **可视化编辑** — 选区、图层、填充、导出、分享  
+- **实时协作** — Yjs WebSocket（`apps/collab`）；编辑器 Live 状态条；生产经 nginx `/collab/` 走 WSS  
 - **Design Agent** — LangGraph 工具 / 技能；创建 / 编辑 / 闲聊，流式对话 UI  
 - **图片导入** — 本地图片 → 可编辑画布节点  
 - **广场与项目** — 灵感流与作品（API）
@@ -65,14 +67,18 @@ docker compose up -d redis
 npm install
 cp apps/api/.env.example apps/api/.env
 npm run dev:api              # 空 DATABASE_URL → SQLite
+npm run dev:collab           # Yjs WS :1234（可选；Vite DEV 默认开协作）
 npm run dev:web
 ```
+
+画布 Live / WSS：**[docs/self-hosting.md § Canvas multiplayer](docs/self-hosting.md#canvas-multiplayer-yjs--wss)** · [apps/collab/README.md](apps/collab/README.md)
 
 ## 仓库结构
 
 ```
-apps/web/          React 画布 + Agent UI
-apps/api/          FastAPI
+apps/web/          React 画布 + Agent UI + Yjs 客户端
+apps/api/          FastAPI（含 collab room-token）
+apps/collab/       Yjs WebSocket 服务（y-websocket）
 apps/docs/         帮助 / 法律站
 packages/          共享协议
 docs/              架构与自托管（含 Postgres 切换）

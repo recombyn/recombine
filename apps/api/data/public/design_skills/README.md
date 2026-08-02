@@ -1,6 +1,6 @@
 # Design skills (OSS baseline)
 
-Open-source ships a **minimal** skill set so self-host Agent can create / edit / vision / image-gen.
+Open-source ships **5 core skills** in `design_skills_seed.json` so self-host Agent can create / edit / vision / image-gen out of the box.
 
 ## Namespaces
 
