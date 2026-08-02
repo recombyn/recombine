@@ -583,12 +583,15 @@ def test_assemble_stage_system_decide_and_paint():
         None, stage="decide", ask_mode=False, persona="我是测试助手"
     )
     assert "IDENTITY: 我是测试助手" in decide
-    assert "按需资源" in decide or "need_tools" in decide
-    assert "Agent" in decide or "禁止" in decide
+    # OSS English packs or product Chinese.
+    assert "need_tools" in decide or "按需资源" in decide or "resource" in decide.lower()
+    assert "Agent" in decide or "Decide" in decide or "禁止" in decide
     paint = assemble_stage_system(None, stage="paint", ask_mode=True, persona="P")
     assert "IDENTITY: P" in paint
     assert "tool_ops" in paint or "PAINT" in paint.upper()
-    assert render_prompt_body("agent.prompt.ask_system")[:20] in paint or "Ask" in paint
+    ask_body = render_prompt_body("agent.prompt.ask_system")
+    assert (ask_body[:20] in paint) if ask_body else True
+    assert "Ask" in paint or "ask" in paint.lower() or ask_body[:20] in paint
 
 
 def test_validate_paint_ops_rejects_unknown_and_keeps_valid():

@@ -537,16 +537,20 @@ def ensure_design_prompt_packs() -> None:
     global _PACKS_READY
     now = time.time()
     with _PACKS_LOCK:
-        with connect() as conn:
-            try:
-                from services.design.admin.schema import (
-                    _ensure_prompt_pack_kind_width,
-                    _ensure_prompt_pack_type_column,
-                    _ensure_prompt_pack_used_by_column,
-                )
-                from services.db import dialect
+        from services.db import dialect, init_schema
+        from services.design.admin.schema import (
+            _ensure_prompt_pack_kind_width,
+            _ensure_prompt_pack_type_column,
+            _ensure_prompt_pack_used_by_column,
+            ensure_design_tables,
+        )
 
-                mysql = dialect() == "mysql"
+        # Cold unit tests may hit this before FastAPI lifespan — create tables first.
+        init_schema()
+        mysql = dialect() == "mysql"
+        with connect() as conn:
+            ensure_design_tables(conn, mysql=mysql)
+            try:
                 _ensure_prompt_pack_kind_width(conn, mysql=mysql)
                 _ensure_prompt_pack_type_column(conn, mysql=mysql)
                 _ensure_prompt_pack_used_by_column(conn, mysql=mysql)
