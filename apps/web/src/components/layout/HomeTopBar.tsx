@@ -4,10 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   HiOutlineBars3,
+  HiOutlineBriefcase,
   HiOutlineFolder,
   HiOutlineHome,
-  HiOutlineUser,
 } from 'react-icons/hi2';
+import { LuUserRound } from 'react-icons/lu';
 import { Dropdown } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import AuthHeader from '@/components/layout/AuthHeader';
@@ -25,8 +26,8 @@ function HomeTopBar({ setNav }: Props) {
   const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
   const authed = Boolean(userId && getToken());
 
-  const goNav = (id: 'home' | 'mine' | 'account') => {
-    if ((id === 'mine' || id === 'account') && !authed) {
+  const goNav = (id: 'home' | 'mine' | 'account' | 'skills') => {
+    if ((id === 'mine' || id === 'account' || id === 'skills') && !authed) {
       navigate(buildLoginUrl('/home'));
       return;
     }
@@ -45,20 +46,29 @@ function HomeTopBar({ setNav }: Props) {
         ),
       },
       {
-        key: 'account',
-        label: (
-          <span className="inline-flex items-center gap-2">
-            <HiOutlineUser className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.5} />
-            {t('home.account')}
-          </span>
-        ),
-      },
-      {
         key: 'mine',
         label: (
           <span className="inline-flex items-center gap-2">
             <HiOutlineFolder className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.5} />
             {t('home.mine')}
+          </span>
+        ),
+      },
+      {
+        key: 'skills',
+        label: (
+          <span className="inline-flex items-center gap-2">
+            <HiOutlineBriefcase className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.5} />
+            {t('home.railSkills')}
+          </span>
+        ),
+      },
+      {
+        key: 'account',
+        label: (
+          <span className="inline-flex items-center gap-2">
+            <LuUserRound className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.5} />
+            {t('home.account')}
           </span>
         ),
       },
@@ -77,7 +87,7 @@ function HomeTopBar({ setNav }: Props) {
           offset={8}
           items={mobileNavItems}
           onClick={(key) => {
-            if (key === 'home' || key === 'mine' || key === 'account') {
+            if (key === 'home' || key === 'mine' || key === 'account' || key === 'skills') {
               goNav(key);
             }
           }}

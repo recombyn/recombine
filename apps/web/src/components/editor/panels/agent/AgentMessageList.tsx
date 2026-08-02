@@ -7,6 +7,7 @@ import {
   type VirtualListHandle,
 } from '@/components/base/VirtualList';
 import ChatTurnList, {
+  type AskChoicePick,
   type ChatTurn,
   type ChatUiMessage,
 } from '@/components/editor/panels/agent/ChatTurnList';
@@ -32,7 +33,7 @@ type AgentMessageListProps = {
   onBeginEdit: (m: ChatUiMessage) => void;
   onCancelEdit: () => void;
   onRestore: (userId: string) => void;
-  onChoice?: (choice: string) => void;
+  onChoice?: (choice: AskChoicePick) => void;
   onOpenSession: (session: AgentChatSessionRow) => void;
   onDeleteSession: (id: string) => void;
   formatChatTime: (ts: number) => string;

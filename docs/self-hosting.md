@@ -106,12 +106,12 @@ docker compose up -d mysql redis
 
 ## License & commercial model
 
-This repository is **MIT** (see root `LICENSE`). You may self-host freely.
+This repository uses the **Recombyn Open Source License v1.0** (Apache 2.0 with additional conditions — see root `LICENSE`).
 
-How we intend to sustain the project (same shape as many OSS + Cloud products):
-
-- **Individuals / community**: self-host free; Cloud may offer a free tier later.
-- **Teams / enterprises**: paid **hosted Cloud**, support/SLA, and (later) optional enterprise add-ons — not a lock on the MIT core.
+- **Individuals / private groups**: self-host free under the license.
+- **Internal org deployment**: permitted (employees / contractors of that org).
+- **Public-facing deployment** of Recombyn (or a substantially similar platform) as a service — paid or free — requires **commercial / enterprise authorization** (`licensing@recombyn.com`).
+- Hosted **Cloud**, support/SLA, and enterprise add-ons are separate commercial offerings.
 
 Third-party images you may run alongside (Redis, MySQL, …) keep **their own** licenses.
 

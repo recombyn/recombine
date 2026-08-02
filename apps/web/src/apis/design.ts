@@ -265,6 +265,27 @@ export type RunDesignJobBody = {
   };
   /** Ask confirm: apply previously proposed tool_ops without a new LLM plan. */
   apply_ops?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+  /** User-pinned skills from `/` chips (skill keys or ids). */
+  skill_refs?: string[];
+};
+
+export type DesignSkillCard = {
+  id: number;
+  skillKey?: string | null;
+  qualifiedKey?: string | null;
+  name: string;
+  description?: string;
+  whenToUse?: string;
+  logo?: string | null;
+  namespace?: string;
+  source?: string;
+  ownerUserId?: string | null;
+  category?: string;
+  mine?: boolean;
+  enabled?: boolean;
+  promptPositive?: string;
+  promptNegative?: string;
+  triggers?: Array<Record<string, unknown> | string>;
 };
 
 export type SseHandlers = {
@@ -351,4 +372,86 @@ export const fetchDesignBrushes = () =>
   request<{ items?: DesignBrush[] }>({
     url: '/api/v1/design/brushes',
     method: 'get',
+  });
+
+/** Skills for `/` picker, `mine=true`, or toolbox `manage=true` (includes disabled). */
+export const fetchDesignSkills = (opts?: {
+  scene?: string;
+  mine?: boolean;
+  manage?: boolean;
+}) =>
+  request<{ items?: DesignSkillCard[] }>({
+    url: '/api/v1/design/skills',
+    method: 'get',
+    params: {
+      ...(opts?.scene ? { scene: opts.scene } : {}),
+      ...(opts?.mine ? { mine: true } : {}),
+      ...(opts?.manage ? { manage: true } : {}),
+    },
+  });
+
+export const upsertDesignUserSkill = (body: {
+  id?: number;
+  name: string;
+  description?: string;
+  whenToUse?: string;
+  promptPositive: string;
+  promptNegative?: string;
+  skillKey?: string;
+  logo?: string;
+  category?: string;
+  enabled?: boolean;
+}) =>
+  request<{ item?: DesignSkillCard }>({
+    url: '/api/v1/design/skills',
+    method: 'post',
+    data: body,
+  });
+
+export const setDesignSkillEnabled = (skillId: number, enabled: boolean) =>
+  request<{ item?: DesignSkillCard }>({
+    url: `/api/v1/design/skills/${skillId}/enabled`,
+    method: 'patch',
+    data: { enabled },
+  });
+
+export type DesignSkillImportExisting = {
+  id: number;
+  name: string;
+  skillKey?: string | null;
+  packVersion?: string | null;
+  updatedAt?: number | null;
+  useCount?: number;
+  mine?: boolean;
+};
+
+export type DesignSkillImportResult = {
+  status: 'ok' | 'exists' | 'rejected';
+  fileName?: string;
+  scan?: {
+    ok?: boolean;
+    checks?: Array<{ id?: string; ok?: boolean; label?: string; detail?: string }>;
+    errors?: string[];
+  };
+  item?: DesignSkillCard | null;
+  existing?: DesignSkillImportExisting | null;
+};
+
+/** Upload a skill pack `.zip` (`_meta.json` + `SKILL.md`). */
+export const importDesignSkillZip = (file: File, opts?: { overwrite?: boolean }) => {
+  const data = new FormData();
+  data.append('file', file);
+  data.append('overwrite', opts?.overwrite ? 'true' : 'false');
+  return request<DesignSkillImportResult>({
+    url: '/api/v1/design/skills/import',
+    method: 'post',
+    data,
+    timeout: 120000,
+  });
+};
+
+export const deleteDesignUserSkill = (skillId: number) =>
+  request<{ ok?: boolean }>({
+    url: `/api/v1/design/skills/${skillId}`,
+    method: 'delete',
   });

@@ -249,6 +249,7 @@ async def run_agent_graph(
     refund_hold_fn: Any,
     apply_ops: list[dict[str, Any]] | None = None,
     interaction_mode: str | None = None,
+    skill_refs: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Internal graph runner. Prefer ``design_stream`` at call sites."""
     del reserve_hold_fn
@@ -309,7 +310,7 @@ async def run_agent_graph(
     tools_catalog = format_canvas_tools_catalog(rules)
     scene_for_cat = scene_key or "website"
     skills_catalog, knowledge_catalog, aesthetics_catalog = await asyncio.gather(
-        asyncio.to_thread(format_skills_catalog, scene=scene_for_cat),
+        asyncio.to_thread(format_skills_catalog, scene=scene_for_cat, user_id=user_id),
         asyncio.to_thread(format_knowledge_catalog, scene=scene_for_cat),
         asyncio.to_thread(format_aesthetics_catalog, scene=scene_for_cat),
     )
@@ -366,6 +367,11 @@ async def run_agent_graph(
         spatial_summary=spatial_summary if isinstance(spatial_summary, dict) else None,
     )
     rt.flags["mode"] = ui_mode
+    pinned_refs = [
+        str(x).strip() for x in (skill_refs or []) if str(x).strip()
+    ][:8]
+    if pinned_refs:
+        rt.flags["skill_refs"] = pinned_refs
     _bind_design_hold_fns(task_id, settle_hold_fn, refund_hold_fn)
 
     graph = await asyncio.to_thread(_lc_design_graph)

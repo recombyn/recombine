@@ -2,14 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, memo
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { GoHome } from 'react-icons/go';
 import {
   HiOutlineBell,
   HiOutlineBookOpen,
+  HiOutlineBriefcase,
   HiOutlineChatBubbleLeftRight,
   HiOutlineFolder,
-  HiOutlineUser,
+  HiOutlineHome,
+  HiOutlinePlusCircle,
 } from 'react-icons/hi2';
+import { LuUserRound } from 'react-icons/lu';
 import { Dropdown, Tooltip } from '@/components/base';
 import AppLogo from '@/components/base/AppLogo';
 import { fetchProjects } from '@/apis/projects';
@@ -17,6 +19,7 @@ import HomeHero from '@/components/home/HomeHero';
 import InspirationSection from '@/components/home/InspirationSection';
 import MePage from '@/components/home/MePage';
 import RecentProjectsSection from '@/components/home/RecentProjectsSection';
+import SkillsLibraryPanel from '@/components/home/SkillsLibraryPanel';
 import type { HomeAgentSubmitPayload } from '@/components/home/HomeAgentComposer';
 import type { OfficialCaseMeta } from '@/utils/officialCases';
 import TemplateGrid from '@/components/templates/TemplateGrid';
@@ -46,29 +49,20 @@ type Props = {
 };
 
 const RAIL_STROKE = 1.5;
+/** Shared hit box for rail buttons. */
+const RAIL_ICON_BOX = 'flex h-6 w-6 shrink-0 items-center justify-center';
+/** Add (+) stays slightly larger. */
+const RAIL_ICON = 'h-6 w-6';
+/** Home / account — 22px. */
+const RAIL_ICON_MD = 'h-[22px] w-[22px]';
+/** Skills / mine — 20px (optically denser glyphs). */
+const RAIL_ICON_SM = 'h-5 w-5';
 
 const RAIL_HELP_WIKI =
   'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink';
 
-/** Circled + — rail create action (glyph fills viewBox like Home/User). */
-function RailPlusIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth={RAIL_STROKE}
-      />
-      <path
-        d="M12 7.25v9.5M7.25 12h9.5"
-        stroke="currentColor"
-        strokeWidth={RAIL_STROKE}
-        strokeLinecap="round"
-      />
-    </svg>
-  );
+function RailGlyph({ children }: { children: ReactNode }) {
+  return <span className={RAIL_ICON_BOX}>{children}</span>;
 }
 
 function RailItem({
@@ -93,13 +87,13 @@ function RailItem({
         disabled={disabled}
         onClick={onClick}
         className={cn(
-          'mx-auto flex h-10 w-10 items-center justify-center rounded-full transition-colors disabled:opacity-50',
+          'mx-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-50',
           active
             ? 'bg-[color-mix(in_srgb,var(--ink)_4%,var(--rail))] text-[var(--ink)]'
             : 'text-[var(--ink)]/55 hover:bg-[color-mix(in_srgb,var(--ink)_2%,var(--rail))] hover:text-[var(--ink)]'
         )}
       >
-        {icon}
+        <RailGlyph>{icon}</RailGlyph>
       </button>
     </Tooltip>
   );
@@ -211,8 +205,8 @@ function HomeSidebar({
   const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
   const authed = Boolean(userId && getToken());
 
-  const goNav = (id: 'home' | 'mine' | 'account') => {
-    if ((id === 'mine' || id === 'account') && !authed) {
+  const goNav = (id: 'home' | 'mine' | 'account' | 'skills') => {
+    if ((id === 'mine' || id === 'account' || id === 'skills') && !authed) {
       navigate(buildLoginUrl('/home'));
       return;
     }
@@ -251,26 +245,54 @@ function HomeSidebar({
               label={t('home.railAdd')}
               disabled={importing}
               onClick={onCreate}
-              icon={<RailPlusIcon className="h-[22px] w-[22px]" />}
+              icon={
+                <HiOutlinePlusCircle
+                  className={RAIL_ICON}
+                  strokeWidth={RAIL_STROKE}
+                  aria-hidden
+                />
+              }
             />
             <RailItem
               label={t('home.navHome')}
               active={nav === 'home'}
               onClick={() => goNav('home')}
-              icon={<GoHome className="h-[22px] w-[22px]" aria-hidden />}
+              icon={
+                <HiOutlineHome className={RAIL_ICON_MD} strokeWidth={RAIL_STROKE} aria-hidden />
+              }
             />
-            <RailItem
-              label={t('home.account')}
-              active={nav === 'account'}
-              onClick={() => goNav('account')}
-              icon={<HiOutlineUser className="h-[22px] w-[22px]" strokeWidth={RAIL_STROKE} aria-hidden />}
-            />
-            <RailDivider />
             <RailItem
               label={t('home.mine')}
               active={nav === 'mine'}
               onClick={() => goNav('mine')}
-              icon={<HiOutlineFolder className="h-[18px] w-[18px]" strokeWidth={RAIL_STROKE} aria-hidden />}
+              icon={
+                <HiOutlineFolder
+                  className={RAIL_ICON_SM}
+                  strokeWidth={RAIL_STROKE}
+                  aria-hidden
+                />
+              }
+            />
+            <RailItem
+              label={t('home.railSkills')}
+              active={nav === 'skills'}
+              onClick={() => goNav('skills')}
+              icon={
+                <HiOutlineBriefcase
+                  className={RAIL_ICON_SM}
+                  strokeWidth={RAIL_STROKE}
+                  aria-hidden
+                />
+              }
+            />
+            <RailDivider />
+            <RailItem
+              label={t('home.account')}
+              active={nav === 'account'}
+              onClick={() => goNav('account')}
+              icon={
+                <LuUserRound className={RAIL_ICON_MD} strokeWidth={RAIL_STROKE} aria-hidden />
+              }
             />
           </nav>
           <div className="mt-auto flex shrink-0 justify-center pt-3">
@@ -314,7 +336,7 @@ function HomeTemplateList({
       return;
     }
     if (authed) return;
-    if (nav !== 'mine' && nav !== 'account') return;
+    if (nav !== 'mine' && nav !== 'account' && nav !== 'skills') return;
     setNav('home');
     navigate(buildLoginUrl('/home'));
   }, [authed, nav, navigate, setNav]);
@@ -405,7 +427,8 @@ function HomeTemplateList({
 
   const showAccount = nav === 'account' && Boolean(authed);
   const showMine = nav === 'mine' && Boolean(authed);
-  const showHome = !showAccount && !showMine;
+  const showSkills = nav === 'skills' && Boolean(authed);
+  const showHome = !showAccount && !showMine && !showSkills;
 
   const homeProjectsLoading = Boolean(authed) && !projectsReady;
   const mineTitle = t('home.mine');
@@ -418,6 +441,14 @@ function HomeTemplateList({
   return (
     <>
       {showAccount ? <MePage onOpenCase={onOpenCase} /> : null}
+
+      {showSkills ? (
+        <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
+          <div className="relative mx-auto w-full min-w-0 max-w-[1700px] px-5 pb-10 pt-16 sm:px-8 sm:pt-20 md:px-24 lg:px-[100px] xl:px-[120px]">
+            <SkillsLibraryPanel />
+          </div>
+        </main>
+      ) : null}
 
       {showMine ? (
         <main className="min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">

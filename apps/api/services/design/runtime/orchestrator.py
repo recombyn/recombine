@@ -177,6 +177,7 @@ async def run_design_job(
     apply_ops: list[dict[str, Any]] | None = None,
     interaction_mode: str | None = None,
     client_country: str | None = None,
+    skill_refs: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """LangGraph agent loop. Chat vs design from model intent / ops."""
     del is_premium  # reserved
@@ -315,6 +316,7 @@ async def run_design_job(
                 refund_hold_fn=_refund_hold,
                 apply_ops=apply_ops,
                 interaction_mode=ui_mode,
+                skill_refs=skill_refs,
             ):
                 yield ev
         finally:

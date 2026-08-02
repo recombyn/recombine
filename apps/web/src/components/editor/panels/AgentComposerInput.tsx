@@ -108,6 +108,8 @@ export type AgentComposerHandle = {
    * Used to anchor the attach picker to the caret, not the whole composer.
    */
   getAtMentionAnchorRect: () => DOMRect | null;
+  /** Screen rect of the active `/…` skill mention. */
+  getSlashMentionAnchorRect: () => DOMRect | null;
 };
 
 function placeCaretAtEnd(el: HTMLElement) {
@@ -275,13 +277,24 @@ function setPlainTextCaretOffset(root: HTMLElement, target: number): Range {
   return range;
 }
 
-/** Client rect for the active `@query` token (follows caret / @ glyph). */
-function getAtMentionAnchorRect(root: HTMLElement): DOMRect | null {
+/** Client rect for an active `@` / `/` trigger token (follows caret). */
+function getTriggerAnchorRect(root: HTMLElement, trigger: '@' | '/'): DOMRect | null {
   const text = readPlainText(root);
-  const at = text.lastIndexOf('@');
-  if (at < 0) return null;
-  const after = text.slice(at + 1);
-  if (/\s/.test(after)) return null;
+  let at = -1;
+  if (trigger === '@') {
+    at = text.lastIndexOf('@');
+    if (at < 0) return null;
+    if (/\s/.test(text.slice(at + 1))) return null;
+  } else {
+    for (let i = text.length - 1; i >= 0; i -= 1) {
+      if (text[i] !== '/') continue;
+      if (/\s/.test(text.slice(i + 1))) return null;
+      if (i > 0 && !/\s/.test(text[i - 1]!)) continue;
+      at = i;
+      break;
+    }
+    if (at < 0) return null;
+  }
   try {
     const start = setPlainTextCaretOffset(root, at);
     const end = setPlainTextCaretOffset(root, Math.min(text.length, at + 1));
@@ -292,7 +305,6 @@ function getAtMentionAnchorRect(root: HTMLElement): DOMRect | null {
     if (rect.width > 0 || rect.height > 0) {
       return new DOMRect(rect.left, rect.top, Math.max(rect.width, 1), Math.max(rect.height, 16));
     }
-    // Empty editor / collapsed — use caret point with line-height fallback.
     const caret = start.getBoundingClientRect();
     if (caret.left || caret.top) {
       return new DOMRect(caret.left, caret.top, 1, Math.max(caret.height, 16));
@@ -302,6 +314,10 @@ function getAtMentionAnchorRect(root: HTMLElement): DOMRect | null {
   }
   const box = root.getBoundingClientRect();
   return new DOMRect(box.left + 8, box.top + 4, 1, 18);
+}
+
+function getAtMentionAnchorRect(root: HTMLElement): DOMRect | null {
+  return getTriggerAnchorRect(root, '@');
 }
 
 const CHIP_STYLE = '3';
@@ -330,6 +346,33 @@ export function stripTrailingAtQuery(prev: string): string {
   const after = prev.slice(at + 1);
   if (/\s/.test(after)) return prev;
   return prev.slice(0, at);
+}
+
+/**
+ * `/query` skill picker — `/` only when at start or after whitespace
+ * (skips mid-token paths like `https://`).
+ */
+export function parseSlashSkillQuery(next: string): { open: boolean; query: string } {
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    if (next[i] !== '/') continue;
+    const after = next.slice(i + 1);
+    if (/\s/.test(after)) return { open: false, query: '' };
+    if (i > 0 && !/\s/.test(next[i - 1]!)) continue;
+    return { open: true, query: after };
+  }
+  return { open: false, query: '' };
+}
+
+/** Remove trailing `/query` after picking a skill chip. */
+export function stripTrailingSlashQuery(prev: string): string {
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    if (prev[i] !== '/') continue;
+    const after = prev.slice(i + 1);
+    if (/\s/.test(after)) return prev;
+    if (i > 0 && !/\s/.test(prev[i - 1]!)) continue;
+    return prev.slice(0, i);
+  }
+  return prev;
 }
 
 function withChipInstance(key: string): string {
@@ -738,6 +781,10 @@ const AgentComposerInput = forwardRef<
     getAtMentionAnchorRect: () => {
       const el = editorRef.current;
       return el ? getAtMentionAnchorRect(el) : null;
+    },
+    getSlashMentionAnchorRect: () => {
+      const el = editorRef.current;
+      return el ? getTriggerAnchorRect(el, '/') : null;
     },
   }));
 
