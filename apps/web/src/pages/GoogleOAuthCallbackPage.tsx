@@ -40,7 +40,7 @@ function GoogleOAuthCallbackPage() {
       return;
     }
 
-    void (async () => {
+    async function completeGoogleLogin() {
       try {
         const res = await loginGoogle({
           code,
@@ -63,7 +63,8 @@ function GoogleOAuthCallbackPage() {
         const detail = e?.response?.data?.detail || e?.message || 'Google login failed';
         setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
       }
-    })();
+    }
+    completeGoogleLogin();
   }, [dispatch, navigate, params, t]);
 
   return (

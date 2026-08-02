@@ -1,6 +1,11 @@
 import {
   useRcbScreenToScene,
+  useRcbViewportEl,
 } from '../camera/context';
+import {
+  rcbResolveViewportEl,
+  rcbViewportMetrics,
+} from '../core/math';
 import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { ARROW_HEAD, ptsAttr, shapeVertexPoints } from '@/components/rcb/scene/document/sceneShapes';
 
@@ -14,6 +19,25 @@ function normalizeBox(x0: number, y0: number, x1: number, y1: number) {
     height: Math.max(1, Math.abs(y1 - y0)),
   };
 }
+
+type ShapeDrawSession = {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  clientX0: number;
+  clientY0: number;
+  /** Continuously updated from pointerdown/move — never from pointerup/cancel. */
+  currentClientX: number;
+  currentClientY: number;
+  scaleX: number;
+  scaleY: number;
+  /** Last pointer position before axis snap (for Shift toggle mid-drag). */
+  rawX1: number;
+  rawY1: number;
+  shift: boolean;
+  pointerId: number;
+};
 
 /**
  * Shift+drag line/arrow: lock to the dominant axis (horizontal or vertical).
@@ -81,16 +105,14 @@ function ShapeDrawFeature({
   onCreate,
 }: ShapeDrawFeatureProps) {
   const toScene = useRcbScreenToScene();
-  const session = useRef<{
-    x0: number;
-    y0: number;
-    x1: number;
-    y1: number;
-    /** Last pointer position before axis snap (for Shift toggle mid-drag). */
-    rawX1: number;
-    rawY1: number;
-    shift: boolean;
-  } | null>(null);
+  const viewportEl = useRcbViewportEl();
+  const toSceneRef = useRef(toScene);
+  const onCreateRef = useRef(onCreate);
+  const shapeKindRef = useRef(shapeKind);
+  toSceneRef.current = toScene;
+  onCreateRef.current = onCreate;
+  shapeKindRef.current = shapeKind;
+  const session = useRef<ShapeDrawSession | null>(null);
   const [preview, setPreview] = useState<{
     x0: number;
     y0: number;
@@ -99,7 +121,7 @@ function ShapeDrawFeature({
   } | null>(null);
 
   useEffect(() => {
-    const hitEl = stageEl || paperEl;
+    const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
     if (!enabled || !hitEl) return undefined;
 
     const applyStrokeEnd = (
@@ -109,23 +131,60 @@ function ShapeDrawFeature({
       rawY1: number,
       shiftKey: boolean
     ) => {
-      const kind = shapeKind || 'rect';
+      const kind = shapeKindRef.current || 'rect';
       const isStroke = kind === 'line' || kind === 'arrow';
       if (!isStroke) return { x1: rawX1, y1: rawY1 };
       return snapStrokeAxis(x0, y0, rawX1, rawY1, shiftKey);
     };
 
+    const pointerScene = (clientX: number, clientY: number) =>
+      toSceneRef.current(clientX, clientY);
+
+    const releaseCapture = (pointerId: number) => {
+      try {
+        hitEl.releasePointerCapture?.(pointerId);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const applyPointerToSession = (
+      s: ShapeDrawSession,
+      clientX: number,
+      clientY: number,
+      shiftKey: boolean
+    ) => {
+      const p = pointerScene(clientX, clientY);
+      const end = applyStrokeEnd(s.x0, s.y0, p.x, p.y, shiftKey);
+      s.currentClientX = clientX;
+      s.currentClientY = clientY;
+      s.rawX1 = p.x;
+      s.rawY1 = p.y;
+      s.shift = shiftKey;
+      s.x1 = end.x1;
+      s.y1 = end.y1;
+      return { p, end };
+    };
+
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
-      const p = toScene(e.clientX, e.clientY);
+      const p = pointerScene(e.clientX, e.clientY);
+      const metrics = rcbViewportMetrics(hitEl);
       session.current = {
         x0: p.x,
         y0: p.y,
         x1: p.x,
         y1: p.y,
+        clientX0: e.clientX,
+        clientY0: e.clientY,
+        currentClientX: e.clientX,
+        currentClientY: e.clientY,
+        scaleX: metrics.scaleX,
+        scaleY: metrics.scaleY,
         rawX1: p.x,
         rawY1: p.y,
         shift: e.shiftKey,
+        pointerId: e.pointerId,
       };
       setPreview({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
       hitEl.setPointerCapture?.(e.pointerId);
@@ -134,54 +193,55 @@ function ShapeDrawFeature({
     };
 
     const onMove = (e: PointerEvent) => {
-      if (!session.current) return;
-      const p = toScene(e.clientX, e.clientY);
-      const { x0, y0 } = session.current;
-      const end = applyStrokeEnd(x0, y0, p.x, p.y, e.shiftKey);
-      session.current.rawX1 = p.x;
-      session.current.rawY1 = p.y;
-      session.current.shift = e.shiftKey;
-      session.current.x1 = end.x1;
-      session.current.y1 = end.y1;
-      setPreview({ x0, y0, x1: end.x1, y1: end.y1 });
+      const s = session.current;
+      if (!s || e.pointerId !== s.pointerId) return;
+      // Position state only updates from move (and down). End events may report 0,0.
+      const { end } = applyPointerToSession(s, e.clientX, e.clientY, e.shiftKey);
+      setPreview({ x0: s.x0, y0: s.y0, x1: end.x1, y1: end.y1 });
     };
 
-    const onUp = (e: PointerEvent) => {
-      if (!session.current) return;
-      const p = toScene(e.clientX, e.clientY);
-      const { x0, y0 } = session.current;
-      const kind = shapeKind || 'rect';
+    /**
+     * End events are a lifecycle signal only. Commit geometry from the session's
+     * current point (last down/move). End-event clientX/Y are unreliable on
+     * narrow / touch / device-mode viewports (often 0,0).
+     */
+    const finishSession = (e: PointerEvent) => {
+      const s = session.current;
+      if (!s || e.pointerId !== s.pointerId) return;
+      const kind = shapeKindRef.current || 'rect';
       const isStroke = kind === 'line' || kind === 'arrow';
-      const end = applyStrokeEnd(x0, y0, p.x, p.y, e.shiftKey);
+      const end = applyStrokeEnd(s.x0, s.y0, s.rawX1, s.rawY1, s.shift);
+      const x0 = s.x0;
+      const y0 = s.y0;
       const x1 = end.x1;
       const y1 = end.y1;
+      const box = normalizeBox(x0, y0, x1, y1);
       session.current = null;
       setPreview(null);
-      try {
-        hitEl.releasePointerCapture?.(e.pointerId);
-      } catch {
-        /* ignore */
-      }
+      releaseCapture(e.pointerId);
+
       if (isStroke) {
         if (Math.hypot(x1 - x0, y1 - y0) < 3) return;
-        const box = normalizeBox(x0, y0, x1, y1);
-        onCreate(kind, { ...box, x0, y0, x1, y1 });
+        onCreateRef.current(kind, { ...box, x0, y0, x1, y1 });
         return;
       }
-      let box = normalizeBox(x0, y0, x1, y1);
-      if (box.width < 3 && box.height < 3) return;
-      if (locksSquareAspect(kind)) box = squareLockedBox(box);
-      onCreate(kind, box);
+      let next = box;
+      if (next.width < 3 && next.height < 3) return;
+      if (locksSquareAspect(kind)) next = squareLockedBox(next);
+      onCreateRef.current(kind, next);
     };
 
+    // Move on window so current point stays fresh even outside the stage.
+    // Up/cancel both finish from session current — not from end-event coords.
     hitEl.addEventListener('pointerdown', onDown);
-    hitEl.addEventListener('pointermove', onMove);
-    hitEl.addEventListener('pointerup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', finishSession);
+    window.addEventListener('pointercancel', finishSession);
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Shift' || !session.current) return;
       const { x0, y0, rawX1, rawY1 } = session.current;
-      const kind = shapeKind || 'rect';
+      const kind = shapeKindRef.current || 'rect';
       if (kind !== 'line' && kind !== 'arrow') return;
       const shift = e.type === 'keydown';
       const end = snapStrokeAxis(x0, y0, rawX1, rawY1, shift);
@@ -195,12 +255,15 @@ function ShapeDrawFeature({
 
     return () => {
       hitEl.removeEventListener('pointerdown', onDown);
-      hitEl.removeEventListener('pointermove', onMove);
-      hitEl.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finishSession);
+      window.removeEventListener('pointercancel', finishSession);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);
     };
-  }, [enabled, paperEl, stageEl, toScene, shapeKind, onCreate]);
+    // Intentionally omit toScene/onCreate/shapeKind — read via refs so a parent
+    // re-render cannot tear down listeners mid-drag.
+  }, [enabled, paperEl, stageEl, viewportEl]);
 
   if (!enabled || !preview) return null;
 
@@ -251,6 +314,7 @@ function ShapeDrawFeature({
     }
     return (
       <div
+        data-shape-draw-preview
         className="pointer-events-none absolute z-20"
         style={{ left, top, width: vw, height: vh }}
       >
@@ -326,6 +390,7 @@ function ShapeDrawFeature({
 
   return (
     <div
+      data-shape-draw-preview
       className="pointer-events-none absolute z-20"
       style={{
         left: drawLeft,

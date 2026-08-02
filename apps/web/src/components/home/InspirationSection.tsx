@@ -208,34 +208,32 @@ function InspirationCaseCard({
     },
   ];
 
-  const onUseMenu = (key: string) => {
-    void (async () => {
-      if (key === 'prompt') {
-        const prompt = resolveCasePrompt(meta, t);
-        const ok = await copyTextToClipboard(prompt);
-        if (ok) {
-          message.success(t('home.cases.promptCopied'));
-          void recordPlazaUse(meta.id).catch(() => undefined);
-        } else {
-          message.error(t('home.cases.copyFailed'));
-        }
+  const onUseMenu = async (key: string) => {
+    if (key === 'prompt') {
+      const prompt = resolveCasePrompt(meta, t);
+      const ok = await copyTextToClipboard(prompt);
+      if (ok) {
+        message.success(t('home.cases.promptCopied'));
+        recordPlazaUse(meta.id).catch(() => undefined);
+      } else {
+        message.error(t('home.cases.copyFailed'));
+      }
+      return;
+    }
+    if (key === 'image') {
+      const url = coverImageUrl(meta);
+      if (!url) {
+        message.error(t('home.cases.copyFailed'));
         return;
       }
-      if (key === 'image') {
-        const url = coverImageUrl(meta);
-        if (!url) {
-          message.error(t('home.cases.copyFailed'));
-          return;
-        }
-        const ok = await copyImageToClipboard(url);
-        if (ok) {
-          message.success(t('home.cases.imageCopied'));
-          void recordPlazaUse(meta.id).catch(() => undefined);
-        } else {
-          message.error(t('home.cases.copyFailed'));
-        }
+      const ok = await copyImageToClipboard(url);
+      if (ok) {
+        message.success(t('home.cases.imageCopied'));
+        recordPlazaUse(meta.id).catch(() => undefined);
+      } else {
+        message.error(t('home.cases.copyFailed'));
       }
-    })();
+    }
   };
 
   return (

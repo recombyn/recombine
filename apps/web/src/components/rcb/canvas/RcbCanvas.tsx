@@ -7,12 +7,18 @@ import {
   RcbOverlayRootContext,
   RcbViewportElContext,
 } from '../camera/context';
-import { readDevicePixelRatio, snapCssToDevicePixel, subscribeDevicePixelRatio, toDomPrecision } from '../core/dpr';
+import { readDevicePixelRatio, subscribeDevicePixelRatio, toDomPrecision } from '../core/dpr';
 import {
   installDprDebugHelpers,
   logDprCameraState,
 } from '../core/dprDebug';
-import { rcbFitCamera, rcbStepZoom, rcbZoomAtPoint } from '../core/math';
+import {
+  rcbCameraScreenOffset,
+  rcbClientToStageLocal,
+  rcbFitCamera,
+  rcbStepZoom,
+  rcbZoomAtPoint,
+} from '../core/math';
 import { RCB_DEFAULT_CAMERA, type RcbCamera } from '../core/types';
 
 export type { RcbCamera };
@@ -55,6 +61,12 @@ export type RcbCanvasProps = {
   showGrid?: boolean;
   gridSize?: number;
   stageRef?: RefObject<HTMLDivElement | null>;
+  /**
+   * Fires whenever the live viewport node mounts/unmounts.
+   * Hosts must use this (not a one-shot effect) so stageEl stays connected
+   * after resize / mobile breakpoint remounts.
+   */
+  onViewportEl?: (el: HTMLElement | null) => void;
   cursor?: string;
   background?: string;
   /** Stable id for one-time autofit (e.g. document id). */
@@ -90,14 +102,17 @@ function RcbCanvas({
   showGrid = false,
   gridSize = 10,
   stageRef: stageRefProp,
+  onViewportEl,
   cursor,
   background,
   fitKey,
 }: RcbCanvasProps) {
   const localRef = useRef<HTMLDivElement | null>(null);
   const stageRef = stageRefProp || localRef;
+  const onViewportElRef = useRef(onViewportEl);
+  onViewportElRef.current = onViewportEl;
   const cameraRef = useRef(camera);
-  const panRef = useRef<{ x: number; y: number } | null>(null);
+  const panRef = useRef<{ x: number; y: number; scaleX: number; scaleY: number } | null>(null);
   const pendingPanRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const spaceDown = useRef(false);
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -147,8 +162,7 @@ function RcbCanvas({
       dpr: devicePixelRatio,
       camera,
       camCss: {
-        x: toDomPrecision(snapCssToDevicePixel(camera.x, devicePixelRatio)),
-        y: toDomPrecision(snapCssToDevicePixel(camera.y, devicePixelRatio)),
+        ...rcbCameraScreenOffset(camera, devicePixelRatio),
         z: toDomPrecision(camera.zoom),
       },
     });
@@ -200,6 +214,7 @@ function RcbCanvas({
       localRef.current = node;
     }
     setViewportEl(node);
+    onViewportElRef.current?.(node);
   };
 
   useEffect(() => {
@@ -284,23 +299,30 @@ function RcbCanvas({
       pendingPanRef.current = null;
       e.preventDefault();
       e.stopPropagation();
-      panRef.current = { x: e.clientX, y: e.clientY };
+      const local = rcbClientToStageLocal(el, e.clientX, e.clientY);
+      panRef.current = { x: local.x, y: local.y, scaleX: local.scaleX, scaleY: local.scaleY };
       el.setPointerCapture?.(e.pointerId);
     };
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const localX = e.clientX - rect.left;
-      const localY = e.clientY - rect.top;
+      const local = rcbClientToStageLocal(el, e.clientX, e.clientY);
       const cam = cameraRef.current;
       markCameraMoving();
 
       if (e.ctrlKey || e.metaKey) {
-        onCameraChange(rcbZoomAtPoint(cam, cam.zoom * (e.deltaY > 0 ? 0.92 : 1.08), localX, localY));
+        onCameraChange(
+          rcbZoomAtPoint(cam, cam.zoom * (e.deltaY > 0 ? 0.92 : 1.08), local.x, local.y)
+        );
         return;
       }
-      onCameraChange({ ...cam, x: cam.x - e.deltaX, y: cam.y - e.deltaY });
+      const sx = local.scaleX > 0 ? local.scaleX : 1;
+      const sy = local.scaleY > 0 ? local.scaleY : 1;
+      onCameraChange({
+        ...cam,
+        x: cam.x - e.deltaX / sx,
+        y: cam.y - e.deltaY / sy,
+      });
     };
 
     const onDown = (e: PointerEvent) => {
@@ -317,9 +339,15 @@ function RcbCanvas({
     };
     const onMove = (e: PointerEvent) => {
       if (panRef.current) {
-        const dx = e.clientX - panRef.current.x;
-        const dy = e.clientY - panRef.current.y;
-        panRef.current = { x: e.clientX, y: e.clientY };
+        const local = rcbClientToStageLocal(el, e.clientX, e.clientY);
+        const dx = local.x - panRef.current.x;
+        const dy = local.y - panRef.current.y;
+        panRef.current = {
+          x: local.x,
+          y: local.y,
+          scaleX: local.scaleX,
+          scaleY: local.scaleY,
+        };
         const cam = cameraRef.current;
         markCameraMoving();
         onCameraChange({ ...cam, x: cam.x + dx, y: cam.y + dy });
@@ -364,8 +392,8 @@ function RcbCanvas({
 
   // Snap pan to the device-pixel grid so translate doesn't add extra frac error
   // on top of scene*dpr (critical at browser 90% → dpr≈0.9).
-  const camX = toDomPrecision(snapCssToDevicePixel(camera.x, devicePixelRatio));
-  const camY = toDomPrecision(snapCssToDevicePixel(camera.y, devicePixelRatio));
+  // Must stay in sync with rcbScreenToScene / rcbSceneToScreen.
+  const { x: camX, y: camY } = rcbCameraScreenOffset(camera, devicePixelRatio);
   const camZ = toDomPrecision(camera.zoom);
 
   return (
@@ -380,14 +408,14 @@ function RcbCanvas({
               data-canvas-stage="1"
               data-rcb-dpr={String(devicePixelRatio)}
               className={cn(
-                'relative h-full w-full overflow-hidden',
+                // Own pan/zoom/draw — block browser scroll/pinch so it cannot
+                // fire pointercancel mid-gesture (common on tablet / DevTools device).
+                'relative h-full w-full touch-none overflow-hidden select-none',
                 !background && 'bg-[var(--canvas)]',
-                panning
-                  ? 'cursor-grab active:cursor-grabbing'
-                    : cursor
-                    ? // Force nested shapes / chrome to inherit tool cursor (eraser / pencil / …).
-                      '[&_*]:!cursor-inherit'
-                    : 'cursor-default',
+                panning && 'cursor-grab active:cursor-grabbing',
+                // Force nested shapes / chrome to inherit tool cursor (eraser / pencil / …).
+                !panning && cursor && '[&_*]:!cursor-inherit',
+                !panning && !cursor && 'cursor-default',
                 className
               )}
               style={{

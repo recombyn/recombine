@@ -23,6 +23,7 @@ import {
   HiOutlineTrash,
 } from 'react-icons/hi2';
 import { Icon } from '@/components/base';
+import { useChromePointerActivate } from './SelectionToolbarShell';
 
 type CtxAction =
   | 'upload'
@@ -118,6 +119,31 @@ const itemClass =
 
 const PAD = 8;
 
+/**
+ * Menu is `position: fixed` on document.body — use viewport client coords.
+ * Keep the click anchor; only shift when the panel would overflow.
+ * Cap height so a tall menu scrolls instead of pinning to the corner.
+ */
+function clampFixedMenuPos(opts: {
+  left: number;
+  top: number;
+  menuW: number;
+  menuH: number;
+}): { left: number; top: number; maxHeight: number } {
+  const viewW = Math.max(1, window.innerWidth);
+  const viewH = Math.max(1, window.innerHeight);
+  const maxHeight = Math.max(120, viewH - PAD * 2);
+  const h = Math.min(Math.max(1, opts.menuH), maxHeight);
+  const w = Math.min(Math.max(1, opts.menuW), Math.max(1, viewW - PAD * 2));
+  let left = opts.left;
+  let top = opts.top;
+  if (left + w > viewW - PAD) left = viewW - PAD - w;
+  if (left < PAD) left = PAD;
+  if (top + h > viewH - PAD) top = viewH - PAD - h;
+  if (top < PAD) top = PAD;
+  return { left, top, maxHeight };
+}
+
 function MenuItem({
   icon,
   label,
@@ -197,7 +223,6 @@ function ExportSubmenu({
         <div
           ref={flyoutRef}
           className={`absolute ${sideClass} ${vClass} z-[1] min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]`}
-          onPointerDown={(e) => e.stopPropagation()}
         >
           {kind === 'video' ? (
             <>
@@ -227,7 +252,7 @@ function ExportSubmenu({
   );
 }
 
-/** Right-click menu — screen-space portal (not scaled by canvas camera). */
+/** Right-click menu — `fixed` on body with viewport client coords (not scene space). */
 function CanvasContextMenu({
   menu,
   hasNode,
@@ -251,6 +276,7 @@ function CanvasContextMenu({
   onClose,
 }: CanvasContextMenuProps) {
   const { t } = useTranslation();
+  const chromePointer = useChromePointerActivate();
   const deleteEnabled = canDelete ?? hasNode;
   const addToChatEnabled = canAddToChat ?? hasNode;
   const layerEnabled = canLayerActions ?? hasNode;
@@ -258,7 +284,7 @@ function CanvasContextMenu({
   const hideEnabled = canToggleHidden ?? hasNode;
   const lockEnabled = canToggleLocked ?? layerEnabled;
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
 
   useLayoutEffect(() => {
     if (!menu) {
@@ -266,14 +292,14 @@ function CanvasContextMenu({
       return;
     }
     const el = panelRef.current;
-    const w = el?.offsetWidth || 200;
-    const h = el?.offsetHeight || 420;
-    const maxL = Math.max(PAD, window.innerWidth - w - PAD);
-    const maxT = Math.max(PAD, window.innerHeight - h - PAD);
-    setPos({
-      left: Math.min(Math.max(PAD, menu.clientX), maxL),
-      top: Math.min(Math.max(PAD, menu.clientY), maxT),
-    });
+    setPos(
+      clampFixedMenuPos({
+        left: menu.clientX,
+        top: menu.clientY,
+        menuW: el?.offsetWidth || 200,
+        menuH: el?.offsetHeight || 420,
+      })
+    );
   }, [menu]);
 
   useEffect(() => {
@@ -293,9 +319,13 @@ function CanvasContextMenu({
       <div
         ref={panelRef}
         data-ctx-menu
-        className="fixed z-[70] min-w-[200px] overflow-visible rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
-        style={{ left: pos?.left ?? menu.clientX, top: pos?.top ?? menu.clientY }}
-        onPointerDown={(e) => e.stopPropagation()}
+        className="fixed z-[70] min-w-[200px] overflow-y-auto overflow-x-visible rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
+        style={{
+          left: pos?.left ?? menu.clientX,
+          top: pos?.top ?? menu.clientY,
+          maxHeight: pos?.maxHeight,
+        }}
+        {...chromePointer}
       >
         <MenuItem
           icon={<HiOutlineChatBubbleLeftRight className={ICON_CLASS} strokeWidth={1.75} />}

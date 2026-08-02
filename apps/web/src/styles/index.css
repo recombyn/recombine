@@ -27,8 +27,6 @@
 
   html {
     font-family: var(--font-sans);
-    /* Discourage browser / trackpad page zoom; canvas has its own camera zoom. */
-    touch-action: manipulation;
   }
 
   body {
@@ -40,7 +38,6 @@
     color: var(--ink);
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
-    touch-action: manipulation;
   }
 
   /* Force chrome controls to inherit PuHuiTi (Tailwind/preflight + portaled UI). */

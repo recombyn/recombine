@@ -254,7 +254,7 @@ function MePage({ onOpenCase }: Props): ReactNode {
     const gen = ++likedFetchGen.current;
     setLikedLoading(true);
     setLikedLoadingMore(false);
-    void (async () => {
+    async function loadLiked() {
       try {
         if (!likedMigratedRef.current) {
           const localIds = loadLocalLikedIds(userId);
@@ -288,7 +288,8 @@ function MePage({ onOpenCase }: Props): ReactNode {
           setLikedReady(true);
         }
       }
-    })();
+    }
+    loadLiked();
     return () => {
       cancelled = true;
     };

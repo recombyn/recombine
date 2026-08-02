@@ -1011,7 +1011,7 @@ function EditorPage() {
     if (!currentId || !document) return;
     if (sessionReadyForIdRef.current === currentId) return;
     let cancelled = false;
-    void (async () => {
+    async function restoreSession() {
       const session = await getProjectSession(currentId).catch(() => null);
       if (cancelled) return;
       // Do not restore session.camera — enter page always fits content once after load.
@@ -1034,7 +1034,8 @@ function EditorPage() {
         dispatch(setMixedSelection({ nodeIds, frameIds }));
       }
       sessionReadyForIdRef.current = currentId;
-    })();
+    }
+    restoreSession();
     return () => {
       cancelled = true;
     };
@@ -1107,10 +1108,6 @@ function EditorPage() {
       { replace: true }
     );
   }, [currentId, routeProjectId, navigate, location.search]);
-
-  useEffect(() => {
-    setStageEl(stageRef.current);
-  }, [document, frames.length, bootOpen]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1546,16 +1543,14 @@ function EditorPage() {
                 <button
                   type="button"
                   aria-label={t('editor.home', { defaultValue: '首页' })}
-                  onClick={() => {
-                    void (async () => {
-                      try {
-                        // Always push doc + auto cover on leave (dirty may already be clear).
-                        await flushCurrentProjectNow({ force: true });
-                      } catch {
-                        /* still navigate — local draft already holds bytes */
-                      }
-                      navigate('/home');
-                    })();
+                  onClick={async () => {
+                    try {
+                      // Always push doc + auto cover on leave (dirty may already be clear).
+                      await flushCurrentProjectNow({ force: true });
+                    } catch {
+                      /* still navigate — local draft already holds bytes */
+                    }
+                    navigate('/home');
                   }}
                   className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--line)]"
                 >
@@ -1680,6 +1675,7 @@ function EditorPage() {
                 panBlockSelector={EDITOR_PAN_BLOCK_SELECTOR}
                 background={stageBackground}
                 stageRef={stageRef}
+                onViewportEl={setStageEl}
                 cursor={canvasCursor}
                 defs={<RcbSvgDefs />}
                 showGrid={isGridMode}
@@ -2027,11 +2023,9 @@ function EditorPage() {
             onAttachConsumed={() => setAttachToChat(null)}
             dataTour={agentOpen ? 'editor-agent' : undefined}
             projectName={isMobileViewport ? projectName : undefined}
-            onGoHome={isMobileViewport ? () => {
-              void (async () => {
-                try { await flushCurrentProjectNow({ force: true }); } catch { /* ignore */ }
-                navigate('/home');
-              })();
+            onGoHome={isMobileViewport ? async () => {
+              try { await flushCurrentProjectNow({ force: true }); } catch { /* ignore */ }
+              navigate('/home');
             } : undefined}
             canvasUi={{
               getZoom: () => camera.zoom,
