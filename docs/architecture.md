@@ -4,17 +4,20 @@
 
 | Path | Role |
 |------|------|
-| `apps/web` | React editor, home, Agent chat |
-| `apps/api` | FastAPI: import, projects/plaza, Design Agent, etc. |
+| `apps/web` | React editor, home, Agent chat, Yjs collab client |
+| `apps/api` | FastAPI: import, projects/plaza, Design Agent, collab room tokens |
+| `apps/collab` | Yjs WebSocket server (`y-websocket`); proxied as `/collab/` |
 | `apps/docs` | User help and legal docs site |
 | `packages/scene-schema` | Scene JSON protocol |
 | `packages/scene-builder-py` | Parse blocks → Scene JSON |
 
-Backend details: [apps/api/README.md](../apps/api/README.md).
+Backend details: [apps/api/README.md](../apps/api/README.md). Collab: [apps/collab/README.md](../apps/collab/README.md) · [self-hosting § multiplayer](./self-hosting.md#canvas-multiplayer-yjs--wss).
 
 ## Web canvas
 
 Mixed scenes of about **5k** nodes stay smooth for daily editing (Chromium pan median ~**17ms**); rectangle-heavy scenes can reach ~**10k**; for very heavy paths, keep roughly **1k–2k** per scene. Implemented with viewport culling + LOD, spatial-index hits, and copy-on-write history. Retest: `npm run test:stress --workspace=apps/web`.
+
+**Realtime collab:** when enabled, the live scene truth is a Y.Doc (synced over WS); Redux is the UI projection. Room tokens from `POST /api/v1/collab/room-token`; view-only peers cannot seed or persist.
 
 ## Backend layers
 
@@ -57,5 +60,5 @@ Async jobs: Redis + Celery (`POST /api/v1/import/jobs`, `source_type=image`).
 
 ## Deploy
 
-Dev: `npm run dev:web` + `npm run dev:api` (+ Redis / Worker as needed)  
-Prod: Docker Compose (web + api + worker + redis)
+Dev: `npm run dev:web` + `npm run dev:api` + `npm run dev:collab` (+ Redis / Worker as needed)  
+Prod: Docker Compose (web + api + worker + redis + **collab**); public HTTPS needs `wss://` and shared `COLLAB_TOKEN_SECRET`
