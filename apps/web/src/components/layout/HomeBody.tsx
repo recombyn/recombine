@@ -50,19 +50,19 @@ const RAIL_STROKE = 1.5;
 const RAIL_HELP_WIKI =
   'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink';
 
-/** Circled + — rail create action. */
+/** Circled + — rail create action (glyph fills viewBox like Home/User). */
 function RailPlusIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
       <circle
         cx="12"
         cy="12"
-        r="8.25"
+        r="10"
         stroke="currentColor"
         strokeWidth={RAIL_STROKE}
       />
       <path
-        d="M12 8.5v7M8.5 12h7"
+        d="M12 7.25v9.5M7.25 12h9.5"
         stroke="currentColor"
         strokeWidth={RAIL_STROKE}
         strokeLinecap="round"

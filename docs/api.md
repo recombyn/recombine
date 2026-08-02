@@ -1,44 +1,44 @@
 # API
 
 Base URL: `http://localhost:8000/api/v1`  
-完整契约以 Swagger 为准：http://127.0.0.1:8000/docs
+Full contract: Swagger at http://127.0.0.1:8000/docs
 
-## 路由概览
+## Route overview
 
-| 前缀 | 说明 |
-|------|------|
-| `/auth` | 登录 / OAuth / 会话 |
-| `/projects` | 项目 CRUD |
-| `/plaza` | 广场 feed / 投稿 / 点赞 |
-| `/chat` · `/chat-sessions` | Agent 对话与会话 |
-| `/uploads` · `/fonts` | 上传与字体 |
-| `/image-tools` | 抠图等视觉工具 |
-| `/shares` · `/notices` · `/users` | 分享、公告、用户目录 |
-| `/design/*` | Design Agent 跑图（SSE）、catalog、canvas-tools、scene 回传 |
-| `/import/*` | 图片 → Scene（同步或异步 job） |
-| `/admin/*` | 管理端（流程、字典、模型、广场审核等；需管理员） |
+| Prefix | Notes |
+|--------|-------|
+| `/auth` | Login / OAuth / session |
+| `/projects` | Project CRUD |
+| `/plaza` | Plaza feed / submissions / likes |
+| `/chat` · `/chat-sessions` | Agent chat and sessions |
+| `/uploads` · `/fonts` | Uploads and fonts |
+| `/image-tools` | Cutout and other vision tools |
+| `/shares` · `/notices` · `/users` | Shares, notices, user directory |
+| `/design/*` | Design Agent run (SSE), catalog, canvas-tools, scene feedback |
+| `/import/*` | Image → Scene (sync or async job) |
+| `/admin/*` | Admin (flows, dictionaries, models, plaza review, etc.; admin only) |
 
 ## Health
 
 `GET /api/v1/health` → `{ "status": "ok" }`
 
-## Design Agent（摘要）
+## Design Agent (summary)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/design/run` | SSE：权限 → LangGraph agent（事件流） |
-| POST | `/design/run/{taskId}/scene` | 前端回传真实画布 inventory |
-| GET | `/design/catalog` | 公开 catalog |
-| GET | `/design/canvas-tools` | 画布 op 能力表 |
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/design/run` | SSE: auth → LangGraph agent (event stream) |
+| POST | `/design/run/{taskId}/scene` | FE returns live canvas inventory |
+| GET | `/design/catalog` | Public catalog |
+| GET | `/design/canvas-tools` | Canvas op capability table |
 
-后端调用链与包结构见 [design-agent-runtime.md](./design-agent-runtime.md)。
+Backend call chain and package layout: [design-agent-runtime.md](./design-agent-runtime.md).
 
-## Import（摘要）
+## Import (summary)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/import/image` | 上传图片 |
-| POST | `/import/jobs` | 异步导入任务（`source_type=image`） |
-| GET | `/import/jobs/{id}` | 查询任务状态 |
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/import/image` | Upload image |
+| POST | `/import/jobs` | Async import job (`source_type=image`) |
+| GET | `/import/jobs/{id}` | Job status |
 
-导入管线细节见 [import-pipeline.md](./import-pipeline.md)。
+Import pipeline details: [import-pipeline.md](./import-pipeline.md).
