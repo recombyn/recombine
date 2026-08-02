@@ -96,6 +96,8 @@ function SharePage() {
 
   const canEdit = Boolean(record?.viewerCanEdit);
   const canView = Boolean(record?.viewerCanView);
+  /** Link ACL "Can download" — preview viewers without download stay view-only. */
+  const canDownload = record?.permission === 'download' || record?.permission === 'edit';
   const loginUrl = buildLoginUrl(location.pathname + location.search);
 
   const zoomAtStageCenter = useCallback((nextZoom: number) => {
@@ -285,7 +287,7 @@ function SharePage() {
         }}
       >
         <div className="pointer-events-auto flex items-center gap-2">
-          <EditorTopExportButton />
+          {canDownload ? <EditorTopExportButton /> : null}
           <button
             type="button"
             onClick={() => setInspectOpen((v) => !v)}

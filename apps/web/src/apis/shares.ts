@@ -4,7 +4,7 @@
 
 import { request } from '@/utils/request';
 
-export type SharePermission = 'preview' | 'edit';
+export type SharePermission = 'preview' | 'download' | 'edit';
 
 export type ShareDto = {
   id: string;
