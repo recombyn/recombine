@@ -8,6 +8,9 @@ from services.design.aesthetics.scorer import retrieve_aesthetic_refs
 
 
 def test_user_refs_skip_good_ok_corpus():
+    from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
+
+    ensure_design_prompt_packs()
     fake_bad = [
         {
             "id": 9,
@@ -45,7 +48,12 @@ def test_user_refs_skip_good_ok_corpus():
     assert out["badRefs"]
     guidance = out.get("guidance") or ""
     assert "AESTHETIC_DESIGN_TOKENS" not in guidance
-    assert "看图" in guidance or "用户附件" in guidance
+    # OSS English baseline or product Chinese packs.
+    assert (
+        "User aesthetic" in guidance
+        or "看图" in guidance
+        or "用户附件" in guidance
+    )
     assert "crowded" not in guidance  # 短评不再注入
 
 

@@ -14,8 +14,16 @@ def test_seed_prompt_overlay_nodes_migrated_to_skills():
 
 
 def test_prompt_packs_catalog_points_to_skills():
+    """Scene methodology packs retired — catalog is a stub; skills own playbooks."""
+    from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
+
+    ensure_design_prompt_packs()
     block = format_prompt_packs_catalog(scene="website")
-    assert "need_skills" in block or "Skill" in block
+    assert (
+        "retired" in block.lower()
+        or "need_skills" in block
+        or "Skill" in block
+    )
 
 
 def test_methodology_lives_in_skills():
