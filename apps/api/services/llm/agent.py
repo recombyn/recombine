@@ -33,6 +33,8 @@ _CHECKPOINTER_CONN: Any = None
 _CHECKPOINT_MSGPACK_MODULES: tuple[tuple[str, str], ...] = (
     ("services.design.runtime.agent_controller", "AgentRuntime"),
     ("services.design.runtime.agent_controller", "AgentRunState"),
+    ("services.design.runtime.graph.state", "AgentRuntime"),
+    ("services.design.runtime.graph.state", "AgentRunState"),
     ("services.design.runtime.decision_log", "DesignRunDecision"),
 )
 
@@ -1110,6 +1112,14 @@ async def ainvoke_structured(
         try:
             structured_llm = llm.with_structured_output(schema, method=method)
             got = await structured_llm.ainvoke(lc_messages, config=cfg)
+            # Doubao function_calling often returns None without raising — do not
+            # treat that as success or intent_classify falls back to heuristic.
+            if got is None:
+                _log.warning(
+                    "with_structured_output(method=%s) returned None; trying next",
+                    method,
+                )
+                continue
             return {"structured": got, "text": "", "messages": lc_messages}
         except Exception as direct_err:
             _log.debug(

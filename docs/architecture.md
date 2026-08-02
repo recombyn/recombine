@@ -19,13 +19,28 @@
 ## 后端分层
 
 ```
-HTTP  api/v1/*          薄路由
-业务  services/*        按域分包（design / plaza / wallet / …）
-种子  data/*.json       流程、字典、字体、官方案例 → DB（INSERT 缺失，不覆盖已有）
-运行  design.runtime（agent_controller / orchestrator / flow_runtime）
+HTTP     api/v1/*                 薄路由
+业务     services/*               按域分包（design / plaza / wallet / …）
+种子     data/*.json              流程、字典、字体、官方案例 → DB（INSERT 缺失，不覆盖已有）
+Design   design.runtime           orchestrator → design_stream → graph
+         design.prompts           Skill / prompt pack / knowledge / token
+         design.ops               tool_ops 契约
 ```
 
-Design Agent 的可配置内容（默认图、节点模板、动作契约、字典、全局规则、**Skill**）以 `apps/api/data/public/`（及可选 `private/` 覆盖）为种子源；也可在运行后直接改数据库。Skill 支持 `core` / `ext` / `user` 命名空间、ACL 与版本 pin（见 [design_skills/README.md](../apps/api/data/public/design_skills/README.md)）。
+Design Agent 主路径：
+
+```text
+POST /api/v1/design/run
+  → run_design_job → design_stream → run_agent_graph（LangGraph nodes）
+```
+
+- `runtime/host/`：产品原语（prompt 组装、放置、ops 校验、资源加载）
+- `runtime/graph/`：图编译、节点、SSE / turn / paint 辅助
+- `agent_controller`：兼容 re-export，不是外层入口
+
+可配置内容（prompt packs、Skill、字典、全局规则等）以 `apps/api/data/public/`（及可选 `private/` 覆盖）为种子；Admin / DB 为准。Skill 命名空间见 [design_skills/README.md](../apps/api/data/public/design_skills/README.md)。
+
+包结构、调用约定与 SSE 相关接口见 **[design-agent-runtime.md](./design-agent-runtime.md)**。
 
 数据库：SQLite / MySQL / PostgreSQL（见 [postgres-switch.md](./postgres-switch.md)）；SQLite 默认 WAL，可选周期备份。
 

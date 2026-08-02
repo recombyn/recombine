@@ -10,12 +10,10 @@ from services.design.runtime.agent_controller import (
     _ask_propose_user_text,
     _chat_fallback_text,
     _ensure_propose_choice_ui,
-    _has_pending_resource_details,
     _lc_design_needs_canvas_ops,
     _normalize_choice_ui,
     _normalize_ops_payload,
     _parse_agent_turn,
-    _should_recover_edit_after_resources,
     _turn_from_structured,
 )
 
@@ -129,27 +127,6 @@ def test_ask_propose_ignores_ops_detail_when_reply_empty():
     assert _ask_propose_user_text(model_reply="", detail="添加rect") == ""
 
 
-def test_should_recover_edit_after_tools_drop_to_chat():
-    assert _should_recover_edit_after_resources(
-        prior_intent="edit",
-        intent="chat",
-        has_ops=False,
-        has_pending_resources=True,
-    )
-    assert not _should_recover_edit_after_resources(
-        prior_intent="edit",
-        intent="edit",
-        has_ops=True,
-        has_pending_resources=True,
-    )
-    assert not _should_recover_edit_after_resources(
-        prior_intent="chat",
-        intent="chat",
-        has_ops=False,
-        has_pending_resources=True,
-    )
-
-
 def test_lc_design_needs_canvas_ops_blocks_narrate_only():
     assert _lc_design_needs_canvas_ops(
         classified="create", turn_intent="chat", has_ops=False
@@ -169,9 +146,20 @@ def test_lc_design_needs_canvas_ops_blocks_narrate_only():
         has_clarify=False,
         ask_mode=True,
     )
-    # Real clarify may settle without paint.
+    # Clarify chips settle only in Ask mode; Agent still paints.
     assert not _lc_design_needs_canvas_ops(
-        classified="create", turn_intent="ask", has_ops=False, has_clarify=True
+        classified="create",
+        turn_intent="ask",
+        has_ops=False,
+        has_clarify=True,
+        ask_mode=True,
+    )
+    assert _lc_design_needs_canvas_ops(
+        classified="create",
+        turn_intent="ask",
+        has_ops=False,
+        has_clarify=True,
+        ask_mode=False,
     )
     assert not _lc_design_needs_canvas_ops(
         classified="create", turn_intent="chat", has_ops=True
@@ -188,7 +176,16 @@ def test_should_route_to_paint():
         classified="create", turn_intent="chat", has_clarify=False
     )
     assert not _should_route_to_paint(
-        classified="create", turn_intent="ask", has_clarify=True
+        classified="create",
+        turn_intent="ask",
+        has_clarify=True,
+        ask_mode=True,
+    )
+    assert _should_route_to_paint(
+        classified="create",
+        turn_intent="ask",
+        has_clarify=True,
+        ask_mode=False,
     )
     assert not _should_route_to_paint(
         classified="create",
@@ -233,23 +230,27 @@ def test_chat_fallback_fills_persona():
     assert "Recombyn Auto 设计助手" in text
 
 
-def test_has_pending_resource_details():
-    class _RT:
-        pending_tool_details = "TOOL_DETAILS:\n..."
-        pending_knowledge_details = ""
-        pending_prompt_details = ""
-        pending_skill_details = ""
-        pending_aesthetics_details = ""
+def test_prefer_canvas_op_demote_disabled_for_short_chinese_design():
+    """Short Chinese page asks must keep LLM design — no char-length demote."""
+    from services.design.runtime.models_route import (
+        IntentClassifyDecision,
+        _prefer_canvas_op_when_overpromoted,
+    )
 
-    assert _has_pending_resource_details(_RT())
-    empty = _RT()
-    empty.pending_tool_details = ""
-    assert not _has_pending_resource_details(empty)
-    skills = _RT()
-    skills.pending_tool_details = ""
-    skills.pending_skill_details = "SKILL_DETAILS:\n..."
-    assert _has_pending_resource_details(skills)
-
+    fb = IntentClassifyDecision(
+        intent="canvas_op", paint_lane="create", rationale="heuristic_task"
+    )
+    intent, lane, rat = _prefer_canvas_op_when_overpromoted(
+        "design",
+        "create",
+        rationale="mobile login page layout",
+        fallback=fb,
+        has_images=False,
+        prompt="User request:\n帮我设计一个移动端的登录页",
+    )
+    assert intent == "design"
+    assert lane == "create"
+    assert "demote_canvas_op" not in rat
 
 
 def test_heuristic_user_intent_gate():
@@ -370,6 +371,7 @@ def test_paint_tool_keys_empty_canvas_includes_frame():
     from types import SimpleNamespace
 
     from services.design.runtime.agent_controller import AgentRunState, _paint_tool_keys_for_turn
+    from services.design.runtime.decision_log import DesignRunDecision
 
     st = AgentRunState(trace_id="t", task_id="task", goal="new")
     rt = SimpleNamespace(
@@ -380,12 +382,36 @@ def test_paint_tool_keys_empty_canvas_includes_frame():
         scene_nodes=[],
         scene_frames=[],
         focus_id="",
+        decision=DesignRunDecision(has_target_chip=False),
         run=st,
     )
     keys = _paint_tool_keys_for_turn(rt)
     assert keys[0] == "create_frame"
     assert "create_shape" in keys
     assert "create_text" in keys
+
+
+def test_paint_tool_keys_design_create_includes_frame_when_focus_exists():
+    """Ambient FOCUS must not block a new plate for design/create."""
+    from types import SimpleNamespace
+
+    from services.design.runtime.agent_controller import AgentRunState, _paint_tool_keys_for_turn
+    from services.design.runtime.decision_log import DesignRunDecision
+
+    st = AgentRunState(trace_id="t", task_id="task", goal="login")
+    rt = SimpleNamespace(
+        prompt="帮我设计一个移动端的登录页",
+        images=[],
+        classified_intent="design",
+        classified_paint_lane="create",
+        scene_nodes=[{"id": "n1", "type": "text"}],
+        scene_frames=[{"id": "f1", "w": 409, "h": 728, "is_empty": False}],
+        focus_id="f1",
+        decision=DesignRunDecision(has_target_chip=False),
+        run=st,
+    )
+    keys = _paint_tool_keys_for_turn(rt)
+    assert keys[0] == "create_frame"
 
 
 def test_lc_design_needs_canvas_ops_fine_intents():
@@ -546,3 +572,45 @@ def test_scene_digest_includes_frame_world_xy():
     )
     assert "x=5120" in text
     assert "y=880" in text
+
+
+def test_assemble_stage_system_decide_and_paint():
+    from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs, render_prompt_body
+    from services.design.runtime.design_run import assemble_stage_system
+
+    ensure_design_prompt_packs()
+    decide = assemble_stage_system(
+        None, stage="decide", ask_mode=False, persona="我是测试助手"
+    )
+    assert "IDENTITY: 我是测试助手" in decide
+    assert "按需资源" in decide or "need_tools" in decide
+    assert "Agent" in decide or "禁止" in decide
+    paint = assemble_stage_system(None, stage="paint", ask_mode=True, persona="P")
+    assert "IDENTITY: P" in paint
+    assert "tool_ops" in paint or "PAINT" in paint.upper()
+    assert render_prompt_body("agent.prompt.ask_system")[:20] in paint or "Ask" in paint
+
+
+def test_validate_paint_ops_rejects_unknown_and_keeps_valid():
+    from services.design.runtime.design_run import validate_paint_ops
+
+    ops, errs = validate_paint_ops(
+        [
+            {
+                "name": "create_shape",
+                "args": {
+                    "shapeType": "rect",
+                    "x": 10,
+                    "y": 20,
+                    "width": 100,
+                    "height": 80,
+                },
+            },
+            {"name": "not_a_real_tool", "args": {}},
+        ],
+        scene_nodes=[],
+        scene_frames=[],
+        rules={},
+    )
+    assert any(o.get("name") == "create_shape" for o in ops)
+    assert errs  # unknown tool rejected

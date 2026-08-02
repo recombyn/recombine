@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.runtime.agent_controller import (
-    _parse_agent_turn,
-    _parse_plan,
-    _score_ops_candidate,
-    _wants_short_plan,
-)
+from services.design.runtime.agent_controller import _parse_agent_turn
 from services.design.ops.tool_ops_contract import (
     format_canvas_tools_catalog,
     format_canvas_tools_details,
@@ -18,25 +13,6 @@ from services.design.prompts.knowledge_store import (
     normalize_need_knowledge,
 )
 from services.design.aesthetics.scorer import normalize_need_aesthetics
-
-
-def test_short_plan_trigger():
-    rules_on = {"agent.react.short_plan": "1"}
-    # Length gate only — no content keywords.
-    long_brief = "x" * 40
-    assert _wants_short_plan(long_brief, rules=rules_on) is True
-    assert _wants_short_plan("hi", rules=rules_on) is False
-    assert _wants_short_plan(long_brief, rules={"agent.react.short_plan": "0"}) is False
-    assert _wants_short_plan(
-        "short",
-        rules={"agent.react.short_plan": "1", "agent.react.short_plan_min_chars": "8"},
-    ) is False
-
-
-def test_parse_plan():
-    steps = _parse_plan('{"plan":["建画板","写标题","配色","收尾"]}')
-    assert steps == ["建画板", "写标题", "配色", "收尾"]
-    assert _parse_plan('{"plan":["只有一步"]}') == ["只有一步"]
 
 
 def test_parse_need_tools_in_turn():
@@ -76,12 +52,6 @@ def test_tools_catalog_nonempty_shape():
 def test_knowledge_catalog_shape():
     text = format_knowledge_catalog(scene="website")
     assert "knowledge" in text.lower() or "`" in text
-
-
-def test_dual_sample_score():
-    good = _score_ops_candidate([{"name": "create_text"}], [])
-    bad = _score_ops_candidate([], ["missing_tool_ops"])
-    assert good > bad
 
 
 def test_eval_set_metrics_rollup():

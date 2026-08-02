@@ -236,6 +236,7 @@ def ensure_design_tables(conn: Any, *, mysql: bool) -> None:
             body {text} NOT NULL,
             when_to_use {text},
             scenes VARCHAR(128) NOT NULL DEFAULT 'all',
+            used_by VARCHAR(256) NOT NULL DEFAULT '',
             sort_order INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at DOUBLE NOT NULL,
@@ -430,6 +431,41 @@ def _ensure_prompt_pack_type_column(conn: Any, *, mysql: bool) -> None:
               )
             """
         )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_prompt_pack_used_by_column(conn: Any, *, mysql: bool) -> None:
+    """Add used_by (CSV of graph/product stages: decide,paint,…)."""
+    try:
+        if mysql:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'design_prompt_pack'
+                  AND COLUMN_NAME = 'used_by'
+                """
+            ).fetchone()
+            if int((row or {}).get("c") or 0) <= 0:
+                conn.execute(
+                    "ALTER TABLE design_prompt_pack "
+                    "ADD COLUMN used_by VARCHAR(256) NOT NULL DEFAULT ''"
+                )
+        else:
+            cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(design_prompt_pack)").fetchall()
+            }
+            if "used_by" not in cols:
+                conn.execute(
+                    "ALTER TABLE design_prompt_pack "
+                    "ADD COLUMN used_by VARCHAR(256) NOT NULL DEFAULT ''"
+                )
         conn.commit()
     except Exception:
         try:
