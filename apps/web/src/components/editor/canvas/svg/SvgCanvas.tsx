@@ -2439,18 +2439,27 @@ function SvgCanvas({
     [dispatch, readOnly]
   );
 
-  // Context menu: prefer right-button pointer/mouse down (real client coords).
-  // DevTools / some browsers fire only `contextmenu` at (1,1) with no button-2 down.
+  // Context menu: prefer right-button down; fall back to `contextmenu`
+  // (DevTools / some setups never fire pointerdown button=2).
   useEffect(() => {
     const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
     if (readOnly || !hitEl) return undefined;
 
     const skipSel =
       '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar]';
+    // Generators / quick-edit reuse data-sel-toolbar so selection ignores them,
+    // but they are scene content and must still open the canvas context menu.
+    const sceneComposerSel =
+      '[data-image-generator],[data-video-generator],[data-image-quick-edit]';
 
+    let openedAt = 0;
     let lastClientX = Number.NaN;
     let lastClientY = Number.NaN;
-    let suppressCtxUntil = 0;
+
+    const isBogusClient = (clientX: number, clientY: number) =>
+      !Number.isFinite(clientX) ||
+      !Number.isFinite(clientY) ||
+      (clientX <= 2 && clientY <= 2);
 
     const clientInStage = (clientX: number, clientY: number) => {
       const r = hitEl.getBoundingClientRect();
@@ -2462,15 +2471,17 @@ function SvgCanvas({
       );
     };
 
-    /** Synthetic contextmenu often reports (0,0) or (1,1) — not a real click. */
-    const isBogusClient = (clientX: number, clientY: number) =>
-      !Number.isFinite(clientX) ||
-      !Number.isFinite(clientY) ||
-      (clientX <= 2 && clientY <= 2);
-
     const isChromeTarget = (target: EventTarget | null) => {
       const el = target as HTMLElement | null;
-      return Boolean(el?.closest?.(skipSel));
+      if (!el?.closest) return false;
+      if (el.closest(sceneComposerSel)) return false;
+      return Boolean(el.closest(skipSel));
+    };
+
+    const noteClient = (clientX: number, clientY: number) => {
+      if (isBogusClient(clientX, clientY) || !clientInStage(clientX, clientY)) return;
+      lastClientX = clientX;
+      lastClientY = clientY;
     };
 
     const openMenuAt = (clientX: number, clientY: number) => {
@@ -2522,28 +2533,21 @@ function SvgCanvas({
       });
     };
 
-    const noteClient = (clientX: number, clientY: number) => {
-      if (!clientInStage(clientX, clientY) || isBogusClient(clientX, clientY)) return;
-      lastClientX = clientX;
-      lastClientY = clientY;
-    };
-
     const openFromRightButton = (
       clientX: number,
       clientY: number,
-      target: EventTarget | null
+      target: EventTarget | null,
+      opts?: { allowOutsideStage?: boolean }
     ) => {
-      if (performance.now() < suppressCtxUntil) return false;
-      if (isBogusClient(clientX, clientY)) return false;
-      if (!clientInStage(clientX, clientY)) return false;
+      if (performance.now() - openedAt < 400) return false;
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
+      if (!opts?.allowOutsideStage && !clientInStage(clientX, clientY)) return false;
       if (isChromeTarget(target)) return false;
-      noteClient(clientX, clientY);
-      suppressCtxUntil = performance.now() + 500;
+      openedAt = performance.now();
       openMenuAt(clientX, clientY);
       return true;
     };
 
-    // Track hover by geometry (target may be outside roots when portals / overlays move).
     const onPointerMove = (e: PointerEvent) => {
       noteClient(e.clientX, e.clientY);
     };
@@ -2557,7 +2561,6 @@ function SvgCanvas({
       }
     };
 
-    // Some environments deliver right-click via mouse events without pointerdown button=2.
     const onMouseDown = (e: MouseEvent) => {
       noteClient(e.clientX, e.clientY);
       if (e.button !== 2) return;
@@ -2567,39 +2570,37 @@ function SvgCanvas({
       }
     };
 
-    const onCtx = (e: MouseEvent) => {
-      if (isChromeTarget(e.target)) return;
-      // Accept when click is on-stage, or when event coords are bogus but we have a last hover.
-      const eventOnStage = clientInStage(e.clientX, e.clientY);
+    const onContextMenu = (e: MouseEvent) => {
+      const stageOk = clientInStage(e.clientX, e.clientY);
       const hasLast = !isBogusClient(lastClientX, lastClientY);
-      if (!eventOnStage && !hasLast) return;
+      if (!stageOk && !hasLast) return;
+      if (isChromeTarget(e.target)) return;
 
       e.preventDefault();
       e.stopPropagation();
-      if (performance.now() < suppressCtxUntil) return;
 
       const bogus = isBogusClient(e.clientX, e.clientY);
       let clientX = bogus ? lastClientX : e.clientX;
       let clientY = bogus ? lastClientY : e.clientY;
       if (isBogusClient(clientX, clientY)) {
-        // Last resort: stage center (better than pinning to 1,1).
         const r = hitEl.getBoundingClientRect();
         clientX = r.left + r.width / 2;
         clientY = r.top + r.height / 2;
       }
-      openMenuAt(clientX, clientY);
+      openFromRightButton(clientX, clientY, e.target, {
+        allowOutsideStage: bogus && hasLast,
+      });
     };
 
-    // Window capture: right-click coords survive even when target path is odd.
     window.addEventListener('pointermove', onPointerMove, { capture: true });
     window.addEventListener('pointerdown', onPointerDown, { capture: true });
     window.addEventListener('mousedown', onMouseDown, { capture: true });
-    hitEl.addEventListener('contextmenu', onCtx, { capture: true });
+    window.addEventListener('contextmenu', onContextMenu, { capture: true });
     return () => {
       window.removeEventListener('pointermove', onPointerMove, true);
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('mousedown', onMouseDown, true);
-      hitEl.removeEventListener('contextmenu', onCtx, true);
+      window.removeEventListener('contextmenu', onContextMenu, true);
     };
   }, [
     paperEl,
