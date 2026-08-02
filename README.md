@@ -107,7 +107,7 @@ Source-available terms (not OSI open source):
 
 - **Personal / private self-host** — free
 - **Internal org use** — permitted
-- **Hosted / managed service** of Recombyn to third parties (paid or free) — **requires commercial authorization** (`licensing@recombyn.com`)
+- **Hosted / managed service** of Recombyn to third parties (paid or free) — **requires commercial authorization** (`702680355@qq.com`)
 
 See [LICENSE](./LICENSE) for the full text.
 
