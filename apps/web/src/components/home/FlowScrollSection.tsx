@@ -5,7 +5,7 @@ import {
   useScrollLoadMore,
 } from '@/components/home/InfiniteScroll';
 
-/** Multi-column masonry (waterfall) for Plaza / Liked feeds. */
+/** Default plaza / inspiration waterfall — denser than Me profile. */
 export const FLOW_COLUMNS_CLASS =
   'w-full columns-2 gap-4 md:columns-3 lg:columns-5';
 
@@ -32,6 +32,8 @@ type FlowScrollSectionProps = {
   /** Optional custom skeleton; defaults to plaza-style flow placeholders. */
   skeleton?: ReactNode;
   className?: string;
+  /** Per call-site column breakpoints (Me vs Plaza differ). */
+  columnsClassName?: string;
   children: ReactNode;
 };
 
@@ -48,6 +50,7 @@ function FlowScrollSection({
   empty = null,
   skeleton,
   className,
+  columnsClassName = FLOW_COLUMNS_CLASS,
   children,
 }: FlowScrollSectionProps) {
   const sentinelRef = useScrollLoadMore({
@@ -60,7 +63,7 @@ function FlowScrollSection({
   if (loading) {
     return (
       <div className={cn(className)}>
-        <div className={FLOW_COLUMNS_CLASS} aria-busy="true">
+        <div className={columnsClassName} aria-busy="true">
           {skeleton ?? <FlowFeedSkeleton />}
         </div>
       </div>
@@ -73,7 +76,7 @@ function FlowScrollSection({
 
   return (
     <div className={cn(className)}>
-      <div className={FLOW_COLUMNS_CLASS}>
+      <div className={columnsClassName}>
         {Children.map(children, (child) => {
           if (!isValidElement(child)) return child;
           return (

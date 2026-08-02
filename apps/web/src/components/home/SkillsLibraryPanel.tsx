@@ -21,9 +21,9 @@ import {
 } from '@/apis/design';
 import { cn } from '@/utils/classnames';
 
-/** Same breakpoints as Recent Projects / TemplateGrid home grids. */
-const SKILL_GRID =
-  'grid w-full grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
+/** Skills toolbox — 2 cols on phone; denser from lg. */
+const DEFAULT_SKILL_GRID =
+  'grid w-full grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
 
 /** Loading placeholders only — not real totals (API count unknown until fetch). */
 const SKILL_SKELETON_MINE = 2;
@@ -60,13 +60,21 @@ function SkillCardSkeleton(): ReactNode {
   );
 }
 
-function SkillGroupSkeleton({ title, count }: { title: string; count: number }): ReactNode {
+function SkillGroupSkeleton({
+  title,
+  count,
+  gridClassName = DEFAULT_SKILL_GRID,
+}: {
+  title: string;
+  count: number;
+  gridClassName?: string;
+}): ReactNode {
   return (
     <section className="space-y-2" aria-busy="true" aria-label={title}>
       <h3 className="text-[12px] font-semibold uppercase tracking-wide text-[var(--muted)]">
         {title}
       </h3>
-      <div className={SKILL_GRID}>
+      <div className={gridClassName}>
         {Array.from({ length: count }, (_, i) => (
           <SkillCardSkeleton key={`sk-${i}`} />
         ))}
@@ -160,6 +168,7 @@ function SkillGroup({
   onDelete,
   onToggle,
   onPreview,
+  gridClassName = DEFAULT_SKILL_GRID,
 }: {
   title: string;
   rows: DesignSkillCard[];
@@ -170,11 +179,13 @@ function SkillGroup({
   onDelete: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
   onPreview: (row: DesignSkillCard) => void;
+  /** Per-group grid; mine / official can differ if needed. */
+  gridClassName?: string;
 }): ReactNode {
   const body = !rows.length ? (
     <p className="text-[13px] text-[var(--muted)]">{emptyText}</p>
   ) : (
-    <div className={SKILL_GRID}>
+    <div className={gridClassName}>
       {rows.map((row) => (
         <SkillCard
           key={row.id}
