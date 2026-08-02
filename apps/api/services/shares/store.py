@@ -10,7 +10,7 @@ from typing import Any
 from services.db import connect, init_schema
 
 _MAX_DOC_BYTES = 12 * 1024 * 1024
-_PERMISSIONS = frozenset({"preview", "edit"})
+_PERMISSIONS = frozenset({"preview", "download", "edit"})
 
 
 class ShareError(Exception):
@@ -246,7 +246,9 @@ def create_share(
         raise ShareError("invalid_owner", "owner is required")
     perm = (permission or "preview").strip().lower()
     if perm not in _PERMISSIONS:
-        raise ShareError("invalid_permission", "permission must be preview or edit")
+        raise ShareError(
+            "invalid_permission", "permission must be preview, download, or edit"
+        )
     if not isinstance(document, dict):
         raise ShareError("invalid_document", "document must be an object")
     title = _clamp_share_title(name)
@@ -410,7 +412,9 @@ def update_share_meta(
             raise ShareError("forbidden", "Only the owner can manage this share")
         perm = (permission or row["permission"] or "preview").strip().lower()
         if perm not in _PERMISSIONS:
-            raise ShareError("invalid_permission", "permission must be preview or edit")
+            raise ShareError(
+                "invalid_permission", "permission must be preview, download, or edit"
+            )
         editors = _resolve_meta_editors(
             row, owner_id=owner_id, editor_user_ids=editor_user_ids, perm=perm
         )

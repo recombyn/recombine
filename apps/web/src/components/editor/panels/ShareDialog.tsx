@@ -54,7 +54,15 @@ async function copyText(text: string) {
 }
 
 function permissionFromLinkAccess(access: LinkAccess): SharePermission {
-  return access === 'edit' ? 'edit' : 'preview';
+  if (access === 'edit') return 'edit';
+  if (access === 'download') return 'download';
+  return 'preview';
+}
+
+function linkAccessFromPermission(permission: string | undefined): LinkAccess {
+  if (permission === 'edit') return 'edit';
+  if (permission === 'download') return 'download';
+  return 'view';
 }
 
 function accessLabelKey(access: LinkAccess): 'editor.shareCanEdit' | 'editor.shareCanDownload' | 'editor.shareCanView' {
@@ -186,10 +194,14 @@ function ShareDialog({ open, onClose }: Props) {
   const searchTimer = useRef<number | null>(null);
   /** StrictMode remounts effects once in dev — avoid duplicate toasts per open. */
   const noDocWarnedRef = useRef(false);
-  /** Share one in-flight create across StrictMode remount (dev double-invoke). */
+  /** Shared create promise — StrictMode remount must not fire /shares twice. */
   const createShareInflightRef = useRef<Promise<{ share: ShareDto }> | null>(null);
+  /** Only the latest open-session applies results / clears busy. */
+  const createGenRef = useRef(0);
 
   const url = record && linkEnabled ? shareUrl(record.id) : '';
+  const linkReady = Boolean(record) && !busy;
+  const linkOn = linkReady && linkEnabled;
 
   const accessLabel = (access: LinkAccess) => t(accessLabelKey(access));
 
@@ -223,8 +235,11 @@ function ShareDialog({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) {
+      createGenRef.current += 1;
+      createShareInflightRef.current = null;
       setRecord(null);
       setBusy(false);
+      setLinkEnabled(true);
       setTab('share');
       setPublishPhase('confirm');
       setPublishing(false);
@@ -232,10 +247,11 @@ function ShareDialog({ open, onClose }: Props) {
       setSearchHits([]);
       setSelectedInvite(null);
       noDocWarnedRef.current = false;
-      createShareInflightRef.current = null;
       return;
     }
     if (!document) {
+      createGenRef.current += 1;
+      createShareInflightRef.current = null;
       setRecord(null);
       setBusy(false);
       if (!noDocWarnedRef.current) {
@@ -244,7 +260,7 @@ function ShareDialog({ open, onClose }: Props) {
       }
       return;
     }
-    let cancelled = false;
+    const gen = ++createGenRef.current;
     setBusy(true);
     if (!createShareInflightRef.current) {
       createShareInflightRef.current = createShareApi({
@@ -254,32 +270,45 @@ function ShareDialog({ open, onClose }: Props) {
         sourceProjectId: currentId || undefined,
         editorUserIds: [],
         viewerUserIds: [],
-        linkPublic: false,
+        // Match default "Can view" / anyone-with-link UI.
+        linkPublic: true,
       });
     }
     void createShareInflightRef.current
       .then((res) => {
-        if (cancelled) return;
+        if (createGenRef.current !== gen) return;
         const s = res.share;
         setRecord(s);
-        setLinkEnabled(s.linkEnabled !== false);
-        setLinkAccess(s.permission === 'edit' ? 'edit' : 'view');
+        const enabled = s.linkEnabled !== false;
+        setLinkEnabled(enabled);
+        const access = linkAccessFromPermission(s.permission);
+        setLinkAccess(access);
         setEditorIds(Array.isArray(s.editorUserIds) ? s.editorUserIds : []);
         setViewerIds(Array.isArray(s.viewerUserIds) ? s.viewerUserIds : []);
+        // Older rows were created with linkPublic:false while the UI still showed
+        // "anyone with the link". Promote so Copy link actually works for viewers.
+        if (enabled && access !== 'edit' && s.linkPublic === false) {
+          void updateShareMetaApi(s.id, { linkPublic: true })
+            .then((patched) => {
+              if (createGenRef.current !== gen) return;
+              setRecord(patched.share);
+            })
+            .catch(() => {
+              /* keep local UI; copy still works for owner */
+            });
+        }
       })
       .catch(() => {
-        if (cancelled) return;
+        if (createGenRef.current !== gen) return;
         createShareInflightRef.current = null;
         setRecord(null);
         setLinkEnabled(false);
         message.error(t('editor.shareCopyFailed'));
       })
       .finally(() => {
-        if (!cancelled) setBusy(false);
+        if (createGenRef.current === gen) setBusy(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    // No cleanup bump — StrictMode remount reuses the same in-flight create.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -346,7 +375,7 @@ function ShareDialog({ open, onClose }: Props) {
       const res = await updateShareMetaApi(record.id, next);
       setRecord(res.share);
       if (typeof next.linkEnabled === 'boolean') setLinkEnabled(res.share.linkEnabled !== false);
-      if (next.permission) setLinkAccess(next.permission === 'edit' ? 'edit' : 'view');
+      if (next.permission) setLinkAccess(linkAccessFromPermission(res.share.permission));
       if (next.editorUserIds) setEditorIds(res.share.editorUserIds || []);
       if (next.viewerUserIds) setViewerIds(res.share.viewerUserIds || []);
       return res.share;
@@ -358,7 +387,10 @@ function ShareDialog({ open, onClose }: Props) {
 
   const onToggleLink = (on: boolean) => {
     setLinkEnabled(on);
-    void patchMeta({ linkEnabled: on });
+    void patchMeta({
+      linkEnabled: on,
+      linkPublic: on && (linkAccess === 'view' || linkAccess === 'download'),
+    });
   };
 
   const onPickAccess = (access: LinkAccess) => {
@@ -550,13 +582,13 @@ function ShareDialog({ open, onClose }: Props) {
               {t('editor.shareLinkSection')}
             </h3>
             <div className="flex items-center gap-3">
-              <Switch checked={linkEnabled} onChange={onToggleLink} disabled={!record || busy} />
+              <Switch checked={linkOn} onChange={onToggleLink} disabled={!linkReady} />
               <span className="min-w-0 text-[13px] leading-snug text-[var(--muted)]">
-                {linkEnabled ? t('editor.shareLinkOn') : t('editor.shareLinkOff')}
+                {linkOn ? t('editor.shareLinkOn') : t('editor.shareLinkOff')}
               </span>
             </div>
 
-            {linkEnabled ? (
+            {linkOn ? (
               <div className="flex items-center gap-2">
                 <div className="flex min-w-0 flex-1 items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5">
                   <span className="min-w-0 flex-1 truncate py-2 text-[13px] text-[var(--ink)]">
@@ -578,7 +610,7 @@ function ShareDialog({ open, onClose }: Props) {
                   >
                     <button
                       type="button"
-                      disabled={!record}
+                      disabled={!linkReady}
                       className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-1.5 text-[13px] text-[var(--ink)] disabled:opacity-50"
                     >
                       {accessLabel(linkAccess)}
