@@ -46,6 +46,7 @@ async def design_stream(
     refund_hold_fn: Any,
     apply_ops: list[dict[str, Any]] | None = None,
     interaction_mode: str | None = None,
+    skill_refs: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     from services.design.runtime.graph.build import run_agent_graph
 
@@ -74,5 +75,6 @@ async def design_stream(
         refund_hold_fn=refund_hold_fn,
         apply_ops=apply_ops,
         interaction_mode=interaction_mode,
+        skill_refs=skill_refs,
     ):
         yield ev
