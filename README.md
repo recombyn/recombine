@@ -103,7 +103,7 @@ e2e/               Playwright
 
 [Recombyn Open Source License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-Apache License 2.0 with additional conditions (same shape as [Breatic](https://github.com/orime-org/breatic)):
+Apache License 2.0 with additional conditions:
 
 - **Personal / private self-host** — free
 - **Internal org use** — permitted
