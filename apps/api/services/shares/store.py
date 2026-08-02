@@ -68,17 +68,20 @@ def _link_public(row: Any) -> bool:
 
 
 def actor_can_edit_share(row: Any, *, actor_user_id: str | None) -> bool:
-    """Open full editor: owner always; else permission=edit + listed collaborator."""
+    """Open full editor only for edit links (owner or listed collaborator).
+
+    Preview / download links stay on the share viewer — including when the owner
+    opens their own view link to verify it.
+    """
     actor = (actor_user_id or "").strip()
     if not actor:
         return False
-    owner_id = str(row["owner_id"] or "")
-    # Owner needs the normal editor chrome (tools / layers) even for preview links.
-    if actor == owner_id:
-        return True
     perm = (row["permission"] or "preview").strip().lower()
     if perm != "edit":
         return False
+    owner_id = str(row["owner_id"] or "")
+    if actor == owner_id:
+        return True
     editors = _parse_user_ids(_col(row, "editor_user_ids"))
     return actor in editors
 
