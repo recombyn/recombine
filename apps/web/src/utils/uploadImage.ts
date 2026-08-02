@@ -127,6 +127,52 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/**
+ * Wait until a remote/local URL is fully loaded + decoded before swapping off a
+ * local data:/blob: preview (avoids blank flash right after upload succeeds).
+ * Returns false if load failed or aborted — caller should keep the local preview.
+ */
+export function waitForImageReady(
+  src: string,
+  opts?: { signal?: AbortSignal }
+): Promise<boolean> {
+  const url = String(src || '').trim();
+  if (!url) return Promise.resolve(false);
+  // Already local — nothing to wait for.
+  if (url.startsWith('data:') || url.startsWith('blob:')) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    if (opts?.signal?.aborted) {
+      resolve(false);
+      return;
+    }
+    const img = new Image();
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      opts?.signal?.removeEventListener('abort', onAbort);
+      img.onload = null;
+      img.onerror = null;
+      resolve(ok);
+    };
+    const onAbort = () => finish(false);
+    opts?.signal?.addEventListener('abort', onAbort, { once: true });
+    img.onload = () => {
+      if (typeof img.decode === 'function') {
+        void img
+          .decode()
+          .then(() => finish(true))
+          .catch(() => finish(true));
+        return;
+      }
+      finish(true);
+    };
+    img.onerror = () => finish(false);
+    img.src = url;
+  });
+}
+
 export function isOurStoredImageUrl(src: string): boolean {
   const s = (src || '').trim();
   if (!s || s.startsWith('data:')) return false;
