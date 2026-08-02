@@ -1,15 +1,15 @@
 # Notices
 
-Recombyn is licensed under the **Recombyn Open Source License v1.0**
-(Apache License 2.0 with additional conditions) — see [LICENSE](./LICENSE).
+Recombyn is licensed under the **Recombyn Source Available License v1.0**
+— see [LICENSE](./LICENSE).
 
 Summary (not a substitute for the full license):
 
 - **Personal / private-group self-host**: free under the license terms.
 - **Internal use within a single organization**: permitted.
-- **Public-facing deployment** of Recombyn (or a substantially similar
-  platform) as a service — paid or free — **requires commercial
-  authorization** from the Producer (`licensing@recombyn.com`).
+- **Hosted / managed service** of Recombyn (or a substantially similar
+  platform) to third parties — paid or free — **requires commercial
+  authorization** from the Licensor (`licensing@recombyn.com`).
 - Brand / copyright notices must be preserved.
 
 This product may bundle or depend on third-party software. Notable runtime

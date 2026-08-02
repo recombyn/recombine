@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Source--Available-orange.svg" alt="Recombyn Open Source License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Source--Available-orange.svg" alt="Recombyn Source Available License" /></a>
   <a href="docs/self-hosting.md"><img src="https://img.shields.io/badge/self--host-Docker%20Compose-2496ED?logo=docker&logoColor=white" alt="Self-host" /></a>
   <a href="apps/web"><img src="https://img.shields.io/badge/web-React%20%2B%20TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="apps/api"><img src="https://img.shields.io/badge/api-FastAPI%20%2B%20Python-3776AB?logo=python&logoColor=white" alt="Python" /></a>
@@ -86,13 +86,13 @@ e2e/               Playwright
 - Issue / PR 模板见 `.github/`
 ## 协议
 
-[Recombyn Open Source License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
+[Recombyn Source Available License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-基于 Apache License 2.0 的附加条件协议：
+源码可得协议（非 OSI 开源）：
 
 - **个人 / 私有自托管** — 免费
 - **单一组织内部使用** — 允许
-- **对外公开部署** Recombyn 本身作为服务（无论收费与否）— **需企业授权**（`licensing@recombyn.com`）
+- **将 Recombyn 作为托管/管理型服务提供给第三方**（无论收费与否）— **需商业授权**（`licensing@recombyn.com`）
 
 完整条款见 [LICENSE](./LICENSE)。
 
