@@ -1,6 +1,6 @@
-# Scene JSON 规范
+# Scene JSON spec
 
-与 Web 编辑器运行时文档及 `packages/scene-schema` 保持一致。
+Aligned with the Web editor runtime docs and `packages/scene-schema`.
 
 ```json
 {
@@ -15,7 +15,7 @@
       "width": 240,
       "height": 24,
       "attrs": {
-        "ORIGIN_DATA": "示例文本",
+        "ORIGIN_DATA": "Sample text",
         "DATA": { "chars": [] }
       }
     }
@@ -23,4 +23,4 @@
 }
 ```
 
-完整 Schema 见 `packages/scene-schema/schema/scene-document.schema.json`。
+Full schema: `packages/scene-schema/schema/scene-document.schema.json`.
