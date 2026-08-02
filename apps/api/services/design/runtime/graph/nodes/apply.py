@@ -9,6 +9,7 @@ from typing import Any
 from langgraph.types import Command
 
 from services.design.ops.tool_ops_contract import (
+    TOOL_OPS_SCHEMA_VERSION,
     tool_ops_activity_events as _tool_ops_activity_events,
     tool_ops_for_sse,
     validation_failure_reason,
