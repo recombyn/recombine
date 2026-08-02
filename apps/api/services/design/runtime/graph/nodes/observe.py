@@ -8,15 +8,21 @@ from typing import Any
 
 from langgraph.types import Command
 
-from services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
+from services.design.runtime.graph.state import (
+    AgentRunState,
+    AgentRuntime,
+    GraphState,
+    _SCENE_WAIT_SEC,
+)
 from services.design.runtime.graph.support import (
     _bump,
+    _commit,
     _emit,
+    _goto_cmd,
     _llm_ux_reply,
+    _persist_progress,
 )
-from services.design.runtime.graph.support import _goto_cmd
-from services.design.runtime.graph.support import _commit
-from services.design.runtime.graph.support import _persist_progress
+from services.design.runtime.scene_feedback import wait_for_scene
 
 
 async def _node_observe(

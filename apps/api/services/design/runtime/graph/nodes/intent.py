@@ -10,15 +10,20 @@ from langgraph.types import Command
 
 from services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
 from services.design.runtime.graph.support import (
+    _bump,
     _chat_fallback_text,
     _clip_llm_raw,
+    _commit,
     _emit,
     _emit_design_loading_artboard,
     _goto_cmd,
+    _persist_progress,
 )
-from services.design.runtime.graph.support import _bump
-from services.design.runtime.graph.support import _commit
-from services.design.runtime.graph.support import _persist_progress
+from services.design.runtime.models_route import (
+    classify_user_intent,
+    normalize_intent_decision,
+    paint_ops_intent,
+)
 
 
 async def _node_intent_classify(state: GraphState) -> Command:

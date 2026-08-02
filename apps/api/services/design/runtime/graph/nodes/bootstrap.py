@@ -8,16 +8,27 @@ from typing import Any
 
 from langgraph.types import Command
 
+from services.design.admin.task_store import _insert_task
+from services.design.prompts.rules_text import _as_text
+from services.design.readpath.canvas_scene import (
+    early_status_canvas_fields,
+    explicit_canvas_size,
+)
 from services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
 from services.design.runtime.graph.support import (
+    _bump,
     _clip_llm_raw,
     _clip_urls,
+    _commit,
     _emit,
     _goto_cmd,
     _persist_progress,
 )
-from services.design.runtime.graph.support import _bump
-from services.design.runtime.graph.support import _commit
+from services.design.runtime.models_route import (
+    clamp_tier,
+    enabled_tiers,
+    estimate_task_tier,
+)
 
 
 def _canvas_is_empty(rt: Any) -> bool:
