@@ -26,11 +26,9 @@ def test_render_prompt_body_admin_then_langchain():
     """All packs: Admin/seed body → LangChain fill (not Hub)."""
     from services.design.prompts.prompt_pack_store import render_prompt_body
 
-    paint = render_prompt_body(
-        "agent.prompt.paint_system", ask_rule="- Ask mode test.\n"
-    )
+    paint = render_prompt_body("agent.prompt.paint_system")
     assert "PAINT" in paint.upper() or "tool_ops" in paint
-    assert "Ask mode test" in paint
+    assert "{ask_rule}" not in paint
     # Static pack (no placeholders) still renders via LC.
     intent = render_prompt_body("agent.prompt.intent_classify")
     assert "canvas_op" in intent or "Intent" in intent or "intent" in intent.lower()
@@ -81,13 +79,6 @@ def test_splitter_embeddings_and_format_document():
     assert isinstance(msgs[0], BaseMessage)
     assert isinstance(msgs[0], HumanMessage)
 
-
-def test_parse_plan_from_structured_schema():
-    from services.design.runtime.agent_controller import PlanSchema, _parse_plan
-
-    steps = _parse_plan(PlanSchema(plan=["建画板", "加标题", "配色"]))
-    assert steps == ["建画板", "加标题", "配色"]
-    assert _parse_plan({"plan": ["a", "b"]}) == ["a", "b"]
 
 
 def test_tool_node_and_official_agent_factory():

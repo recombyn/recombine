@@ -391,45 +391,6 @@ function explicitPinnedFrameId(opts: {
   return String(opts.pinnedFrameId || '').trim() || null;
 }
 
-const FREE_CANVAS_CREATE_OPS = new Set([
-  'create_shape',
-  'create_text',
-  'create_image',
-  'create_svg',
-  'create_icon',
-]);
-
-/** Free-canvas creates must omit frameId — reject (do not silently strip). */
-function rejectFramedFreeCreates(
-  ops: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>
-): {
-  kept: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
-  rejected: ToolOpResult[];
-} {
-  const kept: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }> = [];
-  const rejected: ToolOpResult[] = [];
-  for (const op of ops) {
-    const name = String(op?.name || '').trim();
-    const args =
-      op?.args && typeof op.args === 'object' ? op.args : {};
-    const hasFrame =
-      FREE_CANVAS_CREATE_OPS.has(name) &&
-      (args.frameId != null || args.parentId != null);
-    if (!hasFrame) {
-      kept.push(op);
-      continue;
-    }
-    rejected.push({
-      op_id: String(op?.op_id || ''),
-      name,
-      ok: false,
-      error:
-        'free_canvas: omit frameId/parentId; re-emit create_* with world x/y from suggested_place_world',
-    });
-  }
-  return { kept, rejected };
-}
-
 /** Pull WxH from a create_frame op when Host size is still unknown. */
 function sizeFromCreateFrameOp(
   ops: Array<{ name?: string; args?: Record<string, unknown> }>
@@ -2889,16 +2850,11 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       }
 
       // Host already opened → drop model create_frame so we don't get a second plate.
-      let paintOps =
+      // Do not reject create_* that carry frameId — placement follows the model / user intent.
+      const paintOps =
         live.frameId || pinned
           ? ops.filter((o) => String(o?.name || '').trim() !== 'create_frame')
           : ops;
-      let freeCanvasRejects: ToolOpResult[] = [];
-      if (!bindToBoard) {
-        const screened = rejectFramedFreeCreates(paintOps);
-        paintOps = screened.kept;
-        freeCanvasRejects = screened.rejected;
-      }
 
       const frameId = bindToBoard
         ? resolveToolOpsFrameId({
@@ -2931,10 +2887,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
           appliedOpIds: appliedOpIdsRef.current,
           canvasUi: params.canvasUi,
         });
-        pendingOpResults.push(...freeCanvasRejects, ...applied.opResults);
-        const failures = [...freeCanvasRejects, ...applied.opResults].filter(
-          (r) => !r.ok
-        );
+        pendingOpResults.push(...applied.opResults);
+        const failures = applied.opResults.filter((r) => !r.ok);
         if (failures.length) {
           // Correct the backend's pre-emitted counts — user must see the truth.
           activitySeq += 1;

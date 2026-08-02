@@ -17,10 +17,13 @@ Legacy Admin keys ``simple|medium|complex`` still parse → ``fast|standard|reas
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+_log = logging.getLogger(__name__)
 
 
 ROUTE_LANES = ("fast", "standard", "reasoning", "vision")
@@ -814,20 +817,22 @@ async def classify_user_intent(
             rationale = structured.get("rationale")
             reply = structured.get("reply")
         else:
+            _log.warning(
+                "intent_classify structured empty/unparsed type=%s; using heuristic",
+                type(structured).__name__,
+            )
             return fallback
         intent, lane = normalize_intent_decision(
             raw_intent, raw_lane, raw_grade=raw_grade
         )
         if intent not in USER_INTENTS:
+            _log.warning(
+                "intent_classify invalid intent=%r; using heuristic", raw_intent
+            )
             return fallback
-        intent, lane, rationale_s = _prefer_canvas_op_when_overpromoted(
-            intent,
-            lane,
-            rationale=str(rationale or "").strip(),
-            fallback=fallback,
-            has_images=has_images,
-            prompt=prompt,
-        )
+        # Trust the intent LLM. Do NOT demote design→canvas_op by char length:
+        # Chinese page asks (e.g. 「设计移动端登录页」~13 chars) are shorter than
+        # the old English-oriented threshold and were wrongly forced to canvas_op.
         reply_s = str(reply or "").strip()
         if intent != "chat":
             reply_s = ""
@@ -835,14 +840,11 @@ async def classify_user_intent(
             intent=intent,  # type: ignore[arg-type]
             paint_lane=lane if intent != "chat" else "",  # type: ignore[arg-type]
             reply=reply_s[:500],
-            rationale=rationale_s or "llm_intent",
+            rationale=str(rationale or "").strip() or "llm_intent",
         )
     except Exception:
+        _log.exception("intent_classify LLM failed; using heuristic")
         return fallback
-
-
-# Matches design_methodology min_prompt_chars — short asks stay on tool path.
-_DESIGN_UPGRADE_MIN_CHARS = 24
 
 
 def _prefer_canvas_op_when_overpromoted(
@@ -854,21 +856,9 @@ def _prefer_canvas_op_when_overpromoted(
     has_images: bool,
     prompt: str,
 ) -> tuple[str, str, str]:
-    """Demote design→canvas_op when the LLM over-promotes a short tool ask.
-
-    Without this, website-scene single ops (add rect) pull methodology skill
-    preload + decide, which is slow and unnecessary.
-    """
-    if intent != "design" or has_images or fallback.intent != "canvas_op":
-        return intent, lane, rationale
-    compact = re.sub(r"\s+", "", _user_request_core(prompt))
-    if len(compact) >= _DESIGN_UPGRADE_MIN_CHARS:
-        return intent, lane, rationale
-    out_lane = lane or fallback.paint_lane or "create"
-    note = (rationale or "llm_intent").strip()
-    if "demote_canvas_op" not in note:
-        note = (note + "; demote_canvas_op").strip("; ")
-    return "canvas_op", out_lane, note
+    """Legacy no-op — length demote removed (broke short Chinese design asks)."""
+    del fallback, has_images, prompt
+    return intent, lane, rationale
 
 
 async def classify_model_route(
