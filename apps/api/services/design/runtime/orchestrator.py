@@ -285,12 +285,12 @@ async def run_design_job(
             medium if isinstance(medium, dict) else None,
         )
 
-        from services.design.runtime.agent_controller import run_agent_graph
+        from services.design.runtime.design_run import design_stream
         from services.llm import reset_byok_user_id, set_byok_user_id
 
         byok_token = set_byok_user_id(user_id)
         try:
-            async for ev in run_agent_graph(
+            async for ev in design_stream(
                 user_id=user_id,
                 mode=mode,
                 prompt=prompt,
