@@ -101,9 +101,3 @@ e2e/               Playwright
 开源不易，如果觉得 Recombyn 对您的工作还有帮助，请帮忙在 GitHub 仓库右上角点个 ⭐ Star。您的支持是让 Recombyn 变得更好最大的动力。
 
 → [https://github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
-
----
-
-<p align="center">
-  <img src="docs/assets/recombyn-lockup-light.svg" alt="recombyn" height="40" />
-</p>

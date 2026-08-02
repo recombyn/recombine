@@ -116,9 +116,3 @@ See [LICENSE](./LICENSE) for the full text.
 Open source takes time. If Recombyn helps your work, please hit **⭐ Star** in the top-right of the GitHub repo — your support is the best fuel for making it better.
 
 → [https://github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
-
----
-
-<p align="center">
-  <img src="docs/assets/recombyn-lockup-light.svg" alt="recombyn" height="40" />
-</p>
