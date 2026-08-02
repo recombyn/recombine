@@ -2555,31 +2555,34 @@ function SvgCanvas({
     const onPointerDown = (e: PointerEvent) => {
       noteClient(e.clientX, e.clientY);
       if (e.button !== 2) return;
-      if (openFromRightButton(e.clientX, e.clientY, e.target)) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      if (!clientInStage(e.clientX, e.clientY)) return;
+      // Block native menu on the stage even when chrome skips opening ours.
+      e.preventDefault();
+      e.stopPropagation();
+      openFromRightButton(e.clientX, e.clientY, e.target);
     };
 
     const onMouseDown = (e: MouseEvent) => {
       noteClient(e.clientX, e.clientY);
       if (e.button !== 2) return;
-      if (openFromRightButton(e.clientX, e.clientY, e.target)) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      if (!clientInStage(e.clientX, e.clientY)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openFromRightButton(e.clientX, e.clientY, e.target);
     };
 
     const onContextMenu = (e: MouseEvent) => {
       const stageOk = clientInStage(e.clientX, e.clientY);
       const hasLast = !isBogusClient(lastClientX, lastClientY);
-      if (!stageOk && !hasLast) return;
-      if (isChromeTarget(e.target)) return;
+      const bogus = isBogusClient(e.clientX, e.clientY);
+      // Only the canvas stage (or synthetic (1,1) after a stage hover).
+      if (!stageOk && !(bogus && hasLast)) return;
 
       e.preventDefault();
       e.stopPropagation();
 
-      const bogus = isBogusClient(e.clientX, e.clientY);
+      if (isChromeTarget(e.target)) return;
+
       let clientX = bogus ? lastClientX : e.clientX;
       let clientY = bogus ? lastClientY : e.clientY;
       if (isBogusClient(clientX, clientY)) {
