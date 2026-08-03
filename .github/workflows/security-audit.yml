@@ -1,0 +1,70 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/api/pyproject.toml'
+      - 'packages/scene-builder-py/pyproject.toml'
+      - '.github/workflows/security-audit.yml'
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/api/pyproject.toml'
+      - 'packages/scene-builder-py/pyproject.toml'
+      - '.github/workflows/security-audit.yml'
+  schedule:
+    # Catch newly published advisories even when lockfiles are unchanged.
+    - cron: '0 6 * * 1'
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            apps/api/pyproject.toml
+            packages/scene-builder-py/pyproject.toml
+
+      - name: Install API deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "../../packages/scene-builder-py"
+          pip install -e "."
+          pip install pip-audit
+
+      - name: pip-audit (runtime deps)
+        # Freeze excludes local editables + install tooling; audit third-party runtime only.
+        run: |
+          pip freeze \
+            | grep -vE '^(pip|setuptools|wheel|recombyn-api|scene-builder-py|resume-scene-api)==' \
+            > /tmp/api-runtime-reqs.txt
+          pip-audit -r /tmp/api-runtime-reqs.txt --desc
