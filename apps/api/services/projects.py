@@ -702,6 +702,17 @@ def upsert_project(
             created = now
             revision = 1
 
+    if document is not None:
+        try:
+            from services.shares.store import sync_project_share_documents
+
+            sync_project_share_documents(
+                owner_id=user_id, project_id=pid, document=document
+            )
+        except Exception:
+            # Share snapshot sync must not fail the project save.
+            pass
+
     return {
         "id": pid,
         "name": name_n,

@@ -107,7 +107,7 @@ function CornerRadiusPanel({
 }) {
   const { t } = useTranslation();
   const clamp = (n: number) => Math.max(0, Math.min(max, Math.round(Number.isFinite(n) ? n : 0)));
-  const n = Math.max(3, Math.round(vertexCount) || 4);
+  const n = Math.max(1, Math.round(vertexCount) || 4);
   const multi = n !== 4;
   const editablePerVertex = multi && n <= MAX_EDITABLE_CORNER_VERTICES;
   const vertices = ensureVertices(value, n);

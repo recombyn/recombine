@@ -82,23 +82,22 @@ function HtmlArtboardFrame({
       <>
         <RcbOverlayPortal>
           {/*
-            Idle edge only. While selected, FrameSelectionChrome draws the blue
-            outline — keep the dark inset off so it doesn't read as a gap
-            (especially against dark theme canvas / white boards).
+            Idle edge always mounted (opacity swap) so select toggles do not
+            remount and flash. While selected, hide it — SelectionChrome draws
+            the blue outline underneath in world space.
           */}
-          {!selected ? (
-            <div
-              className="pointer-events-none absolute z-[5]"
-              style={{
-                left: stageBox.left,
-                top: stageBox.top,
-                width: stageBox.width,
-                height: stageBox.height,
-                boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent)',
-              }}
-              aria-hidden
-            />
-          ) : null}
+          <div
+            className="pointer-events-none absolute z-[5]"
+            style={{
+              left: stageBox.left,
+              top: stageBox.top,
+              width: stageBox.width,
+              height: stageBox.height,
+              boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent)',
+              opacity: selected ? 0 : 1,
+            }}
+            aria-hidden
+          />
         </RcbOverlayPortal>
         <NodeTitleLabel
           box={{

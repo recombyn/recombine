@@ -2,7 +2,7 @@
 
 **Editable design through conversation.**
 
-recombyn is a design Agent: describe your goal in natural language; it generates and refines posters, UI, and graphics on an infinite canvas—keeping structure you can keep editing, not a one-shot dead image.
+recombyn is a design Agent: describe your goal in natural language; it generates and refines posters, UI, and graphics on an infinite canvas—keeping structure you can keep editing.
 
 ## What it is
 
@@ -10,7 +10,7 @@ Turn “what you want” into a workable design. The Agent breaks down intent, p
 
 ## Indie-built
 
-recombyn is built by an independent developer in spare time. The goal is simple: make conversation-driven design genuinely useful—not another chat demo.
+recombyn is built by an independent developer in spare time. The goal is simple: make conversation-driven design genuinely useful.
 
 ## What you can do
 

@@ -39,7 +39,7 @@ export function serializeRadiusVertices(rs: number[]): string {
 }
 
 /**
- * How many fillet-able corners a node has (rect=4, path=ring size, star=2×spikes…).
+ * How many fillet-able corners a node has (rect=4, path=sharp verts only…).
  */
 export function cornerVertexCount(node: any): number {
   if (!node) return 4;
@@ -51,12 +51,192 @@ export function cornerVertexCount(node: any): number {
   if (t === 'path' || t === 'pen' || key === 'path') {
     const rings = parseClosedPathRings(String(node.attrs?.path || node.attrs?.d || ''));
     if (!rings.length) return 4;
-    return rings.reduce((m, ring) => Math.max(m, ring.length), 0);
+    let best = 0;
+    for (const ring of rings) {
+      const sharp = sharpCornerIndices(ring);
+      best = Math.max(best, sharp.length > 0 ? sharp.length : ring.length);
+    }
+    return Math.max(1, best);
   }
   if (t === 'rect' || t === 'roundRect' || t === '' || key === 'rect' || key === 'image' || key === 'video') {
     return 4;
   }
   return 4;
+}
+
+/** Minimum turn (deg from straight) to treat a polyline vertex as a real corner. */
+const SHARP_CORNER_MIN_DEG = 32;
+
+/**
+ * Turn away from a straight line at `curr` (0 = collinear, 90 = right angle).
+ * Vectors are from the vertex toward its neighbors.
+ */
+export function vertexTurnDegrees(
+  prev: [number, number],
+  curr: [number, number],
+  next: [number, number]
+): number {
+  const v1x = prev[0] - curr[0];
+  const v1y = prev[1] - curr[1];
+  const v2x = next[0] - curr[0];
+  const v2y = next[1] - curr[1];
+  const len1 = Math.hypot(v1x, v1y) || 1;
+  const len2 = Math.hypot(v2x, v2y) || 1;
+  const dot = (v1x / len1) * (v2x / len2) + (v1y / len1) * (v2y / len2);
+  const ang = Math.acos(Math.max(-1, Math.min(1, dot)));
+  return ((Math.PI - ang) * 180) / Math.PI;
+}
+
+/**
+ * Indices of real corners on a closed polyline.
+ * Skips dense curve samples and line→arc joins (one long edge + one short
+ * chord). Those joins used to get handles but barely move when R is large,
+ * because fillet clamps to half the short edge — looking “stuck” while true
+ * corners round a lot.
+ */
+export function sharpCornerIndices(points: Array<[number, number]>): number[] {
+  const n = points.length;
+  if (n < 3) return [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const edgeLens: number[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const [x, y] = points[i];
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    const next = points[(i + 1) % n];
+    edgeLens.push(Math.hypot(next[0] - x, next[1] - y));
+  }
+  const diag = Math.hypot(maxX - minX, maxY - minY) || 1;
+  const maxEdge = Math.max(...edgeLens, 1);
+  // Both adjacent edges must be substantial (true polygon sides), not arc chords.
+  const minCornerEdge = Math.max(diag * 0.02, maxEdge * 0.08);
+  const out: number[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const prev = points[(i - 1 + n) % n];
+    const curr = points[i];
+    const next = points[(i + 1) % n];
+    const turn = vertexTurnDegrees(prev, curr, next);
+    if (turn < SHARP_CORNER_MIN_DEG) continue;
+    const len1 = edgeLens[(i - 1 + n) % n];
+    const len2 = edgeLens[i];
+    if (len1 < minCornerEdge || len2 < minCornerEdge) continue;
+    out.push(i);
+  }
+  return out;
+}
+
+export type SharpCornerSite = {
+  /** Index in the sharp-corner list (maps to radiusVertices[i]). */
+  sharpIndex: number;
+  /** Index in the polyline ring. */
+  ringIndex: number;
+  x: number;
+  y: number;
+  /** Inward unit (angle bisector) in local path space. */
+  ix: number;
+  iy: number;
+};
+
+function unitEdgeBisector(
+  prev: [number, number],
+  curr: [number, number],
+  next: [number, number]
+): { ix: number; iy: number } {
+  const v1x = prev[0] - curr[0];
+  const v1y = prev[1] - curr[1];
+  const v2x = next[0] - curr[0];
+  const v2y = next[1] - curr[1];
+  const len1 = Math.hypot(v1x, v1y) || 1;
+  const len2 = Math.hypot(v2x, v2y) || 1;
+  let ix = v1x / len1 + v2x / len2;
+  let iy = v1y / len1 + v2y / len2;
+  const len = Math.hypot(ix, iy);
+  if (len < 1e-6) return { ix: 1, iy: 0 };
+  return { ix: ix / len, iy: iy / len };
+}
+
+/**
+ * Sharp corner handle sites for closed path nodes (local path coords).
+ * Returns null for rect-like shapes that should keep AABB corner handles.
+ */
+export function sharpCornerSitesForNode(node: any): SharpCornerSite[] | null {
+  if (!node) return null;
+  const key = String(node.key || '');
+  const t = String(node.attrs?.shapeType || (key === 'path' ? 'path' : key) || 'rect');
+  if (!(t === 'path' || key === 'path')) return null;
+  const rings = parseClosedPathRings(String(node.attrs?.path || node.attrs?.d || ''));
+  if (!rings.length) return null;
+  // Largest ring drives UI (boolean holes are secondary).
+  let ring = rings[0];
+  for (const r of rings) {
+    if (r.length > ring.length) ring = r;
+  }
+  const sharp = sharpCornerIndices(ring);
+  if (!sharp.length) return null;
+  const n = ring.length;
+  let cx = 0;
+  let cy = 0;
+  for (const [x, y] of ring) {
+    cx += x;
+    cy += y;
+  }
+  cx /= n;
+  cy /= n;
+  return sharp.map((ringIndex, sharpIndex) => {
+    const prev = ring[(ringIndex - 1 + n) % n];
+    const curr = ring[ringIndex];
+    const next = ring[(ringIndex + 1) % n];
+    let { ix, iy } = unitEdgeBisector(prev, curr, next);
+    // Bisector should point into the fill (toward centroid).
+    if (ix * (cx - curr[0]) + iy * (cy - curr[1]) < 0) {
+      ix = -ix;
+      iy = -iy;
+    }
+    return {
+      sharpIndex,
+      ringIndex,
+      x: curr[0],
+      y: curr[1],
+      ix,
+      iy,
+    };
+  });
+}
+
+/**
+ * Expand sharp-corner radii onto a full polyline (soft verts → 0).
+ */
+export function radiiForPolylineRing(
+  attrs: Record<string, unknown> | null | undefined,
+  ring: Array<[number, number]>,
+  fallbackCorners?: CornerRadii
+): number[] {
+  const sharp = sharpCornerIndices(ring);
+  const full = ring.map(() => 0);
+  const effective =
+    attrs ||
+    (fallbackCorners
+      ? {
+          radiusTL: fallbackCorners.tl,
+          radiusTR: fallbackCorners.tr,
+          radiusBR: fallbackCorners.br,
+          radiusBL: fallbackCorners.bl,
+          radiusLinked: 'true',
+        }
+      : null);
+  if (!sharp.length) {
+    return vertexRadiiFromAttrs(effective, ring.length, 'path');
+  }
+  const sharpRadii = vertexRadiiFromAttrs(effective, sharp.length, 'path');
+  for (let i = 0; i < sharp.length; i += 1) {
+    full[sharp[i]] = sharpRadii[i] ?? 0;
+  }
+  return full;
 }
 
 /**
@@ -277,6 +457,7 @@ export function parseClosedPathRings(d: string): Array<Array<[number, number]>> 
  * Fillet sharp corners of a closed polyline path. Falls back to `d` when
  * the path cannot be parsed (curves, etc.).
  * Pass `attrs` so multi-corner paths can use per-vertex `radiusVertices`.
+ * Only real corners are filleted — arc / curve samples stay smooth.
  */
 export function filletPathD(
   d: string,
@@ -299,7 +480,7 @@ export function filletPathD(
   let out = '';
   let anyFillet = false;
   for (const ring of rings) {
-    const radii = vertexRadiiFromAttrs(effectiveAttrs, ring.length, 'path');
+    const radii = radiiForPolylineRing(effectiveAttrs, ring, r);
     if (radii.some((v) => v >= 0.5)) {
       out += roundedPolygonPath(ring, radii);
       anyFillet = true;
@@ -312,6 +493,7 @@ export function filletPathD(
 
 /**
  * Rounded polygon path. `radii[i]` fillets vertex `points[i]`.
+ * Soft curve-sample vertices are forced to 0 even if radii says otherwise.
  * Radii are clamped so adjacent corners never consume more than an edge's length
  * (large R on short edges otherwise self-intersects — common after pen→polyline).
  */
@@ -321,9 +503,13 @@ export function roundedPolygonPath(
 ): string {
   const n = points.length;
   if (n < 3) return '';
-  let rs = points.map((_, i) =>
-    Math.max(0, typeof radii === 'number' ? radii : Number(radii[i] ?? 0) || 0)
-  );
+  const sharp = new Set(sharpCornerIndices(points));
+  let rs = points.map((_, i) => {
+    const raw = Math.max(0, typeof radii === 'number' ? radii : Number(radii[i] ?? 0) || 0);
+    // Path arc densification: never fillet non-corners.
+    if (sharp.size > 0 && !sharp.has(i)) return 0;
+    return raw;
+  });
   if (rs.every((r) => r < 0.5)) {
     return `M ${points.map(([x, y]) => `${x} ${y}`).join(' L ')} Z`;
   }

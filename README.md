@@ -22,7 +22,7 @@
 </p>
 
 **Recombyn** is a **canvas editor + AI Design Agent** (source-available).  
-Design on an infinite canvas; a LangGraph agent edits layers, shapes, text, and layout through conversation — not one-shot image dumps.
+Design on an infinite canvas; a LangGraph agent edits layers, shapes, text, and layout through conversation.
 
 Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API + **Yjs collab**). Local dev can use **SQLite** (empty `DATABASE_URL`), or **PostgreSQL** — see [docs/postgres-switch.md](docs/postgres-switch.md).
 
@@ -32,8 +32,8 @@ Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API 
 
 - **Real canvas editing** — Frames, shapes, images, video, text; export and share
 - **Live multiplayer** — Yjs sync for the same project (cursors, selection, undo); share view-only or edit
-- **Agent that paints** — Conversation plans and applies canvas ops, not a single static render
-- **Self-host first** — Same stack locally or on a server; your data stays yours
+- **Agent that paints** — Conversation plans and applies canvas ops
+- **Self-host first** — Same stack locally or on a server
 - **Composable** — Infra seeds + prompt packs + **5 core Agent skills** under `apps/api/data/public/` (full product packs optional via `data/private/` or Admin)
 
 ## Core features

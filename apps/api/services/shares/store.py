@@ -123,6 +123,30 @@ def actor_can_update_document(row: Any, *, actor_user_id: str | None) -> bool:
     return actor_can_edit_share(row, actor_user_id=actor)
 
 
+def _snapshot_document_from_row(row: Any) -> dict[str, Any] | None:
+    try:
+        doc = json.loads(row["document_json"])
+        return doc if isinstance(doc, dict) else None
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def _live_document_from_source_project(row: Any) -> dict[str, Any] | None:
+    """Prefer the owner's live project doc over a stale share snapshot."""
+    src = str(_col(row, "source_project_id") or "").strip()
+    owner_id = str(row["owner_id"] or "").strip()
+    if not src or not owner_id:
+        return None
+    # Local import avoids circular services.projects ↔ shares at module load.
+    from services.projects import get_project
+
+    proj = get_project(owner_id, src)
+    if not proj:
+        return None
+    doc = proj.get("document")
+    return doc if isinstance(doc, dict) else None
+
+
 def _row_to_share(
     row: Any,
     *,
@@ -149,10 +173,10 @@ def _row_to_share(
     }
     if include_document:
         if can_view:
-            try:
-                out["document"] = json.loads(row["document_json"])
-            except (TypeError, json.JSONDecodeError):
-                out["document"] = None
+            # Linked shares track the live project; fall back to frozen snapshot.
+            out["document"] = _live_document_from_source_project(row) or _snapshot_document_from_row(
+                row
+            )
         else:
             out["document"] = None
     return out
@@ -492,3 +516,37 @@ def update_share_document(
         )
         conn.commit()
         return _reload_share(conn, sid, actor_user_id=actor_user_id or "")
+
+
+def sync_project_share_documents(
+    *,
+    owner_id: str,
+    project_id: str,
+    document: dict[str, Any],
+) -> int:
+    """Keep linked share snapshots warm when the source project is saved.
+
+    Preview GET already prefers the live project doc; this keeps document_json
+    useful for offline / legacy readers.
+    """
+    uid = (owner_id or "").strip()
+    pid = (project_id or "").strip()
+    if not uid or not pid or not isinstance(document, dict):
+        return 0
+    try:
+        raw = _encode_document_json(document, too_large_message="Document is too large")
+    except ShareError:
+        return 0
+    now = time.time()
+    init_schema()
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE document_shares
+            SET document_json = ?, updated_at = ?
+            WHERE owner_id = ? AND source_project_id = ?
+            """,
+            (raw, now, uid, pid),
+        )
+        conn.commit()
+        return int(getattr(cur, "rowcount", 0) or 0)

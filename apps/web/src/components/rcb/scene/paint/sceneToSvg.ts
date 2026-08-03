@@ -35,6 +35,7 @@ import type { StrokeAlign, StrokeLinecap, StrokeLinejoin } from '../document/sce
 import { isTransparentFill, resolveDocumentBackground, resolveFill } from '../document/sceneFill';
 import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isNodeHidden, isVideoGeneratorNode } from '../document/sceneDocument';
 import {
+  clampCornerRadii,
   filletPathD,
   radiiFromAttrs,
   vertexRadiiFromAttrs,
@@ -1998,6 +1999,64 @@ export function previewSvgNodeGeometry(
   });
   reapplySceneTransform(el, box.left, box.top, box.width, box.height);
   return true;
+}
+
+/**
+ * Live corner-radius preview without remounting the shape host.
+ * (Redux skipHistory patches remount via documentPatchToken and can leave ghosts.)
+ */
+export function previewSvgNodeCornerRadii(
+  nodeEls: Map<string, SVGElement>,
+  nodeId: string,
+  opts: {
+    width: number;
+    height: number;
+    shapeType: string;
+    radii: CornerRadii;
+    attrs?: Record<string, unknown> | null;
+    sides?: number;
+  }
+): boolean {
+  const el = nodeEls.get(nodeId);
+  if (!el) return false;
+  const w = Math.max(1, opts.width);
+  const h = Math.max(1, opts.height);
+  const r = clampCornerRadii(opts.radii, w, h);
+  const t = String(opts.shapeType || 'rect');
+
+  let d = '';
+  if (t === 'path') {
+    const base =
+      String((el as any).__sceneBasePath || '') ||
+      el.getAttribute('data-scene-base-path') ||
+      '';
+    if (!base.trim()) return false;
+    d = filletPathD(base, r, opts.attrs);
+  } else if (t === 'triangle' || t === 'star' || t === 'polygon') {
+    d =
+      roundedShapePath(
+        t,
+        w,
+        h,
+        r,
+        opts.sides ?? readSceneSides(el),
+        opts.attrs
+      ) || '';
+  } else if (t === 'circle' || t === 'line' || t === 'arrow' || t === 'pen') {
+    return false;
+  } else {
+    d = roundedRectPath(w, h, r);
+  }
+  if (!d) return false;
+
+  if (el.tagName.toLowerCase() === 'path') {
+    return setPathD(el, d);
+  }
+  const body =
+    el.querySelector(':scope > [data-baseline="1"]') ||
+    el.querySelector(':scope > [data-radius-body="1"]:not([data-stroke-under])') ||
+    el.querySelector(':scope > path:not([data-stroke-under])');
+  return setPathD(body, d);
 }
 
 function removeSceneNodesById(layer: SVGElement, nodeId: string) {
