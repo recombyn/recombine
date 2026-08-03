@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import Tooltip from '@/components/base/tooltip';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
@@ -10,24 +10,26 @@ import {
 import { setBucketFill } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
 
+function bucketFillToPanelValue(raw: any): FillPanelValue {
+  return {
+    fillType: raw?.fillType || 'solid',
+    fillColor: String(raw?.fillColor || '#333333'),
+    fillOpacity: Number.isFinite(Number(raw?.fillOpacity)) ? Number(raw.fillOpacity) : 100,
+    fillGradient: raw?.fillGradient != null ? String(raw.fillGradient) : undefined,
+    fillImageSrc: raw?.fillImageSrc != null ? String(raw.fillImageSrc) : undefined,
+    fillImageFit: raw?.fillImageFit,
+    fillImageRotate: raw?.fillImageRotate,
+    fillImageAdjust: raw?.fillImageAdjust,
+  };
+}
+
 /**
  * Paint-bucket options: same FillPanel as shape fill (solid / gradient / image).
  */
 function BucketFillToolbar({ className }: { className?: string }) {
   const dispatch = useDispatch();
-  const value = useSelector((s: any) => {
-    const raw = s.editor.bucketFill || {};
-    return {
-      fillType: raw.fillType || 'solid',
-      fillColor: String(raw.fillColor || '#333333'),
-      fillOpacity: Number.isFinite(Number(raw.fillOpacity)) ? Number(raw.fillOpacity) : 100,
-      fillGradient: raw.fillGradient != null ? String(raw.fillGradient) : undefined,
-      fillImageSrc: raw.fillImageSrc != null ? String(raw.fillImageSrc) : undefined,
-      fillImageFit: raw.fillImageFit,
-      fillImageRotate: raw.fillImageRotate,
-      fillImageAdjust: raw.fillImageAdjust,
-    } as FillPanelValue;
-  });
+  const bucketFill = useSelector((s: any) => s.editor.bucketFill);
+  const value = useMemo(() => bucketFillToPanelValue(bucketFill), [bucketFill]);
   const preview = fillPanelPreview(value);
 
   return (

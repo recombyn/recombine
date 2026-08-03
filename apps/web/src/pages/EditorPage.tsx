@@ -107,6 +107,7 @@ import {
   setWorkspaceMode,
   updateArtboardFrame,
   pushEditorHistory,
+  EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 import { listSceneNodes, stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
@@ -735,12 +736,14 @@ function EditorPage() {
   const sceneReloadToken = useSelector((state: any) => state.editor.sceneReloadToken);
   const documentPatchToken = useSelector((state: any) => state.editor.documentPatchToken);
   const lastPatchedNodeIds = useSelector(
-    (state: any) => (state.editor.lastPatchedNodeIds as string[]) || []
+    (state: any) => (state.editor.lastPatchedNodeIds as string[]) ?? EMPTY_ID_LIST
   );
   const selectedNodeId = useSelector((state: any) => state.editor.selectedNodeId);
-  const selectedNodeIds = useSelector((state: any) => state.editor.selectedNodeIds || []);
+  const selectedNodeIds = useSelector(
+    (state: any) => (state.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
+  );
   const selectedFrameIds = useSelector(
-    (state: any) => (state.editor.selectedFrameIds as string[] | undefined) || []
+    (state: any) => (state.editor.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
   const currentId = useSelector((state: any) => state.editor.currentId as string | null);
   const templates = useSelector((state: any) => state.editor.templates as any[]);
@@ -844,8 +847,10 @@ function EditorPage() {
     const el = stageEl;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
     const apply = () => {
-      const r = el.getBoundingClientRect();
-      setStageSize({ width: Math.max(1, r.width), height: Math.max(1, r.height) });
+      setStageSize({
+        width: Math.max(1, el.clientWidth),
+        height: Math.max(1, el.clientHeight),
+      });
     };
     apply();
     const ro = new ResizeObserver(apply);
@@ -1006,13 +1011,28 @@ function EditorPage() {
   const sessionReadyForIdRef = useRef<string | null>(null);
   const didInitialFitRef = useRef(false);
   const gridUserTouchedRef = useRef(false);
+  /** True after the user pans/zooms — stops auto re-fit on stage resize. */
+  const cameraTouchedByUserRef = useRef(false);
+  /** Next camera write is programmatic (fit) — don't count as user touch. */
+  const skipCameraTouchRef = useRef(false);
   useEffect(() => {
     sessionReadyForIdRef.current = null;
     didInitialFitRef.current = false;
     gridUserTouchedRef.current = false;
+    cameraTouchedByUserRef.current = false;
+    skipCameraTouchRef.current = false;
     setCamera(DEFAULT_CAMERA);
     dispatch(setGridMode(false));
   }, [currentId, dispatch]);
+
+  useEffect(() => {
+    if (skipCameraTouchRef.current) {
+      skipCameraTouchRef.current = false;
+      return;
+    }
+    if (!didInitialFitRef.current) return;
+    cameraTouchedByUserRef.current = true;
+  }, [camera.x, camera.y, camera.zoom]);
 
   useEffect(() => {
     if (!currentId || !document) return;
@@ -1317,46 +1337,42 @@ function EditorPage() {
 
   const zoomAtStageCenter = useCallback((nextZoom: number) => {
     const el = stageRef.current;
-    if (!el) {
-      setCamera((c) => zoomAtPoint(c, nextZoom, 0, 0));
-      return;
-    }
-    const r = el.getBoundingClientRect();
-    setCamera((c) => zoomAtPoint(c, nextZoom, r.width / 2, r.height / 2));
+    if (!el) return;
+    // Layout px (clientWidth) — same space as camera.x/y. getBoundingClientRect is visual
+    // and drifts under browser zoom / CSS scale, which makes content jump off-screen.
+    setCamera((c) =>
+      zoomAtPoint(c, nextZoom, el.clientWidth / 2, el.clientHeight / 2)
+    );
   }, []);
 
   const onZoomIn = useCallback(() => {
     setCamera((c) => {
       const el = stageRef.current;
+      if (!el) return c;
       const next = Math.min(8, Number((c.zoom * 1.1).toFixed(4)));
-      if (!el) return { ...c, zoom: next };
-      const r = el.getBoundingClientRect();
-      return zoomAtPoint(c, next, r.width / 2, r.height / 2);
+      return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);
 
   const onZoomOut = useCallback(() => {
     setCamera((c) => {
       const el = stageRef.current;
+      if (!el) return c;
       const next = Math.max(0.05, Number((c.zoom / 1.1).toFixed(4)));
-      if (!el) return { ...c, zoom: next };
-      const r = el.getBoundingClientRect();
-      return zoomAtPoint(c, next, r.width / 2, r.height / 2);
+      return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);
 
   const onFitView = useCallback(() => {
     const el = stageRef.current;
-    const vw = el?.clientWidth || el?.getBoundingClientRect().width || 0;
-    const vh = el?.clientHeight || el?.getBoundingClientRect().height || 0;
-    if (vw < 1 || vh < 1) {
-      zoomAtStageCenter(1);
-      return;
-    }
+    const vw = el?.clientWidth || 0;
+    const vh = el?.clientHeight || 0;
+    if (vw < 1 || vh < 1) return;
     const doc = (store.getState() as any).editor?.document;
     const fr: ArtboardFrame[] = Array.isArray(doc?.frames) ? doc.frames : [];
-    setCamera(rcbFitCamera({ width: vw, height: vh }, editorContentBounds(doc, fr), 48));
-  }, [zoomAtStageCenter]);
+    skipCameraTouchRef.current = true;
+    setCamera(rcbFitCamera({ width: vw, height: vh }, editorContentBounds(doc, fr), 120));
+  }, []);
 
   /** Under boot overlay: center once, then reveal — no top-left flash. */
   const onCanvasReady = useCallback(() => {
@@ -1366,6 +1382,27 @@ function EditorPage() {
     }
     finishBoot();
   }, [onFitView]);
+
+  // Agent dock / inspect panel can change stage size after the first fit. Re-fit
+  // until the user pans or zooms so content does not sit off-center then "run away".
+  useEffect(() => {
+    const el = stageEl;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    let lastW = el.clientWidth;
+    let lastH = el.clientHeight;
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (!(w > 8 && h > 8)) return;
+      if (!didInitialFitRef.current || cameraTouchedByUserRef.current) return;
+      if (Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) return;
+      lastW = w;
+      lastH = h;
+      onFitView();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [stageEl, onFitView]);
 
   const zoomModLabel = zoomModShortcutLabel();
 

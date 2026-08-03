@@ -8,6 +8,7 @@ import Dropdown from '@/components/base/dropdown';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import Tooltip from '@/components/base/tooltip';
 import { ExportSelectionPanel } from '@/components/editor/panels/ExportSelectionPanel';
+import { EMPTY_ID_LIST } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
 import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import {
@@ -371,7 +372,9 @@ function DevPropertiesPanel({
 }) {
   const { t } = useTranslation();
   const document = useSelector((s: any) => s.editor.document);
-  const selectedNodeIds = useSelector((s: any) => (s.editor.selectedNodeIds || []) as string[]);
+  const selectedNodeIds = useSelector(
+    (s: any) => (s.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
+  );
   const hoverNodeId = useSelector((s: any) => s.editor.devHoverNodeId as string | null);
   const nodeId =
     hoverNodeId || (selectedNodeIds.length === 1 ? selectedNodeIds[0] : null);

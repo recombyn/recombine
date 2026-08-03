@@ -22,6 +22,7 @@ import {
   type RcbCamera as CanvasCamera,
 } from '@/components/rcb';
 import SvgCanvas from '@/components/editor/canvas/SvgCanvas';
+import EditorBootOverlay from '@/components/editor/chrome/EditorBootOverlay';
 import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
 import {
   listSceneNodes,
@@ -41,12 +42,13 @@ import {
   setDocument,
   setSelectedNodeIds,
   setWorkspaceMode,
+  applyCollabDocument,
+  EMPTY_ID_LIST,
   type ArtboardFrame,
 } from '@/store/modules/editor';
 import { fetchShareApi, type ShareDto } from '@/apis/shares';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
-import { applyCollabDocument } from '@/store/modules/editor';
 
 const ZOOM_TRIGGER_BASE =
   'inline-flex h-7 min-w-[2.75rem] items-center justify-center gap-1.5 rounded px-2.5 transition-colors';
@@ -56,6 +58,8 @@ const ZOOM_TRIGGER_IDLE =
 const HUD_ICON = 'h-4 w-4';
 /** Preview tabs poll so linked shares pick up source-project edits without a hard refresh. */
 const SHARE_PREVIEW_POLL_MS = 2500;
+const BOOT_MIN_MS = 520;
+const BOOT_EXIT_MS = 280;
 
 type SceneBox = { x: number; y: number; width: number; height: number };
 
@@ -108,21 +112,6 @@ function unionSceneBox(a: SceneBox | null, b: SceneBox): SceneBox {
   };
 }
 
-function framesBounds(frames: ArtboardFrame[]) {
-  if (!frames.length) return { x: 0, y: 0, width: 0, height: 0 };
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const f of frames) {
-    minX = Math.min(minX, f.x);
-    minY = Math.min(minY, f.y);
-    maxX = Math.max(maxX, f.x + f.width);
-    maxY = Math.max(maxY, f.y + f.height);
-  }
-  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
-}
-
 /** Same as editor: artboards + finished scene nodes for zoom-to-fit (no generators). */
 function previewContentBounds(doc: any, frames: ArtboardFrame[]): SceneBox {
   let box: SceneBox | null = null;
@@ -159,13 +148,15 @@ function SharePage() {
   const viewerId = useSelector((s: any) => s.auth?.user?.id as string | undefined);
   const document = useSelector((s: any) => s.editor.document);
   const selectedNodeId = useSelector((s: any) => s.editor.selectedNodeId);
-  const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds || []);
+  const selectedNodeIds = useSelector(
+    (s: any) => (s.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
+  );
   const selectedFrameIds = useSelector(
-    (s: any) => (s.editor.selectedFrameIds as string[] | undefined) || []
+    (s: any) => (s.editor.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
   const documentPatchToken = useSelector((s: any) => s.editor.documentPatchToken);
   const lastPatchedNodeIds = useSelector(
-    (s: any) => (s.editor.lastPatchedNodeIds as string[]) || []
+    (s: any) => (s.editor.lastPatchedNodeIds as string[]) ?? EMPTY_ID_LIST
   );
   const sceneReloadToken = useSelector((s: any) => s.editor.sceneReloadToken);
   const [record, setRecord] = useState<ShareDto | null>(null);
@@ -175,12 +166,88 @@ function SharePage() {
   const [inspectOpen, setInspectOpen] = useState(true);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const [bootOpen, setBootOpen] = useState(true);
+  const [bootExiting, setBootExiting] = useState(false);
+  const [bootProgress, setBootProgress] = useState(8);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageEl, setStageEl] = useState<HTMLElement | null>(null);
   const docFingerprintRef = useRef('');
+  const didInitialFitRef = useRef(false);
+  const cameraTouchedByUserRef = useRef(false);
+  const skipCameraTouchRef = useRef(false);
+  const bootOpenRef = useRef(true);
+  const bootFinishingRef = useRef(false);
+  const bootStartedAt = useRef(Date.now());
+  const bootExitTimer = useRef<number | null>(null);
   useEffect(() => {
     setStageEl(stageRef.current);
   }, []);
+
+  const finishBoot = useCallback(() => {
+    if (!bootOpenRef.current || bootFinishingRef.current) return;
+    bootFinishingRef.current = true;
+    const wait = Math.max(0, BOOT_MIN_MS - (Date.now() - bootStartedAt.current));
+    window.setTimeout(() => {
+      setBootProgress(100);
+      setBootExiting(true);
+      bootExitTimer.current = window.setTimeout(() => {
+        bootOpenRef.current = false;
+        setBootOpen(false);
+        setBootExiting(false);
+        bootExitTimer.current = null;
+      }, BOOT_EXIT_MS);
+    }, wait);
+  }, []);
+
+  useEffect(() => {
+    didInitialFitRef.current = false;
+    cameraTouchedByUserRef.current = false;
+    skipCameraTouchRef.current = false;
+    bootOpenRef.current = true;
+    bootFinishingRef.current = false;
+    bootStartedAt.current = Date.now();
+    setBootOpen(true);
+    setBootExiting(false);
+    setBootProgress(8);
+    setCamera(DEFAULT_CAMERA);
+    if (bootExitTimer.current) {
+      window.clearTimeout(bootExitTimer.current);
+      bootExitTimer.current = null;
+    }
+  }, [shareId]);
+
+  useEffect(
+    () => () => {
+      if (bootExitTimer.current) window.clearTimeout(bootExitTimer.current);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!bootOpen || bootExiting) return undefined;
+    const id = window.setInterval(() => {
+      setBootProgress((p) => {
+        if (p >= 90) return p;
+        return Math.min(90, p + 4 + Math.random() * 10);
+      });
+    }, 380);
+    return () => window.clearInterval(id);
+  }, [bootOpen, bootExiting]);
+
+  useEffect(() => {
+    if (!bootOpen) return undefined;
+    const failSafe = window.setTimeout(() => finishBoot(), 12000);
+    return () => window.clearTimeout(failSafe);
+  }, [bootOpen, finishBoot]);
+
+  useEffect(() => {
+    if (skipCameraTouchRef.current) {
+      skipCameraTouchRef.current = false;
+      return;
+    }
+    if (!didInitialFitRef.current) return;
+    cameraTouchedByUserRef.current = true;
+  }, [camera.x, camera.y, camera.zoom]);
 
   const canEdit = Boolean(record?.viewerCanEdit);
   const canView = Boolean(record?.viewerCanView);
@@ -190,45 +257,69 @@ function SharePage() {
 
   const zoomAtStageCenter = useCallback((nextZoom: number) => {
     const el = stageRef.current;
-    if (!el) {
-      setCamera((c) => ({ ...c, zoom: nextZoom }));
-      return;
-    }
-    const r = el.getBoundingClientRect();
-    setCamera((c) => zoomAtPoint(c, nextZoom, r.width / 2, r.height / 2));
+    if (!el) return;
+    setCamera((c) =>
+      zoomAtPoint(c, nextZoom, el.clientWidth / 2, el.clientHeight / 2)
+    );
   }, []);
 
   const onZoomIn = useCallback(() => {
     setCamera((c) => {
       const el = stageRef.current;
+      if (!el) return c;
       const next = Math.min(8, Number((c.zoom * 1.1).toFixed(4)));
-      if (!el) return { ...c, zoom: next };
-      const r = el.getBoundingClientRect();
-      return zoomAtPoint(c, next, r.width / 2, r.height / 2);
+      return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);
 
   const onZoomOut = useCallback(() => {
     setCamera((c) => {
       const el = stageRef.current;
+      if (!el) return c;
       const next = Math.max(0.05, Number((c.zoom / 1.1).toFixed(4)));
-      if (!el) return { ...c, zoom: next };
-      const r = el.getBoundingClientRect();
-      return zoomAtPoint(c, next, r.width / 2, r.height / 2);
+      return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);
 
   const onFitView = useCallback(() => {
     const el = stageRef.current;
-    const vw = el?.clientWidth || el?.getBoundingClientRect().width || 0;
-    const vh = el?.clientHeight || el?.getBoundingClientRect().height || 0;
-    if (vw < 1 || vh < 1) {
-      zoomAtStageCenter(1);
-      return;
-    }
+    const vw = el?.clientWidth || 0;
+    const vh = el?.clientHeight || 0;
+    if (vw < 1 || vh < 1) return;
     const fr: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
-    setCamera(rcbFitCamera({ width: vw, height: vh }, previewContentBounds(document, fr), 48));
-  }, [document, zoomAtStageCenter]);
+    skipCameraTouchRef.current = true;
+    setCamera(rcbFitCamera({ width: vw, height: vh }, previewContentBounds(document, fr), 120));
+  }, [document]);
+
+  // Fit once content is on the stage; re-fit on panel resize until the user pans/zooms.
+  useEffect(() => {
+    if (!document || !record?.viewerCanView || canEdit) return;
+    const el = stageRef.current || stageEl;
+    if (!el || el.clientWidth < 40 || el.clientHeight < 40) return;
+    if (didInitialFitRef.current) return;
+    didInitialFitRef.current = true;
+    onFitView();
+    finishBoot();
+  }, [document, record?.viewerCanView, canEdit, stageEl, onFitView, finishBoot]);
+
+  useEffect(() => {
+    const el = stageEl || stageRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    let lastW = el.clientWidth;
+    let lastH = el.clientHeight;
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (!(w > 8 && h > 8)) return;
+      if (!didInitialFitRef.current || cameraTouchedByUserRef.current) return;
+      if (Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) return;
+      lastW = w;
+      lastH = h;
+      onFitView();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [stageEl, onFitView]);
 
   const zoomPercent = Math.round(camera.zoom * 100);
   const zoomModLabel = zoomModShortcutLabel();
@@ -403,14 +494,14 @@ function SharePage() {
   }, [shareId, record?.viewerCanView, record?.permission, record?.viewerCanEdit, missing, forbidden, dispatch]);
 
   const frames: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
-  const worldBounds = frames.length
-    ? framesBounds(frames)
-    : { x: 0, y: 0, width: Number(document?.width) || 794, height: Number(document?.height) || 1123 };
+  // Disable RcbCanvas one-shot autofit — we fit to finished scene content below.
+  const worldBounds = { x: 0, y: 0, width: 0, height: 0 };
+  const contentBounds = previewContentBounds(document, frames);
   const worldSurface = {
     x: 0,
     y: 0,
-    width: Math.max(3600, worldBounds.x + worldBounds.width + 800),
-    height: Math.max(2400, worldBounds.y + worldBounds.height + 800),
+    width: Math.max(3600, contentBounds.x + contentBounds.width + 800, Number(document?.width) || 0),
+    height: Math.max(2400, contentBounds.y + contentBounds.height + 800, Number(document?.height) || 0),
   };
 
   const stageBackground = useMemo(() => {
@@ -468,8 +559,8 @@ function SharePage() {
 
   if (!record || !document || canEdit) {
     return (
-      <div className="flex h-full min-h-[60vh] items-center justify-center bg-[var(--canvas)] text-[13px] text-[var(--muted)]">
-        Loading...
+      <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[var(--canvas)]">
+        <EditorBootOverlay progress={bootProgress} exiting={bootExiting} />
       </div>
     );
   }
@@ -522,6 +613,7 @@ function SharePage() {
             emptyDragPans={false}
             background={stageBackground}
             stageRef={stageRef}
+            onViewportEl={setStageEl}
             defs={<RcbSvgDefs />}
           >
             {frames.map((frame) =>
@@ -639,6 +731,8 @@ function SharePage() {
           />
         ) : null}
       </div>
+
+      {bootOpen ? <EditorBootOverlay progress={bootProgress} exiting={bootExiting} /> : null}
     </div>
   );
 }

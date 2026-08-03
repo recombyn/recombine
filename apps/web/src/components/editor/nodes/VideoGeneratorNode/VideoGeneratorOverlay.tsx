@@ -4,6 +4,7 @@ import { RcbOverlayPortal } from '@/components/rcb';
 import { isVideoGeneratorNode } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import VideoGeneratorCard from '@/components/editor/nodes/VideoGeneratorNode/VideoGeneratorCard';
+import { EMPTY_ID_LIST } from '@/store/modules/editor';
 
 /**
  * Screen-space Video Generator composers for every generator plate on the canvas.
@@ -20,7 +21,7 @@ function VideoGeneratorOverlay({
   readOnly?: boolean;
 }): ReactNode {
   const selectedNodeIds: string[] = useSelector(
-    (state: any) => state.editor.selectedNodeIds || []
+    (state: any) => (state.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
   );
   const canvasAttachPick = useSelector(
     (state: any) => state.editor.canvasAttachPick as null | { target: string }
