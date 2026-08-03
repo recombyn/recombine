@@ -664,7 +664,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
                 />
                 <Sep />
                 <Tooltip
-                  title={
+                  tip={
                     imageAspectLocked
                       ? t('editor.imageToolbar.unlockAspect')
                       : t('editor.imageToolbar.lockAspect')

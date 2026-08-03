@@ -92,6 +92,25 @@ function zoomModShortcutLabel() {
   return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
 }
 
+function useViewportMatch(query: string) {
+  const read = () =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : false;
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const media = window.matchMedia(query);
+    const onChange = () => setMatches(media.matches);
+    onChange();
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [query]);
+  return matches;
+}
+
 function shareDocumentFingerprint(doc: unknown): string {
   try {
     return JSON.stringify(doc);
@@ -169,12 +188,12 @@ function SharePage() {
   const [bootOpen, setBootOpen] = useState(true);
   const [bootExiting, setBootExiting] = useState(false);
   const [bootProgress, setBootProgress] = useState(8);
+  /** Narrow preview chrome: icon-only actions so title + buttons do not overlap. */
+  const compactTopBar = useViewportMatch('(max-width: 900px)');
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageEl, setStageEl] = useState<HTMLElement | null>(null);
   const docFingerprintRef = useRef('');
   const didInitialFitRef = useRef(false);
-  const cameraTouchedByUserRef = useRef(false);
-  const skipCameraTouchRef = useRef(false);
   const bootOpenRef = useRef(true);
   const bootFinishingRef = useRef(false);
   const bootStartedAt = useRef(Date.now());
@@ -201,8 +220,6 @@ function SharePage() {
 
   useEffect(() => {
     didInitialFitRef.current = false;
-    cameraTouchedByUserRef.current = false;
-    skipCameraTouchRef.current = false;
     bootOpenRef.current = true;
     bootFinishingRef.current = false;
     bootStartedAt.current = Date.now();
@@ -239,15 +256,6 @@ function SharePage() {
     const failSafe = window.setTimeout(() => finishBoot(), 12000);
     return () => window.clearTimeout(failSafe);
   }, [bootOpen, finishBoot]);
-
-  useEffect(() => {
-    if (skipCameraTouchRef.current) {
-      skipCameraTouchRef.current = false;
-      return;
-    }
-    if (!didInitialFitRef.current) return;
-    cameraTouchedByUserRef.current = true;
-  }, [camera.x, camera.y, camera.zoom]);
 
   const canEdit = Boolean(record?.viewerCanEdit);
   const canView = Boolean(record?.viewerCanView);
@@ -287,11 +295,10 @@ function SharePage() {
     const vh = el?.clientHeight || 0;
     if (vw < 1 || vh < 1) return;
     const fr: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
-    skipCameraTouchRef.current = true;
     setCamera(rcbFitCamera({ width: vw, height: vh }, previewContentBounds(document, fr), 120));
   }, [document]);
 
-  // Fit once content is on the stage; re-fit on panel resize until the user pans/zooms.
+  // Fit once when content is on the stage — do not re-fit when panels resize.
   useEffect(() => {
     if (!document || !record?.viewerCanView || canEdit) return;
     const el = stageRef.current || stageEl;
@@ -301,25 +308,6 @@ function SharePage() {
     onFitView();
     finishBoot();
   }, [document, record?.viewerCanView, canEdit, stageEl, onFitView, finishBoot]);
-
-  useEffect(() => {
-    const el = stageEl || stageRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    let lastW = el.clientWidth;
-    let lastH = el.clientHeight;
-    const ro = new ResizeObserver(() => {
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      if (!(w > 8 && h > 8)) return;
-      if (!didInitialFitRef.current || cameraTouchedByUserRef.current) return;
-      if (Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) return;
-      lastW = w;
-      lastH = h;
-      onFitView();
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [stageEl, onFitView]);
 
   const zoomPercent = Math.round(camera.zoom * 100);
   const zoomModLabel = zoomModShortcutLabel();
@@ -567,40 +555,45 @@ function SharePage() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[var(--canvas)]">
-      <div className="pointer-events-none absolute left-4 top-3 z-40">
-        <div className="pointer-events-auto flex min-w-0 items-center gap-2">
-          <span className="max-w-[min(16rem,calc(100vw-14rem))] truncate text-[14px] font-medium text-[var(--ink)]">
-            {record.name}
-          </span>
-          <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--surface)] px-2 text-[11px] font-medium text-[var(--muted)] ring-1 ring-[var(--line)]">
-            {t('editor.sharePreviewOnly', { defaultValue: t('editor.sharePreview') })}
-          </span>
-        </div>
-      </div>
-
       <div
-        className="pointer-events-none absolute top-3 z-40"
+        className="pointer-events-none absolute inset-x-0 top-3 z-40 flex items-center gap-2 pl-4"
         style={{
-          right: inspectOpen ? getInspectDockWidth() + 16 : 16,
+          paddingRight: inspectOpen ? getInspectDockWidth() + 16 : 16,
         }}
       >
-        <div className="pointer-events-auto flex items-center gap-2">
-          {canExport ? <EditorTopExportButton /> : null}
-          <button
-            type="button"
-            onClick={() => setInspectOpen((v) => !v)}
-            className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium shadow-sm ring-1 ring-[var(--line)]',
-              inspectOpen
-                ? 'bg-[var(--ink)] text-[var(--on-brand)]'
-                : 'bg-[var(--surface)] text-[var(--ink)]'
-            )}
-          >
-            <HiOutlineCodeBracket className="h-4 w-4" />
-            {t('editor.devInspect')}
-          </button>
-          <WalletAccountChip />
+        <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2">
+          <span className="min-w-0 truncate text-[14px] font-medium text-[var(--ink)]">
+            {record.name}
+          </span>
+          {compactTopBar ? null : (
+            <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--surface)] px-2 text-[11px] font-medium text-[var(--muted)] ring-1 ring-[var(--line)]">
+              {t('editor.sharePreviewOnly', { defaultValue: t('editor.sharePreview') })}
+            </span>
+          )}
         </div>
+        {/* Narrow + inspect open: panel owns the chrome; keep Export/Inspect/wallet off the sliver. */}
+        {compactTopBar && inspectOpen ? null : (
+          <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
+            {canExport ? <EditorTopExportButton iconOnly={compactTopBar} /> : null}
+            <button
+              type="button"
+              aria-label={t('editor.devInspect')}
+              title={t('editor.devInspect')}
+              onClick={() => setInspectOpen((v) => !v)}
+              className={cn(
+                'inline-flex h-8 items-center justify-center rounded-xl text-[13px] font-medium shadow-sm ring-1 ring-[var(--line)]',
+                compactTopBar ? 'w-8 px-0' : 'gap-1.5 px-3',
+                inspectOpen
+                  ? 'bg-[var(--ink)] text-[var(--on-brand)]'
+                  : 'bg-[var(--surface)] text-[var(--ink)]'
+              )}
+            >
+              <HiOutlineCodeBracket className="h-4 w-4 shrink-0" />
+              {compactTopBar ? null : t('editor.devInspect')}
+            </button>
+            <WalletAccountChip className={compactTopBar ? 'max-w-[7.5rem]' : undefined} />
+          </div>
+        )}
       </div>
 
       <div className="relative flex min-h-0 flex-1">

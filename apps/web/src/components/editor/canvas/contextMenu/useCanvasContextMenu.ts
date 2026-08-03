@@ -1,4 +1,10 @@
-import { useEffect, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import {
+  useEffect,
+  useRef,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from 'react';
 import { useDispatch } from 'react-redux';
 import { rcbResolveViewportEl, type RcbCamera } from '@/components/rcb';
 import type { ContextMenuState } from '@/components/rcb/selection/chrome/CanvasContextMenu';
@@ -28,7 +34,97 @@ type UseCanvasContextMenuArgs = {
   setCtxMenu: Dispatch<SetStateAction<ContextMenuState | null>>;
 };
 
-/** Right-click / contextmenu → canvas context menu state. */
+const LONG_PRESS_MS = 520;
+const LONG_PRESS_MOVE_PX = 10;
+/** Open on pointercancel only if held long enough (ignore scroll aborts). */
+const CANCEL_OPEN_MIN_MS = 400;
+const OPEN_DEBOUNCE_MS = 400;
+
+const CHROME_SKIP_SEL =
+  '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar]';
+const SCENE_COMPOSER_SEL =
+  '[data-image-generator],[data-video-generator],[data-image-quick-edit]';
+
+type LongPress = {
+  pointerId: number;
+  x: number;
+  y: number;
+  target: EventTarget | null;
+  startedAt: number;
+};
+
+function isBogusClient(clientX: number, clientY: number) {
+  return (
+    !Number.isFinite(clientX) ||
+    !Number.isFinite(clientY) ||
+    (clientX <= 2 && clientY <= 2)
+  );
+}
+
+function prefersCoarsePointer() {
+  if (typeof window.matchMedia !== 'function') return false;
+  return (
+    window.matchMedia('(pointer: coarse)').matches ||
+    window.matchMedia('(any-pointer: coarse)').matches
+  );
+}
+
+function isTouchLikePointer(e: PointerEvent, coarse: boolean) {
+  if (e.pointerType === 'touch' || e.pointerType === 'pen') return true;
+  return e.button === 0 && coarse;
+}
+
+function isChromeTarget(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el?.closest) return false;
+  if (el.closest(SCENE_COMPOSER_SEL)) return false;
+  return Boolean(el.closest(CHROME_SKIP_SEL));
+}
+
+function clientInElement(el: HTMLElement, clientX: number, clientY: number) {
+  const r = el.getBoundingClientRect();
+  return (
+    clientX >= r.left &&
+    clientX <= r.right &&
+    clientY >= r.top &&
+    clientY <= r.bottom
+  );
+}
+
+function stageContainsTarget(stage: HTMLElement, target: EventTarget | null) {
+  const node = target as Node | null;
+  if (!node) return false;
+  return node === stage || stage.contains(node);
+}
+
+function findFrameIdAtScene(
+  frames: any[] | undefined,
+  sceneX: number,
+  sceneY: number
+): string | null {
+  if (!Array.isArray(frames)) return null;
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    const f = frames[i];
+    if (!f || f.hidden) continue;
+    const fx = Number(f.x) || 0;
+    const fy = Number(f.y) || 0;
+    const fw = Math.max(1, Number(f.width) || 1);
+    const fh = Math.max(1, Number(f.height) || 1);
+    if (sceneX >= fx && sceneX <= fx + fw && sceneY >= fy && sceneY <= fy + fh) {
+      return String(f.id);
+    }
+  }
+  return null;
+}
+
+/**
+ * Canvas context menu — driven only by our pointer gestures (not browser
+ * `contextmenu`, whose coords are often 0/1 on touch). Native menu is suppressed.
+ *
+ * - mouse right button → open on pointerdown/mousedown
+ * - touch / coarse → long-press at down position
+ * - pointercancel after a long hold → open (browser stole the gesture)
+ */
 export function useCanvasContextMenu(args: UseCanvasContextMenuArgs) {
   const {
     readOnly,
@@ -46,170 +142,190 @@ export function useCanvasContextMenu(args: UseCanvasContextMenuArgs) {
   } = args;
   const dispatch = useDispatch();
 
+  const openedAtRef = useRef(0);
+  const cameraRef = useRef(camera);
+  const artboardRef = useRef(artboard);
+  const hitTestRef = useRef(hitTest);
+  const viewportElRef = useRef(viewportEl);
+  const stageElRef = useRef(stageEl);
+  const paperElRef = useRef(paperEl);
+  cameraRef.current = camera;
+  artboardRef.current = artboard;
+  hitTestRef.current = hitTest;
+  viewportElRef.current = viewportEl;
+  stageElRef.current = stageEl;
+  paperElRef.current = paperEl;
+
   useEffect(() => {
     const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
     if (readOnly || !hitEl) return undefined;
 
-    const skipSel =
-      '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar]';
-    const sceneComposerSel =
-      '[data-image-generator],[data-video-generator],[data-image-quick-edit]';
+    const coarse = prefersCoarsePointer();
+    let longPressTimer: number | null = null;
+    let longPress: LongPress | null = null;
 
-    let openedAt = 0;
-    let lastClientX = Number.NaN;
-    let lastClientY = Number.NaN;
-
-    const isBogusClient = (clientX: number, clientY: number) =>
-      !Number.isFinite(clientX) ||
-      !Number.isFinite(clientY) ||
-      (clientX <= 2 && clientY <= 2);
-
-    const clientInStage = (clientX: number, clientY: number) => {
-      const r = hitEl.getBoundingClientRect();
-      return (
-        clientX >= r.left &&
-        clientX <= r.right &&
-        clientY >= r.top &&
-        clientY <= r.bottom
-      );
-    };
-
-    const isChromeTarget = (target: EventTarget | null) => {
-      const el = target as HTMLElement | null;
-      if (!el?.closest) return false;
-      if (el.closest(sceneComposerSel)) return false;
-      return Boolean(el.closest(skipSel));
-    };
-
-    const noteClient = (clientX: number, clientY: number) => {
-      if (isBogusClient(clientX, clientY) || !clientInStage(clientX, clientY)) return;
-      lastClientX = clientX;
-      lastClientY = clientY;
+    const clearLongPress = () => {
+      if (longPressTimer != null) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      longPress = null;
     };
 
     const openMenuAt = (clientX: number, clientY: number) => {
       const p = pointerToWorld(
-        camera,
-        { viewportEl, stageEl, paperEl, artboard },
+        cameraRef.current,
+        {
+          viewportEl: viewportElRef.current,
+          stageEl: stageElRef.current,
+          paperEl: paperElRef.current,
+          artboard: artboardRef.current,
+        },
         clientX,
         clientY
       );
-      const id = hitTest(p.x, p.y, { clientX, clientY });
+      const id = hitTestRef.current(p.x, p.y, { clientX, clientY });
       const selected = selectedIdsRef.current;
       if (id && !selected.includes(id)) {
         dispatch(setSelectedNodeIds([id]));
         dispatch(setSelectedNodeId(id));
       }
+
       let frameId: string | null = activeFrameIdRef.current;
       if (!id) {
-        const frames = Array.isArray(documentRef.current?.frames)
-          ? documentRef.current.frames
-          : [];
-        for (let i = frames.length - 1; i >= 0; i -= 1) {
-          const f = frames[i];
-          if (!f || f.hidden) continue;
-          const fx = Number(f.x) || 0;
-          const fy = Number(f.y) || 0;
-          const fw = Math.max(1, Number(f.width) || 1);
-          const fh = Math.max(1, Number(f.height) || 1);
-          if (p.x >= fx && p.x <= fx + fw && p.y >= fy && p.y <= fy + fh) {
-            frameId = String(f.id);
-            if (!selected.length && !selectedFrameIdsRef.current.includes(frameId)) {
-              dispatch(setActiveFrameId(frameId));
-              dispatch(setSelectedNodeIds([]));
-              dispatch(setSelectedNodeId(null));
-            }
-            break;
+        const hitFrameId = findFrameIdAtScene(documentRef.current?.frames, p.x, p.y);
+        if (hitFrameId) {
+          frameId = hitFrameId;
+          if (!selected.length && !selectedFrameIdsRef.current.includes(hitFrameId)) {
+            dispatch(setActiveFrameId(hitFrameId));
+            dispatch(setSelectedNodeIds([]));
+            dispatch(setSelectedNodeId(null));
           }
         }
       }
+
+      const nodeId = id || (selected.length === 1 ? selected[0] : null);
       setCtxMenu({
         clientX,
         clientY,
         sceneX: p.x,
         sceneY: p.y,
-        nodeId: id || (selected.length === 1 ? selected[0] : null),
+        nodeId,
         frameId,
       });
     };
 
-    const openFromRightButton = (
-      clientX: number,
-      clientY: number,
-      target: EventTarget | null,
-      opts?: { allowOutsideStage?: boolean }
-    ) => {
-      if (performance.now() - openedAt < 400) return false;
-      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
-      if (!opts?.allowOutsideStage && !clientInStage(clientX, clientY)) return false;
-      if (isChromeTarget(target)) return false;
-      openedAt = performance.now();
+    const tryOpen = (clientX: number, clientY: number, target: EventTarget | null) => {
+      if (performance.now() - openedAtRef.current < OPEN_DEBOUNCE_MS) return;
+      if (isBogusClient(clientX, clientY)) return;
+      if (!clientInElement(hitEl, clientX, clientY)) return;
+      if (isChromeTarget(target)) return;
+      openedAtRef.current = performance.now();
       openMenuAt(clientX, clientY);
-      return true;
+    };
+
+    const startLongPress = (
+      pointerId: number,
+      x: number,
+      y: number,
+      target: EventTarget | null
+    ) => {
+      clearLongPress();
+      longPress = { pointerId, x, y, target, startedAt: performance.now() };
+      longPressTimer = window.setTimeout(() => {
+        const lp = longPress;
+        clearLongPress();
+        if (!lp) return;
+        tryOpen(lp.x, lp.y, lp.target);
+      }, LONG_PRESS_MS);
     };
 
     const onPointerMove = (e: PointerEvent) => {
-      noteClient(e.clientX, e.clientY);
+      if (!longPress || longPress.pointerId !== e.pointerId) return;
+      if (Math.hypot(e.clientX - longPress.x, e.clientY - longPress.y) > LONG_PRESS_MOVE_PX) {
+        clearLongPress();
+      }
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      noteClient(e.clientX, e.clientY);
-      if (e.button !== 2) return;
-      if (!clientInStage(e.clientX, e.clientY)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openFromRightButton(e.clientX, e.clientY, e.target);
-    };
-
-    const onMouseDown = (e: MouseEvent) => {
-      noteClient(e.clientX, e.clientY);
-      if (e.button !== 2) return;
-      if (!clientInStage(e.clientX, e.clientY)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openFromRightButton(e.clientX, e.clientY, e.target);
-    };
-
-    const onContextMenu = (e: MouseEvent) => {
-      const stageOk = clientInStage(e.clientX, e.clientY);
-      const hasLast = !isBogusClient(lastClientX, lastClientY);
-      const bogus = isBogusClient(e.clientX, e.clientY);
-      if (!stageOk && !(bogus && hasLast)) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      if (isChromeTarget(e.target)) return;
-
-      let clientX = bogus ? lastClientX : e.clientX;
-      let clientY = bogus ? lastClientY : e.clientY;
-      if (isBogusClient(clientX, clientY)) {
-        const r = hitEl.getBoundingClientRect();
-        clientX = r.left + r.width / 2;
-        clientY = r.top + r.height / 2;
+      if (isChromeTarget(e.target)) {
+        clearLongPress();
+        return;
       }
-      openFromRightButton(clientX, clientY, e.target, {
-        allowOutsideStage: bogus && hasLast,
-      });
+      if (isBogusClient(e.clientX, e.clientY) || !clientInElement(hitEl, e.clientX, e.clientY)) {
+        clearLongPress();
+        return;
+      }
+
+      if (e.button === 2) {
+        clearLongPress();
+        e.preventDefault();
+        e.stopPropagation();
+        tryOpen(e.clientX, e.clientY, e.target);
+        return;
+      }
+
+      if (e.button !== 0 || !isTouchLikePointer(e, coarse)) return;
+      startLongPress(e.pointerId, e.clientX, e.clientY, e.target);
+    };
+
+    /** Some hybrid drivers skip PointerEvent button=2 but still fire MouseEvent. */
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      if (isChromeTarget(e.target)) return;
+      if (isBogusClient(e.clientX, e.clientY) || !clientInElement(hitEl, e.clientX, e.clientY)) {
+        return;
+      }
+      clearLongPress();
+      e.preventDefault();
+      e.stopPropagation();
+      tryOpen(e.clientX, e.clientY, e.target);
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (longPress && e.pointerId === longPress.pointerId) clearLongPress();
+    };
+
+    const onPointerCancel = (e: PointerEvent) => {
+      if (!longPress) return;
+      if (longPress.pointerId !== e.pointerId && longPress.pointerId !== -1) return;
+      const lp = longPress;
+      const held = performance.now() - lp.startedAt;
+      clearLongPress();
+      if (held < CANCEL_OPEN_MIN_MS) return;
+      tryOpen(lp.x, lp.y, lp.target);
+    };
+
+    /** Suppress native menu only — never open from this event (coords often fake). */
+    const onContextMenu = (e: MouseEvent) => {
+      const onStage =
+        clientInElement(hitEl, e.clientX, e.clientY) ||
+        stageContainsTarget(hitEl, e.target) ||
+        isChromeTarget(e.target);
+      if (!onStage) return;
+      e.preventDefault();
+      e.stopPropagation();
     };
 
     window.addEventListener('pointermove', onPointerMove, { capture: true });
     window.addEventListener('pointerdown', onPointerDown, { capture: true });
     window.addEventListener('mousedown', onMouseDown, { capture: true });
+    window.addEventListener('pointerup', onPointerUp, { capture: true });
+    window.addEventListener('pointercancel', onPointerCancel, { capture: true });
     window.addEventListener('contextmenu', onContextMenu, { capture: true });
     return () => {
+      clearLongPress();
       window.removeEventListener('pointermove', onPointerMove, true);
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerCancel, true);
       window.removeEventListener('contextmenu', onContextMenu, true);
     };
   }, [
     activeFrameIdRef,
-    artboard,
-    camera,
     dispatch,
     documentRef,
-    hitTest,
     paperEl,
     readOnly,
     selectedFrameIdsRef,

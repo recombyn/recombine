@@ -65,6 +65,34 @@ function isVideoOnlyExport(document: any, ids: string[], hasCrop: boolean): bool
   return videos.length === ids.length && videos.length > 0;
 }
 
+function videoExportMode(format: VideoExportFormat): 'audio' | 'video' {
+  return format === 'mp3' ? 'audio' : 'video';
+}
+
+function videoExportCopy(
+  mode: 'audio' | 'video',
+  t: (key: string, opts?: Record<string, string>) => string
+) {
+  if (mode === 'audio') {
+    return {
+      loading: t('editor.videoToolbar.exportingAudio', { defaultValue: '正在导出音频…' }),
+      success: t('editor.exportedAudio', { defaultValue: '已导出音频' }),
+      fail: t('editor.videoToolbar.exportAudioFail', {
+        defaultValue: '音频导出失败（可能无音轨）',
+      }),
+    };
+  }
+  return {
+    loading: t('editor.videoToolbar.exporting', { defaultValue: '正在导出视频…' }),
+    success: t('editor.exportedVideo', { defaultValue: '已导出视频' }),
+    fail: t('editor.videoToolbar.downloadFail', { defaultValue: '下载失败' }),
+  };
+}
+
+function isAttrFlagTrue(value: unknown) {
+  return value === true || value === 'true';
+}
+
 const SCALE_OPTIONS = [
   { value: 0.5, label: '0.5x' },
   { value: 1, label: '1x' },
@@ -322,19 +350,10 @@ function ExportSelectionPanel({
       message.warning(t('editor.noSelectionExport'));
       return;
     }
-    const mode = videoFormat === 'mp3' ? 'audio' : 'video';
+    const mode = videoExportMode(videoFormat);
+    const copy = videoExportCopy(mode, t);
     setBusy(true);
-    const hideLoading = message.loading(
-      t(
-        mode === 'audio'
-          ? 'editor.videoToolbar.exportingAudio'
-          : 'editor.videoToolbar.exporting',
-        {
-          defaultValue: mode === 'audio' ? '正在导出音频…' : '正在导出视频…',
-        }
-      ),
-      0
-    );
+    const hideLoading = message.loading(copy.loading, 0);
     try {
       for (const node of nodes) {
         const attrs = node?.attrs || {};
@@ -348,31 +367,18 @@ function ExportSelectionPanel({
           cropH: attrs.cropH,
           trimStart: attrs.trimStart,
           trimEnd: attrs.trimEnd,
-          flipX: attrs.flipX === true || attrs.flipX === 'true',
-          flipY: attrs.flipY === true || attrs.flipY === 'true',
+          flipX: isAttrFlagTrue(attrs.flipX),
+          flipY: isAttrFlagTrue(attrs.flipY),
           mode,
         });
       }
       hideLoading();
-      message.success(
-        t(mode === 'audio' ? 'editor.exportedAudio' : 'editor.exportedVideo', {
-          defaultValue: mode === 'audio' ? '已导出音频' : '已导出视频',
-        })
-      );
+      message.success(copy.success);
       onClose?.();
     } catch (err) {
       hideLoading();
       console.warn('[export-video]', err);
-      message.error(
-        t(
-          mode === 'audio'
-            ? 'editor.videoToolbar.exportAudioFail'
-            : 'editor.videoToolbar.downloadFail',
-          {
-            defaultValue: mode === 'audio' ? '音频导出失败（可能无音轨）' : '下载失败',
-          }
-        )
-      );
+      message.error(copy.fail);
     } finally {
       setBusy(false);
     }
@@ -613,7 +619,7 @@ function ExportSelectionPopover({
   return (
     <>
       <Tooltip
-        title={t('editor.exportImage')}
+        tip={t('editor.exportImage')}
         placement="top"
         disabled={disabled || !canExport || open}
       >
@@ -656,7 +662,14 @@ function ExportSelectionPopover({
 type ExportMode = 'all' | 'selected';
 
 /** Top-bar Export: All Pages / Selected (PNG·JPG·SVG) + JSON. */
-function EditorTopExportButton({ className }: { className?: string }) {
+function EditorTopExportButton({
+  className,
+  iconOnly = false,
+}: {
+  className?: string;
+  /** Compact top bars — icon only, text stays in aria-label. */
+  iconOnly?: boolean;
+}) {
   const { t } = useTranslation();
   const document = useSelector((s: any) => s.editor.document);
   const selectedNodeIds = useSelector(
@@ -782,7 +795,8 @@ function EditorTopExportButton({ className }: { className?: string }) {
         aria-haspopup="menu"
         disabled={busy}
         className={cn(
-          'inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50',
+          'inline-flex h-8 items-center justify-center rounded-xl bg-[var(--surface)] text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50',
+          iconOnly ? 'w-8 px-0' : 'gap-1.5 px-3',
           className
         )}
         {...getReferenceProps({
@@ -799,7 +813,7 @@ function EditorTopExportButton({ className }: { className?: string }) {
         })}
       >
         <HiOutlineArrowUpTray className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-        {t('editor.export')}
+        {iconOnly ? null : t('editor.export')}
       </button>
 
       <FloatingPortal>
