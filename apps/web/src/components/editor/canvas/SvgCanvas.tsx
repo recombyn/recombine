@@ -188,6 +188,10 @@ const EMPTY_NODE_IDS: string[] = [];
 type SvgCanvasProps = {
   document: any;
   readOnly?: boolean;
+  /**
+   * Skip image/video-generator plates and process-shimmer (share preview / export-like view).
+   */
+  omitNonExportable?: boolean;
   reloadToken?: number;
   selectedNodeId?: string | null;
   selectedNodeIds?: string[];
@@ -219,6 +223,7 @@ type SvgCanvasProps = {
 function SvgCanvas({
   document,
   readOnly = false,
+  omitNonExportable = false,
   reloadToken = 0,
   selectedNodeId = null,
   selectedNodeIds = [],
@@ -458,14 +463,17 @@ function SvgCanvas({
     (board as any).loadSeq = seq;
     // Drop stale wrappers immediately so in-place preview cannot re-attach detached ghosts.
     board.nodeEls = new Map();
-    loadSceneOntoSvg(board.root, board.layer, document, seq, board as any, { infinite }).then(
+    loadSceneOntoSvg(board.root, board.layer, document, seq, board as any, {
+      infinite,
+      omitNonExportable,
+    }).then(
       (map) => {
         if (loadSeqRef.current !== seq) return;
         board.nodeEls = map || new Map();
         onReady?.();
       }
     );
-  }, [document, reloadToken, boardEpoch, onReady, infinite]);
+  }, [document, reloadToken, boardEpoch, onReady, infinite, omitNonExportable]);
 
   useEffect(() => {
     if (!documentPatchToken || geometryTransforming) return;
@@ -2662,7 +2670,6 @@ function SvgCanvas({
           <VideoNodeOverlay
             document={document}
             geometryOverrides={videoLiveGeom}
-            readOnly={readOnly}
           />
         ) : null}
         {/* Scene-space HTML overlays (selection / draw previews). Origin matches SVG. */}
@@ -2716,16 +2723,20 @@ function SvgCanvas({
             onTransformingChange={onGeometryTransformingChange}
           />
           <ImageProcessOverlay document={document} hidden={geometryTransforming} />
-          <ImageGeneratorOverlay
-            document={document}
-            hidden={geometryTransforming}
-            readOnly={readOnly}
-          />
-          <VideoGeneratorOverlay
-            document={document}
-            hidden={geometryTransforming}
-            readOnly={readOnly}
-          />
+          {!omitNonExportable ? (
+            <>
+              <ImageGeneratorOverlay
+                document={document}
+                hidden={geometryTransforming}
+                readOnly={readOnly}
+              />
+              <VideoGeneratorOverlay
+                document={document}
+                hidden={geometryTransforming}
+                readOnly={readOnly}
+              />
+            </>
+          ) : null}
           <ShapeDrawFeature
             enabled={shapeMode}
             shapeKind={shapeKind || 'rect'}

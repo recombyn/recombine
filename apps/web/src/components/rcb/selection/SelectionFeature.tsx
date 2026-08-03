@@ -3185,8 +3185,7 @@ function SelectionFeature({
       supportsCornerRadius(singleNodeData) &&
       !lineChrome &&
       !suppressChrome &&
-      !selectedIsImageGen &&
-      !selectedIsVideoGen ? (
+      !selectedIsImageGen ? (
         <CornerRadiusHandlesOverlay
           box={chromeUnion}
           angle={chromeAngle}

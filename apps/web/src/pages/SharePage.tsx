@@ -26,6 +26,8 @@ import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
 import {
   listSceneNodes,
   normalizeDocument,
+  documentForSharePreview,
+  isExportableSceneNode,
   stackZIndex,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
@@ -121,7 +123,7 @@ function framesBounds(frames: ArtboardFrame[]) {
   return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
 }
 
-/** Same as editor: artboards + scene nodes for zoom-to-fit. */
+/** Same as editor: artboards + finished scene nodes for zoom-to-fit (no generators). */
 function previewContentBounds(doc: any, frames: ArtboardFrame[]): SceneBox {
   let box: SceneBox | null = null;
   for (const f of frames) {
@@ -133,7 +135,7 @@ function previewContentBounds(doc: any, frames: ArtboardFrame[]): SceneBox {
     });
   }
   for (const { node } of listSceneNodes(doc)) {
-    if (!node) continue;
+    if (!isExportableSceneNode(node)) continue;
     const { left, top } = nodeLeftTop(doc, node);
     const w = Math.max(1, Number(node.width) || 0);
     const h = Math.max(1, Number(node.height) || 0);
@@ -182,8 +184,8 @@ function SharePage() {
 
   const canEdit = Boolean(record?.viewerCanEdit);
   const canView = Boolean(record?.viewerCanView);
-  /** Link ACL "Can download" — preview viewers without download stay view-only. */
-  const canDownload = record?.permission === 'download' || record?.permission === 'edit';
+  /** Anyone who can open the share may export finished scene content (same gate as editor inspect). */
+  const canExport = canView;
   const loginUrl = buildLoginUrl(location.pathname + location.search);
 
   const zoomAtStageCenter = useCallback((nextZoom: number) => {
@@ -349,7 +351,7 @@ function SharePage() {
         }
         setRecord(s);
         docFingerprintRef.current = shareDocumentFingerprint(s.document);
-        dispatch(setDocument(normalizeDocument(s.document)));
+        dispatch(setDocument(documentForSharePreview(normalizeDocument(s.document))));
         dispatch(setSelectedNodeIds([]));
         dispatch(setWorkspaceMode('dev'));
         dispatch(setActiveTool('select'));
@@ -386,7 +388,7 @@ function SharePage() {
           if (!fp || fp === docFingerprintRef.current) return;
           docFingerprintRef.current = fp;
           setRecord(s);
-          dispatch(applyCollabDocument(normalizeDocument(s.document)));
+          dispatch(applyCollabDocument(documentForSharePreview(normalizeDocument(s.document))));
         })
         .catch(() => undefined);
     };
@@ -492,7 +494,7 @@ function SharePage() {
         }}
       >
         <div className="pointer-events-auto flex items-center gap-2">
-          {canDownload ? <EditorTopExportButton /> : null}
+          {canExport ? <EditorTopExportButton /> : null}
           <button
             type="button"
             onClick={() => setInspectOpen((v) => !v)}
@@ -551,6 +553,7 @@ function SharePage() {
               selectedNodeId={selectedNodeId}
               selectedNodeIds={selectedNodeIds}
               readOnly
+              omitNonExportable
               embedded
               stageEl={stageEl}
             />
@@ -630,7 +633,10 @@ function SharePage() {
         </div>
 
         {inspectOpen ? (
-          <DevPropertiesPanel onClose={() => setInspectOpen(false)} />
+          <DevPropertiesPanel
+            onClose={() => setInspectOpen(false)}
+            allowExport={canExport}
+          />
         ) : null}
       </div>
     </div>
