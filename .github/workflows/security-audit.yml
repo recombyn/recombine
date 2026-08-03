@@ -6,6 +6,7 @@ on:
     paths:
       - 'package.json'
       - 'package-lock.json'
+      - 'apps/*/package.json'
       - 'apps/api/pyproject.toml'
       - 'packages/scene-builder-py/pyproject.toml'
       - '.github/workflows/security-audit.yml'
@@ -13,6 +14,7 @@ on:
     paths:
       - 'package.json'
       - 'package-lock.json'
+      - 'apps/*/package.json'
       - 'apps/api/pyproject.toml'
       - 'packages/scene-builder-py/pyproject.toml'
       - '.github/workflows/security-audit.yml'
@@ -36,7 +38,10 @@ jobs:
         run: npm ci
 
       - name: npm audit (high+)
-        run: npm audit --audit-level=high
+        # Official GHSA-qwww-vcr4-c8h2 is patched in react-router >=7.18.2, but the
+        # npm advisory DB still lists the pre-backport range (<8.3.0). Allowlist
+        # until the registry catches up; drop when npm audit stops flagging 7.18.2+.
+        run: npx --yes audit-ci@7 --high --allowlist GHSA-qwww-vcr4-c8h2
 
   pip-audit:
     runs-on: ubuntu-latest

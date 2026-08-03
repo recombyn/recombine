@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
-import 'virtual:svg-icons-register';
+import 'virtual:svg-icons/register';
 import '@/i18n';
 import '@/theme/light.css';
 import '@/theme/dark.css';
