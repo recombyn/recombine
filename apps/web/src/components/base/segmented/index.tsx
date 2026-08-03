@@ -208,7 +208,7 @@ function SegmentedControl<T extends string = string>({
         return (
           <Tooltip
             key={opt.value}
-            title={opt.title}
+            tip={opt.title}
             placement="top"
             asChild
             triggerClassName={cn('inline-flex', fullWidth && 'min-w-0 flex-1')}

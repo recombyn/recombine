@@ -19,7 +19,7 @@ function ImageFullscreenPreviewButton({
   return (
     <>
       <Tooltip
-        title={t('editor.fullscreenPreview', { defaultValue: '全屏预览' })}
+        tip={t('editor.fullscreenPreview', { defaultValue: '全屏预览' })}
         placement="top"
       >
         <button

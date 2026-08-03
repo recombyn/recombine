@@ -1119,10 +1119,10 @@ const AGENT_DOCK_MAX_W = 560;
 const AGENT_DOCK_DEFAULT_W = 360;
 
 function clampAgentDockWidth(width: number): number {
-  const viewportCap =
-    typeof window !== 'undefined'
-      ? Math.max(AGENT_DOCK_MIN_W, window.innerWidth - 360)
-      : AGENT_DOCK_MAX_W;
+  let viewportCap = AGENT_DOCK_MAX_W;
+  if (typeof window !== 'undefined') {
+    viewportCap = Math.max(AGENT_DOCK_MIN_W, window.innerWidth - 360);
+  }
   return Math.min(
     AGENT_DOCK_MAX_W,
     viewportCap,
@@ -2160,7 +2160,8 @@ function AgentDock({
   /** Cursor-like: edit a past user message in-place. */
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
-  const [dockWidth, setDockWidth] = useState(AGENT_DOCK_DEFAULT_W);
+  // First paint must use stored width — a later setState(360→stored) reflows the stage.
+  const [dockWidth, setDockWidth] = useState(readStoredAgentDockWidth);
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const currentId = useSelector((s: any) => s.editor.currentId as string | null);
   const canvasAttachPick = useSelector(
@@ -2220,11 +2221,6 @@ function AgentDock({
     const fid = taskState?.canvas?.last_agent_frame_id;
     if (fid) lastAgentFrameIdRef.current = String(fid);
   }, [sessionId, taskState?.canvas?.last_agent_frame_id]);
-
-  useEffect(() => {
-    setDockWidth(readStoredAgentDockWidth());
-  }, []);
-
 
   useEffect(() => {
     void fetchDesignCatalog()

@@ -162,7 +162,7 @@ function MultiAngleToolPanel({
                 const label = angleLabel(preset.key);
                 const tip = `${label}  ${preset.rotate}° / ${preset.tilt}°`;
                 return (
-                  <Tooltip key={preset.key} title={tip} placement="top">
+                  <Tooltip key={preset.key} tip={tip} placement="top">
                     <button
                       type="button"
                       aria-label={tip}
