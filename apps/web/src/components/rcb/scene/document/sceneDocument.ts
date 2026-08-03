@@ -850,6 +850,33 @@ export function isExportableSceneNode(node: any): boolean {
   return true;
 }
 
+/**
+ * Share / public preview: drop generator plates and process-shimmer so viewers
+ * only see finished scene content (same filter as export / cover).
+ */
+export function documentForSharePreview(doc: any): any {
+  if (!doc?.deltaSetLike?.ROOT) return doc;
+  const delta = doc.deltaSetLike;
+  const keepId = (id: string) => isExportableSceneNode(delta[id]);
+  const rootChildren = Array.isArray(delta.ROOT.children)
+    ? delta.ROOT.children.filter(keepId)
+    : [];
+  const pages = Array.isArray(doc.pages)
+    ? doc.pages.map((p: any) => ({
+        ...p,
+        children: Array.isArray(p.children) ? p.children.filter(keepId) : p.children,
+      }))
+    : doc.pages;
+  return {
+    ...doc,
+    pages,
+    deltaSetLike: {
+      ...delta,
+      ROOT: { ...delta.ROOT, children: rootChildren },
+    },
+  };
+}
+
 /** True while an image job (upload / remove-bg / …) shows the loading shimmer. */
 export function isImageProcessRunning(node: any): boolean {
   return Boolean(node) && String(node?.attrs?.processStatus || '') === 'running';
@@ -1837,7 +1864,7 @@ export function supportsSideStroke(node: any) {
 /** Nodes that expose corner-radius toolbar + on-canvas handles. */
 export function supportsCornerRadius(node: any) {
   if (!node) return false;
-  if (node.key === 'rect' || node.key === 'image' || node.key === 'video') return true;
+  if (node.key === 'rect' || node.key === 'image') return true;
   if (node.key === 'path') {
     return isClosedPathAttrs(node.attrs);
   }

@@ -182,10 +182,19 @@ export function videoMediaFromElement(el: HTMLVideoElement): VideoMediaControl {
   };
 }
 
-/** Chrome scale from node screen width so the bar shrinks/grows with the node. */
+/**
+ * Content scale from node **screen** width (CSS px).
+ * Fullscreen / non-camera players pass `getBoundingClientRect().width` directly.
+ */
 export function videoPlaybackBarScale(screenWidth: number): number {
   const w = Math.max(1, screenWidth);
-  return Math.min(1.25, Math.max(0.85, w / 280));
+  return Math.min(1.25, Math.max(0.5, w / 280));
+}
+
+/** Scene-space scale for chrome under camera zoom (screen-constant size). */
+export function videoPlaybackBarSceneScale(sceneWidth: number, zoom: number): number {
+  const z = Math.max(0.05, zoom || 1);
+  return videoPlaybackBarScale(Math.max(1, sceneWidth) * z) / z;
 }
 
 /**
@@ -241,7 +250,7 @@ function VideoPlaybackBar({
   const [volOpen, setVolOpen] = useState(false);
 
   const mediaDuration = known > 0 ? known : fallbackDuration;
-  const s = Math.max(0.85, Number(scale) || 1);
+  const s = Math.max(0.05, Number(scale) || 1);
   const trimWindow = resolveTrimWindow(mediaDuration, trimStart, trimEnd);
   const playable = Math.max(0, trimWindow.end - trimWindow.start);
   trimWindowRef.current = trimWindow;

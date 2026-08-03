@@ -11,7 +11,6 @@ import { useSelector } from 'react-redux';
 import { useRcbCamera } from '@/components/rcb';
 import {
   isNodeHidden,
-  isVideoGeneratorNode,
   isVideoNode,
   stackZIndex,
 } from '@/components/rcb/scene/document/sceneDocument';
@@ -59,12 +58,10 @@ function VideoZoomSync({ onZoom }: { onZoom: (zoom: number) => void }) {
 function VideoNodeOverlay({
   document,
   hidden,
-  readOnly,
   geometryOverrides = null,
 }: {
   document: any;
   hidden?: boolean;
-  readOnly?: boolean;
   /** Live drag/resize boxes — same scene space as selection chrome. */
   geometryOverrides?: Record<string, VideoGeomOverride> | null;
 }): ReactNode {
@@ -82,8 +79,7 @@ function VideoNodeOverlay({
     const children: string[] = document?.deltaSetLike?.ROOT?.children || [];
     return children.filter((id) => {
       const node = document?.deltaSetLike?.[id];
-      if (!node || isVideoGeneratorNode(node)) return false;
-      if (!isVideoNode(node) && node.key !== 'video') return false;
+      if (!isVideoNode(node)) return false;
       return Boolean(String(node?.attrs?.src || '').trim());
     });
   }, [document]);
@@ -135,8 +131,7 @@ function VideoNodeOverlay({
             uploadKey={
               String(node.attrs?.uploadKey || node.attrs?.key || '').trim() || null
             }
-            disabled={readOnly || cropSession}
-            hidden={Boolean(hidden) || trimOpen || layerHidden}
+            hidden={Boolean(hidden) || trimOpen || layerHidden || cropSession}
             trimStart={readOptionalNumber(node.attrs?.trimStart)}
             trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
             knownDuration={readOptionalNumber(node.attrs?.duration)}

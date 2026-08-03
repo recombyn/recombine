@@ -9,7 +9,7 @@ import {
 import { usePlayableVideoSrc } from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
 import VideoPlaybackBar, {
   videoMediaFromElement,
-  videoPlaybackBarScale,
+  videoPlaybackBarSceneScale,
   type VideoMediaControl,
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import { VideoFullscreenPreview } from '@/components/editor/nodes/VideoNode/VideoFullscreenPreviewButton';
@@ -68,12 +68,10 @@ type VideoHoverPlaybackProps = {
   nodeId: string;
   scenePlate: ScenePlate;
   zoom: number;
-  angle?: number;
   stackZ?: number;
   src: string;
   poster?: string;
   uploadKey?: string | null;
-  disabled?: boolean;
   hidden?: boolean;
   flipX?: boolean;
   flipY?: boolean;
@@ -100,7 +98,6 @@ function VideoHoverPlayback({
   src,
   poster,
   uploadKey,
-  disabled,
   hidden,
   trimStart,
   trimEnd,
@@ -132,7 +129,7 @@ function VideoHoverPlayback({
     at: 0,
   }));
   const playSrc = usePlayableVideoSrc(src, uploadKey);
-  const showUi = !hidden && !disabled;
+  const showUi = !hidden;
   const z = Math.max(0.05, zoom || 1);
   const posterUrl = String(poster || '').trim();
   freezeUrlRef.current = freeze.url;
@@ -301,6 +298,7 @@ function VideoHoverPlayback({
   const showStill = !playing && freezeMatches;
   const showVideo = playing || !showStill;
   const barVisible = showUi && (plateHovered || barHovered || playing);
+  const barScale = videoPlaybackBarSceneScale(scenePlate.width, z);
 
   return (
     <div
@@ -373,9 +371,9 @@ function VideoHoverPlayback({
           trimStart={trimStart}
           trimEnd={trimEnd}
           knownDuration={knownDuration}
-          scale={videoPlaybackBarScale(scenePlate.width)}
+          scale={barScale}
           onFullscreen={() => setFsOpen(true)}
-          className="pointer-events-auto absolute inset-x-0 bottom-0"
+          className="pointer-events-auto absolute inset-x-0 bottom-0 z-[2]"
           onHoverChange={setBarHovered}
         />
       ) : null}
@@ -410,7 +408,6 @@ function propsEqual(prev: VideoHoverPlaybackProps, next: VideoHoverPlaybackProps
     prev.src === next.src &&
     prev.poster === next.poster &&
     prev.uploadKey === next.uploadKey &&
-    prev.disabled === next.disabled &&
     prev.hidden === next.hidden &&
     prev.trimStart === next.trimStart &&
     prev.trimEnd === next.trimEnd &&
