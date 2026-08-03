@@ -4,6 +4,7 @@ import { RcbOverlayPortal } from '@/components/rcb';
 import { isImageGeneratorNode } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import ImageGeneratorCard from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorCard';
+import { EMPTY_ID_LIST } from '@/store/modules/editor';
 
 /**
  * Screen-space Image Generator composers for every generator plate on the canvas.
@@ -20,7 +21,7 @@ function ImageGeneratorOverlay({
   readOnly?: boolean;
 }): ReactNode {
   const selectedNodeIds: string[] = useSelector(
-    (state: any) => state.editor.selectedNodeIds || []
+    (state: any) => (state.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
   );
   const canvasAttachPick = useSelector(
     (state: any) => state.editor.canvasAttachPick as null | { target: string }

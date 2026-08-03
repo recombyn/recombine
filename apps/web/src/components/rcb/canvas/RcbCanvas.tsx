@@ -235,14 +235,16 @@ function RcbCanvas({
       if (cancelled) return;
       const stage = stageRef.current || viewportEl;
       if (!stage) return;
-      const r = stage.getBoundingClientRect();
-      if (r.width < 40 || r.height < 40) {
+      const vw = stage.clientWidth;
+      const vh = stage.clientHeight;
+      if (vw < 40 || vh < 40) {
         // Stage not laid out yet — retry a few frames.
         if (tries++ < 30) requestAnimationFrame(applyFit);
         return;
       }
       fittedKey.current = key;
-      onCameraChange(rcbFitCamera({ width: r.width, height: r.height }, artboard));
+      // clientWidth/Height match camera.x/y layout space (not visual getBoundingClientRect).
+      onCameraChange(rcbFitCamera({ width: vw, height: vh }, artboard));
     };
     applyFit();
     return () => {
@@ -310,9 +312,20 @@ function RcbCanvas({
       const cam = cameraRef.current;
       markCameraMoving();
 
+      let deltaX = e.deltaX;
+      let deltaY = e.deltaY;
+      // Normalize line/page deltas so trackpads don't pan/zoom by huge jumps.
+      if (e.deltaMode === 1) {
+        deltaX *= 16;
+        deltaY *= 16;
+      } else if (e.deltaMode === 2) {
+        deltaX *= el.clientWidth;
+        deltaY *= el.clientHeight;
+      }
+
       if (e.ctrlKey || e.metaKey) {
         onCameraChange(
-          rcbZoomAtPoint(cam, cam.zoom * (e.deltaY > 0 ? 0.92 : 1.08), local.x, local.y)
+          rcbZoomAtPoint(cam, cam.zoom * (deltaY > 0 ? 0.92 : 1.08), local.x, local.y)
         );
         return;
       }
@@ -320,8 +333,8 @@ function RcbCanvas({
       const sy = local.scaleY > 0 ? local.scaleY : 1;
       onCameraChange({
         ...cam,
-        x: cam.x - e.deltaX / sx,
-        y: cam.y - e.deltaY / sy,
+        x: cam.x - deltaX / sx,
+        y: cam.y - deltaY / sy,
       });
     };
 

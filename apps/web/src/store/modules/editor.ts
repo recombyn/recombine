@@ -92,6 +92,9 @@ function touchOpened(item: any) {
 
 const templates = loadTemplates();
 
+/** Stable empty id list for useSelector fallbacks (avoid `|| []` new refs). */
+export const EMPTY_ID_LIST: string[] = [];
+
 const initialState = {
   templates,
   currentId: null as string | null,

@@ -15,7 +15,7 @@ import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import { ImageToolSep, imageToolBtn } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
 import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
-import { closeVideoToolPanel, setDocument, setSelectedNodeId, setSelectedNodeIds } from '@/store/modules/editor';
+import { closeVideoToolPanel, setDocument, setSelectedNodeId, setSelectedNodeIds, EMPTY_ID_LIST } from '@/store/modules/editor';
 import { addNodeToDocument } from '@/components/rcb/scene/document/sceneDocument';
 import { message, Tooltip } from '@/components/base';
 import { nanoid } from 'nanoid';
@@ -266,7 +266,9 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
         keepTime?: number;
       }
   );
-  const selectedNodeIds = useSelector((s: any) => (s.editor.selectedNodeIds || []) as string[]);
+  const selectedNodeIds = useSelector(
+    (s: any) => (s.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
+  );
   const open = panel?.kind === 'trim';
   const nodeId = open ? panel!.nodeId : '';
   const node = nodeId ? document?.deltaSetLike?.[nodeId] : null;

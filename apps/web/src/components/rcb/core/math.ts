@@ -139,11 +139,14 @@ export function rcbZoomAtPoint(
   return { zoom: z1, x: localX - sceneX * z1, y: localY - sceneY * z1 };
 }
 
-/** Fit scene bounds into the viewport (e.g. document open). */
+/** Fit scene bounds into the viewport (e.g. document open / Shift+1). */
 export function rcbFitCamera(
   viewport: { width: number; height: number },
   bounds: { x?: number; y?: number; width: number; height: number },
-  padding = 72
+  /** Screen-px margin around content. */
+  padding = 120,
+  /** Cap so small scenes do not fill the whole stage. */
+  maxZoom = 0.85
 ): RcbCamera {
   const vw = Math.max(1, viewport.width);
   const vh = Math.max(1, viewport.height);
@@ -151,7 +154,11 @@ export function rcbFitCamera(
   const ah = Math.max(1, bounds.height);
   const ox = bounds.x || 0;
   const oy = bounds.y || 0;
-  const zoom = rcbClampZoom(Math.min((vw - padding * 2) / aw, (vh - padding * 2) / ah, 1));
+  const pad = Math.max(0, padding);
+  const cap = Math.max(0.05, Math.min(8, maxZoom));
+  const zoom = rcbClampZoom(
+    Math.min((vw - pad * 2) / aw, (vh - pad * 2) / ah, cap)
+  );
   return {
     zoom,
     x: (vw - aw * zoom) / 2 - ox * zoom,

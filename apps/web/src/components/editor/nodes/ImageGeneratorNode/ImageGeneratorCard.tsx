@@ -65,6 +65,7 @@ import {
   patchDocumentNode,
   setDocumentFromCanvas,
   startCanvasAttachPick,
+  EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 import { FREE_IMAGE_MODEL_ID } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
@@ -445,10 +446,10 @@ function ImageGeneratorCard({
   const pickTarget = `node:${nodeId}`;
   const pickingFromCanvas = canvasAttachPick?.target === pickTarget;
   const selectedNodeIds = useSelector(
-    (state: any) => (state.editor?.selectedNodeIds || []) as string[]
+    (state: any) => (state.editor?.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
   );
   const selectedFrameIds = useSelector(
-    (state: any) => (state.editor?.selectedFrameIds || []) as string[]
+    (state: any) => (state.editor?.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
 
   const [prompt, setPrompt] = useState('');
