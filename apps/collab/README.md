@@ -19,6 +19,7 @@ Env (must match `apps/api`):
 
 API: `COLLAB_PUBLIC_WS_URL=ws://127.0.0.1:1234`  
 Web: `VITE_COLLAB_ENABLED=true` or editor `?collab=1` (Vite DEV also defaults on).
+Offline: web also mounts `y-indexeddb` on the same room id ([docs](https://docs.yjs.dev/getting-started/allowing-offline-editing)).
 
 ## Docker / production (WSS)
 

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, memo } from 'react';
+import { useEffect, useMemo, useRef, useState, memo, type PointerEvent as ReactPointerEvent } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { nodeLeftTop, previewSvgNodeCornerRadii } from '@/components/rcb/scene/paint/sceneToSvg';
 import ImageReplaceCornerButton from '@/components/editor/nodes/ImageNode/ImageReplaceCornerButton';
 import ImageVariantsOverlay from '@/components/editor/nodes/ImageNode/ImageVariantsOverlay';
 import VideoReplaceCornerButton from '@/components/editor/nodes/VideoNode/VideoReplaceCornerButton';
@@ -41,6 +41,7 @@ import SpacingInspectOverlay, {
   boxesInvolvedInGuides,
   computeMoveMarginResult,
   SPACING_MEASURE_COLOR,
+  SPACING_SIZE_BADGE_COLOR,
   type SpacingMeasure,
 } from './SpacingInspectOverlay';
 import { resizeFromHandle, rotateBoxesAround, scaleBoxesToUnion, unionOfBoxes, type ResizeHandle } from './resizeGeometry';
@@ -58,8 +59,22 @@ import {
   isNodeLocked,
   listImageVariantUrls,
   nodeIdsInsideFrames,
+  supportsCornerRadius,
   supportsFill,
 } from '@/components/rcb/scene/document/sceneDocument';
+import {
+  clampCornerRadii,
+  cornerVertexCount,
+  isRadiusLinked,
+  radiiFromAttrs,
+  serializeRadiusVertices,
+  sharpCornerSitesForNode,
+  parseRadiusVertices,
+  vertexRadiiFromAttrs,
+  type CornerKey,
+  type CornerRadii,
+  type SharpCornerSite,
+} from '@/components/rcb/scene/document/sceneRadii';
 import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/document/sceneEffects';
 import { geometryIndicatorPathD, isEditablePathNode } from '@/components/rcb/scene/paint/outlineToPath';
 import { patchDocumentNode, setDevHoverNodeId } from '@/store/modules/editor';
@@ -69,8 +84,590 @@ import {
   parseNodeTextStyle,
 } from '@/components/rcb/scene/document/sceneText';
 import type { TextResizeMode } from '@/components/rcb/scene/paint/svgToScene';
+import { useTranslation } from 'react-i18next';
+import { getShapeHost, getSharedNodeEls } from '@/components/rcb/shapes/shapeHostRegistry';
 
 const CORNER_HANDLES = new Set<ResizeHandle>(['nw', 'ne', 'sw', 'se']);
+
+const RADIUS_CORNERS: Array<{
+  key: CornerKey;
+  /** Inward unit in local box space. */
+  ix: number;
+  iy: number;
+  cx: 0 | 1;
+  cy: 0 | 1;
+}> = [
+  { key: 'tl', ix: 1, iy: 1, cx: 0, cy: 0 },
+  { key: 'tr', ix: -1, iy: 1, cx: 1, cy: 0 },
+  { key: 'br', ix: -1, iy: -1, cx: 1, cy: 1 },
+  { key: 'bl', ix: 1, iy: -1, cx: 0, cy: 1 },
+];
+
+function scenePointToLocal(
+  sceneX: number,
+  sceneY: number,
+  box: SceneBox,
+  angleDeg: number
+): { x: number; y: number } {
+  const cx = box.left + box.width / 2;
+  const cy = box.top + box.height / 2;
+  const dx = sceneX - cx;
+  const dy = sceneY - cy;
+  if (Math.abs(angleDeg) < 0.001) {
+    return { x: dx + box.width / 2, y: dy + box.height / 2 };
+  }
+  const rad = (-angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    x: dx * cos - dy * sin + box.width / 2,
+    y: dx * sin + dy * cos + box.height / 2,
+  };
+}
+
+function localPointToScene(
+  lx: number,
+  ly: number,
+  box: SceneBox,
+  angleDeg: number
+): { x: number; y: number } {
+  const cx = box.width / 2;
+  const cy = box.height / 2;
+  const dx = lx - cx;
+  const dy = ly - cy;
+  if (Math.abs(angleDeg) < 0.001) {
+    return { x: box.left + lx, y: box.top + ly };
+  }
+  const rad = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    x: box.left + cx + dx * cos - dy * sin,
+    y: box.top + cy + dx * sin + dy * cos,
+  };
+}
+
+function patchNodeCornerRadii(opts: {
+  dispatch: (a: unknown) => void;
+  nodeId: string;
+  node: any;
+  radii: CornerRadii;
+  linked: boolean;
+  /** When set, written as radiusVertices (sharp-corner list for paths). */
+  vertices?: number[];
+  skipHistory?: boolean;
+}) {
+  const { dispatch, nodeId, node, radii, linked, skipHistory } = opts;
+  const clamped = clampCornerRadii(radii, Number(node.width) || 1, Number(node.height) || 1);
+  const count = cornerVertexCount(node);
+  const vertices =
+    opts.vertices && opts.vertices.length
+      ? opts.vertices.map((v) => Math.max(0, Math.round(v)))
+      : linked
+        ? Array.from({ length: count }, () => Math.round(clamped.tl))
+        : vertexRadiiFromAttrs(
+            {
+              radiusTL: clamped.tl,
+              radiusTR: clamped.tr,
+              radiusBR: clamped.br,
+              radiusBL: clamped.bl,
+              radiusLinked: 'false',
+            },
+            count
+          );
+  dispatch(
+    patchDocumentNode({
+      nodeId,
+      skipHistory: Boolean(skipHistory),
+      patch: {
+        attrs: {
+          radiusTL: Math.max(0, Math.round(clamped.tl)),
+          radiusTR: Math.max(0, Math.round(clamped.tr)),
+          radiusBR: Math.max(0, Math.round(clamped.br)),
+          radiusBL: Math.max(0, Math.round(clamped.bl)),
+          radiusLinked: linked ? 'true' : 'false',
+          radiusVertices: serializeRadiusVertices(vertices),
+        },
+      },
+    })
+  );
+}
+
+type RadiusHandleDrag =
+  | {
+      mode: 'box';
+      corner: CornerKey;
+      startRadii: CornerRadii;
+      linked: boolean;
+      solo: boolean;
+    }
+  | {
+      mode: 'path';
+      sharpIndex: number;
+      startVertices: number[];
+      linked: boolean;
+      solo: boolean;
+      site: SharpCornerSite;
+    };
+
+/**
+ * Figma-style corner-radius dots: appear near corners, drag inward to round.
+ * Path shapes use sharp polyline corners (not the AABB), so boolean cutouts
+ * get handles on real corners only — not along arc samples.
+ */
+function CornerRadiusHandlesOverlay({
+  box,
+  angle,
+  nodeId,
+  node,
+  toScene,
+  stageEl,
+  interactive = true,
+}: {
+  box: SceneBox;
+  angle: number;
+  nodeId: string;
+  node: any;
+  toScene: (clientX: number, clientY: number) => { x: number; y: number };
+  stageEl: HTMLElement | null;
+  /** False while moving/resizing so dots follow chrome without stealing pointers. */
+  interactive?: boolean;
+}) {
+  const { t } = useTranslation();
+  const dispatch = useDispatch();
+  const camera = useRcbCamera();
+  const z = Math.max(0.05, camera.zoom || 1);
+  const inv = 1 / z;
+  const [nearCorners, setNearCorners] = useState(false);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [dragValue, setDragValue] = useState<number | null>(null);
+  const dragRef = useRef<RadiusHandleDrag | null>(null);
+
+  const w = Math.max(1, box.width);
+  const h = Math.max(1, box.height);
+  const maxR = Math.min(w, h) / 2;
+  const baseRadii = clampCornerRadii(radiiFromAttrs(node?.attrs), w, h);
+  const linked = isRadiusLinked(node?.attrs);
+  const pathSites = sharpCornerSitesForNode(node);
+  const usePath = Boolean(pathSites && pathSites.length > 0);
+  const pathVertexCount = usePath ? pathSites!.length : 0;
+  const pathVertices = usePath
+    ? (() => {
+        const stored = parseRadiusVertices(node?.attrs?.radiusVertices);
+        if (stored.length === pathVertexCount) return stored;
+        const u = Math.round(
+          (baseRadii.tl + baseRadii.tr + baseRadii.br + baseRadii.bl) / 4
+        );
+        return Array.from({ length: pathVertexCount }, () =>
+          stored.length ? stored[0] ?? u : u
+        );
+      })()
+    : [];
+
+  // Sit on the quarter-round mid-arc so the dot tracks R while dragging.
+  // Keep a screen-constant minimum so small R clears resize knobs.
+  const padPx = 24;
+  const arcFactor = 1 - Math.SQRT1_2; // ~0.2929 — mid-arc from each edge
+  const visualPx = 11;
+  const hitPx = 28;
+  const revealDist = 56;
+
+  const radiusHandleInset = (r: number) => {
+    const arcInset = Math.max(0, r) * arcFactor;
+    const minInset = padPx * inv;
+    return Math.min(Math.max(arcInset, minInset), Math.min(w, h) / 2 - 1);
+  };
+
+  const boxHandleScenePos = (corner: (typeof RADIUS_CORNERS)[number], r: number) => {
+    const inset = radiusHandleInset(r);
+    const lx = corner.cx === 0 ? inset : w - inset;
+    const ly = corner.cy === 0 ? inset : h - inset;
+    return localPointToScene(lx, ly, box, angle);
+  };
+
+  const pathHandleScenePos = (site: SharpCornerSite, r: number) => {
+    // Axis inset → distance along inward bisector (90° mid-arc ≈ inset√2).
+    const along = radiusHandleInset(r) * Math.SQRT2;
+    return localPointToScene(site.x + site.ix * along, site.y + site.iy * along, box, angle);
+  };
+
+  const radiusAlongBoxCorner = (
+    corner: (typeof RADIUS_CORNERS)[number],
+    local: { x: number; y: number }
+  ) => {
+    const cornerLx = corner.cx * w;
+    const cornerLy = corner.cy * h;
+    const len = Math.hypot(corner.ix, corner.iy) || 1;
+    const along =
+      (local.x - cornerLx) * (corner.ix / len) + (local.y - cornerLy) * (corner.iy / len);
+    return Math.max(0, Math.min(maxR, along));
+  };
+
+  const radiusAlongPathSite = (site: SharpCornerSite, local: { x: number; y: number }) => {
+    const along = (local.x - site.x) * site.ix + (local.y - site.y) * site.iy;
+    return Math.max(0, Math.min(maxR, along));
+  };
+
+  const previewRadiiOnHost = (radii: CornerRadii, vertices?: number[]) => {
+    const hostEl = getSharedNodeEls()?.get(nodeId) || getShapeHost(nodeId)?.el;
+    if (!hostEl) return;
+    const map = getSharedNodeEls() || new Map<string, SVGElement>([[nodeId, hostEl]]);
+    if (!map.has(nodeId)) map.set(nodeId, hostEl);
+    const shapeType = String(
+      node?.attrs?.shapeType || (node?.key === 'path' ? 'path' : node?.key) || 'rect'
+    );
+    const attrs = {
+      ...(node?.attrs || {}),
+      radiusTL: radii.tl,
+      radiusTR: radii.tr,
+      radiusBR: radii.br,
+      radiusBL: radii.bl,
+      radiusLinked: linked ? 'true' : 'false',
+      ...(vertices ? { radiusVertices: serializeRadiusVertices(vertices) } : {}),
+    };
+    previewSvgNodeCornerRadii(map, nodeId, {
+      width: Number(node?.width) || w,
+      height: Number(node?.height) || h,
+      shapeType,
+      radii,
+      attrs,
+    });
+  };
+
+  useEffect(() => {
+    if (!stageEl || !interactive) return undefined;
+    const onMove = (e: PointerEvent) => {
+      if (dragRef.current) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('[data-radius-handle]')) {
+        setNearCorners(true);
+        return;
+      }
+      const sc = toScene(e.clientX, e.clientY);
+      const local = scenePointToLocal(sc.x, sc.y, box, angle);
+      let best = Infinity;
+      if (usePath && pathSites) {
+        for (const site of pathSites) {
+          const r = pathVertices[site.sharpIndex] ?? 0;
+          const seat = pathHandleScenePos(site, r);
+          best = Math.min(
+            best,
+            Math.hypot((sc.x - seat.x) * z, (sc.y - seat.y) * z),
+            Math.hypot((local.x - site.x) * z, (local.y - site.y) * z)
+          );
+        }
+      } else {
+        for (const c of RADIUS_CORNERS) {
+          const dx = (local.x - c.cx * w) * z;
+          const dy = (local.y - c.cy * h) * z;
+          best = Math.min(best, Math.hypot(dx, dy));
+          const seat = radiusHandleInset(0);
+          const seatLx = c.cx === 0 ? seat : w - seat;
+          const seatLy = c.cy === 0 ? seat : h - seat;
+          best = Math.min(best, Math.hypot((local.x - seatLx) * z, (local.y - seatLy) * z));
+        }
+      }
+      setNearCorners(best <= revealDist);
+    };
+    const onLeave = () => {
+      if (!dragRef.current) setNearCorners(false);
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    stageEl.addEventListener('pointerleave', onLeave);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      stageEl.removeEventListener('pointerleave', onLeave);
+    };
+  }, [
+    stageEl,
+    interactive,
+    box,
+    angle,
+    w,
+    h,
+    z,
+    toScene,
+    revealDist,
+    usePath,
+    pathSites,
+    pathVertices,
+  ]);
+
+  useEffect(() => {
+    if (!interactive) return undefined;
+
+    const commitPathRadii = (
+      vertices: number[],
+      linkedNext: boolean,
+      skipHistory: boolean
+    ) => {
+      const u = vertices[0] ?? 0;
+      patchNodeCornerRadii({
+        dispatch,
+        nodeId,
+        node,
+        radii: { tl: u, tr: u, br: u, bl: u },
+        linked: linkedNext,
+        vertices,
+        skipHistory,
+      });
+    };
+
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const sc = toScene(e.clientX, e.clientY);
+      const local = scenePointToLocal(sc.x, sc.y, box, angle);
+      if (d.mode === 'path') {
+        const rounded = Math.round(radiusAlongPathSite(d.site, local));
+        const next = d.solo
+          ? d.startVertices.map((v, i) => (i === d.sharpIndex ? rounded : v))
+          : d.startVertices.map(() => rounded);
+        setDragValue(rounded);
+        // DOM preview only — Redux remount mid-drag leaves ghost shadows.
+        const u = next[0] ?? rounded;
+        previewRadiiOnHost(
+          d.solo
+            ? { tl: u, tr: u, br: u, bl: u }
+            : { tl: rounded, tr: rounded, br: rounded, bl: rounded },
+          next
+        );
+        return;
+      }
+      const corner = RADIUS_CORNERS.find((c) => c.key === d.corner);
+      if (!corner) return;
+      const rounded = Math.round(radiusAlongBoxCorner(corner, local));
+      const next: CornerRadii = d.solo
+        ? { ...d.startRadii, [d.corner]: rounded }
+        : { tl: rounded, tr: rounded, br: rounded, bl: rounded };
+      setDragValue(rounded);
+      previewRadiiOnHost(next);
+    };
+    const onUp = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const sc = toScene(e.clientX, e.clientY);
+      const local = scenePointToLocal(sc.x, sc.y, box, angle);
+      if (d.mode === 'path') {
+        const rounded = Math.round(radiusAlongPathSite(d.site, local));
+        const next = d.solo
+          ? d.startVertices.map((v, i) => (i === d.sharpIndex ? rounded : v))
+          : d.startVertices.map(() => rounded);
+        dragRef.current = null;
+        setActiveKey(null);
+        setDragValue(null);
+        commitPathRadii(next, !d.solo && d.linked, false);
+        return;
+      }
+      const corner = RADIUS_CORNERS.find((c) => c.key === d.corner);
+      if (!corner) {
+        dragRef.current = null;
+        setActiveKey(null);
+        setDragValue(null);
+        return;
+      }
+      const rounded = Math.round(radiusAlongBoxCorner(corner, local));
+      const next: CornerRadii = d.solo
+        ? { ...d.startRadii, [d.corner]: rounded }
+        : { tl: rounded, tr: rounded, br: rounded, bl: rounded };
+      dragRef.current = null;
+      setActiveKey(null);
+      setDragValue(null);
+      patchNodeCornerRadii({
+        dispatch,
+        nodeId,
+        node,
+        radii: next,
+        linked: !d.solo && d.linked,
+        skipHistory: false,
+      });
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !dragRef.current) return;
+      const d = dragRef.current;
+      dragRef.current = null;
+      setActiveKey(null);
+      setDragValue(null);
+      if (d.mode === 'path') {
+        previewRadiiOnHost(
+          {
+            tl: d.startVertices[0] ?? 0,
+            tr: d.startVertices[0] ?? 0,
+            br: d.startVertices[0] ?? 0,
+            bl: d.startVertices[0] ?? 0,
+          },
+          d.startVertices
+        );
+        return;
+      }
+      previewRadiiOnHost(d.startRadii);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [dispatch, node, nodeId, box, angle, w, h, maxR, toScene, interactive, linked]);
+
+  // nearCorners sticks across a move/resize gesture (probe pauses while
+  // !interactive) so visible dots stay glued to chromeUnion / liveUnion.
+  const visible = nearCorners || activeKey != null;
+  if (!visible) return null;
+
+  let badgeVal = Math.round(baseRadii.tl);
+  if (dragValue != null) {
+    badgeVal = dragValue;
+  } else if (activeKey && usePath) {
+    badgeVal = Math.round(pathVertices[Number(activeKey)] ?? baseRadii.tl);
+  } else if (activeKey && activeKey in baseRadii) {
+    badgeVal = Math.round(baseRadii[activeKey as CornerKey]);
+  }
+
+  // Live radii while dragging so dots track the pointer before Redux catches up.
+  const drag = dragRef.current;
+  let liveBoxRadii = baseRadii;
+  let livePathVertices = pathVertices;
+  if (dragValue != null && drag) {
+    if (drag.mode === 'box') {
+      liveBoxRadii = drag.solo
+        ? { ...baseRadii, [drag.corner]: dragValue }
+        : { tl: dragValue, tr: dragValue, br: dragValue, bl: dragValue };
+    } else {
+      livePathVertices = drag.solo
+        ? pathVertices.map((v, i) => (i === drag.sharpIndex ? dragValue : v))
+        : pathVertices.map(() => dragValue);
+    }
+  }
+
+  const hitSize = hitPx * inv;
+  const visualSize = visualPx * inv;
+  const visualBorder = 1.5 * inv;
+
+  const renderHandle = (
+    key: string,
+    pos: { x: number; y: number },
+    onDown: (e: ReactPointerEvent<HTMLButtonElement>) => void
+  ) => {
+    const isActive = activeKey === key;
+    return (
+      <button
+        key={key}
+        type="button"
+        data-radius-handle={key}
+        className={interactive ? 'pointer-events-auto absolute' : 'pointer-events-none absolute'}
+        style={{
+          width: hitSize,
+          height: hitSize,
+          left: pos.x,
+          top: pos.y,
+          transform: 'translate(-50%, -50%)',
+          cursor: interactive ? 'default' : undefined,
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+        }}
+        aria-label={t('editor.imageToolbar.cornerRadius')}
+        onPointerDown={interactive ? onDown : undefined}
+        tabIndex={interactive ? 0 : -1}
+      >
+        <span
+          className="pointer-events-none absolute left-1/2 top-1/2 block -translate-x-1/2 -translate-y-1/2 rounded-full bg-white"
+          style={{
+            width: visualSize,
+            height: visualSize,
+            border: `${visualBorder}px solid #3388ff`,
+            outline: isActive ? `${2 * inv}px solid rgba(51,136,255,0.35)` : undefined,
+            outlineOffset: isActive ? 1 * inv : undefined,
+          }}
+        />
+      </button>
+    );
+  };
+
+  let badgePos: { x: number; y: number } | null = null;
+  if (activeKey != null && dragValue != null) {
+    if (usePath && pathSites) {
+      const site = pathSites.find((s) => String(s.sharpIndex) === activeKey);
+      if (site) {
+        badgePos = pathHandleScenePos(
+          site,
+          livePathVertices[site.sharpIndex] ?? dragValue
+        );
+      }
+    } else {
+      const corner = RADIUS_CORNERS.find((c) => c.key === activeKey);
+      if (corner) badgePos = boxHandleScenePos(corner, liveBoxRadii[corner.key]);
+    }
+  }
+
+  return (
+    <div className="pointer-events-none absolute inset-0 z-[28] overflow-visible">
+      {usePath && pathSites
+        ? pathSites.map((site) => {
+            const r = livePathVertices[site.sharpIndex] ?? 0;
+            return renderHandle(String(site.sharpIndex), pathHandleScenePos(site, r), (e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              e.stopPropagation();
+              const solo = e.altKey || !linked;
+              dragRef.current = {
+                mode: 'path',
+                sharpIndex: site.sharpIndex,
+                startVertices: [...pathVertices],
+                linked,
+                solo,
+                site,
+              };
+              setActiveKey(String(site.sharpIndex));
+              setDragValue(Math.round(pathVertices[site.sharpIndex] ?? 0));
+              setNearCorners(true);
+            });
+          })
+        : RADIUS_CORNERS.map((corner) => {
+            const r = liveBoxRadii[corner.key];
+            return renderHandle(corner.key, boxHandleScenePos(corner, r), (e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              e.stopPropagation();
+              const solo = e.altKey || !linked;
+              dragRef.current = {
+                mode: 'box',
+                corner: corner.key,
+                startRadii: { ...baseRadii },
+                linked,
+                solo,
+              };
+              setActiveKey(corner.key);
+              setDragValue(Math.round(baseRadii[corner.key]));
+              setNearCorners(true);
+            });
+          })}
+      {badgePos ? (
+        <div
+          className="pointer-events-none absolute z-[29] whitespace-nowrap font-semibold tabular-nums text-white"
+          style={{
+            left: badgePos.x,
+            top: badgePos.y,
+            transform: `translate(-50%, calc(-100% - ${12 * inv}px))`,
+            fontSize: 11 * inv,
+            lineHeight: 1.15,
+            paddingInline: 6 * inv,
+            paddingBlock: 2.5 * inv,
+            borderRadius: 4 * inv,
+            background: '#3388ff',
+          }}
+        >
+          {t('editor.imageToolbar.cornerRadius')} {badgeVal}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Hover baseline hairline in SCENE space (same camera layer as shapes).
@@ -1157,10 +1754,15 @@ function SelectionFeature({
     return [...nodeOrigins, ...frameOrigins];
   }, [document, idsKey, frameIdsKey, getNodeBox]);
 
+  /** Same-render selection bounds — avoids one-frame chrome flash when switching. */
+  const selectionUnion = useMemo(
+    () => unionBoxes(baseOrigins.map((o) => o.box)),
+    [baseOrigins]
+  );
+
   useEffect(() => {
     if (dragRef.current) return;
-    const u = unionBoxes(baseOrigins.map((o) => o.box));
-    setLiveUnion(u);
+    setLiveUnion(selectionUnion);
     setLiveOrigins(baseOrigins);
     setGuides([]);
     const onlyNodeId =
@@ -1170,7 +1772,7 @@ function SelectionFeature({
     } else {
       setLiveAngle(0);
     }
-  }, [baseOrigins, document, idsKey, frameIdsKey]);
+  }, [baseOrigins, document, idsKey, frameIdsKey, selectionUnion]);
 
   useEffect(() => {
     setMoveMargins(null);
@@ -1179,15 +1781,12 @@ function SelectionFeature({
 
   // Inspect: keep prior selection as pair target when clicking another element.
   useEffect(() => {
-    if (!inspectDev) {
-      prevInspectSelRef.current = null;
-      setInspectPairNodeId(null);
-      return;
-    }
     const next =
       selectedNodeIds.length === 1 && selectedFrameIds.length === 0
         ? selectedNodeIds[0]
-        : null;
+        : selectedFrameIds.length === 1 && selectedNodeIds.length === 0
+          ? frameSelId(selectedFrameIds[0])
+          : null;
     const prev = prevInspectSelRef.current;
     if (next && prev && prev !== next) {
       setInspectPairNodeId(prev);
@@ -1195,7 +1794,7 @@ function SelectionFeature({
       setInspectPairNodeId(null);
     }
     prevInspectSelRef.current = next;
-  }, [inspectDev, selectedNodeIds, selectedFrameIds]);
+  }, [selectedNodeIds, selectedFrameIds]);
 
   useEffect(() => {
     if (!enabled || !hitEl) return undefined;
@@ -1233,7 +1832,7 @@ function SelectionFeature({
       }
       if (
         target?.closest?.(
-          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props],[data-video-playback-bar],[data-video-trim-toolbar]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props],[data-video-playback-bar],[data-video-trim-toolbar],[data-radius-handle]'
         )
       ) {
         applyHover(null);
@@ -1251,7 +1850,17 @@ function SelectionFeature({
         return;
       }
       const p = toScene(e.clientX, e.clientY);
-      applyHover(hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY }));
+      const nodeHit = hitTestRef.current(p.x, p.y, {
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+      if (nodeHit) {
+        applyHover(nodeHit);
+        return;
+      }
+      // Empty artboard / frame chrome: still measure select↔hover like Figma.
+      const frameHit = hitTestFrameRef.current?.(p.x, p.y) ?? null;
+      applyHover(frameHit ? frameSelId(frameHit) : null);
     };
 
     const onHoverMove = (e: PointerEvent) => {
@@ -1321,7 +1930,7 @@ function SelectionFeature({
       const target = e.target as HTMLElement;
       if (
         target.closest(
-          '[data-ctx-menu],[data-sel-toolbar],[data-frame-toolbar],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-frame-toolbar],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar],[data-radius-handle]'
         )
       )
         return;
@@ -1822,12 +2431,10 @@ function SelectionFeature({
         setMarquee(null);
         lastTextClickRef.current = null;
         // Selection already cleared on pointerdown.
-        // Soft-click inside an artboard ??select that frame.
-        if (!readOnly) {
-          const abs = toScene(clientX, clientY);
-          const frameId = hitTestFrame?.(abs.x, abs.y);
-          if (frameId) onSelectFrame?.(frameId);
-        }
+        // Soft-click inside an artboard — select that frame (edit + preview inspect).
+        const abs = toScene(clientX, clientY);
+        const frameId = hitTestFrame?.(abs.x, abs.y);
+        if (frameId) onSelectFrame?.(frameId);
         endTransform();
         return;
       }
@@ -2318,7 +2925,30 @@ function SelectionFeature({
     ];
   })();
 
-  const selectedSingleId = selectedNodeIds.length === 1 ? selectedNodeIds[0] : null;
+  /** Single node or single frame — both get size badge + hover spacing. */
+  const inspectPrimaryId =
+    selectedNodeIds.length === 1 && selectedFrameIds.length === 0
+      ? selectedNodeIds[0]
+      : selectedFrameIds.length === 1 && selectedNodeIds.length === 0
+        ? frameSelId(selectedFrameIds[0])
+        : null;
+
+  const getInspectBox = (id: string | null): SceneBox | null => {
+    if (!id) return null;
+    const fid = parseFrameSelId(id);
+    if (fid) {
+      const frames = Array.isArray(document?.frames) ? document.frames : [];
+      const f = frames.find((x: any) => x?.id === fid);
+      if (!f) return null;
+      return {
+        left: Number(f.x) || 0,
+        top: Number(f.y) || 0,
+        width: Math.max(1, Number(f.width) || 1),
+        height: Math.max(1, Number(f.height) || 1),
+      };
+    }
+    return getNodeBox(id);
+  };
 
   // DPR seam diagnostics ??opt-in: window.__RCB_DPR_DEBUG__ = true
   useEffect(() => {
@@ -2339,32 +2969,35 @@ function SelectionFeature({
 
   if (!enabled) return null;
 
+  // Idle selection bounds update in the same paint as Redux; liveUnion lags one
+  // effect tick and used to flash empty chrome when switching frames in preview.
+  const chromeUnion = transforming ? liveUnion : selectionUnion;
+
   const selectedBox = (() => {
-    if (!selectedSingleId) return null;
-    if (liveUnion && selectedSingleId === selectedNodeIds[0] && !transforming) {
-      return liveUnion;
-    }
-    return getNodeBox(selectedSingleId);
+    if (!inspectPrimaryId) return null;
+    if (chromeUnion && !transforming) return chromeUnion;
+    return getInspectBox(inspectPrimaryId);
   })();
 
+  // Hover outline in all modes; pair spacing only in inspect (Dev / share preview).
   const hoverBox =
-    inspectDev && hoverNodeId && hoverNodeId !== selectedSingleId
-      ? getNodeBox(hoverNodeId)
-      : null;
+    hoverNodeId && hoverNodeId !== inspectPrimaryId ? getInspectBox(hoverNodeId) : null;
 
   const clickPairBox =
     inspectDev &&
     !hoverBox &&
     inspectPairNodeId &&
-    inspectPairNodeId !== selectedSingleId
-      ? getNodeBox(inspectPairNodeId)
+    inspectPairNodeId !== inspectPrimaryId
+      ? getInspectBox(inspectPairNodeId)
       : null;
 
-  const pairBox = hoverBox || clickPairBox;
+  const pairBox = inspectDev ? hoverBox || clickPairBox : null;
 
   const hoverImageReplaceId = (() => {
     if (inspectDev || transforming || suppressToolbars) return null;
-    if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId)) return null;
+    if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId) || parseFrameSelId(hoverNodeId)) {
+      return null;
+    }
     const node = document?.deltaSetLike?.[hoverNodeId];
     if (node?.key !== 'image') return null;
     if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return null;
@@ -2375,7 +3008,9 @@ function SelectionFeature({
 
   const hoverVideoReplaceId = (() => {
     if (inspectDev || transforming || suppressToolbars || readOnly) return null;
-    if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId)) return null;
+    if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId) || parseFrameSelId(hoverNodeId)) {
+      return null;
+    }
     const node = document?.deltaSetLike?.[hoverNodeId];
     if (node?.key !== 'video') return null;
     if (isVideoGeneratorNode(node)) return null;
@@ -2393,28 +3028,37 @@ function SelectionFeature({
     selectedBox && !pairBox
       ? (listNodeIds()
           .filter((id) => {
-            if (selectedSingleId ? id === selectedSingleId : selectedNodeIds.includes(id)) {
+            if (inspectPrimaryId && !parseFrameSelId(inspectPrimaryId) && id === inspectPrimaryId) {
               return false;
             }
+            if (selectedNodeIds.includes(id)) return false;
             return !isNodeHidden(document?.deltaSetLike?.[id]);
           })
           .map((id) => getNodeBox(id))
           .filter(Boolean) as SceneBox[])
       : [];
 
+  const hoverIsSelectedFrame =
+    Boolean(hoverNodeId) &&
+    (() => {
+      const fid = hoverNodeId ? parseFrameSelId(hoverNodeId) : null;
+      return Boolean(fid && selectedFrameIds.includes(fid));
+    })();
+
   const hoverOutline =
-    inspectDev &&
     hoverBox &&
     hoverNodeId &&
+    hoverNodeId !== inspectPrimaryId &&
     !selectedNodeIds.includes(hoverNodeId) &&
+    !hoverIsSelectedFrame &&
     !transforming
       ? hoverBox
       : null;
 
   const clickPairOutline =
-    inspectDev &&
     clickPairBox &&
     inspectPairNodeId &&
+    inspectPairNodeId !== inspectPrimaryId &&
     !selectedNodeIds.includes(inspectPairNodeId) &&
     !transforming
       ? clickPairBox
@@ -2446,25 +3090,23 @@ function SelectionFeature({
       {hoverOutline ? (
         <WorldHairlineBox
           box={hoverOutline}
-          color="#3388ff"
-          dashed
+          color={inspectDev ? SPACING_MEASURE_COLOR : '#3388ff'}
           zClass="z-[25]"
         />
       ) : null}
 
-      {clickPairOutline ? (
+      {inspectDev && clickPairOutline ? (
         <WorldHairlineBox
           box={clickPairOutline}
-          color="#3388ff"
-          dashed
+          color={SPACING_MEASURE_COLOR}
           zClass="z-[25]"
         />
       ) : null}
 
-      {/* Design mode: spacing only while dragging (moveMargins). Idle gaps are Dev-inspect only. */}
+      {/* Inspect only: select → W×H; hover another → straight orange gaps. */}
       {inspectDev &&
       selectedBox &&
-      selectedSingleId &&
+      inspectPrimaryId &&
       !suppressChrome &&
       !transforming &&
       !moveMargins ? (
@@ -2472,9 +3114,10 @@ function SelectionFeature({
           box={selectedBox}
           others={spacingOthers}
           pairBox={pairBox}
-          showGaps
+          showGaps={Boolean(pairBox)}
           showSizeBadge
-          color="#FF6A00"
+          color={SPACING_MEASURE_COLOR}
+          sizeBadgeColor={SPACING_SIZE_BADGE_COLOR}
         />
       ) : null}
 
@@ -2510,12 +3153,10 @@ function SelectionFeature({
         />
       ))}
 
-      {/* Gate on selection: after deselect, Redux clears first but liveUnion
-          lags one frame ??without this, line chrome briefly falls back to AABB box.
-          Image/video generator: blue stroke only (same #3388ff as hover), no resize knobs. */}
-      {liveUnion && !suppressChrome && selectionCount > 0 ? (
+      {/* Prefer chromeUnion (synced) over liveUnion so select switches do not flash. */}
+      {chromeUnion && !suppressChrome && selectionCount > 0 ? (
         <SelectionChrome
-          box={liveUnion}
+          box={chromeUnion}
           angle={chromeAngle}
           showHandles={!readOnly && !selectedIsImageGen && !selectedIsVideoGen}
           cornerHandlesOnly={!single}
@@ -2536,31 +3177,52 @@ function SelectionFeature({
         />
       ) : null}
 
-      {!inspectDev && liveUnion && singleNode && !transforming && !suppressToolbars ? (
+      {!readOnly &&
+      chromeUnion &&
+      singleNode &&
+      singleId &&
+      singleNodeData &&
+      supportsCornerRadius(singleNodeData) &&
+      !lineChrome &&
+      !suppressChrome &&
+      !selectedIsImageGen &&
+      !selectedIsVideoGen ? (
+        <CornerRadiusHandlesOverlay
+          box={chromeUnion}
+          angle={chromeAngle}
+          nodeId={singleId}
+          node={singleNodeData}
+          toScene={toScene}
+          stageEl={hitEl}
+          interactive={!transforming}
+        />
+      ) : null}
+
+      {!inspectDev && chromeUnion && singleNode && !transforming && !suppressToolbars ? (
         <SelectionContextToolbar
           document={document}
           nodeId={selectedNodeIds[0]}
-          box={liveUnion}
+          box={chromeUnion}
           onOpenAgent={onOpenAgent}
         />
       ) : null}
 
       {!inspectDev &&
-      liveUnion &&
+      chromeUnion &&
       singleNode &&
       singleId &&
       !transforming &&
       !suppressToolbars &&
       (singleNodeData?.key === 'image' || singleNodeData?.key === 'video') ? (
         <NodeTitleLabel
-          box={liveUnion}
+          box={chromeUnion}
           angle={chromeAngle}
           name={String(
             singleNodeData?.attrs?.name ||
               (singleNodeData?.key === 'video' ? 'Video' : 'Image')
           )}
-          sizeWidth={liveUnion.width}
-          sizeHeight={liveUnion.height}
+          sizeWidth={chromeUnion.width}
+          sizeHeight={chromeUnion.height}
           dataAttr="image-label"
           icon={
             selectedIsVideoGen
