@@ -6,5 +6,5 @@ Before making the repository public:
 2. **Env** — only `*.env.example` committed; compose defaults documented as insecure-for-prod.
 3. **URLs** — set real GitHub org in README badges / issue config when the remote exists.
 4. **CI** — ensure `.github/workflows/*` pass on a clean clone.
-5. **License headers** — root `LICENSE` + `NOTICE` are enough for MIT; no need to stamp every file.
+5. **License headers** — root `LICENSE` + `NOTICE` are enough for the Source Available License; no need to stamp every file.
 6. **Tag** — cut `v0.x.0` with release notes pointing at `docs/self-hosting.md`.

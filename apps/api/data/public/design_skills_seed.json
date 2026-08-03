@@ -1,5 +1,5 @@
 {
-  "_comment": "OSS core skills for self-host Agent cold start (create / vision / aesthetics / edit / image). Product workflow skills (user.*) stay Admin or data/private.",
+  "_comment": "OSS core skills for self-host Agent cold start (create / vision / aesthetics / edit / image).",
   "items": [
     {
       "skill_key": "design_methodology",
