@@ -17,12 +17,18 @@ import {
   RcbCanvas,
   RcbSvgDefs,
   RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
+  rcbFitCamera,
   zoomAtPoint,
   type RcbCamera as CanvasCamera,
 } from '@/components/rcb';
 import SvgCanvas from '@/components/editor/canvas/SvgCanvas';
 import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
-import { stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
+import {
+  listSceneNodes,
+  normalizeDocument,
+  stackZIndex,
+} from '@/components/rcb/scene/document/sceneDocument';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
 import { Dropdown, Tooltip } from '@/components/base';
@@ -35,10 +41,10 @@ import {
   setWorkspaceMode,
   type ArtboardFrame,
 } from '@/store/modules/editor';
-import { normalizeDocument } from '@/components/rcb/scene/document/sceneDocument';
 import { fetchShareApi, type ShareDto } from '@/apis/shares';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
+import { applyCollabDocument } from '@/store/modules/editor';
 
 const ZOOM_TRIGGER_BASE =
   'inline-flex h-7 min-w-[2.75rem] items-center justify-center gap-1.5 rounded px-2.5 transition-colors';
@@ -46,6 +52,59 @@ const ZOOM_TRIGGER_OPEN = 'bg-[var(--accent-soft)] text-[var(--ink)]';
 const ZOOM_TRIGGER_IDLE =
   'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]';
 const HUD_ICON = 'h-4 w-4';
+/** Preview tabs poll so linked shares pick up source-project edits without a hard refresh. */
+const SHARE_PREVIEW_POLL_MS = 2500;
+
+type SceneBox = { x: number; y: number; width: number; height: number };
+
+const ZOOM_MENU_PRESETS = [
+  { key: '50', zoom: 0.5 },
+  { key: '100', zoom: 1 },
+  { key: '200', zoom: 2 },
+] as const;
+
+function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }) {
+  return (
+    <span className="flex w-full min-w-[11rem] items-center justify-between gap-6">
+      <span>{label}</span>
+      {shortcut ? (
+        <span className="shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
+          {shortcut}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function zoomMenuSelectedKeys(zoom: number): string[] {
+  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(zoom - p.zoom) < 0.001);
+  return hit ? [hit.key] : [];
+}
+
+function zoomModShortcutLabel() {
+  if (typeof navigator === 'undefined') return 'Ctrl';
+  return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
+}
+
+function shareDocumentFingerprint(doc: unknown): string {
+  try {
+    return JSON.stringify(doc);
+  } catch {
+    return '';
+  }
+}
+
+function unionSceneBox(a: SceneBox | null, b: SceneBox): SceneBox {
+  if (!a) return b;
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y,
+  };
+}
 
 function framesBounds(frames: ArtboardFrame[]) {
   if (!frames.length) return { x: 0, y: 0, width: 0, height: 0 };
@@ -62,6 +121,29 @@ function framesBounds(frames: ArtboardFrame[]) {
   return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
 }
 
+/** Same as editor: artboards + scene nodes for zoom-to-fit. */
+function previewContentBounds(doc: any, frames: ArtboardFrame[]): SceneBox {
+  let box: SceneBox | null = null;
+  for (const f of frames) {
+    box = unionSceneBox(box, {
+      x: f.x,
+      y: f.y,
+      width: Math.max(1, f.width),
+      height: Math.max(1, f.height),
+    });
+  }
+  for (const { node } of listSceneNodes(doc)) {
+    if (!node) continue;
+    const { left, top } = nodeLeftTop(doc, node);
+    const w = Math.max(1, Number(node.width) || 0);
+    const h = Math.max(1, Number(node.height) || 0);
+    if (w < 2 && h < 2) continue;
+    box = unionSceneBox(box, { x: left, y: top, width: w, height: h });
+  }
+  if (!box) return { x: 0, y: 0, width: 1200, height: 800 };
+  return box;
+}
+
 /**
  * Public / ACL share viewer (preview / inspect).
  * Authorized editors redirect into the normal EditorPage.
@@ -76,6 +158,9 @@ function SharePage() {
   const document = useSelector((s: any) => s.editor.document);
   const selectedNodeId = useSelector((s: any) => s.editor.selectedNodeId);
   const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds || []);
+  const selectedFrameIds = useSelector(
+    (s: any) => (s.editor.selectedFrameIds as string[] | undefined) || []
+  );
   const documentPatchToken = useSelector((s: any) => s.editor.documentPatchToken);
   const lastPatchedNodeIds = useSelector(
     (s: any) => (s.editor.lastPatchedNodeIds as string[]) || []
@@ -90,6 +175,7 @@ function SharePage() {
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageEl, setStageEl] = useState<HTMLElement | null>(null);
+  const docFingerprintRef = useRef('');
   useEffect(() => {
     setStageEl(stageRef.current);
   }, []);
@@ -130,33 +216,115 @@ function SharePage() {
     });
   }, []);
 
+  const onFitView = useCallback(() => {
+    const el = stageRef.current;
+    const vw = el?.clientWidth || el?.getBoundingClientRect().width || 0;
+    const vh = el?.clientHeight || el?.getBoundingClientRect().height || 0;
+    if (vw < 1 || vh < 1) {
+      zoomAtStageCenter(1);
+      return;
+    }
+    const fr: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
+    setCamera(rcbFitCamera({ width: vw, height: vh }, previewContentBounds(document, fr), 48));
+  }, [document, zoomAtStageCenter]);
+
   const zoomPercent = Math.round(camera.zoom * 100);
+  const zoomModLabel = zoomModShortcutLabel();
+
   const zoomMenuItems = useMemo<MenuItemType[]>(
     () => [
-      { key: 'in', label: t('editor.zoomIn') },
-      { key: 'out', label: t('editor.zoomOut') },
-      { key: '100', label: t('editor.zoomToPercent', { percent: 100 }) },
-      { key: '50', label: t('editor.zoomToPercent', { percent: 50 }) },
+      {
+        key: 'in',
+        label: <ZoomMenuLabel label={t('editor.zoomIn')} shortcut={`${zoomModLabel} +`} />,
+      },
+      {
+        key: 'out',
+        label: <ZoomMenuLabel label={t('editor.zoomOut')} shortcut={`${zoomModLabel} -`} />,
+      },
+      {
+        key: 'fit',
+        label: <ZoomMenuLabel label={t('editor.fitCanvas')} shortcut="Shift 1" />,
+      },
+      {
+        key: '50',
+        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 50 })} />,
+      },
+      {
+        key: '100',
+        label: (
+          <ZoomMenuLabel
+            label={t('editor.zoomToPercent', { percent: 100 })}
+            shortcut={`${zoomModLabel} 0`}
+          />
+        ),
+      },
+      {
+        key: '200',
+        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 200 })} />,
+      },
     ],
-    [t]
+    [t, zoomModLabel]
   );
 
+  const zoomSelectedKeys = useMemo(() => zoomMenuSelectedKeys(camera.zoom), [camera.zoom]);
+
   const onZoomMenuClick = useCallback(
-    ({ key }: { key: string }) => {
+    (key: string) => {
+      const actions: Record<string, () => void> = {
+        in: onZoomIn,
+        out: onZoomOut,
+        fit: onFitView,
+        '50': () => zoomAtStageCenter(0.5),
+        '100': () => zoomAtStageCenter(1),
+        '200': () => zoomAtStageCenter(2),
+      };
+      actions[key]?.();
       setZoomMenuOpen(false);
-      if (key === 'in') onZoomIn();
-      else if (key === 'out') onZoomOut();
-      else if (key === '100') zoomAtStageCenter(1);
-      else if (key === '50') zoomAtStageCenter(0.5);
     },
-    [onZoomIn, onZoomOut, zoomAtStageCenter]
+    [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]
   );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        onZoomIn();
+        return;
+      }
+      if (mod && e.key === '-') {
+        e.preventDefault();
+        onZoomOut();
+        return;
+      }
+      if (mod && e.key === '0') {
+        e.preventDefault();
+        zoomAtStageCenter(1);
+        return;
+      }
+      if (e.shiftKey && !mod && !e.altKey && (e.key === '1' || e.code === 'Digit1')) {
+        e.preventDefault();
+        onFitView();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]);
 
   useEffect(() => {
     let cancelled = false;
     setMissing(false);
     setForbidden(false);
     setRecord(null);
+    docFingerprintRef.current = '';
     void fetchShareApi(shareId)
       .then((res) => {
         if (cancelled) return;
@@ -180,6 +348,7 @@ function SharePage() {
           return;
         }
         setRecord(s);
+        docFingerprintRef.current = shareDocumentFingerprint(s.document);
         dispatch(setDocument(normalizeDocument(s.document)));
         dispatch(setSelectedNodeIds([]));
         dispatch(setWorkspaceMode('dev'));
@@ -195,6 +364,41 @@ function SharePage() {
       cancelled = true;
     };
   }, [shareId, dispatch, navigate, viewerId]);
+
+  // Keep inspect mode sticky — other routes may flip workspaceMode back to design.
+  useEffect(() => {
+    dispatch(setWorkspaceMode('dev'));
+    dispatch(setActiveTool('select'));
+  }, [dispatch, shareId]);
+
+  // Keep preview in sync with the source project (API returns live doc when linked).
+  useEffect(() => {
+    if (!shareId || !record?.viewerCanView || missing || forbidden) return undefined;
+    if (record.permission === 'edit' && record.viewerCanEdit) return undefined;
+    let cancelled = false;
+    const poll = () => {
+      void fetchShareApi(shareId)
+        .then((res) => {
+          if (cancelled) return;
+          const s = res.share;
+          if (!s?.viewerCanView || !s.document) return;
+          const fp = shareDocumentFingerprint(s.document);
+          if (!fp || fp === docFingerprintRef.current) return;
+          docFingerprintRef.current = fp;
+          setRecord(s);
+          dispatch(applyCollabDocument(normalizeDocument(s.document)));
+        })
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(poll, SHARE_PREVIEW_POLL_MS);
+    const onFocus = () => poll();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [shareId, record?.viewerCanView, record?.permission, record?.viewerCanEdit, missing, forbidden, dispatch]);
 
   const frames: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
   const worldBounds = frames.length
@@ -324,7 +528,7 @@ function SharePage() {
                 key={`body-${frame.id}`}
                 frame={frame}
                 zIndex={stackZIndex(document, 'frame', frame.id)}
-                selected={false}
+                selected={selectedFrameIds.includes(frame.id)}
                 layer="body"
                 hideTitle
               />
@@ -356,7 +560,7 @@ function SharePage() {
               <HtmlArtboardFrame
                 key={`label-${frame.id}`}
                 frame={frame}
-                selected={false}
+                selected={selectedFrameIds.includes(frame.id)}
                 layer="label"
                 hideTitle
               />
@@ -373,7 +577,7 @@ function SharePage() {
                 camera={camera}
                 stageEl={stageEl}
                 activeFrameId={null}
-                selectedFrameIds={[]}
+                selectedFrameIds={selectedFrameIds}
                 selectedNodeIds={selectedNodeIds}
                 onCameraChange={setCamera}
                 canvasBg={stageBackground}
@@ -404,7 +608,8 @@ function SharePage() {
                 strategy="fixed"
                 items={zoomMenuItems}
                 onClick={onZoomMenuClick}
-                popupClassName="min-w-[10rem]"
+                popupClassName="min-w-[12.5rem]"
+                selectedKeys={zoomSelectedKeys}
               >
                 <button
                   type="button"

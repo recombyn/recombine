@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, memo } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  memo,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -23,7 +31,9 @@ import {
   HiOutlineTrash,
 } from 'react-icons/hi2';
 import { Icon } from '@/components/base';
-import { useChromePointerActivate } from './SelectionToolbarShell';
+
+/** Absorb the browser click that lands under a just-unmounted menu / backdrop. */
+const CLICK_THROUGH_GUARD_MS = 320;
 
 type CtxAction =
   | 'upload'
@@ -157,7 +167,16 @@ function MenuItem({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className={itemClass} disabled={disabled} onClick={onClick}>
+    <button
+      type="button"
+      className={itemClass}
+      disabled={disabled}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+    >
       <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {shortcut ? (
@@ -275,7 +294,6 @@ function CanvasContextMenu({
   onClose,
 }: CanvasContextMenuProps) {
   const { t } = useTranslation();
-  const chromePointer = useChromePointerActivate();
   const deleteEnabled = canDelete ?? hasNode;
   const addToChatEnabled = canAddToChat ?? hasNode;
   const layerEnabled = canLayerActions ?? hasNode;
@@ -284,6 +302,33 @@ function CanvasContextMenu({
   const lockEnabled = canToggleLocked ?? layerEnabled;
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  // Keep a full-screen shield after dismiss so the leftover click cannot hit
+  // the bottom tool strip under Delete / Export (classic menu click-through).
+  const [guardOpen, setGuardOpen] = useState(false);
+  const guardTimerRef = useRef<number | null>(null);
+
+  const armClickThroughGuard = () => {
+    setGuardOpen(true);
+    if (guardTimerRef.current != null) window.clearTimeout(guardTimerRef.current);
+    guardTimerRef.current = window.setTimeout(() => {
+      guardTimerRef.current = null;
+      setGuardOpen(false);
+    }, CLICK_THROUGH_GUARD_MS);
+  };
+
+  const runAction = (action: CtxAction) => {
+    armClickThroughGuard();
+    onAction(action);
+  };
+
+  const dismiss = () => {
+    armClickThroughGuard();
+    onClose();
+  };
+
+  const stopPanelPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+  };
 
   useLayoutEffect(() => {
     if (!menu) {
@@ -304,183 +349,205 @@ function CanvasContextMenu({
   useEffect(() => {
     if (!menu) return undefined;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Escape') return;
+      armClickThroughGuard();
+      onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+    // armClickThroughGuard is local and always fresh enough for Escape dismiss
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu, onClose]);
 
-  if (!menu) return null;
+  useEffect(
+    () => () => {
+      if (guardTimerRef.current != null) window.clearTimeout(guardTimerRef.current);
+    },
+    []
+  );
+
+  if (!menu && !guardOpen) return null;
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-[60]" onPointerDown={onClose} aria-hidden />
       <div
-        ref={panelRef}
-        data-ctx-menu
-        className="fixed z-[70] min-w-[200px] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
-        style={{
-          left: pos?.left ?? menu.clientX,
-          top: pos?.top ?? menu.clientY,
+        className="fixed inset-0 z-[60]"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (menu) dismiss();
         }}
-        {...chromePointer}
-      >
-        <MenuItem
-          icon={<HiOutlineChatBubbleLeftRight className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.addToChat')}
-          shortcut={`${modLabel}+Shift+L`}
-          disabled={!addToChatEnabled}
-          onClick={() => onAction('addToChat')}
-        />
-        <MenuItem
-          icon={<HiOutlinePhoto className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.uploadMedia')}
-          shortcut={`${modLabel}+Shift+I`}
-          disabled={Boolean(menu.nodeId)}
-          onClick={() => onAction('upload')}
-        />
-        <MenuItem
-          icon={<HiOutlineArrowUturnLeft className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.undo')}
-          shortcut={`${modLabel}+Z`}
-          disabled={!canUndo}
-          onClick={() => onAction('undo')}
-        />
-        <MenuItem
-          icon={<HiOutlineArrowUturnRight className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.redo')}
-          shortcut={`${modLabel}+Y`}
-          disabled={!canRedo}
-          onClick={() => onAction('redo')}
-        />
-        <div className="my-1 h-px bg-[var(--line)]" />
-        <MenuItem
-          icon={<HiOutlineScissors className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.cut')}
-          shortcut={`${modLabel}+X`}
-          disabled={!hasNode}
-          onClick={() => onAction('cut')}
-        />
-        <MenuItem
-          icon={<HiOutlineClipboardDocument className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.copy')}
-          shortcut={`${modLabel}+C`}
-          disabled={!hasNode}
-          onClick={() => onAction('copy')}
-        />
-        <MenuItem
-          icon={<HiOutlineSquare2Stack className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.duplicate')}
-          shortcut={`${modLabel}+D`}
-          disabled={!hasNode}
-          onClick={() => onAction('duplicate')}
-        />
-        <MenuItem
-          icon={<HiOutlineClipboard className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.paste')}
-          shortcut={`${modLabel}+V`}
-          disabled={!canPaste}
-          onClick={() => onAction('paste')}
-        />
-        <div className="my-1 h-px bg-[var(--line)]" />
-        <MenuItem
-          icon={<Icon name="editor-group" width={14} height={14} className={ICON_CLASS} />}
-          label={t('editor.contextMenu.group')}
-          shortcut={`${modLabel}+G`}
-          disabled={!canGroup}
-          onClick={() => onAction('group')}
-        />
-        <MenuItem
-          icon={<Icon name="editor-ungroup" width={14} height={14} className={ICON_CLASS} />}
-          label={t('editor.contextMenu.ungroup')}
-          shortcut={`${modLabel}+Shift+G`}
-          disabled={!canUngroup}
-          onClick={() => onAction('ungroup')}
-        />
-        <div className="my-1 h-px bg-[var(--line)]" />
-        <MenuItem
-          icon={<HiOutlineChevronDoubleUp className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.bringToFront')}
-          shortcut="]"
-          disabled={!hasNode}
-          onClick={() => onAction('front')}
-        />
-        <MenuItem
-          icon={<HiOutlineChevronUp className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.bringForward')}
-          shortcut={`${modLabel}+]`}
-          disabled={!hasNode}
-          onClick={() => onAction('forward')}
-        />
-        <MenuItem
-          icon={<HiOutlineChevronDown className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.sendBackward')}
-          shortcut={`${modLabel}+[`}
-          disabled={!hasNode}
-          onClick={() => onAction('backward')}
-        />
-        <MenuItem
-          icon={<HiOutlineChevronDoubleDown className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.sendToBack')}
-          shortcut="["
-          disabled={!hasNode}
-          onClick={() => onAction('back')}
-        />
-        <div className="my-1 h-px bg-[var(--line)]" />
-        <MenuItem
-          icon={
-            targetHidden ? (
-              <HiOutlineEyeSlash className={ICON_CLASS} strokeWidth={1.75} />
-            ) : (
-              <HiOutlineEye className={ICON_CLASS} strokeWidth={1.75} />
-            )
-          }
-          label={
-            targetHidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
-          }
-          shortcut={`${modLabel}+Shift+H`}
-          disabled={!hideEnabled}
-          onClick={() => onAction('toggleHidden')}
-        />
-        <MenuItem
-          icon={
-            targetLocked ? (
-              <HiOutlineLockClosed className={ICON_CLASS} strokeWidth={1.75} />
-            ) : (
-              <HiOutlineLockOpen className={ICON_CLASS} strokeWidth={1.75} />
-            )
-          }
-          label={
-            targetLocked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
-          }
-          shortcut={`${modLabel}+Shift+K`}
-          disabled={!lockEnabled}
-          onClick={() => onAction('toggleLocked')}
-        />
-        <MenuItem
-          icon={<IconGrid className={ICON_CLASS} />}
-          label={
-            gridOn
-              ? t('editor.contextMenu.hideGrid')
-              : t('editor.contextMenu.showGrid')
-          }
-          onClick={() => onAction('toggleGrid')}
-        />
-        <div className="my-1 h-px bg-[var(--line)]" />
-        <ExportSubmenu
-          disabled={!exportEnabled}
-          kind={exportKind}
-          onPick={(action) => onAction(action)}
-        />
-        <div className="my-1 h-px bg-[var(--line)]" />
-        <MenuItem
-          icon={<HiOutlineTrash className={ICON_CLASS} strokeWidth={1.75} />}
-          label={t('editor.contextMenu.delete')}
-          shortcut="Del"
-          disabled={!deleteEnabled}
-          onClick={() => onAction('delete')}
-        />
-      </div>
+        aria-hidden
+      />
+      {menu ? (
+        <div
+          ref={panelRef}
+          data-ctx-menu
+          className="fixed z-[70] min-w-[200px] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
+          style={{
+            left: pos?.left ?? menu.clientX,
+            top: pos?.top ?? menu.clientY,
+          }}
+          onPointerDown={stopPanelPointer}
+          onPointerUp={stopPanelPointer}
+        >
+          <MenuItem
+            icon={<HiOutlineChatBubbleLeftRight className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.addToChat')}
+            shortcut={`${modLabel}+Shift+L`}
+            disabled={!addToChatEnabled}
+            onClick={() => runAction('addToChat')}
+          />
+          <MenuItem
+            icon={<HiOutlinePhoto className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.uploadMedia')}
+            shortcut={`${modLabel}+Shift+I`}
+            disabled={Boolean(menu.nodeId)}
+            onClick={() => runAction('upload')}
+          />
+          <MenuItem
+            icon={<HiOutlineArrowUturnLeft className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.undo')}
+            shortcut={`${modLabel}+Z`}
+            disabled={!canUndo}
+            onClick={() => runAction('undo')}
+          />
+          <MenuItem
+            icon={<HiOutlineArrowUturnRight className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.redo')}
+            shortcut={`${modLabel}+Y`}
+            disabled={!canRedo}
+            onClick={() => runAction('redo')}
+          />
+          <div className="my-1 h-px bg-[var(--line)]" />
+          <MenuItem
+            icon={<HiOutlineScissors className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.cut')}
+            shortcut={`${modLabel}+X`}
+            disabled={!hasNode}
+            onClick={() => runAction('cut')}
+          />
+          <MenuItem
+            icon={<HiOutlineClipboardDocument className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.copy')}
+            shortcut={`${modLabel}+C`}
+            disabled={!hasNode}
+            onClick={() => runAction('copy')}
+          />
+          <MenuItem
+            icon={<HiOutlineSquare2Stack className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.duplicate')}
+            shortcut={`${modLabel}+D`}
+            disabled={!hasNode}
+            onClick={() => runAction('duplicate')}
+          />
+          <MenuItem
+            icon={<HiOutlineClipboard className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.paste')}
+            shortcut={`${modLabel}+V`}
+            disabled={!canPaste}
+            onClick={() => runAction('paste')}
+          />
+          <div className="my-1 h-px bg-[var(--line)]" />
+          <MenuItem
+            icon={<Icon name="editor-group" width={14} height={14} className={ICON_CLASS} />}
+            label={t('editor.contextMenu.group')}
+            shortcut={`${modLabel}+G`}
+            disabled={!canGroup}
+            onClick={() => runAction('group')}
+          />
+          <MenuItem
+            icon={<Icon name="editor-ungroup" width={14} height={14} className={ICON_CLASS} />}
+            label={t('editor.contextMenu.ungroup')}
+            shortcut={`${modLabel}+Shift+G`}
+            disabled={!canUngroup}
+            onClick={() => runAction('ungroup')}
+          />
+          <div className="my-1 h-px bg-[var(--line)]" />
+          <MenuItem
+            icon={<HiOutlineChevronDoubleUp className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.bringToFront')}
+            shortcut="]"
+            disabled={!hasNode}
+            onClick={() => runAction('front')}
+          />
+          <MenuItem
+            icon={<HiOutlineChevronUp className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.bringForward')}
+            shortcut={`${modLabel}+]`}
+            disabled={!hasNode}
+            onClick={() => runAction('forward')}
+          />
+          <MenuItem
+            icon={<HiOutlineChevronDown className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.sendBackward')}
+            shortcut={`${modLabel}+[`}
+            disabled={!hasNode}
+            onClick={() => runAction('backward')}
+          />
+          <MenuItem
+            icon={<HiOutlineChevronDoubleDown className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.sendToBack')}
+            shortcut="["
+            disabled={!hasNode}
+            onClick={() => runAction('back')}
+          />
+          <div className="my-1 h-px bg-[var(--line)]" />
+          <MenuItem
+            icon={
+              targetHidden ? (
+                <HiOutlineEyeSlash className={ICON_CLASS} strokeWidth={1.75} />
+              ) : (
+                <HiOutlineEye className={ICON_CLASS} strokeWidth={1.75} />
+              )
+            }
+            label={
+              targetHidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
+            }
+            shortcut={`${modLabel}+Shift+H`}
+            disabled={!hideEnabled}
+            onClick={() => runAction('toggleHidden')}
+          />
+          <MenuItem
+            icon={
+              targetLocked ? (
+                <HiOutlineLockClosed className={ICON_CLASS} strokeWidth={1.75} />
+              ) : (
+                <HiOutlineLockOpen className={ICON_CLASS} strokeWidth={1.75} />
+              )
+            }
+            label={
+              targetLocked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
+            }
+            shortcut={`${modLabel}+Shift+K`}
+            disabled={!lockEnabled}
+            onClick={() => runAction('toggleLocked')}
+          />
+          <MenuItem
+            icon={<IconGrid className={ICON_CLASS} />}
+            label={
+              gridOn
+                ? t('editor.contextMenu.hideGrid')
+                : t('editor.contextMenu.showGrid')
+            }
+            onClick={() => runAction('toggleGrid')}
+          />
+          <div className="my-1 h-px bg-[var(--line)]" />
+          <ExportSubmenu
+            disabled={!exportEnabled}
+            kind={exportKind}
+            onPick={(action) => runAction(action)}
+          />
+          <div className="my-1 h-px bg-[var(--line)]" />
+          <MenuItem
+            icon={<HiOutlineTrash className={ICON_CLASS} strokeWidth={1.75} />}
+            label={t('editor.contextMenu.delete')}
+            shortcut="Del"
+            disabled={!deleteEnabled}
+            onClick={() => runAction('delete')}
+          />
+        </div>
+      ) : null}
     </>,
     document.body
   );

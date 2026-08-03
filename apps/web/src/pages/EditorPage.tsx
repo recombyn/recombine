@@ -1518,7 +1518,7 @@ function EditorPage() {
   const projectName = currentTemplate?.name || t('home.untitled');
 
   return (
-    <CollabRoomProvider stageEl={stageEl} camera={camera}>
+    <CollabRoomProvider stageEl={stageEl} camera={camera} onCameraChange={setCamera}>
     <div
       className={cn(
         'relative flex h-screen flex-col overflow-hidden',
@@ -1606,8 +1606,10 @@ function EditorPage() {
                   {t('editor.share')}
                 </button>
               </Tooltip>
-              <CollabPresenceBar />
-              <WalletAccountChip />
+              <div className="inline-flex items-center gap-1">
+                <CollabPresenceBar />
+                <WalletAccountChip />
+              </div>
               {!agentOpen ? (
                 <button
                   type="button"

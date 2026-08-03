@@ -2619,12 +2619,12 @@ function SvgCanvas({
     };
   }, [editingPenId]);
 
-  // Select / inspect: Dev+readOnly (share preview) still needs hit-test + spacing overlays.
-  // Path-edit owns the pointer (anchors / draft pen) — do not let SelectionFeature
-  // clear selection on empty click (that unmounts path-edit and looks like “auto exit”).
+  // Select / inspect: share preview is readOnly — always allow hit-test + chrome
+  // (workspaceMode may briefly lag behind 'dev'). Path-edit owns the pointer
+  // (anchors / draft pen) — do not let SelectionFeature clear selection on empty
+  // click (that unmounts path-edit and looks like “auto exit”).
   const selectToolActive = activeTool === 'select' || activeTool === 'scale';
-  const selectAllowed = !readOnly || workspaceMode === 'dev';
-  const selectMode = selectToolActive && selectAllowed && !editingPenId;
+  const selectMode = selectToolActive && !editingPenId;
   const shapeMode = !readOnly && activeTool === 'shape';
   const textMode = !readOnly && activeTool === 'text';
   const imageMode = !readOnly && activeTool === 'image';
@@ -2666,7 +2666,8 @@ function SvgCanvas({
           />
         ) : null}
         {/* Scene-space HTML overlays (selection / draw previews). Origin matches SVG. */}
-        <div className="absolute left-0 top-0 z-20 h-0 w-0 overflow-visible">
+        {/* Above frame/node stackOrder so preview select/hover strokes aren't covered. */}
+        <div className="absolute left-0 top-0 z-[10000] h-0 w-0 overflow-visible">
           <SelectionFeature
             enabled={selectMode}
             readOnly={readOnly}

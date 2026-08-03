@@ -1,6 +1,8 @@
 /**
- * Yjs room lifecycle: mint token → WebsocketProvider → bridge scene ↔ Redux.
+ * Yjs room lifecycle: mint token → IndexedDB (offline) + WebsocketProvider → bridge scene ↔ Redux.
  * Presence (selection / cursors) via Awareness. Persist via debounced cloud PUT.
+ * Offline: y-indexeddb keeps the room locally; reconnect merges with peers / server.
+ * @see https://docs.yjs.dev/getting-started/allowing-offline-editing
  */
 
 import {
@@ -15,7 +17,9 @@ import {
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import * as Y from 'yjs';
+import { IndexeddbPersistence } from 'y-indexeddb';
 import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
 import { mintCollabRoomTokenApi } from '@/apis/collab';
@@ -60,6 +64,13 @@ const CURSOR_AWARENESS_MS = 48;
 const SEED_RACE_WAIT_MS = 120;
 const SEED_FOLLOWER_WAIT_MS = 450;
 
+function waitIndexeddbSynced(persistence: IndexeddbPersistence): Promise<void> {
+  if (persistence.synced) return Promise.resolve();
+  return new Promise((resolve) => {
+    persistence.once('synced', () => resolve());
+  });
+}
+
 function dispatchRemoteScene(
   dispatch: (action: unknown) => void,
   prev: unknown,
@@ -84,6 +95,7 @@ function dispatchRemoteScene(
 
 const PERSIST_DEBOUNCE_MS = 2000;
 const PEER_COLORS = ['#E4572E', '#29335C', '#F3A712', '#A8C256', '#669BBC', '#6A4C93'];
+const CAMERA_AWARENESS_MS = 80;
 
 type CollabContextValue = {
   status: CollabStatus;
@@ -91,6 +103,9 @@ type CollabContextValue = {
   peers: CollabPeer[];
   enabled: boolean;
   error: string | null;
+  followingUserId: string | null;
+  followPeer: (userId: string) => void;
+  unfollowPeer: () => void;
 };
 
 const CollabContext = createContext<CollabContextValue>({
@@ -99,6 +114,9 @@ const CollabContext = createContext<CollabContextValue>({
   peers: [],
   enabled: false,
   error: null,
+  followingUserId: null,
+  followPeer: () => undefined,
+  unfollowPeer: () => undefined,
 });
 
 export function useCollabRoom() {
@@ -129,57 +147,76 @@ function shouldEnableCollab(searchParams: URLSearchParams): boolean {
   return Boolean(import.meta.env.DEV);
 }
 
-function collabStatusLabel(status: CollabStatus, role: CollabRole | null): string {
-  if (role === 'view' && (status === 'synced' || status === 'connecting')) {
-    return status === 'synced' ? 'Viewing' : 'Connecting…';
-  }
-  switch (status) {
-    case 'synced':
-      return 'Live';
-    case 'connecting':
-      return 'Connecting…';
-    case 'error':
-      return 'Collab error';
-    default:
-      return 'Collab';
-  }
+function parsePeerCamera(raw: unknown): CollabPeer['camera'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const c = raw as { x?: unknown; y?: unknown; zoom?: unknown };
+  if (!Number.isFinite(c.x) || !Number.isFinite(c.y) || !Number.isFinite(c.zoom)) return null;
+  return { x: Number(c.x), y: Number(c.y), zoom: Number(c.zoom) };
 }
 
-function collabStatusDotClass(status: CollabStatus): string {
-  const base = 'inline-block h-1.5 w-1.5 rounded-full';
-  switch (status) {
-    case 'synced':
-      return `${base} bg-emerald-500`;
-    case 'error':
-      return `${base} bg-red-500`;
-    default:
-      return `${base} animate-pulse bg-amber-400`;
-  }
+function camerasClose(a: RcbCamera, b: RcbCamera): boolean {
+  return (
+    Math.abs(a.x - b.x) < 0.5 &&
+    Math.abs(a.y - b.y) < 0.5 &&
+    Math.abs(a.zoom - b.zoom) < 0.0001
+  );
 }
 
-function readPeers(awareness: Awareness, selfId: number): CollabPeer[] {
-  const out: CollabPeer[] = [];
+/** Pan so a scene point sits near the stage center (fallback when peer has no camera yet). */
+function cameraCenteringScenePoint(
+  sceneX: number,
+  sceneY: number,
+  zoom: number,
+  stageEl: HTMLElement
+): RcbCamera {
+  const z = Math.max(0.05, zoom || 1);
+  const w = Math.max(1, stageEl.clientWidth || 0);
+  const h = Math.max(1, stageEl.clientHeight || 0);
+  return {
+    x: w / 2 - sceneX * z,
+    y: h / 2 - sceneY * z,
+    zoom: z,
+  };
+}
+
+function preferPeer(prev: CollabPeer, next: CollabPeer): CollabPeer {
+  // Newer Yjs client wins (refresh / reconnect). Tie-break: prefer live cursor / camera.
+  if (next.clientId > prev.clientId) return next;
+  if (prev.clientId > next.clientId) return prev;
+  if (next.camera && !prev.camera) return next;
+  if (next.cursor && !prev.cursor) return next;
+  return prev;
+}
+
+/** One entry per userId — skip self (incl. stale tabs after refresh) and merge multi-tab ghosts. */
+function readPeers(awareness: Awareness, selfId: number, selfUserId: string): CollabPeer[] {
+  const byUserId = new Map<string, CollabPeer>();
   awareness.getStates().forEach((state, clientId) => {
     if (clientId === selfId) return;
     const user = (state as any)?.user;
     if (!user?.userId) return;
+    const userId = String(user.userId);
+    if (userId === selfUserId) return;
     const cursor = (state as any)?.cursor;
     const selected = (state as any)?.selectedNodeIds;
     const frames = (state as any)?.selectedFrameIds;
-    out.push({
+    const peer: CollabPeer = {
       clientId,
-      userId: String(user.userId),
+      userId,
       name: String(user.name || 'Peer'),
-      color: String(user.color || peerColor(String(user.userId))),
+      color: String(user.color || peerColor(userId)),
       selectedNodeIds: Array.isArray(selected) ? selected.map(String) : [],
       selectedFrameIds: Array.isArray(frames) ? frames.map(String) : [],
       cursor:
         cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)
           ? { x: Number(cursor.x), y: Number(cursor.y) }
           : null,
-    });
+      camera: parsePeerCamera((state as any)?.camera),
+    };
+    const existing = byUserId.get(userId);
+    byUserId.set(userId, existing ? preferPeer(existing, peer) : peer);
   });
-  return out;
+  return Array.from(byUserId.values());
 }
 
 function measurePeerTarget(
@@ -258,7 +295,7 @@ function CollabPeerPresenceOverlay({
         if (peer.cursor) {
           const screen = rcbSceneToScreen(camera, peer.cursor.x, peer.cursor.y);
           nextCursors.push({
-            key: `cursor:${peer.clientId}`,
+            key: `cursor:${peer.userId}`,
             left: screen.x,
             top: screen.y,
             color: peer.color,
@@ -325,28 +362,95 @@ function CollabPeerPresenceOverlay({
   );
 }
 
-/** Compact status + peer chips — place inline next to Share in the top toolbar. */
+/**
+ * Figma-style presence: overlapping peer avatars (not a Live chip).
+ * Click an avatar to follow their viewport; click again or pan/zoom to stop.
+ */
 export function CollabPresenceBar() {
-  const { enabled, status, role, peers, error } = useCollabRoom();
+  const { t } = useTranslation();
+  const { enabled, status, peers, error, followingUserId, followPeer, unfollowPeer } =
+    useCollabRoom();
   if (!enabled) return null;
+
+  if (status === 'error') {
+    return (
+      <div
+        className="inline-flex h-8 items-center px-1"
+        title={error || 'Collab error'}
+        aria-label={error || 'Collab error'}
+      >
+        <span className="inline-block h-2 w-2 rounded-full bg-red-500" />
+      </div>
+    );
+  }
+
+  if (!peers.length) return null;
+
+  const shown = peers.slice(0, 5);
+  const overflow = peers.length - shown.length;
+  const following = followingUserId
+    ? peers.find((p) => p.userId === followingUserId) || null
+    : null;
+
   return (
-    <div
-      className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-2.5 text-[12px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)]"
-      title={error || undefined}
-    >
-      <span className={collabStatusDotClass(status)} />
-      <span>{collabStatusLabel(status, role)}</span>
-      {peers.length ? <span className="text-[var(--muted)]">+{peers.length}</span> : null}
-      {peers.slice(0, 4).map((p) => (
-        <span
-          key={p.clientId}
-          className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold text-white"
-          style={{ background: p.color }}
-          title={p.name}
+    <div className="inline-flex h-8 items-center gap-2">
+      <div
+        className="inline-flex items-center"
+        aria-label={`${peers.length} collaborator${peers.length === 1 ? '' : 's'}`}
+      >
+        {shown.map((p, i) => {
+          const isFollowing = followingUserId === p.userId;
+          return (
+            <button
+              key={p.userId}
+              type="button"
+              className="relative inline-flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold text-white transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ink)]"
+              style={{
+                background: p.color,
+                marginLeft: i === 0 ? 0 : -10,
+                zIndex: isFollowing ? shown.length + 1 : shown.length - i,
+                boxShadow: isFollowing
+                  ? `0 0 0 2px var(--canvas), 0 0 0 4px ${p.color}`
+                  : '0 0 0 2px var(--canvas)',
+              }}
+              title={
+                isFollowing
+                  ? t('editor.collabStopFollow')
+                  : t('editor.collabFollow', { name: p.name })
+              }
+              aria-pressed={isFollowing}
+              onClick={() => {
+                if (isFollowing) unfollowPeer();
+                else followPeer(p.userId);
+              }}
+            >
+              {(p.name || '?').slice(0, 1).toUpperCase()}
+            </button>
+          );
+        })}
+        {overflow > 0 ? (
+          <span
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--surface)] text-[11px] font-semibold text-[var(--muted)]"
+            style={{ marginLeft: -10, boxShadow: '0 0 0 2px var(--canvas)' }}
+            title={`+${overflow} more`}
+          >
+            +{overflow}
+          </span>
+        ) : null}
+      </div>
+      {following ? (
+        <button
+          type="button"
+          onClick={() => unfollowPeer()}
+          className="inline-flex h-7 max-w-[9rem] items-center gap-1.5 truncate rounded-full px-2.5 text-[11px] font-medium text-white"
+          style={{ background: following.color }}
+          title={t('editor.collabStopFollow')}
         >
-          {(p.name || '?').slice(0, 1).toUpperCase()}
-        </span>
-      ))}
+          <span className="truncate">
+            {t('editor.collabFollowing', { name: following.name })}
+          </span>
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -355,16 +459,20 @@ export function CollabRoomProvider({
   children,
   stageEl,
   camera,
+  onCameraChange,
 }: {
   children: ReactNode;
   stageEl: HTMLElement | null;
   camera: RcbCamera;
+  onCameraChange?: (next: RcbCamera) => void;
 }) {
   const dispatch = useDispatch();
   const [searchParams] = useSearchParams();
   const enabled = shouldEnableCollab(searchParams);
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
+  const onCameraChangeRef = useRef(onCameraChange);
+  onCameraChangeRef.current = onCameraChange;
 
   const document = useSelector((s: any) => s.editor.document);
   const currentId = useSelector((s: any) => s.editor.currentId as string | null);
@@ -386,20 +494,39 @@ export function CollabRoomProvider({
   const [role, setRole] = useState<CollabRole | null>(null);
   const [peers, setPeers] = useState<CollabPeer[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [followingUserId, setFollowingUserId] = useState<string | null>(null);
 
   const ydocRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<WebsocketProvider | null>(null);
+  const idbRef = useRef<IndexeddbPersistence | null>(null);
   const awarenessRef = useRef<Awareness | null>(null);
   const applyingRemoteRef = useRef(false);
+  const applyingFollowRef = useRef(false);
   const lastPushedHashRef = useRef('');
   const seededRef = useRef(false);
   const persistTimerRef = useRef<number | null>(null);
   const documentRef = useRef(document);
   documentRef.current = document;
 
+  const followPeer = (userId: string) => {
+    setFollowingUserId(userId);
+  };
+  const unfollowPeer = () => {
+    setFollowingUserId(null);
+  };
+
   const ctx = useMemo<CollabContextValue>(
-    () => ({ status, role, peers, enabled, error }),
-    [status, role, peers, enabled, error]
+    () => ({
+      status,
+      role,
+      peers,
+      enabled,
+      error,
+      followingUserId,
+      followPeer,
+      unfollowPeer,
+    }),
+    [status, role, peers, enabled, error, followingUserId]
   );
 
   // Connect / disconnect room.
@@ -432,6 +559,7 @@ export function CollabRoomProvider({
     bindCollabUndoManager(undoManager);
 
     const roleRef = { current: null as CollabRole | null };
+    const idbReadyRef = { current: false };
 
     const schedulePersist = () => {
       if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
@@ -569,6 +697,8 @@ export function CollabRoomProvider({
 
     const onYUpdate = (_update: Uint8Array, origin: unknown) => {
       if (cancelled) return;
+      // Skip while IndexedDB is replaying history into the doc.
+      if (!idbReadyRef.current) return;
       if (
         origin === Y_ORIGIN_LOCAL ||
         origin === Y_ORIGIN_SEED ||
@@ -603,6 +733,18 @@ export function CollabRoomProvider({
         roleRef.current = tokenRes.role;
         setCollabViewOnly(tokenRes.role === 'view');
 
+        // Local offline replica (same room id as WS). Meshable with WebsocketProvider.
+        const persistence = new IndexeddbPersistence(tokenRes.roomId, ydoc);
+        idbRef.current = persistence;
+        await waitIndexeddbSynced(persistence);
+        if (cancelled) return;
+        idbReadyRef.current = true;
+
+        if (!isYDocEmpty(ydoc)) {
+          hydrateFromY();
+          seededRef.current = true;
+        }
+
         const awareness = new Awareness(ydoc);
         awarenessRef.current = awareness;
         awareness.setLocalStateField('user', {
@@ -620,7 +762,7 @@ export function CollabRoomProvider({
 
         const refreshPeers = () => {
           if (cancelled) return;
-          setPeers(readPeers(awareness, ydoc.clientID));
+          setPeers(readPeers(awareness, ydoc.clientID, user.id));
         };
         awareness.on('change', refreshPeers);
         refreshPeers();
@@ -670,6 +812,12 @@ export function CollabRoomProvider({
       }
       providerRef.current = null;
       try {
+        void idbRef.current?.destroy();
+      } catch {
+        /* ignore */
+      }
+      idbRef.current = null;
+      try {
         awarenessRef.current?.destroy();
       } catch {
         /* ignore */
@@ -681,9 +829,73 @@ export function CollabRoomProvider({
       setPeers([]);
       setRole(null);
       roleRef.current = null;
+      setFollowingUserId(null);
       setCollabViewOnly(false);
     };
   }, [enabled, currentId, user?.id, user?.name, user?.email, dispatch]);
+
+  const followingUserIdRef = useRef<string | null>(null);
+  followingUserIdRef.current = followingUserId;
+
+  // Publish local viewport so peers can follow (Figma-style).
+  useEffect(() => {
+    const awareness = awarenessRef.current;
+    if (!awareness || !enabled || status === 'idle') return undefined;
+    let timer: number | null = null;
+    const publish = () => {
+      timer = null;
+      const a = awarenessRef.current;
+      if (!a) return;
+      const c = cameraRef.current;
+      a.setLocalStateField('camera', { x: c.x, y: c.y, zoom: c.zoom });
+    };
+    timer = window.setTimeout(publish, CAMERA_AWARENESS_MS);
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [enabled, status, camera.x, camera.y, camera.zoom]);
+
+  // Local pan/zoom cancels follow (must run before the follow-apply effect).
+  useEffect(() => {
+    if (applyingFollowRef.current) {
+      applyingFollowRef.current = false;
+      return;
+    }
+    if (followingUserIdRef.current) {
+      followingUserIdRef.current = null;
+      setFollowingUserId(null);
+    }
+  }, [camera.x, camera.y, camera.zoom]);
+
+  // Follow peer viewport (or cursor center fallback).
+  useEffect(() => {
+    const followId = followingUserIdRef.current;
+    if (!followId) return;
+    const peer = peers.find((p) => p.userId === followId);
+    if (!peer) {
+      followingUserIdRef.current = null;
+      setFollowingUserId(null);
+      return;
+    }
+    const apply = onCameraChangeRef.current;
+    if (!apply) return;
+
+    let next: RcbCamera | null = null;
+    if (peer.camera) {
+      next = peer.camera;
+    } else if (peer.cursor && stageEl) {
+      next = cameraCenteringScenePoint(
+        peer.cursor.x,
+        peer.cursor.y,
+        cameraRef.current.zoom,
+        stageEl
+      );
+    }
+    if (!next) return;
+    if (camerasClose(next, cameraRef.current)) return;
+    applyingFollowRef.current = true;
+    apply(next);
+  }, [followingUserId, peers, stageEl]);
 
   // Local Redux → Y (editors only).
   useEffect(() => {
