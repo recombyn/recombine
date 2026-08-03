@@ -33,7 +33,7 @@ import {
   markProjectDraftSynced,
 } from '@/components/editor/projectDraftStore';
 import store from '@/store';
-import { applyCollabDocument, applyCollabScenePatch } from '@/store/modules/editor';
+import { applyCollabDocument, applyCollabScenePatch, EMPTY_ID_LIST } from '@/store/modules/editor';
 import { getToken } from '@/utils/token';
 import {
   bindCollabUndoManager,
@@ -477,10 +477,10 @@ export function CollabRoomProvider({
   const document = useSelector((s: any) => s.editor.document);
   const currentId = useSelector((s: any) => s.editor.currentId as string | null);
   const selectedNodeIds = useSelector(
-    (s: any) => (s.editor.selectedNodeIds as string[]) || []
+    (s: any) => (s.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
   );
   const selectedFrameIds = useSelector(
-    (s: any) => (s.editor.selectedFrameIds as string[]) || []
+    (s: any) => (s.editor.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
   const activeFrameId = useSelector(
     (s: any) => (s.editor.document?.activeFrameId as string | null) || null
