@@ -36,10 +36,34 @@ import {
   type ExportImageFormat,
   type ExportSlotConfig,
 } from '@/components/rcb/scene/paint/exportImage';
-import { normalizeDocument, isExportableSceneNode } from '@/components/rcb/scene/document/sceneDocument';
+import {
+  normalizeDocument,
+  isExportableSceneNode,
+  isVideoNode,
+} from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { downloadVideoNodeAsset } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
 import { cn } from '@/utils/classnames';
 import { SEL_ICON_BTN } from '@/components/rcb/selection/chrome/ToolbarValueSlider';
+
+type VideoExportFormat = 'mp4' | 'mp3';
+
+const VIDEO_FORMAT_OPTIONS: { value: VideoExportFormat; label: string }[] = [
+  { value: 'mp4', label: 'MP4' },
+  { value: 'mp3', label: 'MP3' },
+];
+
+function videoNodesForExport(document: any, ids: string[]) {
+  return ids
+    .map((id) => document?.deltaSetLike?.[id])
+    .filter((node: any) => isVideoNode(node) && String(node?.attrs?.src || '').trim());
+}
+
+function isVideoOnlyExport(document: any, ids: string[], hasCrop: boolean): boolean {
+  if (hasCrop || ids.length === 0) return false;
+  const videos = videoNodesForExport(document, ids);
+  return videos.length === ids.length && videos.length > 0;
+}
 
 const SCALE_OPTIONS = [
   { value: 0.5, label: '0.5x' },
@@ -249,10 +273,12 @@ function ExportSelectionPanel({
     return [];
   }, [crop, crops]);
   const [slot, setSlot] = useState<ExportSlotConfig>(() => defaultSlot());
+  const [videoFormat, setVideoFormat] = useState<VideoExportFormat>('mp4');
   const [compress, setCompress] = useState(false);
   const [busy, setBusy] = useState(false);
   const inline = variant === 'inline';
   const canExport = cropList.length > 0 || ids.length > 0;
+  const videoOnly = isVideoOnlyExport(document, ids, cropList.length > 0);
   const isSvg = slot.format === 'svg';
   const isJpeg = slot.format === 'jpeg';
   const format = slot.format;
@@ -290,9 +316,75 @@ function ExportSelectionPanel({
     { value: 'suffix', label: t('editor.exportSuffix') },
   ];
 
+  const runVideoExport = async () => {
+    const nodes = videoNodesForExport(document, ids);
+    if (!nodes.length) {
+      message.warning(t('editor.noSelectionExport'));
+      return;
+    }
+    const mode = videoFormat === 'mp3' ? 'audio' : 'video';
+    setBusy(true);
+    const hideLoading = message.loading(
+      t(
+        mode === 'audio'
+          ? 'editor.videoToolbar.exportingAudio'
+          : 'editor.videoToolbar.exporting',
+        {
+          defaultValue: mode === 'audio' ? '正在导出音频…' : '正在导出视频…',
+        }
+      ),
+      0
+    );
+    try {
+      for (const node of nodes) {
+        const attrs = node?.attrs || {};
+        await downloadVideoNodeAsset({
+          src: String(attrs.src || ''),
+          name: String(node?.name || attrs.name || name || 'video'),
+          uploadKey: attrs.uploadKey != null ? String(attrs.uploadKey) : null,
+          cropX: attrs.cropX,
+          cropY: attrs.cropY,
+          cropW: attrs.cropW,
+          cropH: attrs.cropH,
+          trimStart: attrs.trimStart,
+          trimEnd: attrs.trimEnd,
+          flipX: attrs.flipX === true || attrs.flipX === 'true',
+          flipY: attrs.flipY === true || attrs.flipY === 'true',
+          mode,
+        });
+      }
+      hideLoading();
+      message.success(
+        t(mode === 'audio' ? 'editor.exportedAudio' : 'editor.exportedVideo', {
+          defaultValue: mode === 'audio' ? '已导出音频' : '已导出视频',
+        })
+      );
+      onClose?.();
+    } catch (err) {
+      hideLoading();
+      console.warn('[export-video]', err);
+      message.error(
+        t(
+          mode === 'audio'
+            ? 'editor.videoToolbar.exportAudioFail'
+            : 'editor.videoToolbar.downloadFail',
+          {
+            defaultValue: mode === 'audio' ? '音频导出失败（可能无音轨）' : '下载失败',
+          }
+        )
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const runExport = async () => {
     if (!canExport) {
       message.warning(t('editor.noSelectionExport'));
+      return;
+    }
+    if (videoOnly) {
+      await runVideoExport();
       return;
     }
     if (!isSvg && !isExportScaleSafe(sourceSize.width, sourceSize.height, slot.scale)) {
@@ -359,71 +451,87 @@ function ExportSelectionPanel({
         </div>
       ) : null}
 
-      <div className={cn('grid grid-cols-3 gap-1.5', inline && 'gap-2')}>
+      {videoOnly ? (
         <Select
           size="small"
           type="filled"
-          value={isSvg ? 1 : slot.scale}
-          options={scaleOptions}
-          disabled={isSvg}
-          onChange={(v) => setSlot((s) => ({ ...s, scale: Number(v) || 1 }))}
-          className={selectFieldClass}
-          placement="bottom-start"
-        />
-        <Select
-          size="small"
-          type="filled"
-          value={slot.affixMode}
-          options={affixOptions}
+          value={videoFormat}
+          options={VIDEO_FORMAT_OPTIONS}
           onChange={(v) =>
-            setSlot((s) => ({
-              ...s,
-              affixMode: parseAffixMode(String(v)),
-            }))
+            setVideoFormat(String(v) === 'mp3' ? 'mp3' : 'mp4')
           }
           className={selectFieldClass}
           placement="bottom-start"
         />
-        <Select
-          size="small"
-          type="filled"
-          value={slot.format}
-          options={VECTOR_FORMAT_OPTIONS}
-          onChange={(v) => {
-            const next = parseExportFormat(String(v));
-            setSlot((s) => ({ ...s, format: next }));
-            if (next !== 'jpeg') setCompress(false);
-          }}
-          className={selectFieldClass}
-          placement="bottom-start"
-        />
-      </div>
+      ) : (
+        <>
+          <div className={cn('grid grid-cols-3 gap-1.5', inline && 'gap-2')}>
+            <Select
+              size="small"
+              type="filled"
+              value={isSvg ? 1 : slot.scale}
+              options={scaleOptions}
+              disabled={isSvg}
+              onChange={(v) => setSlot((s) => ({ ...s, scale: Number(v) || 1 }))}
+              className={selectFieldClass}
+              placement="bottom-start"
+            />
+            <Select
+              size="small"
+              type="filled"
+              value={slot.affixMode}
+              options={affixOptions}
+              onChange={(v) =>
+                setSlot((s) => ({
+                  ...s,
+                  affixMode: parseAffixMode(String(v)),
+                }))
+              }
+              className={selectFieldClass}
+              placement="bottom-start"
+            />
+            <Select
+              size="small"
+              type="filled"
+              value={slot.format}
+              options={VECTOR_FORMAT_OPTIONS}
+              onChange={(v) => {
+                const next = parseExportFormat(String(v));
+                setSlot((s) => ({ ...s, format: next }));
+                if (next !== 'jpeg') setCompress(false);
+              }}
+              className={selectFieldClass}
+              placement="bottom-start"
+            />
+          </div>
 
-      {isJpeg ? (
-        <div className="mt-3 flex items-center gap-1.5 text-[12px] text-[var(--ink)]">
-          <Checkbox
-            size="small"
-            checked={compress}
-            onChange={(e) => setCompress(e.target.checked)}
-          >
-            {t('editor.exportCompress')}
-          </Checkbox>
-          <Tooltip tip={t('editor.exportCompressTip')} placement="top">
-            <button
-              type="button"
-              id={tipId}
-              className="inline-flex text-[var(--muted)]"
-              aria-label={t('editor.exportCompressTip')}
-            >
-              <HiOutlineInformationCircle className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-        </div>
-      ) : null}
+          {isJpeg ? (
+            <div className="mt-3 flex items-center gap-1.5 text-[12px] text-[var(--ink)]">
+              <Checkbox
+                size="small"
+                checked={compress}
+                onChange={(e) => setCompress(e.target.checked)}
+              >
+                {t('editor.exportCompress')}
+              </Checkbox>
+              <Tooltip tip={t('editor.exportCompressTip')} placement="top">
+                <button
+                  type="button"
+                  id={tipId}
+                  className="inline-flex text-[var(--muted)]"
+                  aria-label={t('editor.exportCompressTip')}
+                >
+                  <HiOutlineInformationCircle className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+            </div>
+          ) : null}
+        </>
+      )}
 
       <button
         type="button"
-        disabled={busy || !canExport || !scaleSafe}
+        disabled={busy || !canExport || (!videoOnly && !scaleSafe)}
         onClick={() => void runExport()}
         className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--ink)] text-[12px] font-medium text-[var(--surface)] disabled:opacity-40"
       >
