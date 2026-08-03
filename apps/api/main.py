@@ -32,15 +32,12 @@ for _name in (
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="Recombyn API",
-    description="Canvas Scene API + Design Agent runtime",
-    version="0.1.0",
-)
+_DEV_COLLAB_SECRET = "dev-collab-token-secret-change-me"
+_DEFAULT_MYSQL_URL = "mysql://recombyn:recombyn@mysql:3306/recombyn"
 
 
-@app.on_event("startup")
-def _init_stores() -> None:
+def _warn_insecure_defaults() -> None:
+    """Log loud warnings when local defaults would be unsafe on a public host."""
     try:
         from services.auth.admin import SUPER_ADMIN_BOOTSTRAP_PASSWORD
 
@@ -51,6 +48,55 @@ def _init_stores() -> None:
             )
     except Exception:
         pass
+
+    import os
+
+    collab_secret = (os.getenv("COLLAB_TOKEN_SECRET") or "").strip() or _DEV_COLLAB_SECRET
+    if collab_secret == _DEV_COLLAB_SECRET:
+        logger.warning(
+            "COLLAB_TOKEN_SECRET is still the compose/dev default — "
+            "set a long random secret before any public deploy (must match collab)"
+        )
+
+    db_url = (os.getenv("DATABASE_URL") or "").strip()
+    if db_url == _DEFAULT_MYSQL_URL or "recombyn:recombyn@" in db_url:
+        logger.warning(
+            "DATABASE_URL still uses the default MySQL password (recombyn) — "
+            "change MYSQL_PASSWORD / DATABASE_URL before any public deploy"
+        )
+
+    card_salt = (os.getenv("CARD_KEY_SALT") or "").strip()
+    if not card_salt or card_salt.startswith("replace-with-"):
+        logger.warning(
+            "CARD_KEY_SALT is empty or still a placeholder — "
+            "set a strong random salt before issuing card keys publicly"
+        )
+
+    byok = (os.getenv("BYOK_AES_KEY") or "").strip()
+    if not byok:
+        logger.warning(
+            "BYOK_AES_KEY is empty — user LLM vault keys derive from CARD_KEY_SALT (dev only); "
+            "set a dedicated 32+ char key for public deploy"
+        )
+
+    ws = (os.getenv("COLLAB_PUBLIC_WS_URL") or "").strip().lower()
+    if ws.startswith("ws://") and "localhost" not in ws and "127.0.0.1" not in ws:
+        logger.warning(
+            "COLLAB_PUBLIC_WS_URL is plain ws:// on a non-local host — "
+            "public HTTPS deploys need wss:// (see deploy/caddy/Caddyfile.example)"
+        )
+
+
+app = FastAPI(
+    title="Recombyn API",
+    description="Canvas Scene API + Design Agent runtime",
+    version="0.1.0",
+)
+
+
+@app.on_event("startup")
+def _init_stores() -> None:
+    _warn_insecure_defaults()
     init_schema()
     try:
         from services.security import ensure_byok_table
