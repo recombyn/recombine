@@ -1,7 +1,7 @@
 ﻿import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { createSvgIconsPlugin } from 'vite-plugin-svg-icons';
+import { createSvgIconsPlugin } from 'vite-plugin-svg-icons-ng';
 
 export default defineConfig(({ mode }) => {
   // Prefer repo-root / apps/web env; support both GOOGLE_CLIENT_ID and VITE_GOOGLE_CLIENT_ID
@@ -26,21 +26,25 @@ export default defineConfig(({ mode }) => {
         iconDirs: [path.resolve(__dirname, 'src/assets/svg')],
         symbolId: 'icon-[dir]-[name]',
         inject: 'body-last',
+        // Entry imports virtual:svg-icons/register; skip duplicate HTML injection.
+        htmlMode: 'none',
         customDomId: '__svg__icons__dom__',
-        svgoOptions: {
-          plugins: [
-            {
-              name: 'preset-default',
-              params: {
-                overrides: {
-                  removeViewBox: false,
-                  // Keep multi-color brand marks (logo_mark) intact.
-                  convertColors: false,
+        bakerOptions: {
+          svgoOptions: {
+            plugins: [
+              {
+                name: 'preset-default',
+                params: {
+                  overrides: {
+                    removeViewBox: false,
+                    // Keep multi-color brand marks (logo_mark) intact.
+                    convertColors: false,
+                  },
                 },
               },
-            },
-            // Monochrome UI icons already use currentColor in source.
-          ],
+              // Monochrome UI icons already use currentColor in source.
+            ],
+          },
         },
       }),
     ],
