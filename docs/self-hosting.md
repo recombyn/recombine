@@ -25,9 +25,9 @@ Default config loads from seed JSON under `apps/api/data/public/` (optional `pri
 
 | Seed | Public (git) | Notes |
 |------|--------------|--------|
-| Prompt packs | Minimal English baseline | Enough to avoid `missing prompt pack` on Agent; replace via Admin or `data/private/design_prompt_packs_seed.json` for production quality |
+| Prompt packs | Minimal English baseline | Enough to avoid `missing prompt pack` on Agent |
 | Skills (core) | 5 core playbooks | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` — Agent can create & edit out of the box |
-| Knowledge / tokens / models / cases | Often stub or infra-only | Full product content → `data/private/` (gitignored) |
+| Knowledge / tokens / models / cases | Often stub or infra-only | Optional local overlay under `data/private/` (gitignored) |
 | Canvas actions, fonts, dicts, stages | Shipped in public | |
 
 See [data/README.md](../apps/api/data/README.md) and [design_skills/README.md](../apps/api/data/public/design_skills/README.md) (namespaces `core` / `ext` / `user`, ACL, hot reload).

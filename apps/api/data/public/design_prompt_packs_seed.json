@@ -1,5 +1,5 @@
 {
-  "_comment": "OSS runnable baseline (English, minimal). Full product packs: data/private/design_prompt_packs_seed.json (gitignored) or Admin.",
+  "_comment": "OSS runnable baseline (English, minimal) for Agent cold start.",
   "kindLabels": {
     "agent.prompt.need_tools_overlay": "Decide — resource protocol (OSS)",
     "agent.prompt.paint_system": "Paint system (OSS)",
@@ -103,7 +103,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 10,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.paint_system",
@@ -117,7 +117,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 20,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.ask_system",
@@ -132,7 +132,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 30,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.agent_system",
@@ -147,7 +147,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 40,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.paint_retry",
@@ -161,7 +161,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 50,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.ask_propose_situation",
@@ -175,7 +175,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 60,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.ux_reply_system",
@@ -192,7 +192,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 70,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.intent_classify",
@@ -206,7 +206,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 80,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.lc_tools_overlay",
@@ -220,7 +220,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 90,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.react_system",
@@ -234,7 +234,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 100,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.chat_agent_system",
@@ -248,7 +248,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 110,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.partial_system",
@@ -262,7 +262,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 120,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.chat_fallback",
@@ -276,7 +276,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 130,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.size_auto",
@@ -291,7 +291,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 140,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.ask_canvas_size",
@@ -305,7 +305,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 150,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.unsafe_ops_ask",
@@ -319,7 +319,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 160,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.ask_blocked_edit",
@@ -333,7 +333,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 170,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.pending_tools",
@@ -347,7 +347,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 180,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.pending_knowledge",
@@ -361,7 +361,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 190,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.pending_skills",
@@ -375,7 +375,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 200,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.pending_aesthetics",
@@ -389,7 +389,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 210,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.default_assistant_name",
@@ -403,7 +403,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 220,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tools_loaded_fallback",
@@ -417,7 +417,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 230,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.recover_edit_retry",
@@ -431,7 +431,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 240,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tools_registry_header",
@@ -446,7 +446,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 250,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tools_registry_empty",
@@ -461,7 +461,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 260,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tools_catalog_header",
@@ -476,7 +476,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 270,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tools_catalog_empty",
@@ -491,7 +491,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 280,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tool_details_header",
@@ -506,7 +506,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 290,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tool_details_hint_line",
@@ -521,7 +521,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 300,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tool_details_args_line",
@@ -536,7 +536,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 310,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.tool_details_unknown",
@@ -551,7 +551,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 320,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.skill_catalog_header",
@@ -566,7 +566,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 330,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.skill_catalog_empty",
@@ -581,7 +581,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 340,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.skill_details_header",
@@ -596,7 +596,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 350,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.skill_details_truncated",
@@ -611,7 +611,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 360,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.knowledge_catalog_header",
@@ -626,7 +626,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 370,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.knowledge_catalog_empty",
@@ -641,7 +641,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 380,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.knowledge_details_header",
@@ -656,7 +656,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 390,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.knowledge_when_line",
@@ -671,7 +671,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 400,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.focus_frame_authority",
@@ -686,7 +686,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 410,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.focus_empty_frame",
@@ -701,7 +701,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 420,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.scene_frames_header",
@@ -716,7 +716,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 430,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.bg_candidate_hint",
@@ -730,7 +730,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 440,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.prompt_pack_inject_header",
@@ -744,7 +744,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 450,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.prompt_packs_retired_catalog",
@@ -758,7 +758,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 460,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_user",
@@ -772,7 +772,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 470,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_corpus",
@@ -786,7 +786,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 480,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_clip_fallback",
@@ -800,7 +800,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 490,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_section_good",
@@ -814,7 +814,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 500,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_section_ok",
@@ -828,7 +828,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 510,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_section_bad",
@@ -842,7 +842,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 520,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_empty_ok",
@@ -856,7 +856,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 530,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_empty_bad",
@@ -870,7 +870,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 540,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_empty_bad_user",
@@ -884,7 +884,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 550,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_footer",
@@ -898,7 +898,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 560,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_vision_hint",
@@ -912,7 +912,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 570,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_no_image_hint",
@@ -926,7 +926,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 580,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_bad_item",
@@ -940,7 +940,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 590,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_verb_imitate",
@@ -954,7 +954,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 600,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_verb_surpass",
@@ -968,7 +968,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 610,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_refs_verb_avoid",
@@ -982,7 +982,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 620,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_catalog",
@@ -996,7 +996,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 630,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_ref",
@@ -1010,7 +1010,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 640,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_ref_comment",
@@ -1024,7 +1024,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 650,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_layout_detail",
@@ -1038,7 +1038,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 660,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_layout_hint",
@@ -1052,7 +1052,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 670,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_color_detail",
@@ -1066,7 +1066,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 680,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_color_hint",
@@ -1080,7 +1080,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 690,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_aesthetic_detail",
@@ -1094,7 +1094,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 700,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_aesthetic_hint",
@@ -1108,7 +1108,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 710,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_score_detail",
@@ -1122,7 +1122,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 720,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_gap_score_hint",
@@ -1136,7 +1136,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 730,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_header",
@@ -1150,7 +1150,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 740,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_priority_user",
@@ -1164,7 +1164,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 750,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_priority_corpus",
@@ -1178,7 +1178,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 760,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_section_user",
@@ -1192,7 +1192,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 770,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_section_good_secondary",
@@ -1206,7 +1206,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 780,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_section_good",
@@ -1220,7 +1220,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 790,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_section_ok",
@@ -1234,7 +1234,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 800,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_section_bad",
@@ -1248,7 +1248,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 810,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_comment",
@@ -1262,7 +1262,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 820,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_extract_fail",
@@ -1276,7 +1276,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 830,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_primary_override",
@@ -1290,7 +1290,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 840,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_src_user",
@@ -1304,7 +1304,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 850,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_src_good",
@@ -1318,7 +1318,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 860,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_verb_user",
@@ -1332,7 +1332,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 870,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     },
     {
       "kind": "agent.prompt.aesthetic_tokens_verb_secondary",
@@ -1346,7 +1346,7 @@
       "scenes": "all",
       "selectable": false,
       "sort_order": 880,
-      "when_to_use": "OSS baseline — replace via Admin or data/private for production."
+      "when_to_use": "OSS baseline."
     }
   ]
 }
