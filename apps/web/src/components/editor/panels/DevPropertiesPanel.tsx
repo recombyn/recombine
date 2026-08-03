@@ -16,7 +16,7 @@ import {
   resolveShadow,
   resolveStroke,
 } from '@/components/rcb/scene/document/sceneEffects';
-import { isExportableSceneNode } from '@/components/rcb/scene/document/sceneDocument';
+import { isExportableSceneNode, isVideoNode } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
 function formatPx(n: number) {
@@ -380,6 +380,7 @@ function DevPropertiesPanel({
     hoverNodeId || (selectedNodeIds.length === 1 ? selectedNodeIds[0] : null);
   const node = nodeId ? document?.deltaSetLike?.[nodeId] : null;
   const canExportNode = Boolean(allowExport && nodeId && isExportableSceneNode(node));
+  const isVideo = isVideoNode(node);
 
   const [dockWidth, setDockWidth] = useState(INSPECT_DOCK_DEFAULT_W);
   const [colorFormat, setColorFormat] = useState<ColorFormat>('rgba');
@@ -501,9 +502,18 @@ function DevPropertiesPanel({
   );
 
   const copySnippet = async () => {
-    if (!model?.snippet) return;
+    if (!model) return;
+    const text = isVideo
+      ? [
+          `x: ${formatPx(model.left)}px`,
+          `y: ${formatPx(model.top)}px`,
+          `width: ${formatPx(model.width)}px`,
+          `height: ${formatPx(model.height)}px`,
+        ].join('\n')
+      : model.snippet;
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(model.snippet);
+      await navigator.clipboard.writeText(text);
       message.success(t('editor.devCopied'));
     } catch {
       message.error(t('editor.devCopyFailed'));
@@ -600,15 +610,18 @@ function DevPropertiesPanel({
                 <Metric label="W" value={`${formatPx(model.width)}px`} />
                 <Metric label="H" value={`${formatPx(model.height)}px`} />
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-[var(--ink)]">
-                <span className="text-[var(--muted)]">{t('editor.fillRadius')}</span>
-                <span className="tabular-nums">{formatPx(model.radius)}px</span>
-                <span className="text-[var(--muted)]">·</span>
-                <span className="text-[var(--muted)]">{t('editor.fillOpacity')}</span>
-                <span className="tabular-nums">{Math.round(model.opacity * 100)}%</span>
-              </div>
+              {!isVideo ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-[var(--ink)]">
+                  <span className="text-[var(--muted)]">{t('editor.fillRadius')}</span>
+                  <span className="tabular-nums">{formatPx(model.radius)}px</span>
+                  <span className="text-[var(--muted)]">·</span>
+                  <span className="text-[var(--muted)]">{t('editor.fillOpacity')}</span>
+                  <span className="tabular-nums">{Math.round(model.opacity * 100)}%</span>
+                </div>
+              ) : null}
             </Section>
 
+            {!isVideo ? (
             <Section
               title={t('editor.devStyle')}
               right={
@@ -683,7 +696,9 @@ function DevPropertiesPanel({
                 </div>
               </div>
             </Section>
+            ) : null}
 
+            {!isVideo ? (
             <Section
               title={t('editor.devCode')}
               right={
@@ -731,6 +746,7 @@ function DevPropertiesPanel({
                 })}
               </pre>
             </Section>
+            ) : null}
 
             {canExportNode ? (
               <Section title={t('editor.export')}>
