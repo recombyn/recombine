@@ -35,6 +35,7 @@ import {
   setActiveFrameId,
   setSelectedNodeId,
   updateArtboardFrame,
+  EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 
 type LayerStackRow = { kind: 'frame' | 'node'; id: string };
@@ -515,9 +516,9 @@ function LayerPanel({
   const selectedNodeId = useSelector((state: any) => state.editor.selectedNodeId);
   const activeFrameId = useSelector((state: any) => state.editor.document?.activeFrameId);
   const selectedFrameIds = useSelector(
-    (state: any) => (state.editor.selectedFrameIds as string[] | undefined) || []
+    (state: any) => (state.editor.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
-  const historyPast = useSelector((state: any) => state.editor.historyPast || []);
+  const historyPast = useSelector((state: any) => state.editor.historyPast as any[]);
   const nodes = listSceneNodes(document);
   const frames = Array.isArray(document?.frames) ? document.frames : [];
   const frameById = useMemo(() => {

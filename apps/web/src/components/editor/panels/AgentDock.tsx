@@ -38,6 +38,7 @@ import {
   startCanvasAttachPick,
   clearCanvasAttachPick,
   consumePendingCanvasAttach,
+  EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 import MentionAttachPanel, {
   type MentionAttachItem,
@@ -2167,10 +2168,10 @@ function AgentDock({
   );
   const pickingFromCanvas = canvasAttachPick?.target === 'agent';
   const selectedNodeIds = useSelector(
-    (s: any) => (s.editor.selectedNodeIds || []) as string[]
+    (s: any) => (s.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
   );
   const selectedFrameIds = useSelector(
-    (s: any) => (s.editor.selectedFrameIds || []) as string[]
+    (s: any) => (s.editor.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>();
   const location = useLocation();

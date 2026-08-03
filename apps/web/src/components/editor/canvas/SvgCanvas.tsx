@@ -115,6 +115,7 @@ import {
   setCanvasAttachPickBlocked,
   setPendingCanvasAttach,
   setGridMode,
+  EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 import { requestProjectFlush } from '@/components/editor/useProjectCloudSync';
 import {
@@ -304,7 +305,7 @@ function SvgCanvas({
     (s: any) => (s.editor.document?.activeFrameId as string | null) ?? null
   );
   const selectedFrameIds = useSelector(
-    (s: any) => (s.editor.selectedFrameIds as string[] | undefined) || []
+    (s: any) => (s.editor.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
 
   const paperRef = useRef<HTMLDivElement | null>(null);

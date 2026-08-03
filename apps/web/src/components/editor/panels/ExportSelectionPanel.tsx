@@ -12,6 +12,7 @@ import {
 } from '@floating-ui/react';
 import { useTranslation } from 'react-i18next';
 import { useSelector } from 'react-redux';
+import { EMPTY_ID_LIST } from '@/store/modules/editor';
 import {
   HiOutlineArrowDownTray,
   HiOutlineArrowUpTray,
@@ -550,7 +551,9 @@ type ExportMode = 'all' | 'selected';
 function EditorTopExportButton({ className }: { className?: string }) {
   const { t } = useTranslation();
   const document = useSelector((s: any) => s.editor.document);
-  const selectedNodeIds = useSelector((s: any) => s.editor.selectedNodeIds || []) as string[];
+  const selectedNodeIds = useSelector(
+    (s: any) => (s.editor.selectedNodeIds as string[]) ?? EMPTY_ID_LIST
+  );
   const projectName = useSelector((s: any) => {
     const id = s.editor.currentId;
     const row = (s.editor.templates || []).find((item: any) => item.id === id);
