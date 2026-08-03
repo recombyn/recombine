@@ -45,10 +45,6 @@ def _wallet(monkeypatch):
         lambda _uid: 0,
     )
     monkeypatch.setattr(
-        "services.design.runtime.agent_controller.get_user_tokens",
-        lambda _uid: 200_000,
-    )
-    monkeypatch.setattr(
         "services.design.runtime.orchestrator._reserve_design_hold",
         lambda *_a, **_k: (100, False),
     )
@@ -103,7 +99,7 @@ def test_react_chat_hello(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "services.design.runtime.agent_controller.classify_user_intent",
+        "services.design.runtime.graph.nodes.intent.classify_user_intent",
         _classify,
     )
     events = _run(prompt="你好")
@@ -119,10 +115,15 @@ def test_react_chat_hello(monkeypatch):
 
 @pytest.mark.integration
 def test_react_edit_emits_tool_ops(monkeypatch):
-    """edit → decide → paint_ops structured tool_ops → action SSE."""
+    """design/edit → decide → paint_ops structured tool_ops → action SSE."""
 
     async def _classify(**_kwargs: Any) -> IntentClassifyDecision:
-        return IntentClassifyDecision(intent="edit", reply="", rationale="edit title")
+        return IntentClassifyDecision(
+            intent="design",
+            paint_lane="edit",
+            reply="",
+            rationale="edit title",
+        )
 
     async def _stream(
         *,
@@ -163,11 +164,11 @@ def test_react_edit_emits_tool_ops(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "services.design.runtime.agent_controller.classify_user_intent",
+        "services.design.runtime.graph.nodes.intent.classify_user_intent",
         _classify,
     )
     monkeypatch.setattr(
-        "services.design.runtime.agent_controller._stream_llm_text",
+        "services.design.runtime.graph.nodes.decide._stream_llm_text",
         _stream,
     )
     monkeypatch.setattr(
