@@ -33,8 +33,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Host-only — do not publish Redis on all interfaces for public hosts.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
