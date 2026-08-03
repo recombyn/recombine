@@ -200,72 +200,131 @@ function ExportSubmenu({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement | null>(null);
-  const flyoutRef = useRef<HTMLDivElement | null>(null);
-  const [side, setSide] = useState<'right' | 'left'>('right');
-  const [vAlign, setVAlign] = useState<'top' | 'bottom'>('top');
+  const closeTimerRef = useRef<number | null>(null);
+  const [flyoutPos, setFlyoutPos] = useState<{ left: number; top: number } | null>(null);
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current == null) return;
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  };
+
+  const scheduleClose = () => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setOpen(false);
+    }, 120);
+  };
+
+  const openMenu = () => {
+    if (disabled) return;
+    clearCloseTimer();
+    setOpen(true);
+  };
 
   useLayoutEffect(() => {
-    if (!open || !rowRef.current) return;
+    if (!open || !rowRef.current) {
+      setFlyoutPos(null);
+      return;
+    }
     const rect = rowRef.current.getBoundingClientRect();
-    const spaceRight = window.innerWidth - rect.right;
-    setSide(spaceRight < 140 ? 'left' : 'right');
+    const flyoutW = 128;
+    const flyoutH = kind === 'video' ? 88 : 120;
+    const preferRight = window.innerWidth - rect.right >= flyoutW + 8;
+    const left = preferRight ? rect.right + 4 : Math.max(PAD, rect.left - flyoutW - 4);
+    let top = rect.top;
+    if (top + flyoutH > window.innerHeight - PAD) {
+      top = Math.max(PAD, rect.bottom - flyoutH);
+    }
+    setFlyoutPos({ left, top });
+  }, [kind, open]);
 
-    const flyoutH = flyoutRef.current?.offsetHeight || 140;
-    const spaceBelow = window.innerHeight - rect.top - PAD;
-    const spaceAbove = rect.bottom - PAD;
-    // Prefer top-align with the row; flip up when the flyout would go past the viewport.
-    setVAlign(spaceBelow < flyoutH && spaceAbove > spaceBelow ? 'bottom' : 'top');
-  }, [open]);
+  useEffect(
+    () => () => {
+      clearCloseTimer();
+    },
+    []
+  );
 
-  const sideClass =
-    side === 'right' ? 'left-full ml-1' : 'right-full mr-1';
-  const vClass = vAlign === 'top' ? 'top-0' : 'bottom-0';
+  const pick = (
+    action: 'exportPng' | 'exportJpg' | 'exportSvg' | 'exportMp4' | 'exportMp3'
+  ) => {
+    clearCloseTimer();
+    setOpen(false);
+    onPick(action);
+  };
 
   return (
     <div
       ref={rowRef}
       className="relative"
-      onMouseEnter={() => {
-        if (!disabled) setOpen(true);
-      }}
-      onMouseLeave={() => setOpen(false)}
+      onMouseEnter={openMenu}
+      onMouseLeave={scheduleClose}
     >
-      <button type="button" className={itemClass} disabled={disabled}>
+      <button
+        type="button"
+        className={itemClass}
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open && !disabled}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (disabled) return;
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          openMenu();
+        }}
+      >
         <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
           <HiOutlineArrowDownTray className={ICON_CLASS} strokeWidth={1.75} />
         </span>
         <span className="min-w-0 flex-1 truncate">{t('editor.contextMenu.export')}</span>
         <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
       </button>
-      {open && !disabled ? (
-        <div
-          ref={flyoutRef}
-          className={`absolute ${sideClass} ${vClass} z-[1] min-w-[7.5rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]`}
-        >
-          {kind === 'video' ? (
-            <>
-              <button type="button" className={itemClass} onClick={() => onPick('exportMp4')}>
-                MP4
-              </button>
-              <button type="button" className={itemClass} onClick={() => onPick('exportMp3')}>
-                MP3
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" className={itemClass} onClick={() => onPick('exportPng')}>
-                PNG
-              </button>
-              <button type="button" className={itemClass} onClick={() => onPick('exportJpg')}>
-                JPG
-              </button>
-              <button type="button" className={itemClass} onClick={() => onPick('exportSvg')}>
-                SVG
-              </button>
-            </>
-          )}
-        </div>
-      ) : null}
+      {open && !disabled && flyoutPos
+        ? createPortal(
+            <div
+              role="menu"
+              data-ctx-menu-flyout
+              className="fixed z-[80] min-w-[8rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
+              style={{ left: flyoutPos.left, top: flyoutPos.top }}
+              onMouseEnter={openMenu}
+              onMouseLeave={scheduleClose}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            >
+              {kind === 'video' ? (
+                <>
+                  <button type="button" className={itemClass} onClick={() => pick('exportMp4')}>
+                    MP4
+                  </button>
+                  <button type="button" className={itemClass} onClick={() => pick('exportMp3')}>
+                    MP3
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className={itemClass} onClick={() => pick('exportPng')}>
+                    PNG
+                  </button>
+                  <button type="button" className={itemClass} onClick={() => pick('exportJpg')}>
+                    JPG
+                  </button>
+                  <button type="button" className={itemClass} onClick={() => pick('exportSvg')}>
+                    SVG
+                  </button>
+                </>
+              )}
+            </div>,
+            window.document.body
+          )
+        : null}
     </div>
   );
 }
@@ -375,6 +434,9 @@ function CanvasContextMenu({
         onPointerDown={(e) => {
           e.preventDefault();
           e.stopPropagation();
+          const target = e.target as HTMLElement | null;
+          // Keep menu open while interacting with the export flyout portal.
+          if (target?.closest?.('[data-ctx-menu-flyout]')) return;
           if (menu) dismiss();
         }}
         aria-hidden

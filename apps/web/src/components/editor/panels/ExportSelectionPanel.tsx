@@ -35,7 +35,7 @@ import {
   type ExportImageFormat,
   type ExportSlotConfig,
 } from '@/components/rcb/scene/paint/exportImage';
-import { normalizeDocument } from '@/components/rcb/scene/document/sceneDocument';
+import { normalizeDocument, isExportableSceneNode } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { cn } from '@/utils/classnames';
 import { SEL_ICON_BTN } from '@/components/rcb/selection/chrome/ToolbarValueSlider';
@@ -134,7 +134,7 @@ function contentCropFallback(document: any, name: string): NamedExportCrop | nul
   if (Array.isArray(children)) {
     for (const id of children) {
       const node = document.deltaSetLike?.[id];
-      if (!node) continue;
+      if (!isExportableSceneNode(node)) continue;
       const { left, top } = nodeLeftTop(document, node);
       const w = Number(node.width);
       const h = Number(node.height);
@@ -194,7 +194,7 @@ function exportSourceSize(
   let hit = false;
   for (const id of ids) {
     const node = document?.deltaSetLike?.[id];
-    if (!node) continue;
+    if (!isExportableSceneNode(node)) continue;
     const { left, top } = nodeLeftTop(document, node);
     const w = Number(node.width);
     const h = Number(node.height);
@@ -232,7 +232,16 @@ function ExportSelectionPanel({
   const { t } = useTranslation();
   const tipId = useId();
   const document = useSelector((s: any) => s.editor.document);
-  const ids = nodeIds || [];
+  const ids = useMemo(() => {
+    const raw = nodeIds || [];
+    return raw.filter((id) => {
+      if (!id) return false;
+      const node = document?.deltaSetLike?.[id];
+      // Missing node (e.g. stale id) — keep and let export fail softly.
+      if (!node) return true;
+      return isExportableSceneNode(node);
+    });
+  }, [document, nodeIds]);
   const cropList = useMemo((): NamedExportCrop[] => {
     if (crops?.length) return crops;
     if (crop) return [{ ...crop }];
@@ -448,8 +457,17 @@ function ExportSelectionPopover({
   children,
 }: ExportSelectionPopoverProps) {
   const { t } = useTranslation();
+  const document = useSelector((s: any) => s.editor.document);
   const [open, setOpen] = useState(false);
-  const ids = nodeIds || [];
+  const ids = useMemo(() => {
+    const raw = nodeIds || [];
+    return raw.filter((id) => {
+      if (!id) return false;
+      const node = document?.deltaSetLike?.[id];
+      if (!node) return true;
+      return isExportableSceneNode(node);
+    });
+  }, [document, nodeIds]);
   const canExport = Boolean(crop) || ids.length > 0;
 
   const { refs, floatingStyles, context } = useFloating({
@@ -565,6 +583,12 @@ function EditorTopExportButton({ className }: { className?: string }) {
     return fallback ? [fallback] : [];
   }, [document, frames, t]);
 
+  const exportableSelectedIds = useMemo(
+    () =>
+      selectedNodeIds.filter((id) => isExportableSceneNode(document?.deltaSetLike?.[id])),
+    [document, selectedNodeIds]
+  );
+
   const floatingOpen = menuOpen || panelOpen;
   const { refs, floatingStyles, context } = useFloating({
     open: floatingOpen,
@@ -605,7 +629,7 @@ function EditorTopExportButton({ className }: { className?: string }) {
           setMenuOpen(false);
           return;
         }
-      } else if (!selectedNodeIds.length) {
+      } else if (!exportableSelectedIds.length) {
         message.warning(t('editor.noSelectionExport'));
         setMenuOpen(false);
         return;
@@ -614,7 +638,7 @@ function EditorTopExportButton({ className }: { className?: string }) {
       setMenuOpen(false);
       setPanelOpen(true);
     },
-    [pageCrops.length, selectedNodeIds.length, t]
+    [exportableSelectedIds.length, pageCrops.length, t]
   );
 
   const runExportJson = useCallback(() => {
@@ -632,6 +656,10 @@ function EditorTopExportButton({ className }: { className?: string }) {
       message.error(t('editor.exportFailed'));
     }
   }, [document, projectName, t]);
+
+  const panelNodeIds = mode === 'selected' ? exportableSelectedIds : undefined;
+  const panelCrops = mode === 'all' ? pageCrops : undefined;
+  const panelBaseName = mode === 'all' ? t('editor.pageExportName') : t('editor.selectionExportName');
 
   return (
     <>
@@ -708,11 +736,9 @@ function EditorTopExportButton({ className }: { className?: string }) {
             {...getFloatingProps()}
           >
             <ExportSelectionPanel
-              nodeIds={mode === 'selected' ? selectedNodeIds : undefined}
-              crops={mode === 'all' ? pageCrops : undefined}
-              baseName={
-                mode === 'all' ? t('editor.pageExportName') : t('editor.selectionExportName')
-              }
+              nodeIds={panelNodeIds}
+              crops={panelCrops}
+              baseName={panelBaseName}
               onClose={() => {
                 setPanelOpen(false);
                 setMode(null);
