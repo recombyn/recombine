@@ -901,7 +901,7 @@ function ImageAspectRatioPicker({
           <span>{t('agent.imageSize')}</span>
           {imageLimits?.min_pixels || imageLimits?.max_pixels ? (
             <Tooltip
-              title={t('agent.imageSizeRangeTip', {
+              tip={t('agent.imageSizeRangeTip', {
                 min: formatPixelBudget(Number(imageLimits.min_pixels) || 0),
                 max: formatPixelBudget(Number(imageLimits.max_pixels) || 0),
               })}

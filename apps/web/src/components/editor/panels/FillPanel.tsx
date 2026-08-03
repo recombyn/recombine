@@ -489,7 +489,7 @@ function GradientStopsBar({
 
   return (
     <Tooltip
-      title="选中色标后按 Delete 删除（至少保留 2 个）"
+      tip="选中色标后按 Delete 删除（至少保留 2 个）"
       placement="top"
       triggerClassName="min-w-0 flex-1"
     >
@@ -771,7 +771,7 @@ function FillPanel({
         {panelType === 'image' ? (
           <div className="space-y-2.5">
             <Tooltip
-              title={value.fillImageSrc ? '点击替换图片' : '点击上传图片'}
+              tip={value.fillImageSrc ? '点击替换图片' : '点击上传图片'}
               placement="top"
               triggerClassName="w-full"
             >

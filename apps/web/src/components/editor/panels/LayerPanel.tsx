@@ -324,7 +324,7 @@ function LayerStackRowView({
           </span>
         </button>
         <Tooltip
-          title={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
+          tip={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
           placement="top"
         >
           <button
@@ -358,7 +358,7 @@ function LayerStackRowView({
           </button>
         </Tooltip>
         <Tooltip
-          title={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
+          tip={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
           placement="top"
         >
           <button
@@ -425,7 +425,7 @@ function LayerStackRowView({
         </span>
       </button>
       <Tooltip
-        title={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
+        tip={hidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')}
         placement="top"
       >
         <button
@@ -461,7 +461,7 @@ function LayerStackRowView({
         </button>
       </Tooltip>
       <Tooltip
-        title={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
+        tip={locked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')}
         placement="top"
       >
         <button

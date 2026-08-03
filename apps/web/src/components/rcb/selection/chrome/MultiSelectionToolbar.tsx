@@ -726,7 +726,7 @@ function MultiSelectionToolbar({
       )}
       {sizeField('w', box.width)}
       <Tooltip
-        title={
+        tip={
           aspectLocked
             ? t('editor.imageToolbar.unlockAspect')
             : t('editor.imageToolbar.lockAspect')
