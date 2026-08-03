@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { LuPanelRight } from 'react-icons/lu';
-import { HiOutlineClipboardDocument } from 'react-icons/hi2';
+import { HiOutlineChevronDown, HiOutlineClipboardDocument } from 'react-icons/hi2';
 import { message } from '@/components/base';
+import Dropdown from '@/components/base/dropdown';
+import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import Tooltip from '@/components/base/tooltip';
 import { ExportSelectionPanel } from '@/components/editor/panels/ExportSelectionPanel';
 import { cn } from '@/utils/classnames';
@@ -13,6 +15,7 @@ import {
   resolveShadow,
   resolveStroke,
 } from '@/components/rcb/scene/document/sceneEffects';
+import { isExportableSceneNode } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
 function formatPx(n: number) {
@@ -20,30 +23,244 @@ function formatPx(n: number) {
   return Number.isInteger(r) ? String(r) : String(r);
 }
 
-function toRgbaDisplay(color: string): string {
+type Rgba = { r: number; g: number; b: number; a: number };
+
+type ColorFormat = 'rgb' | 'rgba' | 'argb' | 'hex' | 'hexa' | 'ahex' | 'hsl' | 'hwb';
+type CodeTarget = 'css' | 'ios' | 'android';
+
+const COLOR_FORMATS: ColorFormat[] = [
+  'rgb',
+  'rgba',
+  'argb',
+  'hex',
+  'hexa',
+  'ahex',
+  'hsl',
+  'hwb',
+];
+const CODE_TARGETS: CodeTarget[] = ['css', 'ios', 'android'];
+
+function clamp01(n: number) {
+  return Math.min(1, Math.max(0, n));
+}
+
+function clampByte(n: number) {
+  return Math.min(255, Math.max(0, Math.round(n)));
+}
+
+function parseRgba(color: string): Rgba {
   const c = (color || '').trim();
-  if (!c || c === 'transparent' || c === 'rgba(0,0,0,0)') return 'rgba(0, 0, 0, 0)';
-  if (/^rgba?\(/i.test(c)) return c.replace(/\s+/g, ' ');
+  if (!c || c === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+
+  const rgbMatch = c.match(
+    /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i
+  );
+  if (rgbMatch) {
+    return {
+      r: clampByte(Number(rgbMatch[1])),
+      g: clampByte(Number(rgbMatch[2])),
+      b: clampByte(Number(rgbMatch[3])),
+      a: rgbMatch[4] == null ? 1 : clamp01(Number(rgbMatch[4])),
+    };
+  }
+
   const hex = c.replace('#', '');
-  if (hex.length === 6) {
-    const r = parseInt(hex.slice(0, 2), 16);
-    const g = parseInt(hex.slice(2, 4), 16);
-    const b = parseInt(hex.slice(4, 6), 16);
-    if ([r, g, b].every((n) => Number.isFinite(n))) return `rgba(${r}, ${g}, ${b}, 1)`;
+  if (/^[0-9a-f]{3}$/i.test(hex)) {
+    return {
+      r: parseInt(hex[0] + hex[0], 16),
+      g: parseInt(hex[1] + hex[1], 16),
+      b: parseInt(hex[2] + hex[2], 16),
+      a: 1,
+    };
   }
-  if (hex.length === 8) {
-    const r = parseInt(hex.slice(0, 2), 16);
-    const g = parseInt(hex.slice(2, 4), 16);
-    const b = parseInt(hex.slice(4, 6), 16);
-    const a = Math.round((parseInt(hex.slice(6, 8), 16) / 255) * 100) / 100;
-    if ([r, g, b, a].every((n) => Number.isFinite(n))) return `rgba(${r}, ${g}, ${b}, ${a})`;
+  if (/^[0-9a-f]{6}$/i.test(hex)) {
+    return {
+      r: parseInt(hex.slice(0, 2), 16),
+      g: parseInt(hex.slice(2, 4), 16),
+      b: parseInt(hex.slice(4, 6), 16),
+      a: 1,
+    };
   }
-  return c;
+  if (/^[0-9a-f]{8}$/i.test(hex)) {
+    return {
+      r: parseInt(hex.slice(0, 2), 16),
+      g: parseInt(hex.slice(2, 4), 16),
+      b: parseInt(hex.slice(4, 6), 16),
+      a: clamp01(parseInt(hex.slice(6, 8), 16) / 255),
+    };
+  }
+  return { r: 0, g: 0, b: 0, a: 1 };
+}
+
+function toHex2(n: number) {
+  return clampByte(n).toString(16).padStart(2, '0').toUpperCase();
+}
+
+function rgbToHsl(r: number, g: number, b: number) {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+  else h = ((rn - gn) / d + 4) / 6;
+  return { h: h * 360, s, l };
+}
+
+function rgbToHwb(r: number, g: number, b: number) {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const { h } = rgbToHsl(r, g, b);
+  return { h, w: min, b: 1 - max };
+}
+
+function formatAlpha(a: number) {
+  const r = Math.round(a * 1000) / 1000;
+  return Number.isInteger(r) ? String(r) : String(r);
+}
+
+function formatColor(color: string, format: ColorFormat): string {
+  const { r, g, b, a } = parseRgba(color);
+  const aa = clampByte(a * 255);
+  switch (format) {
+    case 'rgb':
+      return `rgb(${r}, ${g}, ${b})`;
+    case 'rgba':
+      return `rgba(${r}, ${g}, ${b}, ${formatAlpha(a)})`;
+    case 'argb':
+      return `#${toHex2(aa)}${toHex2(r)}${toHex2(g)}${toHex2(b)}`;
+    case 'hex':
+      return `#${toHex2(r)}${toHex2(g)}${toHex2(b)}`;
+    case 'hexa':
+      return `#${toHex2(r)}${toHex2(g)}${toHex2(b)}${toHex2(aa)}`;
+    case 'ahex':
+      return `#${toHex2(aa)}${toHex2(r)}${toHex2(g)}${toHex2(b)}`;
+    case 'hsl': {
+      const { h, s, l } = rgbToHsl(r, g, b);
+      return `hsl(${Math.round(h)}, ${Math.round(s * 100)}%, ${Math.round(l * 100)}%)`;
+    }
+    case 'hwb': {
+      const { h, w, b: bl } = rgbToHwb(r, g, b);
+      return `hwb(${Math.round(h)} ${Math.round(w * 100)}% ${Math.round(bl * 100)}%)`;
+    }
+    default:
+      return `rgba(${r}, ${g}, ${b}, ${formatAlpha(a)})`;
+  }
+}
+
+function colorLabel(format: ColorFormat): string {
+  return format.toUpperCase();
+}
+
+function codeTargetLabel(target: CodeTarget): string {
+  if (target === 'ios') return 'iOS';
+  if (target === 'android') return 'Android';
+  return 'CSS';
+}
+
+function iosUiColor(color: string): string {
+  const { r, g, b, a } = parseRgba(color);
+  const f = (n: number) => formatAlpha(n / 255);
+  return `UIColor(red: ${f(r)}, green: ${f(g)}, blue: ${f(b)}, alpha: ${formatAlpha(a)})`;
+}
+
+function androidColor(color: string): string {
+  return formatColor(color, 'argb');
+}
+
+function buildCodeSnippet(
+  target: CodeTarget,
+  colorFormat: ColorFormat,
+  opts: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    opacity: number;
+    radius: number;
+    fill: string;
+    stroke: string;
+    strokeWidth: number;
+    shadow: ReturnType<typeof resolveShadow>;
+  }
+): string {
+  const hasFill =
+    opts.fill && opts.fill !== 'rgba(0,0,0,0)' && opts.fill !== 'transparent';
+  const hasStroke =
+    opts.strokeWidth > 0 && opts.stroke && opts.stroke !== 'transparent';
+
+  if (target === 'ios') {
+    const lines = [
+      `frame: CGRect(x: ${formatPx(opts.left)}, y: ${formatPx(opts.top)}, width: ${formatPx(opts.width)}, height: ${formatPx(opts.height)})`,
+      `opacity: ${formatAlpha(opts.opacity)}`,
+    ];
+    if (opts.radius > 0) lines.push(`cornerRadius: ${formatPx(opts.radius)}`);
+    if (hasFill) lines.push(`backgroundColor: ${iosUiColor(opts.fill)}`);
+    if (hasStroke) {
+      lines.push(`borderWidth: ${formatPx(opts.strokeWidth)}`);
+      lines.push(`borderColor: ${iosUiColor(opts.stroke)}`);
+    }
+    if (opts.shadow) {
+      lines.push(`shadowOffset: CGSize(width: ${formatPx(opts.shadow.offsetX)}, height: ${formatPx(opts.shadow.offsetY)})`);
+      lines.push(`shadowRadius: ${formatPx(opts.shadow.blur)}`);
+      lines.push(`shadowColor: ${iosUiColor(opts.shadow.color)}`);
+    }
+    return lines.join('\n');
+  }
+
+  if (target === 'android') {
+    const lines = [
+      `android:layout_width="${formatPx(opts.width)}dp"`,
+      `android:layout_height="${formatPx(opts.height)}dp"`,
+      `android:translationX="${formatPx(opts.left)}dp"`,
+      `android:translationY="${formatPx(opts.top)}dp"`,
+      `android:alpha="${formatAlpha(opts.opacity)}"`,
+    ];
+    if (hasFill) lines.push(`android:background="${androidColor(opts.fill)}"`);
+    if (opts.radius > 0) {
+      lines.push(`app:cardCornerRadius="${formatPx(opts.radius)}dp"`);
+    }
+    if (hasStroke) {
+      lines.push(`android:strokeWidth="${formatPx(opts.strokeWidth)}dp"`);
+      lines.push(`android:strokeColor="${androidColor(opts.stroke)}"`);
+    }
+    return lines.join('\n');
+  }
+
+  const lines = [
+    `left: ${formatPx(opts.left)}px;`,
+    `top: ${formatPx(opts.top)}px;`,
+    `width: ${formatPx(opts.width)}px;`,
+    `height: ${formatPx(opts.height)}px;`,
+    `opacity: ${formatAlpha(opts.opacity)};`,
+  ];
+  if (opts.radius > 0) lines.push(`border-radius: ${formatPx(opts.radius)}px;`);
+  if (hasFill) lines.push(`background: ${formatColor(opts.fill, colorFormat)};`);
+  if (hasStroke) {
+    lines.push(
+      `border: ${formatPx(opts.strokeWidth)}px solid ${formatColor(opts.stroke, colorFormat)};`
+    );
+  }
+  if (opts.shadow) {
+    lines.push(
+      `box-shadow: ${formatPx(opts.shadow.offsetX)}px ${formatPx(opts.shadow.offsetY)}px ${formatPx(opts.shadow.blur)}px ${formatColor(opts.shadow.color, colorFormat)};`
+    );
+  }
+  return lines.join('\n');
 }
 
 function ColorSwatch({ color }: { color: string }) {
-  const display = toRgbaDisplay(color);
-  const isClear = display === 'rgba(0, 0, 0, 0)' || display.includes(', 0)');
+  const display = formatColor(color, 'rgba');
+  const isClear = parseRgba(color).a <= 0;
   return (
     <span
       className="inline-block h-4 w-4 shrink-0 rounded-sm ring-1 ring-[var(--line)]"
@@ -54,6 +271,27 @@ function ColorSwatch({ color }: { color: string }) {
       }}
       title={display}
     />
+  );
+}
+
+function InspectMenuTrigger({
+  label,
+  open,
+}: {
+  label: string;
+  open?: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-medium',
+        'bg-[var(--accent-soft)] text-[var(--ink)] transition',
+        open && 'ring-1 ring-[var(--line)]'
+      )}
+    >
+      <span className="min-w-[2.25rem] text-left">{label}</span>
+      <HiOutlineChevronDown className="h-3 w-3 shrink-0 opacity-70" />
+    </span>
   );
 }
 
@@ -84,40 +322,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       <span className="min-w-0 truncate text-[12px] tabular-nums text-[var(--ink)]">{value}</span>
     </div>
   );
-}
-
-function buildCss(opts: {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  opacity: number;
-  radius: number;
-  fill: string;
-  stroke: string;
-  strokeWidth: number;
-  shadow: ReturnType<typeof resolveShadow>;
-}) {
-  const lines = [
-    `left: ${formatPx(opts.left)}px;`,
-    `top: ${formatPx(opts.top)}px;`,
-    `width: ${formatPx(opts.width)}px;`,
-    `height: ${formatPx(opts.height)}px;`,
-    `opacity: ${opts.opacity};`,
-  ];
-  if (opts.radius > 0) lines.push(`border-radius: ${formatPx(opts.radius)}px;`);
-  if (opts.fill && opts.fill !== 'rgba(0,0,0,0)' && opts.fill !== 'transparent') {
-    lines.push(`background: ${toRgbaDisplay(opts.fill)};`);
-  }
-  if (opts.strokeWidth > 0 && opts.stroke && opts.stroke !== 'transparent') {
-    lines.push(`border: ${formatPx(opts.strokeWidth)}px solid ${toRgbaDisplay(opts.stroke)};`);
-  }
-  if (opts.shadow) {
-    lines.push(
-      `box-shadow: ${formatPx(opts.shadow.offsetX)}px ${formatPx(opts.shadow.offsetY)}px ${formatPx(opts.shadow.blur)}px ${toRgbaDisplay(opts.shadow.color)};`
-    );
-  }
-  return lines.join('\n');
 }
 
 const INSPECT_DOCK_WIDTH_KEY = 'inspect-dock-width';
@@ -158,9 +362,12 @@ function readStoredInspectDockWidth(): number {
 function DevPropertiesPanel({
   className,
   onClose,
+  /** Share preview: false when link is view-only (same gate as top-bar Export). */
+  allowExport = true,
 }: {
   className?: string;
   onClose?: () => void;
+  allowExport?: boolean;
 }) {
   const { t } = useTranslation();
   const document = useSelector((s: any) => s.editor.document);
@@ -169,8 +376,11 @@ function DevPropertiesPanel({
   const nodeId =
     hoverNodeId || (selectedNodeIds.length === 1 ? selectedNodeIds[0] : null);
   const node = nodeId ? document?.deltaSetLike?.[nodeId] : null;
+  const canExportNode = Boolean(allowExport && nodeId && isExportableSceneNode(node));
 
   const [dockWidth, setDockWidth] = useState(INSPECT_DOCK_DEFAULT_W);
+  const [colorFormat, setColorFormat] = useState<ColorFormat>('rgba');
+  const [codeTarget, setCodeTarget] = useState<CodeTarget>('css');
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -241,7 +451,7 @@ function DevPropertiesPanel({
     const fill = resolveFillColor(node, 'transparent');
     const stroke = resolveStroke(node, 'transparent');
     const shadow = resolveShadow(node);
-    const css = buildCss({
+    const snippet = buildCodeSnippet(codeTarget, colorFormat, {
       left,
       top,
       width,
@@ -253,13 +463,65 @@ function DevPropertiesPanel({
       strokeWidth: stroke.strokeWidth,
       shadow,
     });
-    return { left, top, width, height, radius, opacity, fill, stroke, shadow, css };
-  }, [document, node, nodeId]);
+    return {
+      left,
+      top,
+      width,
+      height,
+      radius,
+      opacity,
+      fill,
+      stroke,
+      shadow,
+      snippet,
+      fillText: formatColor(fill, colorFormat),
+      strokeText: formatColor(stroke.stroke, colorFormat),
+      shadowText: shadow ? formatColor(shadow.color, colorFormat) : '',
+    };
+  }, [codeTarget, colorFormat, document, node, nodeId]);
 
-  const copyCss = async () => {
-    if (!model?.css) return;
+  const colorFormatItems = useMemo(
+    (): MenuItemType[] =>
+      COLOR_FORMATS.map((key) => ({
+        key,
+        label: colorLabel(key),
+      })),
+    []
+  );
+  const codeTargetItems = useMemo(
+    (): MenuItemType[] =>
+      CODE_TARGETS.map((key) => ({
+        key,
+        label: codeTargetLabel(key),
+      })),
+    []
+  );
+
+  const copySnippet = async () => {
+    if (!model?.snippet) return;
     try {
-      await navigator.clipboard.writeText(model.css);
+      await navigator.clipboard.writeText(model.snippet);
+      message.success(t('editor.devCopied'));
+    } catch {
+      message.error(t('editor.devCopyFailed'));
+    }
+  };
+
+  const copyStyle = async () => {
+    if (!model) return;
+    const lines = [
+      `fill: ${model.fillText}`,
+      `stroke: ${formatPx(model.stroke.strokeWidth)}px ${model.strokeText}`,
+    ];
+    if (model.shadow) {
+      lines.push(
+        `shadow: ${formatPx(model.shadow.offsetX)} ${formatPx(model.shadow.offsetY)} ${formatPx(model.shadow.blur)} ${model.shadowText}`
+      );
+    } else {
+      lines.push('shadow: none');
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
       message.success(t('editor.devCopied'));
     } catch {
       message.error(t('editor.devCopyFailed'));
@@ -321,9 +583,9 @@ function DevPropertiesPanel({
               right={
                 <button
                   type="button"
-                  onClick={copyCss}
+                  onClick={copySnippet}
                   className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-                  aria-label={t('editor.devCopyCss')}
+                  aria-label={t('editor.devCopyCode')}
                 >
                   <HiOutlineClipboardDocument className="h-3.5 w-3.5" />
                 </button>
@@ -347,7 +609,33 @@ function DevPropertiesPanel({
             <Section
               title={t('editor.devStyle')}
               right={
-                <span className="text-[11px] text-[var(--muted)]">RGBA</span>
+                <div className="flex items-center gap-1.5">
+                  <Dropdown
+                    items={colorFormatItems}
+                    selectedKeys={[colorFormat]}
+                    placement="bottom-end"
+                    offset={6}
+                    floatingClassName="z-[90]"
+                    popupClassName="min-w-[6rem]"
+                    onClick={(key) => {
+                      if (COLOR_FORMATS.includes(key as ColorFormat)) {
+                        setColorFormat(key as ColorFormat);
+                      }
+                    }}
+                  >
+                    <button type="button" aria-label={t('editor.devColorFormat')}>
+                      <InspectMenuTrigger label={colorLabel(colorFormat)} />
+                    </button>
+                  </Dropdown>
+                  <button
+                    type="button"
+                    onClick={copyStyle}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+                    aria-label={t('editor.devCopyStyle')}
+                  >
+                    <HiOutlineClipboardDocument className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               }
             >
               <div className="space-y-2.5 text-[12px]">
@@ -355,7 +643,7 @@ function DevPropertiesPanel({
                   <span className="w-10 shrink-0 text-[var(--muted)]">{t('editor.fill')}</span>
                   <ColorSwatch color={model.fill} />
                   <span className="min-w-0 truncate tabular-nums text-[var(--ink)]">
-                    {toRgbaDisplay(model.fill)}
+                    {model.fillText}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -365,7 +653,7 @@ function DevPropertiesPanel({
                   </span>
                   <ColorSwatch color={model.stroke.stroke} />
                   <span className="min-w-0 truncate tabular-nums text-[var(--ink)]">
-                    {toRgbaDisplay(model.stroke.stroke)}
+                    {model.strokeText}
                   </span>
                 </div>
                 <div className="flex items-start gap-2">
@@ -382,7 +670,7 @@ function DevPropertiesPanel({
                       <div className="flex items-center gap-2">
                         <ColorSwatch color={model.shadow.color} />
                         <span className="min-w-0 truncate tabular-nums">
-                          {toRgbaDisplay(model.shadow.color)}
+                          {model.shadowText}
                         </span>
                       </div>
                     </div>
@@ -397,22 +685,36 @@ function DevPropertiesPanel({
               title={t('editor.devCode')}
               right={
                 <div className="flex items-center gap-1.5">
-                  <span className="rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] text-[var(--ink)]">
-                    CSS
-                  </span>
+                  <Dropdown
+                    items={codeTargetItems}
+                    selectedKeys={[codeTarget]}
+                    placement="bottom-end"
+                    offset={6}
+                    floatingClassName="z-[90]"
+                    popupClassName="min-w-[6rem]"
+                    onClick={(key) => {
+                      if (CODE_TARGETS.includes(key as CodeTarget)) {
+                        setCodeTarget(key as CodeTarget);
+                      }
+                    }}
+                  >
+                    <button type="button" aria-label={t('editor.devCodeTarget')}>
+                      <InspectMenuTrigger label={codeTargetLabel(codeTarget)} />
+                    </button>
+                  </Dropdown>
                   <button
                     type="button"
-                    onClick={copyCss}
+                    onClick={copySnippet}
                     className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-                    aria-label={t('editor.devCopyCss')}
+                    aria-label={t('editor.devCopyCode')}
                   >
                     <HiOutlineClipboardDocument className="h-3.5 w-3.5" />
                   </button>
                 </div>
               }
             >
-              <pre className="overflow-x-auto rounded-md bg-[var(--canvas)] p-2.5 font-mono text-[11px] leading-relaxed text-[var(--ink)]">
-                {model.css.split('\n').map((line, i) => {
+              <pre className="whitespace-pre-wrap break-all rounded-md bg-[var(--canvas)] p-2.5 font-mono text-[11px] leading-relaxed text-[var(--ink)]">
+                {model.snippet.split('\n').map((line, i) => {
                   const idx = line.indexOf(':');
                   if (idx < 0) return <div key={i}>{line}</div>;
                   return (
@@ -427,9 +729,11 @@ function DevPropertiesPanel({
               </pre>
             </Section>
 
-            <Section title={t('editor.export')}>
-              <ExportSelectionPanel nodeIds={[nodeId]} variant="inline" />
-            </Section>
+            {canExportNode ? (
+              <Section title={t('editor.export')}>
+                <ExportSelectionPanel nodeIds={[nodeId!]} variant="inline" />
+              </Section>
+            ) : null}
           </>
         )}
       </div>
