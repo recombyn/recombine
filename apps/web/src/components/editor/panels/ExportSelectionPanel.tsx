@@ -36,10 +36,62 @@ import {
   type ExportImageFormat,
   type ExportSlotConfig,
 } from '@/components/rcb/scene/paint/exportImage';
-import { normalizeDocument, isExportableSceneNode } from '@/components/rcb/scene/document/sceneDocument';
+import {
+  normalizeDocument,
+  isExportableSceneNode,
+  isVideoNode,
+} from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { downloadVideoNodeAsset } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
 import { cn } from '@/utils/classnames';
 import { SEL_ICON_BTN } from '@/components/rcb/selection/chrome/ToolbarValueSlider';
+
+type VideoExportFormat = 'mp4' | 'mp3';
+
+const VIDEO_FORMAT_OPTIONS: { value: VideoExportFormat; label: string }[] = [
+  { value: 'mp4', label: 'MP4' },
+  { value: 'mp3', label: 'MP3' },
+];
+
+function videoNodesForExport(document: any, ids: string[]) {
+  return ids
+    .map((id) => document?.deltaSetLike?.[id])
+    .filter((node: any) => isVideoNode(node) && String(node?.attrs?.src || '').trim());
+}
+
+function isVideoOnlyExport(document: any, ids: string[], hasCrop: boolean): boolean {
+  if (hasCrop || ids.length === 0) return false;
+  const videos = videoNodesForExport(document, ids);
+  return videos.length === ids.length && videos.length > 0;
+}
+
+function videoExportMode(format: VideoExportFormat): 'audio' | 'video' {
+  return format === 'mp3' ? 'audio' : 'video';
+}
+
+function videoExportCopy(
+  mode: 'audio' | 'video',
+  t: (key: string, opts?: Record<string, string>) => string
+) {
+  if (mode === 'audio') {
+    return {
+      loading: t('editor.videoToolbar.exportingAudio', { defaultValue: '正在导出音频…' }),
+      success: t('editor.exportedAudio', { defaultValue: '已导出音频' }),
+      fail: t('editor.videoToolbar.exportAudioFail', {
+        defaultValue: '音频导出失败（可能无音轨）',
+      }),
+    };
+  }
+  return {
+    loading: t('editor.videoToolbar.exporting', { defaultValue: '正在导出视频…' }),
+    success: t('editor.exportedVideo', { defaultValue: '已导出视频' }),
+    fail: t('editor.videoToolbar.downloadFail', { defaultValue: '下载失败' }),
+  };
+}
+
+function isAttrFlagTrue(value: unknown) {
+  return value === true || value === 'true';
+}
 
 const SCALE_OPTIONS = [
   { value: 0.5, label: '0.5x' },
@@ -249,10 +301,12 @@ function ExportSelectionPanel({
     return [];
   }, [crop, crops]);
   const [slot, setSlot] = useState<ExportSlotConfig>(() => defaultSlot());
+  const [videoFormat, setVideoFormat] = useState<VideoExportFormat>('mp4');
   const [compress, setCompress] = useState(false);
   const [busy, setBusy] = useState(false);
   const inline = variant === 'inline';
   const canExport = cropList.length > 0 || ids.length > 0;
+  const videoOnly = isVideoOnlyExport(document, ids, cropList.length > 0);
   const isSvg = slot.format === 'svg';
   const isJpeg = slot.format === 'jpeg';
   const format = slot.format;
@@ -290,9 +344,53 @@ function ExportSelectionPanel({
     { value: 'suffix', label: t('editor.exportSuffix') },
   ];
 
+  const runVideoExport = async () => {
+    const nodes = videoNodesForExport(document, ids);
+    if (!nodes.length) {
+      message.warning(t('editor.noSelectionExport'));
+      return;
+    }
+    const mode = videoExportMode(videoFormat);
+    const copy = videoExportCopy(mode, t);
+    setBusy(true);
+    const hideLoading = message.loading(copy.loading, 0);
+    try {
+      for (const node of nodes) {
+        const attrs = node?.attrs || {};
+        await downloadVideoNodeAsset({
+          src: String(attrs.src || ''),
+          name: String(node?.name || attrs.name || name || 'video'),
+          uploadKey: attrs.uploadKey != null ? String(attrs.uploadKey) : null,
+          cropX: attrs.cropX,
+          cropY: attrs.cropY,
+          cropW: attrs.cropW,
+          cropH: attrs.cropH,
+          trimStart: attrs.trimStart,
+          trimEnd: attrs.trimEnd,
+          flipX: isAttrFlagTrue(attrs.flipX),
+          flipY: isAttrFlagTrue(attrs.flipY),
+          mode,
+        });
+      }
+      hideLoading();
+      message.success(copy.success);
+      onClose?.();
+    } catch (err) {
+      hideLoading();
+      console.warn('[export-video]', err);
+      message.error(copy.fail);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const runExport = async () => {
     if (!canExport) {
       message.warning(t('editor.noSelectionExport'));
+      return;
+    }
+    if (videoOnly) {
+      await runVideoExport();
       return;
     }
     if (!isSvg && !isExportScaleSafe(sourceSize.width, sourceSize.height, slot.scale)) {
@@ -359,71 +457,87 @@ function ExportSelectionPanel({
         </div>
       ) : null}
 
-      <div className={cn('grid grid-cols-3 gap-1.5', inline && 'gap-2')}>
+      {videoOnly ? (
         <Select
           size="small"
           type="filled"
-          value={isSvg ? 1 : slot.scale}
-          options={scaleOptions}
-          disabled={isSvg}
-          onChange={(v) => setSlot((s) => ({ ...s, scale: Number(v) || 1 }))}
-          className={selectFieldClass}
-          placement="bottom-start"
-        />
-        <Select
-          size="small"
-          type="filled"
-          value={slot.affixMode}
-          options={affixOptions}
+          value={videoFormat}
+          options={VIDEO_FORMAT_OPTIONS}
           onChange={(v) =>
-            setSlot((s) => ({
-              ...s,
-              affixMode: parseAffixMode(String(v)),
-            }))
+            setVideoFormat(String(v) === 'mp3' ? 'mp3' : 'mp4')
           }
           className={selectFieldClass}
           placement="bottom-start"
         />
-        <Select
-          size="small"
-          type="filled"
-          value={slot.format}
-          options={VECTOR_FORMAT_OPTIONS}
-          onChange={(v) => {
-            const next = parseExportFormat(String(v));
-            setSlot((s) => ({ ...s, format: next }));
-            if (next !== 'jpeg') setCompress(false);
-          }}
-          className={selectFieldClass}
-          placement="bottom-start"
-        />
-      </div>
+      ) : (
+        <>
+          <div className={cn('grid grid-cols-3 gap-1.5', inline && 'gap-2')}>
+            <Select
+              size="small"
+              type="filled"
+              value={isSvg ? 1 : slot.scale}
+              options={scaleOptions}
+              disabled={isSvg}
+              onChange={(v) => setSlot((s) => ({ ...s, scale: Number(v) || 1 }))}
+              className={selectFieldClass}
+              placement="bottom-start"
+            />
+            <Select
+              size="small"
+              type="filled"
+              value={slot.affixMode}
+              options={affixOptions}
+              onChange={(v) =>
+                setSlot((s) => ({
+                  ...s,
+                  affixMode: parseAffixMode(String(v)),
+                }))
+              }
+              className={selectFieldClass}
+              placement="bottom-start"
+            />
+            <Select
+              size="small"
+              type="filled"
+              value={slot.format}
+              options={VECTOR_FORMAT_OPTIONS}
+              onChange={(v) => {
+                const next = parseExportFormat(String(v));
+                setSlot((s) => ({ ...s, format: next }));
+                if (next !== 'jpeg') setCompress(false);
+              }}
+              className={selectFieldClass}
+              placement="bottom-start"
+            />
+          </div>
 
-      {isJpeg ? (
-        <div className="mt-3 flex items-center gap-1.5 text-[12px] text-[var(--ink)]">
-          <Checkbox
-            size="small"
-            checked={compress}
-            onChange={(e) => setCompress(e.target.checked)}
-          >
-            {t('editor.exportCompress')}
-          </Checkbox>
-          <Tooltip tip={t('editor.exportCompressTip')} placement="top">
-            <button
-              type="button"
-              id={tipId}
-              className="inline-flex text-[var(--muted)]"
-              aria-label={t('editor.exportCompressTip')}
-            >
-              <HiOutlineInformationCircle className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-        </div>
-      ) : null}
+          {isJpeg ? (
+            <div className="mt-3 flex items-center gap-1.5 text-[12px] text-[var(--ink)]">
+              <Checkbox
+                size="small"
+                checked={compress}
+                onChange={(e) => setCompress(e.target.checked)}
+              >
+                {t('editor.exportCompress')}
+              </Checkbox>
+              <Tooltip tip={t('editor.exportCompressTip')} placement="top">
+                <button
+                  type="button"
+                  id={tipId}
+                  className="inline-flex text-[var(--muted)]"
+                  aria-label={t('editor.exportCompressTip')}
+                >
+                  <HiOutlineInformationCircle className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+            </div>
+          ) : null}
+        </>
+      )}
 
       <button
         type="button"
-        disabled={busy || !canExport || !scaleSafe}
+        disabled={busy || !canExport || (!videoOnly && !scaleSafe)}
         onClick={() => void runExport()}
         className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--ink)] text-[12px] font-medium text-[var(--surface)] disabled:opacity-40"
       >
@@ -505,7 +619,7 @@ function ExportSelectionPopover({
   return (
     <>
       <Tooltip
-        title={t('editor.exportImage')}
+        tip={t('editor.exportImage')}
         placement="top"
         disabled={disabled || !canExport || open}
       >
@@ -548,7 +662,14 @@ function ExportSelectionPopover({
 type ExportMode = 'all' | 'selected';
 
 /** Top-bar Export: All Pages / Selected (PNG·JPG·SVG) + JSON. */
-function EditorTopExportButton({ className }: { className?: string }) {
+function EditorTopExportButton({
+  className,
+  iconOnly = false,
+}: {
+  className?: string;
+  /** Compact top bars — icon only, text stays in aria-label. */
+  iconOnly?: boolean;
+}) {
   const { t } = useTranslation();
   const document = useSelector((s: any) => s.editor.document);
   const selectedNodeIds = useSelector(
@@ -674,7 +795,8 @@ function EditorTopExportButton({ className }: { className?: string }) {
         aria-haspopup="menu"
         disabled={busy}
         className={cn(
-          'inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50',
+          'inline-flex h-8 items-center justify-center rounded-xl bg-[var(--surface)] text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] disabled:opacity-50',
+          iconOnly ? 'w-8 px-0' : 'gap-1.5 px-3',
           className
         )}
         {...getReferenceProps({
@@ -691,7 +813,7 @@ function EditorTopExportButton({ className }: { className?: string }) {
         })}
       >
         <HiOutlineArrowUpTray className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-        {t('editor.export')}
+        {iconOnly ? null : t('editor.export')}
       </button>
 
       <FloatingPortal>

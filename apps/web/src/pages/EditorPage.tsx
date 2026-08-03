@@ -1011,28 +1011,13 @@ function EditorPage() {
   const sessionReadyForIdRef = useRef<string | null>(null);
   const didInitialFitRef = useRef(false);
   const gridUserTouchedRef = useRef(false);
-  /** True after the user pans/zooms — stops auto re-fit on stage resize. */
-  const cameraTouchedByUserRef = useRef(false);
-  /** Next camera write is programmatic (fit) — don't count as user touch. */
-  const skipCameraTouchRef = useRef(false);
   useEffect(() => {
     sessionReadyForIdRef.current = null;
     didInitialFitRef.current = false;
     gridUserTouchedRef.current = false;
-    cameraTouchedByUserRef.current = false;
-    skipCameraTouchRef.current = false;
     setCamera(DEFAULT_CAMERA);
     dispatch(setGridMode(false));
   }, [currentId, dispatch]);
-
-  useEffect(() => {
-    if (skipCameraTouchRef.current) {
-      skipCameraTouchRef.current = false;
-      return;
-    }
-    if (!didInitialFitRef.current) return;
-    cameraTouchedByUserRef.current = true;
-  }, [camera.x, camera.y, camera.zoom]);
 
   useEffect(() => {
     if (!currentId || !document) return;
@@ -1370,7 +1355,6 @@ function EditorPage() {
     if (vw < 1 || vh < 1) return;
     const doc = (store.getState() as any).editor?.document;
     const fr: ArtboardFrame[] = Array.isArray(doc?.frames) ? doc.frames : [];
-    skipCameraTouchRef.current = true;
     setCamera(rcbFitCamera({ width: vw, height: vh }, editorContentBounds(doc, fr), 120));
   }, []);
 
@@ -1382,27 +1366,6 @@ function EditorPage() {
     }
     finishBoot();
   }, [onFitView]);
-
-  // Agent dock / inspect panel can change stage size after the first fit. Re-fit
-  // until the user pans or zooms so content does not sit off-center then "run away".
-  useEffect(() => {
-    const el = stageEl;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    let lastW = el.clientWidth;
-    let lastH = el.clientHeight;
-    const ro = new ResizeObserver(() => {
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      if (!(w > 8 && h > 8)) return;
-      if (!didInitialFitRef.current || cameraTouchedByUserRef.current) return;
-      if (Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) return;
-      lastW = w;
-      lastH = h;
-      onFitView();
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [stageEl, onFitView]);
 
   const zoomModLabel = zoomModShortcutLabel();
 

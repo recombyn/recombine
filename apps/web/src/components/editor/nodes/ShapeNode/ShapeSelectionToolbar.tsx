@@ -309,7 +309,7 @@ function ShapeSelectionToolbar({
         />
       </label>
       <Tooltip
-        title={
+        tip={
           aspectLocked
             ? t('editor.imageToolbar.unlockAspect')
             : t('editor.imageToolbar.lockAspect')

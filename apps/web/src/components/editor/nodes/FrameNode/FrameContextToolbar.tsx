@@ -160,7 +160,7 @@ function FrameContextToolbar({ frame }: Props) {
       </FrameSizePresetMenu>
 
       <Tooltip
-        title={
+        tip={
           isLandscape
             ? t('editor.frameToolbar.toPortrait')
             : t('editor.frameToolbar.toLandscape')
@@ -242,7 +242,7 @@ function FrameContextToolbar({ frame }: Props) {
         />
       </label>
       <Tooltip
-        title={
+        tip={
           aspectLocked
             ? t('editor.frameToolbar.unlockAspect')
             : t('editor.frameToolbar.lockAspect')
@@ -287,7 +287,7 @@ function FrameContextToolbar({ frame }: Props) {
       </label>
 
       <Tooltip
-        title={
+        tip={
           canvasLocked
             ? t('editor.frameToolbar.unlockCanvas')
             : t('editor.frameToolbar.lockCanvas')
@@ -314,7 +314,7 @@ function FrameContextToolbar({ frame }: Props) {
       </Tooltip>
 
       <Tooltip
-        title={clipContent ? t('editor.showOverflow') : t('editor.clipOverflow')}
+        tip={clipContent ? t('editor.showOverflow') : t('editor.clipOverflow')}
         placement="top"
       >
         <button

@@ -51,7 +51,7 @@ function PanelSegmentedIcons<T extends string>({
         return (
           <Tooltip
             key={id}
-            title={tip}
+            tip={tip}
             placement="top"
             asChild={false}
             triggerClassName={PANEL_ICON_SLOT}
@@ -104,7 +104,7 @@ function PanelToggleIcons<T extends string>({
     <div className={cn(PANEL_ICON_TRACK, className)} role="group">
       {leading && LeadIcon ? (
         <Tooltip
-          title={leading.tip}
+          tip={leading.tip}
           placement="top"
           asChild={false}
           triggerClassName={PANEL_ICON_SLOT}
@@ -129,7 +129,7 @@ function PanelToggleIcons<T extends string>({
         return (
           <Tooltip
             key={id}
-            title={tip}
+            tip={tip}
             placement="top"
             asChild={false}
             triggerClassName={PANEL_ICON_SLOT}
@@ -199,7 +199,7 @@ function StylePanelShell({
         <div className="flex items-center gap-0.5">
           {showLayerToggle ? (
             <Tooltip
-              title={layerVisible ? layerVisibleTipHide : layerVisibleTipShow}
+              tip={layerVisible ? layerVisibleTipHide : layerVisibleTipShow}
               placement="bottom"
             >
               <button

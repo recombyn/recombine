@@ -245,7 +245,7 @@ function DiffuseMeshEditor({
         </p>
         <div className="flex items-center gap-0.5">
           <Tooltip
-            title={showGuides ? t('editor.fillMeshHideGuides') : t('editor.fillMeshShowGuides')}
+            tip={showGuides ? t('editor.fillMeshHideGuides') : t('editor.fillMeshShowGuides')}
             placement="top"
           >
             <button

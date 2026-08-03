@@ -401,7 +401,7 @@ function PenStrokeToolbar({
             onMouseLeave={scheduleCloseBrush}
           >
             <Tooltip
-              title={`画笔：${brush.label}`}
+              tip={`画笔：${brush.label}`}
               placement={docked ? 'bottom' : 'top'}
               disabled={eraseMode}
             >
@@ -544,7 +544,7 @@ function PenStrokeToolbar({
           <>
             <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
             <Tooltip
-              title={pressureEnabled ? '\u538b\u611f\uff1a\u5f00' : '\u538b\u611f\uff1a\u5173'}
+              tip={pressureEnabled ? '\u538b\u611f\uff1a\u5f00' : '\u538b\u611f\uff1a\u5173'}
               placement={docked ? 'bottom' : 'top'}
             >
               <button

@@ -129,11 +129,13 @@ const itemClass =
 
 const PAD = 8;
 
-/**
- * Menu is `position: fixed` on document.body — use viewport client coords.
- * Keep the click anchor; only shift when the panel would overflow.
- * No scrollbars: reposition to fit the natural size (overflow hidden).
- */
+type ExportPickAction =
+  | 'exportPng'
+  | 'exportJpg'
+  | 'exportSvg'
+  | 'exportMp4'
+  | 'exportMp3';
+
 function clampFixedMenuPos(opts: {
   left: number;
   top: number;
@@ -151,6 +153,44 @@ function clampFixedMenuPos(opts: {
   if (top + h > viewH - PAD) top = viewH - PAD - h;
   if (top < PAD) top = PAD;
   return { left, top };
+}
+
+function exportFlyoutHeight(kind: 'image' | 'video') {
+  return kind === 'video' ? 88 : 120;
+}
+
+function ExportFormatButtons({
+  kind,
+  onPick,
+}: {
+  kind: 'image' | 'video';
+  onPick: (action: ExportPickAction) => void;
+}) {
+  if (kind === 'video') {
+    return (
+      <>
+        <button type="button" className={itemClass} onClick={() => onPick('exportMp4')}>
+          MP4
+        </button>
+        <button type="button" className={itemClass} onClick={() => onPick('exportMp3')}>
+          MP3
+        </button>
+      </>
+    );
+  }
+  return (
+    <>
+      <button type="button" className={itemClass} onClick={() => onPick('exportPng')}>
+        PNG
+      </button>
+      <button type="button" className={itemClass} onClick={() => onPick('exportJpg')}>
+        JPG
+      </button>
+      <button type="button" className={itemClass} onClick={() => onPick('exportSvg')}>
+        SVG
+      </button>
+    </>
+  );
 }
 
 function MenuItem({
@@ -193,9 +233,7 @@ function ExportSubmenu({
 }: {
   disabled?: boolean;
   kind?: 'image' | 'video';
-  onPick: (
-    action: 'exportPng' | 'exportJpg' | 'exportSvg' | 'exportMp4' | 'exportMp3'
-  ) => void;
+  onPick: (action: ExportPickAction) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -230,7 +268,7 @@ function ExportSubmenu({
     }
     const rect = rowRef.current.getBoundingClientRect();
     const flyoutW = 128;
-    const flyoutH = kind === 'video' ? 88 : 120;
+    const flyoutH = exportFlyoutHeight(kind);
     const preferRight = window.innerWidth - rect.right >= flyoutW + 8;
     const left = preferRight ? rect.right + 4 : Math.max(PAD, rect.left - flyoutW - 4);
     let top = rect.top;
@@ -247,13 +285,13 @@ function ExportSubmenu({
     []
   );
 
-  const pick = (
-    action: 'exportPng' | 'exportJpg' | 'exportSvg' | 'exportMp4' | 'exportMp3'
-  ) => {
+  const pick = (action: ExportPickAction) => {
     clearCloseTimer();
     setOpen(false);
     onPick(action);
   };
+
+  const showFlyout = open && !disabled && flyoutPos;
 
   return (
     <div
@@ -285,7 +323,7 @@ function ExportSubmenu({
         <span className="min-w-0 flex-1 truncate">{t('editor.contextMenu.export')}</span>
         <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
       </button>
-      {open && !disabled && flyoutPos
+      {showFlyout
         ? createPortal(
             <div
               role="menu"
@@ -299,28 +337,7 @@ function ExportSubmenu({
                 e.stopPropagation();
               }}
             >
-              {kind === 'video' ? (
-                <>
-                  <button type="button" className={itemClass} onClick={() => pick('exportMp4')}>
-                    MP4
-                  </button>
-                  <button type="button" className={itemClass} onClick={() => pick('exportMp3')}>
-                    MP3
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button type="button" className={itemClass} onClick={() => pick('exportPng')}>
-                    PNG
-                  </button>
-                  <button type="button" className={itemClass} onClick={() => pick('exportJpg')}>
-                    JPG
-                  </button>
-                  <button type="button" className={itemClass} onClick={() => pick('exportSvg')}>
-                    SVG
-                  </button>
-                </>
-              )}
+              <ExportFormatButtons kind={kind} onPick={pick} />
             </div>,
             window.document.body
           )
@@ -389,6 +406,34 @@ function CanvasContextMenu({
     e.stopPropagation();
   };
 
+  const onBackdropPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.('[data-ctx-menu-flyout]')) return;
+    if (menu) dismiss();
+  };
+
+  const visibilityIcon = targetHidden ? (
+    <HiOutlineEyeSlash className={ICON_CLASS} strokeWidth={1.75} />
+  ) : (
+    <HiOutlineEye className={ICON_CLASS} strokeWidth={1.75} />
+  );
+  const visibilityLabel = targetHidden
+    ? t('editor.contextMenu.show')
+    : t('editor.contextMenu.hide');
+  const lockIcon = targetLocked ? (
+    <HiOutlineLockClosed className={ICON_CLASS} strokeWidth={1.75} />
+  ) : (
+    <HiOutlineLockOpen className={ICON_CLASS} strokeWidth={1.75} />
+  );
+  const lockLabel = targetLocked
+    ? t('editor.contextMenu.unlock')
+    : t('editor.contextMenu.lock');
+  const gridLabel = gridOn
+    ? t('editor.contextMenu.hideGrid')
+    : t('editor.contextMenu.showGrid');
+
   useLayoutEffect(() => {
     if (!menu) {
       setPos(null);
@@ -430,15 +475,9 @@ function CanvasContextMenu({
   return createPortal(
     <>
       <div
+        data-ctx-menu
         className="fixed inset-0 z-[60]"
-        onPointerDown={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const target = e.target as HTMLElement | null;
-          // Keep menu open while interacting with the export flyout portal.
-          if (target?.closest?.('[data-ctx-menu-flyout]')) return;
-          if (menu) dismiss();
-        }}
+        onPointerDown={onBackdropPointerDown}
         aria-hidden
       />
       {menu ? (
@@ -556,42 +595,22 @@ function CanvasContextMenu({
           />
           <div className="my-1 h-px bg-[var(--line)]" />
           <MenuItem
-            icon={
-              targetHidden ? (
-                <HiOutlineEyeSlash className={ICON_CLASS} strokeWidth={1.75} />
-              ) : (
-                <HiOutlineEye className={ICON_CLASS} strokeWidth={1.75} />
-              )
-            }
-            label={
-              targetHidden ? t('editor.contextMenu.show') : t('editor.contextMenu.hide')
-            }
+            icon={visibilityIcon}
+            label={visibilityLabel}
             shortcut={`${modLabel}+Shift+H`}
             disabled={!hideEnabled}
             onClick={() => runAction('toggleHidden')}
           />
           <MenuItem
-            icon={
-              targetLocked ? (
-                <HiOutlineLockClosed className={ICON_CLASS} strokeWidth={1.75} />
-              ) : (
-                <HiOutlineLockOpen className={ICON_CLASS} strokeWidth={1.75} />
-              )
-            }
-            label={
-              targetLocked ? t('editor.contextMenu.unlock') : t('editor.contextMenu.lock')
-            }
+            icon={lockIcon}
+            label={lockLabel}
             shortcut={`${modLabel}+Shift+K`}
             disabled={!lockEnabled}
             onClick={() => runAction('toggleLocked')}
           />
           <MenuItem
             icon={<IconGrid className={ICON_CLASS} />}
-            label={
-              gridOn
-                ? t('editor.contextMenu.hideGrid')
-                : t('editor.contextMenu.showGrid')
-            }
+            label={gridLabel}
             onClick={() => runAction('toggleGrid')}
           />
           <div className="my-1 h-px bg-[var(--line)]" />
