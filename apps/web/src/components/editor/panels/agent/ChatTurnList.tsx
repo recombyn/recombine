@@ -713,6 +713,7 @@ function UserMessageBody({
             key={`${c.key}-${chipIdx}`}
             label={c.label}
             thumbUrl={c.thumbUrl}
+            hideLeadingIcon={c.kind === 'skill' || c.key.startsWith('skill:')}
             className="mx-0.5"
           />
         );
@@ -727,6 +728,7 @@ function UserMessageBody({
         key={`${c.key}-${chipIdx}`}
         label={c.label}
         thumbUrl={c.thumbUrl}
+        hideLeadingIcon={c.kind === 'skill' || c.key.startsWith('skill:')}
         className="mx-0.5"
       />
     );
