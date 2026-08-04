@@ -1,5 +1,10 @@
 <p align="center">
-  <img src="docs/assets/readme-hero.png" alt="Recombyn — 开源画布 + AI 设计 Agent" width="100%" />
+  <img src="docs/assets/logo-mark.svg" alt="Recombyn" width="96" height="96" />
+</p>
+
+<p align="center">
+  <strong>recombyn</strong><br />
+  <sub>开源画布 + AI 设计 Agent</sub>
 </p>
 
 <p align="center">
@@ -33,7 +38,7 @@
 - **实时多人协作** — 同一项目 Yjs 同步（光标、选区、撤销）；分享可只读或可编辑
 - **Agent 落笔改稿** — 对话规划并执行画布操作
 - **自托管优先** — 本地 / 服务器同一套栈
-- **可组合** — `apps/api/data/public/` 含基建种子 + 提示词包 + **5 个核心 Agent Skill**；完整产品内容可放 `data/private/` 或 Admin
+- **可组合** — `apps/api/data/public/` 含基建种子 + 提示词包 + **5 个核心 Agent Skill**
 
 ## 核心能力
 

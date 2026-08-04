@@ -24,7 +24,7 @@ Mixed scenes of about **5k** nodes stay smooth for daily editing (Chromium pan m
 ```
 HTTP     api/v1/*                 thin routes
 Domain   services/*               by domain (design / plaza / wallet / …)
-Seeds    data/*.json              flows, dictionaries, fonts, official cases → DB
+Seeds    data/*.json              flows, dictionaries, fonts → DB
                                   (INSERT missing; do not overwrite existing)
 Design   design.runtime           orchestrator → design_stream → graph
          design.prompts           Skill / prompt pack / knowledge / token
@@ -42,7 +42,7 @@ POST /api/v1/design/run
 - `runtime/graph/` — graph compile, nodes, SSE / turn / paint helpers
 - `agent_controller` — compatibility re-exports; not the outer entry
 
-Configurable content (prompt packs, Skills, dictionaries, global rules, etc.) is seeded from `apps/api/data/public/` (and optional `private/` overrides); Admin / DB is authoritative. Skill namespaces: [design_skills/README.md](../apps/api/data/public/design_skills/README.md).
+Configurable content (prompt packs, Skills, dictionaries, global rules, etc.) is seeded from `apps/api/data/public/`; Admin / DB is authoritative. Skill namespaces: [design_skills/README.md](../apps/api/data/public/design_skills/README.md).
 
 Package layout, call conventions, and SSE-related interfaces: **[design-agent-runtime.md](./design-agent-runtime.md)**.
 

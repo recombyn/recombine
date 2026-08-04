@@ -1,5 +1,6 @@
 import { useMemo, memo } from 'react';
 import { useRcbCamera } from '../camera/context';
+import { toDomPrecision } from '../core/dpr';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -42,6 +43,24 @@ export const SPACING_SIZE_BADGE_COLOR = '#3388FF';
 const MEASURE = SPACING_MEASURE_COLOR;
 const OVERLAP_EPS = 0.5;
 const DASH_CLEAR_PAD = OVERLAP_EPS * 4;
+/**
+ * Skip spacing rails when the gap (or shaft) is longer than this on screen.
+ * Far pairs like 1500px clearance only add clutter.
+ */
+const MAX_SPACING_GAP_SCREEN_PX = 400;
+
+/** Drop measures that span too far in screen space (distance tip or shaft length). */
+function filterFarSpacingMeasures(
+  measures: SpacingMeasure[],
+  zoom: number
+): SpacingMeasure[] {
+  const maxScene = MAX_SPACING_GAP_SCREEN_PX / Math.max(0.05, zoom);
+  return measures.filter((m) => {
+    if (m.distance > maxScene) return false;
+    const span = Math.hypot(m.x2 - m.x1, m.y2 - m.y1);
+    return span <= maxScene;
+  });
+}
 
 function overlaps1D(a0: number, a1: number, b0: number, b1: number) {
   return a0 < b1 - OVERLAP_EPS && a1 > b0 + OVERLAP_EPS;
@@ -410,20 +429,15 @@ export function computePairSpacingMeasures(
 
     const x0 = Math.min(ox, sx);
     const x1 = Math.max(ox, sx);
-    out.push(
-      measureSeg(otherLeft ? 'left' : 'right', hSep, x0, sy, x1, sy, [
-        { x1: ox, y1: oy, x2: ox, y2: sy },
-      ])
-    );
+    // gapsOnly: just the two clearance shafts (no corner projection dashes).
+    const hDashes = gapsOnly ? undefined : [{ x1: ox, y1: oy, x2: ox, y2: sy }];
+    out.push(measureSeg(otherLeft ? 'left' : 'right', hSep, x0, sy, x1, sy, hDashes));
 
     const y0 = Math.min(oy, sy);
     const y1 = Math.max(oy, sy);
-    out.push(
-      measureSeg(otherAbove ? 'top' : 'bottom', vSep, sx, y0, sx, y1, [
-        { x1: ox, y1: oy, x2: sx, y2: oy },
-      ])
-    );
-    return pruneOverlappingDashes(out);
+    const vDashes = gapsOnly ? undefined : [{ x1: ox, y1: oy, x2: sx, y2: oy }];
+    out.push(measureSeg(otherAbove ? 'top' : 'bottom', vSep, sx, y0, sx, y1, vDashes));
+    return gapsOnly ? out : pruneOverlappingDashes(out);
   }
 
   // —— Horizontal clearance (Y overlaps) ——
@@ -620,7 +634,7 @@ export type GuideTargetLike = {
 
 /**
  * MasterGo-style: only objects that participate in the active align/gap guides.
- * Prevents distance tips + orange outlines on every nearby frame (图2 clutter).
+ * Prefer the path-sized box when faced duplicates remain (never outer ink).
  */
 export function boxesInvolvedInGuides(
   guides: GuideTargetLike[],
@@ -632,7 +646,26 @@ export function boxesInvolvedInGuides(
   const out: SceneBox[] = [];
   const seen = new Set<string>();
 
+  // Drop near-duplicate faced boxes (same center); keep the smaller = path.
+  const unique: SceneBox[] = [];
   for (const b of candidates) {
+    const cx = b.left + b.width / 2;
+    const cy = b.top + b.height / 2;
+    const idx = unique.findIndex((u) => {
+      const ux = u.left + u.width / 2;
+      const uy = u.top + u.height / 2;
+      return Math.abs(ux - cx) <= eps && Math.abs(uy - cy) <= eps;
+    });
+    if (idx >= 0) {
+      if (b.width * b.height < unique[idx].width * unique[idx].height) {
+        unique[idx] = b;
+      }
+      continue;
+    }
+    unique.push(b);
+  }
+
+  for (const b of unique) {
     const e = boxEdges(b);
     const key = boxKey(b);
     if (seen.has(key)) continue;
@@ -672,93 +705,165 @@ export function boxesInvolvedInGuides(
   return out;
 }
 
-/** Open chevron double-headed measure (fig.2 — stroke only, no fill). */
-function MeasureArrowLine({
-  horizontal,
-  length,
-  stroke,
-  color,
-  arrow,
-}: {
-  horizontal: boolean;
-  length: number;
-  stroke: number;
-  color: string;
-  arrow: number;
-}) {
-  const head = Math.min(arrow, Math.max(stroke * 4, Math.min(length * 0.32, arrow)));
-  const wing = head * 0.7;
-
+/** Open chevron double-headed measure in scene coords (no CSS translate). */
+function measureArrowScenePath(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  arrow: number,
+  stroke: number
+): { shaft: string; headA: string; headB: string } | null {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (!(len > 0.05)) return null;
+  const horizontal = Math.abs(dx) >= Math.abs(dy);
+  const head = Math.min(arrow, Math.max(stroke * 2, Math.min(len * 0.28, arrow)));
+  const wing = head * 0.55;
   if (horizontal) {
-    const h = Math.max(stroke * 2, wing * 2 + stroke);
-    const y = h / 2;
-    return (
-      <svg className="absolute overflow-visible" width={Math.max(1, length)} height={h} aria-hidden>
-        <line
-          x1={0}
-          y1={y}
-          x2={length}
-          y2={y}
-          stroke={color}
-          strokeWidth={stroke}
-          strokeLinecap="butt"
-        />
-        <polyline
-          points={`${head},${y - wing} 0,${y} ${head},${y + wing}`}
-          fill="none"
-          stroke={color}
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <polyline
-          points={`${length - head},${y - wing} ${length},${y} ${length - head},${y + wing}`}
-          fill="none"
-          stroke={color}
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
+    const left = Math.min(x1, x2);
+    const right = Math.max(x1, x2);
+    const y = (y1 + y2) / 2;
+    return {
+      shaft: `M${left} ${y} L${right} ${y}`,
+      headA: `M${left + head} ${y - wing} L${left} ${y} L${left + head} ${y + wing}`,
+      headB: `M${right - head} ${y - wing} L${right} ${y} L${right - head} ${y + wing}`,
+    };
   }
+  const top = Math.min(y1, y2);
+  const bottom = Math.max(y1, y2);
+  const x = (x1 + x2) / 2;
+  return {
+    shaft: `M${x} ${top} L${x} ${bottom}`,
+    headA: `M${x - wing} ${top + head} L${x} ${top} L${x + wing} ${top + head}`,
+    headB: `M${x - wing} ${bottom - head} L${x} ${bottom} L${x + wing} ${bottom - head}`,
+  };
+}
 
-  const w = Math.max(stroke * 2, wing * 2 + stroke);
-  const x = w / 2;
+function spacingWorldViewport(
+  box: SceneBox,
+  measures: SpacingMeasure[],
+  showSizeBadge: boolean,
+  pad: number
+): { minX: number; minY: number; w: number; h: number } {
+  let minX = box.left;
+  let minY = box.top;
+  let maxX = box.left + box.width;
+  let maxY = box.top + box.height;
+  const grow = (x: number, y: number) => {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  };
+  for (const m of measures) {
+    if (m.distance < 0.05) continue;
+    grow(m.x1, m.y1);
+    grow(m.x2, m.y2);
+    grow(m.mx, m.my);
+    for (const d of m.dashes || []) {
+      grow(d.x1, d.y1);
+      grow(d.x2, d.y2);
+    }
+  }
+  if (showSizeBadge) {
+    grow(box.left + box.width / 2, box.top + box.height);
+    grow(box.left + box.width / 2, box.top);
+    grow(box.left + box.width, box.top + box.height / 2);
+  }
+  return {
+    minX: toDomPrecision(minX - pad),
+    minY: toDomPrecision(minY - pad),
+    w: toDomPrecision(Math.max(1, maxX - minX + pad * 2)),
+    h: toDomPrecision(Math.max(1, maxY - minY + pad * 2)),
+  };
+}
+
+/** Screen-constant pill in scene space (SVG — no CSS radius squash under camera scale). */
+function spacingBadgeGeom(
+  text: string,
+  x: number,
+  y: number,
+  anchor: 'center' | 'below' | 'above' | 'right',
+  inv: number,
+  clearance = 0
+) {
+  const fontSize = 11 * inv;
+  const padX = 5.5 * inv;
+  const padY = 2.25 * inv;
+  const radius = 4 * inv;
+  const gap = Math.max(6 * inv, clearance);
+  const tw = Math.max(14 * inv, String(text).length * fontSize * 0.62);
+  const th = fontSize * 1.2;
+  const w = tw + padX * 2;
+  const h = th + padY * 2;
+  let cx = x;
+  let cy = y;
+  if (anchor === 'below') cy = y + gap + h / 2;
+  else if (anchor === 'above') cy = y - gap - h / 2;
+  else if (anchor === 'right') cx = x + gap + w / 2;
+  return {
+    fontSize,
+    radius,
+    w,
+    h,
+    cx,
+    cy,
+    x: cx - w / 2,
+    y: cy - h / 2,
+  };
+}
+
+function SpacingBadgeSvg({
+  text,
+  x,
+  y,
+  anchor,
+  fill,
+  inv,
+  clearance = 0,
+}: {
+  text: string;
+  x: number;
+  y: number;
+  anchor: 'center' | 'below' | 'above' | 'right';
+  fill: string;
+  inv: number;
+  clearance?: number;
+}) {
+  const g = spacingBadgeGeom(text, x, y, anchor, inv, clearance);
   return (
-    <svg className="absolute overflow-visible" width={w} height={Math.max(1, length)} aria-hidden>
-      <line
-        x1={x}
-        y1={0}
-        x2={x}
-        y2={length}
-        stroke={color}
-        strokeWidth={stroke}
-        strokeLinecap="butt"
+    <g pointerEvents="none">
+      <rect
+        x={g.x}
+        y={g.y}
+        width={g.w}
+        height={g.h}
+        rx={g.radius}
+        ry={g.radius}
+        fill={fill}
       />
-      <polyline
-        points={`${x - wing},${head} ${x},0 ${x + wing},${head}`}
-        fill="none"
-        stroke={color}
-        strokeWidth={stroke}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <polyline
-        points={`${x - wing},${length - head} ${x},${length} ${x + wing},${length - head}`}
-        fill="none"
-        stroke={color}
-        strokeWidth={stroke}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+      <text
+        x={g.cx}
+        y={g.cy}
+        fill="#ffffff"
+        fontSize={g.fontSize}
+        fontWeight={600}
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+        textAnchor="middle"
+        dominantBaseline="central"
+      >
+        {text}
+      </text>
+    </g>
   );
 }
 
 /**
- * Spacing / margin lines in **camera world** (scene coords).
- * Screen-constant via page sizes `px / zoom` + SVG stroke.
+ * Spacing / margin lines in **camera world** — same contract as path chrome /
+ * SelectionChrome: one fitted SVG (`viewBox` === CSS `left/top/width/height`).
+ * Badges are SVG too — HTML pills under `scale(zoom)` squash border-radius.
  */
 function SpacingInspectOverlay({
   box,
@@ -766,11 +871,14 @@ function SpacingInspectOverlay({
   pairBox = null,
   showGaps = true,
   showSizeBadge = true,
+  drawLines = true,
   color = MEASURE,
   sizeBadgeColor = SPACING_SIZE_BADGE_COLOR,
   measures: measuresProp,
 }: SpacingInspectOverlayProps & {
   showSizeBadge?: boolean;
+  /** When false, only badges (lines already host-injected). */
+  drawLines?: boolean;
   color?: string;
   /** Selected W×H badge — blue in fig.1; gaps stay orange. */
   sizeBadgeColor?: string;
@@ -778,25 +886,24 @@ function SpacingInspectOverlay({
   measures?: SpacingMeasure[] | null;
 }) {
   const camera = useRcbCamera();
+  // Same as path control chrome: screen-constant under camera.zoom (not browser zoom).
   const zoom = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / zoom;
-  // fig.2: ~1px hairline on screen
-  const stroke = 1 * inv;
-  const arrow = 5.5 * inv;
-  const dashArr = `${3.5 * inv} ${3 * inv}`;
-  const labelFont = 11 * inv;
-  const badgeFont = 11 * inv;
+  const stroke = 1.5 * inv;
+  const arrow = Math.max(stroke * 2, 3.5 * inv);
+  const dashArr = `${stroke * 3.5} ${stroke * 3}`;
   const badgeGap = 6 * inv;
-  const badgeRadius = 4 * inv;
-  /** Label sits beside the shaft so it never covers the arrow (fig.2). */
   const labelClearance = 8 * inv;
 
   const measures = useMemo(() => {
-    if (measuresProp) return measuresProp;
-    if (!showGaps) return [];
-    if (pairBox) return computePairSpacingMeasures(box, pairBox);
-    return computeSpacingMeasures(box, others);
-  }, [box, others, pairBox, showGaps, measuresProp]);
+    const raw = (() => {
+      if (measuresProp) return measuresProp;
+      if (!showGaps) return [];
+      if (pairBox) return computePairSpacingMeasures(box, pairBox, { gapsOnly: true });
+      return computeSpacingMeasures(box, others);
+    })();
+    return filterFarSpacingMeasures(raw, zoom);
+  }, [box, others, pairBox, showGaps, measuresProp, zoom]);
 
   const cx = box.left + box.width / 2;
   const cy = box.top + box.height / 2;
@@ -831,153 +938,128 @@ function SpacingInspectOverlay({
 
   if (box.width <= 0 || box.height <= 0) return null;
 
-  const sizeTransform =
-    sizePlacement.mode === 'above'
-      ? `translate(-50%, calc(-100% - ${badgeGap}px))`
-      : sizePlacement.mode === 'below'
-        ? `translate(-50%, ${badgeGap}px)`
-        : `translate(${badgeGap + 2 * inv}px, -50%)`;
+  const vpPad = Math.max(arrow, labelClearance, badgeGap) + 11 * inv * 2 + 8 * inv;
+  const vp = spacingWorldViewport(box, measures, showSizeBadge, vpPad);
+  const visibleMeasures = measures.filter((m) => m.distance >= 0.05);
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-[26] overflow-visible">
-      {measures.map((m) => {
-        if (m.distance < 0.05) return null;
-        let labelX = m.mx;
-
-        if (
-          showSizeBadge &&
-          (m.side === 'top' || m.side === 'bottom') &&
-          Math.abs(m.mx - cx) < 12 &&
-          m.distance < 28
-        ) {
-          labelX = cx + Math.min(48, Math.max(24, box.width * 0.28));
-          if (labelX > right - 8) labelX = cx - Math.min(48, Math.max(24, box.width * 0.28));
-        }
-
-        const horizontal = m.side === 'left' || m.side === 'right';
-        const x = Math.min(m.x1, m.x2);
-        const y = Math.min(m.y1, m.y2);
-        const segLen = Math.max(stroke, horizontal ? Math.abs(m.x2 - m.x1) : Math.abs(m.y2 - m.y1));
-        const isOffset = m.kind === 'offset';
-
-        return (
-          <div
-            key={`${m.side}-${formatPx(m.distance)}-${Math.round(m.mx)}-${Math.round(m.my)}`}
-            className="pointer-events-none absolute"
-          >
-            {/* Projection stubs (offset ticks / move-margin guides). */}
-            {(m.dashes || []).map((d, di) => {
-              const dx = Math.min(d.x1, d.x2);
-              const dy = Math.min(d.y1, d.y2);
-              const dw = Math.max(stroke, Math.abs(d.x2 - d.x1));
-              const dh = Math.max(stroke, Math.abs(d.y2 - d.y1));
-              const vert = Math.abs(d.x2 - d.x1) <= Math.abs(d.y2 - d.y1);
+    <div className="pointer-events-none absolute inset-0 z-[40] overflow-visible">
+      <svg
+        className="pointer-events-none absolute z-[40] overflow-visible"
+        width={vp.w}
+        height={vp.h}
+        viewBox={`${vp.minX} ${vp.minY} ${vp.w} ${vp.h}`}
+        style={{
+          left: vp.minX,
+          top: vp.minY,
+          width: vp.w,
+          height: vp.h,
+          overflow: 'visible',
+        }}
+        aria-hidden
+      >
+        {drawLines
+          ? visibleMeasures.map((m) => {
+              const key = `${m.side}-${formatPx(m.distance)}-${Math.round(m.mx)}-${Math.round(m.my)}`;
+              const isOffset = m.kind === 'offset';
+              const arrowPaths = isOffset
+                ? null
+                : measureArrowScenePath(m.x1, m.y1, m.x2, m.y2, arrow, stroke);
               return (
-                <svg
-                  key={`dash-${di}`}
-                  className="absolute overflow-visible"
-                  width={vert ? Math.max(stroke * 2, 1) : dw}
-                  height={vert ? dh : Math.max(stroke * 2, 1)}
-                  style={{
-                    left: vert ? d.x1 : dx,
-                    top: vert ? dy : d.y1,
-                    transform: vert ? 'translateX(-50%)' : 'translateY(-50%)',
-                  }}
-                  aria-hidden
-                >
-                  <line
-                    x1={vert ? '50%' : 0}
-                    y1={vert ? 0 : '50%'}
-                    x2={vert ? '50%' : dw}
-                    y2={vert ? dh : '50%'}
-                    stroke={color}
-                    strokeWidth={stroke}
-                    strokeDasharray={dashArr}
-                  />
-                </svg>
+                <g key={key}>
+                  {(m.dashes || []).map((d, di) => (
+                    <line
+                      key={`dash-${di}`}
+                      x1={d.x1}
+                      y1={d.y1}
+                      x2={d.x2}
+                      y2={d.y2}
+                      stroke={color}
+                      strokeWidth={stroke}
+                      strokeDasharray={dashArr}
+                    />
+                  ))}
+                  {isOffset ? (
+                    <line
+                      x1={m.x1}
+                      y1={m.y1}
+                      x2={m.x2}
+                      y2={m.y2}
+                      stroke={color}
+                      strokeWidth={stroke}
+                      strokeDasharray={dashArr}
+                    />
+                  ) : arrowPaths ? (
+                    <>
+                      <path
+                        d={arrowPaths.shaft}
+                        fill="none"
+                        stroke={color}
+                        strokeWidth={stroke}
+                        strokeLinecap="butt"
+                      />
+                      <path
+                        d={arrowPaths.headA}
+                        fill="none"
+                        stroke={color}
+                        strokeWidth={stroke}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d={arrowPaths.headB}
+                        fill="none"
+                        stroke={color}
+                        strokeWidth={stroke}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </>
+                  ) : null}
+                </g>
               );
-            })}
-            <div
-              className="absolute"
-              style={{
-                left: horizontal ? x : m.x1,
-                top: horizontal ? m.y1 : y,
-                transform: horizontal ? 'translateY(-50%)' : 'translateX(-50%)',
-              }}
-            >
-              {isOffset ? (
-                <svg
-                  className="absolute overflow-visible"
-                  width={horizontal ? segLen : Math.max(stroke * 2, 1)}
-                  height={horizontal ? Math.max(stroke * 2, 1) : segLen}
-                  style={{ left: 0, top: 0 }}
-                  aria-hidden
-                >
-                  <line
-                    x1={horizontal ? 0 : '50%'}
-                    y1={horizontal ? '50%' : 0}
-                    x2={horizontal ? segLen : '50%'}
-                    y2={horizontal ? '50%' : segLen}
-                    stroke={color}
-                    strokeWidth={stroke}
-                    strokeDasharray={dashArr}
-                  />
-                </svg>
-              ) : (
-                <MeasureArrowLine
-                  horizontal={horizontal}
-                  length={segLen}
-                  stroke={stroke}
-                  color={color}
-                  arrow={arrow}
-                />
-              )}
-            </div>
-            <div
-              className="absolute whitespace-nowrap font-semibold tabular-nums text-white"
-              style={{
-                left: labelX,
-                top: m.my,
-                fontSize: labelFont,
-                lineHeight: 1.15,
-                minWidth: 16 * inv,
-                paddingInline: 5 * inv,
-                paddingBlock: 2 * inv,
-                borderRadius: badgeRadius,
-                textAlign: 'center',
-                // Horizontal → below shaft; vertical → to the right of shaft.
-                transform: horizontal
-                  ? `translate(-50%, ${labelClearance}px)`
-                  : `translate(${labelClearance}px, -50%)`,
-                background: color,
-                boxShadow: '0 1px 2px rgba(0,0,0,0.16)',
-              }}
-            >
-              {formatPx(m.distance)}
-            </div>
-          </div>
-        );
-      })}
+            })
+          : null}
 
-      {showSizeBadge ? (
-        <div
-          className="pointer-events-none absolute z-[27] whitespace-nowrap font-semibold tabular-nums text-white"
-          style={{
-            left: sizePlacement.x,
-            top: sizePlacement.y,
-            fontSize: badgeFont,
-            lineHeight: 1.15,
-            paddingInline: 6 * inv,
-            paddingBlock: 2.5 * inv,
-            borderRadius: badgeRadius,
-            transform: sizeTransform,
-            background: sizeBadgeColor,
-            boxShadow: '0 1px 2px rgba(0,0,0,0.16)',
-          }}
-        >
-          {formatPx(box.width)} × {formatPx(box.height)}
-        </div>
-      ) : null}
+        {visibleMeasures.map((m) => {
+          let labelX = m.mx;
+          const horizontal = m.side === 'left' || m.side === 'right';
+          if (
+            showSizeBadge &&
+            (m.side === 'top' || m.side === 'bottom') &&
+            Math.abs(m.mx - cx) < 12 &&
+            m.distance < 28
+          ) {
+            labelX = cx + Math.min(48, Math.max(24, box.width * 0.28));
+            if (labelX > right - 8) labelX = cx - Math.min(48, Math.max(24, box.width * 0.28));
+          }
+          // Fig.2: sit beside the shaft (below H / right of V).
+          return (
+            <SpacingBadgeSvg
+              key={`lbl-${m.side}-${formatPx(m.distance)}-${Math.round(m.mx)}-${Math.round(m.my)}`}
+              text={formatPx(m.distance)}
+              x={labelX}
+              y={m.my}
+              anchor={horizontal ? 'below' : 'right'}
+              fill={color}
+              inv={inv}
+              clearance={labelClearance}
+            />
+          );
+        })}
+
+        {showSizeBadge ? (
+          <SpacingBadgeSvg
+            text={`${formatPx(box.width)} × ${formatPx(box.height)}`}
+            x={sizePlacement.x}
+            y={sizePlacement.y}
+            anchor={sizePlacement.mode}
+            fill={sizeBadgeColor}
+            inv={inv}
+            clearance={badgeGap}
+          />
+        ) : null}
+      </svg>
     </div>
   );
 }

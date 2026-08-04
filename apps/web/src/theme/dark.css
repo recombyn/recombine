@@ -1,57 +1,58 @@
-/* Dark theme — deep black base (not muddy gray), light surfaces on cards */
+/* Dark theme — Figma-like charcoal stack (not near-black) */
 html[data-theme='dark'] {
-  --surface: #1e1e1e;
-  --canvas: #0c0c0d;
-  --rail: #1a1a1a;
-  --account-rail: #1a1a1a;
-  --account-main: #141416;
-  --account-card: #1e1e1e;
+  /* Chrome / panels sit above the canvas, matching Figma home + editor. */
+  --surface: #2c2c2c;
+  --canvas: #1e1e1e;
+  --rail: #2c2c2c;
+  --account-rail: #2c2c2c;
+  --account-main: #1e1e1e;
+  --account-card: #2c2c2c;
   /* Image/video generator empty plate — lifted above canvas. */
-  --gen-empty: #1e1e1e;
-  --ink: #e3e3e3;
-  --muted: #949494;
-  --line: #383838;
-  --accent: #e3e3e3;
-  --accent-soft: #2c2c2c;
-  --on-brand: #0c0c0d;
-  --preview-overlay: rgba(12, 12, 13, 0.58);
+  --gen-empty: #2c2c2c;
+  --ink: #ffffff;
+  --muted: #b3b3b3;
+  --line: #444444;
+  --accent: #ffffff;
+  --accent-soft: #383838;
+  --on-brand: #1e1e1e;
+  --preview-overlay: rgba(30, 30, 30, 0.58);
 
-  --slider-active: #e3e3e3;
-  --slider-inactive: #3a3a3a;
-  --slider-thumb-ring: #0c0c0d;
+  --slider-active: #ffffff;
+  --slider-inactive: #444444;
+  --slider-thumb-ring: #1e1e1e;
 
-  --color-brand-base: #e3e3e3;
-  --color-brand-base-hover: #ffffff;
+  --color-brand-base: #ffffff;
+  --color-brand-base-hover: #f5f5f5;
   --color-brand-secondary: #b3b3b3;
 
-  --color-background-default-base: #1e1e1e;
-  --color-background-default-base-hover: #2c2c2c;
-  --color-background-default-secondary: #141416;
-  --color-background-default-secondary-hover: #2c2c2c;
-  --color-background-default-tertiary: #444444;
-  --color-background-neutral-tertiary: #242424;
+  --color-background-default-base: #2c2c2c;
+  --color-background-default-base-hover: #383838;
+  --color-background-default-secondary: #1e1e1e;
+  --color-background-default-secondary-hover: #383838;
+  --color-background-default-tertiary: #555555;
+  --color-background-neutral-tertiary: #383838;
 
-  --color-border-default-base: #383838;
+  --color-border-default-base: #444444;
   --color-border-default-base-hover: #555555;
   --color-border-default-secondary: #757575;
 
-  --color-text-default-base: #e3e3e3;
-  --color-text-default-secondary: #cdcdcd;
-  --color-text-default-tertiary: #949494;
-  --color-text-on-button-base: #0c0c0d;
-  --color-text-solid: #0c0c0d;
+  --color-text-default-base: #ffffff;
+  --color-text-default-secondary: #b3b3b3;
+  --color-text-default-tertiary: #999999;
+  --color-text-on-button-base: #1e1e1e;
+  --color-text-solid: #1e1e1e;
 
-  --color-icon-base: rgba(255, 255, 255, 0.85);
+  --color-icon-base: rgba(255, 255, 255, 0.9);
   --color-icon-secondary: rgba(255, 255, 255, 0.7);
-  --color-icon-secondary-hover: rgba(255, 255, 255, 0.8);
+  --color-icon-secondary-hover: rgba(255, 255, 255, 0.85);
 
-  --color-background-success-base: #e3e3e3;
-  --color-background-success-base-hover: #ffffff;
+  --color-background-success-base: #ffffff;
+  --color-background-success-base-hover: #f5f5f5;
   --color-background-warning-base: #e8b931;
   --color-background-warning-base-hover: #bf6a02;
   --color-background-error-base: #c00f0c;
   --color-background-error-base-hover: #900b09;
 
-  --color-shadow-scrim: rgba(255, 255, 255, 0.05);
-  --color-shadow-blanket: rgba(255, 255, 255, 0.08);
+  --color-shadow-scrim: rgba(255, 255, 255, 0.04);
+  --color-shadow-blanket: rgba(0, 0, 0, 0.28);
 }

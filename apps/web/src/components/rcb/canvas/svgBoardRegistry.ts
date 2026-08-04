@@ -5,8 +5,8 @@ export type SvgBoardHandle = {
   root: SVGSVGElement;
   /** Layer that holds scene nodes (excludes chrome). */
   layer: SVGGElement;
-  /** nodeId → SVG element */
-  nodeEls: Map<string, SVGElement>;
+  /** nodeId → SVG or Canvas paint element */
+  nodeEls: Map<string, any>;
   getSvgElement: () => SVGSVGElement | null;
   /** Serialize scene layer for export (no UI chrome). */
   toSvgString: () => string;

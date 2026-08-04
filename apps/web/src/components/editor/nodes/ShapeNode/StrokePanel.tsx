@@ -90,42 +90,44 @@ function StrokeWeightGlyph({ className }: { className?: string }) {
   );
 }
 
-/** Path = outer square; stroke fills toward center (Figma inside). */
+/** Path on the outer edge; stroke grows inward. */
 function IconStrokeAlignInside({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3" y="3" width="10" height="10" rx="1" fill="currentColor" opacity="0.2" />
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.25" />
-      <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" fill="var(--surface, #fff)" stroke="currentColor" strokeWidth="1.25" />
+      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1" opacity="0.4" />
+      <rect x="3.75" y="3.75" width="8.5" height="8.5" rx="0.75" stroke="currentColor" strokeWidth="2.5" />
+      <rect x="6" y="6" width="4" height="4" rx="0.5" fill="var(--surface, #fff)" />
     </svg>
   );
 }
 
+/** Path through the middle of the stroke band. */
 function IconStrokeAlignCenter({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="var(--surface, #fff)" />
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="2.5" />
+      <rect x="4.5" y="4.5" width="7" height="7" rx="0.75" fill="var(--surface, #fff)" />
+      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="2.75" />
+      <rect
+        x="4.25"
+        y="4.25"
+        width="7.5"
+        height="7.5"
+        rx="0.75"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeDasharray="1.5 1.25"
+        opacity="0.85"
+      />
     </svg>
   );
 }
 
-/** Path = inner square; stroke grows outward (Figma outside). */
+/** Path on the inner edge; stroke grows outward. */
 function IconStrokeAlignOutside({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.25" opacity="0.35" />
-      <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" fill="var(--surface, #fff)" stroke="currentColor" strokeWidth="1.25" />
-      <rect
-        x="4"
-        y="4"
-        width="8"
-        height="8"
-        rx="0.75"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        opacity="0.55"
-      />
+      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="2.5" />
+      <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" fill="var(--surface, #fff)" stroke="currentColor" strokeWidth="1" />
     </svg>
   );
 }
@@ -335,7 +337,7 @@ function StrokePanel({
   const patch = (partial: Partial<StrokePanelValue>) => onChange({ ...value, ...partial });
   const width = Math.max(0, Math.round(Number(value.width) || 0));
   const align: StrokeAlign =
-    value.align === 'inside' || value.align === 'center' ? value.align : 'outside';
+    value.align === 'inside' || value.align === 'outside' ? value.align : 'center';
   const linecap: StrokeLinecap =
     value.linecap === 'round' || value.linecap === 'square' ? value.linecap : 'butt';
   const linejoin: StrokeLinejoin =
@@ -360,10 +362,11 @@ function StrokePanel({
           <input
             type="number"
             min={0}
-            max={40}
             value={width}
             onChange={(e) =>
-              patch({ width: Math.max(0, Math.min(40, Math.round(Number(e.target.value) || 0))) })
+              patch({
+                width: Math.max(0, Math.round(Number(e.target.value) || 0)),
+              })
             }
             className={cn(
               'min-w-0 flex-1 bg-transparent text-[12px] tabular-nums outline-none',
@@ -417,10 +420,9 @@ function StrokePanel({
             value={align}
             onChange={(next) => patch({ align: next })}
             options={[
-              // Outside first — matches the common expectation that「外」is the lead option.
-              { id: 'outside', tip: t('editor.strokeAlignOutside'), Icon: IconStrokeAlignOutside },
-              { id: 'center', tip: t('editor.strokeAlignCenter'), Icon: IconStrokeAlignCenter },
               { id: 'inside', tip: t('editor.strokeAlignInside'), Icon: IconStrokeAlignInside },
+              { id: 'center', tip: t('editor.strokeAlignCenter'), Icon: IconStrokeAlignCenter },
+              { id: 'outside', tip: t('editor.strokeAlignOutside'), Icon: IconStrokeAlignOutside },
             ]}
           />
         ) : null}

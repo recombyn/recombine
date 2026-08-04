@@ -3,6 +3,7 @@ import { getSvgBoard, type SvgBoardHandle } from '@/components/rcb/canvas/svgBoa
 import { createSvgBoard, loadSceneOntoSvg } from './sceneToSvg';
 import { nodeLeftTop } from './sceneToSvg';
 import { isExportableSceneNode } from '../document/sceneDocument';
+import { strokeVisualOutset } from '../document/sceneEffects';
 import { getToken } from '@/utils/token';
 
 export type ExportImageFormat = 'png' | 'jpeg' | 'svg';
@@ -163,7 +164,29 @@ function boxFromSceneNode(document: any, node: any): SceneBox | null {
   const h = Number(node.height);
   if (![left, top, w, h].every(Number.isFinite) || !(w > 0) || !(h > 0)) return null;
   const angle = Number(node.attrs?.angle) || 0;
-  return rotatedAabb(left, top, w, h, angle);
+  const geom = rotatedAabb(left, top, w, h, angle);
+  const outset = Math.max(0, strokeVisualOutset(node));
+  if (!(outset > 0)) return geom;
+  return {
+    x: geom.x - outset,
+    y: geom.y - outset,
+    width: geom.width + outset * 2,
+    height: geom.height + outset * 2,
+  };
+}
+
+/** Integer scene crop — fractional viewBox origins make 1px strokes look uneven after rasterize. */
+function snapExportCrop(crop: SceneBox): SceneBox {
+  const x0 = Math.floor(crop.x);
+  const y0 = Math.floor(crop.y);
+  const x1 = Math.ceil(crop.x + crop.width);
+  const y1 = Math.ceil(crop.y + crop.height);
+  return {
+    x: x0,
+    y: y0,
+    width: Math.max(1, x1 - x0),
+    height: Math.max(1, y1 - y0),
+  };
 }
 
 /**
@@ -250,13 +273,14 @@ function unionNodeBBoxes(
   }
 
   if (!hit) return null;
+  // Pad covers AA fringe; stroke outset is already in boxFromSceneNode.
   const pad = 1;
-  return {
+  return snapExportCrop({
     x: minX - pad,
     y: minY - pad,
     width: Math.max(1, maxX - minX + pad * 2),
     height: Math.max(1, maxY - minY + pad * 2),
-  };
+  });
 }
 
 
@@ -435,7 +459,7 @@ export async function inlineSvgImages(
   return new XMLSerializer().serializeToString(root);
 }
 
-/** SVG string → Image → canvas → data URL (single pass). */
+/** SVG string → Image → canvas → data URL (single pass at target pixel size). */
 function rasterizeSvgString(
   svgString: string,
   width: number,
@@ -451,9 +475,11 @@ function rasterizeSvgString(
     const img = new Image();
     img.onload = () => {
       try {
+        const pw = Math.max(1, Math.round(width));
+        const ph = Math.max(1, Math.round(height));
         const canvas = window.document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(width));
-        canvas.height = Math.max(1, Math.round(height));
+        canvas.width = pw;
+        canvas.height = ph;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
           reject(new Error('no-2d'));
@@ -462,9 +488,10 @@ function rasterizeSvgString(
         if (!transparent) {
           const bg = String(backgroundColor || '').trim();
           ctx.fillStyle = bg && bg !== 'transparent' ? bg : '#ffffff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillRect(0, 0, pw, ph);
         }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // SVG already sized to pw×ph — draw 1:1 (no second upscale pass).
+        ctx.drawImage(img, 0, 0, pw, ph);
         resolve(canvas.toDataURL(mime, quality));
       } catch (err) {
         reject(err);
@@ -483,18 +510,28 @@ function rasterizeSvgString(
 /**
  * Infinite-canvas roots carry absolute CSS (left/top/width) for camera hosts.
  * That breaks SVG→Image→canvas rasterization — strip host chrome for export.
+ *
+ * `pixelWidth` / `pixelHeight` = output bitmap size so the browser rasterizes
+ * at export scale (not 1× then upscale — that makes thin strokes look uneven).
  */
-function prepareExportSvgRoot(clone: SVGSVGElement, crop?: SceneBox | null) {
+function prepareExportSvgRoot(
+  clone: SVGSVGElement,
+  crop?: SceneBox | null,
+  pixelWidth?: number,
+  pixelHeight?: number
+) {
   clone.removeAttribute('style');
   clone.removeAttribute('data-rcb-infinite');
   clone.style.cssText = 'display:block;overflow:hidden;';
   if (crop && crop.width > 0 && crop.height > 0) {
+    const pw = Math.max(1, Math.round(pixelWidth ?? crop.width));
+    const ph = Math.max(1, Math.round(pixelHeight ?? crop.height));
     clone.setAttribute('viewBox', `${crop.x} ${crop.y} ${crop.width} ${crop.height}`);
-    clone.setAttribute('width', String(crop.width));
-    clone.setAttribute('height', String(crop.height));
+    clone.setAttribute('width', String(pw));
+    clone.setAttribute('height', String(ph));
   }
-  // Exact size match with viewBox — avoid letterboxing / stretch surprises.
-  clone.setAttribute('preserveAspectRatio', 'none');
+  // Aspect locked by outW/outH derivation; meet avoids stretch if sizes ever diverge.
+  clone.setAttribute('preserveAspectRatio', 'xMinYMin meet');
   clone.setAttribute('overflow', 'hidden');
 }
 
@@ -504,6 +541,9 @@ function buildExportSvgString(
     nodeIds?: string[];
     crop?: SceneBox | null;
     backgroundColor?: string;
+    /** Device pixels for SVG width/height (scene×multiplier). */
+    pixelWidth?: number;
+    pixelHeight?: number;
   }
 ) {
   const svgEl = board.getSvgElement();
@@ -522,7 +562,7 @@ function buildExportSvgString(
   }
 
   const crop = opts.crop || null;
-  prepareExportSvgRoot(clone, crop);
+  prepareExportSvgRoot(clone, crop, opts.pixelWidth, opts.pixelHeight);
 
   if (crop) {
     const { x, y, width, height } = crop;
@@ -611,12 +651,12 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
 
     let crop: SceneBox | null = null;
     if (cropOpt && cropOpt.width > 0 && cropOpt.height > 0) {
-      crop = {
+      crop = snapExportCrop({
         x: Number(cropOpt.x) || 0,
         y: Number(cropOpt.y) || 0,
         width: Math.max(1, Number(cropOpt.width) || 1),
         height: Math.max(1, Number(cropOpt.height) || 1),
-      };
+      });
     } else if (selectionOnly) {
       if (!ids.length) return null;
       crop = unionNodeBBoxes(board, ids, document);
@@ -625,12 +665,12 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
       const svgEl = board.getSvgElement();
       if (!svgEl) return null;
       const vb = svgEl.viewBox?.baseVal;
-      crop = {
+      crop = snapExportCrop({
         x: Number(vb?.x) || 0,
         y: Number(vb?.y) || 0,
         width: Math.max(1, vb?.width || Number(svgEl.getAttribute('width')) || 794),
         height: Math.max(1, vb?.height || Number(svgEl.getAttribute('height')) || 1123),
-      };
+      });
     }
 
     // Reject scales that exceed browser canvas limits (UI should disable these).
@@ -640,14 +680,21 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
       );
       return null;
     }
-    const outW = crop.width * m;
-    const outH = crop.height * m;
+    // Derive height from width so round(w×m)/round(h×m) cannot anisotropically stretch strokes.
+    const outW = Math.max(1, Math.round(crop.width * m));
+    const outH = Math.max(
+      1,
+      Math.round((outW * crop.height) / Math.max(1e-6, crop.width))
+    );
     const selectionIds = selectionOnly || (cropOpt && ids.length) ? ids : undefined;
 
     // Self-contained SVG (images → data URLs) → optional single rasterize.
+    // Rasterize at export pixel size (not 1× then upscale) so thin strokes stay even.
     const svgString = buildExportSvgString(board, {
       crop,
       backgroundColor,
+      pixelWidth: fmt === 'svg' ? crop.width : outW,
+      pixelHeight: fmt === 'svg' ? crop.height : outH,
       ...(selectionIds?.length ? { nodeIds: selectionIds } : {}),
     });
     if (!svgString) return null;

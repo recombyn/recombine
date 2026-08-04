@@ -21,13 +21,13 @@ Host tools can reach MySQL at `127.0.0.1:3306` (same user/password). Change via 
 
 **Dev without Docker MySQL:** leave `DATABASE_URL` empty → SQLite at `storage/recombyn.db`.
 
-Default config loads from seed JSON under `apps/api/data/public/` (optional `private/` overlay) on first API start.
+Default config loads from seed JSON under `apps/api/data/public/` on first API start.
 
 | Seed | Public (git) | Notes |
 |------|--------------|--------|
-| Prompt packs | Minimal English baseline | Enough to avoid `missing prompt pack` on Agent; replace via Admin or `data/private/design_prompt_packs_seed.json` for production quality |
+| Prompt packs | Minimal English baseline | Enough to avoid `missing prompt pack` on Agent |
 | Skills (core) | 5 core playbooks | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` — Agent can create & edit out of the box |
-| Knowledge / tokens / models / cases | Often stub or infra-only | Full product content → `data/private/` (gitignored) |
+| Knowledge / tokens / models | Often stub or infra-only | Expand via Admin / DB after install |
 | Canvas actions, fonts, dicts, stages | Shipped in public | |
 
 See [data/README.md](../apps/api/data/README.md) and [design_skills/README.md](../apps/api/data/public/design_skills/README.md) (namespaces `core` / `ext` / `user`, ACL, hot reload).
@@ -115,7 +115,7 @@ Compose runs `apps/collab` and nginx proxies `/collab/` → the WS server. Brows
 
 **Local compose (HTTP):** leave defaults — Live uses `ws://localhost:3000/collab`.
 
-**Public HTTPS:** terminate TLS in front of port 3000 (Caddy / cloud LB / extra nginx). Then set:
+**Public HTTPS:** terminate TLS in front of port 3000 (Caddy / cloud LB). Example: [deploy/caddy/Caddyfile.example](../deploy/caddy/Caddyfile.example). Then set:
 
 ```bash
 COLLAB_TOKEN_SECRET='…strong…'
@@ -124,17 +124,35 @@ COLLAB_PUBLIC_WS_URL=wss://your.domain/collab
 
 Rebuild web if you change `VITE_COLLAB_ENABLED`. Dev without Docker: `npm run dev:collab` + API `COLLAB_PUBLIC_WS_URL=ws://127.0.0.1:1234`.
 
-## Security checklist before public deploy
+## Public HTTPS (Caddy)
+
+Compose web listens on `:3000` (nginx already proxies `/api/` and `/collab/`).  
+For a public host, terminate TLS in front — example: [deploy/caddy/Caddyfile.example](../deploy/caddy/Caddyfile.example).
+
+```bash
+# after compose is up, and DNS points here:
+export COLLAB_TOKEN_SECRET='…strong…'
+export COLLAB_PUBLIC_WS_URL=wss://your.domain/collab
+docker compose up -d  # recreate api/collab with the new env
+caddy run --config deploy/caddy/Caddyfile.example
+```
+
+## Public host checklist
+
+Do this **before** exposing port 3000 / 8000 to the internet:
 
 1. Never commit `apps/api/.env`.
 2. Replace `CARD_KEY_SALT` / `CARD_KEY_OPS_PASSWORD` placeholders.
 3. Set `BYOK_AES_KEY` (dedicated AES key for user LLM vaults).
 4. Override `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_BOOTSTRAP_PASSWORD` (defaults are for local bootstrap only).
 5. Change `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` (and matching `DATABASE_URL`).
-6. Set strong secrets for Google / SES / S3 if enabled.
-7. Restrict CORS (`CORS_ORIGINS`) to your real origins.
-8. Put TLS in front (Nginx / Caddy); see `deploy/nginx/`. For collab, public URL must be `wss://…` and `COLLAB_TOKEN_SECRET` must not stay the dev default.
-9. Confirm DB backups (`DB_BACKUP_*`) or cloud automated backups.
+6. Set a long random `COLLAB_TOKEN_SECRET` (same value for api + collab).
+7. Set `COLLAB_PUBLIC_WS_URL=wss://your.domain/collab` (not `ws://`).
+8. Restrict CORS (`CORS_ORIGINS`) to your real origins.
+9. Confirm Redis/MySQL are host-only (`127.0.0.1:…` in compose — do not publish them publicly).
+10. Confirm DB backups (`DB_BACKUP_*`) or cloud automated backups.
+
+API startup logs **warnings** if admin password, collab secret, default MySQL password, card salt, or BYOK key look like local defaults.
 
 ## License & commercial model
 

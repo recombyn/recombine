@@ -58,6 +58,15 @@ export function resolveFontFileUrl(
         : Number(fontWeight);
 
   if (children.length) {
+    const exact = children.filter((c) => c.family === fontFamily && c.url);
+    // Unique face name (… Bold) — that file only; never pick sibling Regular by CSS weight.
+    if (exact.length === 1) return resolveFontUrl(exact[0].url!);
+    // Shared CSS family — pick by weight axis.
+    if (exact.length > 1 && Number.isFinite(numeric)) {
+      const byW = exact.find((c) => c.weight === numeric);
+      if (byW?.url) return resolveFontUrl(byW.url);
+      return resolveFontUrl(exact[0].url!);
+    }
     if (Number.isFinite(numeric)) {
       const byW = children.find((c) => c.weight === numeric && c.url);
       if (byW?.url) return resolveFontUrl(byW.url);
@@ -93,10 +102,13 @@ export function injectFontFaces(catalog: FontFamilyNode[], opts?: { force?: bool
         if (!child.url) return;
         const src = resolveFontUrl(child.url);
         const fmt = formatHint(child.format, child.url);
+        // Unique face names (… Bold) use weight 400 so canvas `normal` matches the file;
+        // shared family names keep the real weight axis.
+        const shared =
+          font.children!.filter((c) => c.family === child.family && c.url).length > 1;
+        const faceWeight = shared ? (child.weight ?? 400) : 400;
         rules.push(
-          `@font-face{font-family:'${child.family}';src:url('${src}') format('${fmt}');font-weight:${
-            child.weight ?? 400
-          };font-style:normal;font-display:swap;}`
+          `@font-face{font-family:'${child.family}';src:url('${src}') format('${fmt}');font-weight:${faceWeight};font-style:normal;font-display:swap;}`
         );
       });
     } else if (font.url) {
@@ -284,18 +296,28 @@ export function applyFontFamilySelection(
   const base = getBaseFontFamily(baseOrFace, catalog);
   const child = getDefaultFontChild(baseOrFace, catalog);
   if (!child) return { fontFamily: baseOrFace, fontWeight: 'normal' };
-  // Dedicated face name (e.g. "… Bold") already embeds weight — keep CSS weight normal.
-  if (child.family !== base && child.url) {
-    return { fontFamily: child.family, fontWeight: 'normal' };
+  return styleFromFontChild(child, catalog);
+}
+
+/**
+ * Map a catalog face → canvas style. Dedicated faces (e.g. `Noto Sans SC Bold`)
+ * keep `fontWeight: normal` so we never faux-bold with CSS on the Regular file.
+ */
+export function styleFromFontChild(
+  child: FontChild,
+  catalog = getFontCatalogSync()
+): { fontFamily: string; fontWeight: string } {
+  const base = getBaseFontFamily(child.family, catalog);
+  const sameNameFaces = getFontChildren(base, catalog).filter((c) => c.family === child.family);
+  // Multiple weights share one CSS family name — real @font-face weight axis.
+  if (sameNameFaces.length > 1 && child.weight != null) {
+    const w = child.weight;
+    if (w >= 600) return { fontFamily: child.family, fontWeight: String(w) };
+    if (w === 400) return { fontFamily: child.family, fontWeight: 'normal' };
+    return { fontFamily: child.family, fontWeight: String(w) };
   }
-  const w = child.weight;
-  let fontWeight = 'normal';
-  if (w != null) {
-    if (w >= 600) fontWeight = 'bold';
-    else if (w === 400) fontWeight = 'normal';
-    else fontWeight = String(w);
-  }
-  return { fontFamily: child.family, fontWeight };
+  // One file per family name (… Light / Regular / Bold) — switch family, not CSS weight.
+  return { fontFamily: child.family, fontWeight: 'normal' };
 }
 
 export function parseWeightSelectValue(
@@ -305,31 +327,35 @@ export function parseWeightSelectValue(
   const [familyPart, weightPart] = String(value).split('::');
   const family = familyPart || value;
   const base = getBaseFontFamily(family, catalog);
+  const children = getFontChildren(base, catalog);
   const child =
-    getFontChildren(base, catalog).find((c) => {
+    children.find((c) => {
       if (weightPart != null && weightPart !== '') {
         return c.family === family && String(c.weight) === weightPart;
       }
       return c.family === family;
     }) || findFontChild(family, catalog);
 
-  // Dedicated @font-face family for this weight
-  if (child && child.family !== base && child.url) {
-    return { family: child.family, weight: 'normal' };
+  if (child) {
+    const next = styleFromFontChild(child, catalog);
+    return { family: next.fontFamily, weight: next.fontWeight };
   }
 
   if (weightPart != null && weightPart !== '') {
     const w = Number(weightPart);
-    if (w >= 600) return { family, weight: 'bold' };
-    if (w === 400) return { family, weight: 'normal' };
-    return { family, weight: String(w) };
+    // Prefer a dedicated Bold/Medium face over CSS faux-bold on the base family.
+    if (Number.isFinite(w) && w >= 600) {
+      const face =
+        children.find((c) => c.weight === w) ||
+        children.find((c) => (c.weight ?? 0) >= 600);
+      if (face) {
+        const next = styleFromFontChild(face, catalog);
+        return { family: next.fontFamily, weight: next.fontWeight };
+      }
+    }
+    if (w === 400) return { family: base, weight: 'normal' };
+    if (Number.isFinite(w)) return { family: base, weight: String(w) };
   }
 
-  const w = child?.weight;
-  if (w != null) {
-    if (w >= 600) return { family, weight: 'bold' };
-    if (w === 400) return { family, weight: 'normal' };
-    return { family, weight: String(w) };
-  }
-  return { family, weight: 'normal' };
+  return { family: family || base, weight: 'normal' };
 }

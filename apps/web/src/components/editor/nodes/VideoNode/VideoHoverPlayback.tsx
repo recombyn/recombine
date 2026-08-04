@@ -9,7 +9,8 @@ import {
 import { usePlayableVideoSrc } from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
 import VideoPlaybackBar, {
   videoMediaFromElement,
-  videoPlaybackBarSceneScale,
+  videoChromeLayout,
+  VIDEO_PLAYBACK_BAR_H,
   type VideoMediaControl,
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import { VideoFullscreenPreview } from '@/components/editor/nodes/VideoNode/VideoFullscreenPreviewButton';
@@ -298,7 +299,9 @@ function VideoHoverPlayback({
   const showStill = !playing && freezeMatches;
   const showVideo = playing || !showStill;
   const barVisible = showUi && (plateHovered || barHovered || playing);
-  const barScale = videoPlaybackBarSceneScale(scenePlate.width, z);
+  const screenW = Math.max(1, scenePlate.width * z);
+  const screenH = Math.max(1, scenePlate.height * z);
+  const chrome = videoChromeLayout(screenW, screenH);
 
   return (
     <div
@@ -363,19 +366,37 @@ function VideoHoverPlayback({
         />
       </div>
 
-      {showUi ? (
-        <VideoPlaybackBar
-          nodeId={nodeId}
-          media={media}
-          visible={barVisible}
-          trimStart={trimStart}
-          trimEnd={trimEnd}
-          knownDuration={knownDuration}
-          scale={barScale}
-          onFullscreen={() => setFsOpen(true)}
-          className="pointer-events-auto absolute inset-x-0 bottom-0 z-[2]"
-          onHoverChange={setBarHovered}
-        />
+      {showUi && chrome.visible ? (
+        <div
+          className="pointer-events-none absolute bottom-0 left-0 z-[2] overflow-hidden"
+          style={{
+            width: scenePlate.width,
+            height: Math.min(scenePlate.height, chrome.barScreenH / z),
+          }}
+        >
+          <div
+            className="pointer-events-none absolute bottom-0 left-0"
+            style={{
+              width: chrome.layoutW,
+              height: VIDEO_PLAYBACK_BAR_H,
+              transform: `scale(${chrome.fit / z})`,
+              transformOrigin: '0 100%',
+            }}
+          >
+            <VideoPlaybackBar
+              nodeId={nodeId}
+              media={media}
+              visible={barVisible}
+              trimStart={trimStart}
+              trimEnd={trimEnd}
+              knownDuration={knownDuration}
+              scale={1}
+              onFullscreen={() => setFsOpen(true)}
+              className="pointer-events-auto absolute inset-x-0 bottom-0"
+              onHoverChange={setBarHovered}
+            />
+          </div>
+        </div>
       ) : null}
 
       <VideoFullscreenPreview

@@ -15,7 +15,7 @@ apps/api/
   services/               # 业务层（按域分包）
     design/               # Agent 流程、规则、字典、美学样本、编排运行时
     plaza/ auth/ wallet/ llm/ …
-    seed.py               # 启动种子：字体、官方案例等
+    seed.py               # 启动种子：字体等
   data/                   # 种子 JSON（版本管理；写入 DB 后以 DB 为准）
   config/                 # settings
   worker/                 # Celery
@@ -44,9 +44,8 @@ apps/api/
 | `fonts_seed.json` | 字体目录 |
 | `design_skills_seed.json` | Agent 核心 Skill（`source=seed` / namespace=`core`） |
 | `design_skills/` | 文件包扩展 Skill（`_meta.json` + `SKILL.md`，namespace=`ext`） |
-| `official_cases/` | 官方案例（首页灵感 / 广场种子） |
 
-Skill 命名空间、ACL、版本 pin、热加载说明见 [data/design_skills/README.md](./data/design_skills/README.md)。
+Skill 命名空间、ACL、版本 pin、热加载说明见 [data/public/design_skills/README.md](./data/public/design_skills/README.md)。
 
 修改种子后：新环境会自动 seed；已有库需按业务决定是否手工同步或 bump dict `rev`。
 

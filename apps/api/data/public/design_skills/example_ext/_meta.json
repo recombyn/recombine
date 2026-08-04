@@ -1,0 +1,31 @@
+{
+  "skill_key": "example_ext",
+  "name": "example_ext",
+  "displayName": "Example Ext Pack",
+  "description": "Minimal ext pack sample — copy this folder to add your own server skill",
+  "when_to_use": "Learning pack layout; replace body/meta for a real workflow",
+  "category": "example",
+  "scenes": "all",
+  "sort_weight": 0,
+  "version": "1.0.0",
+  "preferred_tools": [
+    "create_frame",
+    "create_shape",
+    "create_text",
+    "update_node"
+  ],
+  "allowed_resources": ["knowledge", "aesthetics", "tools"],
+  "triggers": [],
+  "mutex_group": "",
+  "prompt_negative": "Do not treat this sample as a production design playbook.",
+  "locales": {
+    "zh-CN": {
+      "displayName": "扩展包示例",
+      "description": "最小 ext 包样例——复制本目录即可添加自己的服务端 Skill"
+    },
+    "en": {
+      "displayName": "Example Ext Pack",
+      "description": "Minimal ext pack sample — copy this folder to add your own server skill"
+    }
+  }
+}

@@ -334,14 +334,11 @@ def main() -> None:
                 "scenes": "all",
                 "selectable": False,
                 "sort_order": sort_i,
-                "when_to_use": "OSS baseline — replace via Admin or data/private for production.",
+                "when_to_use": "OSS baseline.",
             }
         )
     payload = {
-        "_comment": (
-            "OSS runnable baseline (English, minimal). "
-            "Full product packs: data/private/design_prompt_packs_seed.json (gitignored) or Admin."
-        ),
+        "_comment": "OSS runnable baseline (English, minimal) for Agent cold start.",
         "kindLabels": {k: t for k, (t, _, __) in merged.items()},
         "items": items,
     }

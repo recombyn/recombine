@@ -34,7 +34,7 @@ Self-host in minutes with Docker Compose (default **MySQL** + Redis + web + API 
 - **Live multiplayer** — Yjs sync for the same project (cursors, selection, undo); share view-only or edit
 - **Agent that paints** — Conversation plans and applies canvas ops
 - **Self-host first** — Same stack locally or on a server
-- **Composable** — Infra seeds + prompt packs + **5 core Agent skills** under `apps/api/data/public/` (full product packs optional via `data/private/` or Admin)
+- **Composable** — Infra seeds + prompt packs + **5 core Agent skills** under `apps/api/data/public/`
 
 ## Core features
 

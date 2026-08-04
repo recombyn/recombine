@@ -158,7 +158,6 @@ function EditorShortcutsPanel({ onClose }: Props): ReactNode {
             <ShortcutRow label={t('editor.shortcuts.frameTool')} keys={<Kbd>F</Kbd>} />
             <ShortcutRow label={t('editor.shortcuts.textTool')} keys={<Kbd>T</Kbd>} />
             <ShortcutRow label={t('editor.shortcuts.penTool')} keys={<Kbd>P</Kbd>} />
-            <ShortcutRow label={t('editor.shortcuts.bucketTool')} keys={<Kbd>B</Kbd>} />
           </ShortcutSection>
         </div>
 

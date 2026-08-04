@@ -233,41 +233,51 @@ export function alignImportedDocumentOrigin(doc: any) {
   const next = normalizeDocument(doc);
   const page = getActivePage(next);
   const ids = page?.children || [];
-  let minX = Infinity;
-  let minY = Infinity;
-  for (const id of ids) {
-    const node = next.deltaSetLike?.[id];
-    if (!node) continue;
-    const x = Number(node.x) || 0;
-    const y = Number(node.y) || 0;
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-  }
-  if (!Number.isFinite(minX)) {
-    next.x = 0;
-    next.y = 0;
-    return next;
-  }
+  const docOx = Number(next.x) || 0;
+  const docOy = Number(next.y) || 0;
 
-/** Prefer shifting node coords over leaving a document.x/y offset —
-   * old saved templates often ignore document origin and look blank off-canvas.
-   * Skip when artboard frames exist — cases are already laid out in frame space;
-   * shifting would collapse intended margins and look off-center. */
+  /**
+   * Always bake `document.x/y` into node/frame coords then clear origin.
+   * Editor paint (`canvasDocument`) forces origin 0 — leaving a non-zero store
+   * origin makes fitView (store) disagree with hosts (zeroed), then a later
+   * align remounts every shape and the page jumps after boot.
+   *
+   * With artboards: only bake the document origin (do NOT also subtract minX/minY —
+   * that would collapse case margins). Without frames: also pull content to (0,0).
+   */
   const hasFrames = Array.isArray(next.frames) && next.frames.length > 0;
-  if (hasFrames) {
-    next.x = 0;
-    next.y = 0;
-    return next;
-  }
-
-  const ox = (Number(next.x) || 0) + minX;
-  const oy = (Number(next.y) || 0) + minY;
-  if (ox !== 0 || oy !== 0) {
+  let shiftX = docOx;
+  let shiftY = docOy;
+  if (!hasFrames) {
+    let minX = Infinity;
+    let minY = Infinity;
     for (const id of ids) {
       const node = next.deltaSetLike?.[id];
       if (!node) continue;
-      node.x = (Number(node.x) || 0) - ox;
-      node.y = (Number(node.y) || 0) - oy;
+      const x = Number(node.x) || 0;
+      const y = Number(node.y) || 0;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+    }
+    if (Number.isFinite(minX)) {
+      shiftX = docOx + minX;
+      shiftY = docOy + minY;
+    }
+  }
+
+  if (shiftX !== 0 || shiftY !== 0) {
+    for (const id of ids) {
+      const node = next.deltaSetLike?.[id];
+      if (!node) continue;
+      node.x = (Number(node.x) || 0) - shiftX;
+      node.y = (Number(node.y) || 0) - shiftY;
+    }
+    if (hasFrames) {
+      for (const f of next.frames) {
+        if (!f) continue;
+        f.x = (Number(f.x) || 0) - shiftX;
+        f.y = (Number(f.y) || 0) - shiftY;
+      }
     }
   }
   next.x = 0;
@@ -275,15 +285,22 @@ export function alignImportedDocumentOrigin(doc: any) {
   return next;
 }
 
-/** Re-align only when no content intersects the visible canvas after origin offset. */
+/**
+ * Ensure content is paintable at document origin 0.
+ * Non-zero `document.x/y` must always be baked away — not only when off-canvas.
+ */
 export function ensureDocumentContentOnCanvas(doc: any) {
   const next = normalizeDocument(doc);
+  const ox = Number(next.x) || 0;
+  const oy = Number(next.y) || 0;
+  if (ox !== 0 || oy !== 0) {
+    return alignImportedDocumentOrigin(next);
+  }
+
   const page = getActivePage(next);
   const ids = page?.children || [];
   if (!ids.length) return next;
 
-  const ox = Number(next.x) || 0;
-  const oy = Number(next.y) || 0;
   const w = next.width || DEFAULT_CANVAS.width;
   const h = next.height || DEFAULT_CANVAS.height;
 
@@ -294,8 +311,8 @@ export function ensureDocumentContentOnCanvas(doc: any) {
   for (const id of ids) {
     const node = next.deltaSetLike?.[id];
     if (!node) continue;
-    const left = (Number(node.x) || 0) - ox;
-    const top = (Number(node.y) || 0) - oy;
+    const left = Number(node.x) || 0;
+    const top = Number(node.y) || 0;
     const right = left + Math.max(Number(node.width) || 0, 1);
     const bottom = top + Math.max(Number(node.height) || 0, 1);
     minL = Math.min(minL, left);
@@ -461,6 +478,8 @@ export function createShapeNode({
           shapeType,
           'border-color': stroke,
           'border-width': strokeW,
+          strokeAlign: 'center',
+          'stroke-align': 'center',
           'stroke-enabled': 'true',
           'stroke-visible': 'true',
           'fill-color': 'transparent',
@@ -489,6 +508,8 @@ export function createShapeNode({
         'fill-type': 'solid',
         'border-color': stroke,
         'border-width': strokeW,
+        strokeAlign: 'center',
+        'stroke-align': 'center',
         'stroke-enabled': 'true',
         'stroke-visible': 'true',
         'fill-enabled':

@@ -2,6 +2,10 @@
 
 Open-source ships **5 core skills** in `design_skills_seed.json` so self-host Agent can create / edit / vision / image-gen out of the box.
 
+This directory holds optional **extension packs** (`source=file`, namespace `ext`). OSS ships **one sample pack** (`example_ext/`) so you can copy the layout.
+
+Official MIT encyclopedias ship under repo-root [`.agents/skills/`](../../../../../.agents/skills/) (`ui_ux_pro_max`, `garden_style`, `awesome_design_md`, `shadcn_ui`) and load into the same Skill toolbox.
+
 ## Namespaces
 
 | Namespace | Kind | Source | Key rules |
@@ -42,8 +46,19 @@ Process startup starts a daemon that polls seed JSON + pack mtimes (`DESIGN_SKIL
 data/design_skills/<key>/
   _meta.json          # registration (name/description/logo/locales/ACL/schemas/…)
   <key>-logo.png      # optional icon
-  SKILL.md            # prompt body only (no YAML frontmatter)
+  SKILL.md            # prompt body; YAML frontmatter (name/description) supported
+  LICENSE             # optional
 ```
+
+| Format | Recognition |
+|--------|-------------|
+| Product pack | `_meta.json` + `SKILL.md` |
+| Frontmatter-only | folder with only `SKILL.md` |
+| User upload zip | either of the above |
+
+Frontmatter is stripped from the runtime prompt body. Product `_meta.json` wins when both exist.
+
+### Core (seed JSON)
 
 | Key | Role |
 |-----|------|
@@ -53,17 +68,22 @@ data/design_skills/<key>/
 | `canvas_edit` | Edit existing nodes |
 | `image_gen` | `create_image` + genPrompt boundary |
 
+### Sample ext pack (this folder)
+
+| Key | Role |
+|-----|------|
+| `example_ext` | Layout sample — copy/rename to add real ext skills |
+
 ## Ownership vs prompt packs / knowledge
 
 | Layer | Owns |
 |-------|------|
-| Prompt packs (`design_prompt_packs_seed.json`) | Protocol only: JSON shape, intent, when to `need_*`；runtime 经 `host.require_prompt_pack` / `assemble_stage_system` 注入，缺 pack 不硬编码兜底 |
-| Core skills (this seed) | Engine playbooks: create steps, vision, edit, image boundary |
+| Prompt packs (`design_prompt_packs_seed.json`) | Protocol only: JSON shape, intent, when to `need_*` |
+| Core skills (seed JSON) | Engine playbooks: create steps, vision, edit, image boundary |
+| Ext packs (this folder) | Optional server extension playbooks |
 | Admin skills (`user.*`) | Product workflows + **layout ops** (`user.layout_ops`) |
-| Knowledge | Numeric/encyclopedia detail (banner sizes, icon rules, palette) |
+| Knowledge | Numeric/encyclopedia detail |
 
-Runtime 调用链与 `prompts/` / `runtime/` 边界见仓库 [docs/design-agent-runtime.md](../../../../docs/design-agent-runtime.md)。
+Designer workflow skills go through **Admin** (`user.*`), not this directory.
 
-Designer workflow skills（需求整理 / 交互体验 / 视觉规范 / 交付表达 / 落层操作）走 **Admin**（`source=admin` / `user.*`），不要放进本目录。
-
-Seed sync: API startup `ensure_design_skills` **inserts missing** `source=seed` keys only (cold start). It never updates existing rows and never overwrites `admin` / `file`. Bump `version` in JSON for new empty DBs; existing installs keep DB values — ops must Admin-edit seed rows to refresh bodies.
+Seed sync: API startup `ensure_design_skills` **inserts missing** `source=seed` keys only. File packs sync on startup / hot reload and **update** existing `source=file` rows when packs change.
