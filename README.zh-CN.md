@@ -15,6 +15,14 @@
   <a href="apps/api"><img src="https://img.shields.io/badge/api-FastAPI%20%2B%20Python-3776AB?logo=python&logoColor=white" alt="Python" /></a>
 </p>
 
+<p align="center">
+  <a href="README.md"><img src="docs/assets/lang-en.png" alt="English" height="28" /></a>
+  &nbsp;
+  <a href="README.zh-CN.md"><img src="docs/assets/lang-zh-CN.png" alt="简体中文" height="28" /></a>
+  &nbsp;
+  <a href="README.ja.md"><img src="docs/assets/lang-ja.png" alt="日本語" height="28" /></a>
+</p>
+
 **Recombyn** 是 **画布编辑器 + AI Design Agent**（源码可得 / source-available）。  
 在无限画布上创作；Agent 基于 LangGraph 直接改图层、图形、文字与布局——用对话驱动设计。
 
@@ -102,11 +110,3 @@ e2e/               Playwright
 开源不易，如果觉得 Recombyn 对您的工作还有帮助，请帮忙在 GitHub 仓库右上角点个 ⭐ Star。您的支持是让 Recombyn 变得更好最大的动力。
 
 → [https://github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
-
----
-
-<p align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/English-e5e7eb?style=flat-square&labelColor=e5e7eb&color=e5e7eb" alt="English" /></a>
-  &nbsp;
-  <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-e5e7eb?style=flat-square&labelColor=e5e7eb&color=e5e7eb" alt="简体中文" /></a>
-</p>
