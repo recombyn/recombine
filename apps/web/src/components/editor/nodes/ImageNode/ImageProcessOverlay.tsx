@@ -88,18 +88,18 @@ function ProcessNodeChrome({
   return (
     <div
       data-scene-node-id={nodeId}
-      className="pointer-events-none absolute z-[29]"
+      className="pointer-events-none absolute z-[1]"
       style={frameStyle}
     >
       <div
         data-image-process-shimmer
-        className="rcb-image-process-shimmer absolute z-[29] overflow-hidden"
+        className="rcb-image-process-shimmer absolute inset-0 overflow-hidden"
         style={shimmerStyle}
         aria-hidden
       />
       <div
         data-image-process-label
-        className="absolute z-[30] whitespace-nowrap rounded-full bg-[rgba(55,55,55,0.72)] px-2.5 py-1 text-[11px] font-medium leading-none text-white shadow-[0_2px_8px_rgba(15,23,42,0.18)]"
+        className="absolute z-[1] whitespace-nowrap rounded-full bg-[rgba(55,55,55,0.72)] px-2.5 py-1 text-[11px] font-medium leading-none text-white shadow-[0_2px_8px_rgba(15,23,42,0.18)]"
         style={pillStyle}
       >
         {label}

@@ -90,24 +90,22 @@ function MentionAttachPanel({
                       alt=""
                       className="h-7 w-7 shrink-0 rounded border border-[var(--line)] object-cover"
                     />
-                  ) : (
+                  ) : variant === 'skill' ? null : (
                     <span
                       className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[var(--line)] bg-[var(--surface)] text-[11px] font-semibold text-[var(--muted)]"
                       aria-hidden
                     >
-                      {variant === 'skill' ? '/' : (
-                        <svg
-                          viewBox="0 0 24 24"
-                          width="14"
-                          height="14"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <rect x="4" y="4" width="16" height="16" rx="2" />
-                          <path d="M9 9h6v6H9z" />
-                        </svg>
-                      )}
+                      <svg
+                        viewBox="0 0 24 24"
+                        width="14"
+                        height="14"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <path d="M9 9h6v6H9z" />
+                      </svg>
                     </span>
                   )}
                   <span className="min-w-0 flex-1">

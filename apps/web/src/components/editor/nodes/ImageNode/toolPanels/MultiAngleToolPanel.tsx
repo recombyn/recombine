@@ -10,7 +10,7 @@ import AngleEditorScene, {
 } from './AngleEditorScene';
 import ImageToolPanelShell, {
   IMAGE_TOOL_TOKEN_COST,
-  PanelFooterActions,
+  PanelConfirmCost,
   PanelIconBtn,
   PanelSliderRow,
 } from './ImageToolPanelShell';
@@ -32,9 +32,11 @@ const ROTATE_MAX = 90;
 const TILT_MIN = -60;
 const TILT_MAX = 60;
 
-/** Left preview: narrower column, keep stage height. */
+/** Left preview column width; height stretches with the right column + CTA. */
 const PREVIEW_WIDTH = 240;
-const PREVIEW_HEIGHT = 280;
+
+const confirmBtnClass =
+  'inline-flex h-7 w-full shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-xl px-2 text-[12px] font-medium leading-none transition-colors bg-[var(--ink)] text-[var(--on-brand)] hover:opacity-90 disabled:bg-[var(--line)] disabled:text-[var(--muted)] disabled:opacity-80';
 
 const clampInt = (v: number, min: number, max: number) =>
   Math.round(Math.max(min, Math.min(max, v)));
@@ -102,29 +104,12 @@ function MultiAngleToolPanel({
           <HiOutlineArrowPath className="h-4 w-4" />
         </PanelIconBtn>
       }
-      footer={
-        <PanelFooterActions
-          onCancel={onCancel}
-          confirmBusy={busy}
-          onConfirm={() => {
-            setBusy(true);
-            onConfirm({
-              rotate,
-              tilt,
-              zoom: scaleValueToIndex(scale) * 50,
-              mode: tab,
-            });
-          }}
-          confirmLabel={t('editor.imageToolbar.useNow')}
-          confirmCost={IMAGE_TOOL_TOKEN_COST.multiAngle}
-        />
-      }
     >
       <div className="flex items-stretch gap-2.5">
-        {/* Left — orbit / skybox preview */}
+        {/* Left — preview stretches to align with Use now */}
         <div
-          className="relative shrink-0 overflow-hidden rounded bg-[var(--canvas)] ring-1 ring-[var(--line)]"
-          style={{ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT }}
+          className="relative min-h-[280px] shrink-0 self-stretch overflow-hidden rounded bg-[var(--canvas)] ring-1 ring-[var(--line)]"
+          style={{ width: PREVIEW_WIDTH }}
         >
           <AngleEditorScene
             className="h-full w-full"
@@ -138,84 +123,107 @@ function MultiAngleToolPanel({
           />
         </div>
 
-        {/* Right — mode, presets, fine-tune (10px item gaps) */}
-        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-          <SegmentedControl
-            className="shrink-0"
-            size="sm"
-            fullWidth
-            value={tab}
-            onChange={setTab}
-            options={[
-              { value: 'skybox', label: t('editor.imageToolbar.skybox') },
-              { value: 'camera', label: t('editor.imageToolbar.camera') },
-            ]}
-          />
+        {/* Right — mode, presets, fine-tune + CTA */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col gap-2.5">
+            <SegmentedControl
+              className="shrink-0"
+              size="sm"
+              fullWidth
+              value={tab}
+              onChange={setTab}
+              options={[
+                { value: 'skybox', label: t('editor.imageToolbar.skybox') },
+                { value: 'camera', label: t('editor.imageToolbar.camera') },
+              ]}
+            />
 
-          <div className="min-h-0 flex-1">
-            <div className="mb-2.5 text-[12px] text-[var(--muted)]">
-              {t('editor.imageToolbar.commonAngles')}
+            <div className="min-h-0 flex-1">
+              <div className="mb-2.5 text-[12px] text-[var(--muted)]">
+                {t('editor.imageToolbar.commonAngles')}
+              </div>
+              <div className="grid grid-cols-2 gap-2.5">
+                {ANGLE_PRESET_KEYS.map((preset) => {
+                  const active = activePresetKey === preset.key;
+                  const label = angleLabel(preset.key);
+                  const tip = `${label}  ${preset.rotate}° / ${preset.tilt}°`;
+                  return (
+                    <Tooltip key={preset.key} tip={tip} placement="top">
+                      <button
+                        type="button"
+                        aria-label={tip}
+                        onClick={() => applyPreset(preset)}
+                        className={cn(
+                          'h-8 w-full rounded-xl px-2 text-[12px] font-medium transition-colors',
+                          active
+                            ? 'bg-[var(--ink)] text-[var(--on-brand)]'
+                            : 'bg-[var(--accent-soft)] text-[var(--ink)] hover:bg-[var(--line)]'
+                        )}
+                      >
+                        {label}
+                      </button>
+                    </Tooltip>
+                  );
+                })}
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2.5">
-              {ANGLE_PRESET_KEYS.map((preset) => {
-                const active = activePresetKey === preset.key;
-                const label = angleLabel(preset.key);
-                const tip = `${label}  ${preset.rotate}° / ${preset.tilt}°`;
-                return (
-                  <Tooltip key={preset.key} tip={tip} placement="top">
-                    <button
-                      type="button"
-                      aria-label={tip}
-                      onClick={() => applyPreset(preset)}
-                      className={cn(
-                        'h-8 w-full rounded-xl px-2 text-[12px] font-medium transition-colors',
-                        active
-                          ? 'bg-[var(--ink)] text-[var(--on-brand)]'
-                          : 'bg-[var(--accent-soft)] text-[var(--ink)] hover:bg-[var(--line)]'
-                      )}
-                    >
-                      {label}
-                    </button>
-                  </Tooltip>
-                );
-              })}
+
+            <div className="mt-auto flex shrink-0 flex-col gap-2.5">
+              <PanelSliderRow
+                className="py-0"
+                label={t('editor.imageToolbar.rotate')}
+                value={rotate}
+                min={ROTATE_MIN}
+                max={ROTATE_MAX}
+                step={1}
+                display={`${rotate}°`}
+                onChange={setRotateInt}
+                fillFromZero
+              />
+              <PanelSliderRow
+                className="py-0"
+                label={t('editor.imageToolbar.tilt')}
+                value={tilt}
+                min={TILT_MIN}
+                max={TILT_MAX}
+                step={1}
+                display={`${tilt}°`}
+                onChange={setTiltInt}
+                fillFromZero
+              />
+              <PanelSliderRow
+                className="py-0"
+                label={t('editor.imageToolbar.zoom')}
+                value={scaleValueToIndex(scale)}
+                min={0}
+                max={2}
+                step={1}
+                display={scaleLabel}
+                onChange={(v) => setScale(scaleIndexToValue(v))}
+              />
             </div>
           </div>
 
-          <div className="mt-auto flex shrink-0 flex-col gap-2.5">
-            <PanelSliderRow
-              className="py-0"
-              label={t('editor.imageToolbar.rotate')}
-              value={rotate}
-              min={ROTATE_MIN}
-              max={ROTATE_MAX}
-              step={1}
-              display={`${rotate}°`}
-              onChange={setRotateInt}
-              fillFromZero
-            />
-            <PanelSliderRow
-              className="py-0"
-              label={t('editor.imageToolbar.tilt')}
-              value={tilt}
-              min={TILT_MIN}
-              max={TILT_MAX}
-              step={1}
-              display={`${tilt}°`}
-              onChange={setTiltInt}
-              fillFromZero
-            />
-            <PanelSliderRow
-              className="py-0"
-              label={t('editor.imageToolbar.zoom')}
-              value={scaleValueToIndex(scale)}
-              min={0}
-              max={2}
-              step={1}
-              display={scaleLabel}
-              onChange={(v) => setScale(scaleIndexToValue(v))}
-            />
-          </div>
+          <button
+            type="button"
+            disabled={busy}
+            className={cn(confirmBtnClass, 'mt-[10px]')}
+            onClick={() => {
+              setBusy(true);
+              onConfirm({
+                rotate,
+                tilt,
+                zoom: scaleValueToIndex(scale) * 50,
+                mode: tab,
+              });
+            }}
+          >
+            {busy ? (
+              <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            ) : null}
+            <span className="truncate">{t('editor.imageToolbar.useNow')}</span>
+            <PanelConfirmCost amount={IMAGE_TOOL_TOKEN_COST.multiAngle} />
+          </button>
         </div>
       </div>
     </ImageToolPanelShell>
