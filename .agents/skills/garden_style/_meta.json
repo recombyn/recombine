@@ -1,0 +1,33 @@
+{
+  "skill_key": "garden_style",
+  "name": "garden_style",
+  "displayName": "Garden Style",
+  "description": "风格配方引擎：大胆审美方向 + 像素级执行标准",
+  "when_to_use": "需要高完成度视觉风格、避免通用 AI 审美、或做设计质检时加载",
+  "category": "aesthetics",
+  "scenes": "all",
+  "sort_weight": 38,
+  "version": "1.0.0",
+  "preferred_tools": [
+    "create_frame",
+    "create_shape",
+    "create_text",
+    "create_image",
+    "create_svg",
+    "update_node"
+  ],
+  "allowed_resources": ["knowledge", "aesthetics", "tools"],
+  "triggers": [],
+  "mutex_group": "",
+  "prompt_negative": "禁止套用紫渐变白底、Inter/Roboto 默认栈、无意义发光与满屏圆角胶囊；勿复制参考图 Logo/二维码/价格。",
+  "locales": {
+    "zh-CN": {
+      "displayName": "Garden 风格配方",
+      "description": "风格配方引擎：大胆审美方向 + 像素级执行标准"
+    },
+    "en": {
+      "displayName": "Garden Style",
+      "description": "Style recipe engine: bold aesthetic direction with pixel-level craft"
+    }
+  }
+}

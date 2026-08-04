@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, memo } from 'react';
 import { useRcbCamera, useRcbCameraMotion, useRcbViewportEl } from '../camera/context';
 import { rcbViewportSceneBounds } from '../core/math';
+import { toDomPrecision } from '../core/dpr';
 import {
   RcbSpatialIndex,
   boxesIntersect,
@@ -123,9 +124,10 @@ export function pickFullAndProxyIds(opts: {
 }
 
 /**
- * Renders each ROOT child as its own shape host (per-shape paint layer).
+ * Renders each ROOT child as its own SVG shape host (sharp under CSS camera zoom).
+ * Canvas Path2D is only used by selection indicators / draw-tool overlays.
  * Off-viewport nodes are not mounted (lazy paint); selected/editing stay alive.
- * Far zoom / dense views: shared SVG AABB proxies instead of N mini-boards.
+ * Far zoom / dense views: shared SVG AABB proxies.
  * z-index comes from document.stackOrder so shapes can interleave with artboards.
  */
 function RcbShapesLayer({
@@ -239,6 +241,51 @@ function RcbShapesLayer({
 
   const patched = useMemo(() => new Set(lastPatchedNodeIds.filter(Boolean)), [lastPatchedNodeIds]);
 
+  /** Fitted viewBox for LOD proxies — same CSS box + viewBox as shape hosts. */
+  const lodViewport = useMemo(() => {
+    if (!proxyIds.length || !document) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const id of proxyIds) {
+      const node = document.deltaSetLike?.[id];
+      if (!node || isNodeHidden(node) || hiddenNodeId === id) continue;
+      const { left, top } = nodeLeftTop(document, node);
+      const w = Math.max(1, Number(node.width) || 1);
+      const h = Math.max(1, Number(node.height) || 1);
+      const angle = Number(node.attrs?.angle) || 0;
+      const rad = (angle * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const cx = left + w / 2;
+      const cy = top + h / 2;
+      for (const [lx, ly] of [
+        [left, top],
+        [left + w, top],
+        [left + w, top + h],
+        [left, top + h],
+      ] as const) {
+        const dx = lx - cx;
+        const dy = ly - cy;
+        const x = cx + dx * cos - dy * sin;
+        const y = cy + dx * sin + dy * cos;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
+    const pad = 2;
+    return {
+      minX: toDomPrecision(minX - pad),
+      minY: toDomPrecision(minY - pad),
+      w: toDomPrecision(Math.max(1, maxX - minX + pad * 2)),
+      h: toDomPrecision(Math.max(1, maxY - minY + pad * 2)),
+    };
+  }, [document, proxyIds, hiddenNodeId]);
+
   if (!document || !visibleIds.length) return null;
 
   return (
@@ -249,13 +296,20 @@ function RcbShapesLayer({
       data-rcb-proxy-count={proxyIds.length}
       className="pointer-events-none absolute left-0 top-0 overflow-visible"
     >
-      {proxyIds.length ? (
+      {lodViewport ? (
         <svg
           data-rcb-lod-layer="1"
-          className="pointer-events-none absolute left-0 top-0 overflow-visible"
-          width={1}
-          height={1}
-          style={{ overflow: 'visible' }}
+          className="pointer-events-none absolute overflow-visible"
+          width={lodViewport.w}
+          height={lodViewport.h}
+          viewBox={`${lodViewport.minX} ${lodViewport.minY} ${lodViewport.w} ${lodViewport.h}`}
+          style={{
+            left: lodViewport.minX,
+            top: lodViewport.minY,
+            width: lodViewport.w,
+            height: lodViewport.h,
+            overflow: 'visible',
+          }}
           aria-hidden
         >
           {proxyIds.map((id) => {

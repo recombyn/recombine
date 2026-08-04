@@ -1,4 +1,6 @@
 import {
+  useRcbCamera,
+  useRcbDevicePixelRatio,
   useRcbScreenToScene,
   useRcbViewportEl,
 } from '../camera/context';
@@ -6,8 +8,9 @@ import {
   rcbResolveViewportEl,
   rcbViewportMetrics,
 } from '../core/math';
-import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
-import { ARROW_HEAD, ptsAttr, shapeVertexPoints } from '@/components/rcb/scene/document/sceneShapes';
+import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
+import { ARROW_HEAD, shapeVertexPoints, fillCachedPath2D, strokeCachedPath2D } from '@/components/rcb/scene/document/sceneShapes';
+import { getShapeBaselineD } from '@/components/rcb/core/geometry';
 
 function normalizeBox(x0: number, y0: number, x1: number, y1: number) {
   const left = Math.min(x0, x1);
@@ -228,7 +231,8 @@ function ShapeDrawFeature({
       let next = box;
       if (next.width < 3 && next.height < 3) return;
       if (locksSquareAspect(kind)) next = squareLockedBox(next);
-      onCreateRef.current(kind, next);
+      // Same integer scene snap as createShapeNode — preview already shows snapped size.
+      onCreateRef.current(kind, snapSceneBox(next));
     };
 
     // Move on window so current point stays fresh even outside the stage.
@@ -276,142 +280,244 @@ function ShapeDrawFeature({
   const len = Math.hypot(x1 - x0, y1 - y0);
   const showSize = isStroke ? len >= 3 : w >= 3 || h >= 3;
 
-  const fill = isStroke ? 'none' : 'rgba(255,255,255,0.85)';
-  const stroke = '#333333';
-  const strokeW = isStroke ? 2 : 1.5;
-
-  if (isStroke) {
-    // Preview in scene space: line from start→end (may tilt).
-    const pad = 8;
-    const left = Math.min(x0, x1) - pad;
-    const top = Math.min(y0, y1) - pad;
-    const vw = Math.max(1, Math.abs(x1 - x0) + pad * 2);
-    const vh = Math.max(1, Math.abs(y1 - y0) + pad * 2);
-    const lx0 = x0 - left;
-    const ly0 = y0 - top;
-    const lx1 = x1 - left;
-    const ly1 = y1 - top;
-    let arrowExtra: ReactNode = null;
-    if (kind === 'arrow' && len >= 3) {
-      const ux = (x1 - x0) / len;
-      const uy = (y1 - y0) / len;
-      const head = Math.min(ARROW_HEAD, len * 0.45);
-      const bx = x1 - ux * head;
-      const by = y1 - uy * head;
-      const nx = -uy;
-      const ny = ux;
-      const wing = head * 0.55;
-      arrowExtra = (
-        <path
-          d={`M ${bx - left + nx * wing} ${by - top + ny * wing} L ${lx1} ${ly1} L ${bx - left - nx * wing} ${by - top - ny * wing}`}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={strokeW}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      );
-    }
-    return (
-      <div
-        data-shape-draw-preview
-        className="pointer-events-none absolute z-20"
-        style={{ left, top, width: vw, height: vh }}
-      >
-        <svg className="overflow-visible" width={vw} height={vh} viewBox={`0 0 ${vw} ${vh}`}>
-          <line
-            x1={lx0}
-            y1={ly0}
-            x2={lx1}
-            y2={ly1}
-            stroke={stroke}
-            strokeWidth={strokeW}
-            strokeLinecap="round"
-          />
-          {arrowExtra}
-        </svg>
-        {showSize ? (
-          <div className="absolute left-0 top-[-18px] whitespace-nowrap text-[10px] font-medium text-[var(--muted)]">
-            {Math.round(len)}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  // Circle / polygon / star lock to square (same as commit).
   let drawW = w;
   let drawH = h;
   let drawLeft = box.left;
   let drawTop = box.top;
-  if (locksSquareAspect(kind)) {
+  if (!isStroke && locksSquareAspect(kind)) {
     const locked = squareLockedBox(box);
     drawW = locked.width;
     drawH = locked.height;
     drawLeft = locked.left;
     drawTop = locked.top;
   }
-
-  let body: ReactNode = null;
-  if (kind === 'circle') {
-    body = (
-      <ellipse
-        cx={drawW / 2}
-        cy={drawH / 2}
-        rx={drawW / 2}
-        ry={drawH / 2}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={strokeW}
-      />
-    );
-  } else if (kind === 'triangle' || kind === 'star' || kind === 'polygon') {
-    const pts = shapeVertexPoints(kind, drawW, drawH);
-    body = (
-      <polygon points={ptsAttr(pts)} fill={fill} stroke={stroke} strokeWidth={strokeW} />
-    );
-  } else {
-    body = (
-      <rect
-        x={0.5}
-        y={0.5}
-        width={Math.max(1, w - 1)}
-        height={Math.max(1, h - 1)}
-        rx={0}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={strokeW}
-      />
-    );
+  // Live snap to integer scene px (createShapeNode) so 800% drag ≈ committed ink.
+  if (!isStroke) {
+    const snapped = snapSceneBox({ left: drawLeft, top: drawTop, width: drawW, height: drawH });
+    drawLeft = snapped.left;
+    drawTop = snapped.top;
+    drawW = snapped.width;
+    drawH = snapped.height;
   }
 
-  const displayW = locksSquareAspect(kind) ? drawW : w;
-  const displayH = locksSquareAspect(kind) ? drawH : h;
+  const displayW = isStroke ? Math.max(1, Math.abs(x1 - x0)) : drawW;
+  const displayH = isStroke ? Math.max(1, Math.abs(y1 - y0)) : drawH;
+  const sizeLabel = isStroke
+    ? String(Math.round(len))
+    : `${displayW} × ${displayH}`;
+
+  return (
+    <ShapeDrawPreviewCanvas
+      kind={kind}
+      x0={x0}
+      y0={y0}
+      x1={x1}
+      y1={y1}
+      drawLeft={isStroke ? Math.min(x0, x1) : drawLeft}
+      drawTop={isStroke ? Math.min(y0, y1) : drawTop}
+      drawW={isStroke ? displayW : drawW}
+      drawH={isStroke ? displayH : drawH}
+      showSize={showSize}
+      sizeLabel={sizeLabel}
+    />
+  );
+}
+
+/** Drag-to-create shapes — preview must match createShapeNode paint (width + joins). */
+function defaultShapeBorderWidth(kind: string) {
+  if (kind === 'line' || kind === 'arrow' || kind === 'pen' || kind === 'pencil') return 2;
+  return 1;
+}
+
+/** Same integer scene snap as createShapeNode — avoids 800% preview→commit jump. */
+function snapSceneBox(box: { left: number; top: number; width: number; height: number }) {
+  return {
+    left: Math.round(box.left),
+    top: Math.round(box.top),
+    width: Math.max(1, Math.round(box.width)),
+    height: Math.max(1, Math.round(box.height)),
+  };
+}
+
+function ShapeDrawPreviewCanvas({
+  kind,
+  x0,
+  y0,
+  x1,
+  y1,
+  drawLeft,
+  drawTop,
+  drawW,
+  drawH,
+  showSize,
+  sizeLabel,
+}: {
+  kind: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  drawLeft: number;
+  drawTop: number;
+  drawW: number;
+  drawH: number;
+  showSize: boolean;
+  sizeLabel: string;
+}) {
+  const camera = useRcbCamera();
+  const dpr = useRcbDevicePixelRatio();
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const isStroke = kind === 'line' || kind === 'arrow';
+  const z = Math.max(0.05, camera.zoom || 1);
+  const inv = 1 / z;
+  const fill = isStroke ? null : 'rgba(255,255,255,0.85)';
+  const stroke = '#333333';
+  // Match createShapeNode defaults — preview 1.5 vs commit 1 looked like a size jump at 800%.
+  const strokeW = defaultShapeBorderWidth(kind);
+  // Miter joins stick past stroke/2 on sharp polygon tips (SVG default = miter).
+  const pad =
+    Math.ceil(strokeW * 2) + (kind === 'arrow' ? Math.ceil(ARROW_HEAD) : 2);
+  const left = drawLeft - pad;
+  const top = drawTop - pad;
+  const cssW = Math.max(1, drawW + pad * 2);
+  const cssH = Math.max(1, drawH + pad * 2);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const scale = z * Math.max(1, dpr || 1);
+    canvas.width = Math.max(1, Math.round(cssW * scale));
+    canvas.height = Math.max(1, Math.round(cssH * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    // Match SVG applyElementStroke defaults (butt / miter).
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.miterLimit = 10;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = strokeW;
+    ctx.translate(pad, pad);
+
+    if (isStroke) {
+      const lx0 = x0 - drawLeft;
+      const ly0 = y0 - drawTop;
+      const lx1 = x1 - drawLeft;
+      const ly1 = y1 - drawTop;
+      ctx.beginPath();
+      ctx.moveTo(lx0, ly0);
+      ctx.lineTo(lx1, ly1);
+      ctx.stroke();
+      const len = Math.hypot(x1 - x0, y1 - y0);
+      if (kind === 'arrow' && len >= 3) {
+        const ux = (x1 - x0) / len;
+        const uy = (y1 - y0) / len;
+        const head = Math.min(ARROW_HEAD, len * 0.45);
+        const bx = lx1 - ux * head;
+        const by = ly1 - uy * head;
+        const nx = -uy;
+        const ny = ux;
+        const wing = head * 0.55;
+        ctx.beginPath();
+        ctx.moveTo(bx + nx * wing, by + ny * wing);
+        ctx.lineTo(lx1, ly1);
+        ctx.lineTo(bx - nx * wing, by - ny * wing);
+        ctx.stroke();
+      }
+      return;
+    }
+
+    // Same baseline path as sceneToSvg / getShapeBaseline — not an inset rect.
+    const d =
+      getShapeBaselineD(
+        { key: 'shape', width: drawW, height: drawH, attrs: { shapeType: kind } },
+        { width: drawW, height: drawH }
+      ) || '';
+    if (d) {
+      if (fill) {
+        fillCachedPath2D(ctx, d, { fillStyle: fill });
+      }
+      strokeCachedPath2D(ctx, d, {
+        strokeStyle: stroke,
+        lineWidth: strokeW,
+        lineCap: 'butt',
+        lineJoin: 'miter',
+      });
+      return;
+    }
+
+    if (kind === 'triangle' || kind === 'star' || kind === 'polygon') {
+      const pts = shapeVertexPoints(kind, drawW, drawH);
+      const path = new Path2D();
+      if (pts.length) {
+        path.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i += 1) path.lineTo(pts[i][0], pts[i][1]);
+        path.closePath();
+      }
+      if (fill) {
+        ctx.fillStyle = fill;
+        ctx.fill(path);
+      }
+      ctx.stroke(path);
+      return;
+    }
+
+    const path = new Path2D();
+    path.rect(0, 0, Math.max(1, drawW), Math.max(1, drawH));
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill(path);
+    }
+    ctx.stroke(path);
+  }, [
+    kind,
+    x0,
+    y0,
+    x1,
+    y1,
+    drawLeft,
+    drawTop,
+    drawW,
+    drawH,
+    cssW,
+    cssH,
+    pad,
+    isStroke,
+    fill,
+    stroke,
+    strokeW,
+    z,
+    dpr,
+  ]);
+
+  const labelFont = 10 * inv;
+  const labelGap = 14 * inv;
 
   return (
     <div
       data-shape-draw-preview
-      className="pointer-events-none absolute z-20"
-      style={{
-        left: drawLeft,
-        top: drawTop,
-        width: displayW,
-        height: displayH,
-      }}
+      className="pointer-events-none absolute z-20 overflow-visible"
+      style={{ left, top, width: cssW, height: cssH }}
     >
-      <svg
-        className="overflow-visible"
-        width={displayW}
-        height={displayH}
-        viewBox={`0 0 ${displayW} ${displayH}`}
-      >
-        {body}
-      </svg>
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none absolute left-0 top-0"
+        style={{ width: cssW, height: cssH }}
+        aria-hidden
+      />
       {showSize ? (
-        <div className="absolute left-0 top-[-18px] whitespace-nowrap text-[10px] font-medium text-[var(--muted)]">
-          {Math.round(displayW)}
-          {' × '}
-          {Math.round(displayH)}
+        <div
+          className="pointer-events-none absolute whitespace-nowrap font-medium text-[var(--muted)]"
+          style={{
+            left: pad + drawW / 2,
+            top: pad - labelGap,
+            fontSize: labelFont,
+            lineHeight: 1.2,
+            transform: 'translate(-50%, -100%)',
+          }}
+        >
+          {sizeLabel}
         </div>
       ) : null}
     </div>

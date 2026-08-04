@@ -296,7 +296,7 @@ type SnapPair = {
   nudge: number;
   /** Mid↔mid — center align (draw × at marks). */
   center?: boolean;
-  /** Source stroke-band face (prefer outer for display). */
+  /** Source stroke-band face (prefer path for display — matches selection chrome). */
   face?: StrokeBandFace | 'any';
   /** Perpendicular span of the moving box on the align line. */
   thisSpan?: [number, number];
@@ -304,7 +304,7 @@ type SnapPair = {
   otherSpan?: [number, number];
 };
 
-/** Collapse stroke-band / equal-height duplicate snaps to one MasterGo-style guide per axis. */
+/** Collapse equal-distance duplicate snaps to one MasterGo-style guide per axis position. */
 function selectDisplaySnaps(pairs: SnapPair[], axis: 'x' | 'y'): SnapPair[] {
   if (!pairs.length) return pairs;
   const getPos = (p: SnapPair) => (axis === 'x' ? p.otherPoint.x : p.otherPoint.y);
@@ -314,30 +314,21 @@ function selectDisplaySnaps(pairs: SnapPair[], axis: 'x' | 'y'): SnapPair[] {
   let preferred = hasEdge ? pairs.filter((p) => !p.center) : pairs;
   if (!preferred.length) preferred = pairs;
 
-  // Prefer outer / any faces so path/inner don't draw a second parallel line.
-  const outerish = preferred.filter(
-    (p) => !p.face || p.face === 'outer' || p.face === 'any'
+  // Same nudge can hit path+outer+inner; draw on path (blue chrome / 路径线), not outer ink.
+  const pathish = preferred.filter(
+    (p) => !p.face || p.face === 'path' || p.face === 'any'
   );
-  if (outerish.length) preferred = outerish;
+  if (pathish.length) preferred = pathish;
 
-  // Cluster near-duplicate positions (outer vs path tops differ by ~stroke/2).
-  const CLUSTER = 6;
-  type Cluster = { pos: number; pairs: SnapPair[] };
-  const clusters: Cluster[] = [];
+  // One representative pair per distinct position (keep left AND right, not only the densest).
+  const CLUSTER = 2;
+  const byPos: SnapPair[] = [];
   for (const p of preferred) {
     const pos = getPos(p);
-    const hit = clusters.find((c) => Math.abs(c.pos - pos) <= CLUSTER);
-    if (hit) {
-      hit.pairs.push(p);
-      continue;
-    }
-    clusters.push({ pos, pairs: [p] });
+    if (byPos.some((q) => Math.abs(getPos(q) - pos) <= CLUSTER)) continue;
+    byPos.push(p);
   }
-  if (clusters.length <= 1) return preferred;
-
-  // One primary cluster: most pairs wins; tie → first (top/left appear first).
-  clusters.sort((a, b) => b.pairs.length - a.pairs.length);
-  return clusters[0].pairs;
+  return byPos;
 }
 
 /**
@@ -561,8 +552,7 @@ function bestGapNudge(
 
 /**
  * Snap a moving chrome-box to edges / centers / gaps of siblings and frames.
- * Optional `edgeBoxes` are stroke-band faces; each only snaps to the same face
- * (outer→outer, path→path) so cross-face snaps cannot leave an ink gap.
+ * Boxes are vector-path faces; same-face rules still apply for tagged movers.
  */
 export function snapBoxToGuides(
   moving: SceneBox,
@@ -573,7 +563,7 @@ export function snapBoxToGuides(
 ): { box: SceneBox; guides: AlignGuide[] } {
   const edgeBoxes: FacedSceneBox[] = opts?.edgeBoxes?.length
     ? opts.edgeBoxes
-    : [{ ...moving, face: 'outer' }];
+    : [{ ...moving, face: 'any' }];
   const { candidatesX, candidatesY } = collectGuideCandidates(others, containers);
 
   let dx = 0;
@@ -666,7 +656,7 @@ export function snapBoxToGuides(
   candidatesX.forEach((t) => {
     edgeBoxes.forEach((b) => {
       const e = guideEdges(b);
-      const face = b.face || 'outer';
+      const face = b.face || 'any';
       const spanY: [number, number] = [e.top, e.bottom];
       tryX(e.left, e.midY, face, false, spanY, t);
       tryX(e.midX, e.midY, 'any', true, spanY, t);
@@ -676,7 +666,7 @@ export function snapBoxToGuides(
   candidatesY.forEach((t) => {
     edgeBoxes.forEach((b) => {
       const e = guideEdges(b);
-      const face = b.face || 'outer';
+      const face = b.face || 'any';
       const spanX: [number, number] = [e.left, e.right];
       tryY(e.top, e.midX, face, false, spanX, t);
       tryY(e.midY, e.midX, 'any', true, spanX, t);
@@ -763,7 +753,7 @@ export function snapResizeToGuides(
   const { candidatesX, candidatesY } = collectGuideCandidates(others, containers);
   const edgeBoxes: FacedSceneBox[] = opts?.edgeBoxes?.length
     ? opts.edgeBoxes
-    : [{ ...resized, face: 'outer' }];
+    : [{ ...resized, face: 'any' }];
   const moveL = handle === 'w' || handle === 'nw' || handle === 'sw';
   const moveR = handle === 'e' || handle === 'ne' || handle === 'se';
   const moveT = handle === 'n' || handle === 'nw' || handle === 'ne';
@@ -852,7 +842,7 @@ export function snapResizeToGuides(
         return {
           pos: e.left,
           mark: e.midY,
-          face: b.face || 'outer',
+          face: b.face || 'any',
           isMid: false,
           span0: e.top,
           span1: e.bottom,
@@ -892,7 +882,7 @@ export function snapResizeToGuides(
         return {
           pos: e.right,
           mark: e.midY,
-          face: b.face || 'outer',
+          face: b.face || 'any',
           isMid: false,
           span0: e.top,
           span1: e.bottom,
@@ -932,7 +922,7 @@ export function snapResizeToGuides(
         return {
           pos: e.top,
           mark: e.midX,
-          face: b.face || 'outer',
+          face: b.face || 'any',
           isMid: false,
           span0: e.left,
           span1: e.right,
@@ -972,7 +962,7 @@ export function snapResizeToGuides(
         return {
           pos: e.bottom,
           mark: e.midX,
-          face: b.face || 'outer',
+          face: b.face || 'any',
           isMid: false,
           span0: e.left,
           span1: e.right,
@@ -1096,12 +1086,12 @@ export function snapResizeToGuides(
   };
 }
 
-/** Unique widths / heights from siblings (prefer outer faces when tagged). */
+/** Unique widths / heights from siblings (prefer path faces when tagged). */
 function collectSizeTargets(others: FacedSceneBox[], containers: FacedSceneBox[]) {
   const widths: number[] = [];
   const heights: number[] = [];
   const absorb = (b: FacedSceneBox) => {
-    if (b.face && b.face !== 'outer' && b.face !== 'any') return;
+    if (b.face && b.face !== 'path' && b.face !== 'any') return;
     if (b.width > 1) widths.push(b.width);
     if (b.height > 1) heights.push(b.height);
   };
@@ -1249,8 +1239,7 @@ function pushNodeGuideBoxes(
 
 /**
  * Stroke-band face boxes for scene nodes (snap / guide targets).
- * Outside → path + outer; center → inner + path + outer; inside → inner + outer.
- * Faces are tagged so snap only pairs like with like.
+ * Path face only — same AABB as selection chrome / 路径线.
  */
 export function nodeGuideBoxes(
   document: any,
@@ -1284,6 +1273,6 @@ export function nodeGuideBoxesForIds(
 
 /** Chrome (inflated) box → stroke-band faces used while dragging that selection. */
 export function chromeBandGuideBoxes(chrome: SceneBox, node: any): FacedSceneBox[] {
-  if (!node) return [{ ...chrome, face: 'outer' }];
+  if (!node) return [{ ...chrome, face: 'any' }];
   return strokeBandGuideBoxes(deflateSelectionBox(chrome, node), node);
 }

@@ -64,9 +64,9 @@ export type StrokeLinecap = 'butt' | 'round' | 'square';
 export type StrokeLinejoin = 'miter' | 'round' | 'bevel';
 
 export function resolveStrokeAlign(attrs: Record<string, unknown> | null | undefined): StrokeAlign {
-  const v = String(attrs?.strokeAlign || attrs?.['stroke-align'] || 'outside');
+  const v = String(attrs?.strokeAlign || attrs?.['stroke-align'] || 'center');
   if (v === 'inside' || v === 'outside' || v === 'center') return v;
-  return 'outside';
+  return 'center';
 }
 
 function strokePaintMeta(node: any): { align: StrokeAlign; strokeWidth: number } | null {
@@ -84,22 +84,27 @@ function strokePaintMeta(node: any): { align: StrokeAlign; strokeWidth: number }
   if (/rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*0\s*\)/i.test(stroke)) return null;
 
   let align = resolveStrokeAlign(node.attrs);
-  // Same fallback as applyElementStroke: outside needs opaque fill to cover inner half.
+  // Match applyElementStroke: outside needs opaque fill to cover the inner half.
+  // Use the same white default as createShape paint — not 'transparent'.
   if (align === 'outside') {
-    const fill = resolveFillColor(node, 'transparent');
-    const opaque =
-      Boolean(fill) &&
-      fill !== 'transparent' &&
-      !/^rgba?\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/i.test(fill);
-    if (!opaque) align = 'center';
+    const fillType = String(node.attrs?.['fill-type'] || 'solid');
+    if (fillType === 'solid' || fillType === '') {
+      const fill = resolveFillColor(node, '#FFFFFF');
+      const opaque =
+        Boolean(fill) &&
+        fill !== 'transparent' &&
+        fill !== 'rgba(0,0,0,0)' &&
+        !/^rgba?\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/i.test(fill);
+      if (!opaque) align = 'center';
+    }
+    // gradient / image / mesh still cover the inner half
   }
   return { align, strokeWidth };
 }
 
 /**
- * How far the painted stroke extends outside the node's geometric box
- * (matches sceneToSvg applyElementStroke: outside / center / inside).
- * Visual outer-ink AABB (Figma-style), not stroke centerline.
+ * How far painted stroke extends **outside** the geometric box (≥ 0).
+ * Hit-testing / outer-ink bounds — inside stroke stays within geom.
  */
 export function strokeVisualOutset(node: any): number {
   const meta = strokePaintMeta(node);
@@ -110,54 +115,46 @@ export function strokeVisualOutset(node: any): number {
 }
 
 /**
- * Path AABB + stroke-band face AABBs for align / snap.
- * Each box is tagged with `face` so outer only snaps to outer (and path→path,
- * inner→inner). Cross-face snaps (path→outer) leave a visible ink gap of ~sw.
+ * Selection chrome sits on the **vector path** (geometry AABB).
+ * strokeAlign is paint-only — do not offset the control box from the path.
+ */
+export function strokeChromeOutset(node: any): number {
+  void node;
+  return 0;
+}
+
+/**
+ * Offset from the vector path to the **middle of the painted stroke band**.
+ * Scales with real `border-width` — not a constant.
+ * - outside → +sw/2 (band sits entirely outside the path)
+ * - center  → 0 (SVG stroke already straddles the path)
+ * - inside  → −sw/2
+ */
+export function strokeIndicatorOutset(node: any): number {
+  const meta = strokePaintMeta(node);
+  if (!meta) return 0;
+  const sw = meta.strokeWidth;
+  if (!(sw > 0)) return 0;
+  if (meta.align === 'inside') return -sw / 2;
+  if (meta.align === 'outside') return sw / 2;
+  return 0;
+}
+
+/**
+ * Align / snap / spacing boxes — **vector path only** (same as selection chrome).
+ * Stroke align is paint-only; never emit outer/inner ink faces (those pulled
+ * guides and gap measures onto the stroke edge instead of the path line).
  */
 export type StrokeBandFace = 'inner' | 'path' | 'outer';
 
 export type StrokeBandBox<T extends { left: number; top: number; width: number; height: number }> =
-  T & { face: StrokeBandFace };
+  T & { face: StrokeBandFace | 'any' };
 
 export function strokeBandGuideBoxes<
   T extends { left: number; top: number; width: number; height: number },
 >(geom: T, node: any): StrokeBandBox<T>[] {
-  const meta = strokePaintMeta(node);
-  if (!meta || !(meta.strokeWidth > 0.05)) {
-    return [{ ...geom, face: 'outer' }];
-  }
-  const sw = meta.strokeWidth;
-  if (meta.align === 'outside') {
-    return [
-      { ...geom, face: 'path' },
-      { ...padBox(geom, sw), face: 'outer' },
-    ];
-  }
-  if (meta.align === 'inside') {
-    const inner = padBox(geom, -sw);
-    if (inner.width < 1 || inner.height < 1) {
-      return [{ ...geom, face: 'outer' }];
-    }
-    // inside: path is the outer ink edge; inner is the inside of the band.
-    return [
-      { ...inner, face: 'inner' },
-      { ...geom, face: 'outer' },
-    ];
-  }
-  // center — both faces of the band + path centerline
-  const inner = padBox(geom, -sw / 2);
-  const outer = padBox(geom, sw / 2);
-  if (inner.width < 1 || inner.height < 1) {
-    return [
-      { ...geom, face: 'path' },
-      { ...outer, face: 'outer' },
-    ];
-  }
-  return [
-    { ...inner, face: 'inner' },
-    { ...geom, face: 'path' },
-    { ...outer, face: 'outer' },
-  ];
+  void node;
+  return [{ ...geom, face: 'path' }];
 }
 
 function padBox<T extends { left: number; top: number; width: number; height: number }>(
@@ -174,17 +171,25 @@ function padBox<T extends { left: number; top: number; width: number; height: nu
   };
 }
 
+/** Selection chrome AABB from geometry (uses strokeChromeOutset — inside insets). */
 export function inflateBoxByStrokeOutset<
   T extends { left: number; top: number; width: number; height: number },
 >(box: T, node: any): T {
-  return padBox(box, strokeVisualOutset(node));
+  return padBox(box, strokeChromeOutset(node));
 }
 
-/** Inverse of inflateBoxByStrokeOutset — visual selection box → stored geometry. */
+/** Inverse — selection chrome → stored geometry. */
 export function deflateBoxByStrokeOutset<
   T extends { left: number; top: number; width: number; height: number },
 >(box: T, node: any): T {
-  return padBox(box, -strokeVisualOutset(node));
+  return padBox(box, -strokeChromeOutset(node));
+}
+
+/** Outer-ink AABB from geometry (≥ geometry). For hit-testing thick strokes. */
+export function inflateBoxByVisualOutset<
+  T extends { left: number; top: number; width: number; height: number },
+>(box: T, node: any): T {
+  return padBox(box, strokeVisualOutset(node));
 }
 
 /** Scene-space air between text glyphs and selection chrome (flush / ~0). */
@@ -219,9 +224,9 @@ export function deflateBoxByTextSelectionPad<
 }
 
 /**
- * Selection / snap / guide box = path AABB + stroke visual outset (+ text pad).
- * Outside stroke: chrome sits on the outer ink edge; stored geom stays on the path
- * via deflateSelectionBox on commit.
+ * Selection / snap / guide box = path AABB (+ text pad).
+ * strokeAlign does not move chrome — control box stays on the path.
+ * Stored geom stays on the path via deflateSelectionBox on commit.
  */
 export function inflateSelectionBox<
   T extends { left: number; top: number; width: number; height: number },

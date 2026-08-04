@@ -107,6 +107,7 @@ import {
   setWorkspaceMode,
   updateArtboardFrame,
   pushEditorHistory,
+  bakeDocumentOrigin,
   EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 import { listSceneNodes, stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
@@ -136,6 +137,19 @@ import EditorOnboardingTour from '@/components/editor/chrome/EditorOnboardingTou
 
 const BOOT_MIN_MS = 520;
 const BOOT_EXIT_MS = 280;
+
+/** Jump diagnostics — console JSON lines + `window.__rcbJumpLog` / `__rcbJumpDump()`. */
+function rcbJumpLog(event: string, data: Record<string, unknown> = {}) {
+  const row = { event, t: Math.round(performance.now()), ...data };
+  const w = window as Window & {
+    __rcbJumpLog?: unknown[];
+    __rcbJumpDump?: () => string;
+  };
+  if (!Array.isArray(w.__rcbJumpLog)) w.__rcbJumpLog = [];
+  w.__rcbJumpLog.push(row);
+  w.__rcbJumpDump = () => JSON.stringify(w.__rcbJumpLog, null, 2);
+  console.info(JSON.stringify(row));
+}
 
 function documentToCanvasFill(document: any, themeFallback: string): FillPanelValue {
   const raw = String(document?.backgroundColor || '').trim();
@@ -365,6 +379,20 @@ function editorContentBounds(doc: any, frames: ArtboardFrame[]): SceneBox {
   return box;
 }
 
+/** True when the scene has real artboards/nodes — not the empty-doc fallback box. */
+function editorHasFitContent(doc: any, frames: ArtboardFrame[]): boolean {
+  for (const f of frames) {
+    if ((Number(f.width) || 0) >= 2 && (Number(f.height) || 0) >= 2) return true;
+  }
+  for (const { node } of listSceneNodes(doc)) {
+    if (!node) continue;
+    const w = Math.max(0, Number(node.width) || 0);
+    const h = Math.max(0, Number(node.height) || 0);
+    if (w >= 2 && h >= 2) return true;
+  }
+  return false;
+}
+
 function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }) {
   return (
     <span className="flex w-full min-w-[11rem] items-center justify-between gap-6">
@@ -379,19 +407,19 @@ function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }
 }
 
 const ZOOM_MENU_PRESETS = [
+  { key: '25', zoom: 0.25 },
   { key: '50', zoom: 0.5 },
+  { key: '75', zoom: 0.75 },
   { key: '100', zoom: 1 },
+  { key: '150', zoom: 1.5 },
   { key: '200', zoom: 2 },
+  { key: '400', zoom: 4 },
 ] as const;
 
-function zoomMenuSelectedKeys(zoom: number): string[] {
-  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(zoom - p.zoom) < 0.001);
+function zoomMenuSelectedKeys(opts: { zoom: number; fitActive: boolean }): string[] {
+  if (opts.fitActive) return ['fit'];
+  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(opts.zoom - p.zoom) < 0.001);
   return hit ? [hit.key] : [];
-}
-
-function zoomModShortcutLabel() {
-  if (typeof navigator === 'undefined') return 'Ctrl';
-  return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
 }
 
 function resolveHomeAgentInteractionMode(
@@ -708,6 +736,8 @@ function EditorPage() {
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [canvasBgOpen, setCanvasBgOpen] = useState(false);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  /** Enter page / fit-to-canvas — menu highlights「适应画布」until user picks another zoom. */
+  const [zoomFitActive, setZoomFitActive] = useState(true);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [pathEditOpen, setPathEditOpen] = useState(false);
@@ -725,6 +755,12 @@ function EditorPage() {
   const bootOpenRef = useRef(true);
   const bootFinishingRef = useRef(false);
   const bootExitTimer = useRef<number | null>(null);
+  /** Local session: selection + grid. Camera fits once after stage layout (below). */
+  const sessionReadyForIdRef = useRef<string | null>(null);
+  const didInitialFitRef = useRef(false);
+  /** User pan/zoom — do not overwrite with auto-fit. */
+  const cameraUserTouchedRef = useRef(false);
+  const gridUserTouchedRef = useRef(false);
   /** Apply sessionStorage home boot at most once per EditorPage lifetime. */
   const homeAgentBootAppliedRef = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -847,9 +883,19 @@ function EditorPage() {
     const el = stageEl;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
     const apply = () => {
-      setStageSize({
+      const next = {
         width: Math.max(1, el.clientWidth),
         height: Math.max(1, el.clientHeight),
+      };
+      setStageSize((prev) => {
+        if (prev.width === next.width && prev.height === next.height) return prev;
+        rcbJumpLog('stageSize', {
+          prev,
+          next,
+          bootOpen: bootOpenRef.current,
+          didFit: didInitialFitRef.current,
+        });
+        return next;
       });
     };
     apply();
@@ -858,11 +904,24 @@ function EditorPage() {
     return () => ro.disconnect();
   }, [stageEl]);
 
+  /** Log camera changes after boot reveal — catch late auto-fit / collab / parent setState. */
   useEffect(() => {
-    if (isDevMode) {
-      setStackBottomHud(false);
-      return undefined;
-    }
+    if (bootOpen) return;
+    rcbJumpLog('camera.afterReveal', {
+      x: Number(camera.x.toFixed(2)),
+      y: Number(camera.y.toFixed(2)),
+      zoom: Number(camera.zoom.toFixed(4)),
+      userTouched: cameraUserTouchedRef.current,
+      stageW: stageSize.width,
+      stageH: stageSize.height,
+      stack: (new Error().stack || '')
+        .split('\n')
+        .slice(2, 10)
+        .map((s) => s.trim()),
+    });
+  }, [bootOpen, camera.x, camera.y, camera.zoom, stageSize.width, stageSize.height]);
+
+  useEffect(() => {
     const stage = stageEl;
     const hud = bottomHudRef.current;
     const tools = stage?.ownerDocument?.querySelector(
@@ -1007,15 +1066,14 @@ function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch, routeProjectId, location.search, navigate, t]);
 
-  /** Local session: selection + grid. Camera fits once on first canvas ready. */
-  const sessionReadyForIdRef = useRef<string | null>(null);
-  const didInitialFitRef = useRef(false);
-  const gridUserTouchedRef = useRef(false);
+  /** Local session: selection + grid. Camera fits once after stage layout (below). */
   useEffect(() => {
     sessionReadyForIdRef.current = null;
     didInitialFitRef.current = false;
+    cameraUserTouchedRef.current = false;
     gridUserTouchedRef.current = false;
-    setCamera(DEFAULT_CAMERA);
+    setZoomFitActive(true);
+    // Keep previous camera until fit — snapping to DEFAULT here causes a visible jump.
     dispatch(setGridMode(false));
   }, [currentId, dispatch]);
 
@@ -1152,24 +1210,35 @@ function EditorPage() {
   const finishBoot = () => {
     if (!bootOpenRef.current || bootFinishingRef.current) return;
     bootFinishingRef.current = true;
+    const el = stageRef.current;
+    rcbJumpLog('finishBoot.start', {
+      waitMs: Math.max(0, BOOT_MIN_MS - (Date.now() - bootStartedAt.current)),
+      stageW: el?.clientWidth || 0,
+      stageH: el?.clientHeight || 0,
+      camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
+    });
     const wait = Math.max(0, BOOT_MIN_MS - (Date.now() - bootStartedAt.current));
     window.setTimeout(() => {
       setBootProgress(100);
       setBootExiting(true);
+      rcbJumpLog('finishBoot.exiting', {
+        stageW: stageRef.current?.clientWidth || 0,
+        stageH: stageRef.current?.clientHeight || 0,
+      });
       bootExitTimer.current = window.setTimeout(() => {
         bootOpenRef.current = false;
         setBootOpen(false);
         setBootExiting(false);
         bootExitTimer.current = null;
+        rcbJumpLog('finishBoot.revealed', {
+          stageW: stageRef.current?.clientWidth || 0,
+          stageH: stageRef.current?.clientHeight || 0,
+        });
       }, BOOT_EXIT_MS);
     }, wait);
   };
 
-  // Empty world has no SvgCanvas onReady — finish boot immediately.
-  useEffect(() => {
-    if (document && frames.length === 0) finishBoot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document, frames.length]);
+  // Empty / content fit + boot reveal are handled by the stage-layout initial-fit effect.
 
   const onCommitFrame = useCallback(
     (rect: { x: number; y: number; width: number; height: number }) => {
@@ -1323,6 +1392,8 @@ function EditorPage() {
   const zoomAtStageCenter = useCallback((nextZoom: number) => {
     const el = stageRef.current;
     if (!el) return;
+    cameraUserTouchedRef.current = true;
+    setZoomFitActive(false);
     // Layout px (clientWidth) — same space as camera.x/y. getBoundingClientRect is visual
     // and drifts under browser zoom / CSS scale, which makes content jump off-screen.
     setCamera((c) =>
@@ -1331,6 +1402,8 @@ function EditorPage() {
   }, []);
 
   const onZoomIn = useCallback(() => {
+    cameraUserTouchedRef.current = true;
+    setZoomFitActive(false);
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
@@ -1340,6 +1413,8 @@ function EditorPage() {
   }, []);
 
   const onZoomOut = useCallback(() => {
+    cameraUserTouchedRef.current = true;
+    setZoomFitActive(false);
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
@@ -1348,75 +1423,225 @@ function EditorPage() {
     });
   }, []);
 
-  const onFitView = useCallback(() => {
+  const onFitView = useCallback((): boolean => {
     const el = stageRef.current;
     const vw = el?.clientWidth || 0;
     const vh = el?.clientHeight || 0;
-    if (vw < 1 || vh < 1) return;
+    // Match RcbCanvas autofit gate — tiny/unlaid-out stages must not count as fitted.
+    if (vw < 40 || vh < 40) {
+      rcbJumpLog('fitView.skipTiny', { vw, vh });
+      return false;
+    }
     const doc = (store.getState() as any).editor?.document;
     const fr: ArtboardFrame[] = Array.isArray(doc?.frames) ? doc.frames : [];
-    setCamera(rcbFitCamera({ width: vw, height: vh }, editorContentBounds(doc, fr), 120));
+    // Empty scene → 100%. With content → fit all artboards/nodes with 120px margins.
+    if (!editorHasFitContent(doc, fr)) {
+      const next = { ...DEFAULT_CAMERA, zoom: 1 };
+      rcbJumpLog('fitView.empty100', { vw, vh, next });
+      setCamera(next);
+      setZoomFitActive(true);
+      return true;
+    }
+    const bounds = editorContentBounds(doc, fr);
+    const next = rcbFitCamera({ width: vw, height: vh }, bounds, 120, 1);
+    rcbJumpLog('fitView', {
+      vw,
+      vh,
+      bounds,
+      docOrigin: { x: Number(doc?.x) || 0, y: Number(doc?.y) || 0 },
+      next: {
+        x: Number(next.x.toFixed(2)),
+        y: Number(next.y.toFixed(2)),
+        zoom: Number(next.zoom.toFixed(4)),
+      },
+      bootOpen: bootOpenRef.current,
+      userTouched: cameraUserTouchedRef.current,
+    });
+    // Camera pan/zoom only — never move node/frame scene coordinates.
+    setCamera(next);
+    setZoomFitActive(true);
+    return true;
   }, []);
 
-  /** Under boot overlay: center once, then reveal — no top-left flash. */
-  const onCanvasReady = useCallback(() => {
-    if (!didInitialFitRef.current) {
-      didInitialFitRef.current = true;
-      onFitView();
-    }
-    finishBoot();
+  /** Manual fit (toolbar / shortcut) — stop auto re-fit after this. */
+  const onFitViewManual = useCallback((): boolean => {
+    cameraUserTouchedRef.current = true;
+    return onFitView();
   }, [onFitView]);
 
-  const zoomModLabel = zoomModShortcutLabel();
+  /** Pan/zoom from the canvas — marks camera as user-owned. */
+  const onCanvasCameraChange = useCallback((next: CanvasCamera) => {
+    cameraUserTouchedRef.current = true;
+    setZoomFitActive(false);
+    rcbJumpLog('camera.user', {
+      x: Number(next.x.toFixed(2)),
+      y: Number(next.y.toFixed(2)),
+      zoom: Number(next.zoom.toFixed(4)),
+    });
+    setCamera(next);
+  }, []);
+
+  /**
+   * Fit camera **before** boot overlay dismisses — once content is visible, never
+   * auto-adjust again (no post-reveal re-fit when AgentDock width settles).
+   */
+  useEffect(() => {
+    if (!document || !currentId) return;
+    if (didInitialFitRef.current) return;
+
+    // Bake store origin before first fit — canvasDocument paints at 0,0; a late
+    // align remount would jump every host after the overlay lifts.
+    const ox = Number(document.x) || 0;
+    const oy = Number(document.y) || 0;
+    if (ox !== 0 || oy !== 0) {
+      rcbJumpLog('bakeDocumentOrigin', { ox, oy, currentId });
+      dispatch(bakeDocumentOrigin());
+      return;
+    }
+
+    const hasContent = editorHasFitContent(document, frames);
+    if (!hasContent) {
+      // Empty project: enter at 100% zoom (no content fit).
+      const el = stageRef.current;
+      if (el && el.clientWidth >= 40 && el.clientHeight >= 40) {
+        setCamera({ ...DEFAULT_CAMERA, zoom: 1 });
+        didInitialFitRef.current = true;
+        finishBoot();
+      }
+      return;
+    }
+
+    // Boot already gone (e.g. empty → agent added nodes): skip auto-fit to avoid jump.
+    if (!bootOpenRef.current) {
+      didInitialFitRef.current = true;
+      return;
+    }
+
+    let cancelled = false;
+    let tries = 0;
+    let lastW = 0;
+    let lastH = 0;
+    let stableFrames = 0;
+
+    const finishOnce = (fitted: boolean) => {
+      if (cancelled) return;
+      didInitialFitRef.current = true;
+      rcbJumpLog('initialFit.done', {
+        fitted,
+        stageW: stageRef.current?.clientWidth || 0,
+        stageH: stageRef.current?.clientHeight || 0,
+        tries,
+        stableFrames,
+      });
+      finishBoot();
+    };
+
+    const tick = () => {
+      if (cancelled || didInitialFitRef.current) return;
+      const el = stageRef.current;
+      if (!el || el.clientWidth < 40 || el.clientHeight < 40) {
+        if (tries++ < 90) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        finishOnce(false);
+        return;
+      }
+
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      // Wait until stage size stops changing (AgentDock flex) while boot still covers.
+      if (Math.abs(w - lastW) <= 1 && Math.abs(h - lastH) <= 1) {
+        stableFrames += 1;
+      } else {
+        if (lastW || lastH) {
+          rcbJumpLog('initialFit.stageUnstable', {
+            from: { w: lastW, h: lastH },
+            to: { w, h },
+            tries,
+          });
+        }
+        stableFrames = 0;
+        lastW = w;
+        lastH = h;
+      }
+      if (stableFrames < 4) {
+        if (tries++ < 90) {
+          requestAnimationFrame(tick);
+          return;
+        }
+      }
+
+      if (!onFitView()) {
+        if (tries++ < 90) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        finishOnce(false);
+        return;
+      }
+      // One more frame so the camera transform paints under the overlay, then reveal.
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        finishOnce(true);
+      });
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document, currentId, frames.length, stageEl, stageSize.width, stageSize.height, onFitView]);
+
+  /** SvgCanvas ready is no longer the fit trigger (see initial-fit effect above). */
+  const onCanvasReady = useCallback(() => {
+    if (didInitialFitRef.current) finishBoot();
+  }, []);
 
   const zoomMenuItems = useMemo<MenuItemType[]>(
     () => [
-      {
-        key: 'in',
-        label: <ZoomMenuLabel label={t('editor.zoomIn')} shortcut={`${zoomModLabel} +`} />,
-      },
-      {
-        key: 'out',
-        label: <ZoomMenuLabel label={t('editor.zoomOut')} shortcut={`${zoomModLabel} -`} />,
-      },
       {
         key: 'fit',
         label: <ZoomMenuLabel label={t('editor.fitCanvas')} shortcut="Shift 1" />,
       },
       {
-        key: '50',
-        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 50 })} />,
+        key: 'in',
+        label: <ZoomMenuLabel label={t('editor.zoomIn')} />,
       },
       {
-        key: '100',
-        label: (
-          <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 100 })} shortcut={`${zoomModLabel} 0`} />
-        ),
+        key: 'out',
+        label: <ZoomMenuLabel label={t('editor.zoomOut')} />,
       },
-      {
-        key: '200',
-        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 200 })} />,
-      },
+      { key: 'zoom-divider', type: 'divider', label: '' },
+      ...ZOOM_MENU_PRESETS.map((p) => ({
+        key: p.key,
+        label: <ZoomMenuLabel label={`${Math.round(p.zoom * 100)}%`} />,
+      })),
     ],
-    [t, zoomModLabel]
+    [t]
   );
 
-  const zoomSelectedKeys = useMemo(() => zoomMenuSelectedKeys(camera.zoom), [camera.zoom]);
+  const zoomSelectedKeys = useMemo(
+    () => zoomMenuSelectedKeys({ zoom: camera.zoom, fitActive: zoomFitActive }),
+    [camera.zoom, zoomFitActive]
+  );
 
   const onZoomMenuClick = useCallback(
     (key: string) => {
-      const actions: Record<string, () => void> = {
-        in: onZoomIn,
-        out: onZoomOut,
-        fit: onFitView,
-        '50': () => zoomAtStageCenter(0.5),
-        '100': () => zoomAtStageCenter(1),
-        '200': () => zoomAtStageCenter(2),
-      };
-      actions[key]?.();
+      if (key === 'fit') {
+        onFitViewManual();
+      } else if (key === 'in') {
+        onZoomIn();
+      } else if (key === 'out') {
+        onZoomOut();
+      } else {
+        const preset = ZOOM_MENU_PRESETS.find((p) => p.key === key);
+        if (preset) zoomAtStageCenter(preset.zoom);
+      }
       setZoomMenuOpen(false);
     },
-    [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]
+    [onFitViewManual, onZoomIn, onZoomOut, zoomAtStageCenter]
   );
 
   const toggleMinimap = useCallback(() => {
@@ -1457,12 +1682,12 @@ function EditorPage() {
       }
       if (e.shiftKey && !mod && !e.altKey && (e.key === '1' || e.code === 'Digit1')) {
         e.preventDefault();
-        onFitView();
+        onFitViewManual();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]);
+  }, [onFitViewManual, onZoomIn, onZoomOut, zoomAtStageCenter]);
 
   /** Select a layer and pan so its center sits in the current viewport (keep zoom). */
   const focusLayerNode = useCallback(
@@ -1680,7 +1905,7 @@ function EditorPage() {
               <RcbCanvas
                 artboard={worldBounds}
                 camera={camera}
-                onCameraChange={setCamera}
+                onCameraChange={onCanvasCameraChange}
                 panMode={panMode}
                 emptyDragPans={false}
                 panBlockSelector={EDITOR_PAN_BLOCK_SELECTOR}
@@ -1851,20 +2076,23 @@ function EditorPage() {
             ) : null}
           </div>
 
-          {/* Fig.2 bottom-center tools — desktop-style on all viewports */}
-          {!isDevMode ? (
-            <div
-              data-tour="editor-tools"
-              className={cn(
-                'pointer-events-none absolute left-1/2 z-20 -translate-x-1/2',
-                'bottom-4'
-              )}
-            >
-              <div className="pointer-events-auto">
-                <EditorToolStrip camera={camera} stageEl={stageEl} compact={false} />
-              </div>
+          {/* Fig.2 bottom-center tools — keep in preview; only select/pan stay active. */}
+          <div
+            data-tour="editor-tools"
+            className={cn(
+              'pointer-events-none absolute left-1/2 z-20 -translate-x-1/2',
+              'bottom-4'
+            )}
+          >
+            <div className="pointer-events-auto">
+              <EditorToolStrip
+                camera={camera}
+                stageEl={stageEl}
+                compact={false}
+                selectOnly={isDevMode}
+              />
             </div>
-          ) : null}
+          </div>
 
           {/* Bottom-left HUD — lift only when it would collide with the center toolstrip.
               Floating panels (minimap / shortcuts) sit inside the same container but
@@ -1885,7 +2113,7 @@ function EditorPage() {
                 activeFrameId={activeFrameId}
                 selectedFrameIds={selectedFrameIds}
                 selectedNodeIds={selectedNodeIds}
-                onCameraChange={setCamera}
+                onCameraChange={onCanvasCameraChange}
                 canvasBg={stageBackground}
               />
             ) : null}
@@ -2043,7 +2271,7 @@ function EditorPage() {
               zoomIn: onZoomIn,
               zoomOut: onZoomOut,
               setZoom: (z) => zoomAtStageCenter(z),
-              fitView: onFitView,
+              fitView: onFitViewManual,
               getViewportSceneBounds: () => {
                 const w = stageSize.width;
                 const h = stageSize.height;

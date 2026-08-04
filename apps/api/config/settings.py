@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     langfuse_tracing: bool = False
     langfuse_project_id: str = ""
 
-    # Design skills: poll seed JSON + data/design_skills packs for hot reload.
+    # Design skills: poll seed JSON + .agents/skills + data/design_skills for hot reload.
     design_skills_hot_reload: bool = True
     design_skills_hot_reload_interval_sec: float = 2.0
     # Private seed overlay (gitignored). Empty → apps/api/data/private

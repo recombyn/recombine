@@ -20,9 +20,9 @@ import {
   HiOutlineChevronRight,
   HiOutlineGlobeAlt,
   HiOutlineInformationCircle,
-  HiOutlineMoon,
   HiOutlineUserCircle,
 } from 'react-icons/hi2';
+import { TbShirt } from 'react-icons/tb';
 import { message } from '@/components/base';
 import AccountSettingsDialog, {
   type AccountSettingsTab,
@@ -565,7 +565,7 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
                     >
                       <MenuRow
                         icon={
-                          <HiOutlineMoon className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
+                          <TbShirt className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
                         }
                         label={`${t('theme.label')} · ${themeLabel}`}
                         active={flyout === 'theme'}

@@ -12,7 +12,6 @@ import {
   LuImageUp,
   LuMinus,
   LuMousePointer2,
-  LuPaintBucket,
   LuPenTool,
   LuPencil,
   LuSquare,
@@ -238,12 +237,15 @@ function EditorToolStrip({
   camera,
   stageEl = null,
   compact = false,
+  selectOnly = false,
 }: {
   className?: string;
   /** Used to place toolbar image uploads at the visible viewport center. */
   camera?: RcbCamera;
   stageEl?: HTMLElement | null;
   compact?: boolean;
+  /** Preview / inspect: keep the dock visible but only Select / Pan stay active. */
+  selectOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -253,6 +255,13 @@ function EditorToolStrip({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const toolsLocked = Boolean(selectOnly);
+
+  useEffect(() => {
+    if (!toolsLocked) return;
+    if (activeTool === 'select' || activeTool === 'pan') return;
+    dispatch(setActiveTool('select'));
+  }, [toolsLocked, activeTool, dispatch]);
 
   const L = useMemo(
     () => ({
@@ -262,7 +271,6 @@ function EditorToolStrip({
       shape: t('editor.tools.shape'),
       pen: t('editor.tools.pen'),
       pencil: t('editor.tools.pencil'),
-      bucket: t('editor.tools.bucket'),
       text: t('editor.tools.text'),
       rect: t('editor.tools.rect'),
       line: t('editor.tools.line'),
@@ -310,7 +318,7 @@ function EditorToolStrip({
       { key: 'line', label: <MenuLabel iconKey="line" label={L.line} /> },
       { key: 'arrow', label: <MenuLabel iconKey="arrow" label={L.arrow} /> },
       { key: 'circle', label: <MenuLabel iconKey="circle" label={L.circle} /> },
-      { key: 'polygon', label: <MenuLabel iconKey="triangle" label={L.polygon} /> },
+      { key: 'polygon', label: <MenuLabel iconKey="polygon" label={L.polygon} /> },
       { key: 'star', label: <MenuLabel iconKey="star" label={L.star} /> },
     ],
     [L.arrow, L.circle, L.line, L.polygon, L.rect, L.star]
@@ -416,6 +424,13 @@ function EditorToolStrip({
         window.dispatchEvent(new Event('resume:exit-path-edit'));
         dispatch(setActiveTool('pan'));
       }
+      if (toolsLocked) {
+        if (key === 'escape') {
+          window.dispatchEvent(new Event('resume:exit-path-edit'));
+          dispatch(setActiveTool('select'));
+        }
+        return;
+      }
       if (key === 'f' && !e.shiftKey) dispatch(setActiveTool('frame'));
       if (key === 't' && !e.shiftKey) dispatch(setActiveTool('text'));
       if (key === 'r' && !e.shiftKey) dispatch(setShapeKind('rect'));
@@ -433,7 +448,6 @@ function EditorToolStrip({
       }
       if (key === 'p' && !e.shiftKey) dispatch(setActiveTool('pen'));
       if (key === 'p' && e.shiftKey) dispatch(setActiveTool('pencil'));
-      if (key === 'b' && !e.shiftKey) dispatch(setActiveTool('bucket'));
       if (key === 'escape') {
         window.dispatchEvent(new Event('resume:exit-path-edit'));
         dispatch(setActiveTool('select'));
@@ -442,7 +456,7 @@ function EditorToolStrip({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // Intentionally stable: always call latest spawn via closure from this render's effect re-run when deps change.
-  }, [camera, dispatch, document, L.imageGenerator, L.videoGenerator, stageEl]);
+  }, [camera, dispatch, document, L.imageGenerator, L.videoGenerator, stageEl, toolsLocked]);
 
   const placeAtViewportCenter = (
     natural: { width: number; height: number }
@@ -598,7 +612,6 @@ function EditorToolStrip({
   const imageActive = activeTool === 'image';
   const penActive = activeTool === 'pen';
   const pencilActive = activeTool === 'pencil';
-  const bucketActive = activeTool === 'bucket';
   const textActive = activeTool === 'text';
 
   return (
@@ -634,6 +647,7 @@ function EditorToolStrip({
       <SplitToolButton
         tip={L.shape}
         active={shapeActive}
+        disabled={toolsLocked}
         menuOpen={openMenu === 'shape'}
         onMenuOpenChange={(open) => {
           setOpenMenu(open ? 'shape' : null);
@@ -657,6 +671,7 @@ function EditorToolStrip({
             tip={L.pen}
             ariaLabel={L.pen}
             active={penActive}
+            disabled={toolsLocked}
             onClick={() => dispatch(setActiveTool('pen'))}
           >
             <ToolIcon>
@@ -669,22 +684,11 @@ function EditorToolStrip({
             tip={L.pencil}
             ariaLabel={L.pencil}
             active={pencilActive}
+            disabled={toolsLocked}
             onClick={() => dispatch(setActiveTool('pencil'))}
           >
             <ToolIcon>
               <PencilIcon className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
-            </ToolIcon>
-          </ToolBtn>
-
-          {/* 油漆桶 — uses pen stroke color as fill */}
-          <ToolBtn
-            tip={L.bucket}
-            ariaLabel={L.bucket}
-            active={bucketActive}
-            onClick={() => dispatch(setActiveTool('bucket'))}
-          >
-            <ToolIcon>
-              <LuPaintBucket className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
             </ToolIcon>
           </ToolBtn>
         </>
@@ -694,6 +698,7 @@ function EditorToolStrip({
       <ToolBtn
         tip={L.text}
         active={textActive}
+        disabled={toolsLocked}
         onClick={() => dispatch(setActiveTool('text'))}
       >
         <ToolIcon>
@@ -705,6 +710,7 @@ function EditorToolStrip({
       <ToolBtn
         tip={L.frame}
         active={frameActive}
+        disabled={toolsLocked}
         onClick={() => dispatch(setActiveTool('frame'))}
       >
         <ToolIcon className="h-3.5 w-3.5">
@@ -716,6 +722,7 @@ function EditorToolStrip({
       <ToolBtn
         tip={L.uploadMedia}
         active={imageActive}
+        disabled={toolsLocked}
         onClick={openImageUpload}
       >
         <ToolIcon>
@@ -728,6 +735,7 @@ function EditorToolStrip({
       {/* 图像生成器 — places a generator node at viewport center */}
       <ToolBtn
         tip={L.imageGenerator}
+        disabled={toolsLocked}
         onClick={spawnImageGeneratorAtView}
       >
         <ToolIcon>
@@ -736,7 +744,7 @@ function EditorToolStrip({
       </ToolBtn>
 
       {/* 视频生成器 — Remix fill reads heavier than Lucide strokes; soften to match. */}
-      <ToolBtn tip={L.videoGenerator} onClick={spawnVideoGeneratorAtView}>
+      <ToolBtn tip={L.videoGenerator} disabled={toolsLocked} onClick={spawnVideoGeneratorAtView}>
         <ToolIcon className="h-[18px] w-[18px]">
           <RiVideoAiLine className="opacity-[0.72]" />
         </ToolIcon>

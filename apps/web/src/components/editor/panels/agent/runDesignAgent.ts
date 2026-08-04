@@ -321,6 +321,8 @@ export type SceneNodeInventoryItem = {
   fillType?: string;
   stroke?: string;
   borderWidth?: number;
+  /** center | inside | outside — selection chrome sits on mid of stroke band. */
+  strokeAlign?: string;
   opacity?: number;
   rotation?: number;
   path?: string;
@@ -421,6 +423,13 @@ function nodeToInventoryItem(
   const fill = nodeFillForInventory(node);
   const stroke = String(attrs['border-color'] ?? attrs.stroke ?? '').trim();
   const borderRaw = Number(attrs['border-width'] ?? attrs.strokeWidth);
+  const strokeAlignRaw = String(attrs.strokeAlign || attrs['stroke-align'] || 'center')
+    .trim()
+    .toLowerCase();
+  const strokeAlign =
+    strokeAlignRaw === 'inside' || strokeAlignRaw === 'outside' || strokeAlignRaw === 'center'
+      ? strokeAlignRaw
+      : 'center';
   const opacityRaw = Number(attrs.opacity);
   const angleRaw = Number(attrs.angle ?? attrs.rotation);
   const path = String(attrs.path || attrs.d || '').trim();
@@ -441,6 +450,7 @@ function nodeToInventoryItem(
     fillType,
     stroke: stroke && stroke !== 'transparent' && stroke !== 'none' ? stroke : undefined,
     borderWidth: Number.isFinite(borderRaw) && borderRaw >= 0 ? borderRaw : 0,
+    strokeAlign,
     opacity: sceneNodeOpacityPercent(opacityRaw),
     rotation: Number.isFinite(angleRaw) ? Math.round(angleRaw * 100) / 100 : 0,
   };

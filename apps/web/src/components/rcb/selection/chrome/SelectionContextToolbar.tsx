@@ -78,8 +78,6 @@ import {
   requestEnterPathEdit,
 } from '@/components/rcb/scene/paint/outlineToPath';
 import {
-  familyHasBoldFace,
-  getFontChildren,
   loadFontCatalog,
   parseWeightSelectValue,
   resolveWeightSelectValue,
@@ -100,6 +98,8 @@ type Props = {
   document: any;
   nodeId: string;
   box: SceneBox;
+  /** Scene pad beyond chrome for outer stroke ink (center stroke half-width). */
+  edgePadScene?: number;
   onOpenAgent?: (opts?: { prompt?: string }) => void;
 };
 
@@ -136,7 +136,7 @@ function DecorationsTriggerIcon({
 }
 
 function SelectionContextToolbar(props: Props): ReactNode {
-  const { document, nodeId, box } = props;
+  const { document, nodeId, box, edgePadScene = 0 } = props;
   const dispatch = useDispatch();
   const { t } = useTranslation();
   const [decorationOpen, setDecorationOpen] = useState(false);
@@ -206,7 +206,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
     weightFaces[0]?.label ||
     'Regular';
   const showWeightSelect = weightFaces.length > 1;
-  const showBoldToggle = familyHasBoldFace(fontFamily);
+  const showBoldToggle = true;
 
   const runImageProcess = (
     kind: ImageProcessKind,
@@ -255,6 +255,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
     <>
       <SelectionToolbarShell
         box={box}
+        edgePadScene={edgePadScene}
         hasTitleLabel={kind === 'image' || kind === 'video'}
         bare={kind === 'image' && isIconImageNode(node)}
       >
@@ -305,33 +306,11 @@ function SelectionContextToolbar(props: Props): ReactNode {
                     aria-label={t('editor.imageToolbar.bold')}
                     className={cn(SEL_ICON_BTN, isTextBold(style) && SEL_ICON_BTN_ACTIVE)}
                     aria-pressed={isTextBold(style)}
-                    onClick={() => {
-                      const children = getFontChildren(fontFamily);
-                      const pickFace = (child: (typeof children)[number]) => {
-                        const shared =
-                          children.filter((c) => c.family === child.family).length > 1;
-                        const key =
-                          shared && child.weight != null
-                            ? `${child.family}::${child.weight}`
-                            : child.family;
-                        const parsed = parseWeightSelectValue(key);
-                        patchTextStyle({
-                          fontFamily: parsed.family,
-                          fontWeight: parsed.weight,
-                        });
-                      };
-                      if (isTextBold(style)) {
-                        const regular =
-                          children.find((c) => (c.weight ?? 400) === 400) || children[0];
-                        if (regular) pickFace(regular);
-                        else patchTextStyle({ fontWeight: 'normal' });
-                      } else {
-                        const bold =
-                          children.find((c) => (c.weight ?? 0) >= 700) ||
-                          children.find((c) => (c.weight ?? 0) >= 600);
-                        if (bold) pickFace(bold);
-                      }
-                    }}
+                    onClick={() =>
+                      patchTextStyle({
+                        fontWeight: isTextBold(style) ? 'normal' : 'bold',
+                      })
+                    }
                   >
                     <HiOutlineBold className="h-3.5 w-3.5" strokeWidth={2} />
                   </button>

@@ -21,13 +21,13 @@ Host tools can reach MySQL at `127.0.0.1:3306` (same user/password). Change via 
 
 **Dev without Docker MySQL:** leave `DATABASE_URL` empty → SQLite at `storage/recombyn.db`.
 
-Default config loads from seed JSON under `apps/api/data/public/` (optional `private/` overlay) on first API start.
+Default config loads from seed JSON under `apps/api/data/public/` on first API start.
 
 | Seed | Public (git) | Notes |
 |------|--------------|--------|
 | Prompt packs | Minimal English baseline | Enough to avoid `missing prompt pack` on Agent |
 | Skills (core) | 5 core playbooks | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` — Agent can create & edit out of the box |
-| Knowledge / tokens / models / cases | Often stub or infra-only | Optional local overlay under `data/private/` (gitignored) |
+| Knowledge / tokens / models | Often stub or infra-only | Expand via Admin / DB after install |
 | Canvas actions, fonts, dicts, stages | Shipped in public | |
 
 See [data/README.md](../apps/api/data/README.md) and [design_skills/README.md](../apps/api/data/public/design_skills/README.md) (namespaces `core` / `ext` / `user`, ACL, hot reload).

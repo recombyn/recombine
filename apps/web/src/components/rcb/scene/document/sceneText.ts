@@ -47,6 +47,7 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   textDecoration: 'none',
 };
 
+/** Bold = CSS `font-weight` only (B button). Face files use the weight dropdown. */
 export function isTextBold(style: Partial<TextStyle> | null | undefined) {
   const w = style?.fontWeight;
   return w === 'bold' || Number(w) >= 600;
