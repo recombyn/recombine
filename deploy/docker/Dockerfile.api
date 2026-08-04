@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY packages/scene-builder-py ./packages/scene-builder-py
 COPY apps/api ./apps/api
+COPY .agents/skills ./.agents/skills
 
 ARG INSTALL_OCR=false
 

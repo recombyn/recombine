@@ -38,6 +38,8 @@ import {
   resolveStrokeLinecap,
   resolveStrokeLinejoin,
   boolEffectAttr,
+  inflateBoxByVisualOutset,
+  inflateBoxByTextSelectionPad,
 } from '@/components/rcb/scene/document/sceneEffects';
 import { supportsFill, supportsCornerRadius } from '@/components/rcb/scene/document/sceneDocument';
 import {
@@ -86,7 +88,8 @@ function unionBoxes(boxes: SceneBox[]): SceneBox | null {
   };
 }
 
-function nodeBox(document: any, node: any): SceneBox | null {
+/** Geometry AABB (fill / path) — gradient & mesh handles stay on this. */
+function nodeGeomBox(document: any, node: any): SceneBox | null {
   if (!node) return null;
   const { left, top } = nodeLeftTop(document, node);
   return {
@@ -95,6 +98,13 @@ function nodeBox(document: any, node: any): SceneBox | null {
     width: Math.max(1, Number(node.width) || 1),
     height: Math.max(1, Number(node.height) || 1),
   };
+}
+
+/** Painted footprint including stroke outset — dock panels outside this. */
+function nodeVisualBox(document: any, node: any): SceneBox | null {
+  const geom = nodeGeomBox(document, node);
+  if (!geom) return null;
+  return inflateBoxByVisualOutset(inflateBoxByTextSelectionPad(geom, node), node);
 }
 
 function fillAttrsFromValue(
@@ -139,8 +149,8 @@ function strokeAttrsFromValue(
     'stroke-opacity': Math.max(0, Math.min(100, Math.round(next.opacity))),
     'border-width': Math.max(0, Math.round(next.width) || 0),
     strokeStyle: next.style,
-    strokeAlign: next.align ?? 'outside',
-    'stroke-align': next.align ?? 'outside',
+    strokeAlign: next.align ?? 'center',
+    'stroke-align': next.align ?? 'center',
     strokeLinecap: linecap,
     'stroke-linecap': linecap,
     strokeLinejoin: linejoin,
@@ -299,7 +309,7 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
   const box = useMemo(() => {
     if (!panel) return null;
     const boxes = panel.nodeIds
-      .map((id) => nodeBox(document, document?.deltaSetLike?.[id]))
+      .map((id) => nodeVisualBox(document, document?.deltaSetLike?.[id]))
       .filter(Boolean) as SceneBox[];
     return unionBoxes(boxes);
   }, [document, panel]);
@@ -316,7 +326,7 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
     panel.kind === 'fill' &&
     (fillType === 'linear' || fillType === 'radial' || fillType === 'angular');
   const showMeshHandles = panel.kind === 'fill' && fillType === 'diffuse';
-  const handleBox = nodeBox(document, firstNode) || box;
+  const handleBox = nodeGeomBox(document, firstNode) || box;
   const nodeAngle = Number(firstAttrs?.angle);
   const gradient: FillGradient | null = showGradientHandles
     ? (() => {

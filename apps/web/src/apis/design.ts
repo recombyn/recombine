@@ -437,7 +437,7 @@ export type DesignSkillImportResult = {
   existing?: DesignSkillImportExisting | null;
 };
 
-/** Upload a skill pack `.zip` (`_meta.json` + `SKILL.md`). */
+/** Upload a skill pack `.zip`: `_meta.json`+`SKILL.md`, or Agent Skills `SKILL.md` with YAML frontmatter. */
 export const importDesignSkillZip = (file: File, opts?: { overwrite?: boolean }) => {
   const data = new FormData();
   data.append('file', file);

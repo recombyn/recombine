@@ -19,6 +19,14 @@ export function rcbCameraScreenOffset(
   };
 }
 
+/**
+ * CSS `scale()` written on the camera world layer (`RcbCanvas` camZ).
+ * Stage overlays must multiply by this — raw `camera.zoom` drifts on large scene X/Y.
+ */
+export function rcbCameraCssZoom(camera: RcbCamera): number {
+  return toDomPrecision(Math.max(0.05, camera.zoom || 1));
+}
+
 export type RcbViewportMetrics = {
   rect: DOMRect;
   /** Visual CSS px per layout px (≈1 unless an ancestor has CSS scale / zoom). */
@@ -72,11 +80,50 @@ export function rcbSceneToScreen(
   sceneY: number,
   dpr?: number
 ): RcbVec {
-  const z = Math.max(0.05, camera.zoom || 1);
+  const z = rcbCameraCssZoom(camera);
   const { x: camX, y: camY } = rcbCameraScreenOffset(camera, dpr);
   return {
     x: sceneX * z + camX,
     y: sceneY * z + camY,
+  };
+}
+
+/**
+ * Snap a scene-axis value so `(scene * zoom + camSnapped) * dpr` lands on an
+ * integer device pixel. Needed when browser zoom makes dpr fractional (e.g. 0.9):
+ * pan is already snapped, but scene*zoom*dpr is still often frac — SVG strokes
+ * and HTML chrome then round to different pixels.
+ */
+export function rcbSnapSceneAxis(
+  scene: number,
+  zoom: number,
+  camSnapped: number,
+  dpr: number
+): number {
+  const z = Math.max(0.05, zoom || 1);
+  const d = dpr > 0 ? dpr : 1;
+  const screen = scene * z + camSnapped;
+  const snappedScreen = snapCssToDevicePixel(screen, d);
+  return (snappedScreen - camSnapped) / z;
+}
+
+/** Snap box corners onto the device-pixel grid under the live camera CSS. */
+export function rcbSnapSceneBox(
+  box: { left: number; top: number; width: number; height: number },
+  camera: RcbCamera,
+  dpr: number = readDevicePixelRatio()
+): { left: number; top: number; width: number; height: number } {
+  const z = Math.max(0.05, camera.zoom || 1);
+  const { x: camX, y: camY } = rcbCameraScreenOffset(camera, dpr);
+  const left = rcbSnapSceneAxis(box.left, z, camX, dpr);
+  const top = rcbSnapSceneAxis(box.top, z, camY, dpr);
+  const right = rcbSnapSceneAxis(box.left + box.width, z, camX, dpr);
+  const bottom = rcbSnapSceneAxis(box.top + box.height, z, camY, dpr);
+  return {
+    left,
+    top,
+    width: Math.max(1e-4, right - left),
+    height: Math.max(1e-4, bottom - top),
   };
 }
 
@@ -93,7 +140,7 @@ export function rcbScreenToScene(
   dpr?: number
 ): RcbVec {
   const local = rcbClientToStageLocal(viewportEl, clientX, clientY);
-  const z = Math.max(0.05, camera.zoom || 1);
+  const z = rcbCameraCssZoom(camera);
   const { x: camX, y: camY } = rcbCameraScreenOffset(camera, dpr);
   return {
     x: (local.x - camX) / z,
@@ -143,10 +190,10 @@ export function rcbZoomAtPoint(
 export function rcbFitCamera(
   viewport: { width: number; height: number },
   bounds: { x?: number; y?: number; width: number; height: number },
-  /** Screen-px margin around content. */
+  /** Screen-px margin on each side (top/right/bottom/left). */
   padding = 120,
-  /** Cap so small scenes do not fill the whole stage. */
-  maxZoom = 0.85
+  /** Cap so small scenes do not zoom past 100%. */
+  maxZoom = 1
 ): RcbCamera {
   const vw = Math.max(1, viewport.width);
   const vh = Math.max(1, viewport.height);
@@ -156,9 +203,9 @@ export function rcbFitCamera(
   const oy = bounds.y || 0;
   const pad = Math.max(0, padding);
   const cap = Math.max(0.05, Math.min(8, maxZoom));
-  const zoom = rcbClampZoom(
-    Math.min((vw - pad * 2) / aw, (vh - pad * 2) / ah, cap)
-  );
+  const availW = Math.max(1, vw - pad * 2);
+  const availH = Math.max(1, vh - pad * 2);
+  const zoom = rcbClampZoom(Math.min(availW / aw, availH / ah, cap));
   return {
     zoom,
     x: (vw - aw * zoom) / 2 - ox * zoom,

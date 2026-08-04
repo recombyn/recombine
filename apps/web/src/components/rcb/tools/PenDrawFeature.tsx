@@ -2,7 +2,7 @@ import {
   useRcbCamera,
   useRcbScreenToScene,
 } from '../camera/context';
-import { useEffect, useRef, useState, memo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, memo, type ReactNode } from 'react';
 import {
   CLOSE_THRESHOLD,
   localizeAnchors,
@@ -11,8 +11,11 @@ import {
   withMirroredHandles,
   type PenAnchor,
 } from './penPath';
-import RcbSceneOverlaySvg from '../canvas/RcbSceneOverlaySvg';
+import RcbSceneOverlayCanvas, {
+  type RcbSceneOverlayCanvasHandle,
+} from '../canvas/RcbSceneOverlayCanvas';
 import { isEditablePathNode } from '../scene/paint/outlineToPath';
+import { strokeCachedPath2D } from '@/components/rcb/scene/document/sceneShapes';
 import { PEN_CURSOR } from './PencilDrawFeature';
 
 type HandleSide = 'in' | 'out';
@@ -50,9 +53,77 @@ const HANDLE_HIT_PX = 14;
 const ANCHOR_HIT_PX = 16;
 const ANCHOR_DBL_MS = 450;
 
+/** Same as SelectionChrome: page size = screenPx / zoom under camera scale. */
+const ANCHOR_VIS_PX = 8;
+const HANDLE_VIS_PX = 7;
+const STROKE_PX = 1.5;
+const HANDLE_STROKE_PX = 1.25;
+const LINK_STROKE_PX = 1;
+const PATH_STROKE_MAX_PX = 2.25;
+const SEL_BASELINE = '#3388ff';
+
 /** Scene-space radius matching ~screenPx at current camera zoom. */
 function hitRadiusScene(zoom: number, screenPx: number) {
   return screenPx / Math.max(0.05, zoom || 1);
+}
+
+function ScreenAnchorKnob(props: {
+  x: number;
+  y: number;
+  vis: number;
+  stroke: number;
+  fill: string;
+  strokeColor?: string;
+}) {
+  const { x, y, vis, stroke, fill, strokeColor = SEL_BASELINE } = props;
+  const r = Math.max(0.01, vis / 2 - stroke / 2);
+  return (
+    <svg
+      className="pointer-events-none absolute z-[21] overflow-visible"
+      width={vis}
+      height={vis}
+      style={{ left: x - vis / 2, top: y - vis / 2 }}
+      aria-hidden
+    >
+      <circle
+        cx={vis / 2}
+        cy={vis / 2}
+        r={r}
+        fill={fill}
+        stroke={strokeColor}
+        strokeWidth={stroke}
+      />
+    </svg>
+  );
+}
+
+function ScreenHandleDiamond(props: {
+  x: number;
+  y: number;
+  vis: number;
+  stroke: number;
+  active: boolean;
+}) {
+  const { x, y, vis, stroke, active } = props;
+  const cx = vis / 2;
+  const cy = vis / 2;
+  const r = Math.max(0.01, vis / 2 - stroke / 2);
+  return (
+    <svg
+      className="pointer-events-none absolute z-[21] overflow-visible"
+      width={vis}
+      height={vis}
+      style={{ left: x - vis / 2, top: y - vis / 2 }}
+      aria-hidden
+    >
+      <polygon
+        points={handleDiamondPoints(cx, cy, r)}
+        fill={active ? SEL_BASELINE : '#fff'}
+        stroke={active ? SEL_BASELINE : '#383838'}
+        strokeWidth={stroke}
+      />
+    </svg>
+  );
 }
 
 function hitHandle(
@@ -684,136 +755,287 @@ function PenDrawFeature({
     (closing || closeHot) && first && last && anchors.length >= 2 && !placingRef.current;
 
   const sw = Math.max(1, Number(strokeWidth) || 1);
-  const zoom = Math.max(0.15, camera.zoom || 1);
-  const anchorR = Math.min(5.5, 4.25 / zoom);
-  const handleR = Math.min(4.25, 3.1 / zoom);
-  const pathSw = Math.min(sw, 2.25 / zoom);
+  const z = Math.max(0.05, camera.zoom || 1);
+  const inv = 1 / z;
+  const stroke = STROKE_PX * inv;
+  const handleStroke = HANDLE_STROKE_PX * inv;
+  const linkStroke = LINK_STROKE_PX * inv;
+  const anchorVis = ANCHOR_VIS_PX * inv;
+  const handleVis = HANDLE_VIS_PX * inv;
+  const pathSw = Math.min(sw, PATH_STROKE_MAX_PX) * inv;
 
   const handleSelected = (i: number, side: HandleSide) =>
     selectedHandle?.index === i && selectedHandle.side === side;
   const handleHovered = (i: number, side: HandleSide) =>
     hoverHandle?.index === i && hoverHandle.side === side;
 
-  const renderHandle = (i: number, side: HandleSide, hx: number, hy: number) => {
-    const active = handleSelected(i, side) || handleHovered(i, side);
-    const r = handleR + (active ? 1.25 : 0);
-    return (
-      <>
-        <line x1={anchors[i].x} y1={anchors[i].y} x2={hx} y2={hy} stroke="#8b8b8b" strokeWidth={1} />
-        <polygon
-          points={handleDiamondPoints(hx, hy, r)}
-          fill={active ? '#3388ff' : '#fff'}
-          stroke={active ? '#3388ff' : '#383838'}
-          strokeWidth={active ? 1.5 : 1}
+  type LinkSeg = { x1: number; y1: number; x2: number; y2: number };
+  const linkSegs: LinkSeg[] = [];
+  const handleChrome: ReactNode[] = [];
+  const anchorChrome: ReactNode[] = [];
+
+  anchors.forEach((a, i) => {
+    const isStart = i === 0;
+    const hot = isStart && (closeHot || closing) && anchors.length >= 2;
+    const hovered = hoverAnchor === i;
+    const pushHandle = (side: HandleSide, hx: number, hy: number) => {
+      const active = handleSelected(i, side) || handleHovered(i, side);
+      linkSegs.push({ x1: a.x, y1: a.y, x2: hx, y2: hy });
+      handleChrome.push(
+        <ScreenHandleDiamond
+          key={`h-${i}-${side}`}
+          x={hx}
+          y={hy}
+          vis={active ? handleVis + 2 * inv : handleVis}
+          stroke={handleStroke}
+          active={active}
         />
-      </>
-    );
-  };
+      );
+    };
+    if (a.outX != null && a.outY != null) pushHandle('out', a.outX, a.outY);
+    if (a.inX != null && a.inY != null) pushHandle('in', a.inX, a.inY);
+
+    if (hot) {
+      anchorChrome.push(
+        <svg
+          key={`hot-ring-${i}`}
+          className="pointer-events-none absolute z-[20] overflow-visible"
+          width={anchorVis + 12 * inv}
+          height={anchorVis + 12 * inv}
+          style={{
+            left: a.x - (anchorVis + 12 * inv) / 2,
+            top: a.y - (anchorVis + 12 * inv) / 2,
+          }}
+          aria-hidden
+        >
+          <circle
+            cx={(anchorVis + 12 * inv) / 2}
+            cy={(anchorVis + 12 * inv) / 2}
+            r={anchorVis / 2 + 3 * inv}
+            fill="none"
+            stroke={SEL_BASELINE}
+            strokeWidth={stroke}
+            opacity={0.55}
+          >
+            <animate
+              attributeName="r"
+              values={`${anchorVis / 2 + 1.5 * inv};${anchorVis / 2 + 4 * inv};${anchorVis / 2 + 1.5 * inv}`}
+              dur="0.9s"
+              repeatCount="indefinite"
+            />
+            <animate
+              attributeName="opacity"
+              values="0.7;0.25;0.7"
+              dur="0.9s"
+              repeatCount="indefinite"
+            />
+          </circle>
+        </svg>
+      );
+      anchorChrome.push(
+        <ScreenAnchorKnob
+          key={`a-${i}`}
+          x={a.x}
+          y={a.y}
+          vis={anchorVis}
+          stroke={stroke}
+          fill={SEL_BASELINE}
+          strokeColor="#fff"
+        />
+      );
+    } else {
+      if (hovered) {
+        anchorChrome.push(
+          <svg
+            key={`hov-${i}`}
+            className="pointer-events-none absolute z-[20] overflow-visible"
+            width={anchorVis + 8 * inv}
+            height={anchorVis + 8 * inv}
+            style={{
+              left: a.x - (anchorVis + 8 * inv) / 2,
+              top: a.y - (anchorVis + 8 * inv) / 2,
+            }}
+            aria-hidden
+          >
+            <circle
+              cx={(anchorVis + 8 * inv) / 2}
+              cy={(anchorVis + 8 * inv) / 2}
+              r={anchorVis / 2 + 2 * inv}
+              fill="none"
+              stroke={SEL_BASELINE}
+              strokeWidth={stroke}
+              opacity={0.45}
+            />
+          </svg>
+        );
+      }
+      anchorChrome.push(
+        <ScreenAnchorKnob
+          key={`a-${i}`}
+          x={a.x}
+          y={a.y}
+          vis={hovered ? anchorVis + 2 * inv : anchorVis}
+          stroke={stroke}
+          fill={hovered ? SEL_BASELINE : isStart ? '#383838' : '#fff'}
+          strokeColor={hovered ? '#fff' : '#383838'}
+        />
+      );
+    }
+  });
+
+  const rubberBand =
+    !showClosePreview &&
+    cursor &&
+    anchors.length > 0 &&
+    last &&
+    !hoverHandle &&
+    hoverAnchor == null
+      ? { x1: last.x, y1: last.y, x2: cursor.x, y2: cursor.y }
+      : null;
 
   return (
-    <RcbSceneOverlaySvg>
-      <path
-        d={d}
-        fill="none"
-        stroke={strokeColor}
-        strokeWidth={pathSw}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <>
+      <PenInkPreviewCanvas
+        pathD={d}
+        closePreviewD={showClosePreview ? closePreviewD : ''}
+        rubberBand={rubberBand}
+        linkSegs={linkSegs}
+        strokeColor={strokeColor || '#333333'}
+        pathSw={pathSw}
+        hairlineSw={stroke}
+        linkSw={linkStroke}
+        inv={inv}
+        anchors={anchors}
       />
-      {showClosePreview && closePreviewD ? (
-        <path
-          d={closePreviewD}
-          fill="none"
-          stroke="#3388ff"
-          strokeWidth={1.25}
-          strokeDasharray="4 3"
-          opacity={0.85}
-        />
-      ) : cursor && anchors.length > 0 && last && !hoverHandle && hoverAnchor == null ? (
-        <line
-          x1={last.x}
-          y1={last.y}
-          x2={cursor.x}
-          y2={cursor.y}
-          stroke="#8b8b8b"
-          strokeWidth={1}
-          strokeDasharray="3 3"
-          opacity={0.55}
-        />
-      ) : null}
-      {anchors.map((a, i) => {
-        const isStart = i === 0;
-        const hot = isStart && (closeHot || closing) && anchors.length >= 2;
-        const hovered = hoverAnchor === i;
-        const hasOut = a.outX != null && a.outY != null;
-        const hasIn = a.inX != null && a.inY != null;
-        return (
-          <g key={i}>
-            {hasOut ? renderHandle(i, 'out', a.outX!, a.outY!) : null}
-            {hasIn ? renderHandle(i, 'in', a.inX!, a.inY!) : null}
-            {hot ? (
-              <>
-                <circle
-                  cx={a.x}
-                  cy={a.y}
-                  r={anchorR + 6}
-                  fill="none"
-                  stroke="#3388ff"
-                  strokeWidth={1.5}
-                  opacity={0.55}
-                >
-                  <animate
-                    attributeName="r"
-                    values={`${anchorR + 3};${anchorR + 8};${anchorR + 3}`}
-                    dur="0.9s"
-                    repeatCount="indefinite"
-                  />
-                  <animate
-                    attributeName="opacity"
-                    values="0.7;0.25;0.7"
-                    dur="0.9s"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle cx={a.x} cy={a.y} r={anchorR + 1.5} fill="#fff" />
-                <circle
-                  cx={a.x}
-                  cy={a.y}
-                  r={anchorR}
-                  fill="#3388ff"
-                  stroke="#fff"
-                  strokeWidth={1.5}
-                />
-              </>
-            ) : (
-              <>
-                {hovered ? (
-                  <circle
-                    cx={a.x}
-                    cy={a.y}
-                    r={anchorR + 4}
-                    fill="none"
-                    stroke="#3388ff"
-                    strokeWidth={1.5}
-                    opacity={0.45}
-                  />
-                ) : null}
-                <circle cx={a.x} cy={a.y} r={anchorR + 1.25} fill="#fff" />
-                <circle
-                  cx={a.x}
-                  cy={a.y}
-                  r={hovered ? anchorR + 0.75 : anchorR}
-                  fill={hovered ? '#3388ff' : isStart ? '#383838' : '#fff'}
-                  stroke={hovered ? '#fff' : '#383838'}
-                  strokeWidth={hovered ? 1.5 : 1}
-                />
-              </>
-            )}
-          </g>
-        );
-      })}
-    </RcbSceneOverlaySvg>
+      {handleChrome}
+      {anchorChrome}
+    </>
   );
+}
+
+function PenInkPreviewCanvas({
+  pathD,
+  closePreviewD,
+  rubberBand,
+  linkSegs,
+  strokeColor,
+  pathSw,
+  hairlineSw,
+  linkSw,
+  inv,
+  anchors,
+}: {
+  pathD: string;
+  closePreviewD: string;
+  rubberBand: { x1: number; y1: number; x2: number; y2: number } | null;
+  linkSegs: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  strokeColor: string;
+  pathSw: number;
+  hairlineSw: number;
+  linkSw: number;
+  inv: number;
+  anchors: PenAnchor[];
+}) {
+  const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
+
+  useLayoutEffect(() => {
+    const handle = overlayRef.current;
+    if (!handle) return;
+    const pts: Array<{ x: number; y: number }> = [];
+    for (const a of anchors) {
+      pts.push({ x: a.x, y: a.y });
+      if (a.inX != null && a.inY != null) pts.push({ x: a.inX, y: a.inY });
+      if (a.outX != null && a.outY != null) pts.push({ x: a.outX, y: a.outY });
+    }
+    if (rubberBand) {
+      pts.push({ x: rubberBand.x1, y: rubberBand.y1 }, { x: rubberBand.x2, y: rubberBand.y2 });
+    }
+    if (!pts.length && !pathD) {
+      handle.clear();
+      return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    if (!Number.isFinite(minX)) {
+      handle.clear();
+      return;
+    }
+    const pad = Math.max(pathSw, hairlineSw, linkSw, 8) * 2;
+    const ctx = handle.beginFrame({
+      left: minX - pad,
+      top: minY - pad,
+      width: Math.max(1, maxX - minX + pad * 2),
+      height: Math.max(1, maxY - minY + pad * 2),
+    });
+    if (!ctx) return;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (const s of linkSegs) {
+      ctx.strokeStyle = '#8b8b8b';
+      ctx.lineWidth = linkSw;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
+      ctx.stroke();
+    }
+
+    if (pathD) {
+      ctx.setLineDash([]);
+      strokeCachedPath2D(ctx, pathD, {
+        strokeStyle: strokeColor,
+        lineWidth: pathSw,
+        lineCap: 'round',
+        lineJoin: 'round',
+      });
+    }
+
+    if (closePreviewD) {
+      ctx.globalAlpha = 0.85;
+      ctx.setLineDash([4 * inv, 3 * inv]);
+      strokeCachedPath2D(ctx, closePreviewD, {
+        strokeStyle: SEL_BASELINE,
+        lineWidth: hairlineSw,
+        lineCap: 'round',
+        lineJoin: 'round',
+      });
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+    } else if (rubberBand) {
+      ctx.strokeStyle = '#8b8b8b';
+      ctx.lineWidth = linkSw;
+      ctx.globalAlpha = 0.55;
+      ctx.setLineDash([3 * inv, 3 * inv]);
+      ctx.beginPath();
+      ctx.moveTo(rubberBand.x1, rubberBand.y1);
+      ctx.lineTo(rubberBand.x2, rubberBand.y2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+    }
+  }, [
+    pathD,
+    closePreviewD,
+    rubberBand,
+    linkSegs,
+    strokeColor,
+    pathSw,
+    hairlineSw,
+    linkSw,
+    inv,
+    anchors,
+  ]);
+
+  return <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />;
 }
 
 export default memo(PenDrawFeature);

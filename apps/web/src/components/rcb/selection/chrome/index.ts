@@ -1,5 +1,5 @@
 /**
- * Selection chrome — floating toolbars / menus / title labels.
+ * Selection chrome — floating toolbars / menus / title labels / radius dots.
  * Pointer engine, guides, and resize math stay in `selection/` (parent).
  */
 export { default as MultiSelectionToolbar } from './MultiSelectionToolbar';
@@ -24,3 +24,4 @@ export {
   SEL_TOOL_BTN,
 } from './ToolbarValueSlider';
 export { FillColorSwatch, StrokeColorSwatch, IconCornerRadius } from './StyleToolbarIcons';
+export { default as CornerRadiusHandlesOverlay } from './CornerRadiusHandlesOverlay';

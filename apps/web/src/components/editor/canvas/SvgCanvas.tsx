@@ -43,17 +43,22 @@ import {
   STROKE_HIT,
   distPointToPathD,
   distPointToSegment,
+  hitTestPath2DLocal,
   hitTestSvgNodeAtClient,
   pathDContainsPoint,
   pathStrokeHitsSceneBox,
+  rememberNodePath2D,
   strokeEndpointsFromBox,
   strokeNodeFromEndpoints,
 } from '@/components/rcb/scene/document/sceneShapes';
 import {
   deflateSelectionBox,
-  inflateBoxByStrokeOutset,
+  inflateBoxByVisualOutset,
   inflateSelectionBox,
+  resolveStroke,
+  resolveStrokeAlign,
 } from '@/components/rcb/scene/document/sceneEffects';
+import { getShapeBaselineD } from '@/components/rcb/core/geometry';
 import { setSceneHitTestBridge } from '@/components/rcb/scene/document/sceneHitBridge';
 import { RcbSpatialIndex, nodeSceneAabb } from '@/components/rcb/core/spatialIndex';
 import { useSvgBoard } from '@/components/rcb/canvas/useSvgBoard';
@@ -594,7 +599,7 @@ function SvgCanvas({
       width: Math.max(1, Number(node.width) || 1),
       height: Math.max(1, Number(node.height) || 1),
     };
-    // Chrome / snap hug the vector baseline AABB (stroke is paint-only).
+    // Chrome sits on the vector path (inflateSelectionBox / strokeChromeOutset = 0).
     return inflateSelectionBox(geom, node);
   }, []);
 
@@ -644,6 +649,30 @@ function SvgCanvas({
         const shapeType = String(node.attrs?.shapeType || '');
         if (shapeType === 'line' || shapeType === 'arrow') {
           const angle = Number(node.attrs?.angle) || 0;
+          const geom = deflateSelectionBox(box, node);
+          const d = getShapeBaselineD(node, {
+            width: Math.max(1, geom.width),
+            height: Math.max(1, geom.height),
+          });
+          if (d) {
+            let lx = x - geom.left;
+            let ly = y - geom.top;
+            if (Math.abs(angle) > 0.5) {
+              const cx = geom.width / 2;
+              const cy = geom.height / 2;
+              const rad = (-angle * Math.PI) / 180;
+              const dx = lx - cx;
+              const dy = ly - cy;
+              lx = dx * Math.cos(rad) - dy * Math.sin(rad) + cx;
+              ly = dx * Math.sin(rad) + dy * Math.cos(rad) + cy;
+            }
+            const { strokeWidth: sw } = resolveStroke(node, '#333333');
+            const hitW = Math.max(sw > 0 ? sw : STROKE_HIT, pad * 2);
+            rememberNodePath2D(id, d);
+            if (hitTestPath2DLocal(d, lx, ly, { strokeWidth: hitW, lineCap: 'round', lineJoin: 'round' })) {
+              return id;
+            }
+          }
           const ep = strokeEndpointsFromBox(box, angle);
           if (distPointToSegment(x, y, ep.x0, ep.y0, ep.x1, ep.y1) <= pad) {
             return id;
@@ -666,9 +695,42 @@ function SvgCanvas({
             y <= box.top + box.height + pathPad;
           if (!inLooseBox) continue;
 
-          const svgEl = board?.nodeEls?.get(id);
           const d = String(node.attrs?.path || node.attrs?.d || '');
           const heavyPath = d.length >= HEAVY_PATH_D_CHARS;
+
+          // Path2D cache: local fill/stroke hit (works while SVG host remounts).
+          const angle = Number(node.attrs?.angle) || 0;
+          let lx = x - box.left;
+          let ly = y - box.top;
+          if (Math.abs(angle) > 0.5) {
+            const cx = box.width / 2;
+            const cy = box.height / 2;
+            const rad = (-angle * Math.PI) / 180;
+            const dx = lx - cx;
+            const dy = ly - cy;
+            lx = dx * Math.cos(rad) - dy * Math.sin(rad) + cx;
+            ly = dx * Math.sin(rad) + dy * Math.cos(rad) + cy;
+          }
+          if (!heavyPath && d) {
+            rememberNodePath2D(id, d);
+            const hitW = Math.min(Math.max(sw * 2, pathPad * 2), sw + 24 / zoom);
+            if (
+              hitTestPath2DLocal(d, lx, ly, {
+                fill: fillHit,
+                strokeWidth: hitW,
+                fillRule:
+                  String(node.attrs?.['fill-rule'] || 'nonzero') === 'evenodd'
+                    ? 'evenodd'
+                    : 'nonzero',
+                lineCap: shapeType === 'pencil' ? 'round' : 'round',
+                lineJoin: 'round',
+              })
+            ) {
+              return id;
+            }
+          }
+
+          const svgEl = board?.nodeEls?.get(id);
           if (svgEl && screen) {
             const mode = shapeType === 'pencil' || fillHit ? 'auto' : 'stroke';
             // Cap temporary stroke width — huge values ≈ AABB at low zoom.
@@ -686,19 +748,6 @@ function SvgCanvas({
             if (heavyPath) continue;
           }
 
-          // Path centerline / fill sample (also used when DOM hit misses / node not mounted).
-          const angle = Number(node.attrs?.angle) || 0;
-          let lx = x - box.left;
-          let ly = y - box.top;
-          if (Math.abs(angle) > 0.5) {
-            const cx = box.width / 2;
-            const cy = box.height / 2;
-            const rad = (-angle * Math.PI) / 180;
-            const dx = lx - cx;
-            const dy = ly - cy;
-            lx = dx * Math.cos(rad) - dy * Math.sin(rad) + cx;
-            ly = dx * Math.sin(rad) + dy * Math.cos(rad) + cy;
-          }
           // Unmounted / DOM miss: heavy paths → AABB only (never sample 12KB+ d).
           if (heavyPath) {
             if (
@@ -719,12 +768,94 @@ function SvgCanvas({
           if (distPointToPathD(lx, ly, d) <= pathPad) return id;
           continue;
         }
-        // Geo shapes: chrome = baseline; hit uses visual stroke outset so thick ink stays clickable.
-        const hitBox = inflateBoxByStrokeOutset(box, node);
+
+        // Geo shapes (rect/circle/star/…): Path2D baseline hit — same `d` as paint + selection chrome.
+        const key = String(node.key || '');
+        const isGeoShape =
+          key === 'shape' ||
+          key === 'rect' ||
+          key === 'ellipse' ||
+          shapeType === 'rect' ||
+          shapeType === 'roundRect' ||
+          shapeType === 'circle' ||
+          shapeType === 'triangle' ||
+          shapeType === 'star' ||
+          shapeType === 'polygon';
+        if (isGeoShape) {
+          const geom = deflateSelectionBox(box, node);
+          const gw = Math.max(1, geom.width);
+          const gh = Math.max(1, geom.height);
+          const d = getShapeBaselineD(node, { width: gw, height: gh });
+          const angle = Number(node.attrs?.angle) || 0;
+          if (d) {
+            let lx = x - geom.left;
+            let ly = y - geom.top;
+            if (Math.abs(angle) > 0.5) {
+              const cx = gw / 2;
+              const cy = gh / 2;
+              const rad = (-angle * Math.PI) / 180;
+              const dx = lx - cx;
+              const dy = ly - cy;
+              lx = dx * Math.cos(rad) - dy * Math.sin(rad) + cx;
+              ly = dx * Math.sin(rad) + dy * Math.cos(rad) + cy;
+            }
+            const { stroke, strokeWidth: sw } = resolveStroke(node, '#333333');
+            const align = resolveStrokeAlign(node.attrs);
+            // Outside paints a 2× underlay — widen stroke hit so the outer ink stays clickable.
+            const strokeHit =
+              stroke && stroke !== 'transparent' && sw > 0
+                ? align === 'outside'
+                  ? Math.max(sw * 2, pad)
+                  : Math.max(sw, pad)
+                : 0;
+            rememberNodePath2D(id, d);
+            if (
+              hitTestPath2DLocal(d, lx, ly, {
+                fill: supportsFill(node),
+                strokeWidth: strokeHit,
+                lineCap: 'butt',
+                lineJoin: 'miter',
+              })
+            ) {
+              return id;
+            }
+          }
+          // Fallback AABB (visual outset) when Path2D unavailable / exotic paints.
+          const hitBox = inflateBoxByVisualOutset(geom, node);
+          const hitPad = pad;
+          if (Math.abs(angle) > 0.5) {
+            const cx = hitBox.left + hitBox.width / 2;
+            const cy = hitBox.top + hitBox.height / 2;
+            const rad = (-angle * Math.PI) / 180;
+            const dx = x - cx;
+            const dy = y - cy;
+            const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+            const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+            if (
+              Math.abs(lx) <= hitBox.width / 2 + hitPad * 0.25 &&
+              Math.abs(ly) <= hitBox.height / 2 + hitPad * 0.25
+            ) {
+              return id;
+            }
+            continue;
+          }
+          if (
+            x >= hitBox.left - hitPad * 0.15 &&
+            x <= hitBox.left + hitBox.width + hitPad * 0.15 &&
+            y >= hitBox.top - hitPad * 0.15 &&
+            y <= hitBox.top + hitBox.height + hitPad * 0.15
+          ) {
+            return id;
+          }
+          continue;
+        }
+
+        // Image / text / video / other: visual AABB.
+        const geom = deflateSelectionBox(box, node);
+        const hitBox = inflateBoxByVisualOutset(geom, node);
         const hitPad = pad;
         const angle = Number(node.attrs?.angle) || 0;
         if (Math.abs(angle) > 0.5) {
-          // Rotated AABB → local test
           const cx = hitBox.left + hitBox.width / 2;
           const cy = hitBox.top + hitBox.height / 2;
           const rad = (-angle * Math.PI) / 180;
@@ -1114,7 +1245,7 @@ function SvgCanvas({
               return;
             }
             const host = getShapeHost(p.nodeId);
-            if (host) {
+            if (host?.layer) {
               dedupeSceneNode(host.layer, p.nodeId, board.nodeEls.get(p.nodeId) ?? null);
             } else if (board.layer) {
               dedupeSceneNode(board.layer, p.nodeId, board.nodeEls.get(p.nodeId) ?? null);
@@ -1185,11 +1316,15 @@ function SvgCanvas({
             : p;
         if (node?.key === 'video') {
           hasVideo = true;
+          const pending = dragWriteCoalesceRef.current.getPendingVideoGeom()?.[p.nodeId];
           videoOverrides[p.nodeId] = {
             left: box.left,
             top: box.top,
             width: Math.max(1, box.width),
             height: Math.max(1, box.height),
+            angle: Number.isFinite(pending?.angle)
+              ? Number(pending!.angle)
+              : Number(node.attrs?.angle) || 0,
           };
         }
         // Per-shape hosts may register before shared nodeEls is wired — recover.
@@ -1261,7 +1396,7 @@ function SvgCanvas({
           },
         },
       };
-      const synced = previewSvgNodeAngle(board.nodeEls, nodeId, nextAngle);
+      const synced = previewSvgNodeAngle(board.nodeEls, nodeId, nextAngle, documentRef.current);
       if (!synced) {
         void replaceShapePaint(
           documentRef.current,
@@ -1270,8 +1405,30 @@ function SvgCanvas({
           board.root ? board : null
         );
       }
+      // HTML video plates read Redux doc — push live angle so rotate tracks chrome.
+      if (isVideoNode(node)) {
+        const live = documentRef.current?.deltaSetLike?.[nodeId] || node;
+        const { left, top } = nodeLeftTop(documentRef.current, live);
+        const pending = dragWriteCoalesceRef.current.getPendingVideoGeom()?.[nodeId];
+        publishVideoLiveGeom({
+          ...(dragWriteCoalesceRef.current.getPendingVideoGeom() || {}),
+          [nodeId]: {
+            left: pending?.left ?? left,
+            top: pending?.top ?? top,
+            width: Math.max(
+              1,
+              pending?.width != null ? pending.width : Number(live.width) || 1
+            ),
+            height: Math.max(
+              1,
+              pending?.height != null ? pending.height : Number(live.height) || 1
+            ),
+            angle: nextAngle,
+          },
+        });
+      }
     },
-    [readOnly]
+    [readOnly, publishVideoLiveGeom]
   );
 
   const finishToSelect = () => dispatch(setActiveTool('select'));
@@ -1314,7 +1471,9 @@ function SvgCanvas({
         });
         const next = addNodeToDocument(doc, id, node);
         documentRef.current = next;
-        dispatch(setDocument(next));
+        // History without sceneReloadToken — remounting every host caused a one-frame jump.
+        dispatch(pushEditorHistory());
+        dispatch(setDocumentFromCanvas(next));
         dispatch(setSelectedNodeIds([id]));
         dispatch(setSelectedNodeId(id));
         finishToSelect();
@@ -1344,7 +1503,8 @@ function SvgCanvas({
       });
       const next = addNodeToDocument(doc, id, node);
       documentRef.current = next;
-      dispatch(setDocument(next));
+      dispatch(pushEditorHistory());
+      dispatch(setDocumentFromCanvas(next));
       dispatch(setSelectedNodeIds([id]));
       dispatch(setSelectedNodeId(id));
       finishToSelect();
@@ -1593,7 +1753,8 @@ function SvgCanvas({
       }
       const next = addNodeToDocument(doc, id, node);
       documentRef.current = next;
-      dispatch(setDocument(next));
+      dispatch(pushEditorHistory());
+      dispatch(setDocumentFromCanvas(next));
       // Stay in pencil mode for continuous strokes; do not auto-select.
       dispatch(setSelectedNodeIds([]));
       dispatch(setSelectedNodeId(null));
@@ -1760,7 +1921,8 @@ function SvgCanvas({
       });
       const next = addNodeToDocument(doc, id, node);
       documentRef.current = next;
-      dispatch(setDocument(next));
+      dispatch(pushEditorHistory());
+      dispatch(setDocumentFromCanvas(next));
       // Close / Enter finish — keep pen tool so the next click starts a new path.
       dispatch(setSelectedNodeIds([id]));
     },

@@ -51,9 +51,7 @@ import {
   brushSize,
   findPencilBrush,
   isStampBrush,
-  parsePathPressures,
   parseSimplePathPoints,
-  pencilInkPathFromPoints,
   samplePolyline,
   stampSizeForBrush,
   stampSpacingForBrush,
@@ -123,7 +121,7 @@ function setSvgImageHref(img: SVGImageElement, href: string) {
 
 /**
  * Stroke paints along the element's vector baseline.
- * Align is paint-only — selection chrome stays on the path.
+ * Align is paint-only — selection chrome stays on the path (strokeChromeOutset = 0).
  *
  * Outside: a 2× underlay stroke behind an opaque fill (fill covers the inner half).
  * Inside: 2× stroke clipped to the fill region.
@@ -140,7 +138,7 @@ function applyElementStroke(
     removeStrokeUnderlay(el);
     return;
   }
-  let align = opts.align || 'outside';
+  let align = opts.align || 'center';
   if (align === 'outside' && flags?.hasOpaqueFill === false) {
     align = 'center';
   }
@@ -389,6 +387,33 @@ function readSceneSides(el: any): number {
   return DEFAULT_SHAPE_SIDES;
 }
 
+/** Keep live corner radii on the host so geometry preview does not flash sharp. */
+function rememberSceneCornerRadii(el: SVGElement | null | undefined, r: CornerRadii) {
+  if (!el) return;
+  (el as any).__sceneCornerRadii = {
+    tl: Number(r.tl) || 0,
+    tr: Number(r.tr) || 0,
+    br: Number(r.br) || 0,
+    bl: Number(r.bl) || 0,
+  };
+}
+
+function readSceneCornerRadii(el: SVGElement): CornerRadii {
+  const mem = (el as any).__sceneCornerRadii;
+  if (
+    mem &&
+    [mem.tl, mem.tr, mem.br, mem.bl].every((n: unknown) => Number.isFinite(Number(n)))
+  ) {
+    return {
+      tl: Number(mem.tl) || 0,
+      tr: Number(mem.tr) || 0,
+      br: Number(mem.br) || 0,
+      bl: Number(mem.bl) || 0,
+    };
+  }
+  return { tl: 0, tr: 0, br: 0, bl: 0 };
+}
+
 function roundedShapePath(
   shapeType: string,
   width: number,
@@ -509,6 +534,7 @@ function createRectLike(
   }
 
   tagNode(g, nodeId, sceneNodeKey, shapeType, left, top, width, height);
+  rememberSceneCornerRadii(g, r);
   if (allSides || noSides) {
     coverRotatedFillFringe(body, paint, stroke, sw, Number(meta.angle) || 0);
   }
@@ -613,6 +639,7 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
     applyElementStroke(root, path, strokeFull, { hasOpaqueFill: !isTransparentFill(paint) });
     tagNode(g, nodeId, 'shape', shapeType, left, top, width, height);
     if (shapeType === 'star' || shapeType === 'polygon') writeSceneSides(g, sidesFromAttrs(node.attrs));
+    rememberSceneCornerRadii(g, radiiFromAttrs(node.attrs));
     applyMeta(g, left, top, meta, width, height);
     applyNodeShadow(root, g, node);
     return g;
@@ -661,32 +688,25 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
         return g;
       }
 
-      // Variable-width freehand silhouette (pressure + brush thinning / taper).
-      const pressures = parsePathPressures(node.attrs?.pathPressure, pts.length);
-      const outlineD = pencilInkPathFromPoints(pts, strokeWidth, brushId, {
-        linecap: strokeOpen.linecap,
-        dasharray: strokeFull.dasharray,
-        pressures,
-        pressureEnabled: true,
-      });
-      const g = appendChild(parent, svgEl('g'));
-      if (outlineD) {
-        const inkPath = appendChild(g, svgEl('path', { d: outlineD }));
-        setFill(inkPath, ink);
-        setStroke(inkPath, 'none');
-        setAttrs(inkPath, { 'pointer-events': 'none' });
-      }
-      const hit = appendChild(g, svgEl('path', { d: String(d) }));
-      setFill(hit, 'none');
-      setStroke(hit, {
-        color: 'transparent',
-        width: Math.max(brushSize(brush, strokeWidth), strokeWidth),
-      });
-      setAttrs(hit, { 'pointer-events': 'stroke', 'data-baseline': '1' });
-      tagNode(g, nodeId, 'shape', shapeType, left, top, width, height);
-      applyMeta(g, left, top, meta, width, height);
-      applyNodeShadow(root, g, node);
-      return g;
+      // Same as pen: centerline path + SVG stroke (selection chrome shares data-baseline).
+      const inkW = brushSize(brush, strokeWidth);
+      const path = appendChild(parent, svgEl('path', { d: String(d) }));
+      setAttrs(path, { 'data-baseline': '1', 'pointer-events': 'stroke' });
+      setFill(path, 'none');
+      applyElementStroke(
+        root,
+        path,
+        {
+          ...strokeOpen,
+          color: ink,
+          width: inkW,
+        },
+        { hasOpaqueFill: false }
+      );
+      tagNode(path, nodeId, 'shape', shapeType, left, top, width, height);
+      applyMeta(path, left, top, meta, width, height);
+      applyNodeShadow(root, path, node);
+      return path;
     }
 
     const fillPaint =
@@ -718,6 +738,7 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
       setAttrs(path, { 'pointer-events': 'stroke' });
     }
     tagNode(path, nodeId, 'shape', shapeType, left, top, width, height);
+    rememberSceneCornerRadii(path, cornerR);
     applyMeta(path, left, top, meta, width, height);
     applyNodeShadow(root, path, node);
     return path;
@@ -1286,6 +1307,39 @@ function isInfiniteSvgRoot(root: SVGSVGElement) {
   return root.getAttribute('data-rcb-infinite') === '1';
 }
 
+/** Apply a known scene AABB as the infinite SVG CSS box + viewBox (pre-paint). */
+export function seedInfiniteSvgViewport(
+  root: SVGSVGElement,
+  box: { left: number; top: number; width: number; height: number },
+  pad = INFINITE_SVG_PAD
+) {
+  if (!isInfiniteSvgRoot(root)) return;
+  const minX = Math.round((box.left - pad) * 1e4) / 1e4;
+  const minY = Math.round((box.top - pad) * 1e4) / 1e4;
+  const w = Math.max(1, Math.round((Math.max(1, box.width) + pad * 2) * 1e4) / 1e4);
+  const h = Math.max(1, Math.round((Math.max(1, box.height) + pad * 2) * 1e4) / 1e4);
+  setAttrs(root, {
+    width: w,
+    height: h,
+    viewBox: `${minX} ${minY} ${w} ${h}`,
+    overflow: 'visible',
+    preserveAspectRatio: 'none',
+    'shape-rendering': 'geometricPrecision',
+    'pointer-events': 'none',
+    'data-rcb-infinite': '1',
+  });
+  setStyles(root, {
+    display: 'block',
+    overflow: 'visible',
+    position: 'absolute',
+    left: `${minX}px`,
+    top: `${minY}px`,
+    width: `${w}px`,
+    height: `${h}px`,
+    'pointer-events': 'none',
+  });
+}
+
 export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement | null) {
   if (!isInfiniteSvgRoot(root)) return;
 
@@ -1303,10 +1357,11 @@ export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement 
       Number.isFinite(box.height) &&
       (box.width > 0 || box.height > 0)
     ) {
-      minX = box.x - INFINITE_SVG_PAD;
-      minY = box.y - INFINITE_SVG_PAD;
-      w = Math.max(1, box.width + INFINITE_SVG_PAD * 2);
-      h = Math.max(1, box.height + INFINITE_SVG_PAD * 2);
+      // Quantize so CSS left/top and viewBox stay identical (getBBox floats → 1690.999…).
+      minX = Math.round((box.x - INFINITE_SVG_PAD) * 1e4) / 1e4;
+      minY = Math.round((box.y - INFINITE_SVG_PAD) * 1e4) / 1e4;
+      w = Math.max(1, Math.round((box.width + INFINITE_SVG_PAD * 2) * 1e4) / 1e4);
+      h = Math.max(1, Math.round((box.height + INFINITE_SVG_PAD * 2) * 1e4) / 1e4);
     }
   } catch {
     /* empty layer */
@@ -1315,6 +1370,7 @@ export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement 
   setAttrs(root, {
     width: w,
     height: h,
+    // Keep viewBox origin identical to CSS left/top (no float drift).
     viewBox: `${minX} ${minY} ${w} ${h}`,
     overflow: 'visible',
     preserveAspectRatio: 'none',
@@ -1447,7 +1503,7 @@ function setPathD(target: Element | null | undefined, d: string): boolean {
   return true;
 }
 
-export function clearSceneDragPreview(nodeEls: Map<string, SVGElement>, nodeId: string) {
+export function clearSceneDragPreview(nodeEls: Map<string, any>, nodeId: string) {
   const el = nodeEls.get(nodeId) as any;
   if (!el) return;
   delete el.__sceneDragBaseW;
@@ -1636,9 +1692,10 @@ function previewResizeImage(
 }
 
 export function previewSvgNodeAngle(
-  nodeEls: Map<string, SVGElement>,
+  nodeEls: Map<string, any>,
   nodeId: string,
-  angleDeg: number
+  angleDeg: number,
+  _sceneDocument?: any
 ): boolean {
   const el = nodeEls.get(nodeId);
   if (!el) return false;
@@ -1745,7 +1802,7 @@ function previewResizeLocalGeometry(el: SVGElement, width: number, height: numbe
     );
   }
 
-  const zeroR = { tl: 0, tr: 0, br: 0, bl: 0, linked: true as const };
+  const liveR = clampCornerRadii(readSceneCornerRadii(el), width, height);
 
   if (shapeType === 'triangle' || shapeType === 'star' || shapeType === 'polygon') {
     const d =
@@ -1756,14 +1813,19 @@ function previewResizeLocalGeometry(el: SVGElement, width: number, height: numbe
         attrs: {
           shapeType,
           sides: readSceneSides(el),
+          radiusTL: liveR.tl,
+          radiusTR: liveR.tr,
+          radiusBR: liveR.br,
+          radiusBL: liveR.bl,
         },
-      }) || roundedShapePath(shapeType, width, height, zeroR, readSceneSides(el));
+      }) || roundedShapePath(shapeType, width, height, liveR, readSceneSides(el));
     if (el.tagName.toLowerCase() === 'path') return setPathD(el, d);
     return setPathD(el.querySelector('path'), d);
   }
 
   if (shapeType === 'rect' || shapeType === 'roundRect' || shapeType === '') {
-    const d = roundedRectPath(width, height, zeroR);
+    // Must keep cached corner radii — zeroR made move/resize flash a sharp rect.
+    const d = roundedRectPath(width, height, liveR);
     if (el.tagName.toLowerCase() === 'path') return setPathD(el, d);
     // Prefer the filled baseline body (not the stroke underlay).
     const body =
@@ -1796,7 +1858,7 @@ function dmoveAbs(el: SVGElement, dx: number, dy: number) {
 }
 
 export function previewSvgNodeGeometry(
-  nodeEls: Map<string, SVGElement>,
+  nodeEls: Map<string, any>,
   nodeId: string,
   box: { left: number; top: number; width: number; height: number },
   options?: {
@@ -1922,6 +1984,12 @@ export function previewSvgNodeGeometry(
       height: box.height,
       abs: false,
     });
+    // Pure move: only translate. Regenerating local `d` (even at same size) used
+    // to wipe corner radii and flash a sharp rect until commit remounted.
+    if (sameSize && !anyEl.__sceneDidResize) {
+      reapplySceneTransform(el, box.left, box.top, box.width, box.height);
+      return true;
+    }
     if (previewResizeLocalGeometry(el, box.width, box.height)) {
       if (!sameSize) anyEl.__sceneDidResize = true;
       reapplySceneTransform(el, box.left, box.top, box.width, box.height);
@@ -2006,7 +2074,7 @@ export function previewSvgNodeGeometry(
  * (Redux skipHistory patches remount via documentPatchToken and can leave ghosts.)
  */
 export function previewSvgNodeCornerRadii(
-  nodeEls: Map<string, SVGElement>,
+  nodeEls: Map<string, any>,
   nodeId: string,
   opts: {
     width: number;
@@ -2048,6 +2116,8 @@ export function previewSvgNodeCornerRadii(
     d = roundedRectPath(w, h, r);
   }
   if (!d) return false;
+
+  rememberSceneCornerRadii(el, r);
 
   if (el.tagName.toLowerCase() === 'path') {
     return setPathD(el, d);

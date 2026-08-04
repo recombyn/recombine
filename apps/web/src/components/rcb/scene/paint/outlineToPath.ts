@@ -191,11 +191,10 @@ function translatePathD(d: string, dx: number, dy: number): string | null {
 }
 
 /**
- * Rasterize an SVG stroke (same paint as canvas) and vectorize the silhouette.
- * Pencil/pen are drawn as centerline + strokeWidth — not perfect-freehand — so
- * outline must match that, or the ribbon looks jagged / wrong-width (fig.1).
+ * Rasterize an SVG stroke and vectorize the silhouette — fallback only.
+ * Prefer `outlineFromSvgStroke` (geometric) for line/pen/pencil/arrow.
  */
-function outlineFromSvgStroke(opts: {
+function outlineFromSvgStrokeRaster(opts: {
   pathD: string;
   strokeWidth: number;
   linecap?: CanvasLineCap;
@@ -265,12 +264,15 @@ function outlineFromSvgStroke(opts: {
     rw,
     rh
   );
-  const contours = [...outer, ...hole];
+  // Prefer the largest outer ring — tiny noise contours looked like “extra pieces”.
+  const outerSorted = [...outer].sort((a, b) => b.length - a.length);
+  const mainOuter = outerSorted[0] ? [outerSorted[0]] : [];
+  const contours = [...mainOuter, ...hole];
   if (!contours.length) return null;
 
-  // Keep editable outlines sparse — raster Moore traces are extremely dense.
-  const maxPts = 72;
-  const epsilon = Math.max(0.75, sw * 0.15);
+  // Sparse but not destructive — uniform stride used to collapse thin ribbons into wedges.
+  const maxPts = 256;
+  const epsilon = Math.max(0.35, sw * 0.06);
 
   const parts: string[] = [];
   for (const pts of contours) {
@@ -292,6 +294,208 @@ function outlineFromSvgStroke(opts: {
     fillColor: opts.fillColor,
     fillRule: hole.length ? 'evenodd' : 'nonzero',
   };
+}
+
+function dedupePolylinePts(
+  pts: Array<[number, number]>,
+  eps = 0.05
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const p of pts) {
+    const last = out[out.length - 1];
+    if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > eps) out.push(p);
+  }
+  return out;
+}
+
+function segUnitNormal(dx: number, dy: number): [number, number] {
+  const len = Math.hypot(dx, dy) || 1;
+  return [-dy / len, dx / len];
+}
+
+/** Round end-cap arc from `from` → `to` around `center` (outward semicircle). */
+function appendRoundCap(
+  parts: string[],
+  center: [number, number],
+  from: [number, number],
+  to: [number, number],
+  half: number,
+  steps = 8
+) {
+  const a0 = Math.atan2(from[1] - center[1], from[0] - center[0]);
+  let a1 = Math.atan2(to[1] - center[1], to[0] - center[0]);
+  let delta = a1 - a0;
+  while (delta <= -Math.PI) delta += Math.PI * 2;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  // Force a semicircle (stroke cap), not the short chord between offset tips.
+  if (Math.abs(delta) < Math.PI - 1e-3) {
+    delta = delta >= 0 ? Math.PI : -Math.PI;
+  }
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / steps;
+    const a = a0 + delta * t;
+    parts.push(
+      `L ${(center[0] + Math.cos(a) * half).toFixed(2)} ${(center[1] + Math.sin(a) * half).toFixed(2)}`
+    );
+  }
+}
+
+/**
+ * Uniform-width stroke outline of a polyline (matches SVG centerline + lineWidth).
+ * Avoids raster→RDP which collapsed thin ribbons into wedges / extra fragments.
+ */
+function outlinePolylineStroke(
+  ptsIn: Array<[number, number]>,
+  strokeWidth: number,
+  linecap: CanvasLineCap = 'round'
+): string | null {
+  const pts = dedupePolylinePts(ptsIn);
+  if (pts.length < 2) return null;
+  const half = Math.max(0.25, strokeWidth / 2);
+  const n = pts.length;
+  const left: Array<[number, number]> = [];
+  const right: Array<[number, number]> = [];
+
+  for (let i = 0; i < n; i += 1) {
+    const prev = pts[Math.max(0, i - 1)];
+    const curr = pts[i];
+    const next = pts[Math.min(n - 1, i + 1)];
+    let nx: number;
+    let ny: number;
+    if (i === 0) {
+      [nx, ny] = segUnitNormal(next[0] - curr[0], next[1] - curr[1]);
+    } else if (i === n - 1) {
+      [nx, ny] = segUnitNormal(curr[0] - prev[0], curr[1] - prev[1]);
+    } else {
+      const [ax, ay] = segUnitNormal(curr[0] - prev[0], curr[1] - prev[1]);
+      const [bx, by] = segUnitNormal(next[0] - curr[0], next[1] - curr[1]);
+      nx = ax + bx;
+      ny = ay + by;
+      const nl = Math.hypot(nx, ny);
+      if (nl < 1e-6) {
+        nx = ax;
+        ny = ay;
+      } else {
+        nx /= nl;
+        ny /= nl;
+        // Miter length; clamp so sharp corners don't explode.
+        const cos = Math.max(0.2, ax * nx + ay * ny);
+        const m = Math.min(half / cos, half * 3);
+        left.push([curr[0] + nx * m, curr[1] + ny * m]);
+        right.push([curr[0] - nx * m, curr[1] - ny * m]);
+        continue;
+      }
+    }
+    left.push([curr[0] + nx * half, curr[1] + ny * half]);
+    right.push([curr[0] - nx * half, curr[1] - ny * half]);
+  }
+
+  if (left.length < 2 || right.length < 2) return null;
+
+  const parts: string[] = [
+    `M ${left[0][0].toFixed(2)} ${left[0][1].toFixed(2)}`,
+  ];
+  for (let i = 1; i < left.length; i += 1) {
+    parts.push(`L ${left[i][0].toFixed(2)} ${left[i][1].toFixed(2)}`);
+  }
+
+  const end = pts[n - 1];
+  const start = pts[0];
+  const le = left[left.length - 1];
+  const re = right[right.length - 1];
+
+  if (linecap === 'round') {
+    appendRoundCap(parts, end, le, re, half);
+  } else if (linecap === 'square') {
+    const [tnx, tny] = segUnitNormal(end[0] - pts[n - 2][0], end[1] - pts[n - 2][1]);
+    // Tangent = rotate normal back: (ny, -nx)
+    const ex = tny * half;
+    const ey = -tnx * half;
+    parts.push(`L ${(le[0] + ex).toFixed(2)} ${(le[1] + ey).toFixed(2)}`);
+    parts.push(`L ${(re[0] + ex).toFixed(2)} ${(re[1] + ey).toFixed(2)}`);
+  } else {
+    parts.push(`L ${re[0].toFixed(2)} ${re[1].toFixed(2)}`);
+  }
+
+  for (let i = right.length - 2; i >= 0; i -= 1) {
+    parts.push(`L ${right[i][0].toFixed(2)} ${right[i][1].toFixed(2)}`);
+  }
+
+  if (linecap === 'round') {
+    appendRoundCap(parts, start, right[0], left[0], half);
+  } else if (linecap === 'square') {
+    const [tnx, tny] = segUnitNormal(pts[1][0] - start[0], pts[1][1] - start[1]);
+    const ex = -tny * half;
+    const ey = tnx * half;
+    parts.push(`L ${(right[0][0] + ex).toFixed(2)} ${(right[0][1] + ey).toFixed(2)}`);
+    parts.push(`L ${(left[0][0] + ex).toFixed(2)} ${(left[0][1] + ey).toFixed(2)}`);
+  }
+
+  parts.push('Z');
+  return parts.join(' ');
+}
+
+/** Sample each SVG subpath into a polyline (absolute). */
+function samplePathSubpaths(d: string, stepPx = 1.25): Array<Array<[number, number]>> {
+  if (typeof document === 'undefined') return [];
+  const chunks = String(d || '')
+    .split(/(?=[Mm])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out: Array<Array<[number, number]>> = [];
+  for (const chunk of chunks) {
+    try {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      el.setAttribute('d', chunk);
+      const len = el.getTotalLength?.() ?? 0;
+      if (!(len > 0)) continue;
+      const n = Math.max(2, Math.ceil(len / Math.max(0.5, stepPx)));
+      const pts: Array<[number, number]> = [];
+      for (let i = 0; i <= n; i += 1) {
+        const p = el.getPointAtLength((len * i) / n);
+        pts.push([p.x, p.y]);
+      }
+      const cleaned = dedupePolylinePts(pts);
+      if (cleaned.length >= 2) out.push(cleaned);
+    } catch {
+      /* skip bad subpath */
+    }
+  }
+  return out;
+}
+
+/**
+ * Geometric stroke → filled outline (line / pen / pencil / arrow).
+ * Each SVG subpath is outlined separately then unioned — avoids self-intersect
+ * arrow heads turning into overlapping “extra” ribbons after raster simplify.
+ */
+function outlineFromSvgStroke(opts: {
+  pathD: string;
+  strokeWidth: number;
+  linecap?: CanvasLineCap;
+  linejoin?: CanvasLineJoin;
+  fillColor: string;
+}): OutlineResult | null {
+  const raw = String(opts.pathD || '').trim();
+  const sw = Math.max(0.5, Number(opts.strokeWidth) || 1);
+  if (!raw) return null;
+  const linecap = opts.linecap || 'round';
+  void opts.linejoin;
+
+  const subpaths = samplePathSubpaths(raw, Math.max(0.75, Math.min(2, sw * 0.35)));
+  if (!subpaths.length) {
+    return outlineFromSvgStrokeRaster(opts);
+  }
+
+  const parts: OutlineResult[] = [];
+  for (const pts of subpaths) {
+    const d = outlinePolylineStroke(pts, sw, linecap);
+    if (!d) continue;
+    parts.push({ pathD: d, closed: true, fillColor: opts.fillColor });
+  }
+  if (!parts.length) return outlineFromSvgStrokeRaster(opts);
+  if (parts.length === 1) return parts[0];
+  return unionOutlineResults(parts, opts.fillColor) || parts[0];
 }
 
 function readStrokeLinecap(attrs: Record<string, unknown> | undefined): CanvasLineCap {
@@ -366,13 +570,32 @@ function simplifyClosedPolyline(
     if (Math.hypot(f[0] - l[0], f[1] - l[1]) < 1e-6) out = out.slice(0, -1);
   }
   if (out.length > maxPts) {
-    const stride = Math.ceil(out.length / maxPts);
-    const capped: Array<[number, number]> = [];
-    for (let i = 0; i < out.length; i += stride) capped.push(out[i]);
-    if (capped[capped.length - 1] !== out[out.length - 1]) {
-      capped.push(out[out.length - 1]);
+    // Re-RDP with a larger epsilon instead of uniform stride (stride collapsed
+    // thin stroke ribbons into wedges — one end became a single point).
+    let eps = epsilon;
+    let guarded = 0;
+    while (out.length > maxPts && guarded < 12) {
+      eps *= 1.45;
+      out = simplifyRdp(ring.concat([ring[0]]), eps);
+      if (out.length >= 2) {
+        const f = out[0];
+        const l = out[out.length - 1];
+        if (Math.hypot(f[0] - l[0], f[1] - l[1]) < 1e-6) out = out.slice(0, -1);
+      }
+      guarded += 1;
     }
-    out = capped;
+    if (out.length > maxPts) {
+      // Last resort: keep evenly spaced but always retain first point.
+      const stride = Math.ceil(out.length / maxPts);
+      const capped: Array<[number, number]> = [];
+      for (let i = 0; i < out.length; i += stride) capped.push(out[i]);
+      const last = out[out.length - 1];
+      const prev = capped[capped.length - 1];
+      if (!prev || Math.hypot(prev[0] - last[0], prev[1] - last[1]) > 1e-6) {
+        capped.push(last);
+      }
+      out = capped;
+    }
   }
   return out.length >= 3 ? out : ring.slice(0, Math.min(ring.length, maxPts));
 }

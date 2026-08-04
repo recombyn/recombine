@@ -23,6 +23,8 @@ export type VideoGeomOverride = {
   top: number;
   width: number;
   height: number;
+  /** Live rotate preview — omit to use document attrs.angle. */
+  angle?: number;
 };
 
 function readOptionalNumber(value: unknown): number | undefined {
@@ -52,7 +54,7 @@ function VideoZoomSync({ onZoom }: { onZoom: (zoom: number) => void }) {
 /**
  * Idle = freeze-frame still; playing = stable HTML <video>.
  * Selection must not remount plates (key=nodeId + memo).
- * During move/resize, `geometryOverrides` keeps plates glued to the chrome
+ * During move/resize/rotate, `geometryOverrides` keeps plates glued to the chrome
  * (Redux document only commits at gesture end).
  */
 function VideoNodeOverlay({
@@ -62,7 +64,7 @@ function VideoNodeOverlay({
 }: {
   document: any;
   hidden?: boolean;
-  /** Live drag/resize boxes — same scene space as selection chrome. */
+  /** Live drag/resize/rotate boxes — same scene space as selection chrome. */
   geometryOverrides?: Record<string, VideoGeomOverride> | null;
 }): ReactNode {
   const [zoom, setZoom] = useState(1);
@@ -103,7 +105,8 @@ function VideoNodeOverlay({
         const ov = geometryOverrides?.[nodeId];
         const width = Math.max(1, ov ? ov.width : Number(node.width) || 1);
         const height = Math.max(1, ov ? ov.height : Number(node.height) || 1);
-        const angle = readNodeAngle(node);
+        const angle =
+          ov && Number.isFinite(ov.angle) ? Number(ov.angle) : readNodeAngle(node);
         const radii = radiiFromAttrs(node.attrs || {});
         const scenePlate: CSSProperties & {
           left: number;

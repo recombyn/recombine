@@ -76,8 +76,20 @@ yarn-error.log*
 
 apps/docs/dist/
 
-# Local agent tooling / scratch
-.agents/
+# Local agent tooling / scratch — track official Design Skill packs only
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/ui_ux_pro_max/
+!.agents/skills/ui_ux_pro_max/**
+!.agents/skills/garden_style/
+!.agents/skills/garden_style/**
+!.agents/skills/awesome_design_md/
+!.agents/skills/awesome_design_md/**
+!.agents/skills/shadcn_ui/
+!.agents/skills/shadcn_ui/**
+# IDE-only Langfuse docs — never publish
+.agents/skills/langfuse/
 apps/api/.agents/
 apps/api/skills-lock.json
 apps/api/_tmp_*

@@ -92,6 +92,9 @@ export const SELECTION_TOOLBAR_ABOVE_BOX_GAP_PX = 12;
 /** Air between box bottom and toolbar top when docking below. */
 export const SELECTION_TOOLBAR_BELOW_BOX_GAP_PX = 8;
 
+/** Half selection knob + air — knobs sit outside the chrome edge. */
+export const SELECTION_HANDLE_CLEARANCE_PX = 6;
+
 export type SelectionToolbarBox = {
   left: number;
   top: number;
@@ -117,6 +120,11 @@ export function useSelectionToolbarPlacement(opts: {
   box: SelectionToolbarBox | null | undefined;
   /** Image / frame name+size row above the box. */
   hasTitleLabel?: boolean;
+  /**
+   * Extra scene-space pad outside the chrome box (e.g. center-stroke ink beyond
+   * the path face). Added on top of handle clearance.
+   */
+  edgePadScene?: number;
 }): {
   style: CSSProperties;
   preferAbove: boolean;
@@ -125,8 +133,11 @@ export function useSelectionToolbarPlacement(opts: {
 } {
   const { zoom } = useRcbCamera();
   const hasTitle = Boolean(opts.hasTitleLabel);
-  const aboveGap = rcbScreenPxToScene(toolbarAboveClearancePx(hasTitle), zoom);
-  const belowGap = rcbScreenPxToScene(SELECTION_TOOLBAR_BELOW_BOX_GAP_PX, zoom);
+  const handleClear = rcbScreenPxToScene(SELECTION_HANDLE_CLEARANCE_PX, zoom);
+  const edgePad = Math.max(0, Number(opts.edgePadScene) || 0);
+  const clear = handleClear + edgePad;
+  const aboveGap = rcbScreenPxToScene(toolbarAboveClearancePx(hasTitle), zoom) + clear;
+  const belowGap = rcbScreenPxToScene(SELECTION_TOOLBAR_BELOW_BOX_GAP_PX, zoom) + clear;
   const box = opts.box;
   const preferAbove = Boolean(box) && box.top >= aboveGap;
   const left = box ? box.left + box.width / 2 : 0;
@@ -147,6 +158,8 @@ export function useSelectionToolbarPlacement(opts: {
 type ShellProps = {
   box: SelectionToolbarBox | null | undefined;
   hasTitleLabel?: boolean;
+  /** Scene-space pad beyond chrome for outer stroke ink. */
+  edgePadScene?: number;
   children: ReactNode;
   className?: string;
   /** Mark as frame toolbar for hit-testing / dismiss selectors. */
@@ -163,13 +176,14 @@ type ShellProps = {
 function SelectionToolbarShell({
   box,
   hasTitleLabel = false,
+  edgePadScene = 0,
   children,
   className,
   isFrameToolbar = false,
   bare = false,
   zIndexClassName = 'z-30',
 }: ShellProps) {
-  const { style } = useSelectionToolbarPlacement({ box, hasTitleLabel });
+  const { style } = useSelectionToolbarPlacement({ box, hasTitleLabel, edgePadScene });
   const chromePointer = useChromePointerActivate();
   if (!box) return null;
 

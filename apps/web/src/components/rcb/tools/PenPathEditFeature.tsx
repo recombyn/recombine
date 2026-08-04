@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, memo } from 'react';
+﻿import { useEffect, useLayoutEffect, useRef, useState, memo, type ReactNode } from 'react';
 import {
   useRcbCamera,
   useRcbScreenToScene,
@@ -17,7 +17,9 @@ import {
 } from './penPath';
 import { nodeLeftTop } from '../scene/paint/sceneToSvg';
 import { normalizePathDForEdit } from '../scene/paint/outlineToPath';
-import RcbSceneOverlaySvg from '../canvas/RcbSceneOverlaySvg';
+import RcbSceneOverlayCanvas, {
+  type RcbSceneOverlayCanvasHandle,
+} from '../canvas/RcbSceneOverlayCanvas';
 
 type HandleSide = 'in' | 'out';
 type AnchorRef = { sub: number; index: number };
@@ -68,11 +70,88 @@ type Props = {
 
 const HANDLE_HIT_PX = 14;
 const ANCHOR_HIT_PX = 16;
-/** Screen px 鈥?hover near stroke to show a preview dot. */
+/** Screen px — hover near stroke to show a preview dot. */
 const PATH_HIT_PX = 14;
+
+/**
+ * Screen-constant chrome (same contract as SelectionChrome):
+ * page size = screenPx / zoom under the camera CSS scale. No Math.min caps.
+ */
+const ANCHOR_VIS_PX = 8;
+const HANDLE_VIS_PX = 7;
+const STROKE_PX = 1.5;
+const HANDLE_STROKE_PX = 1.25;
+const LINK_STROKE_PX = 1;
+const PATH_EDIT_STROKE_MAX_PX = 2.25;
+const SEL_BASELINE = '#3388ff';
 
 function hitRadiusScene(zoom: number, screenPx: number) {
   return screenPx / Math.max(0.05, zoom || 1);
+}
+
+function handleDiamondPoints(cx: number, cy: number, r: number) {
+  return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
+}
+
+/** SelectionChrome-style circular knob: own SVG sized in page units. */
+function ScreenAnchorKnob(props: {
+  x: number;
+  y: number;
+  vis: number;
+  stroke: number;
+  fill: string;
+  strokeColor?: string;
+}) {
+  const { x, y, vis, stroke, fill, strokeColor = SEL_BASELINE } = props;
+  const r = Math.max(0.01, vis / 2 - stroke / 2);
+  return (
+    <svg
+      className="pointer-events-none absolute z-[21] overflow-visible"
+      width={vis}
+      height={vis}
+      style={{ left: x - vis / 2, top: y - vis / 2 }}
+      aria-hidden
+    >
+      <circle
+        cx={vis / 2}
+        cy={vis / 2}
+        r={r}
+        fill={fill}
+        stroke={strokeColor}
+        strokeWidth={stroke}
+      />
+    </svg>
+  );
+}
+
+/** Bezier handle diamond — same page-size contract as SelectionChrome knobs. */
+function ScreenHandleDiamond(props: {
+  x: number;
+  y: number;
+  vis: number;
+  stroke: number;
+  active: boolean;
+}) {
+  const { x, y, vis, stroke, active } = props;
+  const cx = vis / 2;
+  const cy = vis / 2;
+  const r = Math.max(0.01, vis / 2 - stroke / 2);
+  return (
+    <svg
+      className="pointer-events-none absolute z-[21] overflow-visible"
+      width={vis}
+      height={vis}
+      style={{ left: x - vis / 2, top: y - vis / 2 }}
+      aria-hidden
+    >
+      <polygon
+        points={handleDiamondPoints(cx, cy, r)}
+        fill={active ? SEL_BASELINE : '#fff'}
+        stroke={active ? SEL_BASELINE : '#383838'}
+        strokeWidth={stroke}
+      />
+    </svg>
+  );
 }
 
 function hitHandle(
@@ -166,10 +245,6 @@ function mapSubpathAnchor(
     const anchors = s.anchors.map((a, i) => (i === index ? fn(a) : a));
     return { ...s, anchors };
   });
-}
-
-function handleDiamondPoints(cx: number, cy: number, r: number) {
-  return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
 }
 
 function clearHandle(anchor: PenAnchor, side: HandleSide): PenAnchor {
@@ -421,7 +496,7 @@ function PenPathEditFeature({
     setStrokeColor(loaded.strokeColor);
     setStrokeEnabled(loaded.strokeEnabled);
     setFillColor(loaded.fill || 'none');
-    setFillRule(loaded.fillRule);
+    setFillRule(loaded.fillRule === 'evenodd' ? 'evenodd' : 'nonzero');
     dirtyRef.current = false;
     dragRef.current = null;
     setSelectedHandle(null);
@@ -728,14 +803,21 @@ function PenPathEditFeature({
 
   const d = penSubpathsToD(subpaths);
   const sw = Math.max(0, strokeWidth);
-  // Screen-fixed chrome — do not scale with stroke width (outlined text / thick fills).
-  const zoom = Math.max(0.15, camera.zoom || 1);
-  const anchorR = Math.min(5.5, 4.25 / zoom);
-  const handleR = Math.min(4.25, 3.1 / zoom);
+  // SelectionChrome contract: page = screenPx / zoom (under camera scale).
+  const z = Math.max(0.05, camera.zoom || 1);
+  const inv = 1 / z;
+  const stroke = STROKE_PX * inv;
+  const handleStroke = HANDLE_STROKE_PX * inv;
+  const linkStroke = LINK_STROKE_PX * inv;
+  const anchorVis = ANCHOR_VIS_PX * inv;
+  const handleVis = HANDLE_VIS_PX * inv;
   // Fill-only paths (stroke off) still need a visible edit centerline.
   const editStrokeOn = strokeEnabled || fillColor === 'none';
-  const editStrokeColor = strokeEnabled ? strokeColor : '#3388ff';
-  const pathSw = editStrokeOn ? Math.min(Math.max(sw || 1.5, 0.5), 2.25 / zoom) : 0;
+  const editStrokeColor = strokeEnabled ? strokeColor : SEL_BASELINE;
+  const pathSw = editStrokeOn
+    ? Math.min(Math.max(sw || 1.5, 0.5), PATH_EDIT_STROKE_MAX_PX) * inv
+    : 0;
+  const draftSw = Math.max(1, newStrokeWidth) * inv;
   const draftD =
     draftAnchors.length >= 2
       ? penAnchorsToD(draftAnchors, false)
@@ -747,113 +829,231 @@ function PenPathEditFeature({
       ? `M ${draftAnchors[draftAnchors.length - 1].x} ${draftAnchors[draftAnchors.length - 1].y} L ${draftCursor.x} ${draftCursor.y}`
       : '';
 
-  const renderHandle = (sub: number, i: number, side: HandleSide, hx: number, hy: number, ax: number, ay: number) => {
-    const active =
-      (selectedHandle?.sub === sub && selectedHandle?.index === i && selectedHandle.side === side) ||
-      (hoverHandle?.sub === sub && hoverHandle?.index === i && hoverHandle.side === side);
-    const r = handleR + (active ? 0.7 / Math.max(0.15, camera.zoom || 1) : 0);
-    return (
-      <g key={`h-${sub}-${i}-${side}`}>
-        <line
-          x1={ax}
-          y1={ay}
-          x2={hx}
-          y2={hy}
-          stroke="#8b8b8b"
-          strokeWidth={1 / Math.max(0.15, camera.zoom || 1)}
+  const handleChrome: ReactNode[] = [];
+  const anchorChrome: ReactNode[] = [];
+  type LinkSeg = { x1: number; y1: number; x2: number; y2: number };
+  const linkSegs: LinkSeg[] = [];
+
+  subpaths.forEach((sp, si) => {
+    sp.anchors.forEach((a, i) => {
+      const hovered = hoverAnchor?.sub === si && hoverAnchor?.index === i;
+      const pushHandle = (side: HandleSide, hx: number, hy: number) => {
+        const active =
+          (selectedHandle?.sub === si &&
+            selectedHandle?.index === i &&
+            selectedHandle.side === side) ||
+          (hoverHandle?.sub === si && hoverHandle?.index === i && hoverHandle.side === side);
+        linkSegs.push({ x1: a.x, y1: a.y, x2: hx, y2: hy });
+        handleChrome.push(
+          <ScreenHandleDiamond
+            key={`h-${si}-${i}-${side}`}
+            x={hx}
+            y={hy}
+            vis={active ? handleVis + 2 * inv : handleVis}
+            stroke={handleStroke}
+            active={active}
+          />
+        );
+      };
+      if (a.outX != null && a.outY != null) pushHandle('out', a.outX, a.outY);
+      if (a.inX != null && a.inY != null) pushHandle('in', a.inX, a.inY);
+      anchorChrome.push(
+        <ScreenAnchorKnob
+          key={`a-${si}-${i}`}
+          x={a.x}
+          y={a.y}
+          vis={hovered ? anchorVis + 2 * inv : anchorVis}
+          stroke={stroke}
+          fill={hovered ? SEL_BASELINE : '#fff'}
         />
-        <polygon
-          points={handleDiamondPoints(hx, hy, r)}
-          fill={active ? '#3388ff' : '#fff'}
-          stroke={active ? '#3388ff' : '#383838'}
-          strokeWidth={(active ? 1.35 : 1) / Math.max(0.15, camera.zoom || 1)}
-        />
-      </g>
-    );
-  };
+      );
+    });
+  });
 
   return (
-    <RcbSceneOverlaySvg>
-      <path
-        d={d}
-        fill={fillColor !== 'none' ? fillColor : 'none'}
-        fillRule={fillRule}
-        stroke={editStrokeOn ? editStrokeColor : 'none'}
-        strokeWidth={pathSw}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <>
+      <PenPathEditInkCanvas
+        pathD={d}
+        fillColor={fillColor}
+        fillRule={fillRule === 'evenodd' ? 'evenodd' : 'nonzero'}
+        editStrokeOn={editStrokeOn}
+        editStrokeColor={editStrokeColor}
+        pathSw={pathSw}
+        linkSegs={linkSegs}
+        linkSw={linkStroke}
+        draftD={draftD}
+        draftRubber={draftRubber}
+        draftColor={newStrokeColor}
+        draftSw={draftSw}
+        inv={inv}
+        subpaths={subpaths}
+        draftAnchors={draftAnchors}
+        draftCursor={draftCursor}
       />
-      {subpaths.map((sp, si) =>
-        sp.anchors.map((a, i) => {
-          const hovered = hoverAnchor?.sub === si && hoverAnchor?.index === i;
-          return (
-            <g key={`a-${si}-${i}`}>
-              {a.outX != null && a.outY != null
-                ? renderHandle(si, i, 'out', a.outX, a.outY, a.x, a.y)
-                : null}
-              {a.inX != null && a.inY != null
-                ? renderHandle(si, i, 'in', a.inX, a.inY, a.x, a.y)
-                : null}
-              <circle
-                cx={a.x}
-                cy={a.y}
-                r={anchorR + (hovered ? 0.8 / zoom : 0)}
-                fill={hovered ? '#3388ff' : '#fff'}
-                stroke="#3388ff"
-                strokeWidth={1.25 / zoom}
-              />
-            </g>
-          );
-        })
-      )}
+      {handleChrome}
+      {anchorChrome}
       {pathHover ? (
-        <circle
-          cx={pathHover.x}
-          cy={pathHover.y}
-          r={anchorR}
-          fill="#3388ff"
-          stroke="#fff"
-          strokeWidth={1.5 / zoom}
-          pointerEvents="none"
-        />
-      ) : null}
-      {draftD ? (
-        <path
-          d={draftD}
-          fill="none"
-          stroke={newStrokeColor}
-          strokeWidth={Math.max(1, newStrokeWidth) / zoom}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          pointerEvents="none"
-        />
-      ) : null}
-      {draftRubber ? (
-        <path
-          d={draftRubber}
-          fill="none"
-          stroke={newStrokeColor}
-          strokeWidth={Math.max(1, newStrokeWidth) / zoom}
-          strokeLinecap="round"
-          strokeDasharray={`${4 / zoom} ${3 / zoom}`}
-          opacity={0.7}
-          pointerEvents="none"
+        <ScreenAnchorKnob
+          x={pathHover.x}
+          y={pathHover.y}
+          vis={anchorVis}
+          stroke={stroke}
+          fill={SEL_BASELINE}
+          strokeColor="#fff"
         />
       ) : null}
       {draftAnchors.map((a, i) => (
-        <circle
+        <ScreenAnchorKnob
           key={`draft-a-${i}`}
-          cx={a.x}
-          cy={a.y}
-          r={anchorR}
+          x={a.x}
+          y={a.y}
+          vis={anchorVis}
+          stroke={stroke}
           fill="#fff"
-          stroke="#3388ff"
-          strokeWidth={1.25 / zoom}
-          pointerEvents="none"
         />
       ))}
-    </RcbSceneOverlaySvg>
+    </>
   );
+}
+
+function PenPathEditInkCanvas({
+  pathD,
+  fillColor,
+  fillRule,
+  editStrokeOn,
+  editStrokeColor,
+  pathSw,
+  linkSegs,
+  linkSw,
+  draftD,
+  draftRubber,
+  draftColor,
+  draftSw,
+  inv,
+  subpaths,
+  draftAnchors,
+  draftCursor,
+}: {
+  pathD: string;
+  fillColor: string;
+  fillRule: CanvasFillRule;
+  editStrokeOn: boolean;
+  editStrokeColor: string;
+  pathSw: number;
+  linkSegs: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  linkSw: number;
+  draftD: string;
+  draftRubber: string;
+  draftColor: string;
+  draftSw: number;
+  inv: number;
+  subpaths: PenSubpath[];
+  draftAnchors: PenAnchor[];
+  draftCursor: { x: number; y: number } | null;
+}) {
+  const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
+
+  useLayoutEffect(() => {
+    const handle = overlayRef.current;
+    if (!handle) return;
+    const pts: Array<{ x: number; y: number }> = [];
+    for (const sp of subpaths) {
+      for (const a of sp.anchors) {
+        pts.push({ x: a.x, y: a.y });
+        if (a.inX != null && a.inY != null) pts.push({ x: a.inX, y: a.inY });
+        if (a.outX != null && a.outY != null) pts.push({ x: a.outX, y: a.outY });
+      }
+    }
+    for (const a of draftAnchors) pts.push({ x: a.x, y: a.y });
+    if (draftCursor) pts.push(draftCursor);
+    if (!pts.length && !pathD) {
+      handle.clear();
+      return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    if (!Number.isFinite(minX)) {
+      handle.clear();
+      return;
+    }
+    const pad = Math.max(pathSw, draftSw, linkSw, 8) * 2;
+    const ctx = handle.beginFrame({
+      left: minX - pad,
+      top: minY - pad,
+      width: Math.max(1, maxX - minX + pad * 2),
+      height: Math.max(1, maxY - minY + pad * 2),
+    });
+    if (!ctx) return;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (const s of linkSegs) {
+      ctx.strokeStyle = '#8b8b8b';
+      ctx.lineWidth = linkSw;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
+      ctx.stroke();
+    }
+
+    if (pathD) {
+      const path = new Path2D(pathD);
+      if (fillColor !== 'none') {
+        ctx.fillStyle = fillColor;
+        ctx.fill(path, fillRule);
+      }
+      if (editStrokeOn && pathSw > 0) {
+        ctx.strokeStyle = editStrokeColor;
+        ctx.lineWidth = pathSw;
+        ctx.setLineDash([]);
+        ctx.stroke(path);
+      }
+    }
+
+    if (draftD) {
+      ctx.strokeStyle = draftColor;
+      ctx.lineWidth = draftSw;
+      ctx.setLineDash([]);
+      ctx.stroke(new Path2D(draftD));
+    }
+    if (draftRubber) {
+      ctx.strokeStyle = draftColor;
+      ctx.lineWidth = draftSw;
+      ctx.globalAlpha = 0.7;
+      ctx.setLineDash([4 * inv, 3 * inv]);
+      ctx.stroke(new Path2D(draftRubber));
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+    }
+  }, [
+    pathD,
+    fillColor,
+    fillRule,
+    editStrokeOn,
+    editStrokeColor,
+    pathSw,
+    linkSegs,
+    linkSw,
+    draftD,
+    draftRubber,
+    draftColor,
+    draftSw,
+    inv,
+    subpaths,
+    draftAnchors,
+    draftCursor,
+  ]);
+
+  return <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />;
 }
 
 export default memo(PenPathEditFeature);

@@ -3,9 +3,9 @@
   "items": [
     {
       "skill_key": "design_methodology",
-      "name": "设计方法论",
+      "name": "Design methodology",
       "category": "create",
-      "when_to_use": "从零创作：确认物料与步骤骨架；落层细则另开 layout_ops",
+      "when_to_use": "Create from scratch: confirm deliverable and step skeleton; layout ops live in layout_ops",
       "scenes": "all",
       "sort_weight": 100,
       "preferred_tools": [
@@ -16,8 +16,8 @@
         "create_svg",
         "update_node"
       ],
-      "prompt_positive": "# 设计方法论\n\n从零创作的步骤骨架。元素用什么 op、放哪、矢量/生图/透明底 → need_skills=[\"user.layout_ops\"]。配色/Banner 像素等数字细则 → need_knowledge（从 Knowledge 目录选）。\n\n## 物料（一句话）\n- **website / 落地页**：导航 → 英雄 → 卖点 → CTA → 页脚\n- **mobile / H5**：单列；主 CTA 在易触区\n- **电商主图**：约 1:1；主体最大；无导航无表单\n- **电商详情**：主图 → 标题价格 → 卖点 → 规格 → 图文\n- **Banner**：文案在中部安全带\n- **poster / 易拉宝**：主视觉 + 信息组；竖长上中下\n- **image**：主体图形；无页面壳\n\n## 步骤\n1. 确认物料、尺寸、必出文案；缺则 ask；未提供的价格/电话不写\n2. 固定尺寸先 create_frame，再板内落层（细则见 user.layout_ops）\n3. 有附图 → need_skills 含 vision_extract；产品工作流（需求整理等）按目录再加 user.*\n4. 节点 id 必须来自 SCENE\n",
-      "prompt_negative": "缺关键信息时不要直接堆 tool_ops；勿编造价格与电话；勿在本 skill 展开落层坐标与 op 对照表。",
+      "prompt_positive": "# Design methodology\n\nStep skeleton for create-from-scratch. Which op, where to place, vector vs image-gen vs transparent bg → need_skills=[\"user.layout_ops\"]. Numeric details (palette, banner px, …) → need_knowledge (pick from the Knowledge catalog).\n\n## Deliverables (one line each)\n- **website / landing**: nav → hero → benefits → CTA → footer\n- **mobile / H5**: single column; primary CTA in the thumb zone\n- **ecommerce hero**: ~1:1; subject largest; no nav, no forms\n- **ecommerce detail**: hero → title/price → benefits → specs → rich text\n- **Banner**: copy in the middle safe band\n- **poster / roll-up**: hero visual + info group; tall top/mid/bottom\n- **image**: subject graphic; no page chrome\n\n## Steps\n1. Confirm deliverable, size, required copy; ask if missing; never invent price/phone\n2. Fixed size → create_frame first, then place layers inside (see user.layout_ops)\n3. User attached images → need_skills includes vision_extract; product workflows add user.* from the catalog\n4. Node ids must come from SCENE\n",
+      "prompt_negative": "Do not dump tool_ops when key info is missing; do not invent prices or phone numbers; do not expand layout coordinates or op cheat-sheets in this skill.",
       "triggers": [
         {
           "empty_canvas": true,
@@ -33,13 +33,13 @@
         }
       ],
       "mutex_group": "methodology",
-      "version": 6
+      "version": 7
     },
     {
       "skill_key": "vision_extract",
-      "name": "看图抽取",
+      "name": "Vision extract",
       "category": "vision",
-      "when_to_use": "用户附图：识别物料并抽取版式、元素、配色",
+      "when_to_use": "User attached images: identify deliverable and extract layout, elements, palette",
       "scenes": "all",
       "sort_weight": 90,
       "preferred_tools": [
@@ -49,8 +49,8 @@
         "create_image",
         "update_node"
       ],
-      "prompt_positive": "# 看图抽取\n\n只写图中可见内容。标明物料：主图 / 商详 / Banner / 海报 / 易拉宝 / 网页或 App / 插画图标。\n\n列出：分区、关键元素与大致位置、主色 3～5、建议宽高或比例。\n主图写主体与角标；商详写模块分段；Banner 写文案是否在中部；竖长图写上中下。\n",
-      "prompt_negative": "图中没有的价格、文案、模块不要补写。",
+      "prompt_positive": "# Vision extract\n\nOnly describe what is visible. Label deliverable: hero / PDP / Banner / poster / roll-up / web or App / illustration icon.\n\nList: regions, key elements and rough placement, 3–5 main colors, suggested size or aspect.\nHero: subject + badges; PDP: module sections; Banner: whether copy sits mid-band; tall art: top/mid/bottom.\n",
+      "prompt_negative": "Do not invent prices, copy, or modules that are not in the image.",
       "triggers": [
         {
           "has_images": true,
@@ -60,13 +60,13 @@
         }
       ],
       "mutex_group": "vision",
-      "version": 5
+      "version": 6
     },
     {
       "skill_key": "aesthetics_align",
-      "name": "美学对齐",
+      "name": "Aesthetics align",
       "category": "aesthetics",
-      "when_to_use": "有美学样本时参考构图与配色",
+      "when_to_use": "When aesthetics samples exist, match composition and palette",
       "scenes": "all",
       "sort_weight": 80,
       "preferred_tools": [
@@ -76,21 +76,21 @@
         "create_image",
         "update_node"
       ],
-      "prompt_positive": "# 美学对齐\n\n参考样本的构图分区、留白、层级、配色；按当前物料调整疏密。\n结束后 need_aesthetics=false。\n",
-      "prompt_negative": "不要复制样本文案、Logo、二维码、价格数字。",
+      "prompt_positive": "# Aesthetics align\n\nMatch sample composition regions, whitespace, hierarchy, and palette; tune density for the current deliverable.\nWhen done set need_aesthetics=false.\n",
+      "prompt_negative": "Do not copy sample copy, logos, QR codes, or price numbers.",
       "triggers": [
         {
           "need_aesthetics": true
         }
       ],
       "mutex_group": "aesthetics",
-      "version": 5
+      "version": 6
     },
     {
       "skill_key": "canvas_edit",
-      "name": "画布增改",
+      "name": "Canvas edit",
       "category": "edit",
-      "when_to_use": "已有画布上加形、改色、改字、挪位",
+      "when_to_use": "Add shapes, recolor, rewrite, or move on an existing canvas",
       "scenes": "all",
       "sort_weight": 70,
       "preferred_tools": [
@@ -101,17 +101,17 @@
         "move_nodes",
         "resize_nodes"
       ],
-      "prompt_positive": "# 画布增改\n\n加形/改色/改字直接 tool_ops；缺省尺寸颜色用合理默认。\n改类型用 update_node，保留 id。\n节点 id 仅使用 SCENE 已有。\n主图保持主体与留白；商详保持模块顺序；Banner 保持安全带内文案。\n",
-      "prompt_negative": "局部修改不要新建空画板；不要用 delete+create 改类型。",
+      "prompt_positive": "# Canvas edit\n\nAdd shape / recolor / rewrite via tool_ops; use sensible defaults for missing size/color.\nChange type with update_node; keep id.\nNode ids only from SCENE.\nHero: keep subject and whitespace; PDP: keep module order; Banner: keep copy in the safe band.\n",
+      "prompt_negative": "Do not create an empty frame for local edits; do not delete+create to change type.",
       "triggers": [],
       "mutex_group": "",
-      "version": 5
+      "version": 6
     },
     {
       "skill_key": "image_gen",
-      "name": "生图配图",
+      "name": "Image generation",
       "category": "image",
-      "when_to_use": "需要 create_image（含艺术字作图）",
+      "when_to_use": "When create_image is needed (including stylized lettering as bitmap)",
       "scenes": "all",
       "sort_weight": 60,
       "preferred_tools": [
@@ -119,11 +119,11 @@
         "create_frame",
         "update_node"
       ],
-      "prompt_positive": "# 生图配图\n\n`create_image` 的 `genPrompt`（或 `prompt`）：给图像模型的自然语言描述，用来生成位图；不是画布上的可编辑文字节点。\n\n## 选型（由你判断，勿套固定文案品类清单）\n- **create_image**：需要摄影/插画/材质，或文字本身是视觉特效（书法笔触、分色块字、立体挤出等——字体文件做不到）→ 整块当图形生图；prompt 写清要出现的字、风格、配色、是否透明底。\n- **create_text**：需要可编辑、可改字、当图层文字排版的内容（无上述特效）。\n\n用户禁止生图时跳过 create_image；特效字退回简洁 create_text，勿假装有书法字体。\n艺术字可带 letteringText（图上原文），便于 image_process kind=replaceText（meta.originalText+newText）换字。\n未提供的事实信息不要编造进画面。\n尺寸、透明底、叠层位置见 user.layout_ops（勿在此展开）。\n",
-      "prompt_negative": "用户禁止生图时不要 create_image；勿用 create_text 冒充书法/立体艺术字；勿写死「某类文案必须用某 op」。",
+      "prompt_positive": "# Image generation\n\n`create_image` `genPrompt` (or `prompt`): natural-language brief for the image model to make a bitmap — not an editable canvas text node.\n\n## Choose (your judgment; no fixed copy→op checklist)\n- **create_image**: photo / illustration / material, or text that is a visual effect (calligraphy strokes, color-block type, extrusion — fonts cannot do this) → generate as one graphic; prompt must state the glyphs, style, palette, transparent bg or not.\n- **create_text**: editable, rewritable layout text (not the effects above).\n\nIf the user forbids image gen, skip create_image; fall back to plain create_text for effect lettering — do not pretend a calligraphy font exists.\nStylized lettering may set letteringText (exact on-image string) so image_process kind=replaceText (meta.originalText+newText) can swap words.\nDo not invent facts into the image.\nSize, transparent bg, stacking → user.layout_ops (do not expand here).\n",
+      "prompt_negative": "If the user forbids image gen, do not create_image; do not fake calligraphy/3D type with create_text; do not hardcode “this copy category must use that op”.",
       "triggers": [],
       "mutex_group": "image",
-      "version": 9
+      "version": 10
     }
   ]
 }

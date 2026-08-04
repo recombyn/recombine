@@ -17,7 +17,7 @@ export function normalizeCaseCategory(raw: string | undefined | null): OfficialC
 
 /**
  * Plaza / inspiration card meta.
- * All feed items are plaza-backed (admin-approved). Official demos are seeded into plaza.
+ * All feed items are plaza-backed (admin-approved).
  */
 export type OfficialCaseMeta = {
   id: string;

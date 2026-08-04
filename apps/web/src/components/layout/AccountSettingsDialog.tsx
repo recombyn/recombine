@@ -177,7 +177,7 @@ function AccountSettingsDialog({
   const { title, subtitle } = tabCopy[tab];
 
   const actionBtn =
-    'flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-[13px] text-[var(--muted)] transition hover:bg-[var(--surface)]/70 hover:text-[var(--ink)]';
+    'flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-[13px] text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]';
 
   return (
     <>
@@ -220,9 +220,7 @@ function AccountSettingsDialog({
                         onClick={() => setPlansOpen(true)}
                         className={actionBtn}
                       >
-                        <span className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted)]">
-                          <HiOutlineCubeTransparent className="h-4 w-4" strokeWidth={1.75} />
-                        </span>
+                        <HiOutlineCubeTransparent className="h-4 w-4 shrink-0" strokeWidth={1.75} />
                         {t('wallet.settingsNavPlans')}
                       </button>
                       <button
@@ -230,9 +228,7 @@ function AccountSettingsDialog({
                         onClick={() => setRedeemOpen(true)}
                         className={actionBtn}
                       >
-                        <span className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted)]">
-                          <HiOutlineBolt className="h-4 w-4" strokeWidth={1.75} />
-                        </span>
+                        <HiOutlineBolt className="h-4 w-4 shrink-0" strokeWidth={1.75} />
                         {t('wallet.settingsNavRedeem')}
                       </button>
 
@@ -248,20 +244,11 @@ function AccountSettingsDialog({
                             className={cn(
                               'flex items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-[13px] transition',
                               active
-                                ? 'bg-[var(--surface)] font-semibold text-[var(--ink)] shadow-sm'
-                                : 'text-[var(--muted)] hover:bg-[var(--surface)]/70 hover:text-[var(--ink)]'
+                                ? 'bg-[var(--accent-soft)] font-semibold text-[var(--ink)]'
+                                : 'text-[var(--muted)] hover:bg-[var(--accent-soft)]/70 hover:text-[var(--ink)]'
                             )}
                           >
-                            <span
-                              className={cn(
-                                'flex h-7 w-7 items-center justify-center rounded-lg',
-                                active
-                                  ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-                                  : 'bg-transparent text-[var(--muted)]'
-                              )}
-                            >
-                              {CONTENT_ICONS[item.id]}
-                            </span>
+                            <span className="shrink-0">{CONTENT_ICONS[item.id]}</span>
                             {item.label}
                           </button>
                         );

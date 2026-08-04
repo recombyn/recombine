@@ -1,5 +1,10 @@
 <p align="center">
-  <img src="docs/assets/readme-hero.png" alt="Recombyn — 开源画布 + AI 设计 Agent" width="100%" />
+  <img src="docs/assets/logo-mark.svg" alt="Recombyn" width="96" height="96" />
+</p>
+
+<p align="center">
+  <strong>recombyn</strong><br />
+  <sub>开源画布 + AI 设计 Agent</sub>
 </p>
 
 <p align="center">

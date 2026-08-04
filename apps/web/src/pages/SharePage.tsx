@@ -33,6 +33,7 @@ import {
 } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
+import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
 import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
 import { Dropdown, Tooltip } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
@@ -64,10 +65,20 @@ const BOOT_EXIT_MS = 280;
 type SceneBox = { x: number; y: number; width: number; height: number };
 
 const ZOOM_MENU_PRESETS = [
+  { key: '25', zoom: 0.25 },
   { key: '50', zoom: 0.5 },
+  { key: '75', zoom: 0.75 },
   { key: '100', zoom: 1 },
+  { key: '150', zoom: 1.5 },
   { key: '200', zoom: 2 },
+  { key: '400', zoom: 4 },
 ] as const;
+
+function zoomMenuSelectedKeys(opts: { zoom: number; fitActive: boolean }): string[] {
+  if (opts.fitActive) return ['fit'];
+  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(opts.zoom - p.zoom) < 0.001);
+  return hit ? [hit.key] : [];
+}
 
 function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }) {
   return (
@@ -82,21 +93,13 @@ function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }
   );
 }
 
-function zoomMenuSelectedKeys(zoom: number): string[] {
-  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(zoom - p.zoom) < 0.001);
-  return hit ? [hit.key] : [];
-}
-
-function zoomModShortcutLabel() {
-  if (typeof navigator === 'undefined') return 'Ctrl';
-  return /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
-}
-
 function useViewportMatch(query: string) {
-  const read = () =>
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(query).matches
-      : false;
+  const read = () => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return false;
+    }
+    return window.matchMedia(query).matches;
+  };
   const [matches, setMatches] = useState(read);
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -185,6 +188,7 @@ function SharePage() {
   const [inspectOpen, setInspectOpen] = useState(true);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const [zoomFitActive, setZoomFitActive] = useState(true);
   const [bootOpen, setBootOpen] = useState(true);
   const [bootExiting, setBootExiting] = useState(false);
   const [bootProgress, setBootProgress] = useState(8);
@@ -226,6 +230,7 @@ function SharePage() {
     setBootOpen(true);
     setBootExiting(false);
     setBootProgress(8);
+    setZoomFitActive(true);
     setCamera(DEFAULT_CAMERA);
     if (bootExitTimer.current) {
       window.clearTimeout(bootExitTimer.current);
@@ -266,12 +271,14 @@ function SharePage() {
   const zoomAtStageCenter = useCallback((nextZoom: number) => {
     const el = stageRef.current;
     if (!el) return;
+    setZoomFitActive(false);
     setCamera((c) =>
       zoomAtPoint(c, nextZoom, el.clientWidth / 2, el.clientHeight / 2)
     );
   }, []);
 
   const onZoomIn = useCallback(() => {
+    setZoomFitActive(false);
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
@@ -281,6 +288,7 @@ function SharePage() {
   }, []);
 
   const onZoomOut = useCallback(() => {
+    setZoomFitActive(false);
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
@@ -295,7 +303,8 @@ function SharePage() {
     const vh = el?.clientHeight || 0;
     if (vw < 1 || vh < 1) return;
     const fr: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
-    setCamera(rcbFitCamera({ width: vw, height: vh }, previewContentBounds(document, fr), 120));
+    setCamera(rcbFitCamera({ width: vw, height: vh }, previewContentBounds(document, fr), 120, 1));
+    setZoomFitActive(true);
   }, [document]);
 
   // Fit once when content is on the stage — do not re-fit when panels resize.
@@ -310,60 +319,56 @@ function SharePage() {
   }, [document, record?.viewerCanView, canEdit, stageEl, onFitView, finishBoot]);
 
   const zoomPercent = Math.round(camera.zoom * 100);
-  const zoomModLabel = zoomModShortcutLabel();
 
   const zoomMenuItems = useMemo<MenuItemType[]>(
     () => [
-      {
-        key: 'in',
-        label: <ZoomMenuLabel label={t('editor.zoomIn')} shortcut={`${zoomModLabel} +`} />,
-      },
-      {
-        key: 'out',
-        label: <ZoomMenuLabel label={t('editor.zoomOut')} shortcut={`${zoomModLabel} -`} />,
-      },
       {
         key: 'fit',
         label: <ZoomMenuLabel label={t('editor.fitCanvas')} shortcut="Shift 1" />,
       },
       {
-        key: '50',
-        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 50 })} />,
+        key: 'in',
+        label: <ZoomMenuLabel label={t('editor.zoomIn')} />,
       },
       {
-        key: '100',
-        label: (
-          <ZoomMenuLabel
-            label={t('editor.zoomToPercent', { percent: 100 })}
-            shortcut={`${zoomModLabel} 0`}
-          />
-        ),
+        key: 'out',
+        label: <ZoomMenuLabel label={t('editor.zoomOut')} />,
       },
-      {
-        key: '200',
-        label: <ZoomMenuLabel label={t('editor.zoomToPercent', { percent: 200 })} />,
-      },
+      { key: 'zoom-divider', type: 'divider', label: '' },
+      ...ZOOM_MENU_PRESETS.map((p) => ({
+        key: p.key,
+        label: <ZoomMenuLabel label={`${Math.round(p.zoom * 100)}%`} />,
+      })),
     ],
-    [t, zoomModLabel]
+    [t]
   );
 
-  const zoomSelectedKeys = useMemo(() => zoomMenuSelectedKeys(camera.zoom), [camera.zoom]);
+  const zoomSelectedKeys = useMemo(
+    () => zoomMenuSelectedKeys({ zoom: camera.zoom, fitActive: zoomFitActive }),
+    [camera.zoom, zoomFitActive]
+  );
 
   const onZoomMenuClick = useCallback(
     (key: string) => {
-      const actions: Record<string, () => void> = {
-        in: onZoomIn,
-        out: onZoomOut,
-        fit: onFitView,
-        '50': () => zoomAtStageCenter(0.5),
-        '100': () => zoomAtStageCenter(1),
-        '200': () => zoomAtStageCenter(2),
-      };
-      actions[key]?.();
+      if (key === 'fit') {
+        onFitView();
+      } else if (key === 'in') {
+        onZoomIn();
+      } else if (key === 'out') {
+        onZoomOut();
+      } else {
+        const preset = ZOOM_MENU_PRESETS.find((p) => p.key === key);
+        if (preset) zoomAtStageCenter(preset.zoom);
+      }
       setZoomMenuOpen(false);
     },
     [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]
   );
+
+  const onShareCameraChange = useCallback((next: CanvasCamera) => {
+    setZoomFitActive(false);
+    setCamera(next);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -601,7 +606,7 @@ function SharePage() {
           <RcbCanvas
             artboard={worldBounds}
             camera={camera}
-            onCameraChange={setCamera}
+            onCameraChange={onShareCameraChange}
             panMode={false}
             emptyDragPans={false}
             background={stageBackground}
@@ -656,7 +661,22 @@ function SharePage() {
             )}
           </RcbCanvas>
 
-          {/* Preview HUD — zoom / minimap (edit tools live on EditorPage) */}
+          {/* Preview: same bottom tools as editor — Select/Pan only. */}
+          <div
+            data-tour="editor-tools"
+            className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
+          >
+            <div className="pointer-events-auto">
+              <EditorToolStrip
+                camera={camera}
+                stageEl={stageEl}
+                compact={false}
+                selectOnly
+              />
+            </div>
+          </div>
+
+          {/* Preview HUD — zoom / minimap */}
           <div className="pointer-events-none absolute bottom-4 left-4 z-20 flex flex-col items-start gap-2">
             {minimapOpen ? (
               <EditorMinimap
@@ -667,7 +687,7 @@ function SharePage() {
                 activeFrameId={null}
                 selectedFrameIds={selectedFrameIds}
                 selectedNodeIds={selectedNodeIds}
-                onCameraChange={setCamera}
+                onCameraChange={onShareCameraChange}
                 canvasBg={stageBackground}
               />
             ) : null}

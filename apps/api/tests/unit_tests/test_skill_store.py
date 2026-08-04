@@ -139,7 +139,7 @@ def test_filter_ops_allowlist():
 
 
 def test_file_skill_loader_returns_list():
-    """OSS ships no ext file packs by default (demo pack removed)."""
+    """Loader scans public + private ``design_skills`` packs."""
     files = _load_file_skills()
     assert isinstance(files, list)
 
@@ -163,7 +163,7 @@ def test_namespace_split_and_qualify(monkeypatch):
     assert qualify_skill_key(NS_CORE, "design_methodology") == "design_methodology"
     assert qualify_skill_key(NS_USER, "my_brand") == "user.my_brand"
     assert resolve_storage_skill_key("core.design_methodology") == "design_methodology"
-    # OSS no longer ships ext file packs; stub one row so ns.ext resolve stays covered.
+    # Stub one ext row so ns.ext resolve stays covered when monkeypatched.
     from services.design.prompts import skill_store as skill_mod
 
     monkeypatch.setattr(
@@ -268,3 +268,61 @@ def test_seed_sync_does_not_overwrite_existing_rows():
             (before, "design_methodology"),
         )
         conn.commit()
+
+
+def test_agent_skills_frontmatter_split_and_meta():
+    from services.design.prompts.skill_store import (
+        _meta_from_agent_skill_frontmatter,
+        _split_skill_md_frontmatter,
+    )
+
+    fm, body = _split_skill_md_frontmatter(
+        """---
+name: demo-skill
+description: >-
+  Hello world skill for canvas.
+disable-model-invocation: true
+---
+
+# Demo
+Do the thing.
+"""
+    )
+    assert fm.get("name") == "demo-skill"
+    assert "Hello world" in str(fm.get("description") or "")
+    assert body.startswith("# Demo")
+    assert "disable-model-invocation" not in body
+    meta = _meta_from_agent_skill_frontmatter(fm, folder="demo-skill")
+    assert meta is not None
+    assert meta["skill_key"] == "demo-skill"
+    assert "Hello world" in meta["when_to_use"]
+
+
+def test_load_pack_dir_agent_skills_only(tmp_path):
+    from services.design.prompts.skill_store import _load_pack_dir
+
+    pack = tmp_path / "demo-skill"
+    pack.mkdir()
+    (pack / "SKILL.md").write_text(
+        """---
+name: demo-skill
+description: Agent skills only pack
+---
+
+# Body
+Keep this prompt.
+""",
+        encoding="utf-8",
+    )
+    item = _load_pack_dir(pack)
+    assert item is not None
+    assert item["skill_key"] == "demo-skill"
+    assert item["prompt_positive"].startswith("# Body")
+    assert "---" not in item["prompt_positive"]
+
+
+def test_oss_ext_packs_present():
+    keys = {str(x.get("skill_key") or "") for x in _load_file_skills()}
+    assert "example_ext" in keys
+    for key in ("ui_ux_pro_max", "garden_style", "awesome_design_md", "shadcn_ui"):
+        assert key in keys
