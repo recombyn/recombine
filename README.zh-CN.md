@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo-mark.svg" alt="Recombyn" width="96" height="96" />
+  <img src="docs/assets/logo-mark.png" alt="Recombyn" width="96" height="96" />
 </p>
 
 <p align="center">

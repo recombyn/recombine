@@ -1,5 +1,10 @@
 <p align="center">
-  <img src="docs/assets/readme-hero.png" alt="Recombyn — open source canvas + AI design agent" width="100%" />
+  <img src="docs/assets/logo-mark.png" alt="Recombyn" width="96" height="96" />
+</p>
+
+<p align="center">
+  <strong>recombyn</strong><br />
+  <sub>open-source canvas + AI design agent</sub>
 </p>
 
 <p align="center">
