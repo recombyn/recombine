@@ -25,18 +25,26 @@ const CONTEXT_CHIP_THUMB_CLASS =
 const CONTEXT_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>';
 
+function isSkillComposerContext(ctx: { kind?: string; key?: string }): boolean {
+  return ctx.kind === 'skill' || Boolean(ctx.key?.startsWith('skill:'));
+}
+
 /** Read-only / history chip matching the composer pill (optional × when `onRemove`). */
 function ContextChipPill({
   label,
   thumbUrl,
+  hideLeadingIcon,
   onRemove,
   className,
 }: {
   label: string;
   thumbUrl?: string;
+  /** Skill chips: label (+ ×) only — no nested-squares placeholder. */
+  hideLeadingIcon?: boolean;
   onRemove?: () => void;
   className?: string;
 }): ReactNode {
+  const showIcon = !thumbUrl && !hideLeadingIcon;
   return (
     <span
       className={cn(
@@ -47,13 +55,13 @@ function ContextChipPill({
     >
       {thumbUrl ? (
         <img src={thumbUrl} alt="" className={CONTEXT_CHIP_THUMB_CLASS} />
-      ) : (
+      ) : showIcon ? (
         <span
           className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[var(--canvas)] text-[var(--muted)] ring-1 ring-[var(--line)]"
           aria-hidden
           dangerouslySetInnerHTML={{ __html: CONTEXT_ICON_SVG }}
         />
-      )}
+      ) : null}
       <span className="truncate font-medium">{label}</span>
       {onRemove ? (
         <button
@@ -418,6 +426,8 @@ function buildChip(
     label: string;
     iconSvg: string;
     thumbUrl?: string;
+    /** Skill chips: label + × only when no logo thumb. */
+    hideLeadingIcon?: boolean;
     onRemove: () => void;
   }
 ): HTMLSpanElement {
@@ -430,8 +440,8 @@ function buildChip(
   // Keep in sync with CONTEXT_CHIP_PILL_CLASS / ContextChipPill.
   chip.className = cn(CONTEXT_CHIP_PILL_CLASS, 'mr-1');
 
-  let leading: HTMLElement;
   const thumb = String(opts.thumbUrl || '').trim();
+  const parts: HTMLElement[] = [];
   if (thumb) {
     chip.classList.add('pl-1', 'pr-0.5');
     const img = document.createElement('img');
@@ -439,20 +449,23 @@ function buildChip(
     img.alt = '';
     img.draggable = false;
     img.className = CONTEXT_CHIP_THUMB_CLASS;
-    leading = img;
-  } else {
+    parts.push(img);
+  } else if (!opts.hideLeadingIcon) {
     chip.classList.add('pl-1.5', 'pr-0.5');
     const icon = document.createElement('span');
     icon.className =
       'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[var(--canvas)] text-[var(--muted)] ring-1 ring-[var(--line)]';
     icon.setAttribute('aria-hidden', 'true');
     icon.innerHTML = opts.iconSvg;
-    leading = icon;
+    parts.push(icon);
+  } else {
+    chip.classList.add('pl-1.5', 'pr-0.5');
   }
 
   const label = document.createElement('span');
   label.className = 'truncate font-medium';
   label.textContent = opts.label;
+  parts.push(label);
 
   const remove = document.createElement('button');
   remove.type = 'button';
@@ -465,8 +478,9 @@ function buildChip(
     e.stopPropagation();
     opts.onRemove();
   });
+  parts.push(remove);
 
-  chip.append(leading, label, remove);
+  chip.append(...parts);
   return chip;
 }
 
@@ -597,6 +611,7 @@ const AgentComposerInput = forwardRef<
       label: ctx.label,
       iconSvg: CONTEXT_ICON,
       thumbUrl: ctx.thumbUrl || ctx.dataUrl,
+      hideLeadingIcon: isSkillComposerContext(ctx),
       onRemove: () => removeContextByKey(ctx.key),
     });
 
@@ -665,6 +680,7 @@ const AgentComposerInput = forwardRef<
           label: ctx.label,
           iconSvg: CONTEXT_ICON,
           thumbUrl: ctx.thumbUrl || ctx.dataUrl,
+          hideLeadingIcon: isSkillComposerContext(ctx),
           onRemove: () => removeContextByKey(ctx.key),
         })
       );
