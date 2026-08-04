@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-hero.jpg" alt="recombyn — 开源画布 + AI Design Agent" width="920" />
+  <img src="docs/assets/readme-hero-v2.jpg" alt="recombyn — 开源画布 + AI Design Agent" width="920" />
 </p>
 
 <p align="center">
