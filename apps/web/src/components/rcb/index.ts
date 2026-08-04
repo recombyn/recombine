@@ -9,6 +9,7 @@ export type { RcbBox, RcbCamera, RcbVec } from './core/types';
 export { RCB_DEFAULT_CAMERA } from './core/types';
 export {
   rcbClampZoom,
+  rcbCameraCssZoom,
   rcbCameraScreenOffset,
   rcbViewportMetrics,
   rcbClientToStageLocal,
@@ -60,11 +61,12 @@ export {
 export { default as RcbCanvas, zoomAtPoint } from './canvas/RcbCanvas';
 export type { RcbCanvasProps } from './canvas/RcbCanvas';
 export { default as RcbSvgDefs } from './canvas/RcbSvgDefs';
-export { default as RcbSceneOverlaySvg } from './canvas/RcbSceneOverlaySvg';
+export { default as RcbSceneOverlayCanvas } from './canvas/RcbSceneOverlayCanvas';
+export type { RcbSceneOverlayCanvasHandle } from './canvas/RcbSceneOverlayCanvas';
 export { getSvgBoard, setSvgBoard, type SvgBoardHandle } from './canvas/svgBoardRegistry';
 export { useSvgBoard } from './canvas/useSvgBoard';
 
-// Per-shape paint hosts (runtime — not document store)
+// Per-shape SVG paint hosts (runtime — not document store)
 export { default as RcbShapesLayer } from './shapes/RcbShapesLayer';
 export { default as RcbShapeHost } from './shapes/RcbShapeHost';
 export {
@@ -76,6 +78,7 @@ export {
   getSharedNodeEls,
   replaceShapePaint,
   type ShapeHostHandle,
+  type SceneHostEl,
 } from './shapes/shapeHostRegistry';
 
 // Tools

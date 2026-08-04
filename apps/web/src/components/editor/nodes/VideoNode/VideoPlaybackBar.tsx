@@ -18,10 +18,36 @@ import { cn } from '@/utils/classnames';
 
 /** Horizontal padding; bar is full-bleed with bottom gradient. */
 const EDGE_PAD = 10;
-/** Single-row chrome height. */
-const BAR_H = 36;
+/** Single-row chrome height (screen CSS px when not camera-compensated). */
+export const VIDEO_PLAYBACK_BAR_H = 36;
+const BAR_H = VIDEO_PLAYBACK_BAR_H;
+/** Layout width that fits play · times · track · vol · fs before uniform scale. */
+const FULL_LAYOUT_W = 240;
+/** Hide bar + replace when fitted bar is shorter than this (screen px). */
+const CHROME_HIDE_MIN_PX = 16;
+
+/** Full-chrome layout + fit for a plate’s on-screen size (shared by bar + replace). */
+export function videoChromeLayout(screenW: number, screenH: number) {
+  const w = Math.max(1, screenW);
+  const h = Math.max(1, screenH);
+  const layoutW = Math.max(w, FULL_LAYOUT_W);
+  const fit = Math.min(1, h / VIDEO_PLAYBACK_BAR_H, w / layoutW);
+  const barScreenH = VIDEO_PLAYBACK_BAR_H * fit;
+  return {
+    layoutW,
+    fit,
+    barScreenH,
+    visible: barScreenH >= CHROME_HIDE_MIN_PX,
+  };
+}
 /** Uniform gap between play · time · track · time · volume · fullscreen. */
 const ITEM_GAP = 10;
+const ICON = 15;
+const BTN = ICON + 8;
+const TIME_SIZE = 11;
+const TRACK_H = 28;
+const RAIL = 3;
+const THUMB = 10;
 
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
@@ -183,22 +209,17 @@ export function videoMediaFromElement(el: HTMLVideoElement): VideoMediaControl {
 }
 
 /**
- * Content scale from node **screen** width (CSS px).
- * Fullscreen / non-camera players pass `getBoundingClientRect().width` directly.
+ * Optional grow for wide fullscreen / non-camera players (≥1).
+ * Shrink-to-fit comes from `videoChromeLayout(...).fit`.
  */
 export function videoPlaybackBarScale(screenWidth: number): number {
   const w = Math.max(1, screenWidth);
-  return Math.min(1.25, Math.max(0.5, w / 280));
-}
-
-/** Scene-space scale for chrome under camera zoom (screen-constant size). */
-export function videoPlaybackBarSceneScale(sceneWidth: number, zoom: number): number {
-  const z = Math.max(0.05, zoom || 1);
-  return videoPlaybackBarScale(Math.max(1, sceneWidth) * z) / z;
+  return Math.min(1.15, Math.max(1, w / 420));
 }
 
 /**
  * Shared playback chrome — one row: play · current · scrub · total · volume · fullscreen.
+ * Callers shrink via shell `scale(fit)` / `scale` prop — chrome stays full density.
  */
 function VideoPlaybackBar({
   media,
@@ -209,7 +230,7 @@ function VideoPlaybackBar({
   style,
   onHoverChange,
   nodeId,
-  /** Visual scale (node resize). Default 1. Whole chrome scales together. */
+  /** Uniform visual scale (grow or shrink). Canvas prefers shell `scale(1/zoom)`. */
   scale = 1,
   /** Stored at upload — single source of truth for total length. */
   knownDuration,
@@ -283,7 +304,7 @@ function VideoPlaybackBar({
     media.on('loadedmetadata', syncMeta);
     media.on('volumechange', syncMeta);
 
-    // attrs.duration missing → read / probe once (legacy nodes only).
+    // attrs.duration missing — read / probe once (legacy nodes only).
     if (!(known > 0)) {
       const live = media.getDuration();
       if (live > 0) {
@@ -417,19 +438,12 @@ function VideoPlaybackBar({
     media.setVolume(t);
   };
 
-  const pad = EDGE_PAD * s;
-  const gap = ITEM_GAP * s;
-  const icon = 15 * s;
-  // Hit target ≈ icon + padding; keep box tight so flex `gap` reads as true 10px.
-  const btn = icon + 8 * s;
-  const timeSize = 11 * s;
-  const trackH = 28 * s;
-  const rail = Math.max(3, 3 * s);
-  const thumb = Math.max(10, 10 * s);
-  const thumbTravel = `calc(100% - ${thumb}px)`;
+  const thumbTravel = `calc(100% - ${THUMB}px)`;
   const thumbLeft = `calc(${thumbTravel} * ${ratio})`;
-  const fillW = `calc(${thumbTravel} * ${ratio} + ${thumb / 2}px)`;
+  const fillW = `calc(${thumbTravel} * ${ratio} + ${THUMB / 2}px)`;
   const shownCurrent = scrubRatio != null ? scrubRatio * playable : displayCurrent;
+  const grow = Math.abs(s - 1) > 0.001;
+  const showFullscreen = Boolean(onFullscreen);
 
   return (
     <div
@@ -437,15 +451,24 @@ function VideoPlaybackBar({
       data-video-playback-bar
       data-video-node-id={nodeId}
       className={cn(
-        'flex items-center text-white transition-opacity duration-150',
+        'flex max-w-full min-w-0 items-center overflow-hidden text-white transition-opacity duration-150',
         interactive ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
         className
       )}
       style={{
-        height: BAR_H * s,
-        paddingLeft: pad,
-        paddingRight: pad,
-        gap,
+        height: BAR_H,
+        paddingLeft: EDGE_PAD,
+        paddingRight: EDGE_PAD,
+        gap: ITEM_GAP,
+        boxSizing: 'border-box',
+        // One transform for the whole chrome — keeps icons / thumb / type aligned.
+        ...(grow
+          ? {
+              transform: `scale(${s})`,
+              transformOrigin: 'bottom left',
+              width: `${100 / s}%`,
+            }
+          : { width: '100%' }),
         background:
           'linear-gradient(to top, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.42) 55%, rgba(0,0,0,0) 100%)',
         ...style,
@@ -465,46 +488,47 @@ function VideoPlaybackBar({
         type="button"
         aria-label={paused ? '播放' : '暂停'}
         className="inline-flex shrink-0 items-center justify-center rounded-md hover:bg-white/10"
-        style={{ width: btn, height: btn }}
+        style={{ width: BTN, height: BTN }}
         onClick={togglePlay}
       >
         {paused ? (
-          <HiOutlinePlay style={{ width: icon, height: icon }} />
+          <HiOutlinePlay style={{ width: ICON, height: ICON }} />
         ) : (
-          <HiOutlinePause style={{ width: icon, height: icon }} />
+          <HiOutlinePause style={{ width: ICON, height: ICON }} />
         )}
       </button>
 
       <span
         className="shrink-0 tabular-nums leading-none text-white/90"
-        style={{ fontSize: timeSize }}
+        style={{ fontSize: TIME_SIZE }}
       >
         {formatTime(shownCurrent)}
       </span>
 
+      {/* Track absorbs width — sides stay fixed size. */}
       <div
         ref={trackRef}
-        className="relative z-[1] min-w-[24px] flex-1 cursor-pointer touch-none"
-        style={{ height: trackH }}
+        className="relative z-[1] min-w-0 flex-1 cursor-pointer touch-none"
+        style={{ height: TRACK_H }}
         onPointerDown={onTrackPointerDown}
       >
         <div
           className="pointer-events-none absolute top-1/2 left-0 right-0 -translate-y-1/2 rounded-full bg-white/30"
-          style={{ height: rail }}
+          style={{ height: RAIL }}
         />
         <div
           className="pointer-events-none absolute top-1/2 left-0 -translate-y-1/2 rounded-full bg-white"
-          style={{ height: rail, width: fillW }}
+          style={{ height: RAIL, width: fillW }}
         />
         <div
           className="pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-full bg-white shadow-sm"
-          style={{ left: thumbLeft, width: thumb, height: thumb }}
+          style={{ left: thumbLeft, width: THUMB, height: THUMB }}
         />
       </div>
 
       <span
         className="shrink-0 tabular-nums leading-none text-white/55"
-        style={{ fontSize: timeSize }}
+        style={{ fontSize: TIME_SIZE }}
       >
         {formatTime(playable)}
       </span>
@@ -521,10 +545,10 @@ function VideoPlaybackBar({
             <div
               className="flex items-center justify-center rounded-md bg-black/70 shadow-md"
               style={{
-                height: 88 * s,
-                width: 32 * s,
-                paddingTop: 10 * s,
-                paddingBottom: 10 * s,
+                height: 88,
+                width: 32,
+                paddingTop: 10,
+                paddingBottom: 10,
               }}
               onPointerDown={(e) => {
                 e.stopPropagation();
@@ -533,7 +557,7 @@ function VideoPlaybackBar({
             >
               <div
                 className="relative cursor-pointer touch-none"
-                style={{ height: '100%', width: 28 * s }}
+                style={{ height: '100%', width: 28 }}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -553,45 +577,45 @@ function VideoPlaybackBar({
               >
                 <div
                   className="pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 rounded-full bg-white/30"
-                  style={{ width: rail }}
+                  style={{ width: RAIL }}
                 />
                 <div
                   className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 rounded-full bg-white"
-                  style={{ width: rail, height: `${volPct * 100}%` }}
+                  style={{ width: RAIL, height: `${volPct * 100}%` }}
                 />
                 <div
                   className="pointer-events-none absolute left-1/2 -translate-x-1/2 translate-y-1/2 rounded-full bg-white shadow-sm"
-                  style={{ bottom: `${volPct * 100}%`, width: thumb, height: thumb }}
+                  style={{ bottom: `${volPct * 100}%`, width: THUMB, height: THUMB }}
                 />
               </div>
             </div>
-            <div style={{ height: 8 * s, width: 32 * s }} aria-hidden />
+            <div style={{ height: 8, width: 32 }} aria-hidden />
           </div>
         ) : null}
         <button
           type="button"
           aria-label={muted || volume <= 0.01 ? '取消静音' : '静音'}
-          className="inline-flex items-center justify-center rounded-md hover:bg-white/10"
-          style={{ width: btn, height: btn }}
+          className="inline-flex shrink-0 items-center justify-center rounded-md hover:bg-white/10"
+          style={{ width: BTN, height: BTN }}
           onClick={toggleMute}
         >
           {muted || volume <= 0.01 ? (
-            <HiOutlineSpeakerXMark style={{ width: icon, height: icon }} />
+            <HiOutlineSpeakerXMark style={{ width: ICON, height: ICON }} />
           ) : (
-            <HiOutlineSpeakerWave style={{ width: icon, height: icon }} />
+            <HiOutlineSpeakerWave style={{ width: ICON, height: ICON }} />
           )}
         </button>
       </div>
 
-      {onFullscreen ? (
+      {showFullscreen ? (
         <button
           type="button"
           aria-label="全屏"
           className="inline-flex shrink-0 items-center justify-center rounded-md hover:bg-white/10"
-          style={{ width: btn, height: btn }}
+          style={{ width: BTN, height: BTN }}
           onClick={onFullscreen}
         >
-          <RiFullscreenFill style={{ width: icon, height: icon }} />
+          <RiFullscreenFill style={{ width: ICON, height: ICON }} />
         </button>
       ) : null}
     </div>

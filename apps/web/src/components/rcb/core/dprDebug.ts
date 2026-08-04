@@ -6,7 +6,7 @@
  * Default OFF — enable explicitly when debugging browser-zoom seams.
  */
 
-import { nearestDprMultiple, toDomPrecision } from './dpr';
+import { nearestDprMultiple, snapCssToDevicePixel, toDomPrecision } from './dpr';
 import type { RcbCamera } from './types';
 
 declare global {
@@ -36,12 +36,15 @@ function classify(devicePx: number) {
   return 'frac';
 }
 
-/** Scene → CSS px under camera (same as rcbSceneToScreen). */
-export function sceneToCss(camera: RcbCamera, sceneX: number, sceneY: number) {
+/** Scene → CSS px under camera (same as rcbSceneToScreen — DPR-snapped pan). */
+export function sceneToCss(camera: RcbCamera, sceneX: number, sceneY: number, dpr?: number) {
   const z = Math.max(0.05, camera.zoom || 1);
+  const d = dpr ?? (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+  const camX = toDomPrecision(snapCssToDevicePixel(camera.x, d));
+  const camY = toDomPrecision(snapCssToDevicePixel(camera.y, d));
   return {
-    x: sceneX * z + camera.x,
-    y: sceneY * z + camera.y,
+    x: sceneX * z + camX,
+    y: sceneY * z + camY,
   };
 }
 
@@ -66,8 +69,8 @@ export function sampleBoxEdges(
 ): DprEdgeSample {
   const right = box.left + box.width;
   const bottom = box.top + box.height;
-  const tl = sceneToCss(camera, box.left, box.top);
-  const br = sceneToCss(camera, right, bottom);
+  const tl = sceneToCss(camera, box.left, box.top, dpr);
+  const br = sceneToCss(camera, right, bottom, dpr);
   const device = {
     left: tl.x * dpr,
     top: tl.y * dpr,

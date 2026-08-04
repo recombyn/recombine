@@ -6,6 +6,7 @@ import {
   rcbResolveViewportEl,
   rcbSceneToScreen,
   rcbScreenToScene,
+  rcbSnapSceneAxis,
 } from '../math';
 import { snapCssToDevicePixel, toDomPrecision } from '../dpr';
 
@@ -92,10 +93,13 @@ describe('rcb screen ↔ scene', () => {
     expect(rcbClientDeltaToScene(1, 10, 20, 0.5, 0.5)).toEqual({ x: 20, y: 40 });
   });
 
-  it('prefers a connected viewport node', () => {
-    const dead = mockViewport({ left: 0, top: 0, width: 0, height: 0, connected: false });
-    const live = mockViewport({ left: 0, top: 0, width: 100, height: 100, connected: true });
-    expect(rcbResolveViewportEl(dead, live)).toBe(live);
-    expect(rcbResolveViewportEl(null, dead)).toBe(dead);
+  it('snaps scene axis so screen*dpr is an integer device pixel', () => {
+    const dpr = 0.9;
+    const zoom = 6.2295;
+    const cam = toDomPrecision(snapCssToDevicePixel(-10746.829496055749, dpr));
+    const scene = 1755;
+    const snapped = rcbSnapSceneAxis(scene, zoom, cam, dpr);
+    const screen = snapped * zoom + cam;
+    expect(Math.abs(screen * dpr - Math.round(screen * dpr))).toBeLessThan(1e-6);
   });
 });

@@ -2,7 +2,7 @@
 
 Namespaces (conflict isolation):
   - core  — system seed skills (source=seed); bare keys kept for BC
-  - ext   — server file packs under data/design_skills (source=file)
+  - ext   — file packs under ``.agents/skills`` + data/design_skills (source=file)
   - user  — admin / user-extension skills (source=admin); keys use ``user.<local>``
 
 Also:
@@ -10,6 +10,7 @@ Also:
   - I/O: pack/admin meta validation; need_skills pin/args vs input_schema; ops vs output_schema
   - Version: integer bump + pack_version + design_skill_revision snapshots; pin via ``key@N``
   - Hot reload: optional mtime watcher on seed JSON + file packs
+  - Formats: product ``_meta.json``+``SKILL.md``, or ``SKILL.md`` with YAML frontmatter
 """
 from __future__ import annotations
 
@@ -72,8 +73,123 @@ _ALWAYS_ALLOW_OPS = frozenset(
 
 MAX_SKILL_DETAIL_CHARS = 14000
 _META_NAMES = ("_meta.json", "meta.json")
+_SKILL_MD_NAMES = ("SKILL.md", "skill.md")
 _NS_KEY_RE = re.compile(r"^(core|ext|user)[.:/](.+)$", re.IGNORECASE)
 _PIN_RE = re.compile(r"^(.+?)@([0-9]+(?:\.[0-9]+){0,2})$")
+
+
+def _skill_md_path(pack_dir: Path) -> Path | None:
+    for name in _SKILL_MD_NAMES:
+        p = pack_dir / name
+        if p.is_file():
+            return p
+    return None
+
+
+def _unquote_yaml_scalar(raw: str) -> str:
+    s = str(raw or "").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1].strip()
+    return s
+
+
+def _split_skill_md_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Parse ``SKILL.md`` YAML frontmatter (flat keys only).
+
+    Returns ``(meta, body)``. No frontmatter → ``({}, original_text)``.
+    """
+    raw = str(text or "").lstrip("\ufeff")
+    if not raw.startswith("---"):
+        return {}, raw.strip()
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, raw.strip()
+    end = -1
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end < 1:
+        return {}, raw.strip()
+
+    meta: dict[str, Any] = {}
+    key: str | None = None
+    buf: list[str] = []
+    fold = False
+
+    def flush() -> None:
+        nonlocal key, buf, fold
+        if not key:
+            buf = []
+            fold = False
+            return
+        if fold:
+            meta[key] = " ".join(x.strip() for x in buf if x.strip()).strip()
+        elif buf:
+            meta[key] = _unquote_yaml_scalar("\n".join(buf).strip())
+        else:
+            meta[key] = ""
+        key = None
+        buf = []
+        fold = False
+
+    for line in lines[1:end]:
+        if key and (line.startswith("  ") or line.startswith("\t")):
+            buf.append(line.strip())
+            continue
+        m = re.match(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$", line)
+        if not m:
+            if key:
+                buf.append(line.strip())
+            continue
+        flush()
+        key = m.group(1).strip()
+        rest = m.group(2).rstrip()
+        if rest in (">", "|", ">-", "|-"):
+            fold = True
+            buf = []
+        elif rest == "":
+            fold = True
+            buf = []
+        else:
+            fold = False
+            buf = [rest]
+    flush()
+
+    body = "\n".join(lines[end + 1 :]).strip()
+    return meta, body
+
+
+def _meta_from_agent_skill_frontmatter(
+    fm: dict[str, Any], *, folder: str
+) -> dict[str, Any] | None:
+    """Build a minimal pack meta from ``SKILL.md`` YAML frontmatter."""
+    if not isinstance(fm, dict) or not fm:
+        return None
+    name = str(fm.get("name") or folder or "").strip()
+    description = str(fm.get("description") or "").strip()
+    if not name and not description:
+        return None
+    key = _slug_local_key(name or folder) or folder
+    when = str(fm.get("when_to_use") or fm.get("whenToUse") or description).strip()
+    display = str(
+        fm.get("displayName") or fm.get("display_name") or fm.get("title") or name or key
+    ).strip() or key
+    return {
+        "skill_key": str(fm.get("skill_key") or fm.get("skillKey") or key).strip() or key,
+        "name": key,
+        "displayName": display,
+        "description": description or when,
+        "when_to_use": when,
+        "category": str(fm.get("category") or "agent").strip() or "agent",
+        "version": fm.get("version") or "1.0.0",
+        "scenes": "all",
+        "preferred_tools": [],
+        "triggers": [],
+        "locales": {
+            "en": {"displayName": display, "description": description or when},
+        },
+    }
 
 _RUNTIME_SKILL_KEYS: frozenset[str] | None = None
 _RUNTIME_SKILL_INDEX: dict[str, dict[str, Any]] | None = None
@@ -85,10 +201,50 @@ def _skills_seed_path() -> Path:
     return resolve_data_file("design_skills_seed.json")
 
 
+def _repo_root() -> Path:
+    """``apps/api`` → repository root."""
+    from config.settings import _API_ROOT
+
+    return _API_ROOT.parent.parent
+
+
+def _agents_skills_dir() -> Path:
+    """Repo-root official ext packs: ``<repo>/.agents/skills``."""
+    return _repo_root() / ".agents" / "skills"
+
+
 def _file_skills_dir() -> Path:
+    """Primary design_skills dir (private overlay if present, else public)."""
     from config.settings import resolve_data_dir
 
     return resolve_data_dir("design_skills")
+
+
+def _file_skills_dirs() -> list[Path]:
+    """``.agents/skills`` + public design_skills, then private overlay (later wins)."""
+    from config.settings import private_data_dir, public_data_dir
+
+    dirs: list[Path] = []
+    seen: set[str] = set()
+    for root in (
+        _agents_skills_dir(),
+        public_data_dir() / "design_skills",
+        private_data_dir() / "design_skills",
+    ):
+        try:
+            resolved = root.resolve()
+        except Exception:
+            continue
+        key = str(resolved).lower()
+        if key in seen or not root.is_dir():
+            continue
+        seen.add(key)
+        dirs.append(root)
+    return dirs
+
+
+def _pack_has_product_meta(pack_dir: Path) -> bool:
+    return any((pack_dir / name).is_file() for name in _META_NAMES)
 
 
 def _load_skills_seed() -> list[dict[str, Any]]:
@@ -507,7 +663,7 @@ def _resolve_pack_logo(pack_dir: Path, meta: dict[str, Any]) -> str:
             pack_dir / "logo.jpg",
         ]
     )
-    root = _file_skills_dir().resolve()
+    root = pack_dir.parent.resolve()
     for cand in candidates:
         try:
             if not cand.is_file():
@@ -517,7 +673,7 @@ def _resolve_pack_logo(pack_dir: Path, meta: dict[str, Any]) -> str:
                 rel = resolved.relative_to(root)
                 return rel.as_posix()
             except ValueError:
-                # Outside design_skills root — deny.
+                # Outside this pack's design_skills root — deny.
                 continue
         except Exception:
             continue
@@ -617,11 +773,18 @@ def _skill_item_from_parts(
 
 
 def _load_pack_dir(pack_dir: Path) -> dict[str, Any] | None:
-    """Load one skill pack: requires `_meta.json` + `SKILL.md`."""
+    """Load one skill pack: ``_meta.json`` + ``SKILL.md``, or frontmatter-only ``SKILL.md``."""
     if not pack_dir.is_dir():
         return None
-    skill_md = pack_dir / "SKILL.md"
-    if not skill_md.is_file():
+    skill_md = _skill_md_path(pack_dir)
+    if not skill_md:
+        return None
+    try:
+        raw = skill_md.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    fm, body = _split_skill_md_frontmatter(raw)
+    if not body:
         return None
     meta: dict[str, Any] | None = None
     for name in _META_NAMES:
@@ -631,10 +794,8 @@ def _load_pack_dir(pack_dir: Path) -> dict[str, Any] | None:
             if meta:
                 break
     if not meta:
-        return None
-    try:
-        body = skill_md.read_text(encoding="utf-8").lstrip("\ufeff").strip()
-    except Exception:
+        meta = _meta_from_agent_skill_frontmatter(fm, folder=pack_dir.name)
+    if not meta:
         return None
     return _skill_item_from_parts(
         pack_dir=pack_dir,
@@ -645,22 +806,34 @@ def _load_pack_dir(pack_dir: Path) -> dict[str, Any] | None:
 
 
 def _load_file_skills() -> list[dict[str, Any]]:
-    """Scan data/design_skills/* packs → skill dicts."""
-    root = _file_skills_dir()
-    if not root.is_dir():
-        return []
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for pack_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        item = _load_pack_dir(pack_dir)
-        if not item:
-            continue
-        key = str(item.get("skill_key") or "").strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-    return out
+    """Scan ``.agents/skills`` + design_skills dirs → skill dicts (later roots win).
+
+    Under ``.agents/skills``, only packs with product ``_meta.json`` are ingested
+    (skips IDE-only docs such as ``langfuse``).
+    """
+    by_key: dict[str, dict[str, Any]] = {}
+    agents_root = _agents_skills_dir()
+    try:
+        agents_resolved = agents_root.resolve()
+    except Exception:
+        agents_resolved = agents_root
+    for root in _file_skills_dirs():
+        try:
+            root_resolved = root.resolve()
+        except Exception:
+            root_resolved = root
+        require_product_meta = root_resolved == agents_resolved
+        for pack_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            if require_product_meta and not _pack_has_product_meta(pack_dir):
+                continue
+            item = _load_pack_dir(pack_dir)
+            if not item:
+                continue
+            key = str(item.get("skill_key") or "").strip()
+            if not key:
+                continue
+            by_key[key] = item
+    return list(by_key.values())
 
 
 def _pub(r: Any) -> dict[str, Any]:
@@ -1712,8 +1885,7 @@ def _skills_disk_signature() -> str:
             parts.append(f"seed:{st.st_mtime_ns}:{st.st_size}")
     except Exception:
         parts.append("seed:missing")
-    root = _file_skills_dir()
-    if root.is_dir():
+    for root in _file_skills_dirs():
         for pack in sorted(p for p in root.iterdir() if p.is_dir()):
             try:
                 meta_m = 0
@@ -1723,12 +1895,12 @@ def _skills_disk_signature() -> str:
                     if mp.is_file():
                         meta_m = mp.stat().st_mtime_ns
                         break
-                sp = pack / "SKILL.md"
-                if sp.is_file():
+                sp = _skill_md_path(pack)
+                if sp is not None:
                     body_m = sp.stat().st_mtime_ns
-                parts.append(f"{pack.name}:{meta_m}:{body_m}")
+                parts.append(f"{root.name}/{pack.name}:{meta_m}:{body_m}")
             except Exception:
-                parts.append(f"{pack.name}:err")
+                parts.append(f"{root.name}/{pack.name}:err")
     return "|".join(parts)
 
 
@@ -2324,7 +2496,9 @@ def _import_result(
 def _zip_entry_allowed(rel: str) -> bool:
     """Whitelist pack files inside a user-uploaded skill zip."""
     name = Path(rel.replace("\\", "/")).name.lower()
-    if name in _META_NAMES or name == "skill.md":
+    if name in _META_NAMES or name in ("skill.md", "design.md"):
+        return True
+    if name in ("license", "license.txt", "license.md", "licence", "licence.txt"):
         return True
     if name.startswith(".") or name.startswith("__macosx"):
         return False
@@ -2409,12 +2583,31 @@ def _extract_user_skill_zip(raw: bytes, dest: Path) -> tuple[Path | None, list[d
 
     pack_dir = _resolve_extracted_pack_dir(dest, written)
     has_meta = any((pack_dir / n).is_file() for n in _META_NAMES)
-    has_body = (pack_dir / "SKILL.md").is_file()
-    checks.append(_zip_check("meta", has_meta, "meta_present" if has_meta else "meta_missing"))
+    skill_md = _skill_md_path(pack_dir)
+    has_body = skill_md is not None
+    fm_ok = False
+    if has_body and not has_meta and skill_md is not None:
+        try:
+            fm, body = _split_skill_md_frontmatter(skill_md.read_text(encoding="utf-8"))
+            fm_ok = bool(body) and _meta_from_agent_skill_frontmatter(
+                fm, folder=pack_dir.name
+            ) is not None
+        except Exception:
+            fm_ok = False
+    meta_ok = has_meta or fm_ok
+    checks.append(
+        _zip_check(
+            "meta",
+            meta_ok,
+            "meta_present"
+            if has_meta
+            else ("meta_from_skill_frontmatter" if fm_ok else "meta_missing"),
+        )
+    )
     checks.append(
         _zip_check("skill_md", has_body, "skill_md_present" if has_body else "skill_md_missing")
     )
-    if not has_meta or not has_body:
+    if not meta_ok or not has_body:
         return None, checks
     return pack_dir, checks
 
@@ -2427,15 +2620,28 @@ def _read_pack_meta(pack_dir: Path) -> dict[str, Any] | None:
         meta = _read_json_file(p)
         if meta:
             return meta
-    return None
+    skill_md = _skill_md_path(pack_dir)
+    if not skill_md:
+        return None
+    try:
+        fm, body = _split_skill_md_frontmatter(skill_md.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not body:
+        return None
+    return _meta_from_agent_skill_frontmatter(fm, folder=pack_dir.name)
 
 
 def _read_pack_skill_md(pack_dir: Path) -> tuple[str | None, str | None]:
-    """Return (body, error_label)."""
+    """Return (body, error_label). Strips YAML frontmatter when present."""
+    skill_md = _skill_md_path(pack_dir)
+    if not skill_md:
+        return None, "skill_md_missing"
     try:
-        body = (pack_dir / "SKILL.md").read_text(encoding="utf-8").lstrip("\ufeff").strip()
+        raw = skill_md.read_text(encoding="utf-8")
     except Exception:
         return None, "skill_md_unreadable"
+    _fm, body = _split_skill_md_frontmatter(raw)
     if not body:
         return None, "prompt_positive_required"
     return body, None

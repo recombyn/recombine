@@ -16,6 +16,7 @@ import {
   measureVideoNaturalSize,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { finishImageProcess, patchDocumentNode } from '@/store/modules/editor';
+import { videoChromeLayout } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -29,7 +30,18 @@ type Props = {
 };
 
 /** Inset from the visible edge to the button outer edge (screen px). */
-const EDGE_PAD = 10;
+const EDGE_PAD_MAX = 10;
+const BTN_MAX = 20;
+
+/** Cap at BTN_MAX; shrink with the plate (hide is owned by videoChromeLayout). */
+function replaceBtnScale(stageW: number, stageH: number): { scale: number; pad: number } {
+  const minSide = Math.min(stageW, stageH);
+  const btn = Math.min(BTN_MAX, Math.max(1, minSide * 0.28));
+  return {
+    scale: btn / BTN_MAX,
+    pad: Math.min(EDGE_PAD_MAX, Math.max(2, btn * 0.45)),
+  };
+}
 
 /**
  * Bare replace control (button + file input) for embedding in a shared corner bar.
@@ -235,18 +247,22 @@ function VideoReplaceCornerButton({
     width: Math.abs(br.x - tl.x),
     height: Math.abs(br.y - tl.y),
   };
-  const BTN = 20;
+  // Same gate as VideoHoverPlayback chrome.visible — hide together when tiny.
+  if (!videoChromeLayout(stageBox.width, stageBox.height).visible && !loading) {
+    return null;
+  }
+  const { scale, pad } = replaceBtnScale(stageBox.width, stageBox.height);
   const { x, y } =
     align === 'top-right'
       ? {
-          x: Math.max(0, stageBox.width - EDGE_PAD - BTN),
-          y: EDGE_PAD,
+          x: Math.max(0, stageBox.width - pad - BTN_MAX),
+          y: pad,
         }
       : rcbAlignInBox(
           { left: 0, top: 0, width: stageBox.width, height: stageBox.height },
-          { width: BTN, height: BTN },
+          { width: BTN_MAX, height: BTN_MAX },
           align,
-          EDGE_PAD
+          pad
         );
   const visible = loading || videoHovered || btnHovered;
 
@@ -264,6 +280,10 @@ function VideoReplaceCornerButton({
     position: 'absolute',
     left: x,
     top: y,
+    width: BTN_MAX,
+    height: BTN_MAX,
+    transform: scale < 0.999 ? `scale(${scale})` : undefined,
+    transformOrigin: align === 'top-right' ? 'top right' : 'top left',
   };
 
   return (

@@ -10,6 +10,7 @@ import {
 import { cn } from '@/utils/classnames';
 import { imageSrcToFile, isOurStoredImageUrl } from '@/utils/uploadImage';
 import VideoPlaybackBar, {
+  videoChromeLayout,
   videoMediaFromElement,
   videoPlaybackBarScale,
   type VideoMediaControl,
@@ -190,10 +191,10 @@ function VideoJsPlayer({
   const playable = String(src || '').trim();
   const cropVars = cropCssVars(crop);
   const hasCrop = Boolean(cropVars);
-  const showBar = controlsMode !== 'none';
   const barVisible =
     controlsMode === 'always' ||
     (controlsMode === 'hover' && (controlsVisible || shellHovered));
+  const showBar = controlsMode !== 'none' && barScale > 0;
   const fit = hasCrop ? 'fill' : objectFit;
 
   // Bind media once per element mount — do not recreate on selection re-renders.
@@ -319,7 +320,11 @@ function VideoJsPlayer({
   useEffect(() => {
     const el = shellRef.current;
     if (!el || controlsMode === 'none') return;
-    const sync = () => setBarScale(videoPlaybackBarScale(el.getBoundingClientRect().width));
+    const sync = () => {
+      const rect = el.getBoundingClientRect();
+      const chrome = videoChromeLayout(rect.width, rect.height);
+      setBarScale(chrome.visible ? videoPlaybackBarScale(rect.width) * chrome.fit : 0);
+    };
     sync();
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null;
     ro?.observe(el);

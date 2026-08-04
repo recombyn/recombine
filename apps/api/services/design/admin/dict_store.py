@@ -13,7 +13,7 @@ TYPE_CATALOG = "__types__"
 _DICTS_READY = False
 _DICTS_LOCK = threading.RLock()
 # Bump when data/design_dicts_seed.json gains rows (also stored as seed.rev).
-_DICT_SEED_REV = 28
+_DICT_SEED_REV = 29
 _seeded_rev = 0
 # Label lookup cache (resolve_edge_condition is identity — no per-edge DB).
 _EDGE_COND_LABELS: dict[str, str] | None = None
@@ -215,12 +215,12 @@ def _seed_dict_rows(conn: Any, *, now: float) -> None:
         )
     # Heal live scenes wrongly marked「已废弃」/ disabled in Admin.
     for code, label in (
-        ("all", "全部场景"),
-        ("website", "网站 Website"),
-        ("mobile", "移动应用 Mobile"),
-        ("image", "图像 Image"),
-        ("poster", "海报 Poster"),
-        ("drawing", "手绘 Drawing"),
+        ("all", "All scenes"),
+        ("website", "Website"),
+        ("mobile", "Mobile"),
+        ("image", "Image"),
+        ("poster", "Poster"),
+        ("drawing", "Drawing"),
     ):
         conn.execute(
             """

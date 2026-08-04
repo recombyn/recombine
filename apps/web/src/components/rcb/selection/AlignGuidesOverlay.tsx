@@ -1,10 +1,7 @@
 import { memo } from 'react';
-import {
-  useRcbCamera,
-} from '../camera/context';
-import {
-  rcbSceneToScreen,
-} from '../core/math';
+import { useRcbCamera, useRcbDevicePixelRatio } from '../camera/context';
+import { rcbSceneToScreen } from '../core/math';
+import { toDomPrecision } from '../core/dpr';
 import type { AlignGuide } from './alignGuides';
 import { SPACING_MEASURE_COLOR } from './SpacingInspectOverlay';
 
@@ -22,7 +19,7 @@ export {
 type AlignGuidesOverlayProps = {
   guides: AlignGuide[];
   /**
-   * `world` — parent is camera-scaled scene.
+   * `world` — parent is camera-scaled scene (CSS box + viewBox like shape hosts).
    * `stage` — parent is unscaled RcbOverlayPortal.
    */
   space?: 'world' | 'stage';
@@ -31,45 +28,45 @@ type AlignGuidesOverlayProps = {
 
 /** Screen px — sized as px/zoom in page space. */
 const STROKE_PX = 1.5;
-/** × at edge corners / centers (MasterGo-style). */
-const CROSS_PX = 10;
+/** × at edge corners / centers — small, centered on the hairline (MasterGo). */
+const CROSS_PX = 5;
 
-function GuideCross({
-  x,
-  y,
-  size,
-  stroke,
-  color,
-}: {
-  x: number;
-  y: number;
-  size: number;
-  stroke: number;
-  color: string;
-}) {
-  const pad = stroke;
-  const outer = size + pad * 2;
-  return (
-    <svg
-      className="absolute overflow-visible"
-      width={outer}
-      height={outer}
-      style={{
-        left: x,
-        top: y,
-        transform: 'translate(-50%, -50%)',
-      }}
-      aria-hidden
-    >
-      <path
-        d={`M${pad} ${pad} L${pad + size} ${pad + size} M${pad + size} ${pad} L${pad} ${pad + size}`}
-        fill="none"
-        stroke={color}
-        strokeWidth={stroke}
-        strokeLinecap="square"
-      />
-    </svg>
-  );
+function worldGuidesViewport(
+  guides: AlignGuide[],
+  cross: number,
+  stroke: number
+): { minX: number; minY: number; w: number; h: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const pad = cross / 2 + stroke + 2;
+  const grow = (x: number, y: number) => {
+    minX = Math.min(minX, x - pad);
+    minY = Math.min(minY, y - pad);
+    maxX = Math.max(maxX, x + pad);
+    maxY = Math.max(maxY, y + pad);
+  };
+  for (const g of guides) {
+    const a = Math.min(g.from, g.to);
+    const b = Math.max(g.from, g.to);
+    if (g.orient === 'v') {
+      grow(g.pos, a);
+      grow(g.pos, b);
+      for (const y of g.marks?.length ? g.marks : [a, b]) grow(g.pos, y);
+    } else {
+      grow(a, g.pos);
+      grow(b, g.pos);
+      for (const x of g.marks?.length ? g.marks : [a, b]) grow(x, g.pos);
+    }
+  }
+  if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
+  return {
+    minX: toDomPrecision(minX),
+    minY: toDomPrecision(minY),
+    w: toDomPrecision(Math.max(1, maxX - minX)),
+    h: toDomPrecision(Math.max(1, maxY - minY)),
+  };
 }
 
 /**
@@ -83,109 +80,183 @@ function AlignGuidesOverlay({
   className,
 }: AlignGuidesOverlayProps) {
   const camera = useRcbCamera();
-  const zoom = Math.max(0.05, camera.zoom || 1);
+  const dpr = useRcbDevicePixelRatio();
   const alignGuides = guides.filter((g) => g.kind !== 'gap' && g.kind !== 'size');
   if (!alignGuides.length) return null;
 
   const inStage = space === 'stage';
-  const inv = inStage ? 1 : 1 / zoom;
-  const stroke = STROKE_PX * inv;
-  const cross = CROSS_PX * inv;
+  const zoom = toDomPrecision(Math.max(0.05, camera.zoom || 1));
+  // World sits under camera scale(z) → scene = px / zoom (same as path chrome).
+  // Stage portal is unscaled → raw screen px.
+  const stroke = inStage ? STROKE_PX : STROKE_PX / zoom;
+  const cross = inStage ? CROSS_PX : CROSS_PX / zoom;
   const color = SPACING_MEASURE_COLOR;
+  const halfCross = cross / 2;
 
-  const mapX = (wx: number) => (inStage ? rcbSceneToScreen(camera, wx, 0).x : wx);
-  const mapY = (wy: number) => (inStage ? rcbSceneToScreen(camera, 0, wy).y : wy);
-  const mapLen = (worldLen: number) => (inStage ? worldLen * zoom : worldLen);
+  if (!inStage) {
+    const vp = worldGuidesViewport(alignGuides, cross, stroke);
+    if (!vp) return null;
+    return (
+      <svg
+        className={
+          className ||
+          'pointer-events-none absolute z-[40] overflow-visible'
+        }
+        width={vp.w}
+        height={vp.h}
+        viewBox={`${vp.minX} ${vp.minY} ${vp.w} ${vp.h}`}
+        style={{
+          left: vp.minX,
+          top: vp.minY,
+          width: vp.w,
+          height: vp.h,
+          overflow: 'visible',
+        }}
+        aria-hidden
+      >
+        {alignGuides.map((g, i) => {
+          const a = Math.min(g.from, g.to);
+          const b = Math.max(g.from, g.to);
+          const markVals = (g.marks?.length ? g.marks : [a, b]).map(
+            (n) => Math.round(n * 100) / 100
+          );
+          const crosses = Array.from(new Set(markVals));
+          const len = Math.max(0, b - a);
+          const drawSegment = len >= stroke;
+
+          if (g.orient === 'v') {
+            return (
+              <g key={`v-${g.pos}-${i}`}>
+                {drawSegment ? (
+                  <line
+                    x1={g.pos}
+                    y1={a}
+                    x2={g.pos}
+                    y2={b}
+                    stroke={color}
+                    strokeWidth={stroke}
+                  />
+                ) : null}
+                {crosses.map((y) => (
+                  <path
+                    key={`vx-${y}`}
+                    d={`M${g.pos - halfCross} ${y - halfCross} L${g.pos + halfCross} ${y + halfCross} M${g.pos + halfCross} ${y - halfCross} L${g.pos - halfCross} ${y + halfCross}`}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={stroke}
+                    strokeLinecap="butt"
+                  />
+                ))}
+              </g>
+            );
+          }
+
+          return (
+            <g key={`h-${g.pos}-${i}`}>
+              {drawSegment ? (
+                <line
+                  x1={a}
+                  y1={g.pos}
+                  x2={b}
+                  y2={g.pos}
+                  stroke={color}
+                  strokeWidth={stroke}
+                />
+              ) : null}
+              {crosses.map((x) => (
+                <path
+                  key={`hx-${x}`}
+                  d={`M${x - halfCross} ${g.pos - halfCross} L${x + halfCross} ${g.pos + halfCross} M${x + halfCross} ${g.pos - halfCross} L${x - halfCross} ${g.pos + halfCross}`}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth={stroke}
+                  strokeLinecap="butt"
+                />
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+    );
+  }
+
+  const mapX = (wx: number) => rcbSceneToScreen(camera, wx, 0, dpr).x;
+  const mapY = (wy: number) => rcbSceneToScreen(camera, 0, wy, dpr).y;
 
   return (
     <div
       className={
-        className ||
-        `pointer-events-none absolute inset-0 overflow-visible ${inStage ? 'z-[38]' : 'z-30'}`
+        className || 'pointer-events-none absolute inset-0 z-[38] overflow-visible'
       }
     >
-      {alignGuides.map((g, i) => {
-        const a = Math.min(g.from, g.to);
-        const b = Math.max(g.from, g.to);
-        const markVals = (g.marks?.length ? g.marks : [a, b]).map(
-          (n) => Math.round(n * 100) / 100
-        );
-        const crosses = Array.from(new Set(markVals));
-        const len = Math.max(0, mapLen(b - a));
-        const drawSegment = len >= stroke;
+      <svg className="absolute inset-0 h-full w-full overflow-visible" aria-hidden>
+        {alignGuides.map((g, i) => {
+          const a = Math.min(g.from, g.to);
+          const b = Math.max(g.from, g.to);
+          const markVals = (g.marks?.length ? g.marks : [a, b]).map(
+            (n) => Math.round(n * 100) / 100
+          );
+          const crosses = Array.from(new Set(markVals));
+          const len = Math.abs(b - a) * zoom;
+          const drawSegment = len >= stroke;
 
-        if (g.orient === 'v') {
-          const x = mapX(g.pos);
-          const top = mapY(a);
-          return (
-            <div key={`v-${g.pos}-${i}`}>
-              {drawSegment ? (
-                <svg
-                  className="absolute overflow-visible"
-                  width={Math.max(stroke * 2, 1)}
-                  height={len}
-                  style={{ left: x, top, transform: 'translateX(-50%)' }}
-                  aria-hidden
-                >
+          if (g.orient === 'v') {
+            const x = mapX(g.pos);
+            return (
+              <g key={`v-${g.pos}-${i}`}>
+                {drawSegment ? (
                   <line
-                    x1="50%"
-                    y1={0}
-                    x2="50%"
-                    y2={len}
+                    x1={x}
+                    y1={mapY(a)}
+                    x2={x}
+                    y2={mapY(b)}
                     stroke={color}
                     strokeWidth={stroke}
+                    strokeLinecap="butt"
                   />
-                </svg>
-              ) : null}
-              {crosses.map((y) => (
-                <GuideCross
-                  key={`vx-${y}`}
-                  x={x}
-                  y={mapY(y)}
-                  size={cross}
-                  stroke={stroke}
-                  color={color}
-                />
-              ))}
-            </div>
-          );
-        }
+                ) : null}
+                {crosses.map((y) => (
+                  <path
+                    key={`vx-${y}`}
+                    d={`M${x - halfCross} ${mapY(y) - halfCross} L${x + halfCross} ${mapY(y) + halfCross} M${x + halfCross} ${mapY(y) - halfCross} L${x - halfCross} ${mapY(y) + halfCross}`}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={stroke}
+                    strokeLinecap="butt"
+                  />
+                ))}
+              </g>
+            );
+          }
 
-        const y = mapY(g.pos);
-        const left = mapX(a);
-        return (
-          <div key={`h-${g.pos}-${i}`}>
-            {drawSegment ? (
-              <svg
-                className="absolute overflow-visible"
-                width={len}
-                height={Math.max(stroke * 2, 1)}
-                style={{ left, top: y, transform: 'translateY(-50%)' }}
-                aria-hidden
-              >
+          const y = mapY(g.pos);
+          return (
+            <g key={`h-${g.pos}-${i}`}>
+              {drawSegment ? (
                 <line
-                  x1={0}
-                  y1="50%"
-                  x2={len}
-                  y2="50%"
+                  x1={mapX(a)}
+                  y1={y}
+                  x2={mapX(b)}
+                  y2={y}
                   stroke={color}
                   strokeWidth={stroke}
+                  strokeLinecap="butt"
                 />
-              </svg>
-            ) : null}
-            {crosses.map((x) => (
-              <GuideCross
-                key={`hx-${x}`}
-                x={mapX(x)}
-                y={y}
-                size={cross}
-                stroke={stroke}
-                color={color}
-              />
-            ))}
-          </div>
-        );
-      })}
+              ) : null}
+              {crosses.map((x) => (
+                <path
+                  key={`hx-${x}`}
+                  d={`M${mapX(x) - halfCross} ${y - halfCross} L${mapX(x) + halfCross} ${y + halfCross} M${mapX(x) + halfCross} ${y - halfCross} L${mapX(x) - halfCross} ${y + halfCross}`}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth={stroke}
+                  strokeLinecap="butt"
+                />
+              ))}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }

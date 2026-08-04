@@ -4,7 +4,6 @@ import {
   brushSize,
   findPencilBrush,
   isStampBrush,
-  outlinePathFromPoints,
   polylinePathD,
   samplePolyline,
   serializePathPressures,
@@ -14,6 +13,8 @@ import {
 } from './pencilBrushes';
 import { getTintedStampSrc } from './stampTint';
 import {
+  rcbCameraCssZoom,
+  rcbCameraScreenOffset,
   rcbClientDeltaToScene,
   rcbResolveViewportEl,
   rcbScreenToScene,
@@ -26,7 +27,10 @@ import {
 import {
   type RcbCamera as CanvasCamera,
 } from '../core/types';
-import RcbSceneOverlaySvg from '../canvas/RcbSceneOverlaySvg';
+import RcbSceneOverlayCanvas, {
+  type RcbSceneOverlayCanvasHandle,
+  type SceneOverlayBox,
+} from '../canvas/RcbSceneOverlayCanvas';
 import pencilCursorUrl from '@/assets/svg/editor/cursor_pencil.svg?url';
 import eraserCursorUrl from '@/assets/svg/editor/cursor_eraser.svg?url';
 import penCursorUrl from '@/assets/svg/editor/cursor_pen.svg?url';
@@ -71,6 +75,34 @@ function clientToDrawScene(
   const stage = rcbResolveViewportEl(opts.stageEl);
   if (stage) return rcbScreenToScene(opts.camera, stage, clientX, clientY);
   return clientToPaperScene(opts.paperEl, opts.artboard, clientX, clientY);
+}
+
+/** Stable scene rect covering the current viewport (for stroke preview — avoids per-point canvas resize jitter). */
+function visibleSceneOverlayBox(
+  camera: CanvasCamera,
+  stageEl: HTMLElement | null
+): SceneOverlayBox | null {
+  const stage = rcbResolveViewportEl(stageEl);
+  if (!stage) return null;
+  const { clientWidth, clientHeight } = rcbViewportMetrics(stage);
+  if (!(clientWidth > 0 && clientHeight > 0)) return null;
+  const z = rcbCameraCssZoom(camera);
+  const { x: camX, y: camY } = rcbCameraScreenOffset(camera);
+  const pad = 48 / z;
+  return {
+    left: (-camX) / z - pad,
+    top: (-camY) / z - pad,
+    width: clientWidth / z + pad * 2,
+    height: clientHeight / z + pad * 2,
+  };
+}
+
+function unionSceneOverlayBox(a: SceneOverlayBox, b: SceneOverlayBox): SceneOverlayBox {
+  const left = Math.min(a.left, b.left);
+  const top = Math.min(a.top, b.top);
+  const right = Math.max(a.left + a.width, b.left + b.width);
+  const bottom = Math.max(a.top + a.height, b.top + b.height);
+  return { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
 }
 
 export type PencilEraseTarget = {
@@ -165,10 +197,10 @@ function PencilDrawFeature({
   const lastClientRef = useRef<{ x: number; y: number } | null>(null);
   const strokeScaleRef = useRef({ scaleX: 1, scaleY: 1 });
   const drawing = useRef(false);
-  const previewPathRef = useRef<SVGPathElement | null>(null);
-  const previewStampsRef = useRef<SVGGElement | null>(null);
-  const tipCursorRef = useRef<SVGCircleElement | null>(null);
-  const eraseTrailRef = useRef<SVGPathElement | null>(null);
+  /** Locked overlay viewport for the active stroke — stops per-point canvas resize jitter. */
+  const strokeViewBoxRef = useRef<SceneOverlayBox | null>(null);
+  const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
+  const stampImageRef = useRef<HTMLImageElement | null>(null);
   const lastTipPosRef = useRef<{ x: number; y: number } | null>(null);
   const brushRef = useRef(brushId);
   const widthRef = useRef(strokeWidth);
@@ -199,92 +231,166 @@ function PencilDrawFeature({
   const eraseTipDiameter = () => Math.max(1, Number(widthRef.current) || 1);
   const eraseTipRadius = () => eraseTipDiameter() / 2;
 
-  const paintTipCursor = (p: { x: number; y: number } | null) => {
-    const el = tipCursorRef.current;
-    if (!el) return;
-    // Draw mode uses a fixed pencil CSS cursor; size ring only for eraser.
-    if (!eraseModeRef.current || !p) {
-      if (!p) lastTipPosRef.current = null;
-      el.setAttribute('visibility', 'hidden');
-      return;
+  const pointsBounds = (
+    points: Array<{ x: number; y: number }>,
+    pad: number
+  ) => {
+    if (!points.length) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of points) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
     }
-    lastTipPosRef.current = p;
+    return {
+      left: minX - pad,
+      top: minY - pad,
+      width: Math.max(1, maxX - minX + pad * 2),
+      height: Math.max(1, maxY - minY + pad * 2),
+    };
+  };
+
+  const redrawOverlay = () => {
+    const handle = overlayRef.current;
+    if (!handle) return;
     const zoom = Math.max(0.05, cameraRef.current.zoom || 1);
-    const r = eraseTipRadius();
-    el.setAttribute('cx', String(p.x));
-    el.setAttribute('cy', String(p.y));
-    el.setAttribute('r', String(r));
-    el.setAttribute('stroke-width', String(1.25 / zoom));
-    el.setAttribute('stroke-dasharray', `${3 / zoom} ${2 / zoom}`);
-    el.setAttribute('visibility', 'visible');
-  };
-
-  const clearStampPreview = () => {
-    const g = previewStampsRef.current;
-    if (g) while (g.firstChild) g.removeChild(g.firstChild);
-  };
-
-  const paintPreview = (points: { x: number; y: number; pressure?: number }[]) => {
-    const path = previewPathRef.current;
-    if (!path) return;
-    if (eraseModeRef.current) {
-      path.setAttribute('d', '');
-      clearStampPreview();
+    const tip = lastTipPosRef.current;
+    const points = pts.current;
+    const pad = Math.max(
+      eraseTipDiameter(),
+      brushSize(findPencilBrush(brushRef.current), widthRef.current),
+      stampSizeForBrush(findPencilBrush(brushRef.current), widthRef.current),
+      8
+    );
+    const all: Array<{ x: number; y: number }> = [...points];
+    if (tip) all.push(tip);
+    const contentBox = pointsBounds(all, pad);
+    if (!contentBox) {
+      handle.clear();
+      strokeViewBoxRef.current = null;
       return;
     }
-    const brush = findPencilBrush(brushRef.current);
-    if (isStampBrush(brush.id, brush.stampSrc) && brush.stampSrc && points.length >= 2) {
-      path.setAttribute('d', '');
-      const g = previewStampsRef.current;
-      if (!g) return;
-      clearStampPreview();
-      const size = stampSizeForBrush(brush, widthRef.current);
-      const spacing = stampSpacingForBrush(brush, widthRef.current);
-      const samples = samplePolyline(points, spacing);
-      const tip = getTintedStampSrc(brush.stampSrc, colorRef.current);
-      const ns = 'http://www.w3.org/2000/svg';
-      for (const p of samples) {
-        const img = document.createElementNS(ns, 'image');
-        img.setAttribute('href', tip);
-        img.setAttribute('x', String(p.x - size / 2));
-        img.setAttribute('y', String(p.y - size / 2));
-        img.setAttribute('width', String(size));
-        img.setAttribute('height', String(size));
-        img.setAttribute('opacity', String(opacityRef.current));
-        img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-        g.appendChild(img);
+    let box = contentBox;
+    if (drawing.current) {
+      let view = strokeViewBoxRef.current;
+      if (!view) {
+        view =
+          visibleSceneOverlayBox(cameraRef.current, liveStage) ||
+          unionSceneOverlayBox(contentBox, {
+            left: contentBox.left - 256,
+            top: contentBox.top - 256,
+            width: contentBox.width + 512,
+            height: contentBox.height + 512,
+          });
+        strokeViewBoxRef.current = view;
+      } else if (
+        contentBox.left < view.left ||
+        contentBox.top < view.top ||
+        contentBox.left + contentBox.width > view.left + view.width ||
+        contentBox.top + contentBox.height > view.top + view.height
+      ) {
+        view = unionSceneOverlayBox(view, contentBox);
+        strokeViewBoxRef.current = view;
+      }
+      box = view;
+    }
+    const ctx = handle.beginFrame(box);
+    if (!ctx) return;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (eraseModeRef.current) {
+      if (points.length >= 2) {
+        ctx.strokeStyle = 'rgba(20,20,20,0.28)';
+        ctx.lineWidth = eraseTipDiameter();
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
+        ctx.stroke();
+      }
+      if (tip) {
+        const r = eraseTipRadius();
+        ctx.fillStyle = 'rgba(20,20,20,0.12)';
+        ctx.strokeStyle = 'rgba(20,20,20,0.85)';
+        ctx.lineWidth = 1.25 / zoom;
+        ctx.setLineDash([3 / zoom, 2 / zoom]);
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
       return;
     }
-    clearStampPreview();
-    if (points.length < 2) {
-      path.setAttribute('d', '');
+
+    if (points.length < 2) return;
+    const brush = findPencilBrush(brushRef.current);
+    if (isStampBrush(brush.id, brush.stampSrc) && brush.stampSrc) {
+      const size = stampSizeForBrush(brush, widthRef.current);
+      const spacing = stampSpacingForBrush(brush, widthRef.current);
+      const samples = samplePolyline(points, spacing);
+      const tipSrc = getTintedStampSrc(brush.stampSrc, colorRef.current);
+      let img = stampImageRef.current;
+      if (!img || img.src !== tipSrc) {
+        img = new Image();
+        img.src = tipSrc;
+        stampImageRef.current = img;
+      }
+      ctx.globalAlpha = opacityRef.current;
+      for (const p of samples) {
+        try {
+          ctx.drawImage(img, p.x - size / 2, p.y - size / 2, size, size);
+        } catch {
+          /* decode pending */
+        }
+      }
+      ctx.globalAlpha = 1;
       return;
     }
-    const pressures = points.map((p) => p.pressure);
-    const hasPressure = pressures.some((p) => typeof p === 'number' && p > 0);
-    const d = outlinePathFromPoints(points, widthRef.current, brush.id, {
-      pressureEnabled: pressureRef.current,
-      pressures: hasPressure
-        ? pressures.map((p) => (typeof p === 'number' && p > 0 ? p : 0.5))
-        : undefined,
-    });
-    path.setAttribute('d', d);
-    path.setAttribute('fill', colorRef.current);
-    path.setAttribute('fill-opacity', String(opacityRef.current));
-    path.setAttribute('stroke', 'none');
+
+    // Match committed paint (sceneToSvg): centerline + stroke — same as pen.
+    const inkW = brushSize(brush, widthRef.current);
+    ctx.strokeStyle = colorRef.current;
+    ctx.globalAlpha = opacityRef.current;
+    ctx.lineWidth = inkW;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  };
+
+  const paintTipCursor = (p: { x: number; y: number } | null) => {
+    if (!eraseModeRef.current || !p) {
+      if (!p) lastTipPosRef.current = null;
+      if (!eraseModeRef.current) {
+        // Draw mode: no tip ring.
+        redrawOverlay();
+        return;
+      }
+      lastTipPosRef.current = null;
+      redrawOverlay();
+      return;
+    }
+    lastTipPosRef.current = p;
+    redrawOverlay();
+  };
+
+  const paintPreview = (points: { x: number; y: number; pressure?: number }[]) => {
+    pts.current = points;
+    redrawOverlay();
   };
 
   const paintEraseTrail = (points: { x: number; y: number }[]) => {
-    const el = eraseTrailRef.current;
-    if (!el) return;
-    if (!eraseModeRef.current || points.length < 2) {
-      el.setAttribute('d', '');
-      return;
-    }
-    const d = points.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`).join(' ');
-    el.setAttribute('d', d);
-    el.setAttribute('stroke-width', String(eraseTipDiameter()));
+    // pts.current already holds erase points while drawing; force redraw.
+    void points;
+    redrawOverlay();
   };
 
   useEffect(() => {
@@ -303,6 +409,7 @@ function PencilDrawFeature({
       const p = toScene(e.clientX, e.clientY);
       const pressure = pressureRef.current ? pointerPressure(e) : undefined;
       drawing.current = true;
+      strokeViewBoxRef.current = null;
       lastClientRef.current = { x: e.clientX, y: e.clientY };
       pts.current = [pressure != null ? { ...p, pressure } : p];
       if (eraseModeRef.current) {
@@ -323,7 +430,7 @@ function PencilDrawFeature({
       if (drawing.current && lastPt && lastClient) {
         const { scaleX, scaleY } = strokeScaleRef.current;
         const d = rcbClientDeltaToScene(
-          cameraRef.current.zoom,
+          rcbCameraCssZoom(cameraRef.current),
           e.clientX - lastClient.x,
           e.clientY - lastClient.y,
           scaleX,
@@ -369,20 +476,20 @@ function PencilDrawFeature({
     const finishStroke = (e: PointerEvent, commit: boolean) => {
       if (!drawing.current) return;
       drawing.current = false;
+      strokeViewBoxRef.current = null;
       lastClientRef.current = null;
       try {
         hitEl.releasePointerCapture?.(e.pointerId);
       } catch {
         /* ignore */
       }
-      const pathEl = previewPathRef.current;
-      if (pathEl) pathEl.setAttribute('d', '');
-      clearStampPreview();
-      paintEraseTrail([]);
+      overlayRef.current?.clear();
       const wasErase = eraseModeRef.current;
       const points = pts.current;
       pts.current = [];
-      paintTipCursor(toScene(e.clientX, e.clientY));
+      if (!wasErase) paintTipCursor(null);
+      else paintTipCursor(toScene(e.clientX, e.clientY));
+      redrawOverlay();
       if (wasErase) {
         if (
           commit &&
@@ -456,49 +563,20 @@ function PencilDrawFeature({
 
   useEffect(() => {
     if (!eraseMode) {
-      paintEraseTrail([]);
       lastTipPosRef.current = null;
-      const el = tipCursorRef.current;
-      if (el) el.setAttribute('visibility', 'hidden');
+      redrawOverlay();
     }
   }, [eraseMode]);
 
   // Refresh tip radius / trail width when slider changes (even if pointer is idle).
   useEffect(() => {
     if (!eraseMode) return;
-    const pos = lastTipPosRef.current;
-    if (pos) paintTipCursor(pos);
-    if (pts.current.length >= 2) paintEraseTrail(pts.current);
+    redrawOverlay();
   }, [strokeWidth, eraseMode, camera.zoom]);
 
   if (!enabled) return null;
 
-  return (
-    <RcbSceneOverlaySvg>
-      <path
-        ref={previewPathRef}
-        fill={strokeColor}
-        fillOpacity={Math.min(1, Math.max(0, strokeOpacity))}
-        stroke="none"
-      />
-      <g ref={previewStampsRef} opacity={Math.min(1, Math.max(0, strokeOpacity))} />
-      <path
-        ref={eraseTrailRef}
-        fill="none"
-        stroke="rgba(20,20,20,0.28)"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle
-        ref={tipCursorRef}
-        visibility="hidden"
-        fill="rgba(20,20,20,0.12)"
-        stroke="rgba(20,20,20,0.85)"
-        strokeWidth={1.25}
-        strokeDasharray="3 2"
-      />
-    </RcbSceneOverlaySvg>
-  );
+  return <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />;
 }
 
 export default memo(PencilDrawFeature);

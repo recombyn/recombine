@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, memo, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { nodeLeftTop, previewSvgNodeCornerRadii } from '@/components/rcb/scene/paint/sceneToSvg';
+import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import ImageReplaceCornerButton from '@/components/editor/nodes/ImageNode/ImageReplaceCornerButton';
 import ImageVariantsOverlay from '@/components/editor/nodes/ImageNode/ImageVariantsOverlay';
 import VideoReplaceCornerButton from '@/components/editor/nodes/VideoNode/VideoReplaceCornerButton';
@@ -12,12 +12,13 @@ import {
 } from '@/components/rcb/camera/context';
 import {
   rcbClientDeltaToScene,
+  rcbClientToStageLocal,
   rcbResolveViewportEl,
   rcbViewportMetrics,
 } from '@/components/rcb/core/math';
+import { toDomPrecision } from '@/components/rcb/core/dpr';
 import { logEdgeSamples, sampleBoxEdges } from '@/components/rcb/core/dprDebug';
-import { cn } from '@/utils/classnames';
-import AlignGuidesOverlay, { type AlignGuide } from './AlignGuidesOverlay';
+import { type AlignGuide } from './AlignGuidesOverlay';
 import {
   chromeBandGuideBoxes,
   frameGuideBoxes,
@@ -37,9 +38,11 @@ import SelectionChrome from './SelectionChrome';
 import SelectionContextToolbar from './chrome/SelectionContextToolbar';
 import MultiSelectionToolbar from './chrome/MultiSelectionToolbar';
 import NodeTitleLabel from './chrome/NodeTitleLabel';
+import CornerRadiusHandlesOverlay from './chrome/CornerRadiusHandlesOverlay';
 import SpacingInspectOverlay, {
   boxesInvolvedInGuides,
   computeMoveMarginResult,
+  computePairSpacingMeasures,
   SPACING_MEASURE_COLOR,
   SPACING_SIZE_BADGE_COLOR,
   type SpacingMeasure,
@@ -48,6 +51,7 @@ import { resizeFromHandle, rotateBoxesAround, scaleBoxesToUnion, unionOfBoxes, t
 import {
   HEAVY_PATH_D_CHARS,
   pathStrokeHitsSceneBox,
+  rememberNodePath2D,
   resizeStrokeByEndpoint,
   strokeEndpointsFromBox,
 } from '@/components/rcb/scene/document/sceneShapes';
@@ -63,19 +67,11 @@ import {
   supportsFill,
 } from '@/components/rcb/scene/document/sceneDocument';
 import {
-  clampCornerRadii,
-  cornerVertexCount,
-  isRadiusLinked,
-  radiiFromAttrs,
-  serializeRadiusVertices,
-  sharpCornerSitesForNode,
-  parseRadiusVertices,
-  vertexRadiiFromAttrs,
-  type CornerKey,
-  type CornerRadii,
-  type SharpCornerSite,
-} from '@/components/rcb/scene/document/sceneRadii';
-import { TEXT_SELECTION_PAD } from '@/components/rcb/scene/document/sceneEffects';
+  TEXT_SELECTION_PAD,
+  deflateSelectionBox,
+  strokeChromeOutset,
+  strokeVisualOutset,
+} from '@/components/rcb/scene/document/sceneEffects';
 import { geometryIndicatorPathD, isEditablePathNode } from '@/components/rcb/scene/paint/outlineToPath';
 import { patchDocumentNode, setDevHoverNodeId } from '@/store/modules/editor';
 import {
@@ -84,688 +80,77 @@ import {
   parseNodeTextStyle,
 } from '@/components/rcb/scene/document/sceneText';
 import type { TextResizeMode } from '@/components/rcb/scene/paint/svgToScene';
-import { useTranslation } from 'react-i18next';
-import { getShapeHost, getSharedNodeEls } from '@/components/rcb/shapes/shapeHostRegistry';
+import { getSharedNodeEls } from '@/components/rcb/shapes/shapeHostRegistry';
+import {
+  ShapeOutlineSvg,
+  ChromeAlignGuidesSvg,
+  liveShapeGeomBox,
+  nodeUsesPathChrome,
+  nodeUsesOpenStrokeEndpoints,
+  pathLocalEndpoints,
+  localPointToWorld,
+  boxFromLocalAnchor,
+  type ShapeOutlineItem,
+} from './HostPathChrome';
 
 const CORNER_HANDLES = new Set<ResizeHandle>(['nw', 'ne', 'sw', 'se']);
 
-const RADIUS_CORNERS: Array<{
-  key: CornerKey;
-  /** Inward unit in local box space. */
-  ix: number;
-  iy: number;
-  cx: 0 | 1;
-  cy: 0 | 1;
-}> = [
-  { key: 'tl', ix: 1, iy: 1, cx: 0, cy: 0 },
-  { key: 'tr', ix: -1, iy: 1, cx: 1, cy: 0 },
-  { key: 'br', ix: -1, iy: -1, cx: 1, cy: 1 },
-  { key: 'bl', ix: 1, iy: -1, cx: 0, cy: 1 },
-];
-
-function scenePointToLocal(
-  sceneX: number,
-  sceneY: number,
-  box: SceneBox,
-  angleDeg: number
-): { x: number; y: number } {
-  const cx = box.left + box.width / 2;
-  const cy = box.top + box.height / 2;
-  const dx = sceneX - cx;
-  const dy = sceneY - cy;
-  if (Math.abs(angleDeg) < 0.001) {
-    return { x: dx + box.width / 2, y: dy + box.height / 2 };
-  }
-  const rad = (-angleDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  return {
-    x: dx * cos - dy * sin + box.width / 2,
-    y: dx * sin + dy * cos + box.height / 2,
-  };
-}
-
-function localPointToScene(
-  lx: number,
-  ly: number,
-  box: SceneBox,
-  angleDeg: number
-): { x: number; y: number } {
-  const cx = box.width / 2;
-  const cy = box.height / 2;
-  const dx = lx - cx;
-  const dy = ly - cy;
-  if (Math.abs(angleDeg) < 0.001) {
-    return { x: box.left + lx, y: box.top + ly };
-  }
-  const rad = (angleDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  return {
-    x: box.left + cx + dx * cos - dy * sin,
-    y: box.top + cy + dx * sin + dy * cos,
-  };
-}
-
-function patchNodeCornerRadii(opts: {
-  dispatch: (a: unknown) => void;
-  nodeId: string;
-  node: any;
-  radii: CornerRadii;
-  linked: boolean;
-  /** When set, written as radiusVertices (sharp-corner list for paths). */
-  vertices?: number[];
-  skipHistory?: boolean;
-}) {
-  const { dispatch, nodeId, node, radii, linked, skipHistory } = opts;
-  const clamped = clampCornerRadii(radii, Number(node.width) || 1, Number(node.height) || 1);
-  const count = cornerVertexCount(node);
-  const vertices =
-    opts.vertices && opts.vertices.length
-      ? opts.vertices.map((v) => Math.max(0, Math.round(v)))
-      : linked
-        ? Array.from({ length: count }, () => Math.round(clamped.tl))
-        : vertexRadiiFromAttrs(
-            {
-              radiusTL: clamped.tl,
-              radiusTR: clamped.tr,
-              radiusBR: clamped.br,
-              radiusBL: clamped.bl,
-              radiusLinked: 'false',
-            },
-            count
-          );
-  dispatch(
-    patchDocumentNode({
-      nodeId,
-      skipHistory: Boolean(skipHistory),
-      patch: {
-        attrs: {
-          radiusTL: Math.max(0, Math.round(clamped.tl)),
-          radiusTR: Math.max(0, Math.round(clamped.tr)),
-          radiusBR: Math.max(0, Math.round(clamped.br)),
-          radiusBL: Math.max(0, Math.round(clamped.bl)),
-          radiusLinked: linked ? 'true' : 'false',
-          radiusVertices: serializeRadiusVertices(vertices),
-        },
-      },
-    })
-  );
-}
-
-type RadiusHandleDrag =
-  | {
-      mode: 'box';
-      corner: CornerKey;
-      startRadii: CornerRadii;
-      linked: boolean;
-      solo: boolean;
-    }
-  | {
-      mode: 'path';
-      sharpIndex: number;
-      startVertices: number[];
-      linked: boolean;
-      solo: boolean;
-      site: SharpCornerSite;
-    };
-
-/**
- * Figma-style corner-radius dots: appear near corners, drag inward to round.
- * Path shapes use sharp polyline corners (not the AABB), so boolean cutouts
- * get handles on real corners only — not along arc samples.
- */
-function CornerRadiusHandlesOverlay({
-  box,
-  angle,
-  nodeId,
-  node,
-  toScene,
-  stageEl,
-  interactive = true,
-}: {
-  box: SceneBox;
-  angle: number;
-  nodeId: string;
-  node: any;
-  toScene: (clientX: number, clientY: number) => { x: number; y: number };
-  stageEl: HTMLElement | null;
-  /** False while moving/resizing so dots follow chrome without stealing pointers. */
-  interactive?: boolean;
-}) {
-  const { t } = useTranslation();
-  const dispatch = useDispatch();
-  const camera = useRcbCamera();
-  const z = Math.max(0.05, camera.zoom || 1);
-  const inv = 1 / z;
-  const [nearCorners, setNearCorners] = useState(false);
-  const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [dragValue, setDragValue] = useState<number | null>(null);
-  const dragRef = useRef<RadiusHandleDrag | null>(null);
-
-  const w = Math.max(1, box.width);
-  const h = Math.max(1, box.height);
-  const maxR = Math.min(w, h) / 2;
-  const baseRadii = clampCornerRadii(radiiFromAttrs(node?.attrs), w, h);
-  const linked = isRadiusLinked(node?.attrs);
-  const pathSites = sharpCornerSitesForNode(node);
-  const usePath = Boolean(pathSites && pathSites.length > 0);
-  const pathVertexCount = usePath ? pathSites!.length : 0;
-  const pathVertices = usePath
-    ? (() => {
-        const stored = parseRadiusVertices(node?.attrs?.radiusVertices);
-        if (stored.length === pathVertexCount) return stored;
-        const u = Math.round(
-          (baseRadii.tl + baseRadii.tr + baseRadii.br + baseRadii.bl) / 4
-        );
-        return Array.from({ length: pathVertexCount }, () =>
-          stored.length ? stored[0] ?? u : u
-        );
-      })()
-    : [];
-
-  // Sit on the quarter-round mid-arc so the dot tracks R while dragging.
-  // Keep a screen-constant minimum so small R clears resize knobs.
-  const padPx = 24;
-  const arcFactor = 1 - Math.SQRT1_2; // ~0.2929 — mid-arc from each edge
-  const visualPx = 11;
-  const hitPx = 28;
-  const revealDist = 56;
-
-  const radiusHandleInset = (r: number) => {
-    const arcInset = Math.max(0, r) * arcFactor;
-    const minInset = padPx * inv;
-    return Math.min(Math.max(arcInset, minInset), Math.min(w, h) / 2 - 1);
-  };
-
-  const boxHandleScenePos = (corner: (typeof RADIUS_CORNERS)[number], r: number) => {
-    const inset = radiusHandleInset(r);
-    const lx = corner.cx === 0 ? inset : w - inset;
-    const ly = corner.cy === 0 ? inset : h - inset;
-    return localPointToScene(lx, ly, box, angle);
-  };
-
-  const pathHandleScenePos = (site: SharpCornerSite, r: number) => {
-    // Axis inset → distance along inward bisector (90° mid-arc ≈ inset√2).
-    const along = radiusHandleInset(r) * Math.SQRT2;
-    return localPointToScene(site.x + site.ix * along, site.y + site.iy * along, box, angle);
-  };
-
-  const radiusAlongBoxCorner = (
-    corner: (typeof RADIUS_CORNERS)[number],
-    local: { x: number; y: number }
-  ) => {
-    const cornerLx = corner.cx * w;
-    const cornerLy = corner.cy * h;
-    const len = Math.hypot(corner.ix, corner.iy) || 1;
-    const along =
-      (local.x - cornerLx) * (corner.ix / len) + (local.y - cornerLy) * (corner.iy / len);
-    return Math.max(0, Math.min(maxR, along));
-  };
-
-  const radiusAlongPathSite = (site: SharpCornerSite, local: { x: number; y: number }) => {
-    const along = (local.x - site.x) * site.ix + (local.y - site.y) * site.iy;
-    return Math.max(0, Math.min(maxR, along));
-  };
-
-  const previewRadiiOnHost = (radii: CornerRadii, vertices?: number[]) => {
-    const hostEl = getSharedNodeEls()?.get(nodeId) || getShapeHost(nodeId)?.el;
-    if (!hostEl) return;
-    const map = getSharedNodeEls() || new Map<string, SVGElement>([[nodeId, hostEl]]);
-    if (!map.has(nodeId)) map.set(nodeId, hostEl);
-    const shapeType = String(
-      node?.attrs?.shapeType || (node?.key === 'path' ? 'path' : node?.key) || 'rect'
-    );
-    const attrs = {
-      ...(node?.attrs || {}),
-      radiusTL: radii.tl,
-      radiusTR: radii.tr,
-      radiusBR: radii.br,
-      radiusBL: radii.bl,
-      radiusLinked: linked ? 'true' : 'false',
-      ...(vertices ? { radiusVertices: serializeRadiusVertices(vertices) } : {}),
-    };
-    previewSvgNodeCornerRadii(map, nodeId, {
-      width: Number(node?.width) || w,
-      height: Number(node?.height) || h,
-      shapeType,
-      radii,
-      attrs,
-    });
-  };
-
-  useEffect(() => {
-    if (!stageEl || !interactive) return undefined;
-    const onMove = (e: PointerEvent) => {
-      if (dragRef.current) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest?.('[data-radius-handle]')) {
-        setNearCorners(true);
-        return;
-      }
-      const sc = toScene(e.clientX, e.clientY);
-      const local = scenePointToLocal(sc.x, sc.y, box, angle);
-      let best = Infinity;
-      if (usePath && pathSites) {
-        for (const site of pathSites) {
-          const r = pathVertices[site.sharpIndex] ?? 0;
-          const seat = pathHandleScenePos(site, r);
-          best = Math.min(
-            best,
-            Math.hypot((sc.x - seat.x) * z, (sc.y - seat.y) * z),
-            Math.hypot((local.x - site.x) * z, (local.y - site.y) * z)
-          );
-        }
-      } else {
-        for (const c of RADIUS_CORNERS) {
-          const dx = (local.x - c.cx * w) * z;
-          const dy = (local.y - c.cy * h) * z;
-          best = Math.min(best, Math.hypot(dx, dy));
-          const seat = radiusHandleInset(0);
-          const seatLx = c.cx === 0 ? seat : w - seat;
-          const seatLy = c.cy === 0 ? seat : h - seat;
-          best = Math.min(best, Math.hypot((local.x - seatLx) * z, (local.y - seatLy) * z));
-        }
-      }
-      setNearCorners(best <= revealDist);
-    };
-    const onLeave = () => {
-      if (!dragRef.current) setNearCorners(false);
-    };
-    window.addEventListener('pointermove', onMove, { passive: true });
-    stageEl.addEventListener('pointerleave', onLeave);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      stageEl.removeEventListener('pointerleave', onLeave);
-    };
-  }, [
-    stageEl,
-    interactive,
-    box,
-    angle,
-    w,
-    h,
-    z,
-    toScene,
-    revealDist,
-    usePath,
-    pathSites,
-    pathVertices,
-  ]);
-
-  useEffect(() => {
-    if (!interactive) return undefined;
-
-    const commitPathRadii = (
-      vertices: number[],
-      linkedNext: boolean,
-      skipHistory: boolean
-    ) => {
-      const u = vertices[0] ?? 0;
-      patchNodeCornerRadii({
-        dispatch,
-        nodeId,
-        node,
-        radii: { tl: u, tr: u, br: u, bl: u },
-        linked: linkedNext,
-        vertices,
-        skipHistory,
-      });
-    };
-
-    const onMove = (e: PointerEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const sc = toScene(e.clientX, e.clientY);
-      const local = scenePointToLocal(sc.x, sc.y, box, angle);
-      if (d.mode === 'path') {
-        const rounded = Math.round(radiusAlongPathSite(d.site, local));
-        const next = d.solo
-          ? d.startVertices.map((v, i) => (i === d.sharpIndex ? rounded : v))
-          : d.startVertices.map(() => rounded);
-        setDragValue(rounded);
-        // DOM preview only — Redux remount mid-drag leaves ghost shadows.
-        const u = next[0] ?? rounded;
-        previewRadiiOnHost(
-          d.solo
-            ? { tl: u, tr: u, br: u, bl: u }
-            : { tl: rounded, tr: rounded, br: rounded, bl: rounded },
-          next
-        );
-        return;
-      }
-      const corner = RADIUS_CORNERS.find((c) => c.key === d.corner);
-      if (!corner) return;
-      const rounded = Math.round(radiusAlongBoxCorner(corner, local));
-      const next: CornerRadii = d.solo
-        ? { ...d.startRadii, [d.corner]: rounded }
-        : { tl: rounded, tr: rounded, br: rounded, bl: rounded };
-      setDragValue(rounded);
-      previewRadiiOnHost(next);
-    };
-    const onUp = (e: PointerEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const sc = toScene(e.clientX, e.clientY);
-      const local = scenePointToLocal(sc.x, sc.y, box, angle);
-      if (d.mode === 'path') {
-        const rounded = Math.round(radiusAlongPathSite(d.site, local));
-        const next = d.solo
-          ? d.startVertices.map((v, i) => (i === d.sharpIndex ? rounded : v))
-          : d.startVertices.map(() => rounded);
-        dragRef.current = null;
-        setActiveKey(null);
-        setDragValue(null);
-        commitPathRadii(next, !d.solo && d.linked, false);
-        return;
-      }
-      const corner = RADIUS_CORNERS.find((c) => c.key === d.corner);
-      if (!corner) {
-        dragRef.current = null;
-        setActiveKey(null);
-        setDragValue(null);
-        return;
-      }
-      const rounded = Math.round(radiusAlongBoxCorner(corner, local));
-      const next: CornerRadii = d.solo
-        ? { ...d.startRadii, [d.corner]: rounded }
-        : { tl: rounded, tr: rounded, br: rounded, bl: rounded };
-      dragRef.current = null;
-      setActiveKey(null);
-      setDragValue(null);
-      patchNodeCornerRadii({
-        dispatch,
-        nodeId,
-        node,
-        radii: next,
-        linked: !d.solo && d.linked,
-        skipHistory: false,
-      });
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !dragRef.current) return;
-      const d = dragRef.current;
-      dragRef.current = null;
-      setActiveKey(null);
-      setDragValue(null);
-      if (d.mode === 'path') {
-        previewRadiiOnHost(
-          {
-            tl: d.startVertices[0] ?? 0,
-            tr: d.startVertices[0] ?? 0,
-            br: d.startVertices[0] ?? 0,
-            bl: d.startVertices[0] ?? 0,
-          },
-          d.startVertices
-        );
-        return;
-      }
-      previewRadiiOnHost(d.startRadii);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [dispatch, node, nodeId, box, angle, w, h, maxR, toScene, interactive, linked]);
-
-  // nearCorners sticks across a move/resize gesture (probe pauses while
-  // !interactive) so visible dots stay glued to chromeUnion / liveUnion.
-  const visible = nearCorners || activeKey != null;
-  if (!visible) return null;
-
-  let badgeVal = Math.round(baseRadii.tl);
-  if (dragValue != null) {
-    badgeVal = dragValue;
-  } else if (activeKey && usePath) {
-    badgeVal = Math.round(pathVertices[Number(activeKey)] ?? baseRadii.tl);
-  } else if (activeKey && activeKey in baseRadii) {
-    badgeVal = Math.round(baseRadii[activeKey as CornerKey]);
-  }
-
-  // Live radii while dragging so dots track the pointer before Redux catches up.
-  const drag = dragRef.current;
-  let liveBoxRadii = baseRadii;
-  let livePathVertices = pathVertices;
-  if (dragValue != null && drag) {
-    if (drag.mode === 'box') {
-      liveBoxRadii = drag.solo
-        ? { ...baseRadii, [drag.corner]: dragValue }
-        : { tl: dragValue, tr: dragValue, br: dragValue, bl: dragValue };
-    } else {
-      livePathVertices = drag.solo
-        ? pathVertices.map((v, i) => (i === drag.sharpIndex ? dragValue : v))
-        : pathVertices.map(() => dragValue);
-    }
-  }
-
-  const hitSize = hitPx * inv;
-  const visualSize = visualPx * inv;
-  const visualBorder = 1.5 * inv;
-
-  const renderHandle = (
-    key: string,
-    pos: { x: number; y: number },
-    onDown: (e: ReactPointerEvent<HTMLButtonElement>) => void
-  ) => {
-    const isActive = activeKey === key;
-    return (
-      <button
-        key={key}
-        type="button"
-        data-radius-handle={key}
-        className={interactive ? 'pointer-events-auto absolute' : 'pointer-events-none absolute'}
-        style={{
-          width: hitSize,
-          height: hitSize,
-          left: pos.x,
-          top: pos.y,
-          transform: 'translate(-50%, -50%)',
-          cursor: interactive ? 'default' : undefined,
-          background: 'transparent',
-          border: 'none',
-          padding: 0,
-        }}
-        aria-label={t('editor.imageToolbar.cornerRadius')}
-        onPointerDown={interactive ? onDown : undefined}
-        tabIndex={interactive ? 0 : -1}
-      >
-        <span
-          className="pointer-events-none absolute left-1/2 top-1/2 block -translate-x-1/2 -translate-y-1/2 rounded-full bg-white"
-          style={{
-            width: visualSize,
-            height: visualSize,
-            border: `${visualBorder}px solid #3388ff`,
-            outline: isActive ? `${2 * inv}px solid rgba(51,136,255,0.35)` : undefined,
-            outlineOffset: isActive ? 1 * inv : undefined,
-          }}
-        />
-      </button>
-    );
-  };
-
-  let badgePos: { x: number; y: number } | null = null;
-  if (activeKey != null && dragValue != null) {
-    if (usePath && pathSites) {
-      const site = pathSites.find((s) => String(s.sharpIndex) === activeKey);
-      if (site) {
-        badgePos = pathHandleScenePos(
-          site,
-          livePathVertices[site.sharpIndex] ?? dragValue
-        );
-      }
-    } else {
-      const corner = RADIUS_CORNERS.find((c) => c.key === activeKey);
-      if (corner) badgePos = boxHandleScenePos(corner, liveBoxRadii[corner.key]);
-    }
-  }
-
-  return (
-    <div className="pointer-events-none absolute inset-0 z-[28] overflow-visible">
-      {usePath && pathSites
-        ? pathSites.map((site) => {
-            const r = livePathVertices[site.sharpIndex] ?? 0;
-            return renderHandle(String(site.sharpIndex), pathHandleScenePos(site, r), (e) => {
-              if (e.button !== 0) return;
-              e.preventDefault();
-              e.stopPropagation();
-              const solo = e.altKey || !linked;
-              dragRef.current = {
-                mode: 'path',
-                sharpIndex: site.sharpIndex,
-                startVertices: [...pathVertices],
-                linked,
-                solo,
-                site,
-              };
-              setActiveKey(String(site.sharpIndex));
-              setDragValue(Math.round(pathVertices[site.sharpIndex] ?? 0));
-              setNearCorners(true);
-            });
-          })
-        : RADIUS_CORNERS.map((corner) => {
-            const r = liveBoxRadii[corner.key];
-            return renderHandle(corner.key, boxHandleScenePos(corner, r), (e) => {
-              if (e.button !== 0) return;
-              e.preventDefault();
-              e.stopPropagation();
-              const solo = e.altKey || !linked;
-              dragRef.current = {
-                mode: 'box',
-                corner: corner.key,
-                startRadii: { ...baseRadii },
-                linked,
-                solo,
-              };
-              setActiveKey(corner.key);
-              setDragValue(Math.round(baseRadii[corner.key]));
-              setNearCorners(true);
-            });
-          })}
-      {badgePos ? (
-        <div
-          className="pointer-events-none absolute z-[29] whitespace-nowrap font-semibold tabular-nums text-white"
-          style={{
-            left: badgePos.x,
-            top: badgePos.y,
-            transform: `translate(-50%, calc(-100% - ${12 * inv}px))`,
-            fontSize: 11 * inv,
-            lineHeight: 1.15,
-            paddingInline: 6 * inv,
-            paddingBlock: 2.5 * inv,
-            borderRadius: 4 * inv,
-            background: '#3388ff',
-          }}
-        >
-          {t('editor.imageToolbar.cornerRadius')} {badgeVal}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Hover baseline hairline in SCENE space (same camera layer as shapes).
- * Selected shapes use SelectionChrome box / line stroke instead.
- */
-function ShapeIndicatorOverlay({
-  box,
-  pathD,
-  angle = 0,
-  baseWidth,
-  baseHeight,
-}: {
-  box: SceneBox;
-  pathD: string;
-  angle?: number;
-  baseWidth: number;
-  baseHeight: number;
-}) {
-  const camera = useRcbCamera();
-  const z = Math.max(0.05, camera.zoom || 1);
-  const bw = Math.max(1, baseWidth);
-  const bh = Math.max(1, baseHeight);
-  if (!pathD.trim()) return null;
-  // Stroke in page units = screenPx / zoom
-  const stroke = 1.5 / z;
-
-  return (
-    <svg
-      className="pointer-events-none absolute z-[11] overflow-visible"
-      width={Math.max(1, box.width)}
-      height={Math.max(1, box.height)}
-      viewBox={`0 0 ${bw} ${bh}`}
-      preserveAspectRatio="none"
-      style={{
-        left: box.left,
-        top: box.top,
-        transform: Math.abs(angle) > 0.001 ? `rotate(${angle}deg)` : undefined,
-        transformOrigin: 'center center',
-      }}
-      aria-hidden
-    >
-      <path
-        d={pathD}
-        fill="none"
-        stroke="#3388ff"
-        strokeWidth={stroke}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-/** World-layer rect outline ??page stroke = screenPx / zoom. */
-function WorldHairlineBox({
-  box,
-  color,
-  dashed = false,
-  fill,
-  className,
-  zClass = 'z-20',
-}: {
+type HairlineItem = {
   box: SceneBox;
   color: string;
   dashed?: boolean;
   fill?: string;
-  className?: string;
-  zClass?: string;
+};
+
+function SelectionIndicatorsSvg({
+  hairlines,
+}: {
+  hairlines: HairlineItem[];
 }) {
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
   const stroke = 1.5 / z;
-  const dash = `${4 / z} ${3 / z}`;
-  const w = Math.max(1, box.width);
-  const h = Math.max(1, box.height);
+
+  const bounds = useMemo(() => {
+    const boxes: SceneBox[] = [];
+    for (const h of hairlines) boxes.push(h.box);
+    return unionBoxes(boxes);
+  }, [hairlines]);
+
+  if (!bounds) return null;
+  const left = toDomPrecision(bounds.left);
+  const top = toDomPrecision(bounds.top);
+  const w = toDomPrecision(Math.max(1, bounds.width));
+  const h = toDomPrecision(Math.max(1, bounds.height));
+
   return (
     <svg
-      className={cn(
-        'pointer-events-none absolute overflow-visible',
-        zClass,
-        className
-      )}
+      className="pointer-events-none absolute z-[11] overflow-visible"
       width={w}
       height={h}
-      style={{ left: box.left, top: box.top }}
+      viewBox={`${left} ${top} ${w} ${h}`}
+      style={{
+        left,
+        top,
+        width: w,
+        height: h,
+        overflow: 'visible',
+      }}
       aria-hidden
     >
-      {fill ? <rect x={0} y={0} width={w} height={h} fill={fill} stroke="none" /> : null}
-      <rect
-        x={0}
-        y={0}
-        width={w}
-        height={h}
-        fill="none"
-        stroke={color}
-        strokeWidth={stroke}
-        strokeDasharray={dashed ? dash : undefined}
-      />
+      {hairlines.map((item, i) => (
+        <rect
+          key={`hl-${i}-${item.box.left}-${item.box.top}`}
+          x={item.box.left}
+          y={item.box.top}
+          width={Math.max(1, item.box.width)}
+          height={Math.max(1, item.box.height)}
+          fill={item.fill || 'none'}
+          stroke={item.color}
+          strokeWidth={stroke}
+          strokeDasharray={item.dashed ? `${4 / z} ${3 / z}` : undefined}
+        />
+      ))}
     </svg>
   );
 }
@@ -897,6 +282,34 @@ export function parseFrameSelId(selId: string): string | null {
   return selId.startsWith(FRAME_SEL_PREFIX) ? selId.slice(FRAME_SEL_PREFIX.length) : null;
 }
 
+/** Single node or single frame — inspect / spacing primary target. */
+function resolveInspectPrimaryId(
+  selectedNodeIds: string[],
+  selectedFrameIds: string[]
+): string | null {
+  if (selectedNodeIds.length === 1 && selectedFrameIds.length === 0) {
+    return selectedNodeIds[0] ?? null;
+  }
+  if (selectedFrameIds.length === 1 && selectedNodeIds.length === 0) {
+    return frameSelId(selectedFrameIds[0]);
+  }
+  return null;
+}
+
+function isHostInjectedSelection(
+  singleNode: boolean,
+  singleId: string | null,
+  shapeOutlines: ShapeOutlineItem[],
+  opts?: { inspectDev?: boolean; node?: any }
+): boolean {
+  if (!singleNode || !singleId) return false;
+  // Host already paints the path silhouette (with or without handles / aux).
+  if (shapeOutlines.some((o) => o.id === singleId)) return true;
+  // Inspect: never fall back to world AABB SelectionChrome for path ink.
+  if (opts?.inspectDev && nodeUsesPathChrome(opts.node)) return true;
+  return false;
+}
+
 /** Near-full-bleed artboard plate ??must not block marquee (looks empty but hits as a shape). */
 function frameForFullBleedPlate(doc: any, nodeId: string): string | null {
   const node = doc?.deltaSetLike?.[nodeId];
@@ -941,13 +354,17 @@ function sceneBoxFromMountedNode(
   toScene: (clientX: number, clientY: number) => { x: number; y: number }
 ): SceneBox | null {
   if (typeof document === 'undefined') return null;
-  const safe =
-    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-      ? CSS.escape(nodeId)
-      : nodeId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const el = document.querySelector(
-    `[data-scene-node-id="${safe}"]`
-  ) as SVGGraphicsElement | null;
+  const shared = getSharedNodeEls()?.get(nodeId) as SVGGraphicsElement | undefined;
+  let el: SVGGraphicsElement | null = shared || null;
+  if (!el) {
+    const safe =
+      typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(nodeId)
+        : nodeId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    el = document.querySelector(
+      `[data-scene-node-id="${safe}"]`
+    ) as SVGGraphicsElement | null;
+  }
   if (!el) return null;
   let r: DOMRect;
   try {
@@ -1114,10 +531,11 @@ type SelectionFeatureProps = {
 };
 
 /**
- * `dragDistanceSquared` default ??screen px? before a
- * pointing_canvas gesture becomes brushing (marquee).
+ * `dragDistanceSquared` — screen px² before a pointing_canvas gesture becomes
+ * brushing (marquee). Keep ≥~8–10px so a soft click / OS jitter never flashes
+ * a blue marquee or steals artboard soft-select.
  */
-const DRAG_DISTANCE_SQUARED = 16;
+const DRAG_DISTANCE_SQUARED = 100;
 
 type DragState = {
   /** pointing_canvas: empty press; marquee only after DRAG_DISTANCE_SQUARED. */
@@ -1133,6 +551,12 @@ type DragState = {
   aspectRatio?: number;
   center?: { x: number; y: number };
   pointerAngle0?: number;
+  /**
+   * Open pen/pencil/path: drag endpoint by uniform scale+rotate about the
+   * opposite path end (local coords at gesture start).
+   */
+  pathEpLocal0?: [number, number];
+  pathEpLocal1?: [number, number];
   /**
    * Composer canvas-pick gesture: attach already ran on pointerdown.
    * Skip pointerup onSelect so one-shot clearPick does not steal node selection.
@@ -1466,14 +890,76 @@ function strokeEndpointBox(
 ): { next: SceneBox; angle: number; strokeId: string } | null {
   const strokeId = drag.origins.length === 1 ? drag.origins[0].nodeId : '';
   if (!strokeId || !drag.handle) return null;
-  if (!isStrokeShapeType(readNodeShapeType(document, strokeId))) return null;
   if (drag.handle !== 'e' && drag.handle !== 'w') return null;
+  const shapeType = readNodeShapeType(document, strokeId);
+
+  // Open pen/pencil/path: scale+rotate about the opposite path endpoint so the
+  // grabbed tip follows the pointer (AABB edge resize would miss the tip).
+  if (
+    drag.pathEpLocal0 &&
+    drag.pathEpLocal1 &&
+    (shapeType === 'pen' || shapeType === 'pencil' || shapeType === 'path')
+  ) {
+    const placed = resizeOpenPathByEndpoint(
+      drag.union,
+      drag.angle0 || 0,
+      drag.pathEpLocal0,
+      drag.pathEpLocal1,
+      drag.handle,
+      sceneX,
+      sceneY
+    );
+    if (!placed) return null;
+    return { strokeId, angle: placed.angle, next: placed.box };
+  }
+
+  if (!isStrokeShapeType(shapeType)) return null;
   const placed = resizeStrokeByEndpoint(drag.union, drag.angle0 || 0, drag.handle, sceneX, sceneY);
   return {
     strokeId,
     angle: placed.angle,
     next: { left: placed.x, top: placed.y, width: placed.width, height: placed.height },
   };
+}
+
+/**
+ * Uniform scale + rotate about the fixed path end so the free end tracks the pointer.
+ * Path local coords scale with the box (same as live geometry preview).
+ */
+function resizeOpenPathByEndpoint(
+  box: SceneBox,
+  angleDeg: number,
+  ep0: [number, number],
+  ep1: [number, number],
+  handle: 'e' | 'w',
+  pointerX: number,
+  pointerY: number
+): { box: SceneBox; angle: number } | null {
+  const freeLocal = handle === 'w' ? ep0 : ep1;
+  const fixedLocal = handle === 'w' ? ep1 : ep0;
+  const fixedW = localPointToWorld(fixedLocal[0], fixedLocal[1], box, angleDeg);
+  const free0W = localPointToWorld(freeLocal[0], freeLocal[1], box, angleDeg);
+  const len0 = Math.hypot(free0W.x - fixedW.x, free0W.y - fixedW.y);
+  if (!(len0 > 1e-4)) return null;
+  const len1 = Math.hypot(pointerX - fixedW.x, pointerY - fixedW.y);
+  const scale = Math.max(0.05, len1 / len0);
+  const a0 = Math.atan2(free0W.y - fixedW.y, free0W.x - fixedW.x);
+  const a1 = Math.atan2(pointerY - fixedW.y, pointerX - fixedW.x);
+  const newAngle = angleDeg + ((a1 - a0) * 180) / Math.PI;
+  const newW = Math.max(1, box.width * scale);
+  const newH = Math.max(1, box.height * scale);
+  // Path scales from local origin with the box — fixed/free locals scale too.
+  const fixedLocal2: [number, number] = [fixedLocal[0] * scale, fixedLocal[1] * scale];
+  const next = boxFromLocalAnchor(
+    fixedLocal2[0],
+    fixedLocal2[1],
+    fixedW.x,
+    fixedW.y,
+    newW,
+    newH,
+    newAngle
+  );
+  return { box: next, angle: Number(newAngle.toFixed(2)) };
 }
 
 function readNodeAngle(document: any, nodeId: string) {
@@ -1706,6 +1192,13 @@ function SelectionFeature({
 
   const idsKey = selectedNodeIds.join('|');
   const frameIdsKey = selectedFrameIds.join('|');
+  /** Bust chrome memo when stroke band attrs change (align / width). */
+  const strokeChromeKey = selectedNodeIds
+    .map((id) => {
+      const a = document?.deltaSetLike?.[id]?.attrs || {};
+      return `${a.strokeAlign ?? a['stroke-align']}:${a['border-width'] ?? a.strokeWidth}`;
+    })
+    .join('|');
   const selectionCount = selectedNodeIds.length + selectedFrameIds.length;
   const single = selectionCount === 1;
   const singleNode = selectedNodeIds.length === 1 && selectedFrameIds.length === 0;
@@ -1752,7 +1245,7 @@ function SelectionFeature({
       })
       .filter(Boolean) as Array<{ nodeId: string; box: SceneBox }>;
     return [...nodeOrigins, ...frameOrigins];
-  }, [document, idsKey, frameIdsKey, getNodeBox]);
+  }, [document, idsKey, frameIdsKey, getNodeBox, strokeChromeKey]);
 
   /** Same-render selection bounds — avoids one-frame chrome flash when switching. */
   const selectionUnion = useMemo(
@@ -1781,12 +1274,7 @@ function SelectionFeature({
 
   // Inspect: keep prior selection as pair target when clicking another element.
   useEffect(() => {
-    const next =
-      selectedNodeIds.length === 1 && selectedFrameIds.length === 0
-        ? selectedNodeIds[0]
-        : selectedFrameIds.length === 1 && selectedNodeIds.length === 0
-          ? frameSelId(selectedFrameIds[0])
-          : null;
+    const next = resolveInspectPrimaryId(selectedNodeIds, selectedFrameIds);
     const prev = prevInspectSelRef.current;
     if (next && prev && prev !== next) {
       setInspectPairNodeId(prev);
@@ -1985,16 +1473,38 @@ function SelectionFeature({
         e.preventDefault();
         e.stopPropagation();
         const handle = (resizeEl.getAttribute('data-resize') || 'se') as ResizeHandle;
+        const singleId = liveOriginsNow.length === 1 ? liveOriginsNow[0].nodeId : '';
+        const singleNode = singleId ? document?.deltaSetLike?.[singleId] : null;
+        const shapeType = singleNode ? String(singleNode.attrs?.shapeType || '') : '';
+        const angle0 =
+          liveOriginsNow.length === 1 && !parseFrameSelId(liveOriginsNow[0].nodeId)
+            ? liveAngleNow || readNodeAngle(document, liveOriginsNow[0].nodeId)
+            : 0;
+        let pathEpLocal0: [number, number] | undefined;
+        let pathEpLocal1: [number, number] | undefined;
+        // Open stroke tips: record path-local ends so resize tracks the grabbed tip.
+        if (
+          singleId &&
+          (handle === 'e' || handle === 'w') &&
+          nodeUsesOpenStrokeEndpoints(singleNode) &&
+          shapeType !== 'line' &&
+          shapeType !== 'arrow'
+        ) {
+          const box = liveOriginsNow[0].box;
+          const d = String(singleNode?.attrs?.path || singleNode?.attrs?.d || '');
+          const [a, b] = pathLocalEndpoints(d, box.width, box.height, 'path');
+          pathEpLocal0 = a;
+          pathEpLocal1 = b;
+        }
         dragRef.current = seed('resize', e, p, {
           origins: liveOriginsNow.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })),
           union: { ...liveUnionNow },
           handle,
           // Multi-select union is axis-aligned; single keeps node angle for local resize.
-          angle0:
-            liveOriginsNow.length === 1 && !parseFrameSelId(liveOriginsNow[0].nodeId)
-              ? liveAngleNow || readNodeAngle(document, liveOriginsNow[0].nodeId)
-              : 0,
+          angle0,
           aspectRatio: liveUnionNow.width / Math.max(1, liveUnionNow.height),
+          pathEpLocal0,
+          pathEpLocal1,
         });
         setTransformingNotify(true);
         capture(e.pointerId);
@@ -2204,20 +1714,23 @@ function SelectionFeature({
       if (drag.mode === 'pointing_canvas') {
         if (readOnly || clientDistSq < DRAG_DISTANCE_SQUARED) return;
         drag.mode = 'marquee';
-        const p0 = sceneFromClientGesture(drag, zoom, e.clientX, e.clientY);
+        // Absolute toScene (not client-delta): matches cursor under 800% + browser zoom.
+        const p0 = toScene(e.clientX, e.clientY);
         setMarquee(normalizeBox(drag.sceneX0, drag.sceneY0, p0.x, p0.y));
         marqueeLog('enter marquee', { clientDistSq });
         return;
       }
       // Client-delta keeps the selection under the pointer when the stage rect
       // shifts (mobile chrome / small-viewport reflow). Rotate still needs an
-      // absolute scene point for atan2 around the pivot.
+      // absolute scene point for atan2 around the pivot. Marquee also uses abs.
       const gesture = sceneFromClientGesture(drag, zoom, e.clientX, e.clientY);
       const dx = gesture.dx;
       const dy = gesture.dy;
       const abs = toScene(e.clientX, e.clientY);
       const p =
-        drag.mode === 'rotate' ? abs : { x: gesture.x, y: gesture.y };
+        drag.mode === 'rotate' || drag.mode === 'marquee'
+          ? abs
+          : { x: gesture.x, y: gesture.y };
 
       if (drag.mode === 'marquee') {
         setMarquee(normalizeBox(drag.sceneX0, drag.sceneY0, p.x, p.y));
@@ -2417,10 +1930,13 @@ function SelectionFeature({
       const gesture = sceneFromClientGesture(drag, zoom, clientX, clientY);
       const dx = gesture.dx;
       const dy = gesture.dy;
+      const absEnd = toScene(clientX, clientY);
       const p =
-        drag.mode === 'move' || drag.mode === 'resize' || drag.mode === 'marquee'
-          ? { x: gesture.x, y: gesture.y }
-          : toScene(clientX, clientY);
+        drag.mode === 'marquee' || drag.mode === 'rotate'
+          ? absEnd
+          : drag.mode === 'move' || drag.mode === 'resize'
+            ? { x: gesture.x, y: gesture.y }
+            : absEnd;
       const clientDistSq =
         (clientX - drag.startX) ** 2 + (clientY - drag.startY) ** 2;
 
@@ -2443,9 +1959,19 @@ function SelectionFeature({
         const box = normalizeBox(drag.sceneX0, drag.sceneY0, p.x, p.y);
         setMarquee(null);
         lastTextClickRef.current = null;
-        // Still under threshold somehow ??treat as click, not brush.
+        // Still under threshold somehow — treat as soft click, not brush.
         if (clientDistSq < DRAG_DISTANCE_SQUARED) {
           marqueeLog('marquee aborted (under threshold)');
+          const frameId = hitTestFrame?.(absEnd.x, absEnd.y);
+          if (frameId) onSelectFrame?.(frameId);
+          endTransform();
+          return;
+        }
+        // Tiny brush from jitter past threshold — still a click, not a marquee.
+        if (box.width < 8 && box.height < 8) {
+          marqueeLog('marquee aborted (tiny box)');
+          const frameId = hitTestFrame?.(drag.sceneX0, drag.sceneY0);
+          if (frameId) onSelectFrame?.(frameId);
           endTransform();
           return;
         }
@@ -2886,52 +2412,206 @@ function SelectionFeature({
     if (mode === 'resize' && isStrokeShapeType(readNodeShapeType(document, id))) {
       return liveAngle;
     }
+    if (
+      mode === 'resize' &&
+      dragRef.current?.pathEpLocal0 &&
+      dragRef.current?.pathEpLocal1
+    ) {
+      return liveAngle;
+    }
     // Move / box-resize: always use stored angle ??avoids click flash when liveAngle lags at 0.
     return fromDoc;
   })();
 
-  /**
-   * Hover baseline only. Selected shapes use SelectionChrome box stroke ??   * drawing both stacks a second blue path on top of white knobs (looks hollow).
-   */
-  const shapeIndicators = (() => {
-    if (!enabled || suppressChrome || transforming) return [];
-    const id =
-      hoverNodeId && !selectedNodeIds.includes(hoverNodeId) ? hoverNodeId : null;
-    if (!id) return [];
-    const node = document?.deltaSetLike?.[id];
-    if (!node) return [];
-    const box = getNodeBox(id);
-    if (!box) return [];
-    const rawPath = String(node.attrs?.path || node.attrs?.d || '');
-    // Outlined text: don't paint a second full multi-glyph path on hover.
-    const pathD =
-      rawPath.length >= HEAVY_PATH_D_CHARS
-        ? `M 0 0 H ${Math.max(1, box.width)} V ${Math.max(1, box.height)} H 0 Z`
-        : geometryIndicatorPathD(node, {
-            width: box.width,
-            height: box.height,
-          });
-    if (!pathD) return [];
-    return [
-      {
+  /** Single node or single frame — both get size badge + hover spacing. */
+  const inspectPrimaryId = resolveInspectPrimaryId(selectedNodeIds, selectedFrameIds);
+
+  /** Host path silhouette / handles / transform spacing aux for vector nodes. */
+  const { shapeOutlines, guideBadgeMeasures } = (() => {
+    if (!enabled || suppressChrome) {
+      return {
+        shapeOutlines: [] as ShapeOutlineItem[],
+        guideBadgeMeasures: null as SpacingMeasure[] | null,
+      };
+    }
+    const ids: string[] = [];
+    const handleIds = new Set<string>();
+    /** Geom box override while dragging (host live origin). */
+    const hostGuideBoxById = new Map<string, SceneBox>();
+    /** Multi (nodes and/or frames): host silhouettes only — union handles live on SelectionChrome. */
+    const hostHandlesOk =
+      !readOnly &&
+      selectedNodeIds.length === 1 &&
+      selectedFrameIds.length === 0;
+
+    const pushId = (id: string | null | undefined) => {
+      if (!id || parseFrameSelId(id) || ids.includes(id)) return;
+      ids.push(id);
+    };
+
+    const inspectPairId = (() => {
+      if (!inspectDev || transforming) return null;
+      if (
+        hoverNodeId &&
+        hoverNodeId !== inspectPrimaryId &&
+        !selectedNodeIds.includes(hoverNodeId) &&
+        !parseFrameSelId(hoverNodeId)
+      ) {
+        return hoverNodeId;
+      }
+      if (
+        inspectPairNodeId &&
+        inspectPairNodeId !== inspectPrimaryId &&
+        !selectedNodeIds.includes(inspectPairNodeId) &&
+        !parseFrameSelId(inspectPairNodeId)
+      ) {
+        return inspectPairNodeId;
+      }
+      return null;
+    })();
+
+    // Hover path silhouette — edit + inspect (same algorithm).
+    if (!transforming && hoverNodeId && !selectedNodeIds.includes(hoverNodeId)) {
+      pushId(hoverNodeId);
+    }
+
+    // Inspect click-pair silhouette when not hovering.
+    if (inspectDev && !transforming && inspectPairId) {
+      pushId(inspectPairId);
+    }
+
+    // Inspect select: path silhouette only (spacing/size badges on world overlay — top z).
+    if (
+      inspectDev &&
+      !transforming &&
+      inspectPrimaryId &&
+      !parseFrameSelId(inspectPrimaryId) &&
+      nodeUsesPathChrome(document?.deltaSetLike?.[inspectPrimaryId])
+    ) {
+      pushId(inspectPrimaryId);
+    }
+
+    // Edit idle: selected path chrome + handles (single).
+    if (!inspectDev && !transforming) {
+      for (const sid of selectedNodeIds) {
+        const sn = document?.deltaSetLike?.[sid];
+        if (!nodeUsesPathChrome(sn)) continue;
+        pushId(sid);
+        // Single only — multi uses one world SelectionChrome (fig.2), not per-host knobs.
+        if (hostHandlesOk) handleIds.add(sid);
+      }
+    }
+
+    // Transform: keep mover path chrome mounted (guides paint on chrome layer separately).
+    if (
+      !inspectDev &&
+      transforming &&
+      selectedNodeIds.length === 1 &&
+      selectedFrameIds.length === 0
+    ) {
+      const sid = selectedNodeIds[0];
+      const sn = sid ? document?.deltaSetLike?.[sid] : null;
+      if (sid && nodeUsesPathChrome(sn)) {
+        pushId(sid);
+        const hostGeom = liveShapeGeomBox(sid);
+        const liveChrome = liveOrigins?.find((o) => o.nodeId === sid)?.box;
+        const anchorBox =
+          hostGeom ||
+          (liveChrome ? deflateSelectionBox(liveChrome, sn) : null) ||
+          (() => {
+            const chrome = getNodeBox(sid);
+            return chrome ? deflateSelectionBox(chrome, sn) : null;
+          })();
+        if (anchorBox) hostGuideBoxById.set(sid, anchorBox);
+      }
+    }
+
+    const out: ShapeOutlineItem[] = [];
+    for (const id of ids) {
+      const node = document?.deltaSetLike?.[id];
+      if (!nodeUsesPathChrome(node)) continue;
+      const liveChrome =
+        transforming && liveOrigins
+          ? liveOrigins.find((o) => o.nodeId === id)?.box
+          : null;
+      const chromeBox = liveChrome || getNodeBox(id);
+      if (!chromeBox) continue;
+      const geomBox =
+        hostGuideBoxById.get(id) ||
+        (liveChrome
+          ? deflateSelectionBox(liveChrome, node)
+          : liveShapeGeomBox(id) || deflateSelectionBox(chromeBox, node));
+      const gw = Math.max(1, geomBox.width);
+      const gh = Math.max(1, geomBox.height);
+      const rawPath = String(node.attrs?.path || node.attrs?.d || '');
+      const shapeType = String(node.attrs?.shapeType || '');
+      // Path / pen / pencil: always host-inject the real painted path — never AABB stand-in.
+      const vectorStroke =
+        shapeType === 'pencil' ||
+        shapeType === 'pen' ||
+        shapeType === 'path' ||
+        shapeType === 'line' ||
+        shapeType === 'arrow' ||
+        String(node.key || '') === 'path' ||
+        nodeUsesOpenStrokeEndpoints(node);
+      const pathD = vectorStroke
+        ? rawPath.trim().length >= 2
+          ? rawPath
+          : geometryIndicatorPathD(node, { width: gw, height: gh })
+        : rawPath.length >= HEAVY_PATH_D_CHARS
+          ? `M 0 0 H ${gw} V ${gh} H 0 Z`
+          : geometryIndicatorPathD(node, { width: gw, height: gh });
+      if (!pathD) continue;
+      rememberNodePath2D(id, pathD);
+      const angle =
+        id === singleId ? chromeAngle : readNodeAngle(document, id);
+      const lineMode = nodeUsesOpenStrokeEndpoints(node);
+      const shaftEndpoints = shapeType === 'line' || shapeType === 'arrow';
+      const withHandles = handleIds.has(id);
+      out.push({
         id,
         pathD,
-        box,
-        angle: readNodeAngle(document, id),
-        baseWidth: Math.max(1, box.width),
-        baseHeight: Math.max(1, box.height),
-        selected: false,
-      },
-    ];
+        box: geomBox,
+        angle,
+        color: '#3388ff',
+        withHandles,
+        // Selected with handles: control box only (no blue path silhouette).
+        // Hover / inspect without handles still show the path line.
+        showPath: !withHandles && !transforming,
+        lineMode,
+        shaftEndpoints,
+        showRotate: withHandles && !lineMode && !selectedIsImageGen && !selectedIsVideoGen,
+      });
+    }
+    return {
+      shapeOutlines: out,
+      guideBadgeMeasures: moveMargins?.length ? moveMargins : null,
+    };
   })();
 
-  /** Single node or single frame — both get size badge + hover spacing. */
-  const inspectPrimaryId =
-    selectedNodeIds.length === 1 && selectedFrameIds.length === 0
-      ? selectedNodeIds[0]
-      : selectedFrameIds.length === 1 && selectedNodeIds.length === 0
-        ? frameSelId(selectedFrameIds[0])
-        : null;
+  const hostInjectedSelection = isHostInjectedSelection(
+    singleNode,
+    singleId,
+    shapeOutlines,
+    { inspectDev, node: singleNodeData }
+  );
+
+  /** Scene pad beyond chrome to outer stroke ink (center → sw/2 outside the box). */
+  const toolbarEdgePadScene = (() => {
+    if (!singleNodeData) return 0;
+    const visual = strokeVisualOutset(singleNodeData);
+    const chrome = Math.max(0, strokeChromeOutset(singleNodeData));
+    return Math.max(0, visual - chrome);
+  })();
+
+  /** SelectionChrome edge knobs: generators none; video/text L/R only; else all. */
+  function selectionEdgeHandles(): 'all' | 'horizontal' | 'none' {
+    if (selectedIsImageGen || selectedIsVideoGen) return 'none';
+    // Video scrubber on bottom — keep L/R only so S handle does not steal events.
+    if (selectedIsVideo) return 'horizontal';
+    if (!lineChrome && singleNodeData?.key === 'text') return 'horizontal';
+    return 'all';
+  }
 
   const getInspectBox = (id: string | null): SceneBox | null => {
     if (!id) return null;
@@ -2967,11 +2647,18 @@ function SelectionFeature({
     logEdgeSamples(`selection(${selectedNodeIds.length})`, samples, dpr, camera);
   }, [enabled, selectedNodeIds, camera.x, camera.y, camera.zoom, getNodeBox, camera]);
 
-  if (!enabled) return null;
-
   // Idle selection bounds update in the same paint as Redux; liveUnion lags one
   // effect tick and used to flash empty chrome when switching frames in preview.
-  const chromeUnion = transforming ? liveUnion : selectionUnion;
+  const chromeUnion = (() => {
+    const base = transforming ? liveUnion : selectionUnion;
+    if (!base || transforming) return base;
+    // Single node: lock chrome AABB to the same live host geom path chrome uses.
+    if (selectedNodeIds.length === 1 && selectedFrameIds.length === 0) {
+      const live = liveShapeGeomBox(selectedNodeIds[0]);
+      if (live) return live;
+    }
+    return base;
+  })();
 
   const selectedBox = (() => {
     if (!inspectPrimaryId) return null;
@@ -2980,16 +2667,16 @@ function SelectionFeature({
   })();
 
   // Hover outline in all modes; pair spacing only in inspect (Dev / share preview).
-  const hoverBox =
-    hoverNodeId && hoverNodeId !== inspectPrimaryId ? getInspectBox(hoverNodeId) : null;
+  const hoverBox = (() => {
+    if (!hoverNodeId || hoverNodeId === inspectPrimaryId) return null;
+    return getInspectBox(hoverNodeId);
+  })();
 
-  const clickPairBox =
-    inspectDev &&
-    !hoverBox &&
-    inspectPairNodeId &&
-    inspectPairNodeId !== inspectPrimaryId
-      ? getInspectBox(inspectPairNodeId)
-      : null;
+  const clickPairBox = (() => {
+    if (!inspectDev || hoverBox) return null;
+    if (!inspectPairNodeId || inspectPairNodeId === inspectPrimaryId) return null;
+    return getInspectBox(inspectPairNodeId);
+  })();
 
   const pairBox = inspectDev ? hoverBox || clickPairBox : null;
 
@@ -3023,87 +2710,55 @@ function SelectionFeature({
   // Frames often sit off-screen; measuring to their edge draws a pink gap across
   // empty dotted canvas and looks like a phantom guide. Frame margins still show
   // while dragging via computeMoveMarginResult(containers).
-  // Skip hidden layers ??same phantom-guide issue when measuring into empty space.
-  const spacingOthers =
-    selectedBox && !pairBox
-      ? (listNodeIds()
-          .filter((id) => {
-            if (inspectPrimaryId && !parseFrameSelId(inspectPrimaryId) && id === inspectPrimaryId) {
-              return false;
-            }
-            if (selectedNodeIds.includes(id)) return false;
-            return !isNodeHidden(document?.deltaSetLike?.[id]);
-          })
-          .map((id) => getNodeBox(id))
-          .filter(Boolean) as SceneBox[])
-      : [];
+  // Skip hidden layers — same phantom-guide issue when measuring into empty space.
+  const spacingOthers = (() => {
+    if (!selectedBox || pairBox) return [] as SceneBox[];
+    const skipPrimary =
+      inspectPrimaryId && !parseFrameSelId(inspectPrimaryId) ? inspectPrimaryId : null;
+    return listNodeIds()
+      .filter((id) => {
+        if (skipPrimary && id === skipPrimary) return false;
+        if (selectedNodeIds.includes(id)) return false;
+        return !isNodeHidden(document?.deltaSetLike?.[id]);
+      })
+      .map((id) => getNodeBox(id))
+      .filter(Boolean) as SceneBox[];
+  })();
 
-  const hoverIsSelectedFrame =
-    Boolean(hoverNodeId) &&
-    (() => {
-      const fid = hoverNodeId ? parseFrameSelId(hoverNodeId) : null;
-      return Boolean(fid && selectedFrameIds.includes(fid));
-    })();
+  // Marquee only — path multi-select uses host silhouettes + world union box (fig.2).
+  // Vector ink uses host path chrome; non-path uses SelectionChrome (handles / box).
+  const indicatorHairlines = useMemo(() => {
+    const list: HairlineItem[] = [];
+    if (marquee) {
+      list.push({
+        box: marquee,
+        color: '#3388ff',
+        fill: 'rgba(51,136,255,0.08)',
+      });
+    }
+    return list;
+  }, [marquee]);
 
-  const hoverOutline =
-    hoverBox &&
-    hoverNodeId &&
-    hoverNodeId !== inspectPrimaryId &&
-    !selectedNodeIds.includes(hoverNodeId) &&
-    !hoverIsSelectedFrame &&
-    !transforming
-      ? hoverBox
-      : null;
+  if (!enabled) return null;
 
-  const clickPairOutline =
-    clickPairBox &&
-    inspectPairNodeId &&
-    inspectPairNodeId !== inspectPrimaryId &&
-    !selectedNodeIds.includes(inspectPairNodeId) &&
-    !transforming
-      ? clickPairBox
-      : null;
+  // Path chrome already covers single vector selection (and inspect path ink).
+  const skipWorldSelectionChrome = hostInjectedSelection;
 
   return (
     <>
-      <AlignGuidesOverlay guides={guides} space="world" />
-
-      {moveHighlights.map((hb, i) => (
-        <WorldHairlineBox
-          key={`mh-${i}-${Math.round(hb.left)}-${Math.round(hb.top)}`}
-          box={hb}
-          color={SPACING_MEASURE_COLOR}
-          zClass="z-[25]"
-        />
-      ))}
+      {/* Align guides on chrome layer (same parent as path control box — no browser-zoom drift). */}
+      <ChromeAlignGuidesSvg guides={guides} />
 
       {moveMargins && liveUnion ? (
         <SpacingInspectOverlay
           box={liveUnion}
           others={[]}
-          measures={moveMargins}
+          measures={guideBadgeMeasures || moveMargins}
           showSizeBadge={false}
           color={SPACING_MEASURE_COLOR}
         />
       ) : null}
 
-      {hoverOutline ? (
-        <WorldHairlineBox
-          box={hoverOutline}
-          color={inspectDev ? SPACING_MEASURE_COLOR : '#3388ff'}
-          zClass="z-[25]"
-        />
-      ) : null}
-
-      {inspectDev && clickPairOutline ? (
-        <WorldHairlineBox
-          box={clickPairOutline}
-          color={SPACING_MEASURE_COLOR}
-          zClass="z-[25]"
-        />
-      ) : null}
-
-      {/* Inspect only: select → W×H; hover another → straight orange gaps. */}
       {inspectDev &&
       selectedBox &&
       inspectPrimaryId &&
@@ -3121,63 +2776,38 @@ function SelectionFeature({
         />
       ) : null}
 
-      {marquee ? (
-        <WorldHairlineBox
-          box={marquee}
-          color="#3388ff"
-          fill="rgba(51,136,255,0.08)"
-          zClass="z-20"
-        />
-      ) : null}
+      <ShapeOutlineSvg outlines={shapeOutlines} />
+      <SelectionIndicatorsSvg hairlines={indicatorHairlines} />
 
-      {liveOrigins && liveOrigins.length > 1 && !transforming
-        ? liveOrigins.map((o) => (
-            <WorldHairlineBox
-              key={o.nodeId}
-              box={o.box}
-              color="rgba(51,136,255,0.55)"
-              dashed
-              zClass="z-[9]"
-            />
-          ))
-        : null}
-
-      {shapeIndicators.map((ind) => (
-        <ShapeIndicatorOverlay
-          key={`ind-${ind.id}`}
-          box={ind.box}
-          pathD={ind.pathD}
-          angle={ind.angle}
-          baseWidth={ind.baseWidth}
-          baseHeight={ind.baseHeight}
-        />
-      ))}
-
-      {/* Prefer chromeUnion (synced) over liveUnion so select switches do not flash. */}
-      {chromeUnion && !suppressChrome && selectionCount > 0 ? (
+      {/* World SelectionChrome only when idle — no control box while moving/resizing.
+          Multi: always the union box + corner handles (fig.2). Single path: host silhouette. */}
+      {chromeUnion &&
+      !suppressChrome &&
+      selectionCount > 0 &&
+      !transforming &&
+      !skipWorldSelectionChrome ? (
         <SelectionChrome
           box={chromeUnion}
           angle={chromeAngle}
-          showHandles={!readOnly && !selectedIsImageGen && !selectedIsVideoGen}
+          showHandles={!inspectDev && !readOnly && !selectedIsImageGen && !selectedIsVideoGen}
           cornerHandlesOnly={!single}
           variant={lineChrome ? 'line' : 'box'}
-          showRotate={!readOnly && !lineChrome && singleNode && !selectedIsImageGen && !selectedIsVideoGen}
-          showLineStroke={lineChrome}
+          showRotate={
+            !inspectDev &&
+            !readOnly &&
+            !lineChrome &&
+            singleNode &&
+            !selectedIsImageGen &&
+            !selectedIsVideoGen
+          }
           showBoxStroke={!lineChrome}
           interactiveBox={selectedFrameIds.length > 0}
-          edgeHandles={
-            selectedIsImageGen || selectedIsVideoGen
-              ? 'none'
-              : // Video scrubber sits on the bottom edge ??keep L/R only so the S handle
-                // does not steal pointer events from the playback bar.
-              selectedIsVideo || (!lineChrome && singleNodeData?.key === 'text')
-                ? 'horizontal'
-                : 'all'
-          }
+          edgeHandles={selectionEdgeHandles()}
         />
       ) : null}
 
-      {!readOnly &&
+      {!inspectDev &&
+      !readOnly &&
       chromeUnion &&
       singleNode &&
       singleId &&
@@ -3202,6 +2832,7 @@ function SelectionFeature({
           document={document}
           nodeId={selectedNodeIds[0]}
           box={chromeUnion}
+          edgePadScene={toolbarEdgePadScene}
           onOpenAgent={onOpenAgent}
         />
       ) : null}

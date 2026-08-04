@@ -4,8 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { HiOutlineCheck, HiOutlineTrash } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
-import { message, DropdownPanel } from '@/components/base';
-import Slider from '@/components/base/slider';
+import { DropdownPanel } from '@/components/base';
 import Tooltip from '@/components/base/tooltip';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import {
@@ -62,7 +61,7 @@ function brushesToDefs(list: StoredBrush[]): PencilBrushDef[] {
   return list.map((b) =>
     makeCustomStampBrush({
       id: b.id,
-      label: b.label || '自定义画笔',
+      label: b.label || 'Brush',
       stampSrc: b.stampSrc,
       sizeFactor: b.sizeFactor,
       spacingFactor: b.spacingFactor,
@@ -111,24 +110,24 @@ function removeCustomPencilBrush(id: string): PencilBrushDef[] {
 function readBrushImageFile(file: File): Promise<{ dataUrl: string; name: string }> {
   return new Promise((resolve, reject) => {
     if (!file || !file.type.startsWith('image/')) {
-      reject(new Error('请选择图片文件（PNG / JPG / SVG / WebP）'));
+      reject(new Error('invalid-type'));
       return;
     }
     if (file.size > MAX_BRUSH_FILE_BYTES) {
-      reject(new Error('图片请小于 1.5MB'));
+      reject(new Error('too-large'));
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = String(reader.result || '');
       if (!dataUrl.startsWith('data:image/')) {
-        reject(new Error('无法读取该图片'));
+        reject(new Error('unreadable'));
         return;
       }
-      const name = file.name.replace(/\.[^.]+$/, '') || '自定义画笔';
+      const name = file.name.replace(/\.[^.]+$/, '') || 'Brush';
       resolve({ dataUrl, name: name.slice(0, 24) });
     };
-    reader.onerror = () => reject(new Error('读取失败'));
+    reader.onerror = () => reject(new Error('read-failed'));
     reader.readAsDataURL(file);
   });
 }
@@ -325,7 +324,6 @@ function PenStrokeToolbar({
     removeCustomPencilBrush(id);
     setBrushRev((n) => n + 1);
     if (brushId === id) dispatch(setPencilBrushId('solid'));
-    message.destructive('已删除自定义画笔');
   };
 
   const onAddCustomBrush = async (file: File | null) => {
@@ -338,9 +336,8 @@ function PenStrokeToolbar({
       setBrushRev((n) => n + 1);
       dispatch(setPencilBrushId(id));
       setBrushOpen(false);
-      message.success('已添加自定义画笔');
-    } catch (err: any) {
-      message.error(err?.message || '添加失败');
+    } catch {
+      /* ignore invalid file */
     }
   };
 
@@ -518,27 +515,24 @@ function PenStrokeToolbar({
 
         {isPencil ? <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden /> : null}
 
-        {/* Width: inline slider (no popover) */}
-        <div
-          className="flex h-8 items-center gap-2 px-1"
+        {/* Width: number input, no upper cap */}
+        <label
+          className="inline-flex h-8 items-center gap-1.5 rounded-[4px] bg-[var(--accent-soft)] px-2"
           onPointerDown={(e) => e.stopPropagation()}
           title={eraseMode ? '橡皮尺寸' : '粗细'}
         >
           <StrokeWeightIcon className="h-4 w-4 shrink-0 text-[var(--ink)]" />
-          <div className="w-[96px] shrink-0">
-            <Slider
-              min={1}
-              max={40}
-              step={1}
-              value={width}
-              onChange={(v) => dispatch(setPenStrokeWidth(v))}
-            />
-          </div>
-          <span className="min-w-[2.75rem] shrink-0 text-right text-[12px] font-medium tabular-nums text-[var(--ink)]">
-            {width}
-            <span className="ml-0.5 text-[11px] font-normal text-[var(--muted)]">Px</span>
-          </span>
-        </div>
+          <input
+            type="number"
+            min={1}
+            value={width}
+            onChange={(e) =>
+              dispatch(setPenStrokeWidth(Math.max(1, Math.round(Number(e.target.value) || 1))))
+            }
+            className="w-12 min-w-0 bg-transparent text-[12px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          />
+          <span className="shrink-0 text-[11px] text-[var(--muted)]">Px</span>
+        </label>
 
         {isPencil ? (
           <>

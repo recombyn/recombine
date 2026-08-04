@@ -1,24 +1,24 @@
 {
-  "rev": 28,
+  "rev": 29,
   "types": [
     {
       "code": "scene",
-      "label": "场景",
+      "label": "Scene",
       "sortOrder": 10
     },
     {
       "code": "prompt_pack_type",
-      "label": "提示词包分类",
+      "label": "Prompt pack type",
       "sortOrder": 15
     },
     {
       "code": "prompt_pack_kind",
-      "label": "提示词包 Key",
+      "label": "Prompt pack key",
       "sortOrder": 20
     },
     {
       "code": "canvas_tool_kind",
-      "label": "画布能力类型",
+      "label": "Canvas capability kind",
       "sortOrder": 30
     }
   ],
@@ -26,97 +26,97 @@
     {
       "dictType": "scene",
       "code": "all",
-      "label": "全部场景",
+      "label": "All scenes",
       "sortOrder": 0
     },
     {
       "dictType": "scene",
       "code": "website",
-      "label": "网站",
+      "label": "Website",
       "sortOrder": 10
     },
     {
       "dictType": "scene",
       "code": "mobile",
-      "label": "移动应用",
+      "label": "Mobile",
       "sortOrder": 20
     },
     {
       "dictType": "scene",
       "code": "image",
-      "label": "图像",
+      "label": "Image",
       "sortOrder": 30
     },
     {
       "dictType": "scene",
       "code": "poster",
-      "label": "海报",
+      "label": "Poster",
       "sortOrder": 40
     },
     {
       "dictType": "scene",
       "code": "drawing",
-      "label": "手绘",
+      "label": "Drawing",
       "sortOrder": 50
     },
     {
       "dictType": "prompt_pack_type",
       "code": "need",
-      "label": "按需包",
+      "label": "On-demand pack",
       "sortOrder": 10
     },
     {
       "dictType": "prompt_pack_type",
       "code": "system",
-      "label": "系统",
+      "label": "System",
       "sortOrder": 20
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "mutate",
-      "label": "改属性",
+      "label": "Mutate",
       "sortOrder": 10
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "create",
-      "label": "新建",
+      "label": "Create",
       "sortOrder": 20
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "delete",
-      "label": "删除",
+      "label": "Delete",
       "sortOrder": 30
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "arrange",
-      "label": "排布",
+      "label": "Arrange",
       "sortOrder": 40
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "frame",
-      "label": "画板",
+      "label": "Frame",
       "sortOrder": 50
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "canvas",
-      "label": "画布",
+      "label": "Canvas",
       "sortOrder": 60
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "image",
-      "label": "图片",
+      "label": "Image",
       "sortOrder": 70
     },
     {
       "dictType": "canvas_tool_kind",
       "code": "export",
-      "label": "导出",
+      "label": "Export",
       "sortOrder": 80
     }
   ],

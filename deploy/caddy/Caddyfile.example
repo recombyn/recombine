@@ -1,0 +1,14 @@
+# Public HTTPS in front of compose web (port 3000).
+# Web nginx already proxies /api/ and /collab/ — Caddy only terminates TLS.
+#
+#   1. docker compose up -d --build
+#   2. Set strong secrets (see docs/self-hosting.md § Public host checklist)
+#   3. COLLAB_PUBLIC_WS_URL=wss://your.domain/collab
+#   4. caddy run --config deploy/caddy/Caddyfile.example
+#
+# Replace your.domain with a DNS name that points at this machine.
+
+your.domain {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+}

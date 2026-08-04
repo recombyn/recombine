@@ -94,20 +94,32 @@ function FrameDrawFeature({
   if (!enabled || !preview) return null;
 
   const showSize = preview.width >= 24 || preview.height >= 24;
+  const inv = 1 / Math.max(0.05, camera.zoom || 1);
+  const labelFont = 10 * inv;
+  const labelGap = 10 * inv;
 
   return (
     <div
-      className="pointer-events-none absolute border border-dashed border-[#3370ff] bg-white"
+      className="pointer-events-none absolute bg-white"
       style={{
         left: preview.x,
         top: preview.y,
         width: preview.width,
         height: preview.height,
-        boxShadow: '0 0 0 1px rgba(51,112,255,0.35)',
+        // Match HtmlArtboardFrame default plate edge (grey), not selection blue.
+        boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent)',
       }}
     >
       {showSize ? (
-        <div className="absolute left-0 top-[-18px] whitespace-nowrap text-[10px] font-medium text-[var(--muted)]">
+        <div
+          className="pointer-events-none absolute left-1/2 whitespace-nowrap font-medium text-[var(--muted)]"
+          style={{
+            top: -labelGap,
+            fontSize: labelFont,
+            lineHeight: 1.2,
+            transform: 'translate(-50%, -100%)',
+          }}
+        >
           {Math.round(preview.width)}
           {' × '}
           {Math.round(preview.height)}

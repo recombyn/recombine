@@ -1,9 +1,12 @@
 import { useEffect, useRef, type CSSProperties, memo } from 'react';
 import { applyFrameContentClip } from '@/components/rcb/frames/frameContentClip';
+import { strokeVisualOutset } from '@/components/rcb/scene/document/sceneEffects';
 import {
   createSvgBoard,
   fitInfiniteSvgToContent,
+  nodeLeftTop,
   nodeToSvgElement,
+  seedInfiniteSvgViewport,
 } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   blendModeToCss,
@@ -17,6 +20,18 @@ import {
   updateShapeHostElement,
 } from '@/components/rcb/shapes/shapeHostRegistry';
 
+function hostJumpLog(event: string, data: Record<string, unknown> = {}) {
+  const row = { event, t: Math.round(performance.now()), ...data };
+  const w = window as Window & {
+    __rcbJumpLog?: unknown[];
+    __rcbJumpDump?: () => string;
+  };
+  if (!Array.isArray(w.__rcbJumpLog)) w.__rcbJumpLog = [];
+  w.__rcbJumpLog.push(row);
+  w.__rcbJumpDump = () => JSON.stringify(w.__rcbJumpLog, null, 2);
+  console.info(JSON.stringify(row));
+}
+
 type Props = {
   nodeId: string;
   document: any;
@@ -28,21 +43,22 @@ type Props = {
   forceHidden?: boolean;
 };
 
-function setHostPaintOpacity(el: SVGElement | null | undefined, hidden: boolean) {
+function setHostPaintOpacity(el: Element | null | undefined, hidden: boolean) {
   if (!el) return;
-  // Layer opacity lives on the HTML wrapper (for mix-blend with siblings).
-  // Hide for text-edit by zeroing SVG paint only.
   const v = hidden ? '0' : '1';
-  el.style.opacity = v;
+  if (el instanceof HTMLElement || el instanceof SVGElement) {
+    el.style.opacity = v;
+  }
   el.setAttribute('opacity', v);
   const anyEl = el as any;
   if (typeof anyEl.opacity === 'function') anyEl.opacity(hidden ? 0 : 1);
 }
 
 /**
- * One native SVG board per scene node under the camera world layer.
+ * One paint host per scene node under the camera world layer.
+ * Committed ink is SVG (vector stays sharp under CSS camera zoom — same as tldraw shapes).
+ * Canvas Path2D caches geometry for hit-test + draw-tool overlays (see sceneShapes).
  * Only mounted while in (or near) the viewport — see RcbShapesLayer culling.
- * Patch / drag-preview stay in SvgCanvas via shapeHostRegistry.
  */
 function RcbShapeHost({
   nodeId,
@@ -77,8 +93,14 @@ function RcbShapeHost({
     node?.attrs?.['fill-opacity'],
     node?.attrs?.['fill-enabled'],
     node?.attrs?.['fill-visible'],
+    node?.attrs?.['fill-gradient'],
+    node?.attrs?.['fill-image-src'],
+    node?.attrs?.['fill-image-fit'],
+    node?.attrs?.['fill-image-rotate'],
+    node?.attrs?.['fill-image-adjust'],
     node?.attrs?.opacity,
     node?.attrs?.blendMode,
+    node?.attrs?.brushStampSrc,
     node?.width,
     node?.height,
     node?.attrs?.markdown ?? node?.attrs?.DATA,
@@ -87,6 +109,8 @@ function RcbShapeHost({
     node?.attrs?.autoSize,
     node?.attrs?.path,
     node?.attrs?.shapeType,
+    node?.attrs?.brushStyle,
+    node?.attrs?.pathPressure,
   ].join('|');
 
   useEffect(() => {
@@ -94,14 +118,34 @@ function RcbShapeHost({
     if (!host || !document) return undefined;
 
     const seq = ++bootRef.current;
-    const { root, layer } = createSvgBoard(host, 1, 1, { infinite: true });
-    const nodeEls = getSharedNodeEls() || new Map();
-
+    const n = document.deltaSetLike?.[nodeId];
     let cancelled = false;
-    registerShapeHost({ nodeId, root, layer, el: null });
+
+    const { root, layer } = createSvgBoard(host, 1, 1, { infinite: true });
+    // Seed CSS box from node AABB before paint — avoids 1×1→fit jump under browser zoom.
+    let seedBox: { left: number; top: number; width: number; height: number } | null = null;
+    if (n) {
+      try {
+        const { left, top } = nodeLeftTop(document, n);
+        const w = Math.max(1, Number(n.width) || 1);
+        const h = Math.max(1, Number(n.height) || 1);
+        const outset = Math.max(0, strokeVisualOutset(n));
+        seedBox = {
+          left: left - outset,
+          top: top - outset,
+          width: w + outset * 2,
+          height: h + outset * 2,
+        };
+        seedInfiniteSvgViewport(root, seedBox);
+        hostJumpLog('host.seed', { nodeId, seed: seedBox, paintToken });
+      } catch {
+        /* keep 1×1 until fit */
+      }
+    }
+    const nodeEls = getSharedNodeEls() || new Map();
+    registerShapeHost({ nodeId, root, layer, el: null, kind: 'svg' });
 
     async function mountShape() {
-      const n = document.deltaSetLike?.[nodeId];
       try {
         const el = await nodeToSvgElement(root, layer, document, n, nodeId);
         if (cancelled || bootRef.current !== seq) {
@@ -113,23 +157,40 @@ function RcbShapeHost({
           return;
         }
         if (el) {
-          // Blend / layer opacity are on the HTML wrapper — clear SVG duplicates
-          // so we don't double-apply opacity and so mix-blend sees sibling hosts.
           el.style.removeProperty('mix-blend-mode');
           el.style.opacity = '1';
           el.setAttribute('opacity', '1');
-          // Hide before first paint if inline editor owns this node (no double glyphs).
           if (forceHiddenRef.current) setHostPaintOpacity(el, true);
           applyFrameContentClip(root, el, document, n);
-          // Prefer the live shared map (board.nodeEls). A throwaway Map here
-          // would make geometry preview miss the node and skip live resize.
           const shared = getSharedNodeEls();
           if (shared) shared.set(nodeId, el);
           else nodeEls.set(nodeId, el);
           updateShapeHostElement(nodeId, el);
         }
         try {
+          const before = {
+            left: root.style.left,
+            top: root.style.top,
+            width: root.style.width,
+            height: root.style.height,
+            viewBox: root.getAttribute('viewBox'),
+          };
           fitInfiniteSvgToContent(root, layer);
+          const after = {
+            left: root.style.left,
+            top: root.style.top,
+            width: root.style.width,
+            height: root.style.height,
+            viewBox: root.getAttribute('viewBox'),
+          };
+          const moved =
+            before.left !== after.left ||
+            before.top !== after.top ||
+            before.width !== after.width ||
+            before.height !== after.height;
+          if (moved) {
+            hostJumpLog('host.fitDelta', { nodeId, seed: seedBox, before, after });
+          }
         } catch {
           /* ignore */
         }
@@ -141,6 +202,7 @@ function RcbShapeHost({
 
     return () => {
       cancelled = true;
+      hostJumpLog('host.unmount', { nodeId, paintToken: String(paintToken).slice(0, 120) });
       unregisterShapeHost(nodeId);
       try {
         root.remove();
@@ -156,7 +218,7 @@ function RcbShapeHost({
   useEffect(() => {
     const el =
       getSharedNodeEls()?.get(nodeId) ||
-      (hostRef.current?.querySelector?.('[data-scene-node-id]') as SVGElement | null);
+      (hostRef.current?.querySelector?.('[data-scene-node-id]') as Element | null);
     setHostPaintOpacity(el, forceHidden);
   }, [forceHidden, nodeId, paintToken, reloadToken]);
 

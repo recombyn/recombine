@@ -25,7 +25,21 @@ type Props = {
 };
 
 /** Inset from the visible image edge to the button outer edge (screen px). */
-const EDGE_PAD = 10;
+const EDGE_PAD_MAX = 10;
+const BTN_MAX = 20;
+/** Hide replace control when the scaled size would be smaller than this (screen px). */
+const BTN_HIDE = 12;
+
+/** Cap at BTN_MAX; shrink with the node; null → hide. */
+function replaceBtnScale(stageW: number, stageH: number): { scale: number; pad: number } | null {
+  const minSide = Math.min(stageW, stageH);
+  const btn = Math.min(BTN_MAX, minSide * 0.28);
+  if (btn < BTN_HIDE) return null;
+  return {
+    scale: btn / BTN_MAX,
+    pad: Math.min(EDGE_PAD_MAX, Math.max(2, btn * 0.45)),
+  };
+}
 
 /**
  * Replace control for selected image nodes — top-right corner, 10px inset.
@@ -50,18 +64,22 @@ function ImageReplaceCornerButton({
     width: Math.abs(br.x - tl.x),
     height: Math.abs(br.y - tl.y),
   };
-  const BTN = 20;
+  const sized = replaceBtnScale(stageBox.width, stageBox.height);
+  // Keep on screen while uploading even if the node is tiny.
+  if (!sized && !loading) return null;
+  const scale = sized?.scale ?? BTN_HIDE / BTN_MAX;
+  const pad = sized?.pad ?? 2;
   const { x, y } =
     align === 'top-right'
       ? {
-          x: Math.max(0, stageBox.width - EDGE_PAD - BTN),
-          y: EDGE_PAD,
+          x: Math.max(0, stageBox.width - pad - BTN_MAX),
+          y: pad,
         }
       : rcbAlignInBox(
           { left: 0, top: 0, width: stageBox.width, height: stageBox.height },
-          { width: BTN, height: BTN },
+          { width: BTN_MAX, height: BTN_MAX },
           align,
-          EDGE_PAD
+          pad
         );
   const visible = loading || imageHovered || btnHovered;
 
@@ -79,6 +97,10 @@ function ImageReplaceCornerButton({
     position: 'absolute',
     left: x,
     top: y,
+    width: BTN_MAX,
+    height: BTN_MAX,
+    transform: scale < 0.999 ? `scale(${scale})` : undefined,
+    transformOrigin: align === 'top-right' ? 'top right' : 'top left',
   };
 
   return (

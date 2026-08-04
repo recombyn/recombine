@@ -3,9 +3,9 @@
     {
       "op_key": "update_node",
       "kind": "mutate",
-      "label": "更新节点",
+      "label": "Update node",
       "sort_order": 10,
-      "model_hint": "Patch an existing node by nodeId|id (keeps z-order). Geometry: x,y,width,height. Morph shape: shapeType|type=rect|ellipse|circle|triangle|polygon|star|line|arrow|… (rect→circle = update_node shapeType=circle on same id — NEVER delete+create_shape). Style: fill,stroke,opacity,cornerRadius,rotation,blendMode,name, flipX/flipY, text styles…. Visibility/edit: hidden, locked (boolean).",
+      "model_hint": "Patch an existing node by nodeId|id (keeps z-order). Geometry: x,y,width,height. Morph shape: shapeType|type=rect|ellipse|circle|triangle|polygon|star|line|arrow|… (rect→circle = update_node shapeType=circle on same id — NEVER delete+create_shape). Style: fill,stroke,borderWidth,strokeAlign=center|inside|outside (default center; selection chrome sits on mid of stroke band), strokeStyle, strokeLinecap, strokeLinejoin, strokeOpacity, opacity,cornerRadius,rotation,blendMode,name, flipX/flipY, text styles…. Visibility/edit: hidden, locked (boolean).",
       "args_schema": {
         "nodeId": "string",
         "id": "string?",
@@ -18,6 +18,12 @@
         "sides": "number?",
         "fill": "string?",
         "stroke": "string?",
+        "borderWidth": "number?",
+        "strokeAlign": "center|inside|outside?",
+        "strokeStyle": "solid|dashed|dotted?",
+        "strokeLinecap": "butt|round|square?",
+        "strokeLinejoin": "miter|round|bevel?",
+        "strokeOpacity": "number 0-100?",
         "opacity": "number?",
         "text": "string?",
         "cornerRadius": "number?",
@@ -33,9 +39,9 @@
     {
       "op_key": "create_shape",
       "kind": "create",
-      "label": "新建形状",
+      "label": "Create shape",
       "sort_order": 20,
-      "model_hint": "Add a shape. Args: shapeType|type = rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil (+ path for pen/pencil/path; sides for polygon/star), x,y,width,height, fill, stroke, borderWidth. Pen=pen+path; 画笔=pencil+path (stroke-only; brushStyle?; pathPressure?). Icons: create_svg / create_icon.",
+      "model_hint": "Add a shape. Args: shapeType|type = rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil (+ path for pen/pencil/path; sides for polygon/star), x,y,width,height, fill, stroke, borderWidth, strokeAlign=center|inside|outside (default center — ink + selection indicator sit on stroke mid-band; outside/inside shift the band). Optional: strokeStyle, strokeLinecap, strokeLinejoin, strokeOpacity. Pen=pen+path; brush=pencil+path (stroke-only; brushStyle?; pathPressure?). Line/arrow are open center strokes (full arrow path includes head). Icons: create_svg / create_icon.",
       "args_schema": {
         "shapeType": "rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil",
         "x": "number",
@@ -50,13 +56,18 @@
         "fill": "string?",
         "stroke": "string?",
         "borderWidth": "number?",
+        "strokeAlign": "center|inside|outside?",
+        "strokeStyle": "solid|dashed|dotted?",
+        "strokeLinecap": "butt|round|square?",
+        "strokeLinejoin": "miter|round|bevel?",
+        "strokeOpacity": "number 0-100?",
         "name": "string?"
       }
     },
     {
       "op_key": "create_text",
       "kind": "create",
-      "label": "新建文字",
+      "label": "Create text",
       "sort_order": 30,
       "model_hint": "Add a text node. Args: text, x, y, width?, fontSize?, fill?, fontWeight?",
       "args_schema": {
@@ -71,7 +82,7 @@
     {
       "op_key": "create_image",
       "kind": "create",
-      "label": "新建图片",
+      "label": "Create image",
       "sort_order": 40,
       "model_hint": "Add an image node. Args: src|url or attachmentIndex (user attach), x,y,width,height. Or genPrompt for AI image hydrate. Optional letteringText=visible text in the image (helps later replaceText).",
       "args_schema": {
@@ -88,7 +99,7 @@
     {
       "op_key": "create_svg",
       "kind": "create",
-      "label": "新建SVG",
+      "label": "Create SVG",
       "sort_order": 50,
       "model_hint": "Add SVG icon/illustration. Args: svg (required), x,y,width,height, fill?. svg = full <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">…</svg> OR fragment (<path d=\"…\"/> / <circle…/>). path d: use spaced commands Mm Ll Hh Vv Cc Ss Qq Tt Aa Zz + numbers; never glue arc params (bad: a22001…). Backend rejects invalid SVG and retries.",
       "args_schema": {
@@ -103,7 +114,7 @@
     {
       "op_key": "create_icon",
       "kind": "create",
-      "label": "新建图标",
+      "label": "Create icon",
       "sort_order": 55,
       "model_hint": "Same as create_svg for icons. Prefer viewBox 0 0 24 24; valid path d only.",
       "args_schema": {
@@ -118,7 +129,7 @@
     {
       "op_key": "create_frame",
       "kind": "frame",
-      "label": "新建画板",
+      "label": "Create frame",
       "sort_order": 60,
       "model_hint": "Create a frame/artboard. Args: x,y,width,height, name?",
       "args_schema": {
@@ -132,7 +143,7 @@
     {
       "op_key": "delete_nodes",
       "kind": "delete",
-      "label": "删除节点",
+      "label": "Delete nodes",
       "sort_order": 70,
       "model_hint": "Remove nodes by id. Args: nodeIds (string[]). Only when user asked to delete.",
       "args_schema": {
@@ -142,7 +153,7 @@
     {
       "op_key": "update_frame",
       "kind": "frame",
-      "label": "更新画板",
+      "label": "Update frame",
       "sort_order": 80,
       "model_hint": "Update frame size/name/background/lock. Args: frameId|id (must match FOCUS_FRAME_ID when set), width?, height?, name?, backgroundColor?, locked? (boolean — prevent moving/resizing the artboard). When FOCUS_FRAME_ID is present, always use that id — never retarget by name.",
       "args_schema": {
@@ -157,7 +168,7 @@
     {
       "op_key": "delete_frame",
       "kind": "frame",
-      "label": "删除画板",
+      "label": "Delete frame",
       "sort_order": 90,
       "model_hint": "Delete a frame. Args: frameId|id from SCENE_FRAMES. Destructive — first turn must ask confirmation (reply+choices), emit this op only after user confirms. Never put ids in reply.",
       "args_schema": {
@@ -167,7 +178,7 @@
     {
       "op_key": "align_nodes",
       "kind": "arrange",
-      "label": "对齐节点",
+      "label": "Align nodes",
       "sort_order": 100,
       "model_hint": "Align 2+ nodes. Args: nodeIds, mode=left|centerX|right|top|middle|bottom (FE reads mode; centerX not center).",
       "args_schema": {
@@ -178,7 +189,7 @@
     {
       "op_key": "distribute_nodes",
       "kind": "arrange",
-      "label": "分布节点",
+      "label": "Distribute nodes",
       "sort_order": 110,
       "model_hint": "Distribute 3+ nodes. Args: nodeIds, axis=h|v (h=horizontal, v=vertical)",
       "args_schema": {
@@ -189,7 +200,7 @@
     {
       "op_key": "reorder_nodes",
       "kind": "arrange",
-      "label": "调整层级",
+      "label": "Reorder z-index",
       "sort_order": 120,
       "model_hint": "Z-order. Args: nodeIds, action=front|back|forward|backward",
       "args_schema": {
@@ -200,7 +211,7 @@
     {
       "op_key": "group_nodes",
       "kind": "arrange",
-      "label": "编组",
+      "label": "Group",
       "sort_order": 130,
       "model_hint": "Group nodes. Args: nodeIds",
       "args_schema": {
@@ -210,7 +221,7 @@
     {
       "op_key": "ungroup_nodes",
       "kind": "arrange",
-      "label": "取消编组",
+      "label": "Ungroup",
       "sort_order": 140,
       "model_hint": "Ungroup. Args: nodeIds (group ids)",
       "args_schema": {
@@ -220,7 +231,7 @@
     {
       "op_key": "duplicate_nodes",
       "kind": "arrange",
-      "label": "复制节点",
+      "label": "Duplicate nodes",
       "sort_order": 150,
       "model_hint": "Duplicate nodes. Args: nodeIds, offsetX?, offsetY?",
       "args_schema": {
@@ -232,7 +243,7 @@
     {
       "op_key": "flip_nodes",
       "kind": "arrange",
-      "label": "翻转节点",
+      "label": "Flip nodes",
       "sort_order": 160,
       "model_hint": "Flip nodes. Args: nodeIds, flipX?=true and/or flipY?=true",
       "args_schema": {
@@ -244,7 +255,7 @@
     {
       "op_key": "boolean_op",
       "kind": "arrange",
-      "label": "布尔运算",
+      "label": "Boolean ops",
       "sort_order": 170,
       "model_hint": "Boolean on shapes. Args: nodeIds (2+), mode=union|subtract|intersect|exclude",
       "args_schema": {
@@ -255,7 +266,7 @@
     {
       "op_key": "set_canvas_background",
       "kind": "canvas",
-      "label": "画布背景",
+      "label": "Canvas background",
       "sort_order": 180,
       "model_hint": "Set infinite-canvas stage background (not artboard fill). Args: color|fill|backgroundColor, fillType?=solid|linear|radial|angular|diffuse|image, fillEnd?, gradientAngle?, opacity?",
       "args_schema": {
@@ -271,7 +282,7 @@
     {
       "op_key": "set_viewport",
       "kind": "canvas",
-      "label": "视口",
+      "label": "Viewport",
       "sort_order": 190,
       "model_hint": "Zoom/fit. Args: action=zoom_in|zoom_out|fit|set; for set pass percent (e.g. 100) or zoom (1.0).",
       "args_schema": {
@@ -283,7 +294,7 @@
     {
       "op_key": "image_process",
       "kind": "image",
-      "label": "图片处理",
+      "label": "Image process",
       "sort_order": 200,
       "model_hint": "Run image toolbar pipeline on a node (spawns processing clone). Args: nodeId (image id), kind=upscale|removeBg|eraser|editText|editElements|replaceText|multiAngle|expand|adjust|crop|flipRotate|moveObject|vector. replaceText=i2i swap lettering (meta.originalText + meta.newText); editText=OCR text layers; editElements=subjects+text+bg. Optional: targetWidth, targetHeight, meta (object).",
       "args_schema": {
@@ -297,7 +308,7 @@
     {
       "op_key": "export_canvas",
       "kind": "export",
-      "label": "导出",
+      "label": "Export",
       "sort_order": 210,
       "model_hint": "Export canvas/selection download. Args: format=png|jpeg|svg, nodeIds? (selection), multiplier? (scale, default 1), filename?",
       "args_schema": {
@@ -364,7 +375,8 @@
     "create_shape": {
       "must_contain": [
         "triangle",
-        "pen"
+        "pen",
+        "strokeAlign"
       ],
       "stale_if_contains": []
     },
@@ -384,7 +396,9 @@
       "must_contain": [
         "hidden",
         "locked",
-        "shapeType"
+        "shapeType",
+        "strokeAlign",
+        "borderWidth"
       ],
       "stale_if_contains": []
     },

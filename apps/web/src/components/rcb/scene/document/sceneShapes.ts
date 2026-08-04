@@ -210,6 +210,159 @@ export function distPointToSegment(
   return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
 }
 
+/**
+ * Canvas Path2D geometry cache — reuse for hit-test + overlay batch stroke.
+ * Committed ink stays SVG hosts; Path2D is the shared vector kernel.
+ */
+const PATH2D_CACHE_MAX = 256;
+const path2dByD = new Map<string, Path2D>();
+const path2dTouch: string[] = [];
+/** nodeId → path `d` fingerprint currently cached for that node. */
+const nodePathFp = new Map<string, string>();
+
+let hitCtx: CanvasRenderingContext2D | null = null;
+
+function getPath2DHitCtx(): CanvasRenderingContext2D | null {
+  if (typeof document === 'undefined') return null;
+  if (hitCtx) return hitCtx;
+  const c = document.createElement('canvas');
+  c.width = 1;
+  c.height = 1;
+  hitCtx = c.getContext('2d', { willReadFrequently: true });
+  return hitCtx;
+}
+
+function touchPath2DKey(d: string) {
+  const i = path2dTouch.indexOf(d);
+  if (i >= 0) path2dTouch.splice(i, 1);
+  path2dTouch.push(d);
+  while (path2dTouch.length > PATH2D_CACHE_MAX) {
+    const drop = path2dTouch.shift();
+    if (drop) path2dByD.delete(drop);
+  }
+}
+
+/** Cached Path2D for an SVG path `d` (empty / invalid → null). */
+export function getCachedPath2D(pathD: string): Path2D | null {
+  const d = String(pathD || '').trim();
+  if (!d || typeof Path2D === 'undefined') return null;
+  let path = path2dByD.get(d);
+  if (path) {
+    touchPath2DKey(d);
+    return path;
+  }
+  try {
+    path = new Path2D(d);
+  } catch {
+    return null;
+  }
+  path2dByD.set(d, path);
+  touchPath2DKey(d);
+  return path;
+}
+
+/** Bind a node id to a path `d` so paint remounts can drop the entry. */
+export function rememberNodePath2D(nodeId: string, pathD: string): Path2D | null {
+  const id = String(nodeId || '');
+  const d = String(pathD || '').trim();
+  if (!id || !d) return null;
+  const prev = nodePathFp.get(id);
+  if (prev && prev !== d) {
+    // Keep Path2D for `prev` if other nodes share it — only forget the binding.
+  }
+  nodePathFp.set(id, d);
+  return getCachedPath2D(d);
+}
+
+export function invalidateNodePath2D(nodeId: string) {
+  const id = String(nodeId || '');
+  if (!id) return;
+  nodePathFp.delete(id);
+}
+
+export function clearPath2DCache() {
+  path2dByD.clear();
+  path2dTouch.length = 0;
+  nodePathFp.clear();
+}
+
+export type Path2DHitOpts = {
+  /** Test fill (closed shapes / pencil blobs). */
+  fill?: boolean;
+  /** Stroke hit width in local units (0 / omit → skip stroke test). */
+  strokeWidth?: number;
+  fillRule?: CanvasFillRule;
+  lineCap?: CanvasLineCap;
+  lineJoin?: CanvasLineJoin;
+};
+
+/**
+ * Local-space hit against a cached Path2D (same coords as path `d`).
+ * Prefer this over sampling `getPointAtLength` for pen/path hover.
+ */
+export function hitTestPath2DLocal(
+  pathD: string,
+  lx: number,
+  ly: number,
+  opts?: Path2DHitOpts
+): boolean {
+  if (![lx, ly].every(Number.isFinite)) return false;
+  const path = getCachedPath2D(pathD);
+  if (!path) return false;
+  const ctx = getPath2DHitCtx();
+  if (!ctx) return false;
+
+  const wantFill = Boolean(opts?.fill);
+  const sw = Math.max(0, Number(opts?.strokeWidth) || 0);
+  const rule: CanvasFillRule =
+    opts?.fillRule === 'evenodd' ? 'evenodd' : 'nonzero';
+
+  try {
+    if (wantFill && ctx.isPointInPath(path, lx, ly, rule)) return true;
+    if (sw > 0 && typeof ctx.isPointInStroke === 'function') {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.lineWidth = sw;
+      ctx.lineCap = opts?.lineCap || 'round';
+      ctx.lineJoin = opts?.lineJoin || 'round';
+      ctx.miterLimit = 10;
+      if (ctx.isPointInStroke(path, lx, ly)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/** Stroke a cached Path2D onto a Canvas2D context (overlay / draft batch). */
+export function strokeCachedPath2D(
+  ctx: CanvasRenderingContext2D,
+  pathD: string,
+  style?: { strokeStyle?: string; lineWidth?: number; lineCap?: CanvasLineCap; lineJoin?: CanvasLineJoin }
+): boolean {
+  const path = getCachedPath2D(pathD);
+  if (!path) return false;
+  if (style?.strokeStyle) ctx.strokeStyle = style.strokeStyle;
+  if (style?.lineWidth != null) ctx.lineWidth = style.lineWidth;
+  if (style?.lineCap) ctx.lineCap = style.lineCap;
+  if (style?.lineJoin) ctx.lineJoin = style.lineJoin;
+  ctx.stroke(path);
+  return true;
+}
+
+/** Fill a cached Path2D (closed geo / pencil). */
+export function fillCachedPath2D(
+  ctx: CanvasRenderingContext2D,
+  pathD: string,
+  style?: { fillStyle?: string; fillRule?: CanvasFillRule }
+): boolean {
+  const path = getCachedPath2D(pathD);
+  if (!path) return false;
+  if (style?.fillStyle) ctx.fillStyle = style.fillStyle;
+  const rule = style?.fillRule === 'evenodd' ? 'evenodd' : 'nonzero';
+  ctx.fill(path, rule);
+  return true;
+}
+
 /** Reused off-DOM path for length sampling (Bezier pen / freehand). */
 let measurePathEl: SVGPathElement | null = null;
 
@@ -259,6 +412,15 @@ export function pathDContainsPoint(
 ): boolean {
   const d = String(pathD || '').trim();
   if (!d || typeof document === 'undefined') return false;
+  // Prefer Canvas Path2D (cached) — no DOM CTM / createSVGPoint per probe.
+  if (
+    hitTestPath2DLocal(d, px, py, {
+      fill: true,
+      fillRule: fillRule === 'evenodd' ? 'evenodd' : 'nonzero',
+    })
+  ) {
+    return true;
+  }
   try {
     const el = getMeasurePathEl();
     syncMeasurePathD(el, d, fillRule);

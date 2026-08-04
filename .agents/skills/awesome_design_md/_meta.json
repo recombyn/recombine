@@ -1,0 +1,32 @@
+{
+  "skill_key": "awesome_design_md",
+  "name": "awesome_design_md",
+  "displayName": "Awesome DesignMD",
+  "description": "品牌视觉参数注入：把风格系统变成可执行的设计约束",
+  "when_to_use": "需要注入品牌色板/字体/间距/圆角等视觉参数，或切换整套风格语言时加载",
+  "category": "brand",
+  "scenes": "all",
+  "sort_weight": 36,
+  "version": "1.0.0",
+  "preferred_tools": [
+    "create_frame",
+    "create_shape",
+    "create_text",
+    "create_image",
+    "update_node"
+  ],
+  "allowed_resources": ["knowledge", "aesthetics", "tools"],
+  "triggers": [],
+  "mutex_group": "",
+  "prompt_negative": "不要同时混用两套互斥风格；不要在未确认品牌参数前随意发明第二套色板。",
+  "locales": {
+    "zh-CN": {
+      "displayName": "Awesome DesignMD",
+      "description": "品牌视觉参数注入：把风格系统变成可执行的设计约束"
+    },
+    "en": {
+      "displayName": "Awesome DesignMD",
+      "description": "Brand visual parameter injector — turn a style system into enforceable design constraints"
+    }
+  }
+}

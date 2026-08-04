@@ -7,12 +7,13 @@ import {
   RcbOverlayRootContext,
   RcbViewportElContext,
 } from '../camera/context';
-import { readDevicePixelRatio, subscribeDevicePixelRatio, toDomPrecision } from '../core/dpr';
+import { readDevicePixelRatio, subscribeDevicePixelRatio } from '../core/dpr';
 import {
   installDprDebugHelpers,
   logDprCameraState,
 } from '../core/dprDebug';
 import {
+  rcbCameraCssZoom,
   rcbCameraScreenOffset,
   rcbClientToStageLocal,
   rcbFitCamera,
@@ -81,9 +82,9 @@ export type RcbCanvasProps = {
  *   2. World — CSS `translate3d + scale` (optional grid + scene content)
  *   3. Overlay — unscaled screen UI only (toolbars / labels via RcbOverlayPortal)
  *
- * Selection chrome + align guides live in the world layer (scene coords) so
- * browser zoom + canvas zoom cannot desync boxes from shapes. DPR is tracked
- * for future length alignment / canvas buffers.
+ * Selection chrome + align guides live in the world layer using the same
+ * CSS box + SVG viewBox compositing as shape hosts — not a 1×1 overflow SVG —
+ * so browser zoom cannot desync boxes from ink.
  *
  * Camera never mutates scene coordinate origin. Shapes SVG grows with content
  * bounds (no fixed ±N plane) — unbounded page space.
@@ -163,7 +164,7 @@ function RcbCanvas({
       camera,
       camCss: {
         ...rcbCameraScreenOffset(camera, devicePixelRatio),
-        z: toDomPrecision(camera.zoom),
+        z: rcbCameraCssZoom(camera),
       },
     });
   }, [devicePixelRatio, camera.x, camera.y, camera.zoom]);
@@ -407,7 +408,7 @@ function RcbCanvas({
   // on top of scene*dpr (critical at browser 90% → dpr≈0.9).
   // Must stay in sync with rcbScreenToScene / rcbSceneToScreen.
   const { x: camX, y: camY } = rcbCameraScreenOffset(camera, devicePixelRatio);
-  const camZ = toDomPrecision(camera.zoom);
+  const camZ = rcbCameraCssZoom(camera);
 
   return (
     <RcbCameraContext.Provider value={camera}>

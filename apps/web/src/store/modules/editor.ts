@@ -448,6 +448,8 @@ const editorSlice = createSlice({
       // Enter editor with nothing selected (cases often ship activeFrameId).
       doc.activeFrameId = null;
       state.document = doc;
+      // Keep library copy origin-cleared so reopen doesn't re-jump.
+      item.document = doc;
       clearSelection(state);
       state.dirty = false;
       state.historyPast = [];
@@ -455,6 +457,21 @@ const editorSlice = createSlice({
       state.sceneReloadToken += 1;
       touchOpened(item);
       saveTemplates(state.templates);
+    },
+    /**
+     * Bake non-zero document.x/y into node coords before first fit/paint.
+     * Idempotent when origin is already 0.
+     */
+    bakeDocumentOrigin(state) {
+      if (!state.document) return;
+      const ox = Number(state.document.x) || 0;
+      const oy = Number(state.document.y) || 0;
+      if (ox === 0 && oy === 0) return;
+      const doc = alignImportedDocumentOrigin(state.document);
+      state.document = doc;
+      const item = state.templates.find((t) => t.id === state.currentId);
+      if (item) item.document = doc;
+      state.sceneReloadToken += 1;
     },
     setDocument(state, action) {
       pushHistory(state);
@@ -1743,7 +1760,7 @@ const editorSlice = createSlice({
     setPenStrokeWidth(state, action) {
       const n = Number(action.payload);
       if (!Number.isFinite(n)) return;
-      state.penStrokeWidth = Math.max(1, Math.min(40, Math.round(n)));
+      state.penStrokeWidth = Math.max(1, Math.round(n));
     },
     setPenStrokeOpacity(state, action) {
       const n = Number(action.payload);
@@ -1839,6 +1856,7 @@ export const {
   openTemplate,
   setDocument,
   setDocumentFromCanvas,
+  bakeDocumentOrigin,
   removeDocumentNodes,
   patchDocumentNode,
   patchDocumentNodes,
