@@ -16,6 +16,14 @@
   <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-green.svg" alt="Security" /></a>
 </p>
 
+<p align="center">
+  <a href="README.md"><img src="docs/assets/lang-en.png" alt="English" height="28" /></a>
+  &nbsp;
+  <a href="README.zh-CN.md"><img src="docs/assets/lang-zh-CN.png" alt="简体中文" height="28" /></a>
+  &nbsp;
+  <a href="README.ja.md"><img src="docs/assets/lang-ja.png" alt="日本語" height="28" /></a>
+</p>
+
 **Recombyn** is a **canvas editor + AI Design Agent** (source-available).  
 Design on an infinite canvas; a LangGraph agent edits layers, shapes, text, and layout through conversation.
 
@@ -117,11 +125,3 @@ See [LICENSE](./LICENSE) for the full text.
 Open source takes time. If Recombyn helps your work, please hit **⭐ Star** in the top-right of the GitHub repo — your support is the best fuel for making it better.
 
 → [https://github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
-
----
-
-<p align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/English-e5e7eb?style=flat-square&labelColor=e5e7eb&color=e5e7eb" alt="English" /></a>
-  &nbsp;
-  <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-e5e7eb?style=flat-square&labelColor=e5e7eb&color=e5e7eb" alt="简体中文" /></a>
-</p>
