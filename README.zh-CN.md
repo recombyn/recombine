@@ -1,21 +1,11 @@
 <p align="center">
-  <img src="docs/assets/logo-mark.png" alt="Recombyn" width="96" height="96" />
-</p>
-
-<p align="center">
-  <strong>recombyn</strong><br />
-  <sub>开源画布 + AI 设计 Agent</sub>
+  <img src="docs/assets/readme-hero.jpg" alt="recombyn — 开源画布 + AI Design Agent" width="920" />
 </p>
 
 <p align="center">
   <a href="docs/self-hosting.md"><strong>自托管</strong></a> ·
   <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
   <a href="apps/docs"><strong>文档</strong></a>
-</p>
-
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="#readme">简体中文</a>
 </p>
 
 <p align="center">
@@ -112,3 +102,11 @@ e2e/               Playwright
 开源不易，如果觉得 Recombyn 对您的工作还有帮助，请帮忙在 GitHub 仓库右上角点个 ⭐ Star。您的支持是让 Recombyn 变得更好最大的动力。
 
 → [https://github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+
+---
+
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/English-e5e7eb?style=flat-square&labelColor=e5e7eb&color=e5e7eb" alt="English" /></a>
+  &nbsp;
+  <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-e5e7eb?style=flat-square&labelColor=e5e7eb&color=e5e7eb" alt="简体中文" /></a>
+</p>
