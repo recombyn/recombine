@@ -64,14 +64,14 @@ def _store_mysql_url() -> str:
 
 
 def _store_sqlite_path() -> Path:
-    from app.core.config import settings
+    from app.core.config import _API_ROOT, settings
 
     raw = (settings.langgraph_store_sqlite_path or "").strip()
     if not raw:
         raw = "storage/langgraph_store.db"
     p = Path(raw)
     if not p.is_absolute():
-        p = Path(__file__).resolve().parents[2] / p
+        p = _API_ROOT / p
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

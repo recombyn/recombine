@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.core.config import settings
+from app.core.config import _API_ROOT, settings
 
 _log = logging.getLogger(__name__)
 _BACKUP_LOCK = threading.Lock()
@@ -21,7 +21,7 @@ def _backup_dir() -> Path:
     raw = (settings.db_backup_dir or "storage/backups").strip() or "storage/backups"
     path = Path(raw)
     if not path.is_absolute():
-        path = Path(__file__).resolve().parents[2] / path
+        path = _API_ROOT / path
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -95,7 +95,7 @@ def run_db_backup(*, reason: str = "scheduled") -> dict[str, Any]:
                     continue
                 path = Path(raw)
                 if not path.is_absolute():
-                    path = Path(__file__).resolve().parents[2] / path
+                    path = _API_ROOT / path
                 if not path.is_file():
                     continue
                 dest2 = out_dir / f"{prefix}{stamp}.db"

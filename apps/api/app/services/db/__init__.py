@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator, Literal
 from urllib.parse import unquote, urlparse
 
-from app.core.config import settings
+from app.core.config import _API_ROOT, settings
 
 Dialect = Literal["mysql", "sqlite", "postgres"]
 
@@ -27,7 +27,7 @@ _PG_RO_POOL: Any = None
 _PG_POOL_SIZE = 8
 _SCHEMA_READY = False
 
-_SQLITE_FALLBACK = Path(__file__).resolve().parents[2] / "storage" / "recombyn.db"
+_SQLITE_FALLBACK = _API_ROOT / "storage" / "recombyn.db"
 
 
 def dialect() -> Dialect:
@@ -358,7 +358,7 @@ def _sqlite_path() -> Path:
     if raw:
         path = Path(raw)
         if not path.is_absolute():
-            path = Path(__file__).resolve().parents[2] / path
+            path = _API_ROOT / path
     else:
         path = _SQLITE_FALLBACK
     path.parent.mkdir(parents=True, exist_ok=True)
