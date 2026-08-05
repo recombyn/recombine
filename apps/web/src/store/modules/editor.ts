@@ -664,9 +664,13 @@ const editorSlice = createSlice({
       const key = `frame:${frame.id}`;
       const order = Array.isArray(next.stackOrder) ? next.stackOrder.map(String) : [];
       if (!order.includes(key)) next.stackOrder = [...order, key];
-      // Agent-created frames must not steal selection — only user clicks select.
+      // User draw must set selectedFrameIds too — otherwise the idle grey edge
+      // hides (via activeFrameId) while SelectionChrome never paints.
       if (activate !== false) {
         next.activeFrameId = frame.id;
+        state.selectedFrameIds = [frame.id];
+        state.selectedNodeId = null;
+        state.selectedNodeIds = [];
       }
       state.document = next;
       state.dirty = true;

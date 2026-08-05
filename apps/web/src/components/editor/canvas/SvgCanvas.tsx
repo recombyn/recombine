@@ -119,7 +119,6 @@ import {
   clearCanvasAttachPick,
   setCanvasAttachPickBlocked,
   setPendingCanvasAttach,
-  setGridMode,
   EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 import { requestProjectFlush } from '@/components/editor/useProjectCloudSync';
@@ -165,6 +164,7 @@ import {
   findPencilBrush,
   STAMP_TINT_READY_EVENT,
   rcbCenterOnPoint,
+  getDocumentGridSize,
 } from '@/components/rcb';
 import { parseFrameSelId } from '@/components/rcb/selection/SelectionFeature';
 import ImageProcessOverlay from '@/components/editor/nodes/ImageNode/ImageProcessOverlay';
@@ -296,7 +296,6 @@ function SvgCanvas({
   useSyncExternalStore(subscribeCollabUndo, getCollabUndoEpoch, getCollabUndoEpoch);
   const canUndo = isCollabActive() ? canCollabUndo() : reduxCanUndo;
   const canRedo = isCollabActive() ? canCollabRedo() : reduxCanRedo;
-  const isGridMode = useSelector((s: any) => Boolean(s.editor.isGridMode));
   const imageToolPanelKind = useSelector((s: any) => s.editor.imageToolPanel?.kind as string | undefined);
   const shapeStylePanel = useSelector((s: any) => s.editor.shapeStylePanel as null | { kind: string });
   const shapeStylePanelOpen = Boolean(shapeStylePanel);
@@ -337,7 +336,7 @@ function SvgCanvas({
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   /** Double-click pen path → anchor / handle edit. */
   const [editingPenId, setEditingPenId] = useState<string | null>(null);
-  const [pathEditSubtool, setPathEditSubtool] = useState<'select' | 'pen'>('select');
+  const [pathEditSubtool, setPathEditSubtool] = useState<'select' | 'pen' | 'curve'>('select');
   /** After inline text commit, blank-canvas pointerup must not clear selection. */
   const keepSelectAfterTextEditRef = useRef<string | null>(null);
   /**
@@ -2368,10 +2367,6 @@ function SvgCanvas({
       }
       return;
     }
-    if (action === 'toggleGrid') {
-      dispatch(setGridMode(!isGridMode));
-      return;
-    }
     if (action === 'exportMp4' || action === 'exportMp3') {
       const doc = documentRef.current;
       const seedNodes = ctxMenuSeedNodeIds(ids, hitNodeId);
@@ -2755,7 +2750,9 @@ function SvgCanvas({
   useEffect(() => {
     const onSub = (e: Event) => {
       const s = (e as CustomEvent).detail?.subtool;
-      setPathEditSubtool(s === 'pen' ? 'pen' : 'select');
+      if (s === 'pen') setPathEditSubtool('pen');
+      else if (s === 'curve') setPathEditSubtool('curve');
+      else setPathEditSubtool('select');
     };
     window.addEventListener('resume:path-edit-subtool', onSub);
     return () => window.removeEventListener('resume:path-edit-subtool', onSub);
@@ -2772,23 +2769,9 @@ function SvgCanvas({
     };
   }, [editingPenId]);
 
-  // Dim the underlying pen SVG while path-edit overlay is active.
-  useEffect(() => {
-    const nodeId = editingPenId;
-    if (!nodeId) return;
-    const board = boardRef.current;
-    if (!board?.nodeEls) return;
-    const el = board.nodeEls.get(nodeId);
-    if (!el) return;
-    el.setAttribute('opacity', '0.12');
-    return () => {
-      try {
-        board.nodeEls.get(nodeId)?.removeAttribute('opacity');
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [editingPenId]);
+  // Path-edit ink is painted on the overlay canvas; host is forceHidden via
+  // RcbShapesLayer (same gate as inline text edit) so the committed SVG does
+  // not ghost under the live path.
 
   // Select / inspect: share preview is readOnly — always allow hit-test + chrome
   // (workspaceMode may briefly lag behind 'dev'). Path-edit owns the pointer
@@ -2823,7 +2806,7 @@ function SvgCanvas({
             reloadToken={reloadToken}
             documentPatchToken={documentPatchToken}
             lastPatchedNodeIds={lastPatchedNodeIds}
-            hiddenNodeId={editingTextId}
+            hiddenNodeId={editingTextId || editingPenId}
             keepVisibleIds={keepVisibleIds}
             spatialIndex={nodeSpatialIndex}
           />
@@ -2837,7 +2820,10 @@ function SvgCanvas({
         ) : null}
         {/* Scene-space HTML overlays (selection / draw previews). Origin matches SVG. */}
         {/* Above frame/node stackOrder so preview select/hover strokes aren't covered. */}
-        <div className="absolute left-0 top-0 z-[10000] h-0 w-0 overflow-visible">
+        {/* Above HostPathChrome (z=1e6) so poly/star/radius knobs receive hits
+            over resize hotzones; wrapper is 0×0 + overflow visible, empty areas
+            still pass through to chrome / shapes. */}
+        <div className="absolute left-0 top-0 z-[1000001] h-0 w-0 overflow-visible">
           <SelectionFeature
             enabled={selectMode}
             readOnly={readOnly}
@@ -2907,6 +2893,9 @@ function SvgCanvas({
             paperEl={paperEl}
             stageEl={stageEl}
             onCreate={onCreateShape}
+            // Draw always snaps to the document grid; overlay visibility is separate.
+            gridSnap
+            gridSize={getDocumentGridSize(document)}
           />
           <TextPlaceFeature
             enabled={textMode}
@@ -2976,6 +2965,7 @@ function SvgCanvas({
               paperEl={paperEl}
               stageEl={stageEl}
               drawNewShapeMode={pathEditSubtool === 'pen'}
+              convertPointMode={pathEditSubtool === 'curve'}
               newStrokeColor={penStrokeColor}
               newStrokeWidth={penStrokeWidth}
               onCommitNewShape={({ pathD, box, closed }) => {
@@ -3101,7 +3091,6 @@ function SvgCanvas({
           );
           return Boolean(frame?.locked);
         })()}
-        gridOn={isGridMode}
         exportKind={(() => {
           const targetIds = resolveSelectionNodeIds(
             document,

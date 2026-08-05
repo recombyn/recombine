@@ -5,6 +5,7 @@ import { HiOutlineCheck, HiOutlineTrash } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
 import { DropdownPanel } from '@/components/base';
+import { Icon } from '@/components/base/icon';
 import Tooltip from '@/components/base/tooltip';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import {
@@ -130,26 +131,6 @@ function readBrushImageFile(file: File): Promise<{ dataUrl: string; name: string
     reader.onerror = () => reject(new Error('read-failed'));
     reader.readAsDataURL(file);
   });
-}
-
-/** Compact stroke-weight glyph (three uneven bars). */
-function StrokeWeightIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <rect x="2" y="3" width="12" height="1.5" rx="0.75" />
-      <rect x="2" y="7" width="12" height="2.5" rx="1" />
-      <rect x="2" y="12" width="12" height="1" rx="0.5" />
-    </svg>
-  );
-}
-
-/** Pressure-sensitive stroke glyph (tapered ribbon). */
-function PressureIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M1.5 11.5c2.2-1.6 3.8-5.2 5.2-7.2.6-.9 1.4-1.4 2.3-.7 1.4 1.1 2.6 3.8 3.8 5.6.7 1.1 1.6 1.8 2.7 1.2l.2-.1c-.9.4-1.7-.1-2.3-1-1.1-1.7-2.3-4.3-3.5-5.3-.4-.3-.7-.2-1 .2C7.5 6 6 9.2 4 10.8c-1 .8-1.9 1-2.5.7z" />
-    </svg>
-  );
 }
 
 function BrushStrokePreview({
@@ -521,7 +502,7 @@ function PenStrokeToolbar({
           onPointerDown={(e) => e.stopPropagation()}
           title={eraseMode ? '橡皮尺寸' : '粗细'}
         >
-          <StrokeWeightIcon className="h-4 w-4 shrink-0 text-[var(--ink)]" />
+          <Icon name="editor-stroke-weight" className="h-4 w-4 shrink-0 text-[var(--ink)]" />
           <input
             type="number"
             min={1}
@@ -555,7 +536,7 @@ function PenStrokeToolbar({
                   eraseMode && 'cursor-not-allowed opacity-40'
                 )}
               >
-                <PressureIcon className="h-4 w-4" />
+                <Icon name="editor-pressure" className="h-4 w-4" />
               </button>
             </Tooltip>
             <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />

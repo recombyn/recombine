@@ -31,7 +31,16 @@ async def _node_observe(
     rt = state["rt"]
     st = rt.run
     round_i = st.round
-    snap = await wait_for_scene(st.task_id, timeout_sec=_SCENE_WAIT_SEC)
+    from services.design.runtime.graph.build import (
+        mark_design_running,
+        mark_design_waiting_client,
+    )
+
+    await asyncio.to_thread(mark_design_waiting_client, st.task_id)
+    try:
+        snap = await wait_for_scene(st.task_id, timeout_sec=_SCENE_WAIT_SEC)
+    finally:
+        await asyncio.to_thread(mark_design_running, st.task_id)
     op_failures: list[dict[str, Any]] = []
     if snap:
         nodes = [

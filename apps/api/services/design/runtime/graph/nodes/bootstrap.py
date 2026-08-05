@@ -73,6 +73,12 @@ async def _node_bootstrap(state: GraphState) -> Command:
                     "max_rounds": rt.max_rounds,
                     "decision_log": rt.decision.to_log(),
                     "execution_log": st.to_execution_log(),
+                    "run_lifecycle": {
+                        "thread_id": f"design:{st.task_id}",
+                        "resumable": True,
+                        "interrupt_kind": None,
+                        "settled": False,
+                    },
                     **({"apply_ops": True} if rt.apply_ops else {})
                 },
                 ensure_ascii=False,

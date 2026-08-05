@@ -39,10 +39,6 @@ import CropExpandOverlay, {
   type CropRect,
   type ExpandFrame,
 } from './CropExpandOverlay';
-import {
-  frameGuideBoxes,
-  nodeGuideBoxes,
-} from '@/components/rcb/selection/alignGuides';
 
 /**
  * Decode src for canvas crop. Must go through authenticated fetch for local
@@ -271,16 +267,6 @@ function CropExpandSessionHost({ document }: { document: any }): ReactNode {
     anchor: 'top',
   });
 
-  /** Snap targets: current image + siblings + artboard frames. */
-  const guideBoxes = useMemo(() => {
-    if (!box) return [];
-    const siblings = nodeGuideBoxes(document, {
-      excludeIds: nodeId ? [nodeId] : [],
-    });
-    // Always include the active image so the expand frame can center on it.
-    return [box, ...siblings];
-  }, [document, nodeId, box]);
-  const frameBoxes = useMemo(() => frameGuideBoxes(document), [document]);
 
   if (!mode || !nodeId || !box || !cropRect || !expandFrame || !frameWorld) return null;
 
@@ -414,8 +400,6 @@ function CropExpandSessionHost({ document }: { document: any }): ReactNode {
         cropRect={cropRect}
         expandFrame={expandFrame}
         label={label}
-        guideBoxes={guideBoxes}
-        frameBoxes={frameBoxes}
         onCropChange={(next) => {
           setCropRect(next);
           setRatio('original');

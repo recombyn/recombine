@@ -3,6 +3,10 @@
  * Enable:  window.__RCB_DPR_DEBUG__ = true
  * Dump now: window.__rcbDumpDpr?.()
  *
+ * Align guides: window.__RCB_ALIGN_DEBUG__ = true
+ * Last align dump: window.__rcbLastAlignDump
+ * Dump now: window.__rcbDumpAlign?.()
+ *
  * Default OFF — enable explicitly when debugging browser-zoom seams.
  */
 
@@ -12,8 +16,11 @@ import type { RcbCamera } from './types';
 declare global {
   interface Window {
     __RCB_DPR_DEBUG__?: boolean;
+    __RCB_ALIGN_DEBUG__?: boolean;
     __rcbDumpDpr?: () => void;
+    __rcbDumpAlign?: () => void;
     __rcbLastDprDump?: Record<string, unknown>;
+    __rcbLastAlignDump?: Record<string, unknown>;
   }
 }
 
@@ -211,4 +218,32 @@ export function installDprDebugHelpers(getState: () => {
     );
     logEdgeSamples('manual-dump', samples, dpr, camera);
   };
+  window.__rcbDumpAlign = () => {
+    const last = window.__rcbLastAlignDump;
+    if (!last) {
+      console.warn(TAG, 'no align dump yet — enable __RCB_ALIGN_DEBUG__ and drag to snap');
+      return;
+    }
+    console.log(TAG, 'align dump (copy JSON)', JSON.stringify(last, null, 2));
+  };
+}
+
+const ALIGN_TAG = '[rcb:align]';
+
+function alignDebugEnabled() {
+  if (typeof window === 'undefined') return false;
+  return window.__RCB_ALIGN_DEBUG__ === true || window.__RCB_DPR_DEBUG__ === true;
+}
+
+/** Opt-in JSON dump while orange align guides are active (browser-zoom seams). */
+export function logAlignGuideDump(payload: Record<string, unknown>) {
+  if (!alignDebugEnabled()) return;
+  window.__rcbLastAlignDump = payload;
+  console.log(ALIGN_TAG, 'dump', payload);
+  // One-line copy-friendly JSON for pasting back into chat.
+  try {
+    console.log(ALIGN_TAG, 'json', JSON.stringify(payload));
+  } catch {
+    /* ignore */
+  }
 }

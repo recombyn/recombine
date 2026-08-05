@@ -216,8 +216,8 @@ function readStrokeValue(attrs: Record<string, unknown> | undefined): StrokePane
   const style = parseStrokeStyle(a.strokeStyle);
   const widthNum = Number(a['border-width'] ?? a.strokeWidth ?? 1);
   const shapeType = String(a.shapeType || '');
-  const freehandCaps =
-    shapeType === 'pen' || shapeType === 'pencil' || shapeType === 'arrow';
+  // Pencil / arrow default round; pen + line default butt (stroke panel).
+  const roundCaps = shapeType === 'pencil' || shapeType === 'arrow';
   const hasCapAttr = a.strokeLinecap != null || a['stroke-linecap'] != null;
   const hasJoinAttr = a.strokeLinejoin != null || a['stroke-linejoin'] != null;
   return {
@@ -228,12 +228,12 @@ function readStrokeValue(attrs: Record<string, unknown> | undefined): StrokePane
     align: resolveStrokeAlign(a),
     linecap: hasCapAttr
       ? resolveStrokeLinecap(a)
-      : freehandCaps
+      : roundCaps
         ? 'round'
         : 'butt',
     linejoin: hasJoinAttr
       ? resolveStrokeLinejoin(a)
-      : freehandCaps
+      : roundCaps
         ? 'round'
         : 'miter',
     sides: readStrokeSides(a),
@@ -496,6 +496,15 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
               radiusBL: Math.max(0, Math.round(next.bl) || 0),
               radiusLinked: next.linked ? 'true' : 'false',
               radiusVertices: serializeRadiusVertices(vertices),
+              // Keep legacy aliases in sync for inventory / import paths.
+              radius: Math.max(
+                0,
+                Math.round(Math.max(next.tl, next.tr, next.br, next.bl) || 0)
+              ),
+              cornerRadius: Math.max(
+                0,
+                Math.round(Math.max(next.tl, next.tr, next.br, next.bl) || 0)
+              ),
             },
           },
         })

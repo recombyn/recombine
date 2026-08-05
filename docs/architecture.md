@@ -17,6 +17,8 @@ Backend details: [apps/api/README.md](../apps/api/README.md). Collab: [apps/coll
 
 Mixed scenes of about **5k** nodes stay smooth for daily editing (Chromium pan median ~**17ms**); rectangle-heavy scenes can reach ~**10k**; for very heavy paths, keep roughly **1k–2k** per scene. Implemented with viewport culling + LOD, spatial-index hits, and copy-on-write history. Retest: `npm run test:stress --workspace=apps/web`.
 
+**Stroke outline:** `outlineToPath` converts stroked open paths (line / pen / pencil / arrow) into filled editable paths. Single-subpath strokes use geometric offset (`outlinePolylineStroke`); multi-subpath strokes (e.g. arrows) rasterize one paint-accurate silhouette. Defaults: line and pen use butt/miter; pencil and arrow use round/round. Pencil centerlines are RDP-sparsified before offset. Module: `apps/web/src/components/rcb/scene/paint/outlineToPath.ts`.
+
 **Realtime collab:** when enabled, the live scene truth is a Y.Doc (synced over WS); Redux is the UI projection. Room tokens from `POST /api/v1/collab/room-token`; view-only peers cannot seed or persist.
 
 ## Backend layers

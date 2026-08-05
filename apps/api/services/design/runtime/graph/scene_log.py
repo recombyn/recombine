@@ -322,6 +322,21 @@ def _resolve_wh(
             return fw, fh
     return 0, 0
 
+def _existing_run_lifecycle(task_id: str) -> dict[str, Any] | None:
+    try:
+        from services.design.admin.task_store import (
+            get_design_task,
+            get_run_lifecycle,
+            parse_task_meta,
+        )
+
+        row = get_design_task(task_id)
+        lc = get_run_lifecycle(parse_task_meta((row or {}).get("meta_json")))
+        return lc or None
+    except Exception:
+        return None
+
+
 def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: AgentRunState) -> None:
     """Persist decision + slim step path/timing for Admin; full I/O also in Langfuse."""
     try:
@@ -370,7 +385,13 @@ def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: Agen
                     "trace_id": state.trace_id,
                     "decision_log": decision.to_log(),
                     "execution_log": exec_log,
-                    "langfuse": langfuse
+                    "langfuse": langfuse,
+                    # Preserve pause/resume fields across Admin meta rewrites.
+                    **(
+                        {"run_lifecycle": prev_lc}
+                        if (prev_lc := _existing_run_lifecycle(task_id))
+                        else {}
+                    ),
                 },
                 ensure_ascii=False,
             ),

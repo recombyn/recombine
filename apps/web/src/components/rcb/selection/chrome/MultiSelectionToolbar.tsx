@@ -117,6 +117,7 @@ type NodeBox = {
   path?: string;
   angle?: number;
   sides?: number;
+  attrs?: Record<string, unknown>;
 };
 
 function readBoxes(document: any, nodeIds: string[]): NodeBox[] {
@@ -141,6 +142,8 @@ function readBoxes(document: any, nodeIds: string[]): NodeBox[] {
         path: pathRaw || undefined,
         angle,
         sides: Number.isFinite(sidesRaw) ? sidesRaw : undefined,
+        // Keep radii / star / ellipse params so boolean samples the painted silhouette.
+        attrs: node.attrs && typeof node.attrs === 'object' ? { ...node.attrs } : undefined,
       };
     })
     .filter(Boolean) as NodeBox[];

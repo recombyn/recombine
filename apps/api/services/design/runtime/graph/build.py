@@ -50,12 +50,34 @@ from services.design.ops.tool_ops_contract import format_canvas_tools_catalog, f
 from services.design.prompts.knowledge_store import format_knowledge_catalog
 from services.design.prompts.skill_store import format_skills_catalog
 from services.design.aesthetics.scorer import format_aesthetics_catalog
-from services.design.admin.task_store import _update_task
+from services.design.admin.task_store import (
+    STATUS_CANCELLED,
+    STATUS_ERROR,
+    STATUS_PAUSED,
+    STATUS_RUNNING,
+    STATUS_WAITING_CLIENT,
+    _update_task,
+    build_run_lifecycle,
+    get_design_task,
+    get_run_lifecycle,
+    merge_task_meta,
+    new_resume_token,
+    parse_task_meta,
+    task_is_resumable,
+)
 
 _log = logging.getLogger(__name__)
 _LC_DESIGN_GRAPH: Any = None
 _DESIGN_HOLD_FNS: dict[str, tuple[Any, Any]] = {}
 _DESIGN_HOLD_LOCK = threading.Lock()
+# Cooperative control for an in-flight graph asyncio task.
+_RUN_INTENT: dict[str, str] = {}  # task_id → pause | cancel
+_ACTIVE_RUN_TASKS: dict[str, asyncio.Task[Any]] = {}
+_RUN_CONTROL_LOCK = threading.Lock()
+
+_INTENT_PAUSE = "pause"
+_INTENT_CANCEL = "cancel"
+
 
 def _bind_design_hold_fns(task_id: str, settle: Any, refund: Any) -> None:
     tid = str(task_id or "").strip()
@@ -95,6 +117,205 @@ def _design_refund_hold_fn(rt: AgentRuntime) -> Any:
     if callable(fn):
         return fn
     raise RuntimeError("design refund_hold_fn not bound")
+
+
+def _register_active_run(task_id: str, task: asyncio.Task[Any] | None = None) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    cur = task or asyncio.current_task()
+    with _RUN_CONTROL_LOCK:
+        if cur is not None:
+            _ACTIVE_RUN_TASKS[tid] = cur
+        _RUN_INTENT.pop(tid, None)
+
+
+def _unregister_active_run(task_id: str) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    with _RUN_CONTROL_LOCK:
+        _ACTIVE_RUN_TASKS.pop(tid, None)
+        _RUN_INTENT.pop(tid, None)
+
+
+def _get_run_intent(task_id: str) -> str | None:
+    tid = str(task_id or "").strip()
+    with _RUN_CONTROL_LOCK:
+        return _RUN_INTENT.get(tid)
+
+
+def _request_run_intent(task_id: str, intent: str) -> bool:
+    """Set pause/cancel intent and cancel the in-flight asyncio task if any."""
+    tid = str(task_id or "").strip()
+    if not tid or intent not in (_INTENT_PAUSE, _INTENT_CANCEL):
+        return False
+    with _RUN_CONTROL_LOCK:
+        _RUN_INTENT[tid] = intent
+        running = _ACTIVE_RUN_TASKS.get(tid)
+    if running is not None and not running.done():
+        running.cancel()
+        return True
+    return False
+
+
+def request_design_pause(task_id: str) -> dict[str, Any]:
+    """Ask a running design graph to pause at the next cancel boundary (keep checkpoint)."""
+    tid = str(task_id or "").strip()
+    row = get_design_task(tid)
+    if not row:
+        return {"ok": False, "error": "not_found"}
+    status = str(row.get("status") or "")
+    if status == STATUS_PAUSED:
+        return {"ok": True, "status": STATUS_PAUSED, "already": True}
+    if status == STATUS_WAITING_CLIENT:
+        # Already stopped at client wait — treat as resumable pause.
+        merge_task_meta(
+            tid,
+            {
+                "run_lifecycle": build_run_lifecycle(
+                    thread_id=_design_thread_id(tid),
+                    resumable=True,
+                    interrupt_kind="waiting_client",
+                    resume_token=get_run_lifecycle(parse_task_meta(row.get("meta_json"))).get(
+                        "resume_token"
+                    )
+                    or new_resume_token(),
+                )
+            },
+        )
+        _update_task(tid, status=STATUS_PAUSED, error_message="paused")
+        return {"ok": True, "status": STATUS_PAUSED}
+    if status != STATUS_RUNNING:
+        return {"ok": False, "error": "not_running", "status": status}
+    cancelled = _request_run_intent(tid, _INTENT_PAUSE)
+    return {"ok": True, "status": STATUS_RUNNING, "cancel_signaled": cancelled}
+
+
+def request_design_cancel(task_id: str, *, refund_hold_fn: Any | None = None) -> dict[str, Any]:
+    """Abandon a run: refund hold, mark cancelled (checkpoint cleaned by caller/async)."""
+    tid = str(task_id or "").strip()
+    row = get_design_task(tid)
+    if not row:
+        return {"ok": False, "error": "not_found"}
+    status = str(row.get("status") or "")
+    if status in (STATUS_SUCCESS, STATUS_CANCELLED):
+        return {"ok": True, "status": status, "already": True}
+
+    cancelled = _request_run_intent(tid, _INTENT_CANCEL)
+    hold = int(row.get("hold_credits") or 0)
+    charged = int(row.get("charged_credits") or 0)
+    user_id = str(row.get("user_id") or "")
+    if refund_hold_fn and hold > 0 and charged <= 0 and user_id:
+        try:
+            refund_hold_fn(user_id, hold, task_id=tid)
+        except Exception:
+            _log.exception("cancel refund failed task=%s", tid)
+
+    thread_id = _design_thread_id(tid)
+    merge_task_meta(
+        tid,
+        {
+            "run_lifecycle": build_run_lifecycle(
+                thread_id=thread_id,
+                resumable=False,
+                interrupt_kind="cancelled",
+                settled=charged > 0,
+            )
+        },
+    )
+    _update_task(tid, status=STATUS_CANCELLED, error_message="cancelled")
+    _unbind_design_hold_fns(tid)
+    return {
+        "ok": True,
+        "status": STATUS_CANCELLED,
+        "cancel_signaled": cancelled,
+        "thread_id": thread_id,
+        "cleanup_checkpoint": True,
+    }
+
+
+async def cleanup_design_checkpoint(task_id: str) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    await _cleanup_design_thread(_lc_design_graph(), _design_thread_id(tid))
+
+
+def get_design_run_status(task_id: str) -> dict[str, Any] | None:
+    row = get_design_task(task_id)
+    if not row:
+        return None
+    meta = parse_task_meta(row.get("meta_json"))
+    lc = get_run_lifecycle(meta)
+    status = str(row.get("status") or "")
+    resumable = task_is_resumable(row)
+    return {
+        "task_id": row["id"],
+        "user_id": row.get("user_id"),
+        "status": status,
+        "resumable": resumable,
+        "hold_credits": int(row.get("hold_credits") or 0),
+        "charged_credits": int(row.get("charged_credits") or 0),
+        "error_message": row.get("error_message"),
+        "thread_id": lc.get("thread_id") or _design_thread_id(str(row["id"])),
+        "interrupt_kind": lc.get("interrupt_kind"),
+        "checkpoint_at": lc.get("checkpoint_at"),
+        "resume_token": lc.get("resume_token") if resumable else None,
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def mark_design_waiting_client(task_id: str) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    merge_task_meta(
+        tid,
+        {
+            "run_lifecycle": build_run_lifecycle(
+                thread_id=_design_thread_id(tid),
+                resumable=True,
+                interrupt_kind="waiting_client",
+            )
+        },
+    )
+    _update_task(tid, status=STATUS_WAITING_CLIENT, error_message=None)
+
+
+def mark_design_running(task_id: str) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    _update_task(tid, status=STATUS_RUNNING, error_message=None)
+
+
+def _persist_lifecycle(
+    task_id: str,
+    *,
+    status: str,
+    resumable: bool,
+    interrupt_kind: str | None,
+    error_message: str | None = None,
+    settled: bool = False,
+) -> None:
+    token = new_resume_token() if resumable else None
+    merge_task_meta(
+        task_id,
+        {
+            "run_lifecycle": build_run_lifecycle(
+                thread_id=_design_thread_id(task_id),
+                resumable=resumable,
+                interrupt_kind=interrupt_kind,
+                resume_token=token,
+                settled=settled,
+            )
+        },
+    )
+    fields: dict[str, Any] = {"status": status}
+    if error_message is not None:
+        fields["error_message"] = error_message
+    _update_task(task_id, **fields)
 
 
 def invalidate_agent_graph_cache(flow_id: str | None = None) -> None:
@@ -373,6 +594,7 @@ async def run_agent_graph(
     if pinned_refs:
         rt.flags["skill_refs"] = pinned_refs
     _bind_design_hold_fns(task_id, settle_hold_fn, refund_hold_fn)
+    _register_active_run(task_id)
 
     graph = await asyncio.to_thread(_lc_design_graph)
     rt.decision.route = "langgraph:create_agent"
@@ -381,24 +603,183 @@ async def run_agent_graph(
     rt.run.flow_id = "lc_design"
     rt.run.flow_version = 1
     thread_id = _design_thread_id(task_id)
+    merge_task_meta(
+        task_id,
+        {
+            "run_lifecycle": build_run_lifecycle(
+                thread_id=thread_id,
+                resumable=True,
+                interrupt_kind=None,
+            )
+        },
+    )
+
+    async for ev in _drive_design_graph(
+        graph=graph,
+        graph_input={"rt": rt, "tick": 0},
+        task_id=task_id,
+        trace_id=trace_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        hold=hold,
+        rules=rules,
+        run=run,
+        decision=decision,
+        refund_hold_fn=refund_hold_fn,
+        scene_key=scene_key or "",
+        ui_mode=ui_mode,
+        run_name=f"lc_design:{task_id[:8]}",
+    ):
+        yield ev
+
+
+async def resume_agent_graph(
+    *,
+    task_id: str,
+    user_id: str,
+    settle_hold_fn: Any,
+    refund_hold_fn: Any,
+    resume_token: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Continue a paused / waiting_client / resumable-error design run from checkpoint."""
+    tid = str(task_id or "").strip()
+    row = get_design_task(tid)
+    if not row:
+        yield {"type": "error", "message": "task_not_found", "task_id": tid}
+        return
+    if str(row.get("user_id") or "") != str(user_id or ""):
+        yield {"type": "error", "message": "forbidden", "task_id": tid}
+        return
+    if not task_is_resumable(row):
+        yield {
+            "type": "error",
+            "message": "not_resumable",
+            "task_id": tid,
+            "status": row.get("status"),
+        }
+        return
+
+    meta = parse_task_meta(row.get("meta_json"))
+    lc = get_run_lifecycle(meta)
+    if resume_token:
+        expected = str(lc.get("resume_token") or "")
+        if expected and expected != str(resume_token).strip():
+            yield {"type": "error", "message": "resume_token_mismatch", "task_id": tid}
+            return
+
+    thread_id = str(lc.get("thread_id") or _design_thread_id(tid))
+    graph = await asyncio.to_thread(_lc_design_graph)
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        snap = await graph.aget_state(config)
+    except Exception as err:  # noqa: BLE001
+        yield {
+            "type": "error",
+            "message": f"checkpoint_unavailable:{err}"[:240],
+            "task_id": tid,
+        }
+        return
+    values = getattr(snap, "values", None) or {}
+    if not values:
+        yield {"type": "error", "message": "checkpoint_empty", "task_id": tid}
+        return
+
+    rt = values.get("rt")
+    if not isinstance(rt, AgentRuntime):
+        yield {"type": "error", "message": "checkpoint_corrupt", "task_id": tid}
+        return
+
+    run = rt.run
+    decision = rt.decision
+    trace_id = str(run.trace_id or "")
+    hold = int(rt.hold or row.get("hold_credits") or 0)
+    rules = rt.rules if isinstance(rt.rules, dict) else {}
+
+    try:
+        from services.llm.usage_log import bind_usage_context
+
+        bind_usage_context(user_id=user_id, task_id=tid, source="design")
+    except Exception:
+        pass
+
+    _bind_design_hold_fns(tid, settle_hold_fn, refund_hold_fn)
+    _register_active_run(tid)
+    mark_design_running(tid)
+    merge_task_meta(
+        tid,
+        {
+            "run_lifecycle": build_run_lifecycle(
+                thread_id=thread_id,
+                resumable=True,
+                interrupt_kind=None,
+                resume_token=new_resume_token(),
+            )
+        },
+    )
+    yield {
+        "type": "status",
+        "task_id": tid,
+        "trace_id": trace_id,
+        "resumed": True,
+        "status": STATUS_RUNNING,
+    }
+
+    async for ev in _drive_design_graph(
+        graph=graph,
+        graph_input=None,
+        task_id=tid,
+        trace_id=trace_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        hold=hold,
+        rules=rules,
+        run=run,
+        decision=decision,
+        refund_hold_fn=refund_hold_fn,
+        scene_key=str(rt.scene_key or ""),
+        ui_mode=str((rt.flags or {}).get("mode") or rt.mode or "agent"),
+        run_name=f"lc_design_resume:{tid[:8]}",
+    ):
+        yield ev
+
+
+async def _drive_design_graph(
+    *,
+    graph: Any,
+    graph_input: Any,
+    task_id: str,
+    trace_id: str,
+    user_id: str,
+    thread_id: str,
+    hold: int,
+    rules: dict[str, str],
+    run: AgentRunState,
+    decision: DesignRunDecision,
+    refund_hold_fn: Any,
+    scene_key: str,
+    ui_mode: str,
+    run_name: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Shared start/resume driver: stream, pause/cancel, timeout, cleanup."""
     from config.settings import settings as _settings
+    from services.llm.agent import langfuse_callback_handler, merge_tracing_config
 
     run_timeout = float(getattr(_settings, "design_graph_run_timeout_sec", 600.0) or 0.0)
+    timeout_resumable = bool(getattr(_settings, "design_run_timeout_resumable", True))
     keep_checkpoint = False
+    lf_handler = None
     try:
-        from services.llm.agent import langfuse_callback_handler, merge_tracing_config
-
         lf_handler = langfuse_callback_handler()
         graph_cfg = merge_tracing_config(
             {"configurable": {"thread_id": thread_id}},
-            run_name=f"lc_design:{task_id[:8]}",
+            run_name=run_name,
             metadata={
                 "task_id": task_id,
                 "trace_id": trace_id,
                 "user_id": user_id,
                 "scene": scene_key or "",
                 "mode": ui_mode,
-                "langgraph_thread_id": thread_id
+                "langgraph_thread_id": thread_id,
             },
             tags=["design", "lc_design"],
             callbacks=[lf_handler] if lf_handler is not None else None,
@@ -406,7 +787,7 @@ async def run_agent_graph(
 
         async def _emit_stream() -> AsyncIterator[dict[str, Any]]:
             async for chunk in graph.astream(
-                {"rt": rt, "tick": 0},
+                graph_input,
                 config=graph_cfg,
                 stream_mode="custom",
             ):
@@ -420,6 +801,7 @@ async def run_agent_graph(
         else:
             async for chunk in _emit_stream():
                 yield chunk
+
         if lf_handler is not None:
             lf_tid = getattr(lf_handler, "last_trace_id", None)
             if lf_tid:
@@ -433,63 +815,159 @@ async def run_agent_graph(
                     get_client().flush()
                 except Exception:
                     pass
+        # Completed to END — drop checkpoint after settle.
+        keep_checkpoint = False
     except TimeoutError:
         err = TimeoutError(f"design graph run timed out after {run_timeout:.0f}s")
-        rt.fatal = str(err)
-        try:
-            await asyncio.to_thread(refund_hold_fn, user_id, hold, task_id=task_id)
-        except Exception:
-            pass
         run.note_error(str(err)[:240])
         run.push_log(phase="error", error=str(err)[:240])
         decision.apply(route="error", intent=run.intent)
         await asyncio.to_thread(_persist_task_meta, task_id, decision=decision, state=run)
+        if timeout_resumable:
+            keep_checkpoint = True
+            await asyncio.to_thread(
+                _persist_lifecycle,
+                task_id,
+                status=STATUS_PAUSED,
+                resumable=True,
+                interrupt_kind="timeout",
+                error_message=str(err)[:800],
+            )
+            yield {"type": "execution_log", **run.to_execution_log()}
+            yield {
+                "type": "paused",
+                "message": _user_facing_run_error(err, rules=rules),
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "resumable": True,
+                "interrupt_kind": "timeout",
+            }
+        else:
+            try:
+                await asyncio.to_thread(refund_hold_fn, user_id, hold, task_id=task_id)
+            except Exception:
+                pass
+            await asyncio.to_thread(
+                _persist_lifecycle,
+                task_id,
+                status=STATUS_ERROR,
+                resumable=False,
+                interrupt_kind="timeout",
+                error_message=str(err)[:800],
+            )
+            yield {"type": "execution_log", **run.to_execution_log()}
+            yield {
+                "type": "error",
+                "message": _user_facing_run_error(err, rules=rules),
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "refunded_credits": hold,
+            }
+    except asyncio.CancelledError:
+        intent = _get_run_intent(task_id) or _INTENT_PAUSE
+        if intent == _INTENT_CANCEL:
+            keep_checkpoint = False
+            run.note_error("cancelled")
+            run.push_log(phase="error", error="cancelled")
+            try:
+                await asyncio.to_thread(refund_hold_fn, user_id, hold, task_id=task_id)
+            except Exception:
+                pass
+            await asyncio.to_thread(
+                _persist_lifecycle,
+                task_id,
+                status=STATUS_CANCELLED,
+                resumable=False,
+                interrupt_kind="cancelled",
+                error_message="cancelled",
+            )
+            yield {
+                "type": "cancelled",
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "refunded_credits": hold,
+            }
+            raise
+        # Default / explicit pause: keep durable checkpoint for resume.
+        keep_checkpoint = True
+        run.note_error("paused")
+        run.push_log(phase="error", error="paused")
         await asyncio.to_thread(
-            _update_task, task_id, status="error", error_message=str(err)[:800]
+            _persist_lifecycle,
+            task_id,
+            status=STATUS_PAUSED,
+            resumable=True,
+            interrupt_kind="paused",
+            error_message="paused",
         )
-        yield {"type": "execution_log", **run.to_execution_log()}
         yield {
-            "type": "error",
-            "message": _user_facing_run_error(err, rules=rules),
+            "type": "paused",
             "task_id": task_id,
             "trace_id": trace_id,
-            "refunded_credits": hold
+            "resumable": True,
+            "interrupt_kind": "paused",
         }
-    except asyncio.CancelledError:
-        # Keep process-local checkpoint so same-worker resume/get_state can continue.
-        keep_checkpoint = True
-        run.note_error("cancelled")
-        run.push_log(phase="error", error="cancelled")
-        try:
-            await asyncio.to_thread(
-                _update_task, task_id, status="cancelled", error_message="cancelled"
-            )
-        except Exception:
-            pass
         raise
     except Exception as err:  # noqa: BLE001
-        rt.fatal = str(err)
+        run.fatal = str(err) if hasattr(run, "fatal") else None
         try:
-            await asyncio.to_thread(refund_hold_fn, user_id, hold, task_id=task_id)
+            # Prefer keeping checkpoint for unexpected failures when configured.
+            from config.settings import settings as _s
+
+            keep_on_error = bool(getattr(_s, "design_run_error_resumable", True))
         except Exception:
-            pass
-        run.note_error(str(err)[:240])
-        run.push_log(phase="error", error=str(err)[:240])
-        decision.apply(route="error", intent=run.intent)
-        await asyncio.to_thread(_persist_task_meta, task_id, decision=decision, state=run)
-        await asyncio.to_thread(
-            _update_task, task_id, status="error", error_message=str(err)[:800]
-        )
-        yield {"type": "execution_log", **run.to_execution_log()}
-        yield {
-            "type": "error",
-            "message": _user_facing_run_error(err, rules=rules),
-            "task_id": task_id,
-            "trace_id": trace_id,
-            "refunded_credits": hold
-        }
+            keep_on_error = True
+        if keep_on_error:
+            keep_checkpoint = True
+            run.note_error(str(err)[:240])
+            run.push_log(phase="error", error=str(err)[:240])
+            decision.apply(route="error", intent=run.intent)
+            await asyncio.to_thread(_persist_task_meta, task_id, decision=decision, state=run)
+            await asyncio.to_thread(
+                _persist_lifecycle,
+                task_id,
+                status=STATUS_ERROR,
+                resumable=True,
+                interrupt_kind="error",
+                error_message=str(err)[:800],
+            )
+            yield {"type": "execution_log", **run.to_execution_log()}
+            yield {
+                "type": "error",
+                "message": _user_facing_run_error(err, rules=rules),
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "resumable": True,
+            }
+        else:
+            keep_checkpoint = False
+            try:
+                await asyncio.to_thread(refund_hold_fn, user_id, hold, task_id=task_id)
+            except Exception:
+                pass
+            run.note_error(str(err)[:240])
+            run.push_log(phase="error", error=str(err)[:240])
+            decision.apply(route="error", intent=run.intent)
+            await asyncio.to_thread(_persist_task_meta, task_id, decision=decision, state=run)
+            await asyncio.to_thread(
+                _persist_lifecycle,
+                task_id,
+                status=STATUS_ERROR,
+                resumable=False,
+                interrupt_kind="error",
+                error_message=str(err)[:800],
+            )
+            yield {"type": "execution_log", **run.to_execution_log()}
+            yield {
+                "type": "error",
+                "message": _user_facing_run_error(err, rules=rules),
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "refunded_credits": hold,
+            }
     finally:
         if not keep_checkpoint:
             await _cleanup_design_thread(graph, thread_id)
         _unbind_design_hold_fns(task_id)
+        _unregister_active_run(task_id)
 

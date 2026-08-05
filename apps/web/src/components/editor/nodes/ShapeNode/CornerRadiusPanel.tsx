@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { COLOR_PANEL_WIDTH, INPUT_NO_SPIN } from '@/components/base/colorPanel';
+import { Icon } from '@/components/base/icon';
 import Slider from '@/components/base/slider';
 import { StylePanelShell } from '@/components/editor/panels/StylePanelChrome';
 import { cn } from '@/utils/classnames';
@@ -16,53 +17,12 @@ export type CornerRadiiValue = {
   vertices?: number[];
 };
 
-function CornerGlyph({
-  corner,
-  className,
-}: {
-  corner: 'tl' | 'tr' | 'br' | 'bl';
-  className?: string;
-}) {
-  const d =
-    corner === 'tl'
-      ? 'M4 12V6a2 2 0 0 1 2-2h6'
-      : corner === 'tr'
-        ? 'M4 4h6a2 2 0 0 1 2 2v6'
-        : corner === 'br'
-          ? 'M12 4v6a2 2 0 0 1-2 2H4'
-          : 'M12 12H6a2 2 0 0 1-2-2V4';
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d={d} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function IconLink({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M6.5 9.5l3-3M5 8.5H4a2 2 0 1 1 0-4h3M11 7.5h1a2 2 0 1 1 0 4H9"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function IconUnlink({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M5 8.5H4a2 2 0 1 1 0-4h3M11 7.5h1a2 2 0 1 1 0 4H9M6.25 9.75l3.5-3.5M7.5 4.5l1-1M7.5 12.5l1-1"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
+const CORNER_ICON: Record<'tl' | 'tr' | 'br' | 'bl', string> = {
+  tl: 'editor-corner-tl',
+  tr: 'editor-corner-tr',
+  br: 'editor-corner-br',
+  bl: 'editor-corner-bl',
+};
 
 function ensureVertices(value: CornerRadiiValue, count: number): number[] {
   const fromVal = value.vertices;
@@ -223,9 +183,9 @@ function CornerRadiusPanel({
             }}
           >
             {value.linked ? (
-              <IconLink className="h-4 w-4" />
+              <Icon name="editor-link" className="h-4 w-4" />
             ) : (
-              <IconUnlink className="h-4 w-4" />
+              <Icon name="editor-unlink" className="h-4 w-4" />
             )}
           </button>
         ) : null}
@@ -263,7 +223,7 @@ function CornerRadiusPanel({
                   INPUT_NO_SPIN
                 )}
               />
-              <CornerGlyph corner={key} className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+              <Icon name={CORNER_ICON[key]} className="h-4 w-4 shrink-0 text-[var(--muted)]" />
             </label>
           ))}
         </div>

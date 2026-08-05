@@ -99,10 +99,11 @@ export { STAMP_TINT_READY_EVENT, getTintedStampSrc } from './tools/stampTint';
 
 // Selection engine + chrome (toolbars/menus under selection/chrome/)
 export { default as SelectionFeature } from './selection/SelectionFeature';
-export { default as SelectionChrome } from './selection/SelectionChrome';
+export { default as SelectionChrome, WorldSvgFrame, fittedSvgViewport } from './selection/SelectionChrome';
 export { default as SelectionContextToolbar } from './selection/chrome/SelectionContextToolbar';
 export { default as MultiSelectionToolbar } from './selection/chrome/MultiSelectionToolbar';
 export { default as CanvasContextMenu } from './selection/chrome/CanvasContextMenu';
+export { default as BrushOverlay } from './selection/chrome/BrushOverlay';
 export {
   resizeFromHandle,
   rotateBoxesAround,

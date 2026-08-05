@@ -36,17 +36,34 @@ async def _node_settle(state: GraphState) -> Command:
     st = rt.run
     # Lazy import — build.py imports nodes; avoid cycle.
     from services.design.runtime.graph.build import _design_settle_hold_fn
-
-    spend = await asyncio.to_thread(
-        _design_settle_hold_fn(rt),
-        rt.user_id,
-        hold=rt.hold,
-        actual_tokens=st.total_tokens,
-        detail=f"design_settle:{rt.mode}:{st.task_id}",
-        rules=rt.rules,
-        free_daily=rt.free_daily,
-        images_hydrated=st.images_hydrated,
+    from services.design.admin.task_store import (
+        get_design_task,
+        get_run_lifecycle,
+        merge_task_meta,
+        parse_task_meta,
+        build_run_lifecycle,
     )
+    from services.design.runtime.graph.build import _design_thread_id
+
+    prior = await asyncio.to_thread(get_design_task, st.task_id)
+    prior_charged = int((prior or {}).get("charged_credits") or 0)
+    prior_lc = get_run_lifecycle(parse_task_meta((prior or {}).get("meta_json")))
+    already_settled = prior_charged > 0 or bool(prior_lc.get("settled"))
+
+    if already_settled:
+        spend = prior_charged
+        _log.info("settle idempotent skip task=%s charged=%s", st.task_id, spend)
+    else:
+        spend = await asyncio.to_thread(
+            _design_settle_hold_fn(rt),
+            rt.user_id,
+            hold=rt.hold,
+            actual_tokens=st.total_tokens,
+            detail=f"design_settle:{rt.mode}:{st.task_id}",
+            rules=rt.rules,
+            free_daily=rt.free_daily,
+            images_hydrated=st.images_hydrated,
+        )
     has_proposal = bool(st.proposed_ops)
     settle_intent = (
         normalize_user_intent(rt.classified_intent)
@@ -79,6 +96,18 @@ async def _node_settle(state: GraphState) -> Command:
     failed_attempt = bool(st.errors) and not st.painted and not has_proposal
     settle_status = "error" if failed_attempt else "success"
     await asyncio.to_thread(_persist_task_meta, st.task_id, decision=rt.decision, state=st)
+    await asyncio.to_thread(
+        merge_task_meta,
+        st.task_id,
+        {
+            "run_lifecycle": build_run_lifecycle(
+                thread_id=_design_thread_id(st.task_id),
+                resumable=False,
+                interrupt_kind=None,
+                settled=True,
+            )
+        },
+    )
     await asyncio.to_thread(
         _update_task,
         st.task_id,

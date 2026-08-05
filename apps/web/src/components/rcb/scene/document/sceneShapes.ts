@@ -5,6 +5,145 @@ import { ARROW_HEAD as ARROW_HEAD_GEOM, arrowBaselinePath } from '@/components/r
 export const DEFAULT_SHAPE_SIDES = 5;
 export const MIN_SHAPE_SIDES = 3;
 export const MAX_SHAPE_SIDES = 24;
+/** Inner / outer radius ratio for stars (内角半径). */
+export const DEFAULT_STAR_INNER_RATIO = 0.45;
+export const MIN_STAR_INNER_RATIO = 0.08;
+export const MAX_STAR_INNER_RATIO = 0.92;
+
+/** Circle / ellipse hole as fraction of outer radii (内半径). */
+export const DEFAULT_ELLIPSE_INNER_RATIO = 0;
+export const MIN_ELLIPSE_INNER_RATIO = 0;
+export const MAX_ELLIPSE_INNER_RATIO = 0.92;
+/** Circle / ellipse remaining sweep as % of full turn (弧度 / 周弧度). Signed. */
+export const DEFAULT_ELLIPSE_ARC_PERCENT = 100;
+export const MIN_ELLIPSE_ARC_PERCENT = 0.5;
+export const MAX_ELLIPSE_ARC_PERCENT = 100;
+/**
+ * Fixed cut-end “开始位置” in atan2 degrees (0 = east, 90 = south).
+ * Arc end sweeps from here; start knob does not drag.
+ */
+export const DEFAULT_ELLIPSE_START_DEG = 90;
+
+export function clampEllipseInnerRatio(
+  n: unknown,
+  fallback = DEFAULT_ELLIPSE_INNER_RATIO
+): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(MAX_ELLIPSE_INNER_RATIO, Math.max(MIN_ELLIPSE_INNER_RATIO, v));
+}
+
+/**
+ * Signed arc percent in [−100, −0.5] ∪ [0.5, 100].
+ * |value| = remaining sweep from 开始位置; sign = sweep direction.
+ */
+export function clampEllipseArcPercent(
+  n: unknown,
+  fallback = DEFAULT_ELLIPSE_ARC_PERCENT
+): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  const sign = v < 0 ? -1 : 1;
+  const mag = Math.min(MAX_ELLIPSE_ARC_PERCENT, Math.max(MIN_ELLIPSE_ARC_PERCENT, Math.abs(v)));
+  return sign * mag;
+}
+
+/** Normalize degrees into [0, 360). */
+export function clampEllipseStartDeg(
+  n: unknown,
+  fallback = DEFAULT_ELLIPSE_START_DEG
+): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  const m = v % 360;
+  return m < 0 ? m + 360 : m;
+}
+
+/** Normalize angle delta into (−π, π]. */
+function wrapAngleDelta(delta: number): number {
+  let d = delta;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d <= -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+/**
+ * Cut ends: a0 = fixed 开始位置, a1 = movable 弧度 end.
+ * mid = bisector of the remaining sweep (inner-radius seat).
+ */
+export function ellipseArcEndAngles(
+  arcPercent: number,
+  startDeg: number = DEFAULT_ELLIPSE_START_DEG
+): { a0: number; a1: number; mid: number; startRad: number } {
+  const pct = clampEllipseArcPercent(arcPercent);
+  const startRad = (clampEllipseStartDeg(startDeg) * Math.PI) / 180;
+  const sweep = (Math.abs(pct) / 100) * Math.PI * 2;
+  const signed = pct < 0 ? -sweep : sweep;
+  const a0 = startRad;
+  const a1 = startRad + signed;
+  return { a0, a1, mid: startRad + signed / 2, startRad };
+}
+
+/**
+ * Map pointer → signed remaining % from fixed 开始位置.
+ * Prefers continuity near ±100 so a small drag opens a gap (large remaining)
+ * instead of collapsing into a tiny pie.
+ */
+export function ellipseArcPercentFromPointer(
+  localX: number,
+  localY: number,
+  cx: number,
+  cy: number,
+  prevPercent: number,
+  startDeg: number = DEFAULT_ELLIPSE_START_DEG
+): number {
+  const startRad = (clampEllipseStartDeg(startDeg) * Math.PI) / 180;
+  const end = Math.atan2(localY - cy, localX - cx);
+  let delta = wrapAngleDelta(end - startRad); // (−π, π]
+  // CCW-from-start in atan2 (= positive dir): length in (0, 2π]
+  let sweepPos = delta >= 0 ? delta : delta + Math.PI * 2;
+  if (sweepPos < 1e-4) sweepPos = Math.PI * 2;
+  let sweepNeg = delta <= 0 ? -delta : Math.PI * 2 - delta;
+  if (sweepNeg < 1e-4) sweepNeg = Math.PI * 2;
+  const pctPos = (sweepPos / (Math.PI * 2)) * 100;
+  const pctNeg = -(sweepNeg / (Math.PI * 2)) * 100;
+  const prev = Number.isFinite(prevPercent) ? prevPercent : 100;
+  const dPos = Math.abs(pctPos - prev);
+  const dNeg = Math.abs(pctNeg - prev);
+  const dPosWrap = Math.min(dPos, Math.abs(pctPos - 100) + Math.abs(prev - 100));
+  const dNegWrap = Math.min(dNeg, Math.abs(pctNeg + 100) + Math.abs(prev - 100));
+  return clampEllipseArcPercent(dPosWrap <= dNegWrap ? pctPos : pctNeg, prev);
+}
+
+/** Read ellipse hole ratio (0 = solid disk). */
+export function ellipseInnerRatioFromAttrs(
+  attrs: Record<string, unknown> | null | undefined
+): number {
+  return clampEllipseInnerRatio(
+    attrs?.ellipseInnerRatio ?? attrs?.circleInnerRatio ?? attrs?.['inner-radius'],
+    DEFAULT_ELLIPSE_INNER_RATIO
+  );
+}
+
+/** Read ellipse arc sweep percent (100 = full / 周弧度). */
+export function ellipseArcPercentFromAttrs(
+  attrs: Record<string, unknown> | null | undefined
+): number {
+  return clampEllipseArcPercent(
+    attrs?.ellipseArcPercent ?? attrs?.circleArcPercent ?? attrs?.['arc-percent'],
+    DEFAULT_ELLIPSE_ARC_PERCENT
+  );
+}
+
+/** Read fixed 开始位置 degrees. */
+export function ellipseStartDegFromAttrs(
+  attrs: Record<string, unknown> | null | undefined
+): number {
+  return clampEllipseStartDeg(
+    attrs?.ellipseStartDeg ?? attrs?.circleStartDeg ?? attrs?.['start-deg'],
+    DEFAULT_ELLIPSE_START_DEG
+  );
+}
 
 /** Fixed arrowhead length in local (pre-rotation) units. */
 export const ARROW_HEAD = ARROW_HEAD_GEOM;
@@ -14,9 +153,28 @@ export function clampShapeSides(n: unknown, fallback = DEFAULT_SHAPE_SIDES): num
   return Math.min(MAX_SHAPE_SIDES, Math.max(MIN_SHAPE_SIDES, v));
 }
 
+export function clampStarInnerRatio(
+  n: unknown,
+  fallback = DEFAULT_STAR_INNER_RATIO
+): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(MAX_STAR_INNER_RATIO, Math.max(MIN_STAR_INNER_RATIO, v));
+}
+
 /** Read sides from node attrs (polygon / star). */
 export function sidesFromAttrs(attrs: Record<string, unknown> | null | undefined): number {
   return clampShapeSides(attrs?.sides, DEFAULT_SHAPE_SIDES);
+}
+
+/** Read star inner-radius ratio from attrs (fraction of outer radius). */
+export function starInnerRatioFromAttrs(
+  attrs: Record<string, unknown> | null | undefined
+): number {
+  return clampStarInnerRatio(
+    attrs?.starInnerRatio ?? attrs?.innerRatio ?? attrs?.['inner-ratio'],
+    DEFAULT_STAR_INNER_RATIO
+  );
 }
 
 export function starPoints(
@@ -108,7 +266,8 @@ export function shapeVertexPoints(
   shapeType: string,
   width: number,
   height: number,
-  sides: number = DEFAULT_SHAPE_SIDES
+  sides: number = DEFAULT_SHAPE_SIDES,
+  innerRatio: number = DEFAULT_STAR_INNER_RATIO
 ): Array<[number, number]> {
   const w = Math.max(1, width);
   const h = Math.max(1, height);
@@ -121,7 +280,8 @@ export function shapeVertexPoints(
   }
   const n = clampShapeSides(sides);
   if (shapeType === 'star') {
-    return fitPointsUniformToBox(starPoints(0, 0, n, 1, 0.45), w, h);
+    const ratio = clampStarInnerRatio(innerRatio, DEFAULT_STAR_INNER_RATIO);
+    return fitPointsUniformToBox(starPoints(0, 0, n, 1, ratio), w, h);
   }
   if (shapeType === 'polygon') {
     return fitPointsUniformToBox(polygonPoints(0, 0, n, 1), w, h);

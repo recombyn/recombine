@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, memo } from 'react';
 import {
   autoUpdate,
   flip,
@@ -27,7 +27,7 @@ import {
 } from '@/components/base/colorPanel';
 import Slider from '@/components/base/slider';
 import Tooltip from '@/components/base/tooltip';
-import { DropdownPanel, DropdownPanelItem, SegmentedControl } from '@/components/base';
+import { DropdownPanel, DropdownPanelItem, SegmentedControl, Icon } from '@/components/base';
 import DiffuseMeshEditor from '@/components/editor/panels/DiffuseMeshEditor';
 import { StylePanelShell } from '@/components/editor/panels/StylePanelChrome';
 import { cn } from '@/utils/classnames';
@@ -264,101 +264,23 @@ function FitModeSelect({
 }
 
 function TypeIcon({ type, active }: { type: FillType; active?: boolean }) {
-  const stroke = active ? 'var(--ink)' : 'var(--muted)';
-  // Unique ids — duplicate `fp-linear` across panels breaks SVG paint and looks solid.
-  const uid = useId().replace(/:/g, '');
-  if (type === 'solid') {
-    return (
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
-        <rect x="3" y="3" width="12" height="12" rx="1.5" stroke={stroke} strokeWidth="1.5" />
-      </svg>
-    );
-  }
-  if (type === 'linear') {
-    return (
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
-        <defs>
-          <linearGradient id={`${uid}-lg`} x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#525252" />
-            <stop offset="100%" stopColor="#e5e5e5" />
-          </linearGradient>
-        </defs>
-        <rect
-          x="3"
-          y="3"
-          width="12"
-          height="12"
-          rx="1.5"
-          fill={`url(#${uid}-lg)`}
-          stroke={stroke}
-          strokeWidth="1"
-        />
-      </svg>
-    );
-  }
-  if (type === 'radial') {
-    return (
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
-        <defs>
-          <radialGradient id={`${uid}-rg`} cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#f5f5f5" />
-            <stop offset="100%" stopColor="#525252" />
-          </radialGradient>
-        </defs>
-        <circle cx="9" cy="9" r="6" fill={`url(#${uid}-rg)`} stroke={stroke} strokeWidth="1" />
-      </svg>
-    );
-  }
-  if (type === 'angular') {
-    return (
-      <span
-        className="inline-block h-[14px] w-[14px] rounded-full ring-1"
-        style={{
-          background: 'conic-gradient(#fff, #bbb, #666, #fff)',
-          boxShadow: `inset 0 0 0 1px ${stroke}`,
-        }}
-        aria-hidden
-      />
-    );
-  }
-  if (type === 'diffuse') {
-    return (
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
-        <defs>
-          <radialGradient id={`${uid}-a`} cx="28%" cy="32%" r="55%">
-            <stop offset="0%" stopColor="#bbb" />
-            <stop offset="100%" stopColor="#bbb" stopOpacity="0" />
-          </radialGradient>
-          <radialGradient id={`${uid}-b`} cx="72%" cy="40%" r="50%">
-            <stop offset="0%" stopColor="#888" />
-            <stop offset="100%" stopColor="#888" stopOpacity="0" />
-          </radialGradient>
-          <radialGradient id={`${uid}-c`} cx="50%" cy="78%" r="48%">
-            <stop offset="0%" stopColor="#ddd" />
-            <stop offset="100%" stopColor="#ddd" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        <rect x="3" y="3" width="12" height="12" rx="1.5" fill="#f3f3f3" stroke={stroke} strokeWidth="1" />
-        <rect x="3.5" y="3.5" width="11" height="11" rx="1.2" fill={`url(#${uid}-a)`} />
-        <rect x="3.5" y="3.5" width="11" height="11" rx="1.2" fill={`url(#${uid}-b)`} />
-        <rect x="3.5" y="3.5" width="11" height="11" rx="1.2" fill={`url(#${uid}-c)`} />
-      </svg>
-    );
-  }
-  return (
-    <span
-      className="inline-block h-[14px] w-[14px] rounded-[2px] ring-1"
-      style={{
-        backgroundImage:
-          'linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%)',
-        backgroundSize: '6px 6px',
-        backgroundPosition: '0 0,0 3px,3px -3px,-3px 0',
-        backgroundColor: '#fff',
-        boxShadow: `inset 0 0 0 1px ${stroke}`,
-      }}
-      aria-hidden
-    />
-  );
+  const tone = active ? 'text-[var(--ink)]' : 'text-[var(--muted)]';
+  const name =
+    type === 'solid'
+      ? 'editor-fill-solid'
+      : type === 'linear'
+        ? 'editor-fill-linear'
+        : type === 'radial'
+          ? 'editor-fill-radial'
+          : type === 'angular'
+            ? 'editor-fill-angular'
+            : type === 'diffuse'
+              ? 'editor-fill-diffuse'
+              : type === 'image'
+                ? 'editor-fill-image'
+                : null;
+  if (!name) return null;
+  return <Icon name={name} width={18} height={18} className={tone} />;
 }
 
 const CHECKER =

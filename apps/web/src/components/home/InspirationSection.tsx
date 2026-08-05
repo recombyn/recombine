@@ -7,6 +7,7 @@ import {
   HiOutlineDocumentArrowDown,
   HiOutlinePhoto,
 } from 'react-icons/hi2';
+import { Icon } from '@/components/base/icon';
 import {
   fetchMyLikedIds,
   likePlazaItem,
@@ -47,24 +48,6 @@ type PlazaTab = PlazaCategoryFilter;
 
 const TABS: PlazaTab[] = ['all', 'poster', 'mobile', 'image', 'video'];
 const PAGE_SIZE = 12;
-
-/** Use-menu trigger — tilted cards + sparkle (design ref SVG). */
-function UseCaseMenuIcon({ className }: { className?: string }): ReactNode {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 14 14"
-      className={className}
-      aria-hidden
-    >
-      <g fill="currentColor">
-        <path d="M6.216 1.498c.7-.187 1.42.228 1.607.928L9.172 7.46a.85.85 0 0 0-.667.581l-.346 1.036a.88.88 0 0 1-.553.553l-1.036.346c-.796.266-.796 1.393 0 1.66l1.036.345.02.008-2.919.784c-.7.187-1.42-.229-1.607-.928L1.062 4.237c-.188-.7.227-1.42.927-1.607zm2.333.48q.219.009.433.094l3.787 1.55c.67.274.992 1.04.717 1.711l-1.838 4.491-.585-.194a.88.88 0 0 1-.552-.553l-.302-.904z" />
-        <path d="M9.006 8.465a.35.35 0 0 1 .656 0l.488 1.319a.35.35 0 0 0 .207.207l1.319.488a.35.35 0 0 1 0 .656l-1.319.488a.35.35 0 0 0-.207.207l-.488 1.318a.35.35 0 0 1-.656 0l-.488-1.318a.35.35 0 0 0-.207-.207l-1.318-.488a.35.35 0 0 1 0-.656L8.31 9.99a.35.35 0 0 0 .207-.207z" />
-      </g>
-    </svg>
-  );
-}
 
 function formatStatCount(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`;
@@ -330,7 +313,7 @@ function InspirationCaseCard({
               title={t('home.cases.use')}
               className="inline-flex h-5 w-5 items-center justify-center text-[#BCBCBC] transition hover:text-[var(--ink)] disabled:opacity-50"
             >
-              <UseCaseMenuIcon className="h-[14px] w-[14px]" />
+              <Icon name="home-use-case-menu" className="h-[14px] w-[14px]" />
             </button>
           </Dropdown>
         </div>

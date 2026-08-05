@@ -67,7 +67,7 @@ type Props = {
   onPick: (preset: (typeof ELEMENT_ASPECT_PRESETS)[number]) => void;
   triggerClassName?: string;
   placement?: Placement;
-  /** Compact trigger for inline toolbars (fig.2 crop bar style). */
+  /** Compact trigger for inline toolbars (crop bar style). */
   variant?: 'inline' | 'icon';
 };
 

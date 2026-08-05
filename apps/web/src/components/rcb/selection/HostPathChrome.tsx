@@ -1,6 +1,9 @@
 /**
- * Host-accurate path selection chrome on the world top layer.
- * Mirrors shape-host SVG viewport + transform (no zoom drift) and paints above siblings.
+ * Path indicator + path handles.
+ *
+ * Not the AABB control box (`SelectionChrome`). Twin the shape-host SVG viewport under
+ * `[data-rcb-world]` so silhouette ink shares the paint transform tree — one scheme with
+ * SelectionChrome (`left/top === viewBox`, screenPx/zoom), specialized for path accuracy.
  * Gesture / Redux stay in SelectionFeature.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -12,9 +15,8 @@ import {
   listShapeHosts,
   subscribeShapeHosts,
 } from '@/components/rcb/shapes/shapeHostRegistry';
-import type { AlignGuide, SceneBox } from './alignGuides';
-import type { SpacingMeasure } from './SpacingInspectOverlay';
-import { SPACING_MEASURE_COLOR } from './SpacingInspectOverlay';
+import type { SceneBox } from './alignGuides';
+import { cursorForRotate } from './rotateCornerCursor';
 
 function liveNodeEl(nodeId: string): Element | null {
   return (
@@ -65,35 +67,10 @@ export type ShapeOutlineItem = {
   shaftEndpoints?: boolean;
   showRotate?: boolean;
   /**
-   * When false, skip the blue path stroke (transform: guides-only chrome).
+   * When false, skip the blue path stroke (handles/edges only).
    * Default true.
    */
   showPath?: boolean;
-  /**
-   * Guide / spacing segments in host-local coords (origin = geom box top-left).
-   * Painted on an *unrotated* layer so world-axis align guides stay axis-aligned.
-   * `cross` = × mark at (x1,y1); `arrows` = gap double-heads;
-   * `arrowsOnly` = heads on an existing align shaft (no second parallel line).
-   */
-  auxSegs?: Array<{
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-    dashed?: boolean;
-    arrows?: boolean;
-    arrowsOnly?: boolean;
-    cross?: boolean;
-  }>;
-  /** Screen-constant badges (W×H / gap px) — host-injected, not world HTML. */
-  auxBadges?: Array<{
-    x: number;
-    y: number;
-    text: string;
-    fill: string;
-    /** Badge center relative to (x,y). */
-    anchor?: 'center' | 'below' | 'above' | 'right';
-  }>;
 };
 
 const SVG_NS = 'http://www.w3.org/2000/svg' as const;
@@ -107,8 +84,6 @@ const SEL_EDGE_ATTR = 'data-rcb-sel-edge';
 const SEL_BADGE_ATTR = 'data-rcb-sel-badge';
 /** World-layer mount for path chrome (above shape hosts; does not lift node ink). */
 const SEL_CHROME_LAYER_ATTR = 'data-rcb-sel-chrome-layer';
-/** Scene-space align guides on the chrome layer (same parent as path chrome — no browser-zoom drift). */
-const ALIGN_GUIDES_ATTR = 'data-rcb-align-guides';
 const SEL_HANDLE_VIS_PX = 8;
 const SEL_HANDLE_HIT_PX = 18;
 const SEL_LINE_EP_VIS_PX = 8;
@@ -188,201 +163,8 @@ function ensureSelChromeLayer(): HTMLElement | null {
     layer.style.height = '0';
     world.appendChild(layer);
   }
-  // Always last among world children so chrome paints above every shape host.
   if (world.lastElementChild !== layer) world.appendChild(layer);
   return layer;
-}
-
-/** Same quantize as fitInfiniteSvgToContent — keeps guides locked to host ink under browser zoom. */
-function quantScene(n: number) {
-  return Math.round(n * 1e4) / 1e4;
-}
-
-/**
- * Orange align guides on the world chrome layer (scene coords, camera CSS scale).
- * Same mount + stroke sizing as path control chrome (`1.5 / camera.zoom`).
- */
-function syncChromeLayerAlignGuides(guides: AlignGuide[], stroke: number, inv: number) {
-  const layer = ensureSelChromeLayer();
-  if (!layer) return;
-
-  const align = guides.filter((g) => g.kind !== 'gap' && g.kind !== 'size');
-  let root = layer.querySelector(
-    `:scope > svg[${ALIGN_GUIDES_ATTR}]`
-  ) as SVGSVGElement | null;
-
-  if (!align.length) {
-    try {
-      root?.remove();
-    } catch {
-      /* ignore */
-    }
-    return;
-  }
-
-  // Same × sizing as path aux chrome — screen-constant under camera scale(z).
-  const halfCross = Math.max(stroke * 1.25, 2.5 * inv);
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  const pad = halfCross + stroke + 2 * inv;
-  const grow = (x: number, y: number) => {
-    minX = Math.min(minX, x - pad);
-    minY = Math.min(minY, y - pad);
-    maxX = Math.max(maxX, x + pad);
-    maxY = Math.max(maxY, y + pad);
-  };
-  for (const g of align) {
-    const a = Math.min(g.from, g.to);
-    const b = Math.max(g.from, g.to);
-    if (g.orient === 'v') {
-      grow(g.pos, a);
-      grow(g.pos, b);
-      for (const y of g.marks?.length ? g.marks : [a, b]) grow(g.pos, y);
-    } else {
-      grow(a, g.pos);
-      grow(b, g.pos);
-      for (const x of g.marks?.length ? g.marks : [a, b]) grow(x, g.pos);
-    }
-  }
-  if (![minX, minY, maxX, maxY].every(Number.isFinite)) {
-    try {
-      root?.remove();
-    } catch {
-      /* ignore */
-    }
-    return;
-  }
-
-  const left = quantScene(minX);
-  const top = quantScene(minY);
-  const w = Math.max(1, quantScene(maxX - minX));
-  const h = Math.max(1, quantScene(maxY - minY));
-
-  if (!root) {
-    root = document.createElementNS(SVG_NS, 'svg');
-    root.setAttribute(ALIGN_GUIDES_ATTR, '1');
-    root.setAttribute('overflow', 'visible');
-    root.setAttribute('preserveAspectRatio', 'none');
-    root.style.position = 'absolute';
-    root.style.overflow = 'visible';
-    root.style.pointerEvents = 'none';
-    root.style.display = 'block';
-    layer.appendChild(root);
-  }
-
-  root.setAttribute('width', String(w));
-  root.setAttribute('height', String(h));
-  root.setAttribute('viewBox', `${left} ${top} ${w} ${h}`);
-  root.style.left = `${left}px`;
-  root.style.top = `${top}px`;
-  root.style.width = `${w}px`;
-  root.style.height = `${h}px`;
-
-  while (root.firstChild) root.removeChild(root.firstChild);
-
-  const color = SPACING_MEASURE_COLOR;
-  for (let i = 0; i < align.length; i++) {
-    const g = align[i];
-    const a = Math.min(g.from, g.to);
-    const b = Math.max(g.from, g.to);
-    const marks = Array.from(
-      new Set((g.marks?.length ? g.marks : [a, b]).map((n) => quantScene(n)))
-    );
-    const len = Math.max(0, b - a);
-    const group = document.createElementNS(SVG_NS, 'g');
-
-    if (g.orient === 'v') {
-      const x = quantScene(g.pos);
-      if (len >= stroke) {
-        const line = document.createElementNS(SVG_NS, 'line');
-        line.setAttribute('x1', String(x));
-        line.setAttribute('y1', String(quantScene(a)));
-        line.setAttribute('x2', String(x));
-        line.setAttribute('y2', String(quantScene(b)));
-        line.setAttribute('stroke', color);
-        line.setAttribute('stroke-width', String(stroke));
-        line.setAttribute('stroke-linecap', 'butt');
-        group.appendChild(line);
-      }
-      for (const y of marks) {
-        const p = document.createElementNS(SVG_NS, 'path');
-        p.setAttribute(
-          'd',
-          `M${x - halfCross} ${y - halfCross} L${x + halfCross} ${y + halfCross} M${x + halfCross} ${y - halfCross} L${x - halfCross} ${y + halfCross}`
-        );
-        p.setAttribute('fill', 'none');
-        p.setAttribute('stroke', color);
-        p.setAttribute('stroke-width', String(stroke));
-        p.setAttribute('stroke-linecap', 'butt');
-        group.appendChild(p);
-      }
-    } else {
-      const y = quantScene(g.pos);
-      if (len >= stroke) {
-        const line = document.createElementNS(SVG_NS, 'line');
-        line.setAttribute('x1', String(quantScene(a)));
-        line.setAttribute('y1', String(y));
-        line.setAttribute('x2', String(quantScene(b)));
-        line.setAttribute('y2', String(y));
-        line.setAttribute('stroke', color);
-        line.setAttribute('stroke-width', String(stroke));
-        line.setAttribute('stroke-linecap', 'butt');
-        group.appendChild(line);
-      }
-      for (const x of marks) {
-        const p = document.createElementNS(SVG_NS, 'path');
-        p.setAttribute(
-          'd',
-          `M${x - halfCross} ${y - halfCross} L${x + halfCross} ${y + halfCross} M${x + halfCross} ${y - halfCross} L${x - halfCross} ${y + halfCross}`
-        );
-        p.setAttribute('fill', 'none');
-        p.setAttribute('stroke', color);
-        p.setAttribute('stroke-width', String(stroke));
-        p.setAttribute('stroke-linecap', 'butt');
-        group.appendChild(p);
-      }
-    }
-    root.appendChild(group);
-  }
-}
-
-function clearChromeLayerAlignGuides() {
-  if (typeof document === 'undefined') return;
-  document
-    .querySelectorAll(`svg[${ALIGN_GUIDES_ATTR}]`)
-    .forEach((n) => {
-      try {
-        n.remove();
-      } catch {
-        /* ignore */
-      }
-    });
-}
-
-/** Align guides on the chrome layer (scene coords under world CSS scale). */
-function ChromeAlignGuidesSvg({ guides }: { guides: AlignGuide[] }) {
-  const camera = useRcbCamera();
-  // Match ShapeOutlineSvg / path control stroke — camera zoom only, not browser zoom.
-  const z = Math.max(0.05, camera.zoom || 1);
-  const inv = 1 / z;
-  const stroke = 1.5 * inv;
-  const key = guides
-    .filter((g) => g.kind !== 'gap' && g.kind !== 'size')
-    .map(
-      (g) =>
-        `${g.orient}:${g.pos}:${g.from}:${g.to}:${(g.marks || []).join(',')}:${g.center ? 1 : 0}`
-    )
-    .join('|');
-
-  useLayoutEffect(() => {
-    syncChromeLayerAlignGuides(guides, stroke, inv);
-  }, [key, stroke, inv, guides]);
-
-  useEffect(() => () => clearChromeLayerAlignGuides(), []);
-
-  return null;
 }
 
 function clearHostSelOutline(nodeId: string) {
@@ -476,407 +258,6 @@ function nodeUsesOpenStrokeEndpoints(node: any): boolean {
   if (!node) return false;
   const t = String(node.attrs?.shapeType || '');
   return t === 'line' || t === 'arrow';}
-
-/**
- * Orange align/spacing on the world chrome twin (same layer as blue path —
- * above all shape hosts, so not occluded). Local path coords inside the chrome
- * `<g>` (same transform as the silhouette). Never inject into host paint —
- * that expands getBBox / fitInfiniteSvg and causes drag jitter.
- */
-function appendHostAuxLines(
-  chrome: SVGGElement,
-  o: ShapeOutlineItem,
-  stroke: number,
-  inv: number
-) {
-  const color = SPACING_MEASURE_COLOR;
-  const dashArr = `${stroke * 3.5} ${stroke * 3}`;
-  const arrow = Math.max(stroke * 2, 3.5 * inv);
-  const halfCross = Math.max(stroke * 1.25, 2.5 * inv);
-
-  chrome
-    .querySelectorAll(
-      `[${SEL_EDGE_ATTR}],[${SEL_BADGE_ATTR}],g[data-rcb-sel-edge-for="${CSS.escape(o.id)}"]`
-    )
-    .forEach((n) => {
-      try {
-        n.remove();
-      } catch {
-        /* ignore */
-      }
-    });
-  // Drop any leftover scene-space aux sibling under the chrome svg root.
-  const root = chrome.ownerSVGElement;
-  root
-    ?.querySelectorAll?.(
-      `:scope > g[data-rcb-sel-edge-for="${CSS.escape(o.id)}"],:scope > [${SEL_EDGE_ATTR}],:scope > [${SEL_BADGE_ATTR}]`
-    )
-    .forEach((n) => {
-      try {
-        n.remove();
-      } catch {
-        /* ignore */
-      }
-    });
-
-  let layer = chrome.querySelector(
-    `:scope > g[data-rcb-sel-edge-for="${CSS.escape(o.id)}"]`
-  ) as SVGGElement | null;
-  if (!layer) {
-    layer = document.createElementNS(SVG_NS, 'g');
-    layer.setAttribute(SEL_EDGE_ATTR, 'layer');
-    layer.setAttribute('data-rcb-sel-edge-for', o.id);
-    layer.setAttribute('pointer-events', 'none');
-    chrome.appendChild(layer);
-  } else {
-    while (layer.firstChild) layer.removeChild(layer.firstChild);
-  }
-
-  function appendLine(
-    x1: number,
-    y1: number,
-    x2: number,
-    y2: number,
-    dashed?: boolean
-  ) {
-    const line = document.createElementNS(SVG_NS, 'line');
-    line.setAttribute(SEL_EDGE_ATTR, o.id);
-    line.setAttribute('x1', String(x1));
-    line.setAttribute('y1', String(y1));
-    line.setAttribute('x2', String(x2));
-    line.setAttribute('y2', String(y2));
-    line.setAttribute('stroke', color);
-    line.setAttribute('stroke-width', String(stroke));
-    line.setAttribute('stroke-linecap', 'butt');
-    line.setAttribute('pointer-events', 'none');
-    if (dashed) line.setAttribute('stroke-dasharray', dashArr);
-    layer!.appendChild(line);
-  }
-
-  function appendArrowHeads(x1: number, y1: number, x2: number, y2: number) {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const len = Math.hypot(dx, dy);
-    if (!(len > 0.05)) return;
-    const head = Math.min(arrow, Math.max(stroke * 2, Math.min(len * 0.28, arrow)));
-    const wing = head * 0.55;
-    const horizontal = Math.abs(dx) >= Math.abs(dy);
-    const mk = (d: string) => {
-      const p = document.createElementNS(SVG_NS, 'path');
-      p.setAttribute(SEL_EDGE_ATTR, o.id);
-      p.setAttribute('d', d);
-      p.setAttribute('fill', 'none');
-      p.setAttribute('stroke', color);
-      p.setAttribute('stroke-width', String(stroke));
-      p.setAttribute('stroke-linecap', 'round');
-      p.setAttribute('stroke-linejoin', 'round');
-      p.setAttribute('pointer-events', 'none');
-      layer!.appendChild(p);
-    };
-    if (horizontal) {
-      const dir = dx >= 0 ? 1 : -1;
-      mk(
-        `M${x1} ${y1} L${x1 + dir * head} ${y1 - wing} M${x1} ${y1} L${x1 + dir * head} ${y1 + wing}`
-      );
-      mk(
-        `M${x2} ${y2} L${x2 - dir * head} ${y2 - wing} M${x2} ${y2} L${x2 - dir * head} ${y2 + wing}`
-      );
-    } else {
-      const dir = dy >= 0 ? 1 : -1;
-      mk(
-        `M${x1} ${y1} L${x1 - wing} ${y1 + dir * head} M${x1} ${y1} L${x1 + wing} ${y1 + dir * head}`
-      );
-      mk(
-        `M${x2} ${y2} L${x2 - wing} ${y2 - dir * head} M${x2} ${y2} L${x2 + wing} ${y2 - dir * head}`
-      );
-    }
-  }
-
-  function appendCross(x: number, y: number) {
-    const p = document.createElementNS(SVG_NS, 'path');
-    p.setAttribute(SEL_EDGE_ATTR, o.id);
-    p.setAttribute(
-      'd',
-      `M${x - halfCross} ${y - halfCross} L${x + halfCross} ${y + halfCross} M${x + halfCross} ${y - halfCross} L${x - halfCross} ${y + halfCross}`
-    );
-    p.setAttribute('fill', 'none');
-    p.setAttribute('stroke', color);
-    p.setAttribute('stroke-width', String(stroke));
-    p.setAttribute('stroke-linecap', 'butt');
-    p.setAttribute('pointer-events', 'none');
-    layer!.appendChild(p);
-  }
-
-  function appendBadge(b: NonNullable<ShapeOutlineItem['auxBadges']>[number]) {
-    const fontSize = 11 * inv;
-    const padX = 5.5 * inv;
-    const padY = 2.25 * inv;
-    const radius = 4 * inv;
-    const gap = 6 * inv;
-
-    const g = document.createElementNS(SVG_NS, 'g');
-    g.setAttribute(SEL_BADGE_ATTR, o.id);
-    g.setAttribute('pointer-events', 'none');
-
-    const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('font-size', String(fontSize));
-    text.setAttribute('font-weight', '600');
-    text.setAttribute('font-family', 'ui-sans-serif, system-ui, sans-serif');
-    text.setAttribute('fill', '#ffffff');
-    text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('dominant-baseline', 'central');
-    text.textContent = b.text;
-    g.appendChild(text);
-    layer!.appendChild(g);
-
-    let tw = Math.max(14 * inv, b.text.length * fontSize * 0.56);
-    let th = fontSize * 1.2;
-    try {
-      const bb = text.getBBox();
-      if (bb.width > 0) tw = bb.width;
-      if (bb.height > 0) th = bb.height;
-    } catch {
-      /* ignore */
-    }
-    const bw = tw + padX * 2;
-    const bh = th + padY * 2;
-    let cx = b.x;
-    let cy = b.y;
-    const anchor = b.anchor || 'center';
-    if (anchor === 'below') cy = b.y + gap + bh / 2;
-    else if (anchor === 'above') cy = b.y - gap - bh / 2;
-    else if (anchor === 'right') cx = b.x + gap + bw / 2;
-
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(cx - bw / 2));
-    rect.setAttribute('y', String(cy - bh / 2));
-    rect.setAttribute('width', String(bw));
-    rect.setAttribute('height', String(bh));
-    rect.setAttribute('rx', String(radius));
-    rect.setAttribute('ry', String(radius));
-    rect.setAttribute('fill', b.fill);
-    g.insertBefore(rect, text);
-    text.setAttribute('x', String(cx));
-    text.setAttribute('y', String(cy));
-  }
-
-  for (const seg of o.auxSegs || []) {
-    if (seg.cross) continue;
-    if (seg.arrowsOnly) {
-      appendArrowHeads(seg.x1, seg.y1, seg.x2, seg.y2);
-      continue;
-    }
-    appendLine(seg.x1, seg.y1, seg.x2, seg.y2, seg.dashed);
-    if (seg.arrows && !seg.dashed) appendArrowHeads(seg.x1, seg.y1, seg.x2, seg.y2);
-  }
-  for (const seg of o.auxSegs || []) {
-    if (seg.cross) appendCross(seg.x1, seg.y1);
-  }
-  for (const b of o.auxBadges || []) appendBadge(b);
-}
-
-function formatGuideBadgePx(n: number) {
-  return String(Math.round(n));
-}
-
-function worldSegToLocal(
-  box: SceneBox,
-  seg: { x1: number; y1: number; x2: number; y2: number }
-) {
-  return {
-    x1: seg.x1 - box.left,
-    y1: seg.y1 - box.top,
-    x2: seg.x2 - box.left,
-    y2: seg.y2 - box.top,
-  };
-}
-
-type HostAuxSeg = NonNullable<ShapeOutlineItem['auxSegs']>[number];
-
-/** Align guides → host-local segs (+ × marks) using path edge coords as-is. */
-function alignGuidesToLocalSegs(
-  guides: AlignGuide[],
-  box: SceneBox
-): HostAuxSeg[] {
-  const out: HostAuxSeg[] = [];
-  for (const g of guides) {
-    if (g.kind === 'gap' || g.kind === 'size') continue;
-    const a = Math.min(g.from, g.to);
-    const b = Math.max(g.from, g.to);
-    const marks = g.marks?.length ? g.marks : [a, b];
-    if (g.orient === 'v') {
-      if (b - a > 0.05) {
-        out.push({ ...worldSegToLocal(box, { x1: g.pos, y1: a, x2: g.pos, y2: b }) });
-      }
-      for (const y of marks) {
-        const local = worldSegToLocal(box, { x1: g.pos, y1: y, x2: g.pos, y2: y });
-        out.push({ x1: local.x1, y1: local.y1, x2: local.x1, y2: local.y1, cross: true });
-      }
-    } else {
-      if (b - a > 0.05) {
-        out.push({ ...worldSegToLocal(box, { x1: a, y1: g.pos, x2: b, y2: g.pos }) });
-      }
-      for (const x of marks) {
-        const local = worldSegToLocal(box, { x1: x, y1: g.pos, x2: x, y2: g.pos });
-        out.push({ x1: local.x1, y1: local.y1, x2: local.x1, y2: local.y1, cross: true });
-      }
-    }
-  }
-  return out;
-}
-
-/** Spacing measures → host-local shafts (arrows on gap, dashed on offset). */
-function measuresToLocalSegs(measures: SpacingMeasure[], box: SceneBox): HostAuxSeg[] {
-  const out: HostAuxSeg[] = [];
-  for (const m of measures) {
-    if (!(m.distance >= 0.05)) continue;
-    const dashed = m.kind === 'offset';
-    out.push({
-      ...worldSegToLocal(box, m),
-      dashed,
-      arrows: !dashed,
-    });
-    for (const d of m.dashes || []) {
-      out.push({ ...worldSegToLocal(box, d), dashed: true });
-    }
-  }
-  return out;
-}
-
-/**
- * Badge on the path line (fig.2): sit on align/path coords, not a screen reverse-calc.
- * Prefer intersection with a crossing path guide / mark so h+v path lines stack.
- */
-function badgeOnPathLine(
-  m: SpacingMeasure,
-  pinned: AlignGuide | null,
-  align: AlignGuide[]
-): { x: number; y: number; anchor: 'below' | 'right' | 'center' } {
-  if (pinned?.orient === 'h') {
-    const lo = Math.min(m.x1, m.x2);
-    const hi = Math.max(m.x1, m.x2);
-    let x = m.mx;
-    // Crossing vertical path guide → badge on that path X (压到路径中线).
-    for (const g of align) {
-      if (g.orient !== 'v' || g.kind === 'gap' || g.kind === 'size') continue;
-      if (g.pos >= lo - 1 && g.pos <= hi + 1) {
-        x = g.pos;
-        break;
-      }
-    }
-    if (x === m.mx && pinned.marks?.length) {
-      const hits = pinned.marks.filter((mk) => mk >= lo - 1 && mk <= hi + 1);
-      if (hits.length) x = hits.reduce((a, b) => a + b, 0) / hits.length;
-    }
-    return { x, y: pinned.pos, anchor: 'below' };
-  }
-  if (pinned?.orient === 'v') {
-    const lo = Math.min(m.y1, m.y2);
-    const hi = Math.max(m.y1, m.y2);
-    let y = m.my;
-    for (const g of align) {
-      if (g.orient !== 'h' || g.kind === 'gap' || g.kind === 'size') continue;
-      if (g.pos >= lo - 1 && g.pos <= hi + 1) {
-        y = g.pos;
-        break;
-      }
-    }
-    if (y === m.my && pinned.marks?.length) {
-      const hits = pinned.marks.filter((mk) => mk >= lo - 1 && mk <= hi + 1);
-      if (hits.length) y = hits.reduce((a, b) => a + b, 0) / hits.length;
-    }
-    return { x: pinned.pos, y, anchor: 'right' };
-  }
-  const horizontal = m.side === 'left' || m.side === 'right';
-  return { x: m.mx, y: m.my, anchor: horizontal ? 'below' : 'right' };
-}
-
-/**
- * Align shafts + spacing on the mover host, all in path geom coords (L/T/R/B).
- * Same mirror as path chrome — no stage scene→screen reverse calc.
- */
-function buildUnifiedGuideAux(
-  guides: AlignGuide[],
-  measures: SpacingMeasure[],
-  box: SceneBox
-): {
-  aux: HostAuxSeg[];
-  badgeMeasures: SpacingMeasure[];
-  badges: NonNullable<ShapeOutlineItem['auxBadges']>;
-} {
-  const align = guides.filter((g) => g.kind !== 'gap' && g.kind !== 'size');
-  const aux: HostAuxSeg[] = alignGuidesToLocalSegs(guides, box);
-  const badgeMeasures: SpacingMeasure[] = [];
-  const badges: NonNullable<ShapeOutlineItem['auxBadges']> = [];
-
-  for (let i = 0; i < measures.length; i++) {
-    const m = measures[i];
-    if (!(m.distance >= 0.05)) continue;
-
-    if (m.kind === 'offset') {
-      badgeMeasures.push(m);
-      aux.push(...measuresToLocalSegs([m], box));
-      const pt = badgeOnPathLine(m, null, align);
-      badges.push({
-        x: pt.x - box.left,
-        y: pt.y - box.top,
-        text: formatGuideBadgePx(m.distance),
-        fill: SPACING_MEASURE_COLOR,
-        anchor: pt.anchor,
-      });
-      continue;
-    }
-
-    const horizontal = m.side === 'left' || m.side === 'right';
-    const mAxis = horizontal ? (m.y1 + m.y2) / 2 : (m.x1 + m.x2) / 2;
-    const gapLo = horizontal ? Math.min(m.x1, m.x2) : Math.min(m.y1, m.y2);
-    const gapHi = horizontal ? Math.max(m.x1, m.x2) : Math.max(m.y1, m.y2);
-
-    let pinned: AlignGuide | null = null;
-    let best = Infinity;
-    for (const g of align) {
-      if (horizontal && g.orient !== 'h') continue;
-      if (!horizontal && g.orient !== 'v') continue;
-      const gLo = Math.min(g.from, g.to);
-      const gHi = Math.max(g.from, g.to);
-      if (gLo > gapLo + 2 || gHi < gapHi - 2) continue;
-      const d = Math.abs(g.pos - mAxis);
-      const score = d + (g.center ? 0 : 1e3);
-      if (score < best) {
-        best = score;
-        pinned = g;
-      }
-    }
-    const mergeSlop = Math.max(48, (horizontal ? box.height : box.width) * 0.6);
-    let drawn: SpacingMeasure = m;
-    if (pinned && (pinned.center ? best : best - 1e3) < mergeSlop) {
-      const pos = pinned.pos;
-      drawn = horizontal
-        ? { ...m, y1: pos, y2: pos, my: pos }
-        : { ...m, x1: pos, x2: pos, mx: pos };
-      badgeMeasures.push(drawn);
-      aux.push({
-        ...worldSegToLocal(box, drawn),
-        arrows: true,
-        arrowsOnly: true,
-      });
-    } else {
-      badgeMeasures.push(m);
-      aux.push(...measuresToLocalSegs([m], box));
-    }
-
-    const pt = badgeOnPathLine(drawn, pinned, align);
-    badges.push({
-      x: pt.x - box.left,
-      y: pt.y - box.top,
-      text: formatGuideBadgePx(drawn.distance),
-      fill: SPACING_MEASURE_COLOR,
-      anchor: pt.anchor,
-    });
-  }
-
-  return { aux, badgeMeasures, badges };
-}
 
 function syncHostSelHandles(
   chrome: SVGGElement,
@@ -1020,15 +401,17 @@ function syncHostSelHandles(
   }
 
   if (o.showRotate) {
-    const corners: Array<['nw' | 'ne' | 'se' | 'sw', number, number]> = [
-      ['nw', 0, 0],
-      ['ne', w, 0],
-      ['se', w, h],
-      ['sw', 0, h],
+    // Transparent corner hotzones only — rotate icon appears as the cursor, not on canvas.
+    const corners: Array<['nw' | 'ne' | 'se' | 'sw', number, number, number]> = [
+      ['nw', 0, 0, 0],
+      ['ne', w, 0, 90],
+      ['se', w, h, 180],
+      ['sw', 0, h, 270],
     ];
     const cx = w / 2;
     const cy = h / 2;
-    for (const [corner, lx, ly] of corners) {
+    const angle = Number(o.angle) || 0;
+    for (const [corner, lx, ly, iconDeg] of corners) {
       const vx = lx - cx;
       const vy = ly - cy;
       const len = Math.hypot(vx, vy) || 1;
@@ -1038,13 +421,15 @@ function syncHostSelHandles(
       const hit = document.createElementNS(SVG_NS, 'rect');
       hit.setAttribute('data-sel-handle', 'rotate');
       hit.setAttribute('data-rotate-corner', corner);
+      hit.setAttribute('role', 'button');
+      hit.setAttribute('aria-label', 'Rotate');
       hit.setAttribute('x', String(hx - rotateHit / 2));
       hit.setAttribute('y', String(hy - rotateHit / 2));
       hit.setAttribute('width', String(rotateHit));
       hit.setAttribute('height', String(rotateHit));
       hit.setAttribute('fill', 'transparent');
       hit.setAttribute('pointer-events', 'all');
-      hit.style.cursor = 'grab';
+      hit.style.cursor = cursorForRotate(iconDeg, angle);
       chrome.appendChild(hit);
     }
   }
@@ -1198,46 +583,6 @@ function syncHostSelOutline(o: ShapeOutlineItem, stroke: number, inv: number): b
       .forEach((n) => n.remove());
   }
 
-  const hasAux = Boolean(o.auxSegs?.length || o.auxBadges?.length);
-  // Strip any leftover aux injected into the shape host (old path that caused
-  // occlusion + fitInfiniteSvg jitter while dragging).
-  el
-    ?.querySelectorAll?.(
-      `[${SEL_EDGE_ATTR}],[${SEL_BADGE_ATTR}],g[data-rcb-sel-edge-for="${CSS.escape(o.id)}"]`
-    )
-    .forEach((n) => {
-      try {
-        n.remove();
-      } catch {
-        /* ignore */
-      }
-    });
-  if (hasAux) appendHostAuxLines(chrome, o, stroke, inv);
-  else {
-    chrome
-      .querySelectorAll(
-        `[${SEL_EDGE_ATTR}],[${SEL_BADGE_ATTR}],g[data-rcb-sel-edge-for="${CSS.escape(o.id)}"]`
-      )
-      .forEach((n) => {
-        try {
-          n.remove();
-        } catch {
-          /* ignore */
-        }
-      });
-    root
-      .querySelectorAll(
-        `:scope > g[data-rcb-sel-edge-for="${CSS.escape(o.id)}"],:scope > [${SEL_EDGE_ATTR}],:scope > [${SEL_BADGE_ATTR}]`
-      )
-      .forEach((n) => {
-        try {
-          n.remove();
-        } catch {
-          /* ignore */
-        }
-      });
-  }
-
   return true;
 }
 
@@ -1251,20 +596,19 @@ function ShapeOutlineSvg({ outlines }: { outlines: ShapeOutlineItem[] }) {
   const outlineKey = outlines
     .map((o) => {
       const host = getShapeHost(o.id);
-      const hostEl = (host?.el || getSharedNodeEls()?.get(o.id)) as any;
+      const hostEl = (host?.el || getSharedNodeEls()?.get(o.id)) as SVGElement | null | undefined;
+      const baseline =
+        hostEl &&
+        ((hostEl.getAttribute?.('data-baseline') === '1' ? hostEl : null) ||
+          (hostEl.querySelector?.(':scope > [data-baseline="1"]') as SVGElement | null) ||
+          (hostEl.querySelector?.('[data-baseline="1"]') as SVGElement | null));
+      // Prefer live host `d` so radius / tip previews re-sync chrome (attrs path stays stale mid-drag).
+      const liveD = readBaselinePathD(baseline, o.pathD);
       const vb = host?.root?.getAttribute?.('viewBox') || '';
       const tf = hostEl?.getAttribute?.('transform') || '';
-      const origin = `${Number(hostEl?.__sceneLeft) || o.box.left},${Number(hostEl?.__sceneTop) || o.box.top}`;
-      const aux = (o.auxSegs || [])
-        .map(
-          (s) =>
-            `${s.x1.toFixed(1)},${s.y1.toFixed(1)},${s.x2.toFixed(1)},${s.y2.toFixed(1)},${s.dashed ? 1 : 0}${s.arrows ? 'a' : ''}${s.arrowsOnly ? 'o' : ''}${s.cross ? 'x' : ''}`
-        )
-        .join(';');
-      const badges = (o.auxBadges || [])
-        .map((b) => `${b.x.toFixed(1)},${b.y.toFixed(1)},${b.text},${b.anchor || ''}`)
-        .join(';');
-      return `${o.id}:${o.pathD.length}:${o.pathD.slice(0, 24)}:${o.pathD.slice(-24)}:${o.box.left.toFixed(1)},${o.box.top.toFixed(1)},${o.box.width}x${o.box.height}:${o.angle.toFixed(2)}:${o.withHandles ? 1 : 0}:${o.showPath === false ? 0 : 1}:${o.lineMode ? 1 : 0}:${o.shaftEndpoints ? 1 : 0}:${o.showRotate ? 1 : 0}:${aux}:${badges}:${o.color || ''}:${vb}:${tf}:${origin}`;
+      const anyEl = hostEl as any;
+      const origin = `${Number(anyEl?.__sceneLeft) || o.box.left},${Number(anyEl?.__sceneTop) || o.box.top}`;
+      return `${o.id}:${liveD.length}:${liveD.slice(0, 24)}:${liveD.slice(-24)}:${o.box.left.toFixed(1)},${o.box.top.toFixed(1)},${o.box.width}x${o.box.height}:${o.angle.toFixed(2)}:${o.withHandles ? 1 : 0}:${o.showPath === false ? 0 : 1}:${o.lineMode ? 1 : 0}:${o.shaftEndpoints ? 1 : 0}:${o.showRotate ? 1 : 0}:${o.color || ''}:${vb}:${tf}:${origin}`;
     })
     .join('|');
   const outlinesRef = useRef(outlines);
@@ -1317,8 +661,7 @@ function ShapeOutlineSvg({ outlines }: { outlines: ShapeOutlineItem[] }) {
   useEffect(() => {
     return () => {
       for (const o of outlinesRef.current) clearHostSelOutline(o.id);
-      // Keep the chrome layer for align guides; only drop orphan outline svgs.
-    };
+        };
   }, []);
 
   return null;
@@ -1331,7 +674,5 @@ export {
   pathLocalEndpoints,
   localPointToWorld,
   boxFromLocalAnchor,
-  buildUnifiedGuideAux,
   ShapeOutlineSvg,
-  ChromeAlignGuidesSvg,
 };
