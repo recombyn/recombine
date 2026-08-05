@@ -29,7 +29,7 @@ from typing import Any
 from sqlmodel import Session
 
 from app import crud
-from app.core.db import engine
+from app.core import db as core_db
 
 logger = logging.getLogger(__name__)
 
@@ -468,7 +468,7 @@ def runtime_skill_keys() -> frozenset[str]:
     for k in list(keys):
         keys.add(f"{NS_CORE}.{k}")
     try:
-        with Session(engine) as session:
+        with Session(core_db.engine) as session:
             rows = crud.list_design_skill_keys_enabled(session=session)
             for k, ns_raw in rows:
                 k = str(k or "").strip()
@@ -895,7 +895,7 @@ def _load_user_skill_prefs(user_id: str) -> dict[str, bool]:
     if not uid:
         return {}
     ensure_design_skills()
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_user_skill_prefs(session=session, user_id=uid)
     out: dict[str, bool] = {}
     for r in rows:
@@ -916,7 +916,7 @@ def list_runtime_skills(
     scene_l = str(scene or "website").strip().lower() or "website"
     uid = str(user_id or "").strip() or None
     prefs = _load_user_skill_prefs(uid) if uid else {}
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_design_skills_runtime(
             session=session, enabled_only=enabled_only
         )
@@ -1050,7 +1050,7 @@ def _load_skill_revision_snapshot(
     if not key:
         return None
     try:
-        with Session(engine) as session:
+        with Session(core_db.engine) as session:
             raw = crud.get_design_skill_revision_snapshot(
                 session=session,
                 skill_key=key,
@@ -1879,7 +1879,7 @@ def ensure_design_skills(*, force: bool = False) -> None:
 
         init_schema()
         ensure_design_tables_boot()
-        with Session(engine) as session:
+        with Session(core_db.engine) as session:
             for item in _SEED:
                 seeded = dict(item)
                 seeded.setdefault("namespace", NS_CORE)
@@ -2061,7 +2061,7 @@ def list_my_skills(*, user_id: str) -> list[dict[str, Any]]:
         return []
     ensure_design_skills()
     prefs = _load_user_skill_prefs(uid)
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_design_skills_by_owner(
             session=session, owner_user_id=uid, namespace=NS_USER
         )
@@ -2088,7 +2088,7 @@ def set_user_skill_enabled(
     if sid <= 0:
         raise ValueError("skill_id required")
     ensure_design_skills()
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         row = crud.get_design_skill(session=session, item_id=sid)
         if not row:
             raise ValueError("skill not found")
@@ -2226,7 +2226,7 @@ def upsert_end_user_skill(*, user_id: str, payload: dict[str, Any]) -> dict[str,
         )
 
     ensure_design_skills()
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         if sid:
             row = crud.get_design_skill(session=session, item_id=sid)
             if not row:
@@ -2324,7 +2324,7 @@ def delete_end_user_skill(*, user_id: str, skill_id: int) -> bool:
     uid = str(user_id or "").strip()
     if not uid:
         return False
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         row = crud.get_design_skill(session=session, item_id=int(skill_id))
         if not row:
             return False
@@ -2666,7 +2666,7 @@ def _find_owned_skill_conflict(
     key = str(skill_key or "").strip()
     name_l = str(name or "").strip().lower()
     ensure_design_skills()
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         row = _fetch_owned_skill_by_key(session, uid=uid, key=key)
         if not row:
             row = _fetch_owned_skill_by_name(session, uid=uid, name_l=name_l)
@@ -2682,7 +2682,7 @@ def _apply_pack_version(*, uid: str, skill_id: int, pack_ver: str | None) -> Non
     if not pack_ver or skill_id <= 0:
         return
     try:
-        with Session(engine) as session:
+        with Session(core_db.engine) as session:
             crud.update_design_skill_pack_version(
                 session=session,
                 item_id=skill_id,

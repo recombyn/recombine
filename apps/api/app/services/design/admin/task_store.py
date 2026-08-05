@@ -384,7 +384,9 @@ def _claim_lease_meta(
     now = time.time()
     row = get_design_task(tid)
     if not row:
-        return {"ok": False, "error": "not_found"}
+        # New runs claim before bootstrap inserts the row (Redis NX path already
+        # allows this). Treat missing row as an open claim; lease is persisted later.
+        return {"ok": True, "lease": _new_lease(owner, ttl, now=now), "via": "pending"}
     meta = parse_task_meta(row.get("meta_json"))
     prev = get_run_lease(meta)
     conflict = _claim_conflict(
@@ -423,7 +425,7 @@ def _claim_lease_db_cas(
                     pass
             row = crud.get_design_task_for_update(session=session, task_id=tid)
             if not row:
-                return {"ok": False, "error": "not_found"}
+                return {"ok": True, "lease": lease, "via": "pending"}
             meta = parse_task_meta(row.meta_json)
             prev = get_run_lease(meta)
             conflict = _claim_conflict(

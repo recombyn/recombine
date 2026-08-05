@@ -24,20 +24,14 @@ def _catalog(tmp_path_factory):
     os.environ["DATABASE_URL"] = ""
     from app.core.config import settings as settings_mod
     from app.core.db import reset_engine
+    from tests.conftest import restore_default_sqlite_engine
 
     settings_mod.sqlite_db_path = str(db_path)
     settings_mod.database_url = ""
-    import app.services.db as db_mod
-    import app.services.design.readpath.catalog as catalog_mod
-
-    db_mod._SCHEMA_READY = False
-    catalog_mod._CATALOG_READY = False
     reset_engine()
-    from app.core import db as core_db
-
-    catalog_mod.engine = core_db.engine
     ensure_design_catalog(force=True)
-
+    yield
+    restore_default_sqlite_engine()
 
 @pytest.fixture(autouse=True)
 def _wallet(monkeypatch):
