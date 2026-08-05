@@ -1,6 +1,6 @@
 from celery import Celery
 
-from config.settings import settings
+from app.core.config import settings
 
 celery = Celery(
     "resume_scene",

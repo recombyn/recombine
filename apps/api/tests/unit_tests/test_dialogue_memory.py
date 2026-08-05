@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from services.agent_memory.compose import compose_memory_blocks
-from services.agent_memory.short_term import (
+from app.services.agent_memory.compose import compose_memory_blocks
+from app.services.agent_memory.short_term import (
     assistant_facing_text,
     extract_facts_from_text,
     facts_to_summary,

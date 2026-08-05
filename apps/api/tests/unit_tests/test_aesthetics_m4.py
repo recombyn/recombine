@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from services.design.aesthetics.calibrate import _percentile
-from services.design.aesthetics.svg_raster import svg_to_png_bytes
+from app.services.design.aesthetics.calibrate import _percentile
+from app.services.design.aesthetics.svg_raster import svg_to_png_bytes
 
 
 @pytest.mark.unit

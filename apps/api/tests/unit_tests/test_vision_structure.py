@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.aesthetics.structure_extract import (
+from app.services.design.aesthetics.structure_extract import (
     build_vision_structure_system,
     format_schema_for_prompt,
     parse_structure_schema,

@@ -7,28 +7,30 @@ OpenAPI：http://127.0.0.1:8000/docs
 ## 目录结构
 
 ```
-apps/api/
-  main.py                 # FastAPI 入口（startup seed / catalog）
-  api/
-    router.py             # 汇总路由
-    v1/                   # HTTP 层（薄）：auth / projects / plaza / design / admin …
-  services/               # 业务层（按域分包）
-    design/               # Agent 流程、规则、字典、美学样本、编排运行时
-    plaza/ auth/ wallet/ llm/ …
-    seed.py               # 启动种子：字体等
-  data/                   # 种子 JSON（版本管理；写入 DB 后以 DB 为准）
-  config/                 # settings
-  worker/                 # Celery
-  storage/                # 本地结果 / 上传
-  tests/
-  scripts/
+apps/api/                     # ≈ 官方模板 backend/
+  app/                        # 官方 app 包
+    main.py                   # FastAPI + lifespan
+    api/
+      deps.py                 # CurrentUser / AdminUser / OptionalUser / SessionDep
+      main.py                 # api_router
+      routes/                 # HTTP 薄路由
+    core/
+      config.py               # Settings
+      db.py                   # SQLModel engine + Session
+    models.py · crud.py       # ORM + session CRUD
+    services/                 # 业务域（Design Agent 等）
+    schemas/
+  worker/ · data/ · storage/ · tests/
+  main.py                     # 兼容：from app.main import app
 ```
 
-约定：
+约定（完全按官方包结构，见 [docs/api-backend-refactor.md](../../docs/api-backend-refactor.md)）：
 
-- **路由不写业务**：`api/v1/*.py` 只做参数校验与调用 `services/`
-- **种子在 `data/`**：流程 / 字典 / 规则默认值用 JSON，避免大段 Python 字面量
-- **Admin 改过的值以 DB 为准**：`ensure_*` 只 INSERT 缺失 key，不覆盖已有配置
+- **路由不写业务**：`app/api/routes/*.py` → 调 `app.services.*`；鉴权 `user: CurrentUser`
+- **配置**：`from app.core.config import settings`
+- **数据访问**：`Session(engine)` + `app.crud.*`（DDL 仍由 `init_schema` / `ensure_*`）
+- **启动**：`uvicorn app.main:app`
+- **种子在 `data/`**：Admin 改过的值以 DB 为准（`ensure_*` 只插缺失）
 
 ## `data/` 种子说明
 
@@ -53,36 +55,38 @@ Skill 命名空间、ACL、版本 pin、热加载说明见 [data/public/design_s
 
 | 包 / 模块 | 职责 |
 |-----------|------|
-| `services/design/runtime/` | 编排 + LangGraph 运行时（见下） |
-| `services/design/ops/` | tool_ops 契约与校验 |
-| `services/design/prompts/` | Skill、prompt pack、knowledge、token |
-| `services/design/readpath/` | catalog、canvas scene、library |
-| `services/design/admin/` | Admin 存储、字典、美学样本、schema |
-| `services/design/aesthetics/` | 美学 RAG |
-| `services/security.py` | BYOK vault、脱敏、限流相关 |
-| `services/db/backup.py` | 周期性 DB 备份 |
+| `app/services/design/runtime/` | 编排 + LangGraph 运行时（见下） |
+| `app/services/design/ops/` | tool_ops 契约与校验 |
+| `app/services/design/prompts/` | Skill、prompt pack、knowledge、token |
+| `app/services/design/readpath/` | catalog、canvas scene、library |
+| `app/services/design/admin/` | Admin 存储、字典、美学样本、schema |
+| `app/services/design/aesthetics/` | 美学 RAG |
+| `app/services/security.py` | BYOK vault、脱敏、限流相关 |
+| `app/services/db/backup.py` | 周期性 DB 备份 |
 
 ### Design Agent 调用链
 
 ```text
-api/v1/design.py  POST /run
+app/api/routes/design.py  POST /run
   → orchestrator.run_design_job      # 权限 / hold / rules
       → design_run.design_stream     # 公开 facade
           → graph.build.run_agent_graph
+              # LangGraph 外层 StateGraph + interrupt / lease 驱动
+              # 节点内 LangChain（流式 / structured / 可选 create_agent）
 ```
 
 | 模块 | 职责 |
 |------|------|
 | `runtime/orchestrator.py` | HTTP 侧入口：门禁后调 `design_stream` |
 | `runtime/design_run.py` | Facade：`design_stream` + host 再导出 |
-| `runtime/host/` | Prompt 组装、放置、ops 校验、资源加载 |
-| `runtime/graph/` | StateGraph、nodes、SSE / turn / paint / scene 辅助 |
+| `runtime/host/` | Prompt 组装、放置、ops 校验、资源加载（产品逻辑，非 LC/LG 内置） |
+| `runtime/graph/` | 外层 StateGraph、nodes、SSE / turn / paint / scene；`build.py` 含续跑驱动 |
 | `runtime/agent_controller.py` | 兼容 shim（测试 / serde），非主路径 |
 | `runtime/models_route.py` · `llm_step.py` | 选模与单步 LLM |
-| `runtime/scene_feedback.py` | FE 回传画布快照 |
+| `runtime/scene_feedback.py` | FE 回传画布快照（配合 observe `interrupt`） |
 | `prompts/*_store.py` | 内容库（pack / skill / knowledge / token） |
 
-完整约定见仓库 [docs/design-agent-runtime.md](../../docs/design-agent-runtime.md)。
+完整约定（含 **LC/LG 分层、节点图、生命周期 / HITL / critique、Skills vs 语料**）见仓库 [docs/design-agent-runtime.md](../../docs/design-agent-runtime.md)。
 
 Admin HTTP 前缀：`/api/v1/admin/...`（需管理员会话）。
 
@@ -90,7 +94,7 @@ Postgres / 读写分离 / 备份 / LangGraph checkpointer：见仓库 [docs/post
 
 ### LangGraph checkpointer
 
-`get_agent_checkpointer()`（`services/llm/agent.py`）供 Design 外层图与 `create_agent` 共用：
+`get_agent_checkpointer()`（`app/services/llm/agent.py`）供 Design 外层图与 `create_agent` 共用：
 
 1. **MySQL ≥ 8.0.19**（`LANGGRAPH_CHECKPOINT_URL` 或 `DATABASE_URL`）
 2. 否则 **SQLite**（`LANGGRAPH_CHECKPOINT_SQLITE_PATH`，默认 `storage/langgraph_checkpoints.db`）+ async bridge（供 `graph.astream`）
@@ -137,8 +141,9 @@ docker compose up -d redis
 
 ```bash
 cd apps/api
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 # 或仓库根：npm run dev:api
+# 兼容：uvicorn main:app（根 main.py 再导出）
 ```
 
 ### 3. Celery worker（另开终端，cwd = apps/api）
@@ -174,7 +179,7 @@ LLM / 对象存储等见 `.env.example`。
 
 ### 产品支持
 
-- `POST /api/v1/import/image` — 图片 → Scene JSON
+- `POST /api/v1/import/image` — 图片 → Scene JSON（需 Bearer）
 
 ### 遗留（不作为正式产品能力）
 

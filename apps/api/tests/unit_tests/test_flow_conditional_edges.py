@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from langgraph.types import Command
 
-from services.design.runtime.agent_controller import (
+from app.services.design.runtime.agent_controller import (
     AgentRunState,
     AgentRuntime,
     _bind_design_hold_fns,
@@ -20,8 +20,8 @@ from services.design.runtime.agent_controller import (
     _unbind_design_hold_fns,
     invalidate_agent_graph_cache,
 )
-from services.design.runtime.decision_log import DesignRunDecision
-from services.design.runtime.flow_runtime import choose_outgoing_edges, eval_edge_condition
+from app.services.design.runtime.decision_log import DesignRunDecision
+from app.services.design.runtime.flow_runtime import choose_outgoing_edges, eval_edge_condition
 
 
 def test_and_edge_condition():
@@ -30,6 +30,9 @@ def test_and_edge_condition():
 
 
 def test_build_lc_design_graph_nodes():
+    from app.core.config import settings as settings_mod
+
+    settings_mod.settings.design_graph_require_durable_checkpoint = False
     invalidate_agent_graph_cache()
     compiled = _build_lc_design_graph()
     nodes = set(compiled.nodes)
@@ -53,8 +56,11 @@ def test_design_thread_id():
 
 
 def test_design_graph_uses_shared_durable_checkpointer():
+    from app.core.config import settings as settings_mod
+
+    settings_mod.settings.design_graph_require_durable_checkpoint = False
     invalidate_agent_graph_cache()
-    from services.llm.agent import checkpointer_backend, get_agent_checkpointer
+    from app.services.llm.agent import checkpointer_backend, get_agent_checkpointer
 
     cp = _get_design_graph_checkpointer()
     assert cp is get_agent_checkpointer()
@@ -122,9 +128,9 @@ def test_design_hold_fns_bound_outside_checkpoint_state():
         serde = JsonPlusSerializer(
             pickle_fallback=False,
             allowed_msgpack_modules=[
-                ("services.design.runtime.agent_controller", "AgentRuntime"),
-                ("services.design.runtime.agent_controller", "AgentRunState"),
-                ("services.design.runtime.decision_log", "DesignRunDecision"),
+                ("app.services.design.runtime.agent_controller", "AgentRuntime"),
+                ("app.services.design.runtime.agent_controller", "AgentRunState"),
+                ("app.services.design.runtime.decision_log", "DesignRunDecision"),
             ],
         )
         blob = serde.dumps_typed({"rt": rt, "tick": 1})
@@ -146,7 +152,7 @@ def test_commit_has_no_goto():
 
 
 def test_label_is_not_edge_condition():
-    from services.design.runtime.flow_runtime import _edge_condition
+    from app.services.design.runtime.flow_runtime import _edge_condition
 
     edge = {
         "id": "e_mode_agent",

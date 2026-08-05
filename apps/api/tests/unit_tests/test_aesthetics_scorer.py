@@ -6,7 +6,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from services.design.aesthetics.scorer import _blend, _bytes_to_vec, _cosine, _gaps
+from app.services.design.aesthetics.scorer import _blend, _bytes_to_vec, _cosine, _gaps
 
 
 @pytest.mark.unit

@@ -5,9 +5,9 @@ from __future__ import annotations
 from langchain_core.prompts import ChatPromptTemplate
 from unittest.mock import patch
 
-from services.design.prompts.rules_text import render_prompt_template
-from services.design.ops.validate import extract_json
-from services.agent_memory.short_term import split_recent_and_older, trim_turns_by_chars
+from app.services.design.prompts.rules_text import render_prompt_template
+from app.services.design.ops.validate import extract_json
+from app.services.agent_memory.short_term import split_recent_and_older, trim_turns_by_chars
 
 
 def test_prompt_template_official():
@@ -24,7 +24,7 @@ def test_prompt_template_official():
 
 def test_render_prompt_body_admin_then_langchain():
     """All packs: Admin/seed body → LangChain fill (not Hub)."""
-    from services.design.prompts.prompt_pack_store import render_prompt_body
+    from app.services.design.prompts.prompt_pack_store import render_prompt_body
 
     paint = render_prompt_body("agent.prompt.paint_system")
     assert "PAINT" in paint.upper() or "tool_ops" in paint
@@ -57,14 +57,14 @@ def test_splitter_embeddings_and_format_document():
     from langchain_core.documents import Document
     from langchain_core.embeddings import Embeddings
     from langchain_core.messages import BaseMessage, HumanMessage
-    from services.agent_memory.text_embed import (
+    from app.services.agent_memory.text_embed import (
         ClipTextEmbeddings,
         format_rag_block,
         get_text_embeddings,
         hits_to_documents,
         split_text_chunks,
     )
-    from services.llm import to_lc_messages
+    from app.services.llm import to_lc_messages
 
     chunks = split_text_chunks("word " * 80, chunk_size=40, chunk_overlap=5)
     assert len(chunks) >= 2
@@ -86,9 +86,9 @@ def test_tool_node_and_official_agent_factory():
     from langchain.agents.middleware import SummarizationMiddleware
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.prebuilt import ToolNode
-    from services.llm import LlmEndpoint
-    from services.llm.design_tools import design_langchain_tools
-    from services.llm.agent import (
+    from app.services.llm import LlmEndpoint
+    from app.services.llm.design_tools import design_langchain_tools
+    from app.services.llm.agent import (
         agent_thread_config,
         build_official_agent,
         build_summarization_middleware,
@@ -118,7 +118,7 @@ def test_tool_node_and_official_agent_factory():
         model_id="deepseek-chat",
         provider="deepseek",
     )
-    with patch("services.llm.agent.get_llm_endpoint", return_value=ep):
+    with patch("app.services.llm.agent.get_llm_endpoint", return_value=ep):
         mw = build_summarization_middleware(agent_model="deepseek-chat", enabled=True)
         assert len(mw) == 1
         assert isinstance(mw[0], SummarizationMiddleware)
@@ -137,8 +137,8 @@ def test_tool_node_and_official_agent_factory():
 def test_build_official_agent_accepts_response_format():
     from pydantic import BaseModel
     from langgraph.checkpoint.memory import InMemorySaver
-    from services.llm import LlmEndpoint
-    from services.llm.agent import build_official_agent
+    from app.services.llm import LlmEndpoint
+    from app.services.llm.agent import build_official_agent
 
     class Cap(BaseModel):
         name: str
@@ -149,7 +149,7 @@ def test_build_official_agent_accepts_response_format():
         model_id="deepseek-chat",
         provider="deepseek",
     )
-    with patch("services.llm.agent.get_llm_endpoint", return_value=ep):
+    with patch("app.services.llm.agent.get_llm_endpoint", return_value=ep):
         agent = build_official_agent(
             model="deepseek-chat",
             tools=[],
@@ -166,8 +166,8 @@ def test_sqlite_checkpointer_setup_and_thread_config(tmp_path, monkeypatch):
     import asyncio
 
     from langgraph.checkpoint.base import BaseCheckpointSaver
-    from config import settings as settings_mod
-    from services.llm import agent as agent_mod
+    from app.core.config import settings as settings_mod
+    from app.services.llm import agent as agent_mod
 
     monkeypatch.setattr(settings_mod.settings, "database_url", "")
     monkeypatch.setattr(settings_mod.settings, "langgraph_checkpoint_url", "")
@@ -191,7 +191,7 @@ def test_sqlite_checkpointer_setup_and_thread_config(tmp_path, monkeypatch):
 
 
 def test_mysql_version_ok_for_langgraph():
-    from services.llm.agent import _mysql_version_ok_for_langgraph
+    from app.services.llm.agent import _mysql_version_ok_for_langgraph
 
     assert _mysql_version_ok_for_langgraph("8.0.19")
     assert _mysql_version_ok_for_langgraph("8.4.0")
@@ -203,9 +203,9 @@ def test_mysql_version_ok_for_langgraph():
 def test_summarization_middleware_matches_docs(monkeypatch):
     """Docs: SummarizationMiddleware(trigger=('tokens', 4000), keep=('messages', 20))."""
     from langchain.agents.middleware import SummarizationMiddleware
-    from config import settings as settings_mod
-    from services.llm import LlmEndpoint
-    from services.llm.agent import build_summarization_middleware
+    from app.core.config import settings as settings_mod
+    from app.services.llm import LlmEndpoint
+    from app.services.llm.agent import build_summarization_middleware
 
     monkeypatch.setattr(settings_mod.settings, "agent_summarize_enabled", True)
     monkeypatch.setattr(settings_mod.settings, "agent_summarize_trigger_tokens", 4000)
@@ -216,7 +216,7 @@ def test_summarization_middleware_matches_docs(monkeypatch):
         model_id="deepseek-chat",
         provider="deepseek",
     )
-    with patch("services.llm.agent.get_llm_endpoint", return_value=ep):
+    with patch("app.services.llm.agent.get_llm_endpoint", return_value=ep):
         mw = build_summarization_middleware(agent_model="deepseek-chat")
     assert len(mw) == 1
     assert isinstance(mw[0], SummarizationMiddleware)
@@ -226,8 +226,8 @@ def test_summarization_middleware_matches_docs(monkeypatch):
 
 def test_langgraph_store_long_term_put_search(tmp_path, monkeypatch):
     """Docs long-term memory: Store put/search under (user_id, namespace)."""
-    from config import settings as settings_mod
-    from services.agent_memory import long_term as lt
+    from app.core.config import settings as settings_mod
+    from app.services.agent_memory import long_term as lt
 
     monkeypatch.setattr(settings_mod.settings, "database_url", "")
     monkeypatch.setattr(settings_mod.settings, "langgraph_store_url", "")

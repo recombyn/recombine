@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.runtime.agent_controller import (
+from app.services.design.runtime.agent_controller import (
     AgentRunState,
     AgentTurnSchema,
     PaintOpsSchema,
@@ -170,7 +170,7 @@ def test_lc_design_needs_canvas_ops_blocks_narrate_only():
 
 
 def test_should_route_to_paint():
-    from services.design.runtime.agent_controller import _should_route_to_paint
+    from app.services.design.runtime.agent_controller import _should_route_to_paint
 
     assert _should_route_to_paint(
         classified="create", turn_intent="chat", has_clarify=False
@@ -232,7 +232,7 @@ def test_chat_fallback_fills_persona():
 
 def test_prefer_canvas_op_demote_disabled_for_short_chinese_design():
     """Short Chinese page asks must keep LLM design — no char-length demote."""
-    from services.design.runtime.models_route import (
+    from app.services.design.runtime.models_route import (
         IntentClassifyDecision,
         _prefer_canvas_op_when_overpromoted,
     )
@@ -254,7 +254,7 @@ def test_prefer_canvas_op_demote_disabled_for_short_chinese_design():
 
 
 def test_heuristic_user_intent_gate():
-    from services.design.runtime.models_route import (
+    from app.services.design.runtime.models_route import (
         allows_skill_preload,
         heuristic_user_intent,
         normalize_intent_decision,
@@ -299,7 +299,7 @@ def test_heuristic_user_intent_gate():
 
 
 def test_agent_model_id_prefers_api_model():
-    from services.llm.agent import _agent_model_id
+    from app.services.llm.agent import _agent_model_id
 
     assert (
         _agent_model_id("deepseek-v4-flash", "deepseek-v4-flash-260425")
@@ -316,7 +316,7 @@ def test_paint_tool_keys_structural_not_shape_specific():
     """canvas_op create: shape+text only — no create_frame / update."""
     from types import SimpleNamespace
 
-    from services.design.runtime.agent_controller import (
+    from app.services.design.runtime.agent_controller import (
         AgentRunState,
         _is_lean_paint_turn,
         _paint_tool_keys_for_turn,
@@ -343,7 +343,7 @@ def test_paint_tool_keys_structural_not_shape_specific():
 def test_paint_tool_keys_basic_edit_has_update():
     from types import SimpleNamespace
 
-    from services.design.runtime.agent_controller import (
+    from app.services.design.runtime.agent_controller import (
         AgentRunState,
         _is_lean_paint_turn,
         _paint_tool_keys_for_turn,
@@ -370,8 +370,8 @@ def test_paint_tool_keys_basic_edit_has_update():
 def test_paint_tool_keys_empty_canvas_includes_frame():
     from types import SimpleNamespace
 
-    from services.design.runtime.agent_controller import AgentRunState, _paint_tool_keys_for_turn
-    from services.design.runtime.decision_log import DesignRunDecision
+    from app.services.design.runtime.agent_controller import AgentRunState, _paint_tool_keys_for_turn
+    from app.services.design.runtime.decision_log import DesignRunDecision
 
     st = AgentRunState(trace_id="t", task_id="task", goal="new")
     rt = SimpleNamespace(
@@ -395,8 +395,8 @@ def test_paint_tool_keys_design_create_includes_frame_when_focus_exists():
     """Ambient FOCUS must not block a new plate for design/create."""
     from types import SimpleNamespace
 
-    from services.design.runtime.agent_controller import AgentRunState, _paint_tool_keys_for_turn
-    from services.design.runtime.decision_log import DesignRunDecision
+    from app.services.design.runtime.agent_controller import AgentRunState, _paint_tool_keys_for_turn
+    from app.services.design.runtime.decision_log import DesignRunDecision
 
     st = AgentRunState(trace_id="t", task_id="task", goal="login")
     rt = SimpleNamespace(
@@ -415,7 +415,7 @@ def test_paint_tool_keys_design_create_includes_frame_when_focus_exists():
 
 
 def test_lc_design_needs_canvas_ops_fine_intents():
-    from services.design.runtime.agent_controller import (
+    from app.services.design.runtime.agent_controller import (
         _is_canvas_work_intent,
         _lc_design_needs_canvas_ops,
     )
@@ -437,7 +437,7 @@ def test_lc_design_needs_canvas_ops_fine_intents():
 def test_paint_tool_keys_with_images_includes_create_image():
     from types import SimpleNamespace
 
-    from services.design.runtime.agent_controller import (
+    from app.services.design.runtime.agent_controller import (
         AgentRunState,
         _is_lean_paint_turn,
         _paint_tool_keys_for_turn,
@@ -459,7 +459,7 @@ def test_paint_tool_keys_with_images_includes_create_image():
 
 
 def test_derive_suggested_place_world_empty_viewport_centers():
-    from services.design.runtime.agent_controller import _derive_suggested_place_world
+    from app.services.design.runtime.agent_controller import _derive_suggested_place_world
 
     spw = _derive_suggested_place_world(
         {"viewport": {"x": 5000, "y": 2000, "w": 1200, "h": 800}},
@@ -472,7 +472,7 @@ def test_derive_suggested_place_world_empty_viewport_centers():
 
 
 def test_derive_suggested_place_world_aligns_beside_content():
-    from services.design.runtime.agent_controller import _derive_suggested_place_world
+    from app.services.design.runtime.agent_controller import _derive_suggested_place_world
 
     # One free-canvas node in the left of the viewport → prefer slot to its right.
     spw = _derive_suggested_place_world(
@@ -488,7 +488,7 @@ def test_derive_suggested_place_world_aligns_beside_content():
 
 
 def test_format_spatial_placement_from_focus_frame_alone():
-    from services.design.runtime.agent_controller import _format_spatial_placement
+    from app.services.design.runtime.agent_controller import _format_spatial_placement
 
     text = _format_spatial_placement(
         None,
@@ -504,7 +504,7 @@ def test_format_spatial_placement_from_focus_frame_alone():
 def test_placement_errors_for_offscreen_free_creates():
     from types import SimpleNamespace
 
-    from services.design.runtime.agent_controller import (
+    from app.services.design.runtime.agent_controller import (
         _derive_suggested_place_world,
         _placement_errors_for_free_creates,
     )
@@ -545,7 +545,7 @@ def test_placement_errors_for_offscreen_free_creates():
 def test_placement_errors_skip_framed_creates():
     from types import SimpleNamespace
 
-    from services.design.runtime.agent_controller import _placement_errors_for_free_creates
+    from app.services.design.runtime.agent_controller import _placement_errors_for_free_creates
 
     rt = SimpleNamespace(
         spatial_summary={"viewport": {"x": 4800, "y": 1200, "w": 1400, "h": 900}},
@@ -563,7 +563,7 @@ def test_placement_errors_skip_framed_creates():
 
 
 def test_scene_digest_includes_frame_world_xy():
-    from services.design.runtime.agent_controller import _scene_digest
+    from app.services.design.runtime.agent_controller import _scene_digest
 
     text = _scene_digest(
         [],
@@ -575,8 +575,8 @@ def test_scene_digest_includes_frame_world_xy():
 
 
 def test_assemble_stage_system_decide_and_paint():
-    from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs, render_prompt_body
-    from services.design.runtime.design_run import assemble_stage_system
+    from app.services.design.prompts.prompt_pack_store import ensure_design_prompt_packs, render_prompt_body
+    from app.services.design.runtime.design_run import assemble_stage_system
 
     ensure_design_prompt_packs()
     decide = assemble_stage_system(
@@ -595,7 +595,7 @@ def test_assemble_stage_system_decide_and_paint():
 
 
 def test_validate_paint_ops_rejects_unknown_and_keeps_valid():
-    from services.design.runtime.design_run import validate_paint_ops
+    from app.services.design.runtime.design_run import validate_paint_ops
 
     ops, errs = validate_paint_ops(
         [

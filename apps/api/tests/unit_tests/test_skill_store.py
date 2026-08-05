@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.prompts.skill_store import (
+from app.services.design.prompts.skill_store import (
     NS_CORE,
     NS_EXT,
     NS_USER,
@@ -145,7 +145,7 @@ def test_file_skill_loader_returns_list():
 
 
 def test_parse_pack_version_semver():
-    from services.design.prompts.skill_store import _parse_pack_version
+    from app.services.design.prompts.skill_store import _parse_pack_version
 
     label, n = _parse_pack_version("1.0.0")
     assert label == "1.0.0"
@@ -164,7 +164,7 @@ def test_namespace_split_and_qualify(monkeypatch):
     assert qualify_skill_key(NS_USER, "my_brand") == "user.my_brand"
     assert resolve_storage_skill_key("core.design_methodology") == "design_methodology"
     # Stub one ext row so ns.ext resolve stays covered when monkeypatched.
-    from services.design.prompts import skill_store as skill_mod
+    from app.services.design.prompts import skill_store as skill_mod
 
     monkeypatch.setattr(
         skill_mod,
@@ -237,7 +237,7 @@ def test_hot_reload_signature_stable():
 
 def test_seed_sync_does_not_overwrite_existing_rows():
     """Community seed is cold-start only: never updates existing rows."""
-    from services.db import connect
+    from app.services.db import connect
 
     with connect() as conn:
         row = conn.execute(
@@ -271,7 +271,7 @@ def test_seed_sync_does_not_overwrite_existing_rows():
 
 
 def test_agent_skills_frontmatter_split_and_meta():
-    from services.design.prompts.skill_store import (
+    from app.services.design.prompts.skill_store import (
         _meta_from_agent_skill_frontmatter,
         _split_skill_md_frontmatter,
     )
@@ -299,7 +299,7 @@ Do the thing.
 
 
 def test_load_pack_dir_agent_skills_only(tmp_path):
-    from services.design.prompts.skill_store import _load_pack_dir
+    from app.services.design.prompts.skill_store import _load_pack_dir
 
     pack = tmp_path / "demo-skill"
     pack.mkdir()

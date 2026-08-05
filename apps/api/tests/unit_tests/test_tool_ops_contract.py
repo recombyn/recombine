@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.ops.tool_ops_contract import (
+from app.services.design.ops.tool_ops_contract import (
     TOOL_OPS_SCHEMA_VERSION,
     extract_and_validate_tool_ops,
     normalize_agent_tool_ops,
@@ -127,7 +127,7 @@ def test_update_node_missing_nodeId_not_invented():
 
 
 def test_format_op_error_shape():
-    from services.design.ops.tool_ops_contract import format_op_error
+    from app.services.design.ops.tool_ops_contract import format_op_error
 
     s = format_op_error("demo", fix="do X", detail="why")
     assert s == "code=demo; fix=do X; detail=why"
