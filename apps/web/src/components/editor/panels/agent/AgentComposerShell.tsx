@@ -285,10 +285,39 @@ type Props = {
     icon?: ReactNode;
     /** Short label shown in the pill (e.g. Auto / DeepSeek). */
     label?: string;
+    /**
+     * `icon` — cube only (editor default).
+     * `chip` — bordered pill with icon + label (home “智能设计系统”).
+     */
+    variant?: 'icon' | 'chip';
   };
   className?: string;
   /** Home hero: text CTA instead of icon-only send. */
   submitLabel?: string;
+  /** Hide Agent / Ask / Image / Video picker (home category lives in the headline). */
+  showInteractionModePicker?: boolean;
+  /** Hide the model / route-prefs control. @default true */
+  showModelButton?: boolean;
+  /**
+   * Send affordance: circular ink (editor default) vs rounded square (home).
+   * @default 'circle'
+   */
+  sendVariant?: 'circle' | 'square';
+  /**
+   * Square send fill: home CTA blue vs theme ink.
+   * @default 'cta'
+   */
+  sendTone?: 'cta' | 'ink';
+  /** Extra controls in the right cluster, before attach / send (home design-system CTA). */
+  trailingActions?: ReactNode;
+  /** Attach control glyph. @default 'plus' */
+  attachIcon?: 'plus' | 'image';
+  /**
+   * Where the design size / ratio chip sits.
+   * Home: `end` (right cluster). Editor dock: `start` (left of send cluster).
+   * @default 'start'
+   */
+  aspectButtonPlacement?: 'start' | 'end';
 };
 
 
@@ -893,7 +922,9 @@ function buildAttachPlusButton(opts: {
   attachTooltip?: string;
   t: (key: string) => string;
   onClick: () => void;
+  icon?: 'plus' | 'image';
 }): ReactNode {
+  const IconGlyph = opts.icon === 'image' ? HiOutlinePhoto : HiOutlinePlus;
   return (
     <button
       type="button"
@@ -902,7 +933,7 @@ function buildAttachPlusButton(opts: {
       onClick={opts.onClick}
       className={opts.genMediaMode ? composerAttachActionClass() : TOOL_ICON_BTN}
     >
-      <HiOutlinePlus className="h-4 w-4" strokeWidth={2} />
+      <IconGlyph className="h-4 w-4" strokeWidth={2} />
     </button>
   );
 }
@@ -970,6 +1001,13 @@ function AgentComposerShell({
   modelButtonProps,
   className,
   submitLabel,
+  showInteractionModePicker = true,
+  showModelButton = true,
+  sendVariant = 'circle',
+  sendTone = 'cta',
+  trailingActions,
+  attachIcon = 'plus',
+  aspectButtonPlacement = 'start',
 }: Props): ReactNode {
   const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1068,6 +1106,7 @@ function AgentComposerShell({
     attachTooltip,
     t,
     onClick: () => fileInputRef.current?.click(),
+    icon: attachIcon,
   });
 
   const pickCanvasTooltip =
@@ -1082,6 +1121,49 @@ function AgentComposerShell({
         onClick: onPickFromCanvas,
       })
     : null;
+
+  const squareSendFill =
+    sendTone === 'ink'
+      ? 'bg-[var(--ink)] text-[var(--on-brand)]'
+      : 'bg-[var(--home-cta)] text-white';
+  const squareSendBtn = cn(
+    'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-opacity',
+    squareSendFill
+  );
+  /** Image / Video credit send — follow home CTA blue vs editor ink. */
+  const creditSendBtn = cn(
+    'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition disabled:opacity-40',
+    sendVariant === 'square' && sendTone !== 'ink'
+      ? 'bg-[var(--home-cta)] text-white'
+      : 'bg-[var(--ink)] text-[var(--on-brand)]'
+  );
+
+  const aspectButton = showAspectBtn ? (
+    <button
+      type="button"
+      ref={aspectFloating.refs.setReference}
+      aria-label={t('agent.designCanvasSizeAria', {
+        defaultValue: t('agent.imageSettingsAria'),
+      })}
+      aria-expanded={aspectOpen}
+      aria-haspopup="dialog"
+      disabled={disabled}
+      className={cn(
+        'inline-flex h-7 max-w-[9.5rem] shrink-0 items-center rounded-xl px-2 text-[12px] font-medium tabular-nums text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:opacity-40',
+        aspectOpen && TOOL_ICON_BTN_ACTIVE
+      )}
+      {...aspectIx.getReferenceProps()}
+    >
+      <span className="inline-flex min-w-0 items-center gap-1">
+        {isCanvasSizeAutoHint(imageAspectRatio) ? (
+          <AspectRatioGlyph ratio="smart" size={14} className="shrink-0" />
+        ) : null}
+        <span className="truncate">
+          {formatCanvasSizeChipLabel(imageAspectRatio, t)}
+        </span>
+      </span>
+    </button>
+  ) : null;
 
   return (
     <div
@@ -1150,10 +1232,10 @@ function AgentComposerShell({
           className={hasTopAttachRow ? 'min-h-[72px]' : undefined}
         />
       </div>
-      <div className="mt-1 flex items-center gap-1.5">
+      <div className="mt-1 flex w-full items-center gap-1.5">
         {leadingActions}
 
-        {interactionMode && onInteractionModeChange ? (
+        {showInteractionModePicker && interactionMode && onInteractionModeChange ? (
           <ComposerInteractionModePicker
             interactionMode={interactionMode}
             disabled={disabled}
@@ -1263,7 +1345,11 @@ function AgentComposerShell({
           </Dropdown>
         ) : null}
 
-        {!isGenMediaMode && modelButtonProps.panel != null && modelButtonProps.onOpenChange ? (
+        {!isGenMediaMode &&
+        showModelButton &&
+        modelButtonProps.variant !== 'chip' &&
+        modelButtonProps.panel != null &&
+        modelButtonProps.onOpenChange ? (
           <Dropdown
             trigger="click"
             placement={modelButtonProps.panelPlacement ?? 'top-start'}
@@ -1283,7 +1369,7 @@ function AgentComposerShell({
           >
             <button
               type="button"
-              aria-label={t('agent.selectModel')}
+              aria-label={modelButtonProps.label || t('agent.selectModel')}
               aria-expanded={modelButtonProps.open}
               className={cn(TOOL_ICON_BTN, modelButtonProps.open && TOOL_ICON_BTN_ACTIVE)}
             >
@@ -1292,11 +1378,11 @@ function AgentComposerShell({
               )}
             </button>
           </Dropdown>
-        ) : !isGenMediaMode ? (
+        ) : !isGenMediaMode && showModelButton && modelButtonProps.variant !== 'chip' ? (
           <button
             type="button"
             ref={modelButtonProps.ref}
-            aria-label={t('agent.selectModel')}
+            aria-label={modelButtonProps.label || t('agent.selectModel')}
             aria-expanded={modelButtonProps.open}
             className={cn(TOOL_ICON_BTN, modelButtonProps.open && TOOL_ICON_BTN_ACTIVE)}
             {...(modelButtonProps.getReferenceProps?.({
@@ -1309,34 +1395,59 @@ function AgentComposerShell({
           </button>
         ) : null}
 
-        {showAspectBtn ? (
-          <button
-            type="button"
-            ref={aspectFloating.refs.setReference}
-            aria-label={t('agent.designCanvasSizeAria', {
-              defaultValue: t('agent.imageSettingsAria'),
-            })}
-            aria-expanded={aspectOpen}
-            aria-haspopup="dialog"
-            disabled={disabled}
-            className={cn(
-              'inline-flex h-7 max-w-[9.5rem] shrink-0 items-center rounded-xl px-2 text-[12px] font-medium tabular-nums text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:opacity-40',
-              aspectOpen && TOOL_ICON_BTN_ACTIVE
-            )}
-            {...aspectIx.getReferenceProps()}
-          >
-            <span className="inline-flex min-w-0 items-center gap-1">
-              {isCanvasSizeAutoHint(imageAspectRatio) ? (
-                <AspectRatioGlyph ratio="smart" size={14} className="shrink-0" />
-              ) : null}
-              <span className="truncate">
-                {formatCanvasSizeChipLabel(imageAspectRatio, t)}
-              </span>
-            </span>
-          </button>
-        ) : null}
+        {aspectButtonPlacement === 'start' ? aspectButton : null}
 
         <div className="ml-auto flex items-center gap-1.5">
+          {!isGenMediaMode &&
+          showModelButton &&
+          modelButtonProps.variant === 'chip' &&
+          modelButtonProps.panel != null &&
+          modelButtonProps.onOpenChange ? (
+            <Dropdown
+              trigger="click"
+              placement={modelButtonProps.panelPlacement ?? 'top-end'}
+              strategy="fixed"
+              offset={8}
+              open={modelButtonProps.open}
+              onOpenChange={modelButtonProps.onOpenChange}
+              items={[]}
+              nestedDismissGuard="[data-agent-route-submenu], .rcb-agent-route-submenu-popup"
+              floatingClassName="z-[80]"
+              referenceClassName="inline-flex"
+              popupRender={() => (
+                <div className="max-w-full" onPointerDown={(e) => e.stopPropagation()}>
+                  {modelButtonProps.panel}
+                </div>
+              )}
+            >
+              <button
+                type="button"
+                aria-label={
+                  modelButtonProps.label ||
+                  modelButtonProps.title ||
+                  t('agent.selectModel')
+                }
+                aria-expanded={modelButtonProps.open}
+                className={
+                  modelButtonProps.label
+                    ? cn(
+                        'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 text-[12px] font-medium text-[var(--ink)] transition-colors hover:bg-[var(--accent-soft)]',
+                        modelButtonProps.open && 'border-[var(--ink)]/20 bg-[var(--accent-soft)]'
+                      )
+                    : cn(TOOL_ICON_BTN, modelButtonProps.open && TOOL_ICON_BTN_ACTIVE)
+                }
+              >
+                {modelButtonProps.icon ?? (
+                  <Icon name="editor-model-cube" width={16} height={16} />
+                )}
+                {modelButtonProps.label ? (
+                  <span className="max-w-[9rem] truncate">{modelButtonProps.label}</span>
+                ) : null}
+              </button>
+            </Dropdown>
+          ) : null}
+          {aspectButtonPlacement === 'end' ? aspectButton : null}
+          {trailingActions}
           {!isGenMediaMode ? (
             <>
               <Tooltip tip={attachTooltip || t('agent.uploadImage')} placement="top">
@@ -1395,7 +1506,7 @@ function AgentComposerShell({
                   aria-label={t('agent.stop')}
                   title={t('agent.stop')}
                   onClick={() => onStop?.()}
-                  className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--ink)] px-2.5 text-[11px] font-semibold text-[var(--on-brand)]"
+                  className={creditSendBtn}
                 >
                   <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
                 </button>
@@ -1408,7 +1519,7 @@ function AgentComposerShell({
                   title={t('wallet.creditCostTip', {
                     count: imageModeControls.creditCost,
                   })}
-                  className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--ink)] px-2.5 text-[11px] font-semibold text-[var(--on-brand)] transition disabled:opacity-40"
+                  className={creditSendBtn}
                 >
                   <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
                   <span className="tabular-nums">{imageModeControls.creditCost}</span>
@@ -1449,7 +1560,7 @@ function AgentComposerShell({
                   aria-label={t('agent.stop')}
                   title={t('agent.stop')}
                   onClick={() => onStop?.()}
-                  className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--ink)] px-2.5 text-[11px] font-semibold text-[var(--on-brand)]"
+                  className={creditSendBtn}
                 >
                   <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
                 </button>
@@ -1462,7 +1573,7 @@ function AgentComposerShell({
                   title={t('wallet.creditCostTip', {
                     count: videoModeControls.creditCost,
                   })}
-                  className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--ink)] px-2.5 text-[11px] font-semibold text-[var(--on-brand)] transition disabled:opacity-40"
+                  className={creditSendBtn}
                 >
                   <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
                   <span className="tabular-nums">{videoModeControls.creditCost}</span>
@@ -1475,7 +1586,11 @@ function AgentComposerShell({
               aria-label={t('agent.stop')}
               title={t('agent.stop')}
               onClick={() => onStop?.()}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition-opacity hover:opacity-90"
+              className={
+                sendVariant === 'square'
+                  ? cn(squareSendBtn, 'hover:opacity-90')
+                  : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition-opacity hover:opacity-90'
+              }
             >
               <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
             </button>
@@ -1497,7 +1612,11 @@ function AgentComposerShell({
               title={t('agent.send')}
               disabled={!canSend}
               onClick={onSubmit}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition-opacity disabled:opacity-35"
+              className={
+                sendVariant === 'square'
+                  ? cn(squareSendBtn, 'hover:opacity-90 disabled:opacity-35')
+                  : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition-opacity disabled:opacity-35'
+              }
             >
               <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
             </button>

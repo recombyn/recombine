@@ -16,6 +16,7 @@ import {
   measurePlainTextSize,
   measureWrappedTextSize,
 } from '@/components/rcb/scene/document/sceneText';
+import { getDocumentGridSize, snapCoordToGrid } from '@/components/rcb/selection/alignGuides';
 import {
   setDocument,
   setMixedSelection,
@@ -142,12 +143,15 @@ export function useCanvasClipboard(args: UseCanvasClipboardArgs): CanvasClipboar
       const payload = clipboardRef.current;
       if (!doc || readOnly) return;
       if (!payload?.nodes?.length && !payload?.frames?.length) return;
+      // Keep paste nudge on the snap lattice (default 1px). ~10px feels like Figma.
+      const g = getDocumentGridSize(doc);
+      const nudge = Math.max(10, snapCoordToGrid(10, g));
       const { document: next, ids: newIds, frameIds: newFrameIds } = pasteClipboardIntoDocument(
         doc,
         payload,
         {
-          offsetX: 24,
-          offsetY: 24,
+          offsetX: nudge,
+          offsetY: nudge,
           anchor: opts?.anchor,
         }
       );
@@ -179,12 +183,15 @@ export function useCanvasClipboard(args: UseCanvasClipboardArgs): CanvasClipboar
         ...(frameSnap.length ? { frames: frameSnap } : {}),
       };
       const bounds = clipboardNodesBounds(snap);
-      const gap = 16;
+      // Place to the right with a 10px gutter on the snap lattice (default 1px).
+      const g = getDocumentGridSize(doc);
+      const gap = Math.max(10, g);
+      const offsetX = snapCoordToGrid((bounds?.width ?? 0) + gap, g);
       const { document: next, ids: newIds, frameIds: newFrameIds } = pasteClipboardIntoDocument(
         doc,
         snap,
         {
-          offsetX: (bounds?.width ?? 0) + gap,
+          offsetX,
           offsetY: 0,
         }
       );

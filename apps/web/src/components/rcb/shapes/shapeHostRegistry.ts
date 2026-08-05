@@ -39,6 +39,15 @@ export function subscribeShapeHosts(fn: () => void) {
   };
 }
 
+/**
+ * Live DOM geometry preview (corner radius / star tip) changed `d` without remount.
+ * Bump listeners so HostPathChrome re-reads the baseline path.
+ */
+export function notifyShapeHostGeometry(nodeId?: string) {
+  if (nodeId) invalidateNodePath2D(nodeId);
+  bumpHostEpoch();
+}
+
 export function getShapeHostEpoch() {
   return hostEpoch;
 }

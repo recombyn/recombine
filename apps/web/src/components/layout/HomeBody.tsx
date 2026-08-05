@@ -5,15 +5,16 @@ import { useTranslation } from 'react-i18next';
 import {
   HiOutlineBell,
   HiOutlineBookOpen,
-  HiOutlineBriefcase,
   HiOutlineChatBubbleLeftRight,
   HiOutlineFolder,
   HiOutlineHome,
   HiOutlinePlusCircle,
 } from 'react-icons/hi2';
+import { RiPuzzleLine } from 'react-icons/ri';
 import { LuUserRound } from 'react-icons/lu';
 import { Dropdown, Tooltip } from '@/components/base';
 import AppLogo from '@/components/base/AppLogo';
+import { Icon } from '@/components/base/icon';
 import { fetchProjects } from '@/apis/projects';
 import HomeHero from '@/components/home/HomeHero';
 import InspirationSection from '@/components/home/InspirationSection';
@@ -87,7 +88,7 @@ function RailItem({
         disabled={disabled}
         onClick={onClick}
         className={cn(
-          'mx-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-50',
+          'group mx-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-50',
           active
             ? 'bg-[color-mix(in_srgb,var(--ink)_4%,var(--rail))] text-[var(--ink)]'
             : 'text-[var(--ink)]/55 hover:bg-[color-mix(in_srgb,var(--ink)_2%,var(--rail))] hover:text-[var(--ink)]'
@@ -173,16 +174,7 @@ function RailHelpMenu() {
         aria-label={t('home.railHelp')}
         className="mx-auto flex h-10 w-10 items-center justify-center text-[var(--ink)]/55 transition-colors hover:text-[var(--ink)]"
       >
-        <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth={1.5} />
-          <path
-            d="M9.75 9.4a2.4 2.4 0 0 1 4.55.85c0 1.35-1.2 1.95-2.05 2.45-.55.35-.75.6-.75 1.15"
-            stroke="currentColor"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-          />
-          <circle cx="12" cy="16.75" r="0.9" fill="currentColor" />
-        </svg>
+        <Icon name="home-help-circle" className="h-6 w-6" />
       </button>
     </Dropdown>
   );
@@ -278,9 +270,13 @@ function HomeSidebar({
               active={nav === 'skills'}
               onClick={() => goNav('skills')}
               icon={
-                <HiOutlineBriefcase
-                  className={RAIL_ICON_SM}
-                  strokeWidth={RAIL_STROKE}
+                <RiPuzzleLine
+                  // Remix Line is fill-based (~2px); soften to match hi2/lu stroke 1.5.
+                  className={cn(
+                    RAIL_ICON_MD,
+                    'fill-current text-current opacity-[0.78] transition-opacity',
+                    'group-hover:opacity-100 group-aria-[current=page]:opacity-100'
+                  )}
                   aria-hidden
                 />
               }

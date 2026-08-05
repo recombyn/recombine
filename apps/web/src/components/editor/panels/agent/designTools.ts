@@ -557,6 +557,8 @@ function applyCornerRadius(node: any, r: number) {
     radiusBR: v,
     radiusBL: v,
     radiusLinked: 'true',
+    radius: v,
+    cornerRadius: v,
   };
 }
 
@@ -802,6 +804,7 @@ type AgentNodeBox = {
   path?: string;
   angle?: number;
   sides?: number;
+  attrs?: Record<string, unknown>;
 };
 
 function readAgentBoxes(doc: any, nodeIds: string[]): AgentNodeBox[] {
@@ -828,6 +831,7 @@ function readAgentBoxes(doc: any, nodeIds: string[]): AgentNodeBox[] {
         path: pathRaw || undefined,
         angle,
         sides: Number.isFinite(sidesRaw) ? sidesRaw : undefined,
+        attrs: node.attrs && typeof node.attrs === 'object' ? { ...node.attrs } : undefined,
       };
     })
     .filter(Boolean) as AgentNodeBox[];

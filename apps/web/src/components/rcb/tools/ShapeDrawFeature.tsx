@@ -11,6 +11,7 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
 import { ARROW_HEAD, shapeVertexPoints, fillCachedPath2D, strokeCachedPath2D } from '@/components/rcb/scene/document/sceneShapes';
 import { getShapeBaselineD } from '@/components/rcb/core/geometry';
+import { snapBoxEdgesToGrid, snapCoordToGrid } from '../selection/alignGuides';
 
 function normalizeBox(x0: number, y0: number, x1: number, y1: number) {
   const left = Math.min(x0, x1);
@@ -39,6 +40,8 @@ type ShapeDrawSession = {
   rawX1: number;
   rawY1: number;
   shift: boolean;
+  /** Ctrl/Cmd held — skip grid snap for this gesture. */
+  skipGrid: boolean;
   pointerId: number;
 };
 
@@ -96,6 +99,12 @@ type ShapeDrawFeatureProps = {
   paperEl: HTMLElement | null;
   stageEl?: HTMLElement | null;
   onCreate: (kind: string, box: ShapeDrawCommit) => void;
+  /**
+   * Snap draw corners to document grid (default 1px).
+   * Hold Ctrl/Cmd to draw free (integer px still via createShapeNode).
+   */
+  gridSnap?: boolean;
+  gridSize?: number;
 };
 
 /** Drag-to-create shapes ? preview matches committed geometry. */
@@ -106,15 +115,21 @@ function ShapeDrawFeature({
   paperEl,
   stageEl = null,
   onCreate,
+  gridSnap = true,
+  gridSize = 10,
 }: ShapeDrawFeatureProps) {
   const toScene = useRcbScreenToScene();
   const viewportEl = useRcbViewportEl();
   const toSceneRef = useRef(toScene);
   const onCreateRef = useRef(onCreate);
   const shapeKindRef = useRef(shapeKind);
+  const gridSnapRef = useRef(gridSnap);
+  const gridSizeRef = useRef(gridSize);
   toSceneRef.current = toScene;
   onCreateRef.current = onCreate;
   shapeKindRef.current = shapeKind;
+  gridSnapRef.current = gridSnap;
+  gridSizeRef.current = gridSize;
   const session = useRef<ShapeDrawSession | null>(null);
   const [preview, setPreview] = useState<{
     x0: number;
@@ -140,6 +155,12 @@ function ShapeDrawFeature({
       return snapStrokeAxis(x0, y0, rawX1, rawY1, shiftKey);
     };
 
+    const snapPoint = (x: number, y: number, skipGrid: boolean) => {
+      const g = gridSizeRef.current;
+      if (!gridSnapRef.current || skipGrid || !(g > 0)) return { x, y };
+      return { x: snapCoordToGrid(x, g), y: snapCoordToGrid(y, g) };
+    };
+
     const pointerScene = (clientX: number, clientY: number) =>
       toSceneRef.current(clientX, clientY);
 
@@ -155,29 +176,34 @@ function ShapeDrawFeature({
       s: ShapeDrawSession,
       clientX: number,
       clientY: number,
-      shiftKey: boolean
+      shiftKey: boolean,
+      skipGrid: boolean
     ) => {
       const p = pointerScene(clientX, clientY);
-      const end = applyStrokeEnd(s.x0, s.y0, p.x, p.y, shiftKey);
+      const endRaw = applyStrokeEnd(s.x0, s.y0, p.x, p.y, shiftKey);
+      const end = snapPoint(endRaw.x1, endRaw.y1, skipGrid);
       s.currentClientX = clientX;
       s.currentClientY = clientY;
       s.rawX1 = p.x;
       s.rawY1 = p.y;
       s.shift = shiftKey;
-      s.x1 = end.x1;
-      s.y1 = end.y1;
+      s.skipGrid = skipGrid;
+      s.x1 = end.x;
+      s.y1 = end.y;
       return { p, end };
     };
 
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      const skipGrid = e.ctrlKey || e.metaKey;
       const p = pointerScene(e.clientX, e.clientY);
+      const origin = snapPoint(p.x, p.y, skipGrid);
       const metrics = rcbViewportMetrics(hitEl);
       session.current = {
-        x0: p.x,
-        y0: p.y,
-        x1: p.x,
-        y1: p.y,
+        x0: origin.x,
+        y0: origin.y,
+        x1: origin.x,
+        y1: origin.y,
         clientX0: e.clientX,
         clientY0: e.clientY,
         currentClientX: e.clientX,
@@ -187,9 +213,10 @@ function ShapeDrawFeature({
         rawX1: p.x,
         rawY1: p.y,
         shift: e.shiftKey,
+        skipGrid,
         pointerId: e.pointerId,
       };
-      setPreview({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+      setPreview({ x0: origin.x, y0: origin.y, x1: origin.x, y1: origin.y });
       hitEl.setPointerCapture?.(e.pointerId);
       e.preventDefault();
       e.stopPropagation();
@@ -199,8 +226,9 @@ function ShapeDrawFeature({
       const s = session.current;
       if (!s || e.pointerId !== s.pointerId) return;
       // Position state only updates from move (and down). End events may report 0,0.
-      const { end } = applyPointerToSession(s, e.clientX, e.clientY, e.shiftKey);
-      setPreview({ x0: s.x0, y0: s.y0, x1: end.x1, y1: end.y1 });
+      const skipGrid = e.ctrlKey || e.metaKey;
+      const { end } = applyPointerToSession(s, e.clientX, e.clientY, e.shiftKey, skipGrid);
+      setPreview({ x0: s.x0, y0: s.y0, x1: end.x, y1: end.y });
     };
 
     /**
@@ -213,11 +241,12 @@ function ShapeDrawFeature({
       if (!s || e.pointerId !== s.pointerId) return;
       const kind = shapeKindRef.current || 'rect';
       const isStroke = kind === 'line' || kind === 'arrow';
-      const end = applyStrokeEnd(s.x0, s.y0, s.rawX1, s.rawY1, s.shift);
+      const endRaw = applyStrokeEnd(s.x0, s.y0, s.rawX1, s.rawY1, s.shift);
+      const end = snapPoint(endRaw.x1, endRaw.y1, s.skipGrid);
       const x0 = s.x0;
       const y0 = s.y0;
-      const x1 = end.x1;
-      const y1 = end.y1;
+      const x1 = end.x;
+      const y1 = end.y;
       const box = normalizeBox(x0, y0, x1, y1);
       session.current = null;
       setPreview(null);
@@ -228,11 +257,12 @@ function ShapeDrawFeature({
         onCreateRef.current(kind, { ...box, x0, y0, x1, y1 });
         return;
       }
+      // Soft click: do not create a full grid cell from snap expansion alone.
+      const clientDist = Math.hypot(s.currentClientX - s.clientX0, s.currentClientY - s.clientY0);
+      if (clientDist < 4 && box.width < 3 && box.height < 3) return;
       let next = box;
-      if (next.width < 3 && next.height < 3) return;
       if (locksSquareAspect(kind)) next = squareLockedBox(next);
-      // Same integer scene snap as createShapeNode — preview already shows snapped size.
-      onCreateRef.current(kind, snapSceneBox(next));
+      onCreateRef.current(kind, finalizeDrawBox(next, gridSnapRef.current && !s.skipGrid, gridSizeRef.current));
     };
 
     // Move on window so current point stays fresh even outside the stage.
@@ -244,15 +274,16 @@ function ShapeDrawFeature({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Shift' || !session.current) return;
-      const { x0, y0, rawX1, rawY1 } = session.current;
+      const { x0, y0, rawX1, rawY1, skipGrid } = session.current;
       const kind = shapeKindRef.current || 'rect';
       if (kind !== 'line' && kind !== 'arrow') return;
       const shift = e.type === 'keydown';
-      const end = snapStrokeAxis(x0, y0, rawX1, rawY1, shift);
+      const endRaw = snapStrokeAxis(x0, y0, rawX1, rawY1, shift);
+      const end = snapPoint(endRaw.x1, endRaw.y1, skipGrid);
       session.current.shift = shift;
-      session.current.x1 = end.x1;
-      session.current.y1 = end.y1;
-      setPreview({ x0, y0, x1: end.x1, y1: end.y1 });
+      session.current.x1 = end.x;
+      session.current.y1 = end.y;
+      setPreview({ x0, y0, x1: end.x, y1: end.y });
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
@@ -291,9 +322,13 @@ function ShapeDrawFeature({
     drawLeft = locked.left;
     drawTop = locked.top;
   }
-  // Live snap to integer scene px (createShapeNode) so 800% drag ≈ committed ink.
+  // Live snap: grid when enabled, else integer scene px (createShapeNode).
   if (!isStroke) {
-    const snapped = snapSceneBox({ left: drawLeft, top: drawTop, width: drawW, height: drawH });
+    const snapped = finalizeDrawBox(
+      { left: drawLeft, top: drawTop, width: drawW, height: drawH },
+      gridSnap && !(session.current?.skipGrid),
+      gridSize
+    );
     drawLeft = snapped.left;
     drawTop = snapped.top;
     drawW = snapped.width;
@@ -337,6 +372,24 @@ function snapSceneBox(box: { left: number; top: number; width: number; height: n
     width: Math.max(1, Math.round(box.width)),
     height: Math.max(1, Math.round(box.height)),
   };
+}
+
+/** Finalize draw box: grid lattice by default; integer px when gridSnap is off / Ctrl. */
+function finalizeDrawBox(
+  box: { left: number; top: number; width: number; height: number },
+  useGrid: boolean,
+  gridSize: number
+) {
+  if (useGrid && gridSize > 0) {
+    const g = snapBoxEdgesToGrid(box, gridSize, 1);
+    return {
+      left: g.left,
+      top: g.top,
+      width: Math.max(gridSize, g.width),
+      height: Math.max(gridSize, g.height),
+    };
+  }
+  return snapSceneBox(box);
 }
 
 function ShapeDrawPreviewCanvas({

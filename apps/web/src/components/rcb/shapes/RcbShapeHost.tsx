@@ -56,7 +56,7 @@ function setHostPaintOpacity(el: Element | null | undefined, hidden: boolean) {
 
 /**
  * One paint host per scene node under the camera world layer.
- * Committed ink is SVG (vector stays sharp under CSS camera zoom — same as tldraw shapes).
+ * Committed ink is SVG (vector stays sharp under CSS camera zoom).
  * Canvas Path2D caches geometry for hit-test + draw-tool overlays (see sceneShapes).
  * Only mounted while in (or near) the viewport — see RcbShapesLayer culling.
  */

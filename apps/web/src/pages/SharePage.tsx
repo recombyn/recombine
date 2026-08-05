@@ -1,43 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import DevPropertiesPanel from '@/components/editor/panels/DevPropertiesPanel';
 import {
-  HiOutlineArrowRightOnRectangle,
-  HiOutlineChevronDown,
-  HiOutlineCodeBracket,
-  HiOutlineMap,
-} from 'react-icons/hi2';
-import DevPropertiesPanel, {
-  getInspectDockWidth,
-} from '@/components/editor/panels/DevPropertiesPanel';
-import { EditorTopExportButton } from '@/components/editor/panels/ExportSelectionPanel';
-import WalletAccountChip from '@/components/layout/WalletAccountChip';
-import {
-  RcbCanvas,
-  RcbSvgDefs,
   RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
   rcbFitCamera,
   zoomAtPoint,
   type RcbCamera as CanvasCamera,
 } from '@/components/rcb';
-import SvgCanvas from '@/components/editor/canvas/SvgCanvas';
 import EditorBootOverlay from '@/components/editor/chrome/EditorBootOverlay';
-import HtmlArtboardFrame from '@/components/rcb/frames/HtmlArtboardFrame';
 import {
   listSceneNodes,
   normalizeDocument,
   documentForSharePreview,
   isExportableSceneNode,
-  stackZIndex,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
-import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
-import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
-import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
-import { Dropdown, Tooltip } from '@/components/base';
-import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
-import { cn } from '@/utils/classnames';
 import {
   setActiveTool,
   setDocument,
@@ -50,48 +29,16 @@ import {
 import { fetchShareApi, type ShareDto } from '@/apis/shares';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
+import ShareTopChrome from '@/components/share/ShareTopChrome';
+import SharePreviewStage from '@/components/share/SharePreviewStage';
+import ShareGateStates from '@/components/share/ShareGateStates';
 
-const ZOOM_TRIGGER_BASE =
-  'inline-flex h-7 min-w-[2.75rem] items-center justify-center gap-1.5 rounded px-2.5 transition-colors';
-const ZOOM_TRIGGER_OPEN = 'bg-[var(--accent-soft)] text-[var(--ink)]';
-const ZOOM_TRIGGER_IDLE =
-  'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]';
-const HUD_ICON = 'h-4 w-4';
 /** Preview tabs poll so linked shares pick up source-project edits without a hard refresh. */
 const SHARE_PREVIEW_POLL_MS = 2500;
 const BOOT_MIN_MS = 520;
 const BOOT_EXIT_MS = 280;
 
 type SceneBox = { x: number; y: number; width: number; height: number };
-
-const ZOOM_MENU_PRESETS = [
-  { key: '25', zoom: 0.25 },
-  { key: '50', zoom: 0.5 },
-  { key: '75', zoom: 0.75 },
-  { key: '100', zoom: 1 },
-  { key: '150', zoom: 1.5 },
-  { key: '200', zoom: 2 },
-  { key: '400', zoom: 4 },
-] as const;
-
-function zoomMenuSelectedKeys(opts: { zoom: number; fitActive: boolean }): string[] {
-  if (opts.fitActive) return ['fit'];
-  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(opts.zoom - p.zoom) < 0.001);
-  return hit ? [hit.key] : [];
-}
-
-function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }) {
-  return (
-    <span className="flex w-full min-w-[11rem] items-center justify-between gap-6">
-      <span>{label}</span>
-      {shortcut ? (
-        <span className="shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
-          {shortcut}
-        </span>
-      ) : null}
-    </span>
-  );
-}
 
 function useViewportMatch(query: string) {
   const read = () => {
@@ -186,8 +133,6 @@ function SharePage() {
   const [forbidden, setForbidden] = useState(false);
   const [camera, setCamera] = useState<CanvasCamera>(DEFAULT_CAMERA);
   const [inspectOpen, setInspectOpen] = useState(true);
-  const [minimapOpen, setMinimapOpen] = useState(false);
-  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const [zoomFitActive, setZoomFitActive] = useState(true);
   const [bootOpen, setBootOpen] = useState(true);
   const [bootExiting, setBootExiting] = useState(false);
@@ -319,51 +264,6 @@ function SharePage() {
   }, [document, record?.viewerCanView, canEdit, stageEl, onFitView, finishBoot]);
 
   const zoomPercent = Math.round(camera.zoom * 100);
-
-  const zoomMenuItems = useMemo<MenuItemType[]>(
-    () => [
-      {
-        key: 'fit',
-        label: <ZoomMenuLabel label={t('editor.fitCanvas')} shortcut="Shift 1" />,
-      },
-      {
-        key: 'in',
-        label: <ZoomMenuLabel label={t('editor.zoomIn')} />,
-      },
-      {
-        key: 'out',
-        label: <ZoomMenuLabel label={t('editor.zoomOut')} />,
-      },
-      { key: 'zoom-divider', type: 'divider', label: '' },
-      ...ZOOM_MENU_PRESETS.map((p) => ({
-        key: p.key,
-        label: <ZoomMenuLabel label={`${Math.round(p.zoom * 100)}%`} />,
-      })),
-    ],
-    [t]
-  );
-
-  const zoomSelectedKeys = useMemo(
-    () => zoomMenuSelectedKeys({ zoom: camera.zoom, fitActive: zoomFitActive }),
-    [camera.zoom, zoomFitActive]
-  );
-
-  const onZoomMenuClick = useCallback(
-    (key: string) => {
-      if (key === 'fit') {
-        onFitView();
-      } else if (key === 'in') {
-        onZoomIn();
-      } else if (key === 'out') {
-        onZoomOut();
-      } else {
-        const preset = ZOOM_MENU_PRESETS.find((p) => p.key === key);
-        if (preset) zoomAtStageCenter(preset.zoom);
-      }
-      setZoomMenuOpen(false);
-    },
-    [onFitView, onZoomIn, onZoomOut, zoomAtStageCenter]
-  );
 
   const onShareCameraChange = useCallback((next: CanvasCamera) => {
     setZoomFitActive(false);
@@ -504,49 +404,12 @@ function SharePage() {
   }, [document?.backgroundColor, document?.backgroundOpacity]);
 
   if (missing) {
-    return (
-      <div className="relative flex h-full min-h-[60vh] flex-col items-center justify-center gap-3 bg-[var(--canvas)] px-6">
-        <div className="pointer-events-none absolute right-4 top-3 z-20">
-          <div className="pointer-events-auto">
-            <WalletAccountChip />
-          </div>
-        </div>
-        <p className="text-[15px] font-medium text-[var(--ink)]">
-          {t('editor.shareMissing', { defaultValue: '分享丝存在或已失效' })}
-        </p>
-        <p className="text-[13px] text-[var(--muted)]">
-          {t('editor.shareMissingHint', { defaultValue: '链接坯能已过期，或分享已被删除。' })}
-        </p>
-      </div>
-    );
+    return <ShareGateStates kind="missing" loginUrl={loginUrl} />;
   }
 
   if (forbidden || (record && !canView)) {
     return (
-      <div className="relative flex h-full min-h-[60vh] flex-col items-center justify-center gap-3 bg-[var(--canvas)] px-6">
-        <div className="pointer-events-none absolute right-4 top-3 z-20">
-          <div className="pointer-events-auto">
-            <WalletAccountChip />
-          </div>
-        </div>
-        <p className="text-[15px] font-medium text-[var(--ink)]">
-          {t('editor.shareNoViewAccess')}
-        </p>
-        <p className="max-w-sm text-center text-[13px] text-[var(--muted)]">
-          {viewerId
-            ? t('editor.shareNoViewAccessHint')
-            : t('editor.shareLoginToView')}
-        </p>
-        {!viewerId ? (
-          <Link
-            to={loginUrl}
-            className="mt-2 inline-flex h-9 items-center gap-1.5 rounded-xl bg-[var(--ink)] px-4 text-[13px] font-medium text-[var(--on-brand)]"
-          >
-            <HiOutlineArrowRightOnRectangle className="h-4 w-4" />
-            {t('auth.login')}
-          </Link>
-        ) : null}
-      </div>
+      <ShareGateStates kind="forbidden" viewerId={viewerId} loginUrl={loginUrl} />
     );
   }
 
@@ -560,182 +423,39 @@ function SharePage() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[var(--canvas)]">
-      <div
-        className="pointer-events-none absolute inset-x-0 top-3 z-40 flex items-center gap-2 pl-4"
-        style={{
-          paddingRight: inspectOpen ? getInspectDockWidth() + 16 : 16,
-        }}
-      >
-        <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2">
-          <span className="min-w-0 truncate text-[14px] font-medium text-[var(--ink)]">
-            {record.name}
-          </span>
-          {compactTopBar ? null : (
-            <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-[var(--surface)] px-2 text-[11px] font-medium text-[var(--muted)] ring-1 ring-[var(--line)]">
-              {t('editor.sharePreviewOnly', { defaultValue: t('editor.sharePreview') })}
-            </span>
-          )}
-        </div>
-        {/* Narrow + inspect open: panel owns the chrome; keep Export/Inspect/wallet off the sliver. */}
-        {compactTopBar && inspectOpen ? null : (
-          <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
-            {canExport ? <EditorTopExportButton iconOnly={compactTopBar} /> : null}
-            <button
-              type="button"
-              aria-label={t('editor.devInspect')}
-              title={t('editor.devInspect')}
-              onClick={() => setInspectOpen((v) => !v)}
-              className={cn(
-                'inline-flex h-8 items-center justify-center rounded-xl text-[13px] font-medium shadow-sm ring-1 ring-[var(--line)]',
-                compactTopBar ? 'w-8 px-0' : 'gap-1.5 px-3',
-                inspectOpen
-                  ? 'bg-[var(--ink)] text-[var(--on-brand)]'
-                  : 'bg-[var(--surface)] text-[var(--ink)]'
-              )}
-            >
-              <HiOutlineCodeBracket className="h-4 w-4 shrink-0" />
-              {compactTopBar ? null : t('editor.devInspect')}
-            </button>
-            <WalletAccountChip className={compactTopBar ? 'max-w-[7.5rem]' : undefined} />
-          </div>
-        )}
-      </div>
+      <ShareTopChrome
+        shareName={record.name}
+        compactTopBar={compactTopBar}
+        inspectOpen={inspectOpen}
+        canExport={canExport}
+        onToggleInspect={() => setInspectOpen((v) => !v)}
+      />
 
       <div className="relative flex min-h-0 flex-1">
-        <div className="relative min-h-0 min-w-0 flex-1">
-          <RcbCanvas
-            artboard={worldBounds}
-            camera={camera}
-            onCameraChange={onShareCameraChange}
-            panMode={false}
-            emptyDragPans={false}
-            background={stageBackground}
-            stageRef={stageRef}
-            onViewportEl={setStageEl}
-            defs={<RcbSvgDefs />}
-          >
-            {frames.map((frame) =>
-              frame.hidden ? null : (
-              <HtmlArtboardFrame
-                key={`body-${frame.id}`}
-                frame={frame}
-                zIndex={stackZIndex(document, 'frame', frame.id)}
-                selected={selectedFrameIds.includes(frame.id)}
-                layer="body"
-                hideTitle
-              />
-              )
-            )}
-
-            <SvgCanvas
-              document={{
-                ...document,
-                x: 0,
-                y: 0,
-                width: worldSurface.width,
-                height: worldSurface.height,
-                backgroundColor: 'transparent',
-                backgroundFillType: 'solid',
-              }}
-              reloadToken={sceneReloadToken}
-              documentPatchToken={documentPatchToken}
-              lastPatchedNodeIds={lastPatchedNodeIds}
-              selectedNodeId={selectedNodeId}
-              selectedNodeIds={selectedNodeIds}
-              readOnly
-              omitNonExportable
-              embedded
-              stageEl={stageEl}
-            />
-
-            {frames.map((frame) =>
-              frame.hidden ? null : (
-              <HtmlArtboardFrame
-                key={`label-${frame.id}`}
-                frame={frame}
-                selected={selectedFrameIds.includes(frame.id)}
-                layer="label"
-                hideTitle
-              />
-              )
-            )}
-          </RcbCanvas>
-
-          {/* Preview: same bottom tools as editor — Select/Pan only. */}
-          <div
-            data-tour="editor-tools"
-            className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
-          >
-            <div className="pointer-events-auto">
-              <EditorToolStrip
-                camera={camera}
-                stageEl={stageEl}
-                compact={false}
-                selectOnly
-              />
-            </div>
-          </div>
-
-          {/* Preview HUD — zoom / minimap */}
-          <div className="pointer-events-none absolute bottom-4 left-4 z-20 flex flex-col items-start gap-2">
-            {minimapOpen ? (
-              <EditorMinimap
-                document={document}
-                frames={frames}
-                camera={camera}
-                stageEl={stageEl}
-                activeFrameId={null}
-                selectedFrameIds={selectedFrameIds}
-                selectedNodeIds={selectedNodeIds}
-                onCameraChange={onShareCameraChange}
-                canvasBg={stageBackground}
-              />
-            ) : null}
-            <FloatingToolbar className="pointer-events-auto w-fit px-2 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)]">
-              <Tooltip tip={t('editor.minimap')} placement="top">
-                <button
-                  type="button"
-                  aria-label={t('editor.minimap')}
-                  onClick={() => setMinimapOpen((v) => !v)}
-                  className={cn(
-                    'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
-                    minimapOpen
-                      ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-                      : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
-                  )}
-                >
-                  <HiOutlineMap className={HUD_ICON} strokeWidth={1.75} />
-                </button>
-              </Tooltip>
-              <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
-              <Dropdown
-                trigger="click"
-                open={zoomMenuOpen}
-                onOpenChange={setZoomMenuOpen}
-                placement="top-start"
-                strategy="fixed"
-                items={zoomMenuItems}
-                onClick={onZoomMenuClick}
-                popupClassName="min-w-[12.5rem]"
-                selectedKeys={zoomSelectedKeys}
-              >
-                <button
-                  type="button"
-                  aria-label={t('editor.zoomMenu')}
-                  className={cn(
-                    ZOOM_TRIGGER_BASE,
-                    zoomMenuOpen ? ZOOM_TRIGGER_OPEN : ZOOM_TRIGGER_IDLE
-                  )}
-                >
-                  <span className="text-[12px] font-medium tabular-nums text-[var(--ink)]">
-                    {zoomPercent}%
-                  </span>
-                  <HiOutlineChevronDown className="h-3 w-3 shrink-0 text-[var(--muted)]" />
-                </button>
-              </Dropdown>
-            </FloatingToolbar>
-          </div>
-        </div>
+        <SharePreviewStage
+          document={document}
+          frames={frames}
+          worldBounds={worldBounds}
+          worldSurface={worldSurface}
+          camera={camera}
+          onCameraChange={onShareCameraChange}
+          stageBackground={stageBackground}
+          stageRef={stageRef}
+          onViewportEl={setStageEl}
+          stageEl={stageEl}
+          sceneReloadToken={sceneReloadToken}
+          documentPatchToken={documentPatchToken}
+          lastPatchedNodeIds={lastPatchedNodeIds}
+          selectedNodeId={selectedNodeId}
+          selectedNodeIds={selectedNodeIds}
+          selectedFrameIds={selectedFrameIds}
+          zoomPercent={zoomPercent}
+          zoomFitActive={zoomFitActive}
+          onZoomIn={onZoomIn}
+          onZoomOut={onZoomOut}
+          onFitView={onFitView}
+          zoomAtStageCenter={zoomAtStageCenter}
+        />
 
         {inspectOpen ? (
           <DevPropertiesPanel
@@ -748,6 +468,7 @@ function SharePage() {
       {bootOpen ? <EditorBootOverlay progress={bootProgress} exiting={bootExiting} /> : null}
     </div>
   );
+
 }
 
 export default memo(SharePage);

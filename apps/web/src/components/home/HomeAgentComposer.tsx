@@ -10,12 +10,12 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
+import { HiOutlineBookOpen } from 'react-icons/hi2';
 import { listModels, type LlmModel } from '@/apis/chat';
 import {
   agentAttachmentLimit,
   isVolcanoCatalogModel,
 } from '@/components/editor/panels/agent/llmModelMeta';
-import { Icon } from '@/components/base/icon';
 import AgentComposerShell, {
   type ComposerInteractionMode,
   type ImageModeComposerControls,
@@ -40,7 +40,6 @@ import {
 import ModelPickerPanel, {
   isImageKind,
   isVideoKind,
-  modelDescription,
   modelTabOf,
   ModelBrandIcon,
   type ModelPickerTab,
@@ -59,7 +58,8 @@ import {
   readFileAsDataUrl,
   uploadComposerAttachment,
 } from '@/utils/uploadImage';
-import { message } from '@/components/base';
+import { message, Dropdown } from '@/components/base';
+import AppLogo from '@/components/base/AppLogo';
 import { useSelector } from 'react-redux';
 import { estimateImageCredits, estimateVideoCredits } from '@/utils/imageCredits';
 
@@ -70,6 +70,76 @@ export type HomeAgentCategory =
   | 'poster'
   | 'drawing'
   | 'video';
+
+const EXAMPLE_CHIPS_BY_CATEGORY: Record<HomeAgentCategory, readonly string[]> = {
+  poster: ['eventPoster', 'commercePoster', 'brandPoster'],
+  mobile: ['officeApp', 'landing', 'login'],
+  image: ['productShot', 'illustSet', 'styleAvatar'],
+  video: ['storyboard', 'promoClip', 'conceptBoard'],
+  website: ['landing', 'dashboard', 'login'],
+  drawing: ['pencilSketch', 'inkWash', 'markerDraw'],
+};
+
+function exampleChipKeysForCategory(category: HomeAgentCategory): readonly string[] {
+  return EXAMPLE_CHIPS_BY_CATEGORY[category] || EXAMPLE_CHIPS_BY_CATEGORY.poster;
+}
+
+/** Pixso-style capability promo — opens from「AI能做什么」. */
+function HomeAiCapabilityCard(): ReactNode {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-[10px] bg-[var(--surface)] shadow-[0_12px_40px_rgba(15,23,42,0.16)] ring-1 ring-[var(--line)]"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div
+        className="relative flex h-[7.5rem] items-center justify-center overflow-hidden"
+        style={{
+          background:
+            'linear-gradient(165deg, #f4f7ff 0%, #e8f0ff 42%, #fff 72%)',
+        }}
+      >
+        <div className="relative z-[1] inline-flex items-center gap-2 text-[#141414]">
+          {/* Header stay light — always use dark mark + dark type. */}
+          <AppLogo size={28} scheme="dark" />
+          <span
+            className="text-[18px] font-semibold tracking-tight text-[#141414]"
+            style={{ fontFamily: 'var(--font-hero)' }}
+          >
+            {t('app.name')} AI
+          </span>
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[2.75rem]"
+          style={{
+            background:
+              'linear-gradient(90deg, #1a4fd8 0%, #3370ff 38%, #7aa7ff 62%, #ff7eb3 100%)',
+            clipPath: 'ellipse(75% 100% at 50% 100%)',
+            opacity: 0.92,
+          }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-8 opacity-40"
+          style={{
+            backgroundImage:
+              'radial-gradient(circle at 20% 40%, rgba(255,255,255,0.9) 0 1px, transparent 1.5px), radial-gradient(circle at 70% 60%, rgba(255,255,255,0.75) 0 1px, transparent 1.5px), radial-gradient(circle at 45% 20%, rgba(255,255,255,0.65) 0 0.8px, transparent 1.2px)',
+            backgroundSize: '48px 24px',
+          }}
+        />
+      </div>
+      <div className="px-4 pb-4 pt-3.5 text-left">
+        <h3 className="text-[15px] font-semibold leading-snug text-[var(--ink)]">
+          {t('home.aiPromoTitle')}
+        </h3>
+        <p className="mt-1.5 text-[12px] leading-[1.55] text-[var(--muted)]">
+          {t('home.aiPromoBody')}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export type HomeAgentSubmitPayload = {
   prompt: string;
@@ -421,17 +491,6 @@ function HomeAgentComposer({
   const isImageModelSelected =
     !isVideoInteraction &&
     (isImageInteraction || modelTab === 'image' || modelTabOf(selectedModel) === 'image');
-  const modelTitle = useMemo(() => {
-    if (modelId === 'auto') {
-      return modelDescription(
-        { id: 'auto', label: 'Auto', provider: 'system', kind: 'text' },
-        t
-      );
-    }
-    const m = selectedModel;
-    if (!m) return t('agent.selectModel', { defaultValue: 'Models' });
-    return `${m.label || m.id} — ${modelDescription(m, t)}`;
-  }, [modelId, selectedModel, t]);
 
   const imageModels = models.filter((m) => isImageKind(m));
   const imageModeSelectedModel =
@@ -538,11 +597,12 @@ function HomeAgentComposer({
     : null;
 
   const imageAspectProps = {
-    // Design canvas size chip — hidden in Image / Video chat mode.
+    // Design categories: show size/ratio on the right. Image / Video gen use their own settings.
     showDesignSizePicker: !isImageInteraction && !isVideoInteraction,
     imageAspectRatio,
     onImageAspectRatioChange: setImageAspectRatio,
-    aspectMenuPlacement: 'bottom-start' as const,
+    aspectMenuPlacement: 'bottom-end' as const,
+    aspectButtonPlacement: 'end' as const,
     // Size panel has no "drawing" tab — use image presets (square canvases).
     designSceneCategory: designSceneCategoryOf(category),
     onDesignSceneChange: (scene: 'website' | 'mobile' | 'image' | 'poster' | null) => {
@@ -556,6 +616,53 @@ function HomeAgentComposer({
       leaveImageMode();
     },
   };
+
+  const exampleChipKeys = exampleChipKeysForCategory(category);
+
+  const applyExampleChip = (chipKey: string) => {
+    const prompt = t(`home.chipPrompts.${chipKey}`);
+    if (!prompt || prompt.startsWith('home.chipPrompts.')) return;
+    setValue(prompt);
+    queueMicrotask(() => {
+      inputRef.current?.focusEnd();
+    });
+  };
+
+  const homeExampleActions = (
+    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto text-[12px] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <span className="shrink-0 text-[var(--muted)]">{t('home.examplesLabel')}</span>
+      {exampleChipKeys.map((key) => (
+        <button
+          key={`${category}:${key}`}
+          type="button"
+          onClick={() => applyExampleChip(key)}
+          className="shrink-0 text-[12px] font-medium text-[var(--muted)] transition-colors hover:text-[var(--home-cta)]"
+        >
+          {t(`home.chips.${key}`)}
+        </button>
+      ))}
+      <span className="shrink-0 text-[var(--line)]" aria-hidden>
+        |
+      </span>
+      <Dropdown
+        trigger="hover"
+        placement="bottom-start"
+        strategy="fixed"
+        offset={10}
+        items={[]}
+        floatingClassName="z-[80]"
+        referenceClassName="inline-flex shrink-0"
+        popupRender={() => <HomeAiCapabilityCard />}
+      >
+        <button
+          type="button"
+          className="font-medium text-[var(--home-cta)] transition-opacity hover:opacity-80"
+        >
+          {t('home.whatAiCanDo')}
+        </button>
+      </Dropdown>
+    </div>
+  );
 
   const handleSubmit = () => {
     const prompt = value.trim();
@@ -804,7 +911,9 @@ function HomeAgentComposer({
     <>
       <AgentComposerShell
         className={cn(
-          'min-h-[120px] w-full overflow-hidden rounded-[20px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_4px_20px_rgba(0,0,0,0.05)]',
+          'min-h-[132px] w-full overflow-hidden rounded-2xl border border-white/80 bg-[var(--surface)]',
+          'shadow-[0_8px_40px_rgba(51,112,255,0.08),0_2px_16px_rgba(0,0,0,0.04)]',
+          'ring-1 ring-black/[0.04]',
           className
         )}
         inputRef={inputRef}
@@ -824,6 +933,9 @@ function HomeAgentComposer({
             ? t('agent.attachMaxReached', { count: attachmentLimit })
             : t('agent.uploadImage')
         }
+        sendVariant="square"
+        showInteractionModePicker={false}
+        leadingActions={homeExampleActions}
         interactionMode={interactionMode}
         onInteractionModeChange={(mode) => {
           if (mode === 'image') {
@@ -851,13 +963,10 @@ function HomeAgentComposer({
         videoModeControls={videoModeControls}
         {...imageAspectProps}
         modelButtonProps={{
-          title: modelTitle,
-          label:
-            modelId === 'auto'
-              ? t('agent.autoToggle')
-              : selectedModel?.label || modelId,
+          title: t('home.designSystemCta'),
+          variant: 'chip',
           open: modelOpen,
-          panelPlacement: 'bottom-start',
+          panelPlacement: 'bottom-end',
           onOpenChange: (next) => {
             if (next) {
               setMentionPanelOpen(false);
@@ -871,7 +980,7 @@ function HomeAgentComposer({
           panel: (
             <AgentRoutePrefsEditor compact modeLabel={t('agent.interactionAgent')} />
           ),
-          icon: <Icon name="editor-model-cube" width={16} height={16} />,
+          icon: <HiOutlineBookOpen className="h-4 w-4 shrink-0" strokeWidth={1.75} />,
         }}
       />
       {mentionPanelOpen ? (

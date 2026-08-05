@@ -4,9 +4,10 @@ import {
   union,
   xor,
   type MultiPolygon,
+  type Polygon,
   type Ring,
 } from 'polygon-clipping';
-import { shapeVertexPoints } from '@/components/rcb/scene/document/sceneShapes';
+import { getShapeBaselineD } from '@/components/rcb/core/geometry';
 
 export type ShapeBox = {
   left: number;
@@ -20,6 +21,11 @@ export type ShapeBox = {
   angle?: number;
   /** Polygon side count / star point count. */
   sides?: number;
+  /**
+   * Full node attrs (radii, starInnerRatio, ellipse arc/inner, …).
+   * Boolean rings are sampled from the painted baseline so round corners survive.
+   */
+  attrs?: Record<string, unknown>;
 };
 
 export type BoolMode = 'union' | 'subtract' | 'intersect' | 'exclude';
@@ -33,7 +39,10 @@ export type BoolResult = {
   fillRule: 'nonzero' | 'evenodd';
 };
 
-const ELLIPSE_SEGMENTS = 48;
+/** Dense enough that rounded corners / circles stay visually smooth after clip. */
+const SAMPLE_STEP_PX = 1.25;
+const MIN_SAMPLE_POINTS = 24;
+const FALLBACK_ELLIPSE_SEGMENTS = 96;
 
 function rectRing(b: ShapeBox): Ring {
   const { left, top, width, height } = b;
@@ -46,109 +55,18 @@ function rectRing(b: ShapeBox): Ring {
   ];
 }
 
-function ellipseRing(b: ShapeBox): Ring {
+function ellipseRingFallback(b: ShapeBox): Ring {
   const cx = b.left + b.width / 2;
   const cy = b.top + b.height / 2;
   const rx = b.width / 2;
   const ry = b.height / 2;
   const ring: Ring = [];
-  for (let i = 0; i < ELLIPSE_SEGMENTS; i++) {
-    const angle = (i / ELLIPSE_SEGMENTS) * Math.PI * 2;
+  for (let i = 0; i < FALLBACK_ELLIPSE_SEGMENTS; i++) {
+    const angle = (i / FALLBACK_ELLIPSE_SEGMENTS) * Math.PI * 2;
     ring.push([cx + rx * Math.cos(angle), cy + ry * Math.sin(angle)]);
   }
   ring.push(ring[0]);
   return ring;
-}
-
-/** Parse M/L(/H/V/Z) style paths used by scene nodes into absolute points. */
-function parsePathLocalPoints(d: string): Array<[number, number]> {
-  const pts: Array<[number, number]> = [];
-  const tokens = String(d || '')
-    .replace(/,/g, ' ')
-    .replace(/([MmLlHhVvZz])/g, ' $1 ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-
-  let i = 0;
-  let cmd = 'M';
-  let cx = 0;
-  let cy = 0;
-  let startX = 0;
-  let startY = 0;
-
-  const readNum = () => {
-    const n = Number(tokens[i]);
-    i += 1;
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  while (i < tokens.length) {
-    const t = tokens[i];
-    if (/^[MmLlHhVvZz]$/.test(t)) {
-      cmd = t;
-      i += 1;
-      if (cmd === 'Z' || cmd === 'z') {
-        if (pts.length && (pts[0][0] !== cx || pts[0][1] !== cy)) {
-          pts.push([startX, startY]);
-        }
-        cx = startX;
-        cy = startY;
-        continue;
-      }
-    }
-
-    if (cmd === 'M' || cmd === 'L') {
-      const x = readNum();
-      const y = readNum();
-      cx = x;
-      cy = y;
-      if (cmd === 'M') {
-        startX = x;
-        startY = y;
-      }
-      pts.push([x, y]);
-      cmd = cmd === 'M' ? 'L' : cmd;
-      continue;
-    }
-    if (cmd === 'm' || cmd === 'l') {
-      const x = cx + readNum();
-      const y = cy + readNum();
-      cx = x;
-      cy = y;
-      if (cmd === 'm') {
-        startX = x;
-        startY = y;
-      }
-      pts.push([x, y]);
-      cmd = cmd === 'm' ? 'l' : cmd;
-      continue;
-    }
-    if (cmd === 'H') {
-      cx = readNum();
-      pts.push([cx, cy]);
-      continue;
-    }
-    if (cmd === 'h') {
-      cx += readNum();
-      pts.push([cx, cy]);
-      continue;
-    }
-    if (cmd === 'V') {
-      cy = readNum();
-      pts.push([cx, cy]);
-      continue;
-    }
-    if (cmd === 'v') {
-      cy += readNum();
-      pts.push([cx, cy]);
-      continue;
-    }
-    // Unsupported command — skip token to avoid infinite loop.
-    i += 1;
-  }
-
-  return pts;
 }
 
 function closeRing(pts: Array<[number, number]>): Ring {
@@ -171,35 +89,116 @@ function rotateRing(ring: Ring, cx: number, cy: number, angleDeg: number): Ring 
   });
 }
 
-/**
- * Convert a scene shape into a world-space outer ring for polygon-clipping.
- * Uses real geometry (triangle / star / polygon / path), not just the AABB.
- */
-function shapeToRing(b: ShapeBox): Ring {
+function translateRing(ring: Ring, dx: number, dy: number): Ring {
+  return ring.map(([x, y]) => [x + dx, y + dy] as [number, number]);
+}
+
+function ringAbsArea(ring: Ring): number {
+  let a = 0;
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    a += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+  }
+  return Math.abs(a) / 2;
+}
+
+function dedupeRingPts(pts: Array<[number, number]>, eps = 0.05): Array<[number, number]> {
+  if (pts.length < 2) return pts;
+  const out: Array<[number, number]> = [pts[0]];
+  for (let i = 1; i < pts.length; i += 1) {
+    const prev = out[out.length - 1];
+    const p = pts[i];
+    if (Math.hypot(p[0] - prev[0], p[1] - prev[1]) >= eps) out.push(p);
+  }
+  return out;
+}
+
+/** Local-space painted silhouette `d` (includes corner radii / ellipse params). */
+function localBaselinePathD(b: ShapeBox): string {
   const t = String(b.shapeType || 'rect');
-  let local: Array<[number, number]> = [];
-
-  if (t === 'circle') {
-    const ring = ellipseRing(b);
-    return rotateRing(ring, b.left + b.width / 2, b.top + b.height / 2, b.angle || 0);
+  if (t === 'path' || t === 'pen') {
+    return String(b.path || b.attrs?.path || b.attrs?.d || '').trim();
   }
+  const attrs: Record<string, unknown> = {
+    ...(b.attrs || {}),
+    shapeType: t,
+  };
+  if (b.sides != null && attrs.sides == null) attrs.sides = b.sides;
+  if (b.path && attrs.path == null) attrs.path = b.path;
+  return (
+    getShapeBaselineD({
+      key: t === 'ellipse' ? 'ellipse' : 'shape',
+      width: b.width,
+      height: b.height,
+      attrs,
+    }) || ''
+  );
+}
 
-  if (t === 'triangle' || t === 'star' || t === 'polygon') {
-    local = shapeVertexPoints(t, b.width, b.height, b.sides);
-  } else if (t === 'path' || t === 'pen') {
-    local = parsePathLocalPoints(b.path || '');
-    if (local.length < 3) {
-      // Degenerate path — fall back to bounds so ops still do something.
-      return rotateRing(rectRing(b), b.left + b.width / 2, b.top + b.height / 2, b.angle || 0);
+/**
+ * Sample each SVG subpath into a closed ring (browser Path API — keeps C/Q/A curves).
+ * Largest ring first (outer), then holes.
+ */
+function sampleLocalPathToRings(d: string, stepPx = SAMPLE_STEP_PX): Ring[] {
+  const raw = String(d || '').trim();
+  if (!raw) return [];
+  if (typeof document === 'undefined') return [];
+
+  const chunks = raw
+    .split(/(?=[Mm])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const rings: Ring[] = [];
+
+  for (const chunk of chunks) {
+    try {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      el.setAttribute('d', chunk);
+      const len = el.getTotalLength?.() ?? 0;
+      if (!(len > 0)) continue;
+      const n = Math.max(MIN_SAMPLE_POINTS, Math.ceil(len / Math.max(0.5, stepPx)));
+      const pts: Array<[number, number]> = [];
+      for (let i = 0; i <= n; i += 1) {
+        const p = el.getPointAtLength((len * i) / n);
+        pts.push([p.x, p.y]);
+      }
+      const cleaned = dedupeRingPts(pts);
+      if (cleaned.length < 3) continue;
+      rings.push(closeRing(cleaned));
+    } catch {
+      /* skip bad subpath */
     }
-  } else {
-    // rect / rounded rect approximation (corner radii ignored for boolean)
-    return rotateRing(rectRing(b), b.left + b.width / 2, b.top + b.height / 2, b.angle || 0);
   }
 
-  const world = local.map(([x, y]) => [b.left + x, b.top + y] as [number, number]);
-  const ring = closeRing(world);
-  return rotateRing(ring, b.left + b.width / 2, b.top + b.height / 2, b.angle || 0);
+  if (rings.length <= 1) return rings;
+  return rings.sort((a, b) => ringAbsArea(b) - ringAbsArea(a));
+}
+
+/**
+ * Convert a scene shape into a world-space polygon (outer + holes) for clipping.
+ * Uses painted baseline geometry so rounded corners / arcs are preserved.
+ */
+function shapeToPolygon(b: ShapeBox): Polygon | null {
+  const cx = b.left + b.width / 2;
+  const cy = b.top + b.height / 2;
+  const angle = b.angle || 0;
+  const d = localBaselinePathD(b);
+  const localRings = d ? sampleLocalPathToRings(d) : [];
+
+  if (localRings.length) {
+    const world = localRings.map((ring) =>
+      rotateRing(translateRing(ring, b.left, b.top), cx, cy, angle)
+    );
+    if (world[0] && world[0].length >= 4) return world;
+  }
+
+  // DOM-less / empty baseline fallback (sharp AABB or dense ellipse).
+  const t = String(b.shapeType || 'rect');
+  if (t === 'circle' || t === 'ellipse') {
+    const ring = rotateRing(ellipseRingFallback(b), cx, cy, angle);
+    return ring.length >= 4 ? [ring] : null;
+  }
+  const ring = rotateRing(rectRing(b), cx, cy, angle);
+  return ring.length >= 4 ? [ring] : null;
 }
 
 function multipolygonBounds(mp: MultiPolygon) {
@@ -248,29 +247,33 @@ function multipolygonToPath(mp: MultiPolygon, originX: number, originY: number):
   return d;
 }
 
+function multipolygonHasHoles(mp: MultiPolygon): boolean {
+  return mp.some((poly) => poly.length > 1);
+}
+
 function runClipping(boxes: ShapeBox[], mode: BoolMode): MultiPolygon | null {
-  const polygons = boxes.map((b) => {
-    const ring = shapeToRing(b);
-    if (ring.length < 4) return null;
-    return [ring];
-  });
-  if (polygons.some((p) => !p)) return null;
-  const polys = polygons as MultiPolygon;
+  const polygons: Polygon[] = [];
+  for (const b of boxes) {
+    const poly = shapeToPolygon(b);
+    if (!poly || !poly[0] || poly[0].length < 4) return null;
+    polygons.push(poly);
+  }
+  if (polygons.length < 2) return null;
 
   try {
     if (mode === 'union') {
-      const [first, ...rest] = polys;
+      const [first, ...rest] = polygons;
       return union(first, ...rest);
     }
     if (mode === 'subtract') {
-      const [base, ...rest] = polys;
+      const [base, ...rest] = polygons;
       return difference(base, ...rest);
     }
     if (mode === 'intersect') {
-      const [first, ...rest] = polys;
+      const [first, ...rest] = polygons;
       return intersection(first, ...rest);
     }
-    const [first, ...rest] = polys;
+    const [first, ...rest] = polygons;
     return xor(first, ...rest);
   } catch {
     return null;
@@ -380,7 +383,8 @@ export function computeShapeBoolean(
       y: minY,
       width,
       height,
-      fillRule: 'nonzero',
+      // Holes from subtract / donut operands need evenodd when windings are mixed.
+      fillRule: multipolygonHasHoles(mp) || mode === 'exclude' ? 'evenodd' : 'nonzero',
     },
     usedFallback: false,
     hasNonRect,

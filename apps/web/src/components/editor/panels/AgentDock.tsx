@@ -12,7 +12,7 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
-import { Icon } from '@/components/base/icon';
+import { HiOutlineBookOpen } from 'react-icons/hi2';
 import {
   listModels,
   generateImage,
@@ -4228,7 +4228,7 @@ function AgentDock({
         modeLabel={interactionModeLabel(interactionMode, t)}
       />
     ),
-    icon: <Icon name="editor-model-cube" width={16} height={16} />,
+    icon: <HiOutlineBookOpen className="h-4 w-4 shrink-0" strokeWidth={1.75} />,
   };
 
   const escapeComposer = (opts?: { cancelEdit?: boolean }) => {
@@ -4258,6 +4258,8 @@ function AgentDock({
         disabled={false}
         placeholder={composerPlaceholder}
         canSend={!sending && !!editDraft.trim() && available !== false && !attachmentsUploading}
+        sendVariant="square"
+        sendTone="ink"
         {...attachProps}
         modelButtonProps={modelButtonProps}
         {...imageAspectProps}
@@ -4363,6 +4365,8 @@ function AgentDock({
                 available !== false &&
                 !attachmentsUploading
               }
+              sendVariant="square"
+              sendTone="ink"
               {...attachProps}
               interactionMode={interactionMode}
               onInteractionModeChange={applyInteractionMode}

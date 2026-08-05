@@ -598,6 +598,154 @@ async def design_run_scene_feedback(
     return {"ok": ok, "count": n, "frames": f}
 
 
+class DesignResumeIn(BaseModel):
+    resume_token: str | None = None
+
+
+@router.get("/run/{task_id}")
+def design_run_status(
+    task_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    from services.design.runtime.graph.build import get_design_run_status
+
+    st = get_design_run_status(task_id)
+    if not st:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if str(st.get("user_id") or "") != str(user.id):
+        raise HTTPException(status_code=403, detail="forbidden")
+    st.pop("user_id", None)
+    return st
+
+
+@router.post("/run/{task_id}/pause")
+def design_run_pause(
+    task_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    from services.design.admin.task_store import get_design_task
+    from services.design.runtime.graph.build import request_design_pause
+
+    row = get_design_task(task_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if str(row.get("user_id") or "") != str(user.id):
+        raise HTTPException(status_code=403, detail="forbidden")
+    return request_design_pause(task_id)
+
+
+@router.post("/run/{task_id}/cancel")
+async def design_run_cancel(
+    task_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user = _require_user(authorization)
+    from services.design.admin.task_store import get_design_task
+    from services.design.runtime.graph.build import (
+        cleanup_design_checkpoint,
+        request_design_cancel,
+    )
+    from services.design.runtime.orchestrator import _refund_hold
+
+    row = get_design_task(task_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if str(row.get("user_id") or "") != str(user.id):
+        raise HTTPException(status_code=403, detail="forbidden")
+    out = request_design_cancel(task_id, refund_hold_fn=_refund_hold)
+    if out.get("cleanup_checkpoint"):
+        await cleanup_design_checkpoint(task_id)
+    return out
+
+
+@router.post("/run/{task_id}/resume")
+async def design_run_resume(
+    task_id: str,
+    request: Request,
+    body: DesignResumeIn | None = None,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    """Resume a paused / waiting_client / resumable-error design run (SSE)."""
+    user = _require_user(authorization)
+    token = (body.resume_token if body else None) or None
+    from services.design.runtime.orchestrator import resume_design_job
+
+    async def gen():
+        yield ": connected\n\n"
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+        state = _PipelineSseState()
+
+        async def produce() -> None:
+            try:
+                async for ev in resume_design_job(
+                    user_id=user.id,
+                    task_id=task_id,
+                    resume_token=token,
+                ):
+                    await queue.put(("ev", ev))
+            except Exception as err:  # noqa: BLE001
+                await queue.put(("err", err))
+            finally:
+                await queue.put(("done", None))
+
+        task = asyncio.create_task(produce())
+        try:
+            while True:
+                try:
+                    kind, payload = await asyncio.wait_for(
+                        queue.get(), timeout=_SSE_HEARTBEAT_SEC
+                    )
+                except asyncio.TimeoutError:
+                    hb = state.heartbeat_stage_event()
+                    if hb:
+                        yield _sse_data(hb)
+                    yield ": ping\n\n"
+                    continue
+
+                if kind == "done":
+                    term = state.terminal_stage_event()
+                    if term:
+                        yield _sse_data(term)
+                    break
+
+                if kind == "err":
+                    # Cooperative pause re-raises CancelledError after emitting paused.
+                    if isinstance(payload, asyncio.CancelledError):
+                        break
+                    msg = str(payload)[:800] or "design_resume_failed"
+                    yield _sse_data({"type": "error", "message": msg})
+                    break
+
+                state.out_n += 1
+                if isinstance(payload, dict):
+                    for frame in _pipeline_side_effects(state, payload):
+                        yield _sse_data(frame)
+                    yield _sse_data(payload)
+                else:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            yield "data: [DONE]\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/library")
 def design_library(
     kind: str | None = None,

@@ -1,10 +1,9 @@
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 import { useRcbCamera } from '../camera/context';
 import { toDomPrecision } from '../core/dpr';
 import { cursorForRotate } from './rotateCornerCursor';
-import rotateCornerSvg from '@/assets/svg/editor/rotate_corner.svg?raw';
 
-type SceneBox = { left: number; top: number; width: number; height: number };
+export type SceneBox = { left: number; top: number; width: number; height: number };
 type ResizeHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 type SelectionChromeProps = {
@@ -40,29 +39,33 @@ type SelectionChromeProps = {
 };
 
 /**
- * Selection chrome in the world camera layer.
+ * Selection foreground overlay (AABB box + resize / rotate knobs).
  *
- * Match shape-host compositing: CSS `left/top/width/height` === SVG `viewBox`
- * (same as `fitInfiniteSvgToContent`). Viewport covers the selection **box only**;
- * handles / rotate knobs overflow (`overflow: visible`) so zoom does not resize
- * the SVG shell and jitter against path chrome.
+ * **One paint contract for all ephemeral canvas UI** (box / brush / shape handles):
+ * - Mount under `[data-rcb-world]` (CSS camera translate+scale)
+ * - Scene coords in SVG; CSS `left/top/width/height` === `viewBox`
+ * - Screen-constant ink: `lineWidth = screenPx / zoom`
  *
- * Screen-constant sizes: page = screenPx / zoom under camera scale(z).
+ * Path ink indicators use the same world layer but twin the shape-host viewport
+ * (`HostPathChrome`) so fractional DPR cannot desync from path stroke.
  */
-const HANDLE_VIS_PX = 8;
-const HANDLE_HIT_PX = 18;
+export const CHROME_STROKE_PX = 1.5;
+export const CHROME_HANDLE_VIS_PX = 8;
+export const CHROME_HANDLE_HIT_PX = 18;
+
+const HANDLE_VIS_PX = CHROME_HANDLE_VIS_PX;
+const HANDLE_HIT_PX = CHROME_HANDLE_HIT_PX;
 const LINE_ENDPOINT_VIS_PX = 8;
 const LINE_ENDPOINT_HALO_PX = 22;
 const LINE_ENDPOINT_HIT_PX = 28;
 const LINE_SHAFT_HIT_PX = 28;
-const STROKE_PX = 1.5;
+const STROKE_PX = CHROME_STROKE_PX;
 const ROTATE_HIT_PX = 22;
-const ROTATE_ICON_PX = 18;
 const ROTATE_GAP_PX = 2;
 const SEL_BASELINE = '#3388ff';
 
 /** Scene AABB that covers a (possibly rotated) box plus chrome pad. */
-function fittedSvgViewport(
+export function fittedSvgViewport(
   left: number,
   top: number,
   width: number,
@@ -103,6 +106,116 @@ function fittedSvgViewport(
     w: toDomPrecision(Math.max(1, maxX - minX + p * 2)),
     h: toDomPrecision(Math.max(1, maxY - minY + p * 2)),
   };
+}
+
+/**
+ * World-layer SVG shell — shared by selection box, brush, and shape-handle overlays.
+ * Children paint in **scene** coordinates (not CSS pixels).
+ */
+export function WorldSvgFrame({
+  left,
+  top,
+  width,
+  height,
+  angle = 0,
+  pad = 0,
+  zClass = 'z-[18]',
+  pointerEvents = 'none',
+  children,
+}: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  angle?: number;
+  pad?: number;
+  zClass?: string;
+  pointerEvents?: 'none' | 'auto';
+  children: ReactNode;
+}) {
+  const vp = fittedSvgViewport(left, top, width, height, angle, pad);
+  return (
+    <svg
+      className={`absolute overflow-visible ${zClass}`}
+      width={vp.w}
+      height={vp.h}
+      viewBox={`${vp.minX} ${vp.minY} ${vp.w} ${vp.h}`}
+      style={{
+        left: vp.minX,
+        top: vp.minY,
+        width: vp.w,
+        height: vp.h,
+        overflow: 'visible',
+        pointerEvents,
+      }}
+      aria-hidden
+    >
+      {children}
+    </svg>
+  );
+}
+
+/**
+ * Screen-constant value pill in scene space (SVG).
+ * HTML pills under camera `scale(zoom)` squash fonts / radius — keep badges as SVG.
+ */
+export function WorldScreenBadge({
+  text,
+  x,
+  y,
+  inv,
+  anchor = 'above',
+  fill = '#3388ff',
+  clearance = 0,
+}: {
+  text: string;
+  x: number;
+  y: number;
+  /** Scene units per screen px (= 1 / camera.zoom). */
+  inv: number;
+  anchor?: 'center' | 'below' | 'above' | 'right';
+  fill?: string;
+  clearance?: number;
+}) {
+  const fontSize = 11 * inv;
+  const padX = 5.5 * inv;
+  const padY = 2.25 * inv;
+  const radius = 4 * inv;
+  const gap = Math.max(6 * inv, clearance);
+  const tw = Math.max(14 * inv, String(text).length * fontSize * 0.62);
+  const th = fontSize * 1.2;
+  const w = tw + padX * 2;
+  const h = th + padY * 2;
+  let cx = x;
+  let cy = y;
+  if (anchor === 'below') cy = y + gap + h / 2;
+  else if (anchor === 'above') cy = y - gap - h / 2;
+  else if (anchor === 'right') cx = x + gap + w / 2;
+  return (
+    <g pointerEvents="none">
+      <rect
+        x={cx - w / 2}
+        y={cy - h / 2}
+        width={w}
+        height={h}
+        rx={radius}
+        ry={radius}
+        fill={fill}
+      />
+      <text
+        x={cx}
+        y={cy}
+        fill="#ffffff"
+        fontSize={fontSize}
+        fontWeight={600}
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+        textAnchor="middle"
+        dominantBaseline="central"
+      >
+        {text}
+      </text>
+    </g>
+  );
 }
 
 const HANDLE_DIR_DEG: Record<ResizeHandle, number> = {
@@ -206,11 +319,6 @@ const ROTATE_CORNERS: Array<{
   { corner: 'sw', localX: 0, localY: 1, iconDeg: 270, label: 'Rotate' },
 ];
 
-const ROTATE_CORNER_PATH = (() => {
-  const m = rotateCornerSvg.match(/\bd="([^"]+)"/);
-  return m?.[1] || '';
-})();
-
 function SelectionChrome({
   box,
   angle = 0,
@@ -244,7 +352,6 @@ function SelectionChrome({
   const lineEpHit = LINE_ENDPOINT_HIT_PX * inv;
   const lineShaftHit = LINE_SHAFT_HIT_PX * inv;
   const rotateHit = ROTATE_HIT_PX * inv;
-  const rotateIcon = ROTATE_ICON_PX * inv;
   const rotateGap = ROTATE_GAP_PX * inv;
   const metaOffset = 16 * inv;
   const metaFont = 10 * inv;
@@ -312,7 +419,6 @@ function SelectionChrome({
       aria-hidden={!showHandles && !interactiveBox}
     >
       <style>{`
-        g.sel-hit:hover > .sel-rotate-icon { opacity: 1; }
         g.sel-hit:hover > .sel-ep-halo { opacity: 1; }
       `}</style>
       {metaLabel ? (
@@ -467,6 +573,7 @@ function SelectionChrome({
 
       {showRotate && !lineMode
         ? ROTATE_CORNERS.map(({ corner, localX, localY, iconDeg, label }) => {
+            // Fixed hotzone just outside each corner — cursor only, no on-canvas icon.
             const cornerPt = toScene(localX * w, localY * h);
             const mid = toScene(w / 2, h / 2);
             const vx = cornerPt.x - mid.x;
@@ -475,19 +582,9 @@ function SelectionChrome({
             const push = handleHit / 2 + rotateGap + rotateHit / 2;
             const cx = cornerPt.x + (vx / len) * push;
             const cy = cornerPt.y + (vy / len) * push;
-            const rot = ((iconDeg + angle) % 360 + 360) % 360;
-            const iconScale = rotateIcon / 32;
             return (
               <g key={`rot-${corner}`} className="sel-hit" transform={`translate(${cx} ${cy})`}>
                 <title>{label}</title>
-                <g
-                  className="sel-rotate-icon"
-                  transform={`rotate(${rot}) scale(${iconScale}) translate(-16 -16)`}
-                  opacity={0}
-                  style={{ pointerEvents: 'none' }}
-                >
-                  <path fill="#1a1a1a" d={ROTATE_CORNER_PATH} />
-                </g>
                 <rect
                   data-sel-handle="rotate"
                   data-rotate-corner={corner}

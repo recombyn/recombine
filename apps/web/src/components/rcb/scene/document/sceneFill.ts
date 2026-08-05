@@ -26,7 +26,7 @@ export type FillGradient = {
   angle?: number;
   /**
    * Linear gradient endpoints as percent of the node box (0–100).
-   * When set, the vector can be shorter than the full box (Figma-style).
+   * When set, the vector can be shorter than the full box.
    * When omitted, endpoints are derived from `angle` spanning the box.
    */
   x1?: number;

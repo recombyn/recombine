@@ -13,8 +13,12 @@ import {
 import {
   clampShapeSides,
   DEFAULT_SHAPE_SIDES,
+  ellipseArcPercentFromAttrs,
+  ellipseInnerRatioFromAttrs,
+  ellipseStartDegFromAttrs,
   shapeVertexPoints,
   sidesFromAttrs,
+  starInnerRatioFromAttrs,
 } from '@/components/rcb/scene/document/sceneShapes';
 import { scalePathData } from '@/components/rcb/scene/document/pathScale';
 import { PathBuilder } from './PathBuilder';
@@ -119,7 +123,14 @@ export function getShapeBaseline(
   }
 
   if (shapeType === 'circle') {
-    return { d: PathBuilder.ellipse(w, h).toD(), closed: true, kind: 'geo' };
+    const innerRatio = ellipseInnerRatioFromAttrs(node.attrs);
+    const arcPercent = ellipseArcPercentFromAttrs(node.attrs);
+    const startDeg = ellipseStartDegFromAttrs(node.attrs);
+    return {
+      d: PathBuilder.ellipseVariant(w, h, { innerRatio, arcPercent, startDeg }).toD(),
+      closed: true,
+      kind: 'geo',
+    };
   }
 
   if (shapeType === 'rect' || shapeType === 'roundRect' || shapeType === '') {
@@ -129,7 +140,13 @@ export function getShapeBaseline(
 
   if (shapeType === 'triangle' || shapeType === 'star' || shapeType === 'polygon') {
     const sides = sidesFromAttrs(node.attrs) || DEFAULT_SHAPE_SIDES;
-    const pts = shapeVertexPoints(shapeType, w, h, clampShapeSides(sides));
+    const pts = shapeVertexPoints(
+      shapeType,
+      w,
+      h,
+      clampShapeSides(sides),
+      starInnerRatioFromAttrs(node.attrs)
+    );
     if (pts.length < 3) return null;
     const vertexRadii = vertexRadiiFromAttrs(node.attrs, pts.length, shapeType);
     const d = roundedPolygonPath(pts, vertexRadii);
