@@ -38,7 +38,18 @@ def sqlalchemy_database_uri() -> str:
     if lower.startswith("postgresql://"):
         return "postgresql+psycopg://" + raw[len("postgresql://") :]
     if lower.startswith("sqlite:"):
-        return raw
+        # Normalize relative sqlite paths to apps/api so engine matches connect().
+        rest = raw.split(":", 1)[1].lstrip("/")
+        if rest.startswith("/") and len(rest) > 2 and rest[2] == ":":
+            rest = rest[1:]
+        rest = rest.split("?", 1)[0]
+        path = Path(rest)
+        if not path.is_absolute():
+            path = (_API_ROOT / path).resolve()
+        else:
+            path = path.resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return f"sqlite:///{path.as_posix()}"
     raise RuntimeError(f"Unsupported DATABASE_URL for SQLModel: {raw[:48]}…")
 
 
@@ -60,6 +71,18 @@ def _invalidate_bootstrap_flags() -> None:
         import app.services.db as db_mod
 
         db_mod._SCHEMA_READY = False
+    except Exception:
+        pass
+    try:
+        import app.services.llm.catalog_store as llm_catalog_mod
+
+        llm_catalog_mod._CATALOG_SEEDED = False
+    except Exception:
+        pass
+    try:
+        import app.services.llm.usage_log as usage_mod
+
+        usage_mod._TABLE_READY = False
     except Exception:
         pass
     try:
@@ -104,15 +127,25 @@ def reset_engine() -> None:
 
 
 def init_db() -> None:
-    """
-    Register metadata. Product DDL still lives in ``app.services.db.init_schema``
-    (MySQL/SQLite dual + migrations). SQLModel maps existing tables; do not
-    ``create_all`` over the whole schema here.
-    """
-    # Import models so table metadata is registered for Session/mappers.
+    """Import models so SQLModel metadata is registered for Alembic / Session."""
     from app import models as _models  # noqa: F401
 
     _ = SQLModel.metadata
+
+
+def run_migrations() -> None:
+    """Apply Alembic migrations to ``head`` (idempotent)."""
+    from alembic import command
+    from alembic.config import Config
+
+    init_db()
+    cfg = Config(str(_API_ROOT / "alembic.ini"))
+    # ConfigParser treats ``%`` as interpolation — escape DB URLs with %XX encoding.
+    cfg.set_main_option("sqlalchemy.url", sqlalchemy_database_uri().replace("%", "%%"))
+    # script_location in alembic.ini is relative to apps/api cwd when running CLI;
+    # pin absolute path for in-process calls from arbitrary working directories.
+    cfg.set_main_option("script_location", str(_API_ROOT / "app" / "alembic"))
+    command.upgrade(cfg, "head")
 
 
 def get_session() -> Session:

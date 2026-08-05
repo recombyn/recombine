@@ -1,4 +1,4 @@
-"""LangGraph graph nodes — observe (scene feedback HITL + critique)."""
+"""Observe node — scene feedback HITL + critique."""
 from __future__ import annotations
 
 import asyncio

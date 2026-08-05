@@ -572,7 +572,6 @@ def _build_lc_design_graph():
     )
     retry = _design_graph_retry_policy()
     node_timeout = _design_graph_node_timeout()
-    # LLM / IO-heavy nodes: RetryPolicy + TimeoutPolicy.
     # paint_ops already retries empty/invalid ops in-node — do NOT also retry the
     # whole node on 180s timeout (that alone made "add a rect" take ~7 minutes).
     io_kw: dict[str, Any] = {"destinations": dest, "retry_policy": retry}
@@ -650,7 +649,7 @@ async def run_agent_graph(
     interaction_mode: str | None = None,
     skill_refs: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Internal graph runner. Prefer ``design_stream`` at call sites."""
+    """Internal graph runner (public entry: ``design_stream``)."""
     del reserve_hold_fn
 
     task_id = str(uuid.uuid4())
@@ -911,7 +910,7 @@ async def resume_agent_graph(
         from app.services.design.runtime.graph.state import _SCENE_WAIT_SEC
         from app.services.design.runtime.scene_feedback import wait_for_scene
 
-        # Prefer already-posted durable payload; short wait if FE is mid-post.
+        # Use durable scene if posted; else short wait for mid-post FE.
         posted = await wait_for_scene(tid, timeout_sec=min(2.0, float(_SCENE_WAIT_SEC)))
         if posted is not None:
             graph_input = Command(resume=posted)
@@ -1212,7 +1211,7 @@ async def _drive_design_graph(
     except Exception as err:  # noqa: BLE001
         run.fatal = str(err) if hasattr(run, "fatal") else None
         try:
-            # Prefer keeping checkpoint for unexpected failures when configured.
+            # Keep checkpoint on error when ``design_run_error_resumable``.
             from app.core.config import settings as _s
 
             keep_on_error = bool(getattr(_s, "design_run_error_resumable", True))

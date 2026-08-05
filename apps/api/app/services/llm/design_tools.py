@@ -1,14 +1,7 @@
-"""Canvas design agent tools — Admin registry + named functions + Pydantic args.
+"""Canvas/meta tools: Admin registry + Pydantic args.
 
-Convention (LangChain StructuredTool):
-- Tool name        → function ``__name__`` (canvas: Admin ``op_key``)
-- Tool description → function ``__doc__`` (canvas: Admin ``model_hint``)
-- Tool parameters  → Pydantic ``args_schema`` (``Field`` descriptions)
-
-Canvas paint tools are built from Admin ``design_canvas_tool``.
-Meta tools are real functions + explicit Pydantic models in this module.
-
-System prompts live in ``design_global_rule`` (Admin), not in this module.
+Name/doc/params from ``__name__`` / ``__doc__`` / ``args_schema``.
+Prompts live in Admin ``design_global_rule``, not here.
 """
 
 from __future__ import annotations
@@ -33,14 +26,10 @@ _META_TOOL_NAMES = frozenset(
 
 
 class EmptyArgs(BaseModel):
-    """No parameters."""
-
     model_config = ConfigDict(extra="forbid")
 
 
 class AskUserArgs(BaseModel):
-    """Parameters for ``ask_user``."""
-
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(description="Question shown to the user")
@@ -51,8 +40,6 @@ class AskUserArgs(BaseModel):
 
 
 class FinishArgs(BaseModel):
-    """Parameters for ``finish``."""
-
     model_config = ConfigDict(extra="forbid")
 
     summary: str = Field(
@@ -304,7 +291,7 @@ def _structured_tool_from_fn(
     fn: Any,
     args_model: type[BaseModel] | None,
 ) -> Any:
-    """LangChain tool: ``__name__`` / ``__doc__`` + optional Pydantic ``args_schema``."""
+    """Build StructuredTool from function + optional args_schema."""
     import inspect
 
     from langchain_core.tools import StructuredTool
@@ -373,11 +360,7 @@ def design_tool_definitions() -> list[dict[str, Any]]:
 
 
 def design_langchain_tools() -> list[Any]:
-    """LangChain StructuredTools: function name/doc + Pydantic args_schema.
-
-    Canvas tools are Admin-driven and return ``delegated_to_client``.
-    ``generate_image`` is appended as the server-side tool.
-    """
+    """StructuredTools for meta + Admin canvas ops; appends ``generate_image``."""
     tools: list[Any] = []
     for fn, model in _meta_tool_specs():
         tools.append(_structured_tool_from_fn(fn, model))
