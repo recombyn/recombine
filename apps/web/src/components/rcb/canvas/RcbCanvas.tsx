@@ -21,6 +21,7 @@ import {
   rcbZoomAtPoint,
 } from '../core/math';
 import { RCB_DEFAULT_CAMERA, type RcbCamera } from '../core/types';
+import { DEFAULT_GRID_SIZE, shouldShowPixelGrid } from '../selection/alignGuides';
 
 export type { RcbCamera };
 export { RCB_DEFAULT_CAMERA };
@@ -58,8 +59,10 @@ export type RcbCanvasProps = {
   children: ReactNode;
   /** Optional SVG defs / ambient nodes inside the viewport (not scaled). */
   defs?: ReactNode;
-  /** Scene-space grid overlay (matches snap gridSize). */
-  showGrid?: boolean;
+  /**
+   * Pixel-grid pitch in scene units (default 1). Overlay auto-shows around ≥400%
+   * zoom and paints only the viewport (screen-space) for performance.
+   */
   gridSize?: number;
   stageRef?: RefObject<HTMLDivElement | null>;
   /**
@@ -100,8 +103,7 @@ function RcbCanvas({
   className,
   children,
   defs = null,
-  showGrid = false,
-  gridSize = 10,
+  gridSize = DEFAULT_GRID_SIZE,
   stageRef: stageRefProp,
   onViewportEl,
   cursor,
@@ -409,6 +411,13 @@ function RcbCanvas({
   // Must stay in sync with rcbScreenToScene / rcbSceneToScreen.
   const { x: camX, y: camY } = rcbCameraScreenOffset(camera, devicePixelRatio);
   const camZ = rcbCameraCssZoom(camera);
+  const g = gridSize > 0 ? gridSize : DEFAULT_GRID_SIZE;
+  const showPixelGrid = shouldShowPixelGrid(camZ, devicePixelRatio);
+  // Screen-space cell size + origin so lines lock to scene integers without a
+  // 200k² world tile (that was the perf hit at mid zoom).
+  const gridCellPx = camZ * g;
+  const gridPosX = ((camX % gridCellPx) + gridCellPx) % gridCellPx;
+  const gridPosY = ((camY % gridCellPx) + gridCellPx) % gridCellPx;
 
   return (
     <RcbCameraContext.Provider value={camera}>
@@ -439,6 +448,22 @@ function RcbCanvas({
               }}
             >
               {defs}
+              {/* Viewport-only pixel grid (not in the scaled world — cheap + auto ≥400%). */}
+              {showPixelGrid ? (
+                <div
+                  aria-hidden
+                  data-rcb-pixel-grid="1"
+                  className="pointer-events-none absolute inset-0 z-0"
+                  style={{
+                    backgroundImage: [
+                      'linear-gradient(to right, color-mix(in srgb, var(--line) 50%, transparent) 0, color-mix(in srgb, var(--line) 50%, transparent) 1px, transparent 1px)',
+                      'linear-gradient(to bottom, color-mix(in srgb, var(--line) 50%, transparent) 0, color-mix(in srgb, var(--line) 50%, transparent) 1px, transparent 1px)',
+                    ].join(', '),
+                    backgroundSize: `${gridCellPx}px ${gridCellPx}px`,
+                    backgroundPosition: `${gridPosX}px ${gridPosY}px`,
+                  }}
+                />
+              ) : null}
               {/* Camera layer. Shapes + selection chrome. */}
               <div
                 className="rcb-html-layer absolute left-0 top-0 z-[1] origin-top-left overflow-visible [&>*]:pointer-events-auto"
@@ -452,21 +477,6 @@ function RcbCanvas({
                   ['--rcb-scale' as string]: `calc(1 / ${camZ})`,
                 }}
               >
-                {showGrid && gridSize > 0 ? (
-                  <div
-                    aria-hidden
-                    className="pointer-events-none absolute z-0 opacity-[0.4]"
-                    style={{
-                      left: -100000,
-                      top: -100000,
-                      width: 200000,
-                      height: 200000,
-                      backgroundImage:
-                        'radial-gradient(circle at 0.5px 0.5px, color-mix(in srgb, var(--line) 75%, transparent) 0.55px, transparent 0)',
-                      backgroundSize: `${gridSize}px ${gridSize}px`,
-                    }}
-                  />
-                ) : null}
                 {children}
               </div>
               <div

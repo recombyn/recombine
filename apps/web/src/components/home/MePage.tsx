@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { Icon } from '@/components/base/icon';
 import EditProfileDialog from '@/components/home/EditProfileDialog';
 import EmptyState from '@/components/home/EmptyState';
 import InspirationCasePreview from '@/components/home/InspirationCasePreview';
@@ -37,29 +38,6 @@ import { getToken } from '@/utils/token';
 /** Me profile feed — same scale as Skills: 2 → 3 → 4 → 5 (2xl). */
 const ME_FLOW_COLUMNS =
   'w-full columns-2 gap-4 md:columns-3 lg:columns-4 2xl:columns-5';
-
-/** Edit-profile icon (person + pencil) — stroke follows currentColor. */
-function ProfileEditIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      fill="none"
-      viewBox="0 0 14 14"
-      className={className}
-      aria-hidden
-    >
-      <path
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.167"
-        d="M6.708 8.75H4.083a2.333 2.333 0 0 0-2.333 2.333v1.167m10.72-2.551a1.239 1.239 0 1 0-1.752-1.753l-2.339 2.34c-.139.14-.24.31-.295.499l-.488 1.674a.292.292 0 0 0 .361.362l1.674-.489c.189-.055.36-.156.499-.295zM8.168 4.083a2.333 2.333 0 1 1-4.667 0 2.333 2.333 0 0 1 4.667 0"
-      />
-    </svg>
-  );
-}
 
 type ProfileTab = 'published' | 'liked';
 
@@ -517,7 +495,7 @@ function MePage({ onOpenCase }: Props): ReactNode {
               onClick={openProfile}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
             >
-              <ProfileEditIcon className="h-3.5 w-3.5" />
+              <Icon name="home-profile-edit" className="h-3.5 w-3.5" />
             </button>
           </div>
         </header>

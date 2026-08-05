@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/utils/classnames';
+import { Icon } from '@/components/base/icon';
 
 /** Toast API and portal container. */
 
@@ -102,61 +103,23 @@ function ToastMark({
   type: Exclude<ToastType, 'loading'>;
   color: string;
 }) {
-  if (type === 'success' || type === 'destructive') {
-    return (
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden className="block">
-        <path
-          d="M2.5 6.1 4.85 8.45 9.5 3.55"
-          stroke={color}
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-  if (type === 'error') {
-    return (
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden className="block">
-        <path
-          d="M3.4 3.4 8.6 8.6M8.6 3.4 3.4 8.6"
-          stroke={color}
-          strokeWidth="2.2"
-          strokeLinecap="round"
-        />
-      </svg>
-    );
-  }
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden className="block">
-      <path d="M6 2.6v4.4" stroke={color} strokeWidth="2.2" strokeLinecap="round" />
-      <circle cx="6" cy="9.2" r="1.15" fill={color} />
-    </svg>
-  );
+  const name =
+    type === 'success' || type === 'destructive'
+      ? 'base-toast-check'
+      : type === 'error'
+        ? 'base-toast-x'
+        : 'base-toast-info';
+  return <Icon name={name} width={12} height={12} className="block" color={color} />;
 }
 
 function ToastLoadingMark() {
   return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      fill="none"
-      aria-hidden
-      className="block animate-spin"
-      style={{ transformOrigin: 'center' }}
-    >
-      {/* White arc on the green disk — green-on-green looked like a solid dot. */}
-      <circle
-        cx="6"
-        cy="6"
-        r="4.25"
-        stroke="#ffffff"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeDasharray="18 40"
-      />
-    </svg>
+    <Icon
+      name="base-toast-loading"
+      width={12}
+      height={12}
+      className="block animate-spin text-white"
+    />
   );
 }
 

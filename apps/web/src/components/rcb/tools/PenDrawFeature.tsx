@@ -976,8 +976,8 @@ function PenInkPreviewCanvas({
       height: Math.max(1, maxY - minY + pad * 2),
     });
     if (!ctx) return;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
 
     for (const s of linkSegs) {
       ctx.strokeStyle = '#8b8b8b';
@@ -994,8 +994,8 @@ function PenInkPreviewCanvas({
       strokeCachedPath2D(ctx, pathD, {
         strokeStyle: strokeColor,
         lineWidth: pathSw,
-        lineCap: 'round',
-        lineJoin: 'round',
+        lineCap: 'butt',
+        lineJoin: 'miter',
       });
     }
 
@@ -1005,8 +1005,8 @@ function PenInkPreviewCanvas({
       strokeCachedPath2D(ctx, closePreviewD, {
         strokeStyle: SEL_BASELINE,
         lineWidth: hairlineSw,
-        lineCap: 'round',
-        lineJoin: 'round',
+        lineCap: 'butt',
+        lineJoin: 'miter',
       });
       ctx.globalAlpha = 1;
       ctx.setLineDash([]);

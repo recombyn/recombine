@@ -49,6 +49,23 @@ Shortcuts: `]` / `[` front / back; `Ctrl + ]` / `Ctrl + [` up / down; `Ctrl + Sh
 
 Solid, linear gradient, radial gradient, and **mesh / diffuse** fills with editable control points.
 
+## Stroke
+
+Open paths and stroked shapes expose width, alignment, cap, and join in the stroke panel. Defaults:
+
+| Object | Cap | Join |
+|--------|-----|------|
+| Line, pen | Butt | Miter |
+| Brush (pencil), arrow | Round | Round |
+
+Panel values override defaults. Closed paths typically omit the cap control.
+
+## Path edit & outline stroke
+
+- **Double-click** a pen / path node to enter path edit. Subtools: select, pen (add anchors), curve (Alt / Option convert-point behavior).
+- **Outline stroke** bakes the stroke into an editable filled path. Single open paths use geometric offset; multi-subpath strokes (e.g. arrows) use one silhouette matching paint. Pencil centerlines are sparsified before offset to keep anchors manageable.
+- After outlining, stroke ink becomes fill; line / pen / pencil / arrow drop SVG stroke to avoid a double outline.
+
 ## Text & fonts
 
 - Double-click to edit; basic Markdown.

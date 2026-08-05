@@ -17,6 +17,7 @@
     --accent: #141414;
     --accent-soft: #ebebeb;
     --on-brand: #ffffff;
+    --home-cta: #3370ff;
     --font-sans: 'Alibaba PuHuiTi', '阿里巴巴普惠体', 'PingFang SC', 'Microsoft YaHei',
       'Noto Sans SC', system-ui, sans-serif;
     /* Hero — clean UI sans (Lovart-style); EN + CJK share one stack */
@@ -117,14 +118,37 @@ html.rcb-theme-switching *::after {
   background: var(--surface);
 }
 
-/* Home — solid fill (no glow / dot grid). */
+/* Home — solid fill; soft pastel glow lives on `.rcb-home-composer-glow`. */
 .rcb-home-hero-canvas {
+  --home-cta: #3370ff;
   background-color: #ffffff;
   background-image: none;
 }
 
 html[data-theme='dark'] .rcb-home-hero-canvas {
+  --home-cta: #5b8cff;
   background-color: var(--canvas);
+}
+
+/* Soft multi-hue bloom behind the home chat card (MasterGo-style). */
+.rcb-home-composer-glow::before {
+  content: '';
+  position: absolute;
+  inset: -28% -18% -18%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 55% 70% at 18% 55%, rgba(255, 176, 196, 0.45), transparent 70%),
+    radial-gradient(ellipse 50% 65% at 82% 40%, rgba(170, 200, 255, 0.5), transparent 68%),
+    radial-gradient(ellipse 45% 55% at 55% 90%, rgba(255, 210, 160, 0.35), transparent 70%);
+  filter: blur(28px);
+}
+
+html[data-theme='dark'] .rcb-home-composer-glow::before {
+  background:
+    radial-gradient(ellipse 55% 70% at 18% 55%, rgba(255, 120, 160, 0.18), transparent 70%),
+    radial-gradient(ellipse 50% 65% at 82% 40%, rgba(80, 130, 255, 0.22), transparent 68%),
+    radial-gradient(ellipse 45% 55% at 55% 90%, rgba(255, 170, 90, 0.12), transparent 70%);
 }
 
 .rcb-panel-tip {

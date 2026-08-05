@@ -20,7 +20,7 @@ type Props = {
   minWidth?: string;
   /**
    * Combobox mode: type a custom value, chevron still opens the preset list.
-   * Used for font size (fig.2).
+   * Used for font size.
    */
   editable?: boolean;
   /** Clamp typed number when `editable` (inclusive). */

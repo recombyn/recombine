@@ -75,21 +75,26 @@ const RcbSceneOverlayCanvas = memo(
           const canvas = canvasRef.current;
           if (!canvas) return null;
           const z = zoomRef.current;
-          const dpr = Math.max(1, dprRef.current || 1);
+          // Keep fractional browser-zoom dpr (e.g. 0.9) — clamping to ≥1 mis-sized
+          // the backing store vs physical pixels and drifted indicators vs SVG ink.
+          const dpr = Math.max(0.25, dprRef.current || 1);
           const w = Math.max(1, box.width);
           const h = Math.max(1, box.height);
-          // World layer already CSS-scales by z; bake z*dpr for sharpness but map
-          // with round so ceil stretch cannot drift under browser zoom.
+          // World layer already CSS-scales by z; bake z*dpr for the backing store.
+          // CSS size = bitmap/scale so setTransform(scale) stays isotropic (no
+          // round(w*scale)/w skew vs SVG hosts under fractional dpr).
           const scale = z * dpr;
           const pw = Math.max(1, Math.round(w * scale));
           const ph = Math.max(1, Math.round(h * scale));
+          const cssW = pw / scale;
+          const cssH = ph / scale;
           const prev = slotRef.current;
           const sameSlot =
             prev &&
             prev.pw === pw &&
             prev.ph === ph &&
-            prev.w === w &&
-            prev.h === h &&
+            prev.w === cssW &&
+            prev.h === cssH &&
             prev.left === box.left &&
             prev.top === box.top;
           // Reassigning canvas.width clears the bitmap and causes draw-preview jitter.
@@ -99,16 +104,16 @@ const RcbSceneOverlayCanvas = memo(
             canvas.height = ph;
             canvas.style.left = `${box.left}px`;
             canvas.style.top = `${box.top}px`;
-            canvas.style.width = `${w}px`;
-            canvas.style.height = `${h}px`;
+            canvas.style.width = `${cssW}px`;
+            canvas.style.height = `${cssH}px`;
             canvas.style.transform = '';
-            slotRef.current = { left: box.left, top: box.top, w, h, pw, ph };
+            slotRef.current = { left: box.left, top: box.top, w: cssW, h: cssH, pw, ph };
           }
           canvas.style.display = 'block';
           const ctx = canvas.getContext('2d');
           if (!ctx) return null;
-          ctx.setTransform(pw / w, 0, 0, ph / h, 0, 0);
-          ctx.clearRect(0, 0, w, h);
+          ctx.setTransform(scale, 0, 0, scale, 0, 0);
+          ctx.clearRect(0, 0, cssW, cssH);
           ctx.translate(-box.left, -box.top);
           return ctx;
         },

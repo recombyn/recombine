@@ -25,6 +25,63 @@ describe('PathBuilder', () => {
     expect(d).toContain('C ');
     expect(d.endsWith('Z')).toBe(true);
   });
+
+  it('builds a donut with evenodd compound path', () => {
+    const d = PathBuilder.ellipseVariant(100, 100, { innerRatio: 0.4, arcPercent: 100 }).toD();
+    expect(d.split('M ').length).toBeGreaterThan(2);
+    expect(d).toContain('Z');
+  });
+
+  it('builds a pie sector', () => {
+    const d = PathBuilder.ellipseVariant(100, 100, { innerRatio: 0, arcPercent: 50 }).toD();
+    expect(d).toContain('A ');
+    expect(d).toContain('Z');
+  });
+
+  it('sweeps from fixed startDeg (default south)', () => {
+    // start=90°, +50% → south to north via west.
+    const d = PathBuilder.ellipseVariant(100, 100, {
+      innerRatio: 0,
+      arcPercent: 50,
+      startDeg: 90,
+    }).toD();
+    expect(d).toMatch(/M 50 50/);
+    // First rim point is start (south).
+    expect(d).toMatch(/L 50(?:\.\d+)? 100/);
+  });
+
+  it('builds an annular sector with hole + partial arc', () => {
+    const d = PathBuilder.ellipseVariant(100, 100, {
+      innerRatio: 0.4,
+      arcPercent: -76.7,
+      startDeg: 90,
+    }).toD();
+    expect(d).toContain('A ');
+    expect(d.match(/A /g)?.length).toBeGreaterThanOrEqual(2);
+    expect(d).toContain('Z');
+  });
+});
+
+describe('ellipseArcPercentFromPointer', () => {
+  it('opens a small gap when dragging slightly from full', async () => {
+    const { ellipseArcPercentFromPointer } = await import(
+      '@/components/rcb/scene/document/sceneShapes'
+    );
+    // Start at south (90°); slight east of south → near-100% remaining.
+    const next = ellipseArcPercentFromPointer(60, 90, 50, 50, 100, 90);
+    expect(Math.abs(next)).toBeGreaterThan(90);
+  });
+
+  it('sign follows sweep direction from fixed start', async () => {
+    const { ellipseArcPercentFromPointer } = await import(
+      '@/components/rcb/scene/document/sceneShapes'
+    );
+    // From south: east end → negative (CCW back); west end → positive.
+    const neg = ellipseArcPercentFromPointer(90, 50, 50, 50, -50, 90);
+    const pos = ellipseArcPercentFromPointer(10, 50, 50, 50, 50, 90);
+    expect(neg).toBeLessThan(0);
+    expect(pos).toBeGreaterThan(0);
+  });
 });
 
 describe('getShapeBaseline', () => {

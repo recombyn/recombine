@@ -5,12 +5,11 @@ import {
   HiOutlineArrowsRightLeft,
   HiOutlineEye,
   HiOutlineEyeSlash,
-  HiOutlineLink,
-  HiOutlineLinkSlash,
   HiOutlineLockClosed,
   HiOutlineLockOpen,
 } from 'react-icons/hi2';
 import { ColorPanelPopover, FILL_ALPHA_PRESETS } from '@/components/base/colorPanel';
+import { Icon } from '@/components/base/icon';
 import FrameSizePresetMenu from '@/components/editor/nodes/FrameNode/FrameSizePresetMenu';
 import {
   applyFramePreset,
@@ -269,9 +268,9 @@ function FrameContextToolbar({ frame }: Props) {
           }}
         >
           {aspectLocked ? (
-            <HiOutlineLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <Icon name="editor-link" width={14} height={14} />
           ) : (
-            <HiOutlineLinkSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <Icon name="editor-unlink" width={14} height={14} />
           )}
         </button>
       </Tooltip>

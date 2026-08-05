@@ -1,19 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, memo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import {
-  HiOutlineChevronDown,
-  HiOutlineChevronUp,
-  HiOutlineHome,
-  HiOutlineMap,
-  HiOutlineShare,
-  HiOutlineSquare3Stack3D,
-} from 'react-icons/hi2';
-import { LuKeyboard } from 'react-icons/lu';
-import { TbMessage2Filled } from 'react-icons/tb';
-import { Dropdown, Tooltip, message } from '@/components/base';
-import type { MenuItemType } from '@/components/base';
+import { message } from '@/components/base';
 import {
   peekHomeAgentBoot,
   clearHomeAgentBoot,
@@ -23,23 +12,15 @@ import {
 import { withReturnTo } from '@/utils/authReturnTo';
 import { store } from '@/store';
 import { useProjectCloudSync, flushCurrentProjectNow } from '@/components/editor/useProjectCloudSync';
-import {
-  CollabPresenceBar,
-  CollabRoomProvider,
-} from '@/components/editor/collab/CollabRoomProvider';
+import { CollabRoomProvider } from '@/components/editor/collab/CollabRoomProvider';
 import { isCollabActive } from '@/components/editor/collab/collabRuntime';
 import type { ComposerContext } from '@/components/editor/panels/AgentComposerInput';
 import AgentDock from '@/components/editor/panels/AgentDock';
-import DevPropertiesPanel, {
-  getInspectDockWidth,
-} from '@/components/editor/panels/DevPropertiesPanel';
+import DevPropertiesPanel from '@/components/editor/panels/DevPropertiesPanel';
 import ShareDialog from '@/components/editor/panels/ShareDialog';
-import { EditorTopExportButton } from '@/components/editor/panels/ExportSelectionPanel';
 import { fetchShareApi, updateShareDocumentApi } from '@/apis/shares';
 import EditorBootOverlay from '@/components/editor/chrome/EditorBootOverlay';
 import {
-  RcbCanvas,
-  RcbSvgDefs,
   RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
   rcbFitCamera,
   rcbViewportSceneBounds,
@@ -51,38 +32,12 @@ import {
   type RcbCamera as CanvasCamera,
 } from '@/components/rcb';
 import LayerPanel from '@/components/editor/panels/LayerPanel';
-import ImageProcessWatcher from '@/components/editor/nodes/ImageNode/ImageProcessWatcher';
-import CropExpandSessionHost from '@/components/editor/nodes/ImageNode/cropExpand/CropExpandSessionHost';
-import ImageToolPanelHost from '@/components/editor/nodes/ImageNode/toolPanels/ImageToolPanelHost';
-import ShapeStylePanelHost from '@/components/editor/nodes/ShapeNode/ShapeStylePanelHost';
-import VideoTrimSessionHost from '@/components/editor/nodes/VideoNode/VideoTrimSessionHost';
-import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesOverlay';
-import SvgCanvas from '@/components/editor/canvas/SvgCanvas';
 import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
-import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
-import EditorShortcutsPanel from '@/components/editor/chrome/EditorShortcutsPanel';
-import PenStrokeToolbar from '@/components/editor/chrome/PenStrokeToolbar';
-import BucketFillToolbar from '@/components/editor/chrome/BucketFillToolbar';
-import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
-import PathEditToolbar, {
-  type PathEditSubtool,
-} from '@/components/editor/chrome/PathEditToolbar';
-import AlignGuidesOverlay, {
-  type AlignGuide,
-} from '@/components/rcb/selection/AlignGuidesOverlay';
-import {
-  getDocumentGridSize,
-  nodeGuideBoxes,
-  snapBoxToGrid,
-  snapBoxToGuides,
-  snapResizeToGrid,
-  snapResizeToGuides,
-  getSnapThreshold,
-} from '@/components/rcb/selection/alignGuides';
-import type { ResizeHandle } from '@/components/rcb/selection/resizeGeometry';
+import type { PathEditSubtool } from '@/components/editor/chrome/PathEditToolbar';
+import { getDocumentGridSize } from '@/components/rcb/selection/alignGuides';
 import { cn } from '@/utils/classnames';
 import { fetchProject } from '@/apis/projects';
-import { createEmptyDocument } from '@/components/rcb/scene/document/sceneDocument';
+import { createEmptyDocument, listSceneNodes } from '@/components/rcb/scene/document/sceneDocument';
 import {
   getProjectDraft,
   getProjectSession,
@@ -94,32 +49,17 @@ import {
   importDocument,
   openTemplate,
   renameTemplate,
-  addArtboardFrame,
   setActiveFrameId,
   setMixedSelection,
-  renameArtboardFrame,
-  setCanvasMeta,
-  setActiveTool,
   setGridMode,
   setSelectedNodeId,
-  setSelectedNodeIds,
   setTemplateThumbnail,
   setWorkspaceMode,
-  updateArtboardFrame,
-  pushEditorHistory,
   bakeDocumentOrigin,
   EMPTY_ID_LIST,
 } from '@/store/modules/editor';
-import { listSceneNodes, stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
-import {
-  HtmlArtboardFrame,
-  FrameDrawFeature,
-  FrameMoveFeature,
-} from '@/components/rcb';
-import FrameContextToolbar from '@/components/editor/nodes/FrameNode/FrameContextToolbar';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
-import CanvasBgPicker from '@/components/editor/chrome/CanvasBgPicker';
 import type { FillPanelValue } from '@/components/editor/panels/FillPanel';
 import { cssSolidWithOpacity } from '@/components/base/colorPanel';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
@@ -129,11 +69,13 @@ import {
   parseFillGradient,
   parseFillImageFit,
   parseFillType,
-  serializeFillGradient,
   type FillType,
 } from '@/components/rcb/scene/document/sceneFill';
-import WalletAccountChip from '@/components/layout/WalletAccountChip';
 import EditorOnboardingTour from '@/components/editor/chrome/EditorOnboardingTour';
+import EditorTopChrome, { flushAndGoHome } from '@/components/editor/page/EditorTopChrome';
+import EditorToolDocks from '@/components/editor/page/EditorToolDocks';
+import EditorBottomHud, { isThemeFollowCanvasBg } from '@/components/editor/page/EditorBottomHud';
+import EditorStageWorld from '@/components/editor/page/EditorStageWorld';
 
 const BOOT_MIN_MS = 520;
 const BOOT_EXIT_MS = 280;
@@ -148,7 +90,6 @@ function rcbJumpLog(event: string, data: Record<string, unknown> = {}) {
   if (!Array.isArray(w.__rcbJumpLog)) w.__rcbJumpLog = [];
   w.__rcbJumpLog.push(row);
   w.__rcbJumpDump = () => JSON.stringify(w.__rcbJumpLog, null, 2);
-  console.info(JSON.stringify(row));
 }
 
 function documentToCanvasFill(document: any, themeFallback: string): FillPanelValue {
@@ -176,38 +117,6 @@ function documentToCanvasFill(document: any, themeFallback: string): FillPanelVa
   };
 }
 
-function canvasFillToDocumentMeta(next: FillPanelValue, followTheme: boolean) {
-  return {
-    backgroundColor: followTheme ? '' : next.fillColor,
-    backgroundFillType: next.fillType,
-    backgroundOpacity: next.fillOpacity,
-    backgroundGradient: next.fillGradient,
-    backgroundImageSrc: next.fillImageSrc,
-    backgroundImageFit: next.fillImageFit,
-    backgroundImageRotate: next.fillImageRotate,
-    backgroundImageAdjust: next.fillImageAdjust,
-  };
-}
-
-const EDITOR_PAN_BLOCK_SELECTOR = [
-  '[data-scene-node-id]',
-  '[data-sel-box]',
-  '[data-sel-handle]',
-  '[data-frame-label]',
-  '[data-image-label]',
-  '[data-frame-toolbar]',
-  '[data-sel-toolbar]',
-  '[data-ctx-menu]',
-  '[data-crop-expand-overlay]',
-  '[data-crop-expand-toolbar]',
-  '[data-image-tool-panel]',
-  '[data-gradient-handles]',
-  '[data-mesh-handles]',
-  '[data-shape-style-panel]',
-  '[data-video-playback-bar]',
-  '[data-video-trim-toolbar]',
-].join(',');
-
 function computeWorldSurface(doc: any, frames: ArtboardFrame[]) {
   let maxX = 3600;
   let maxY = 2400;
@@ -227,22 +136,6 @@ function computeWorldSurface(doc: any, frames: ArtboardFrame[]) {
     maxY = Math.max(maxY, y + h + 400);
   }
   return { x: 0, y: 0, width: Math.ceil(maxX), height: Math.ceil(maxY) };
-}
-
-/** Legacy / empty document canvas colors ? follow `--canvas` with the active theme. */
-const THEME_FOLLOW_CANVAS_BGS = new Set([
-  '',
-  'transparent',
-  '#fff',
-  '#ffffff',
-  '#f0f0f0',
-  '#f3f3f3',
-  '#f5f5f5',
-  '#fafafa',
-]);
-
-function isThemeFollowCanvasBg(raw: string) {
-  return THEME_FOLLOW_CANVAS_BGS.has(String(raw || '').trim().toLowerCase());
 }
 
 function useThemeCanvasColor() {
@@ -280,64 +173,6 @@ function useViewportMatch(query: string) {
     return () => media.removeEventListener('change', onChange);
   }, [query]);
   return matches;
-}
-
-function HudBtn({
-  tip,
-  active,
-  disabled,
-  onClick,
-  children,
-  className,
-  'data-tour': dataTour,
-}: {
-  tip: string;
-  active?: boolean;
-  disabled?: boolean;
-  onClick?: () => void;
-  children: ReactNode;
-  className?: string;
-  'data-tour'?: string;
-}) {
-  return (
-    <Tooltip tip={tip} placement="top">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onClick}
-        data-tour={dataTour}
-        className={cn(
-          'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
-          active
-            ? 'bg-[var(--accent-soft)] text-[var(--ink)]'
-            : 'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
-          'disabled:cursor-not-allowed disabled:opacity-35',
-          className
-        )}
-      >
-        {children}
-      </button>
-    </Tooltip>
-  );
-}
-
-/** Shared optical size for bottom-left HUD glyphs. */
-const HUD_ICON = 'h-[15px] w-[15px] shrink-0';
-const HUD_ICON_STROKE = 1.75;
-/** Min gap between left HUD (at left-4) and centered toolstrip before stacking. */
-const BOTTOM_HUD_TOOLS_GAP_PX = 12;
-
-/** True when left HUD at bottom-left would horizontally collide with centered tools. */
-function bottomHudCollidesWithTools(opts: {
-  stage: DOMRect;
-  hudWidth: number;
-  toolsWidth: number;
-}): boolean {
-  const { stage, hudWidth, toolsWidth } = opts;
-  if (!(hudWidth > 0) || !(toolsWidth > 0) || !(stage.width > 0)) return false;
-  const hudRight = stage.left + 16 + hudWidth;
-  const toolsLeft = stage.left + stage.width / 2 - toolsWidth / 2;
-  return hudRight + BOTTOM_HUD_TOOLS_GAP_PX > toolsLeft;
 }
 
 type SceneBox = { x: number; y: number; width: number; height: number };
@@ -393,35 +228,6 @@ function editorHasFitContent(doc: any, frames: ArtboardFrame[]): boolean {
   return false;
 }
 
-function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }) {
-  return (
-    <span className="flex w-full min-w-[11rem] items-center justify-between gap-6">
-      <span>{label}</span>
-      {shortcut ? (
-        <span className="shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
-          {shortcut}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-const ZOOM_MENU_PRESETS = [
-  { key: '25', zoom: 0.25 },
-  { key: '50', zoom: 0.5 },
-  { key: '75', zoom: 0.75 },
-  { key: '100', zoom: 1 },
-  { key: '150', zoom: 1.5 },
-  { key: '200', zoom: 2 },
-  { key: '400', zoom: 4 },
-] as const;
-
-function zoomMenuSelectedKeys(opts: { zoom: number; fitActive: boolean }): string[] {
-  if (opts.fitActive) return ['fit'];
-  const hit = ZOOM_MENU_PRESETS.find((p) => Math.abs(opts.zoom - p.zoom) < 0.001);
-  return hit ? [hit.key] : [];
-}
-
 function resolveHomeAgentInteractionMode(
   mode: unknown
 ): 'agent' | 'ask' | 'image' | 'video' | null {
@@ -446,12 +252,6 @@ function shouldApplyHomeAgentBoot(opts: {
   if (!fromFlag && !boot.autoSubmit && !hasChips) return false;
   return true;
 }
-
-const ZOOM_TRIGGER_BASE =
-  'inline-flex h-7 min-w-[2.75rem] items-center justify-center gap-1.5 rounded px-2.5 transition-colors';
-const ZOOM_TRIGGER_OPEN = 'bg-[var(--accent-soft)] text-[var(--ink)]';
-const ZOOM_TRIGGER_IDLE =
-  'text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]';
 
 function computeStageBackground(
   document: any,
@@ -735,7 +535,6 @@ function EditorPage() {
   const [layersOpen, setLayersOpen] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [canvasBgOpen, setCanvasBgOpen] = useState(false);
-  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   /** Enter page / fit-to-canvas — menu highlights「适应画布」until user picks another zoom. */
   const [zoomFitActive, setZoomFitActive] = useState(true);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -765,8 +564,6 @@ function EditorPage() {
   const homeAgentBootAppliedRef = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageEl, setStageEl] = useState<HTMLElement | null>(null);
-  const [movingFrameId, setMovingFrameId] = useState<string | null>(null);
-  const [frameGuides, setFrameGuides] = useState<AlignGuide[]>([]);
   const document = useSelector((state: any) => state.editor.document);
   useProjectCloudSync();
   const sceneReloadToken = useSelector((state: any) => state.editor.sceneReloadToken);
@@ -870,15 +667,10 @@ function EditorPage() {
   const frames: ArtboardFrame[] = Array.isArray(document?.frames) ? document.frames : [];
   const activeFrameId = document?.activeFrameId ?? null;
   const activeFrame = frames.find((f) => f.id === activeFrameId) ?? null;
-  const selectedFrames = frames.filter((f) =>
-    !f.hidden &&
-    (selectedFrameIds.length
-      ? selectedFrameIds.includes(f.id)
-      : Boolean(activeFrameId && f.id === activeFrameId))
+  const selectedFrames = frames.filter(
+    (f) => !f.hidden && selectedFrameIds.includes(f.id)
   );
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
-  const bottomHudRef = useRef<HTMLDivElement | null>(null);
-  const [stackBottomHud, setStackBottomHud] = useState(false);
   useEffect(() => {
     const el = stageEl;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
@@ -904,14 +696,19 @@ function EditorPage() {
     return () => ro.disconnect();
   }, [stageEl]);
 
-  /** Log camera changes after boot reveal — catch late auto-fit / collab / parent setState. */
+  /**
+   * Catch late auto-fit / collab camera writes AFTER boot.
+   * Skip when the user already owns the camera — otherwise every wheel zoom
+   * spam-logs as `afterReveal` and looks like a reveal fight (it is not).
+   */
   useEffect(() => {
     if (bootOpen) return;
+    if (cameraUserTouchedRef.current) return;
     rcbJumpLog('camera.afterReveal', {
       x: Number(camera.x.toFixed(2)),
       y: Number(camera.y.toFixed(2)),
       zoom: Number(camera.zoom.toFixed(4)),
-      userTouched: cameraUserTouchedRef.current,
+      userTouched: false,
       stageW: stageSize.width,
       stageH: stageSize.height,
       stack: (new Error().stack || '')
@@ -921,49 +718,11 @@ function EditorPage() {
     });
   }, [bootOpen, camera.x, camera.y, camera.zoom, stageSize.width, stageSize.height]);
 
-  useEffect(() => {
-    const stage = stageEl;
-    const hud = bottomHudRef.current;
-    const tools = stage?.ownerDocument?.querySelector(
-      '[data-tour="editor-tools"]'
-    ) as HTMLElement | null;
-    if (!stage || !hud || !tools) {
-      setStackBottomHud(false);
-      return undefined;
-    }
-    const measure = () => {
-      const stageBox = stage.getBoundingClientRect();
-      const hudBox = hud.getBoundingClientRect();
-      const toolsBox = tools.getBoundingClientRect();
-      setStackBottomHud(
-        bottomHudCollidesWithTools({
-          stage: stageBox,
-          hudWidth: hudBox.width,
-          toolsWidth: toolsBox.width,
-        })
-      );
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(stage);
-    ro.observe(hud);
-    ro.observe(tools);
-    window.addEventListener('resize', measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', measure);
-    };
-  }, [isDevMode, stageEl, toolsExpanded, useCompactTooling, stageSize.width]);
-
   // Scene paper follows content bounds only. Camera pan/zoom is CSS on RcbCanvas —
   // never resize/slide SVG viewBox to chase the frustum.
   const worldSurface = document
     ? computeWorldSurface(document, frames)
     : { x: 0, y: 0, width: 3600, height: 2400 };
-  const paperWorld = useMemo(
-    () => ({ x: 0, y: 0, width: worldSurface.width, height: worldSurface.height }),
-    [worldSurface.width, worldSurface.height]
-  );
   // RcbCanvas autofit disabled here — we only center once on first load (below).
   const worldBounds = { x: 0, y: 0, width: 0, height: 0 };
 
@@ -1240,130 +999,6 @@ function EditorPage() {
 
   // Empty / content fit + boot reveal are handled by the stage-layout initial-fit effect.
 
-  const onCommitFrame = useCallback(
-    (rect: { x: number; y: number; width: number; height: number }) => {
-      dispatch(addArtboardFrame(rect));
-      // Leave draw mode ? newly created frame is already activeFrameId.
-      dispatch(setActiveTool('select'));
-      dispatch(setSelectedNodeIds([]));
-    },
-    [dispatch]
-  );
-
-  const onMoveFrame = useCallback(
-    (id: string, x: number, y: number, opts?: { skipGrid?: boolean }) => {
-      const frame = frames.find((f) => f.id === id);
-      if (!frame) return;
-      let moving = {
-        left: x,
-        top: y,
-        width: Math.max(1, Number(frame.width) || 1),
-        height: Math.max(1, Number(frame.height) || 1),
-      };
-      if (isGridMode && !opts?.skipGrid) moving = snapBoxToGrid(moving, gridSize);
-      const nodes = nodeGuideBoxes(document);
-      const otherFrames = frames
-        .filter((f) => f.id !== id)
-        .map((f) => ({
-          left: Number(f.x) || 0,
-          top: Number(f.y) || 0,
-          width: Math.max(1, Number(f.width) || 1),
-          height: Math.max(1, Number(f.height) || 1),
-        }));
-      const threshold = getSnapThreshold(camera.zoom);
-      // Snap artboard to scene nodes + sibling frames (same helpers as selection move).
-      const snapped = snapBoxToGuides(moving, [...nodes, ...otherFrames], [], threshold);
-      setFrameGuides(snapped.guides);
-      dispatch(
-        updateArtboardFrame({
-          id,
-          patch: {
-            x: Math.round(snapped.box.left),
-            y: Math.round(snapped.box.top),
-          },
-          skipHistory: true,
-        })
-      );
-    },
-    [camera.zoom, dispatch, document, frames, gridSize, isGridMode]
-  );
-
-  const onResizeFrame = useCallback(
-    (
-      id: string,
-      box: { left: number; top: number; width: number; height: number },
-      handle: ResizeHandle,
-      opts?: { skipGrid?: boolean; lockAspect?: boolean }
-    ) => {
-      let next = box;
-      if (isGridMode && !opts?.skipGrid) {
-        next = snapResizeToGrid(next, handle, gridSize, 40, {
-          lockAspect: Boolean(opts?.lockAspect),
-          aspectRatio: box.width / Math.max(1, box.height),
-        });
-      }
-      const nodes = nodeGuideBoxes(document);
-      const otherFrames = frames
-        .filter((f) => f.id !== id)
-        .map((f) => ({
-          left: Number(f.x) || 0,
-          top: Number(f.y) || 0,
-          width: Math.max(1, Number(f.width) || 1),
-          height: Math.max(1, Number(f.height) || 1),
-        }));
-      const threshold = getSnapThreshold(camera.zoom);
-      const snapped = snapResizeToGuides(
-        next,
-        handle,
-        [...nodes, ...otherFrames],
-        [],
-        threshold,
-        40
-      );
-      setFrameGuides(snapped.guides);
-      dispatch(
-        updateArtboardFrame({
-          id,
-          patch: {
-            x: Math.round(snapped.box.left),
-            y: Math.round(snapped.box.top),
-            width: Math.max(40, Math.round(snapped.box.width)),
-            height: Math.max(40, Math.round(snapped.box.height)),
-          },
-          skipHistory: true,
-        })
-      );
-    },
-    [camera.zoom, dispatch, document, frames, gridSize, isGridMode]
-  );
-
-  const frameContentBoxes = useMemo(() => nodeGuideBoxes(document), [document]);
-
-  const onFrameMoveStart = useCallback(() => {
-    dispatch(pushEditorHistory());
-  }, [dispatch]);
-
-  const onFrameMoveEnd = useCallback(() => {
-    setMovingFrameId(null);
-    setFrameGuides([]);
-  }, []);
-
-  const onFrameDraggingChange = useCallback((id: string | null) => {
-    setMovingFrameId(id);
-    if (!id) setFrameGuides([]);
-  }, []);
-
-  const onSelectFrame = useCallback(
-    (id: string) => {
-      dispatch(setActiveFrameId(id));
-    },
-    [dispatch]
-  );
-
-  const onClearCanvasSelection = useCallback(() => {
-    dispatch(setMixedSelection({ nodeIds: [], frameIds: [] }));
-  }, [dispatch]);
-
   useEffect(() => {
     if (!bootOpen || bootExiting) return undefined;
     const id = window.setInterval(() => {
@@ -1599,61 +1234,6 @@ function EditorPage() {
     if (didInitialFitRef.current) finishBoot();
   }, []);
 
-  const zoomMenuItems = useMemo<MenuItemType[]>(
-    () => [
-      {
-        key: 'fit',
-        label: <ZoomMenuLabel label={t('editor.fitCanvas')} shortcut="Shift 1" />,
-      },
-      {
-        key: 'in',
-        label: <ZoomMenuLabel label={t('editor.zoomIn')} />,
-      },
-      {
-        key: 'out',
-        label: <ZoomMenuLabel label={t('editor.zoomOut')} />,
-      },
-      { key: 'zoom-divider', type: 'divider', label: '' },
-      ...ZOOM_MENU_PRESETS.map((p) => ({
-        key: p.key,
-        label: <ZoomMenuLabel label={`${Math.round(p.zoom * 100)}%`} />,
-      })),
-    ],
-    [t]
-  );
-
-  const zoomSelectedKeys = useMemo(
-    () => zoomMenuSelectedKeys({ zoom: camera.zoom, fitActive: zoomFitActive }),
-    [camera.zoom, zoomFitActive]
-  );
-
-  const onZoomMenuClick = useCallback(
-    (key: string) => {
-      if (key === 'fit') {
-        onFitViewManual();
-      } else if (key === 'in') {
-        onZoomIn();
-      } else if (key === 'out') {
-        onZoomOut();
-      } else {
-        const preset = ZOOM_MENU_PRESETS.find((p) => p.key === key);
-        if (preset) zoomAtStageCenter(preset.zoom);
-      }
-      setZoomMenuOpen(false);
-    },
-    [onFitViewManual, onZoomIn, onZoomOut, zoomAtStageCenter]
-  );
-
-  const toggleMinimap = useCallback(() => {
-    setMinimapOpen((v) => !v);
-    setShortcutsOpen(false);
-  }, []);
-
-  const toggleShortcuts = useCallback(() => {
-    setShortcutsOpen((v) => !v);
-    setMinimapOpen(false);
-  }, []);
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -1744,607 +1324,278 @@ function EditorPage() {
 
   return (
     <CollabRoomProvider stageEl={stageEl} camera={camera} onCameraChange={setCamera}>
-    <div
-      className={cn(
-        'relative flex h-screen flex-col overflow-hidden',
-        followThemeCanvas && 'bg-[var(--canvas)]'
-      )}
-      style={stageBackground ? { background: stageBackground } : undefined}
-    >
-      <div className="relative flex min-h-0 flex-1">
-        {layersOpen && !isMobileViewport ? (
-          <div className="relative z-30 h-full shrink-0">
-            <LayerPanel
-              onClose={() => setLayersOpen(false)}
-              onSelectNode={focusLayerNode}
-              onSelectFrame={focusLayerFrame}
+      <div
+        className={cn(
+          'relative flex h-screen flex-col overflow-hidden',
+          followThemeCanvas && 'bg-[var(--canvas)]'
+        )}
+        style={stageBackground ? { background: stageBackground } : undefined}
+      >
+        <div className="relative flex min-h-0 flex-1">
+          {layersOpen && !isMobileViewport ? (
+            <div className="relative z-30 h-full shrink-0">
+              <LayerPanel
+                onClose={() => setLayersOpen(false)}
+                onSelectNode={focusLayerNode}
+                onSelectFrame={focusLayerFrame}
+              />
+            </div>
+          ) : null}
+
+          <main
+            className={cn(
+              'relative flex min-w-0 flex-1 flex-col overflow-hidden',
+              followThemeCanvas && 'bg-[var(--canvas)]'
+            )}
+            style={stageBackground ? { background: stageBackground } : undefined}
+          >
+            <EditorTopChrome
+              projectName={projectName}
+              workspaceMode={workspaceMode}
+              inspectOpen={inspectOpen}
+              agentOpen={agentOpen}
+              onGoHome={() => void flushAndGoHome(navigate)}
+              onRename={(name) => dispatch(renameTemplate(name))}
+              onShare={() => setShareOpen(true)}
+              onOpenAgent={() => setAgentOpen(true)}
             />
-          </div>
+
+            <EditorToolDocks
+              isDevMode={isDevMode}
+              pathEditOpen={pathEditOpen}
+              pathEditSubtool={pathEditSubtool}
+              onPathEditSubtool={setPathEditSubtool}
+              onPathEditExit={() => setPathEditOpen(false)}
+              activeTool={activeTool}
+            />
+
+            <EditorStageWorld
+              document={document}
+              worldBounds={worldBounds}
+              worldSurface={worldSurface}
+              camera={camera}
+              onCameraChange={onCanvasCameraChange}
+              panMode={panMode}
+              frameMode={frameMode}
+              stageBackground={stageBackground}
+              stageRef={stageRef}
+              onViewportEl={setStageEl}
+              stageEl={stageEl}
+              canvasCursor={canvasCursor}
+              gridSize={gridSize}
+              isDevMode={isDevMode}
+              isMobileViewport={isMobileViewport}
+              activeTool={activeTool}
+              canvasDocument={canvasDocument}
+              sceneReloadToken={sceneReloadToken}
+              documentPatchToken={documentPatchToken}
+              lastPatchedNodeIds={lastPatchedNodeIds}
+              selectedNodeId={selectedNodeId}
+              selectedNodeIds={selectedNodeIds}
+              selectedFrameIds={selectedFrameIds}
+              frames={frames}
+              selectedFrames={selectedFrames}
+              activeFrame={activeFrame}
+              canvasFillValue={canvasFillValue}
+              canvasBgOpen={canvasBgOpen}
+              canvasMeshSelectedIndex={canvasMeshSelectedIndex}
+              setCanvasMeshSelectedIndex={setCanvasMeshSelectedIndex}
+              canvasMeshShowGuides={canvasMeshShowGuides}
+              onZoomIn={onZoomIn}
+              onZoomOut={onZoomOut}
+              onCanvasReady={onCanvasReady}
+              onOpenAgent={(opts) => {
+                if (workspaceMode === 'dev') return;
+                setAgentOpen(true);
+                if (opts?.prompt) setAgentDraft(opts.prompt);
+              }}
+              onAddToChat={(target) => {
+                if (workspaceMode === 'dev') return;
+                setAgentOpen(true);
+                setAttachToChat(target);
+              }}
+            />
+
+            <div
+              data-tour="editor-tools"
+              className={cn(
+                'pointer-events-none absolute left-1/2 z-20 -translate-x-1/2',
+                'bottom-4'
+              )}
+            >
+              <div className="pointer-events-auto">
+                <EditorToolStrip
+                  camera={camera}
+                  stageEl={stageEl}
+                  compact={false}
+                  selectOnly={isDevMode}
+                />
+              </div>
+            </div>
+
+            <EditorBottomHud
+              document={document}
+              frames={frames}
+              camera={camera}
+              stageEl={stageEl}
+              stageBackground={stageBackground}
+              activeFrameId={activeFrameId}
+              selectedFrameIds={selectedFrameIds}
+              selectedNodeIds={selectedNodeIds}
+              onCameraChange={onCanvasCameraChange}
+              isDevMode={isDevMode}
+              useCompactTooling={useCompactTooling}
+              layersOpen={layersOpen}
+              setLayersOpen={setLayersOpen}
+              minimapOpen={minimapOpen}
+              setMinimapOpen={setMinimapOpen}
+              shortcutsOpen={shortcutsOpen}
+              setShortcutsOpen={setShortcutsOpen}
+              toolsExpanded={toolsExpanded}
+              setToolsExpanded={setToolsExpanded}
+              canvasFillValue={canvasFillValue}
+              canvasBgOpen={canvasBgOpen}
+              setCanvasBgOpen={setCanvasBgOpen}
+              canvasMeshSelectedIndex={canvasMeshSelectedIndex}
+              setCanvasMeshSelectedIndex={setCanvasMeshSelectedIndex}
+              canvasMeshShowGuides={canvasMeshShowGuides}
+              setCanvasMeshShowGuides={setCanvasMeshShowGuides}
+              zoomPercent={zoomPercent}
+              zoomFitActive={zoomFitActive}
+              onZoomIn={onZoomIn}
+              onZoomOut={onZoomOut}
+              onFitView={onFitViewManual}
+              zoomAtStageCenter={zoomAtStageCenter}
+            />
+          </main>
+
+          {workspaceMode === 'dev' ? (
+            inspectOpen ? (
+              <DevPropertiesPanel onClose={() => setInspectOpen(false)} />
+            ) : null
+          ) : (
+            <AgentDock
+              open={isMobileViewport ? true : agentOpen}
+              onClose={() => {
+                if (!isMobileViewport) setAgentOpen(false);
+              }}
+              floating={isMobileViewport}
+              allowedInteractionModes={isMobileViewport ? ['image', 'video'] : undefined}
+              draftPrompt={agentDraft}
+              autoSubmitDraft={agentAutoSubmit}
+              draftAttachments={agentDraftAttachments}
+              draftContexts={agentDraftContexts}
+              draftModelId={agentDraftModelId}
+              draftInteractionMode={agentDraftInteractionMode}
+              draftImageAspectRatio={agentDraftImageAspect}
+              draftScene={agentDraftScene}
+              onDraftConsumed={() => {
+                clearHomeAgentBoot();
+                setAgentDraft(null);
+                setAgentAutoSubmit(false);
+                setAgentDraftAttachments([]);
+                setAgentDraftContexts([]);
+                setAgentDraftModelId(null);
+                setAgentDraftInteractionMode(null);
+                setAgentDraftImageAspect(null);
+                setAgentDraftScene(null);
+              }}
+              attachToChat={attachToChat}
+              onAttachConsumed={() => setAttachToChat(null)}
+              dataTour={agentOpen ? 'editor-agent' : undefined}
+              projectName={isMobileViewport ? projectName : undefined}
+              onGoHome={
+                isMobileViewport
+                  ? async () => {
+                      try {
+                        await flushCurrentProjectNow({ force: true });
+                      } catch {
+                        /* ignore */
+                      }
+                      navigate('/home');
+                    }
+                  : undefined
+              }
+              canvasUi={{
+                getZoom: () => camera.zoom,
+                zoomIn: onZoomIn,
+                zoomOut: onZoomOut,
+                setZoom: (z) => zoomAtStageCenter(z),
+                fitView: onFitViewManual,
+                getViewportSceneBounds: () => {
+                  const w = stageSize.width;
+                  const h = stageSize.height;
+                  if (!(w > 8 && h > 8)) return null;
+                  const b = rcbViewportSceneBounds(camera, { width: w, height: h });
+                  return {
+                    x: b.x,
+                    y: b.y,
+                    width: b.width,
+                    height: b.height,
+                  };
+                },
+                setLayersOpen,
+                setMinimapOpen,
+                getLayersOpen: () => layersOpen,
+                getMinimapOpen: () => minimapOpen,
+                openAccountAgent: () => {
+                  const from = `${location.pathname}${location.search}${location.hash}`;
+                  navigate(withReturnTo('/account?tab=agent', from));
+                },
+              }}
+            />
+          )}
+        </div>
+
+        {isMobileViewport && layersOpen ? (
+          <>
+            <button
+              type="button"
+              aria-label={t('editor.closePanel')}
+              className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
+              onClick={() => setLayersOpen(false)}
+            />
+            <div className="fixed inset-y-0 left-0 z-50">
+              <LayerPanel
+                mobile
+                onClose={() => setLayersOpen(false)}
+                onSelectNode={(nodeId) => {
+                  focusLayerNode(nodeId);
+                  setLayersOpen(false);
+                }}
+                onSelectFrame={(frameId) => {
+                  focusLayerFrame(frameId);
+                  setLayersOpen(false);
+                }}
+              />
+            </div>
+          </>
         ) : null}
 
-        <main
-          className={cn(
-            'relative flex min-w-0 flex-1 flex-col overflow-hidden',
-            followThemeCanvas && 'bg-[var(--canvas)]'
-          )}
-          style={stageBackground ? { background: stageBackground } : undefined}
-        >
-          {/* Top-left: home + title (no dropdown) */}
-          <div className="pointer-events-none absolute left-4 top-3 z-20 hidden md:block">
-            <div className="pointer-events-auto flex items-center gap-2">
-              <Tooltip tip={t('editor.home', { defaultValue: '首页' })} placement="bottom">
-                <button
-                  type="button"
-                  aria-label={t('editor.home', { defaultValue: '首页' })}
-                  onClick={async () => {
-                    try {
-                      // Always push doc + auto cover on leave (dirty may already be clear).
-                      await flushCurrentProjectNow({ force: true });
-                    } catch {
-                      /* still navigate — local draft already holds bytes */
-                    }
-                    navigate('/home');
-                  }}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--line)]"
-                >
-                  <HiOutlineHome className="h-4 w-4" strokeWidth={1.75} />
-                </button>
-              </Tooltip>
-              <span className="inline-grid min-w-0 max-w-[min(16rem,calc(100vw-18rem))] items-center overflow-hidden">
-                <span
-                  className="invisible col-start-1 row-start-1 max-w-full truncate whitespace-pre px-1 text-[14px] font-medium"
-                  aria-hidden
-                >
-                  {projectName || ' '}
-                </span>
-                <input
-                  value={projectName}
-                  onChange={(e) => dispatch(renameTemplate(e.target.value))}
-                  aria-label={t('home.untitled')}
-                  title={projectName}
-                  className="col-start-1 row-start-1 h-8 w-full min-w-0 truncate border-0 bg-transparent px-1 text-[14px] font-medium text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
-                />
-              </span>
-            </div>
-          </div>
-
-          {/* Top-right: export + share + account + chat */}
-          <div
-            className="pointer-events-none absolute top-3 z-40 hidden md:block"
-            style={{
-              right:
-                workspaceMode === 'dev' && inspectOpen
-                  ? getInspectDockWidth() + 16
-                  : 16,
-            }}
-          >
-            <div className="pointer-events-auto flex items-center gap-2">
-              <EditorTopExportButton />
-              <Tooltip tip={t('editor.share')} placement="bottom">
-                <button
-                  type="button"
-                  aria-label={t('editor.share')}
-                  onClick={() => setShareOpen(true)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)]"
-                >
-                  <HiOutlineShare className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-                  {t('editor.share')}
-                </button>
-              </Tooltip>
-              <div className="inline-flex items-center gap-1">
-                <CollabPresenceBar />
-                <WalletAccountChip />
-              </div>
-              {!agentOpen ? (
-                <button
-                  type="button"
-                  onClick={() => setAgentOpen(true)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-[var(--surface)] px-3 text-[13px] font-medium text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--accent-soft)]"
-                >
-                  <TbMessage2Filled className="h-4 w-4 shrink-0 text-[var(--ink)]" />
-                  {t('editor.chat')}
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          {!isDevMode && pathEditOpen ? (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2 hidden md:block">
-              <PathEditToolbar
-                subtool={pathEditSubtool}
-                onSubtoolChange={(s) => {
-                  setPathEditSubtool(s);
-                  window.dispatchEvent(
-                    new CustomEvent('resume:path-edit-subtool', { detail: { subtool: s } })
-                  );
-                  // Path-edit Pen is local — do not activate the bottom toolstrip Pen.
-                  dispatch(setActiveTool('select'));
-                }}
-                onExit={() => {
-                  window.dispatchEvent(new Event('resume:exit-path-edit'));
-                  setPathEditOpen(false);
-                }}
-              />
-            </div>
-          ) : null}
-
-          {!isDevMode && !pathEditOpen && (activeTool === 'pen' || activeTool === 'pencil') ? (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2 hidden md:block">
-              <PenStrokeToolbar
-                mode={activeTool === 'pencil' ? 'pencil' : 'pen'}
-                placement="dock"
-              />
-            </div>
-          ) : null}
-
-          {!isDevMode && activeTool === 'bucket' ? (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-[70] -translate-x-1/2 hidden md:block">
-              <BucketFillToolbar />
-            </div>
-          ) : null}
-
-          <div
-            className="relative min-h-0 flex-1"
-            onPointerDown={(e) => {
-              // Blur any focused input (e.g. agent composer) when clicking the canvas,
-              // unless the pointer target is itself interactive.
-              const active = window.document.activeElement as HTMLElement | null;
-              if (
-                active &&
-                active !== e.currentTarget &&
-                !e.currentTarget.contains(active) === false &&
-                (active.tagName === 'INPUT' ||
-                  active.tagName === 'TEXTAREA' ||
-                  active.isContentEditable)
-              ) {
-                active.blur();
-              }
-            }}
-          >
-            {!isMobileViewport && document ? (
-              <RcbCanvas
-                artboard={worldBounds}
-                camera={camera}
-                onCameraChange={onCanvasCameraChange}
-                panMode={panMode}
-                emptyDragPans={false}
-                panBlockSelector={EDITOR_PAN_BLOCK_SELECTOR}
-                background={stageBackground}
-                stageRef={stageRef}
-                onViewportEl={setStageEl}
-                cursor={canvasCursor}
-                defs={<RcbSvgDefs />}
-                showGrid={isGridMode}
-                gridSize={gridSize}
-              >
-                {frames.map((frame) =>
-                  frame.hidden ? null : (
-                  <HtmlArtboardFrame
-                    key={`body-${frame.id}`}
-                    frame={frame}
-                    zIndex={stackZIndex(document, 'frame', frame.id)}
-                    selected={
-                      !isDevMode &&
-                      (selectedFrameIds.length
-                        ? selectedFrameIds.includes(frame.id)
-                        : frame.id === activeFrameId)
-                    }
-                    layer="body"
-                  />
-                  )
-                )}
-
-                {/* Shapes live directly under the camera world layer — no fixed paper size. */}
-                <SvgCanvas
-                  document={canvasDocument}
-                  reloadToken={sceneReloadToken}
-                  documentPatchToken={documentPatchToken}
-                  lastPatchedNodeIds={lastPatchedNodeIds}
-                  selectedNodeId={selectedNodeId}
-                  selectedNodeIds={selectedNodeIds}
-                  onZoomIn={onZoomIn}
-                  onZoomOut={onZoomOut}
-                  onReady={onCanvasReady}
-                  embedded
-                  stageEl={stageEl}
-                  onOpenAgent={(opts) => {
-                    if (workspaceMode === 'dev') return;
-                    setAgentOpen(true);
-                    if (opts?.prompt) setAgentDraft(opts.prompt);
-                  }}
-                  onAddToChat={(target) => {
-                    if (workspaceMode === 'dev') return;
-                    setAgentOpen(true);
-                    setAttachToChat(target);
-                  }}
-                />
-
-                <ImageProcessWatcher />
-                <ImageToolPanelHost document={document} />
-                <ShapeStylePanelHost document={document} />
-                <CropExpandSessionHost document={document} />
-                <VideoTrimSessionHost document={document} />
-
-                {canvasBgOpen && canvasFillValue.fillType === 'diffuse' ? (
-                  <MeshHandlesOverlay
-                    box={{
-                      left: 0,
-                      top: 0,
-                      width: worldSurface.width,
-                      height: worldSurface.height,
-                    }}
-                    gradient={{
-                      ...parseFillGradient(
-                        canvasFillValue.fillGradient,
-                        'diffuse',
-                        canvasFillValue.fillColor
-                      ),
-                      type: 'diffuse',
-                    }}
-                    selectedIndex={canvasMeshSelectedIndex}
-                    showGuides={canvasMeshShowGuides}
-                    onActivePointChange={setCanvasMeshSelectedIndex}
-                    onChange={(next) => {
-                      dispatch(
-                        setCanvasMeta(
-                          canvasFillToDocumentMeta(
-                            {
-                              ...canvasFillValue,
-                              fillType: 'diffuse',
-                              fillGradient: serializeFillGradient(next),
-                              fillColor:
-                                next.meshPoints?.[0]?.color || canvasFillValue.fillColor,
-                            },
-                            false
-                          )
-                        )
-                      );
-                    }}
-                  />
-                ) : null}
-                {frames.map((frame) =>
-                  frame.hidden ? null : (
-                  <HtmlArtboardFrame
-                    key={`label-${frame.id}`}
-                    frame={frame}
-                    selected={
-                      !isDevMode &&
-                      (selectedFrameIds.length
-                        ? selectedFrameIds.includes(frame.id)
-                        : frame.id === activeFrameId)
-                    }
-                    hideTitle={isDevMode || movingFrameId === frame.id}
-                    onSelect={isDevMode ? undefined : () => onSelectFrame(frame.id)}
-                    onRename={
-                      isDevMode
-                        ? undefined
-                        : (name) => dispatch(renameArtboardFrame({ id: frame.id, name }))
-                    }
-                    onMove={
-                      isDevMode
-                        ? undefined
-                        : (x, y, opts) => onMoveFrame(frame.id, x, y, opts)
-                    }
-                    onMoveStart={isDevMode ? undefined : onFrameMoveStart}
-                    onMoveEnd={isDevMode ? undefined : onFrameMoveEnd}
-                    layer="label"
-                  />
-                  )
-                )}
-
-                {frameGuides.length ? (
-                  <div
-                    className="pointer-events-none absolute left-0 top-0 z-[50] overflow-visible"
-                    style={{ width: worldSurface.width, height: worldSurface.height }}
-                  >
-                    <AlignGuidesOverlay guides={frameGuides} />
-                  </div>
-                ) : null}
-
-                {/* Artboard toolbar: single-frame selection, or multi-frame with no nodes.
-                    Mixed frame+nodes uses MultiSelectionToolbar in SelectionFeature. */}
-                {!isDevMode &&
-                selectedFrames.length >= 1 &&
-                selectedNodeIds.length === 0 &&
-                activeFrame &&
-                movingFrameId !== activeFrame.id ? (
-                  <FrameContextToolbar frame={activeFrame} />
-                ) : null}
-
-                <FrameMoveFeature
-                  enabled={!isDevMode && activeTool === 'select' && !panMode}
-                  frames={frames}
-                  camera={camera}
-                  stageEl={stageEl}
-                  activeFrameId={activeFrameId}
-                  onSelect={onSelectFrame}
-                  onClearSelection={onClearCanvasSelection}
-                  onMoveStart={onFrameMoveStart}
-                  onMove={onMoveFrame}
-                  onResize={onResizeFrame}
-                  onDraggingChange={onFrameDraggingChange}
-                  contentBoxes={frameContentBoxes}
-                />
-
-                <FrameDrawFeature
-                  enabled={!isDevMode && frameMode}
-                  camera={camera}
-                  stageEl={stageEl}
-                  onCommit={onCommitFrame}
-                />
-              </RcbCanvas>
-            ) : null}
-          </div>
-
-          {/* Fig.2 bottom-center tools — keep in preview; only select/pan stay active. */}
-          <div
-            data-tour="editor-tools"
-            className={cn(
-              'pointer-events-none absolute left-1/2 z-20 -translate-x-1/2',
-              'bottom-4'
-            )}
-          >
-            <div className="pointer-events-auto">
-              <EditorToolStrip
-                camera={camera}
-                stageEl={stageEl}
-                compact={false}
-                selectOnly={isDevMode}
-              />
-            </div>
-          </div>
-
-          {/* Bottom-left HUD — lift only when it would collide with the center toolstrip.
-              Floating panels (minimap / shortcuts) sit inside the same container but
-              bottomHudRef is pinned on FloatingToolbar only, so panel height does not
-              affect the collision measurement. */}
-          <div
-            className={cn(
-              'pointer-events-none absolute left-4 z-20 flex flex-col items-start gap-2',
-              stackBottomHud ? 'bottom-[4.75rem]' : 'bottom-4'
-            )}
-          >
-            {minimapOpen ? (
-              <EditorMinimap
-                document={document}
-                frames={frames}
-                camera={camera}
-                stageEl={stageEl}
-                activeFrameId={activeFrameId}
-                selectedFrameIds={selectedFrameIds}
-                selectedNodeIds={selectedNodeIds}
-                onCameraChange={onCanvasCameraChange}
-                canvasBg={stageBackground}
-              />
-            ) : null}
-            {shortcutsOpen ? (
-              <EditorShortcutsPanel onClose={() => setShortcutsOpen(false)} />
-            ) : null}
-            <FloatingToolbar ref={bottomHudRef} className="pointer-events-auto w-fit px-2 text-[12px] text-[var(--ink)] shadow-[0_8px_24px_rgba(0,0,0,0.14)]">
-              {!isDevMode ? (
-                <>
-                  {useCompactTooling ? (
-                    <>
-                      <HudBtn
-                        tip={toolsExpanded ? t('editor.tools.hideTools', { defaultValue: '收起' }) : t('editor.tools.showTools', { defaultValue: '展开' })}
-                        active={toolsExpanded}
-                        onClick={() => setToolsExpanded((v) => !v)}
-                      >
-                        {toolsExpanded
-                          ? <HiOutlineChevronDown className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                          : <HiOutlineChevronUp className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                        }
-                      </HudBtn>
-                      {toolsExpanded ? (
-                        <>
-                          <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
-                          <HudBtn tip={t('editor.layers')} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
-                            <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                          </HudBtn>
-                          <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
-                            <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                          </HudBtn>
-                          <span data-shortcuts-toggle>
-                            <HudBtn
-                              tip={t('editor.shortcuts.title')}
-                              active={shortcutsOpen}
-                              onClick={toggleShortcuts}
-                            >
-                              <LuKeyboard className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                            </HudBtn>
-                          </span>
-                          <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
-                        </>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <CanvasBgPicker
-                        value={canvasFillValue}
-                        open={canvasBgOpen}
-                        onOpenChange={(next) => {
-                          setCanvasBgOpen(next);
-                          if (next) setCanvasMeshSelectedIndex(0);
-                        }}
-                        meshSelectedIndex={canvasMeshSelectedIndex}
-                        onMeshSelectedIndexChange={setCanvasMeshSelectedIndex}
-                        meshShowGuides={canvasMeshShowGuides}
-                        onMeshShowGuidesChange={setCanvasMeshShowGuides}
-                        onChange={(next) => {
-                          const follow =
-                            next.fillType === 'solid' && isThemeFollowCanvasBg(next.fillColor);
-                          dispatch(setCanvasMeta(canvasFillToDocumentMeta(next, follow)));
-                        }}
-                      />
-                      <HudBtn tip={t('editor.layers')} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
-                        <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                      </HudBtn>
-                      <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
-                        <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                      </HudBtn>
-                      <span data-shortcuts-toggle>
-                        <HudBtn
-                          tip={t('editor.shortcuts.title')}
-                          active={shortcutsOpen}
-                          onClick={toggleShortcuts}
-                        >
-                          <LuKeyboard className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
-                        </HudBtn>
-                      </span>
-                      <span className="mx-0.5 h-3.5 w-px bg-black/10" aria-hidden />
-                    </>
-                  )}
-                </>
-              ) : null}
-              <Dropdown
-                trigger="click"
-                open={zoomMenuOpen}
-                onOpenChange={setZoomMenuOpen}
-                placement="top-start"
-                strategy="fixed"
-                items={zoomMenuItems}
-                onClick={onZoomMenuClick}
-                popupClassName="min-w-[12.5rem]"
-                selectedKeys={zoomSelectedKeys}
-              >
-                <button
-                  type="button"
-                  aria-label={t('editor.zoomMenu')}
-                  className={cn(
-                    ZOOM_TRIGGER_BASE,
-                    zoomMenuOpen ? ZOOM_TRIGGER_OPEN : ZOOM_TRIGGER_IDLE
-                  )}
-                >
-                  <span className="text-[12px] font-medium tabular-nums text-[var(--ink)]">
-                    {zoomPercent}%
-                  </span>
-                  <HiOutlineChevronDown className="h-3 w-3 shrink-0 text-[var(--muted)]" />
-                </button>
-              </Dropdown>
-            </FloatingToolbar>
-          </div>
-        </main>
-
-        {workspaceMode === 'dev' ? (
-          inspectOpen ? (
-            <DevPropertiesPanel onClose={() => setInspectOpen(false)} />
-          ) : null
-        ) : (
-          <AgentDock
-            open={isMobileViewport ? true : agentOpen}
-            onClose={() => {
-              if (!isMobileViewport) setAgentOpen(false);
-            }}
-            floating={isMobileViewport}
-            allowedInteractionModes={
-              isMobileViewport ? ['image', 'video'] : undefined
-            }
-            draftPrompt={agentDraft}
-            autoSubmitDraft={agentAutoSubmit}
-            draftAttachments={agentDraftAttachments}
-            draftContexts={agentDraftContexts}
-            draftModelId={agentDraftModelId}
-            draftInteractionMode={agentDraftInteractionMode}
-            draftImageAspectRatio={agentDraftImageAspect}
-            draftScene={agentDraftScene}
-            onDraftConsumed={() => {
-              clearHomeAgentBoot();
-              setAgentDraft(null);
-              setAgentAutoSubmit(false);
-              setAgentDraftAttachments([]);
-              setAgentDraftContexts([]);
-              setAgentDraftModelId(null);
-              setAgentDraftInteractionMode(null);
-              setAgentDraftImageAspect(null);
-              setAgentDraftScene(null);
-            }}
-            attachToChat={attachToChat}
-            onAttachConsumed={() => setAttachToChat(null)}
-            dataTour={agentOpen ? 'editor-agent' : undefined}
-            projectName={isMobileViewport ? projectName : undefined}
-            onGoHome={isMobileViewport ? async () => {
-              try { await flushCurrentProjectNow({ force: true }); } catch { /* ignore */ }
-              navigate('/home');
-            } : undefined}
-            canvasUi={{
-              getZoom: () => camera.zoom,
-              zoomIn: onZoomIn,
-              zoomOut: onZoomOut,
-              setZoom: (z) => zoomAtStageCenter(z),
-              fitView: onFitViewManual,
-              getViewportSceneBounds: () => {
-                const w = stageSize.width;
-                const h = stageSize.height;
-                if (!(w > 8 && h > 8)) return null;
-                const b = rcbViewportSceneBounds(camera, { width: w, height: h });
-                return {
-                  x: b.x,
-                  y: b.y,
-                  width: b.width,
-                  height: b.height,
-                };
-              },
-              setLayersOpen,
-              setMinimapOpen,
-              getLayersOpen: () => layersOpen,
-              getMinimapOpen: () => minimapOpen,
-              openAccountAgent: () => {
-                const from = `${location.pathname}${location.search}${location.hash}`;
-                navigate(withReturnTo('/account?tab=agent', from));
-              },
-            }}
-          />
-        )}
-      </div>
-
-      {isMobileViewport && layersOpen ? (
-        <>
+        {isMobileViewport && agentOpen ? (
           <button
             type="button"
-            aria-label={t('editor.closePanel')}
-            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
-            onClick={() => setLayersOpen(false)}
+            aria-label={t('agent.closePanel')}
+            className="fixed inset-0 z-40 bg-black/20"
+            onClick={() => setAgentOpen(false)}
           />
-          <div className="fixed inset-y-0 left-0 z-50">
-            <LayerPanel
-              mobile
-              onClose={() => setLayersOpen(false)}
-              onSelectNode={(nodeId) => {
-                focusLayerNode(nodeId);
-                setLayersOpen(false);
-              }}
-              onSelectFrame={(frameId) => {
-                focusLayerFrame(frameId);
-                setLayersOpen(false);
-              }}
-            />
-          </div>
-        </>
-      ) : null}
+        ) : null}
 
-      {isMobileViewport && agentOpen ? (
-        <button
-          type="button"
-          aria-label={t('agent.closePanel')}
-          className="fixed inset-0 z-40 bg-black/20"
-          onClick={() => setAgentOpen(false)}
+        {bootOpen ? <EditorBootOverlay progress={bootProgress} exiting={bootExiting} /> : null}
+        {shareOpen ? (
+          <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
+        ) : null}
+        <EditorOnboardingTour
+          ready={!bootOpen}
+          onOpenAgent={() => {
+            dispatch(setWorkspaceMode('design'));
+            setAgentOpen(true);
+          }}
         />
-      ) : null}
-
-      {bootOpen ? <EditorBootOverlay progress={bootProgress} exiting={bootExiting} /> : null}
-      {shareOpen ? (
-        <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
-      ) : null}
-      <EditorOnboardingTour
-        ready={!bootOpen}
-        onOpenAgent={() => {
-          dispatch(setWorkspaceMode('design'));
-          setAgentOpen(true);
-        }}
-      />
-    </div>
+      </div>
     </CollabRoomProvider>
   );
+
 }
 
 export default memo(EditorPage);

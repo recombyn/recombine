@@ -47,10 +47,15 @@ type Props = {
   stageEl?: HTMLElement | null;
   /**
    * Path-edit toolbar Pen (independent of the bottom toolstrip):
-   * hover path edge 鈫?preview dot; click to draw a new path in-place
+   * hover path edge → preview dot; click to draw a new path in-place
    * (never activates the global Pen tool / PenStrokeToolbar).
    */
   drawNewShapeMode?: boolean;
+  /**
+   * Path-edit Curve subtool — same as Alt/Option on anchors/handles
+   * (pull out mirrored handles / cornerize / clear one handle).
+   */
+  convertPointMode?: boolean;
   /** Stroke paint for newly drawn paths (path-edit Pen). */
   newStrokeColor?: string;
   newStrokeWidth?: number;
@@ -91,6 +96,36 @@ function hitRadiusScene(zoom: number, screenPx: number) {
 
 function handleDiamondPoints(cx: number, cy: number, r: number) {
   return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
+}
+
+/** Path-edit preview stroke width in page units (0 when fill-only / stroke off). */
+function pathEditStrokeWidth(strokeOn: boolean, sw: number, inv: number) {
+  if (!strokeOn) return 0;
+  const clamped = Math.min(Math.max(sw || 1.5, 0.5), PATH_EDIT_STROKE_MAX_PX);
+  return clamped * inv;
+}
+
+/** In-progress draft path `d` while path-edit Pen is placing points. */
+function draftPathD(
+  anchors: PenAnchor[],
+  cursor: { x: number; y: number } | null
+): string {
+  if (anchors.length >= 2) return penAnchorsToD(anchors, false);
+  if (anchors.length === 1 && cursor) {
+    const a = anchors[0];
+    return `M ${a.x} ${a.y} L ${cursor.x} ${cursor.y}`;
+  }
+  return '';
+}
+
+/** Rubber-band segment from last draft anchor to cursor. */
+function draftRubberBandD(
+  anchors: PenAnchor[],
+  cursor: { x: number; y: number } | null
+): string {
+  if (anchors.length < 2 || !cursor) return '';
+  const last = anchors[anchors.length - 1];
+  return `M ${last.x} ${last.y} L ${cursor.x} ${cursor.y}`;
 }
 
 /** SelectionChrome-style circular knob: own SVG sized in page units. */
@@ -352,10 +387,11 @@ function loadSceneAnchors(document: any, nodeId: string) {
  * path in-place (does not activate the global Pen tool).
  *
  * Convert Point (same idea as PS / AI):
- * - Alt/Option + drag on an anchor 鈫?pull out mirrored handles (restore curve)
- * - Alt/Option + click on an anchor with handles 鈫?remove handles (corner)
- * - Double-click anchor 鈫?remove handles
- * - Alt/Option + click a handle 鈫?delete that side鈥檚 handle
+ * - Alt/Option + drag on an anchor → pull out mirrored handles (restore curve)
+ * - Alt/Option + click on an anchor with handles → remove handles (corner)
+ * - Double-click anchor → remove handles
+ * - Alt/Option + click a handle → delete that side's handle
+ * - Path-edit Curve subtool → same convert behavior without holding Alt
  */
 function PenPathEditFeature({
   enabled,
@@ -364,6 +400,7 @@ function PenPathEditFeature({
   paperEl,
   stageEl = null,
   drawNewShapeMode = false,
+  convertPointMode = false,
   newStrokeColor = '#333333',
   newStrokeWidth = 2,
   onCommitNewShape,
@@ -398,11 +435,13 @@ function PenPathEditFeature({
   const onExitRef = useRef(onExit);
   const onCommitNewShapeRef = useRef(onCommitNewShape);
   const drawNewRef = useRef(drawNewShapeMode);
+  const convertPointRef = useRef(convertPointMode);
   const newStrokeWidthRef = useRef(newStrokeWidth);
   onCommitRef.current = onCommit;
   onExitRef.current = onExit;
   onCommitNewShapeRef.current = onCommitNewShape;
   drawNewRef.current = drawNewShapeMode;
+  convertPointRef.current = convertPointMode;
   newStrokeWidthRef.current = newStrokeWidth;
 
   subpathsRef.current = subpaths;
@@ -568,8 +607,10 @@ function PenPathEditFeature({
 
       const aRef = hitAnchor(list, p, anchorR);
       const handleHit = aRef ? null : hitHandle(list, p, handleR);
+      const convertMod = convertPointRef.current || e.altKey;
 
-      // Select subtool (convert / drag / empty-exit).
+      // Alt/Option (or Meta) on a handle clears that side — not Curve tool alone
+      // (Curve still needs to drag handles after pulling them out).
       if (handleHit && (e.altKey || e.metaKey)) {
         dirtyRef.current = true;
         setSubpaths((prev) =>
@@ -587,7 +628,8 @@ function PenPathEditFeature({
           sub: handleHit.sub,
           index: handleHit.index,
           side: handleHit.side,
-          mirror: !e.altKey,
+          // Curve / Alt: break handle symmetry while dragging one side.
+          mirror: !(convertPointRef.current || e.altKey),
         };
         setSelectedHandle(handleHit);
         try {
@@ -601,8 +643,8 @@ function PenPathEditFeature({
       if (aRef) {
         const a = list[aRef.sub]?.anchors[aRef.index];
         if (!a) return;
-        // Adobe Convert Point: Alt/Option on the anchor (not Meta — reserved for OS).
-        if (e.altKey) {
+        // Adobe Convert Point: Alt/Option, or Curve subtool (no modifier).
+        if (convertMod && !e.metaKey) {
           dragRef.current = {
             kind: 'convert',
             sub: aRef.sub,
@@ -814,20 +856,10 @@ function PenPathEditFeature({
   // Fill-only paths (stroke off) still need a visible edit centerline.
   const editStrokeOn = strokeEnabled || fillColor === 'none';
   const editStrokeColor = strokeEnabled ? strokeColor : SEL_BASELINE;
-  const pathSw = editStrokeOn
-    ? Math.min(Math.max(sw || 1.5, 0.5), PATH_EDIT_STROKE_MAX_PX) * inv
-    : 0;
+  const pathSw = pathEditStrokeWidth(editStrokeOn, sw, inv);
   const draftSw = Math.max(1, newStrokeWidth) * inv;
-  const draftD =
-    draftAnchors.length >= 2
-      ? penAnchorsToD(draftAnchors, false)
-      : draftAnchors.length === 1 && draftCursor
-        ? `M ${draftAnchors[0].x} ${draftAnchors[0].y} L ${draftCursor.x} ${draftCursor.y}`
-        : '';
-  const draftRubber =
-    draftAnchors.length >= 2 && draftCursor
-      ? `M ${draftAnchors[draftAnchors.length - 1].x} ${draftAnchors[draftAnchors.length - 1].y} L ${draftCursor.x} ${draftCursor.y}`
-      : '';
+  const draftD = draftPathD(draftAnchors, draftCursor);
+  const draftRubber = draftRubberBandD(draftAnchors, draftCursor);
 
   const handleChrome: ReactNode[] = [];
   const anchorChrome: ReactNode[] = [];

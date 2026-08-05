@@ -69,7 +69,7 @@ import {
 } from '@/components/editor/nodes/VideoNode';
 import ShapeSelectionToolbar from '@/components/editor/nodes/ShapeNode/ShapeSelectionToolbar';
 import { SelectionToolbarShell } from './SelectionToolbarShell';
-import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import { isRadiusLinked, maxRadius, radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import { supportsCornerRadius } from '@/components/rcb/scene/document/sceneDocument';
 import {
   buildOutlinePathAsync,
@@ -612,7 +612,9 @@ function SelectionContextToolbar(props: Props): ReactNode {
                             >
                               <IconCornerRadius className="h-4 w-4" />
                               <span className="tabular-nums">
-                                {radiiFromAttrs(node.attrs).tl}
+                                {isRadiusLinked(node.attrs)
+                                  ? Math.round(radiiFromAttrs(node.attrs).tl)
+                                  : Math.round(maxRadius(radiiFromAttrs(node.attrs)))}
                               </span>
                             </button>
                           </Tooltip>
