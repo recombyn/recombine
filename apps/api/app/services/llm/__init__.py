@@ -607,13 +607,12 @@ def build_chat_model(
     """
     ``init_chat_model(..., model_provider='openai')`` for our catalog endpoints.
 
-    Resolves base_url/api_key from ``get_llm_endpoint``, then calls the official
-    factory. Optional usage callback writes our billing ledger.
+    Resolves base_url/api_key from ``get_llm_endpoint``. Optional usage callback
+    writes the billing ledger.
 
-    ``stream_chunk_timeout``: LangChain OpenAI stall detector (seconds between
-    chunks). Structured tool-calls often stream under the hood even when
-    ``streaming=False``; without a bound, a half-open TCP can sit until the
-    library default (120s) before failing.
+    ``stream_chunk_timeout``: stall detector (seconds between chunks). Structured
+    tool-calls often stream under the hood even when ``streaming=False``; without
+    a bound, a half-open TCP can sit until the library default (120s).
     """
     from langchain.chat_models import init_chat_model
 
@@ -938,7 +937,7 @@ def _image_content_block(url: str) -> Any:
     u = (url or "").strip()
     if not u:
         raise ValueError("empty image url")
-    # Prefer official base64+mime when FE already inlined bytes as data URL.
+    # Decode data URLs to base64+mime when FE already inlined bytes.
     if u.startswith("data:") and ";base64," in u:
         header, b64 = u.split(";base64,", 1)
         mime = header[5:].strip() if header.startswith("data:") else ""

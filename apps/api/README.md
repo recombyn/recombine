@@ -28,7 +28,9 @@ apps/api/                     # ≈ 官方模板 backend/
 
 - **路由不写业务**：`app/api/routes/*.py` → 调 `app.services.*`；鉴权 `user: CurrentUser`
 - **配置**：`from app.core.config import settings`
-- **数据访问**：`Session(engine)` + `app.crud.*`（DDL 仍由 `init_schema` / `ensure_*`）
+- **数据访问**：`Session(engine)` + `app.crud.*`；建表由 **Alembic**（`alembic upgrade head` / 启动时 `init_schema()` → `run_migrations()`）
+- **迁移目录**：`app/alembic/versions/`（baseline：`0001_baseline` 用 SQLModel metadata `create_all`）
+- **手工迁移**：`cd apps/api && alembic revision -m "..." --autogenerate` 后检查再 upgrade
 - **启动**：`uvicorn app.main:app`
 - **种子在 `data/`**：Admin 改过的值以 DB 为准（`ensure_*` 只插缺失）
 

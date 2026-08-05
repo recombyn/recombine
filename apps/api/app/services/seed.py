@@ -124,8 +124,12 @@ def run_seeds() -> dict[str, Any]:
     fonts = seed_fonts()
     avatars = heal_official_avatars()
     covers = heal_plaza_covers()
+    from app.services.llm.catalog_store import ensure_llm_catalog_seed
+
+    ensure_llm_catalog_seed()
     return {
         "fonts": fonts,
         "avatarsHealed": avatars,
         "coversHealed": covers,
+        "llmCatalog": True,
     }
