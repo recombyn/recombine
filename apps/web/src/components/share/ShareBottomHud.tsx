@@ -23,7 +23,6 @@ const ZOOM_MENU_PRESETS = [
   { key: '100', zoom: 1 },
   { key: '150', zoom: 1.5 },
   { key: '200', zoom: 2 },
-  { key: '400', zoom: 4 },
 ] as const;
 
 function ZoomMenuLabel({ label, shortcut }: { label: string; shortcut?: string }) {

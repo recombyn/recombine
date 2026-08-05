@@ -1,4 +1,4 @@
-﻿import { useEffect, useLayoutEffect, useRef, useState, memo, type ReactNode } from 'react';
+﻿import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
 import {
   useRcbCamera,
   useRcbScreenToScene,
@@ -87,22 +87,25 @@ const HANDLE_VIS_PX = 7;
 const STROKE_PX = 1.5;
 const HANDLE_STROKE_PX = 1.25;
 const LINK_STROKE_PX = 1;
-const PATH_EDIT_STROKE_MAX_PX = 2.25;
 const SEL_BASELINE = '#3388ff';
 
 function hitRadiusScene(zoom: number, screenPx: number) {
   return screenPx / Math.max(0.05, zoom || 1);
 }
 
-function handleDiamondPoints(cx: number, cy: number, r: number) {
-  return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
-}
-
-/** Path-edit preview stroke width in page units (0 when fill-only / stroke off). */
-function pathEditStrokeWidth(strokeOn: boolean, sw: number, inv: number) {
-  if (!strokeOn) return 0;
-  const clamped = Math.min(Math.max(sw || 1.5, 0.5), PATH_EDIT_STROKE_MAX_PX);
-  return clamped * inv;
+/**
+ * Path-edit ink width in scene units.
+ * Real `border-width` when stroke is on (star/polygon must not look thinner after
+ * outline → path-edit). Hairline guide only when stroke is off (fill-only edit).
+ */
+function pathEditStrokeWidth(opts: {
+  strokeEnabled: boolean;
+  borderWidth: number;
+  inv: number;
+}): number {
+  if (opts.strokeEnabled) return Math.max(0, opts.borderWidth);
+  // Fill-only: screen-constant hairline so the centerline stays visible.
+  return STROKE_PX * opts.inv;
 }
 
 /** In-progress draft path `d` while path-edit Pen is placing points. */
@@ -128,65 +131,99 @@ function draftRubberBandD(
   return `M ${last.x} ${last.y} L ${cursor.x} ${cursor.y}`;
 }
 
-/** SelectionChrome-style circular knob: own SVG sized in page units. */
-function ScreenAnchorKnob(props: {
-  x: number;
-  y: number;
-  vis: number;
-  stroke: number;
-  fill: string;
-  strokeColor?: string;
-}) {
-  const { x, y, vis, stroke, fill, strokeColor = SEL_BASELINE } = props;
-  const r = Math.max(0.01, vis / 2 - stroke / 2);
-  return (
-    <svg
-      className="pointer-events-none absolute z-[21] overflow-visible"
-      width={vis}
-      height={vis}
-      style={{ left: x - vis / 2, top: y - vis / 2 }}
-      aria-hidden
-    >
-      <circle
-        cx={vis / 2}
-        cy={vis / 2}
-        r={r}
-        fill={fill}
-        stroke={strokeColor}
-        strokeWidth={stroke}
-      />
-    </svg>
-  );
+/** Drop stacked outline verts (no handles) so knobs sit on the silhouette. */
+function mergeStackedAnchors(anchors: PenAnchor[], eps = 0.55): PenAnchor[] {
+  if (anchors.length < 2) return anchors;
+  const out: PenAnchor[] = [];
+  for (const a of anchors) {
+    const last = out[out.length - 1];
+    const aBusy = a.inX != null || a.outX != null;
+    const lastBusy = last && (last.inX != null || last.outX != null);
+    if (last && !aBusy && !lastBusy && Math.hypot(a.x - last.x, a.y - last.y) < eps) {
+      continue;
+    }
+    out.push(a);
+  }
+  if (out.length > 2) {
+    const first = out[0];
+    const last = out[out.length - 1];
+    const firstBusy = first.inX != null || first.outX != null;
+    const lastBusy = last.inX != null || last.outX != null;
+    if (!firstBusy && !lastBusy && Math.hypot(first.x - last.x, first.y - last.y) < eps) {
+      out.pop();
+    }
+  }
+  return out.length >= 2 ? out : anchors;
 }
 
-/** Bezier handle diamond — same page-size contract as SelectionChrome knobs. */
-function ScreenHandleDiamond(props: {
+/** Merge eps from path size — thick outlines left tip/`to` pairs a few units apart.
+ * Cap by the thin axis: long stroke ribbons are only `strokeWidth` tall; a diag-based
+ * eps of ~6 merged the butt short-sides into 2 verts → zero-area digon (line vanished).
+ */
+function mergeEpsForAnchors(anchors: PenAnchor[]): number {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const a of anchors) {
+    minX = Math.min(minX, a.x);
+    minY = Math.min(minY, a.y);
+    maxX = Math.max(maxX, a.x);
+    maxY = Math.max(maxY, a.y);
+  }
+  if (!Number.isFinite(minX)) return 0.55;
+  const w = Math.max(0, maxX - minX);
+  const h = Math.max(0, maxY - minY);
+  const diag = Math.hypot(w, h);
+  const thin = Math.max(0.5, Math.min(w, h) || diag);
+  return Math.max(0.35, Math.min(1.1, thin * 0.22, diag * 0.008));
+}
+
+type AnchorDraw = {
   x: number;
   y: number;
-  vis: number;
-  stroke: number;
+  r: number;
+  fill: string;
+  strokeColor: string;
+};
+
+type HandleDraw = {
+  x: number;
+  y: number;
+  r: number;
   active: boolean;
-}) {
-  const { x, y, vis, stroke, active } = props;
-  const cx = vis / 2;
-  const cy = vis / 2;
-  const r = Math.max(0.01, vis / 2 - stroke / 2);
-  return (
-    <svg
-      className="pointer-events-none absolute z-[21] overflow-visible"
-      width={vis}
-      height={vis}
-      style={{ left: x - vis / 2, top: y - vis / 2 }}
-      aria-hidden
-    >
-      <polygon
-        points={handleDiamondPoints(cx, cy, r)}
-        fill={active ? SEL_BASELINE : '#fff'}
-        stroke={active ? SEL_BASELINE : '#383838'}
-        strokeWidth={stroke}
-      />
-    </svg>
-  );
+};
+
+function paintAnchorKnob(
+  ctx: CanvasRenderingContext2D,
+  a: AnchorDraw,
+  strokeW: number
+) {
+  ctx.beginPath();
+  ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+  ctx.fillStyle = a.fill;
+  ctx.fill();
+  ctx.strokeStyle = a.strokeColor;
+  ctx.lineWidth = strokeW;
+  ctx.stroke();
+}
+
+function paintHandleDiamond(
+  ctx: CanvasRenderingContext2D,
+  h: HandleDraw,
+  strokeW: number
+) {
+  ctx.beginPath();
+  ctx.moveTo(h.x, h.y - h.r);
+  ctx.lineTo(h.x + h.r, h.y);
+  ctx.lineTo(h.x, h.y + h.r);
+  ctx.lineTo(h.x - h.r, h.y);
+  ctx.closePath();
+  ctx.fillStyle = h.active ? SEL_BASELINE : '#fff';
+  ctx.fill();
+  ctx.strokeStyle = h.active ? SEL_BASELINE : '#383838';
+  ctx.lineWidth = strokeW;
+  ctx.stroke();
 }
 
 function hitHandle(
@@ -368,7 +405,11 @@ function loadSceneAnchors(document: any, nodeId: string) {
   const anyClosed = parsed.some((s) => s.closed);
   return {
     subpaths: parsed.map((s) => ({
-      anchors: offsetAnchors(s.anchors, left, top),
+      anchors: offsetAnchors(
+        mergeStackedAnchors(s.anchors, mergeEpsForAnchors(s.anchors)),
+        left,
+        top
+      ),
       closed: s.closed,
     })),
     strokeWidth,
@@ -845,26 +886,31 @@ function PenPathEditFeature({
 
   const d = penSubpathsToD(subpaths);
   const sw = Math.max(0, strokeWidth);
-  // SelectionChrome contract: page = screenPx / zoom (under camera scale).
+  // Screen-constant ink in scene units (HostPathChrome / SelectionChrome: px / zoom).
   const z = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / z;
   const stroke = STROKE_PX * inv;
   const handleStroke = HANDLE_STROKE_PX * inv;
   const linkStroke = LINK_STROKE_PX * inv;
-  const anchorVis = ANCHOR_VIS_PX * inv;
-  const handleVis = HANDLE_VIS_PX * inv;
-  // Fill-only paths (stroke off) still need a visible edit centerline.
+  const anchorR = Math.max(0.01, (ANCHOR_VIS_PX * inv) / 2 - stroke / 2);
+  const anchorRHot = Math.max(0.01, ((ANCHOR_VIS_PX + 2) * inv) / 2 - stroke / 2);
+  const handleR = Math.max(0.01, (HANDLE_VIS_PX * inv) / 2 - handleStroke / 2);
+  const handleRHot = Math.max(0.01, ((HANDLE_VIS_PX + 2) * inv) / 2 - handleStroke / 2);
   const editStrokeOn = strokeEnabled || fillColor === 'none';
   const editStrokeColor = strokeEnabled ? strokeColor : SEL_BASELINE;
-  const pathSw = pathEditStrokeWidth(editStrokeOn, sw, inv);
+  const pathSw = pathEditStrokeWidth({
+    strokeEnabled,
+    borderWidth: sw,
+    inv,
+  });
   const draftSw = Math.max(1, newStrokeWidth) * inv;
   const draftD = draftPathD(draftAnchors, draftCursor);
   const draftRubber = draftRubberBandD(draftAnchors, draftCursor);
 
-  const handleChrome: ReactNode[] = [];
-  const anchorChrome: ReactNode[] = [];
   type LinkSeg = { x1: number; y1: number; x2: number; y2: number };
   const linkSegs: LinkSeg[] = [];
+  const anchorsDraw: AnchorDraw[] = [];
+  const handlesDraw: HandleDraw[] = [];
 
   subpaths.forEach((sp, si) => {
     sp.anchors.forEach((a, i) => {
@@ -876,75 +922,67 @@ function PenPathEditFeature({
             selectedHandle.side === side) ||
           (hoverHandle?.sub === si && hoverHandle?.index === i && hoverHandle.side === side);
         linkSegs.push({ x1: a.x, y1: a.y, x2: hx, y2: hy });
-        handleChrome.push(
-          <ScreenHandleDiamond
-            key={`h-${si}-${i}-${side}`}
-            x={hx}
-            y={hy}
-            vis={active ? handleVis + 2 * inv : handleVis}
-            stroke={handleStroke}
-            active={active}
-          />
-        );
+        handlesDraw.push({
+          x: hx,
+          y: hy,
+          r: active ? handleRHot : handleR,
+          active,
+        });
       };
       if (a.outX != null && a.outY != null) pushHandle('out', a.outX, a.outY);
       if (a.inX != null && a.inY != null) pushHandle('in', a.inX, a.inY);
-      anchorChrome.push(
-        <ScreenAnchorKnob
-          key={`a-${si}-${i}`}
-          x={a.x}
-          y={a.y}
-          vis={hovered ? anchorVis + 2 * inv : anchorVis}
-          stroke={stroke}
-          fill={hovered ? SEL_BASELINE : '#fff'}
-        />
-      );
+      anchorsDraw.push({
+        x: a.x,
+        y: a.y,
+        r: hovered ? anchorRHot : anchorR,
+        fill: hovered ? SEL_BASELINE : '#fff',
+        strokeColor: SEL_BASELINE,
+      });
+    });
+  });
+
+  if (pathHover) {
+    anchorsDraw.push({
+      x: pathHover.x,
+      y: pathHover.y,
+      r: anchorR,
+      fill: SEL_BASELINE,
+      strokeColor: '#fff',
+    });
+  }
+  draftAnchors.forEach((a) => {
+    anchorsDraw.push({
+      x: a.x,
+      y: a.y,
+      r: anchorR,
+      fill: '#fff',
+      strokeColor: SEL_BASELINE,
     });
   });
 
   return (
-    <>
-      <PenPathEditInkCanvas
-        pathD={d}
-        fillColor={fillColor}
-        fillRule={fillRule === 'evenodd' ? 'evenodd' : 'nonzero'}
-        editStrokeOn={editStrokeOn}
-        editStrokeColor={editStrokeColor}
-        pathSw={pathSw}
-        linkSegs={linkSegs}
-        linkSw={linkStroke}
-        draftD={draftD}
-        draftRubber={draftRubber}
-        draftColor={newStrokeColor}
-        draftSw={draftSw}
-        inv={inv}
-        subpaths={subpaths}
-        draftAnchors={draftAnchors}
-        draftCursor={draftCursor}
-      />
-      {handleChrome}
-      {anchorChrome}
-      {pathHover ? (
-        <ScreenAnchorKnob
-          x={pathHover.x}
-          y={pathHover.y}
-          vis={anchorVis}
-          stroke={stroke}
-          fill={SEL_BASELINE}
-          strokeColor="#fff"
-        />
-      ) : null}
-      {draftAnchors.map((a, i) => (
-        <ScreenAnchorKnob
-          key={`draft-a-${i}`}
-          x={a.x}
-          y={a.y}
-          vis={anchorVis}
-          stroke={stroke}
-          fill="#fff"
-        />
-      ))}
-    </>
+    <PenPathEditInkCanvas
+      pathD={d}
+      fillColor={fillColor}
+      fillRule={fillRule === 'evenodd' ? 'evenodd' : 'nonzero'}
+      editStrokeOn={editStrokeOn}
+      editStrokeColor={editStrokeColor}
+      pathSw={pathSw}
+      linkSegs={linkSegs}
+      linkSw={linkStroke}
+      draftD={draftD}
+      draftRubber={draftRubber}
+      draftColor={newStrokeColor}
+      draftSw={draftSw}
+      inv={inv}
+      subpaths={subpaths}
+      draftAnchors={draftAnchors}
+      draftCursor={draftCursor}
+      anchorsDraw={anchorsDraw}
+      handlesDraw={handlesDraw}
+      knobStroke={stroke}
+      handleStroke={handleStroke}
+    />
   );
 }
 
@@ -965,6 +1003,10 @@ function PenPathEditInkCanvas({
   subpaths,
   draftAnchors,
   draftCursor,
+  anchorsDraw,
+  handlesDraw,
+  knobStroke,
+  handleStroke,
 }: {
   pathD: string;
   fillColor: string;
@@ -982,8 +1024,24 @@ function PenPathEditInkCanvas({
   subpaths: PenSubpath[];
   draftAnchors: PenAnchor[];
   draftCursor: { x: number; y: number } | null;
+  anchorsDraw: AnchorDraw[];
+  handlesDraw: HandleDraw[];
+  knobStroke: number;
+  handleStroke: number;
 }) {
   const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
+  /**
+   * Expand-only paint slot. Tight min-bbox every drag frame retargets
+   * canvas.style.left/top + bitmap size → whole ink shakes (same class of bug
+   * as SelectionChrome zoom-dependent shell).
+   */
+  const slotBoxRef = useRef<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const slotPathKeyRef = useRef<string>('');
 
   useLayoutEffect(() => {
     const handle = overlayRef.current;
@@ -998,8 +1056,12 @@ function PenPathEditInkCanvas({
     }
     for (const a of draftAnchors) pts.push({ x: a.x, y: a.y });
     if (draftCursor) pts.push(draftCursor);
+    for (const a of anchorsDraw) pts.push({ x: a.x, y: a.y });
+    for (const h of handlesDraw) pts.push({ x: h.x, y: h.y });
     if (!pts.length && !pathD) {
       handle.clear();
+      slotBoxRef.current = null;
+      slotPathKeyRef.current = '';
       return;
     }
     let minX = Infinity;
@@ -1016,13 +1078,53 @@ function PenPathEditInkCanvas({
       handle.clear();
       return;
     }
-    const pad = Math.max(pathSw, draftSw, linkSw, 8) * 2;
-    const ctx = handle.beginFrame({
-      left: minX - pad,
-      top: minY - pad,
-      width: Math.max(1, maxX - minX + pad * 2),
-      height: Math.max(1, maxY - minY + pad * 2),
-    });
+    const pad = Math.max(pathSw, draftSw, linkSw, knobStroke * 8, 12) * 2;
+    // Extra room so small drags do not grow the slot every pixel.
+    const slack = Math.max(48, pad * 2);
+    const needLeft = minX - pad;
+    const needTop = minY - pad;
+    const needRight = maxX + pad;
+    const needBottom = maxY + pad;
+
+    // Topology change (load / add / delete verts): reset slot. Dragging only expands.
+    const pathKey = `${fillColor}:${subpaths.map((s) => `${s.anchors.length}:${s.closed ? 1 : 0}`).join('|')}`;
+    if (pathKey !== slotPathKeyRef.current) {
+      slotPathKeyRef.current = pathKey;
+      slotBoxRef.current = null;
+    }
+
+    let slot = slotBoxRef.current;
+    if (!slot) {
+      slot = {
+        left: needLeft - slack,
+        top: needTop - slack,
+        width: Math.max(1, needRight - needLeft + slack * 2),
+        height: Math.max(1, needBottom - needTop + slack * 2),
+      };
+      slotBoxRef.current = slot;
+    } else {
+      const slotRight = slot.left + slot.width;
+      const slotBottom = slot.top + slot.height;
+      const growL = needLeft < slot.left;
+      const growT = needTop < slot.top;
+      const growR = needRight > slotRight;
+      const growB = needBottom > slotBottom;
+      if (growL || growT || growR || growB) {
+        const left = growL ? needLeft - slack : slot.left;
+        const top = growT ? needTop - slack : slot.top;
+        const right = growR ? needRight + slack : slotRight;
+        const bottom = growB ? needBottom + slack : slotBottom;
+        slot = {
+          left,
+          top,
+          width: Math.max(1, right - left),
+          height: Math.max(1, bottom - top),
+        };
+        slotBoxRef.current = slot;
+      }
+    }
+
+    const ctx = handle.beginFrame(slot);
     if (!ctx) return;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -1066,6 +1168,10 @@ function PenPathEditInkCanvas({
       ctx.globalAlpha = 1;
       ctx.setLineDash([]);
     }
+
+    ctx.setLineDash([]);
+    for (const h of handlesDraw) paintHandleDiamond(ctx, h, handleStroke);
+    for (const a of anchorsDraw) paintAnchorKnob(ctx, a, knobStroke);
   }, [
     pathD,
     fillColor,
@@ -1083,6 +1189,10 @@ function PenPathEditInkCanvas({
     subpaths,
     draftAnchors,
     draftCursor,
+    anchorsDraw,
+    handlesDraw,
+    knobStroke,
+    handleStroke,
   ]);
 
   return <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />;

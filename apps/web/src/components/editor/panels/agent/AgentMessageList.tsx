@@ -34,6 +34,7 @@ type AgentMessageListProps = {
   onCancelEdit: () => void;
   onRestore: (userId: string) => void;
   onChoice?: (choice: AskChoicePick) => void;
+  onResume?: (assistantId: string) => void;
   onOpenSession: (session: AgentChatSessionRow) => void;
   onDeleteSession: (id: string) => void;
   formatChatTime: (ts: number) => string;
@@ -59,6 +60,7 @@ const AgentMessageList = forwardRef(function AgentMessageList(
     onCancelEdit,
     onRestore,
     onChoice,
+    onResume,
     onOpenSession,
     onDeleteSession,
     formatChatTime,
@@ -151,6 +153,7 @@ const AgentMessageList = forwardRef(function AgentMessageList(
       onCancelEdit={onCancelEdit}
       onRestore={onRestore}
       onChoice={onChoice}
+      onResume={onResume}
       className={className}
     />
   );

@@ -1380,6 +1380,8 @@ const zhTW = {
     stop: '停止',
     send: '傳送',
     stopped: '已停止',
+    pausedHint: '生成已暫停，可從斷點繼續',
+    resume: '繼續生成',
     failed: '失敗',
     done: '完成',
     apply: '套用',

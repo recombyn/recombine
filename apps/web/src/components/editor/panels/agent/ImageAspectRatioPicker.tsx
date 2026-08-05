@@ -398,6 +398,13 @@ function sizeFromArea(area: number, aspectRatio: string) {
   return { w: roundDim(w), h: roundDim(h) };
 }
 
+/** Area of a catalog `WxH` cell, or 0 when missing/invalid. */
+function areaFromSizeCell(cell: string | undefined): number {
+  if (typeof cell !== 'string') return 0;
+  const [a, b] = cell.split('x').map(Number);
+  return a > 0 && b > 0 ? a * b : 0;
+}
+
 /** Resolve pixel size for a ratio + resolution (catalog tables when present). */
 export function resolveImagePixelSize(
   aspectRatio: string,
@@ -425,14 +432,7 @@ export function resolveImagePixelSize(
     return clampPixelSize(a, b, limits);
   }
   const area =
-    (typeof catalogTable?.['1:1'] === 'string'
-      ? (() => {
-          const [a, b] = catalogTable['1:1'].split('x').map(Number);
-          return a > 0 && b > 0 ? a * b : 0;
-        })()
-      : 0) ||
-    BASE_AREA[resKey] ||
-    BASE_AREA['2K'];
+    areaFromSizeCell(catalogTable?.['1:1']) || BASE_AREA[resKey] || BASE_AREA['2K'];
   const sized = sizeFromArea(area, raw);
   return clampPixelSize(sized.w, sized.h, limits);
 }

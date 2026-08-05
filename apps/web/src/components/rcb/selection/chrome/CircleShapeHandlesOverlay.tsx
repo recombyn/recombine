@@ -1,8 +1,5 @@
 /**
- * Circle / ellipse on-canvas knobs (MasterGo-style):
- * - 内半径: center (solid) or mid-sweep on inner rim (donut)
- * - 开始位置: fixed cut end (display only — does not drag)
- * - 弧度 / 周弧度: movable cut end; when it coincides with start, one 周弧度 knob
+ * Circle / ellipse knobs: 内半径, 开始位置 (display), 弧度 / 周弧度.
  */
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useDispatch } from 'react-redux';
@@ -10,13 +7,15 @@ import { useTranslation } from 'react-i18next';
 import { previewSvgNodeEllipseParams } from '@/components/rcb/scene/paint/sceneToSvg';
 import { useRcbCamera } from '@/components/rcb/camera/context';
 import {
-  clampEllipseArcPercent,
   clampEllipseInnerRatio,
   ellipseArcEndAngles,
+  ellipseArcLockSign,
   ellipseArcPercentFromAttrs,
   ellipseArcPercentFromPointer,
   ellipseInnerRatioFromAttrs,
   ellipseStartDegFromAttrs,
+  snapEllipseArcPercent,
+  snapEllipseInnerRatio,
 } from '@/components/rcb/scene/document/sceneShapes';
 import { patchDocumentNode } from '@/store/modules/editor';
 import {
@@ -100,8 +99,8 @@ function commitEllipseParams(opts: {
       skipHistory: Boolean(opts.skipHistory),
       patch: {
         attrs: {
-          ellipseInnerRatio: clampEllipseInnerRatio(opts.innerRatio),
-          ellipseArcPercent: clampEllipseArcPercent(opts.arcPercent),
+          ellipseInnerRatio: snapEllipseInnerRatio(opts.innerRatio),
+          ellipseArcPercent: snapEllipseArcPercent(opts.arcPercent),
           ellipseStartDeg: opts.startDeg,
         },
       },
@@ -122,6 +121,8 @@ type DragState =
       mode: 'arc';
       startPercent: number;
       current: number;
+      /** Locked on first move — one direction only, cannot flip past 开始位置. */
+      lockSign: 1 | -1 | null;
       startX: number;
       startY: number;
       moved: boolean;
@@ -226,9 +227,8 @@ function CircleShapeHandlesOverlay({
 
       if (d.mode === 'inner') {
         const dist = Math.hypot(local.x - cx, local.y - cy);
-        const next = clampEllipseInnerRatio(
-          dist / Math.max(1e-3, outerR),
-          d.startRatio
+        const next = snapEllipseInnerRatio(
+          clampEllipseInnerRatio(dist / Math.max(1e-3, outerR), d.startRatio)
         );
         d.current = next;
         setDragValue(Math.round(next * 100));
@@ -237,15 +237,25 @@ function CircleShapeHandlesOverlay({
         return;
       }
 
-      // Arc / 周弧度: from fixed 开始位置; continuity keeps a small gap from 100%.
-      const next = ellipseArcPercentFromPointer(
+      // Arc: lock one sweep direction; snap to ±100 when end meets 开始位置.
+      const startRad = (startDeg * Math.PI) / 180;
+      const delta = Math.atan2(local.y - cy, local.x - cx) - startRad;
+      let wrapped = delta;
+      while (wrapped > Math.PI) wrapped -= Math.PI * 2;
+      while (wrapped <= -Math.PI) wrapped += Math.PI * 2;
+      if (d.lockSign == null) {
+        d.lockSign = ellipseArcLockSign(d.startPercent, wrapped);
+      }
+      const raw = ellipseArcPercentFromPointer(
         local.x,
         local.y,
         cx,
         cy,
         d.current,
-        startDeg
+        startDeg,
+        { lockSign: d.lockSign }
       );
+      const next = snapEllipseArcPercent(raw);
       d.current = next;
       setDragValue(Math.round(next * 10) / 10);
       setLiveArc(next);
@@ -374,6 +384,7 @@ function CircleShapeHandlesOverlay({
       mode: 'arc',
       startPercent: baseArc,
       current: baseArc,
+      lockSign: Math.abs(baseArc) >= 99.95 ? null : baseArc < 0 ? -1 : 1,
       startX: e.clientX,
       startY: e.clientY,
       moved: false,

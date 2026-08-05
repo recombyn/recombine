@@ -340,6 +340,32 @@ function resolveTabForKey(key: string, autoActive?: boolean): SizePresetCategory
   return 'website';
 }
 
+/** Prefer the tab for the current WxH / preset; scene hint is only a fallback. */
+function resolveInitialSizeCategory(opts: {
+  autoActive?: boolean;
+  showAuto?: boolean;
+  preferredMatchCategory?: SizePresetCategory;
+  matchedKey: string;
+  activeWidth?: number;
+  activeHeight?: number;
+  initialCategory?: SizePresetCategory;
+}): SizePresetCategory {
+  if (opts.autoActive && opts.showAuto) {
+    if (opts.preferredMatchCategory && opts.preferredMatchCategory !== 'image') {
+      return opts.preferredMatchCategory;
+    }
+    return 'poster';
+  }
+  if (opts.matchedKey && opts.matchedKey !== 'custom' && opts.matchedKey !== 'auto') {
+    return resolveTabForKey(opts.matchedKey, false);
+  }
+  if (opts.activeWidth && opts.activeHeight) return 'custom';
+  if (opts.initialCategory && opts.initialCategory !== 'auto' && opts.initialCategory !== 'image') {
+    return opts.initialCategory;
+  }
+  return resolveTabForKey(opts.matchedKey, false);
+}
+
 /**
  * Shared size preset UI — underline category tabs + Smart switch + device list.
  * Used by frame toolbar and chat design canvas size picker.
@@ -368,22 +394,15 @@ function SizePresetPanel({
 
   // Prefer the tab for the current WxH / preset; scene hint is only a fallback
   // (otherwise Home/editor scene can pin "Poster" while chip shows 1366×768).
-  const resolvedInitial: SizePresetCategory = (() => {
-    if (autoActive && showAuto) {
-      if (preferredMatchCategory && preferredMatchCategory !== 'image') {
-        return preferredMatchCategory;
-      }
-      return 'poster';
-    }
-    if (matchedKey && matchedKey !== 'custom' && matchedKey !== 'auto') {
-      return resolveTabForKey(matchedKey, false);
-    }
-    if (activeWidth && activeHeight) return 'custom';
-    if (initialCategory && initialCategory !== 'auto' && initialCategory !== 'image') {
-      return initialCategory;
-    }
-    return resolveTabForKey(matchedKey, false);
-  })();
+  const resolvedInitial = resolveInitialSizeCategory({
+    autoActive,
+    showAuto,
+    preferredMatchCategory,
+    matchedKey,
+    activeWidth,
+    activeHeight,
+    initialCategory,
+  });
 
   const [tab, setTab] = useState<SizePresetCategory>(() =>
     resolvedInitial === 'auto' || resolvedInitial === 'image' ? 'poster' : resolvedInitial

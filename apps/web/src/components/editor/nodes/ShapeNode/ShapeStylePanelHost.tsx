@@ -53,6 +53,16 @@ import {
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
+function resolvePanelGradient(
+  fillGradient: unknown,
+  fillType: 'linear' | 'radial' | 'angular' | 'diffuse',
+  fillColor: unknown
+): FillGradient {
+  const g = parseFillGradient(fillGradient, fillType, fillColor);
+  g.type = fillType;
+  return g;
+}
+
 /** Panel docked to the top-right of the selection (same pattern as eraser). */
 function panelStyleTopRight(
   camera: { x: number; y: number; zoom: number },
@@ -216,8 +226,8 @@ function readStrokeValue(attrs: Record<string, unknown> | undefined): StrokePane
   const style = parseStrokeStyle(a.strokeStyle);
   const widthNum = Number(a['border-width'] ?? a.strokeWidth ?? 1);
   const shapeType = String(a.shapeType || '');
-  // Pencil / arrow default round; pen + line default butt (stroke panel).
-  const roundCaps = shapeType === 'pencil' || shapeType === 'arrow';
+  // Pencil default round; pen + line + arrow default butt (stroke panel).
+  const roundCaps = shapeType === 'pencil';
   const hasCapAttr = a.strokeLinecap != null || a['stroke-linecap'] != null;
   const hasJoinAttr = a.strokeLinejoin != null || a['stroke-linejoin'] != null;
   return {
@@ -329,22 +339,14 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
   const handleBox = nodeGeomBox(document, firstNode) || box;
   const nodeAngle = Number(firstAttrs?.angle);
   const gradient: FillGradient | null = showGradientHandles
-    ? (() => {
-        const g = parseFillGradient(
-          fillValue.fillGradient,
-          fillType as 'linear' | 'radial' | 'angular',
-          fillValue.fillColor
-        );
-        g.type = fillType as 'linear' | 'radial' | 'angular';
-        return g;
-      })()
+    ? resolvePanelGradient(
+        fillValue.fillGradient,
+        fillType as 'linear' | 'radial' | 'angular',
+        fillValue.fillColor
+      )
     : null;
   const meshGradient: FillGradient | null = showMeshHandles
-    ? (() => {
-        const g = parseFillGradient(fillValue.fillGradient, 'diffuse', fillValue.fillColor);
-        g.type = 'diffuse';
-        return g;
-      })()
+    ? resolvePanelGradient(fillValue.fillGradient, 'diffuse', fillValue.fillColor)
     : null;
 
   const fillLayerVisible =

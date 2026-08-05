@@ -69,7 +69,7 @@ import {
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
-import { fetchDesignSkills, type DesignSkillCard } from '@/apis/design';
+import { fetchDesignSkills, pauseDesignRun, fetchDesignRunStatus, type DesignSkillCard } from '@/apis/design';
 import AgentDockHeader from '@/components/editor/panels/agent/AgentDockHeader';
 import {
   runDesignAgent,
@@ -167,6 +167,13 @@ type ChatSessionMessage = {
   imageModelId?: string;
   imageModelLabel?: string;
   imageAspectRatio?: string;
+  designTaskId?: string;
+  canResume?: boolean;
+  proposedOps?: ChatUiMessage['proposedOps'];
+  proposalId?: string;
+  choices?: string[];
+  applyChoice?: string;
+  choiceUi?: ChatUiMessage['choiceUi'];
 };
 
 type ChatSession = {
@@ -271,11 +278,13 @@ function resolveComposerPlaceholder(
     isImageMode?: boolean;
     isVideoMode?: boolean;
     hasContextChips: boolean;
+    askPlaceholder?: string | null;
   }
 ): string {
   if (opts.isVideoMode) return t('editor.tools.videoGenPlaceholder');
   if (opts.isImageMode) return t('editor.tools.imageGenPlaceholder');
   if (opts.isImageModel) return t('agent.placeholderImage');
+  if (opts.askPlaceholder?.trim()) return opts.askPlaceholder.trim();
   if (opts.hasContextChips) return t('agent.placeholderSkill');
   return t('agent.placeholderDefault');
 }
@@ -372,6 +381,7 @@ function patchChatDoneAssistant(
     finish: FinishAssistant;
     choices?: string[];
     proposedOps?: ChatUiMessage['proposedOps'];
+    proposalId?: string;
     applyChoice?: string;
     choiceUi?: ChatUiMessage['choiceUi'];
   }
@@ -384,6 +394,7 @@ function patchChatDoneAssistant(
     intent: undefined,
     choices: opts.choices?.length ? opts.choices : undefined,
     proposedOps: opts.proposedOps?.length ? opts.proposedOps : undefined,
+    proposalId: opts.proposalId || undefined,
     applyChoice: opts.applyChoice || undefined,
     choiceUi: opts.choiceUi,
     steps: buildChatProcessSteps(opts.t, m),
@@ -400,6 +411,7 @@ function patchDesignDoneAssistant(
     summary?: string;
     choices?: string[];
     proposedOps?: ChatUiMessage['proposedOps'];
+    proposalId?: string;
     applyChoice?: string;
     choiceUi?: ChatUiMessage['choiceUi'];
   }
@@ -432,6 +444,7 @@ function patchDesignDoneAssistant(
     intent: undefined,
     choices: opts.choices?.length ? opts.choices : undefined,
     proposedOps: opts.proposedOps?.length ? opts.proposedOps : undefined,
+    proposalId: opts.proposalId || undefined,
     applyChoice: opts.applyChoice || undefined,
     choiceUi: opts.choiceUi,
     steps: (m.steps || []).map((s) => ({
@@ -485,6 +498,26 @@ type PendingChatSync = {
   payloadJson: string;
 };
 
+function pickAskPersistFields(m: {
+  designTaskId?: string | null;
+  canResume?: boolean | null;
+  proposedOps?: ChatUiMessage['proposedOps'] | null;
+  proposalId?: string | null;
+  choices?: string[] | null;
+  applyChoice?: string | null;
+  choiceUi?: ChatUiMessage['choiceUi'] | null;
+}): Partial<ChatSessionMessage> {
+  return {
+    ...(m.designTaskId ? { designTaskId: m.designTaskId } : {}),
+    ...(m.canResume ? { canResume: true } : {}),
+    ...(m.proposedOps?.length ? { proposedOps: m.proposedOps } : {}),
+    ...(m.proposalId ? { proposalId: m.proposalId } : {}),
+    ...(m.choices?.length ? { choices: m.choices } : {}),
+    ...(m.applyChoice ? { applyChoice: m.applyChoice } : {}),
+    ...(m.choiceUi ? { choiceUi: m.choiceUi } : {}),
+  };
+}
+
 function toUiMessages(session: ChatSession): ChatUiMessage[] {
   return session.messages.map((m) => ({
     id: m.id,
@@ -501,6 +534,7 @@ function toUiMessages(session: ChatSession): ChatUiMessage[] {
     ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
     ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
     ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
+    ...pickAskPersistFields(m),
   }));
 }
 
@@ -524,6 +558,13 @@ function dtoToSession(dto: {
     imageModelId?: string | null;
     imageModelLabel?: string | null;
     imageAspectRatio?: string | null;
+    designTaskId?: string | null;
+    canResume?: boolean | null;
+    proposedOps?: ChatUiMessage['proposedOps'] | null;
+    proposalId?: string | null;
+    choices?: string[] | null;
+    applyChoice?: string | null;
+    choiceUi?: ChatUiMessage['choiceUi'] | null;
   }>;
 }): ChatSession {
   return {
@@ -546,6 +587,7 @@ function dtoToSession(dto: {
       ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
       ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
       ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
+      ...pickAskPersistFields(m),
     })),
   };
 }
@@ -557,6 +599,11 @@ function messagesToPersisted(messages: ChatUiMessage[]): ChatSessionMessage[] {
         m.content ||
         m.thinking ||
         m.intent ||
+        m.canResume ||
+        m.designTaskId ||
+        (m.proposedOps && m.proposedOps.length) ||
+        m.proposalId ||
+        m.choiceUi ||
         (m.contexts && m.contexts.length) ||
         (m.steps && m.steps.length) ||
         (m.images && m.images.length) ||
@@ -584,6 +631,7 @@ function messagesToPersisted(messages: ChatUiMessage[]): ChatSessionMessage[] {
       ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
       ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
       ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
+      ...pickAskPersistFields(m),
     }));
 }
 
@@ -648,7 +696,7 @@ function useChatSessions(documentId: string | null | undefined) {
       return;
     }
 
-    (async () => {
+    async function loadRemoteSessions() {
       try {
         const res = await fetchChatSessions({
           projectId: scope || '__none__',
@@ -681,7 +729,8 @@ function useChatSessions(documentId: string | null | undefined) {
       } finally {
         if (!cancelled) setReadyScope(scope);
       }
-    })();
+    }
+    void loadRemoteSessions();
 
     return () => {
       cancelled = true;
@@ -1177,11 +1226,28 @@ function resolveSendDisplayText(opts: {
   return '';
 }
 
+function askProposalBind(m: ChatUiMessage | undefined | null): {
+  proposalId?: string;
+  proposalTaskId?: string;
+} {
+  if (!m) return {};
+  return {
+    ...(m.proposalId ? { proposalId: m.proposalId } : {}),
+    ...(m.designTaskId ? { proposalTaskId: m.designTaskId } : {}),
+  };
+}
+
 /** Ask mode: typed text matches an apply option → re-send with proposed ops. */
 function findAskApplyConfirm(
   messages: ChatUiMessage[],
   typed: string
-): { messageId: string; ops: NonNullable<ChatUiMessage['proposedOps']>; label: string } | null {
+): {
+  messageId: string;
+  ops: NonNullable<ChatUiMessage['proposedOps']>;
+  label: string;
+  proposalId?: string;
+  proposalTaskId?: string;
+} | null {
   const lastAsk = [...messages]
     .reverse()
     .find((m) => m.role === 'assistant' && m.proposedOps?.length);
@@ -1199,7 +1265,12 @@ function findAskApplyConfirm(
       t === applyLabel ||
       (t.length >= 2 && t.length <= applyLabel.length && applyLabel.includes(t));
     if (confirms) {
-      return { messageId: lastAsk.id, ops: lastAsk.proposedOps, label: t };
+      return {
+        messageId: lastAsk.id,
+        ops: lastAsk.proposedOps,
+        label: t,
+        ...askProposalBind(lastAsk),
+      };
     }
   }
   return null;
@@ -1207,10 +1278,21 @@ function findAskApplyConfirm(
 
 function clearAskProposalFields(m: ChatUiMessage): ChatUiMessage {
   if (m.role !== 'assistant') return m;
-  if (!(m.proposedOps?.length || m.choices?.length || m.applyChoice || m.choiceUi)) return m;
+  if (
+    !(
+      m.proposedOps?.length ||
+      m.choices?.length ||
+      m.applyChoice ||
+      m.choiceUi ||
+      m.proposalId
+    )
+  ) {
+    return m;
+  }
   return {
     ...m,
     proposedOps: undefined,
+    proposalId: undefined,
     applyChoice: undefined,
     choices: undefined,
     choiceUi: undefined,
@@ -1235,6 +1317,8 @@ type AskChoiceSend =
       messageId: string;
       text: string;
       ops: NonNullable<ChatUiMessage['proposedOps']>;
+      proposalId?: string;
+      proposalTaskId?: string;
     }
   | { kind: 'reply'; text: string };
 
@@ -1256,6 +1340,7 @@ function resolveAskChoiceSend(
       messageId: lastAsk.id,
       text,
       ops: lastAsk.proposedOps,
+      ...askProposalBind(lastAsk),
     };
   }
   const text = pick.selectedLabels?.length
@@ -1974,7 +2059,37 @@ function createDesignAgentEventRouter(opts: {
               thinking: undefined,
               pipeline: undefined,
               drawing: undefined,
+              canResume: false,
             })
+          : m
+      )
+    );
+  };
+
+  const handleUiPaused = (ev: Extract<AgentStepEvent, { type: 'paused' }>) => {
+    const tip = opts.t('agent.pausedHint');
+    opts.setMessages((prev) =>
+      prev.map((m) =>
+        m.id === opts.assistantId
+          ? opts.finishAssistantPatch(m, {
+              content: m.content?.trim() ? m.content : tip,
+              thinking: undefined,
+              pipeline: undefined,
+              drawing: undefined,
+              designTaskId: ev.taskId || m.designTaskId,
+              designResumeToken: ev.resumeToken || m.designResumeToken,
+              canResume: Boolean(ev.taskId || m.designTaskId),
+            })
+          : m
+      )
+    );
+  };
+
+  const handleUiTask = (ev: Extract<AgentStepEvent, { type: 'task' }>) => {
+    opts.setMessages((prev) =>
+      prev.map((m) =>
+        m.id === opts.assistantId
+          ? { ...m, designTaskId: ev.taskId, canResume: false }
           : m
       )
     );
@@ -1990,26 +2105,38 @@ function createDesignAgentEventRouter(opts: {
       prev.map((m) => {
         if (m.id === opts.assistantId) {
           if (!opts.mutable.designStarted) {
-            return patchChatDoneAssistant(m, {
+            return {
+              ...patchChatDoneAssistant(m, {
+                t: opts.t,
+                finish: opts.finishAssistantPatch,
+                choices: ev.choices,
+                proposedOps: ev.proposedOps,
+                proposalId: ev.proposalId,
+                applyChoice: ev.applyChoice,
+                choiceUi: ev.choiceUi,
+              }),
+              ...(ev.taskId ? { designTaskId: ev.taskId } : {}),
+              canResume: false,
+              designResumeToken: undefined,
+            };
+          }
+          return {
+            ...patchDesignDoneAssistant(m, {
               t: opts.t,
               finish: opts.finishAssistantPatch,
+              painted,
+              designStarted: opts.mutable.designStarted,
+              summary: ev.summary,
               choices: ev.choices,
               proposedOps: ev.proposedOps,
+              proposalId: ev.proposalId,
               applyChoice: ev.applyChoice,
               choiceUi: ev.choiceUi,
-            });
-          }
-          return patchDesignDoneAssistant(m, {
-            t: opts.t,
-            finish: opts.finishAssistantPatch,
-            painted,
-            designStarted: opts.mutable.designStarted,
-            summary: ev.summary,
-            choices: ev.choices,
-            proposedOps: ev.proposedOps,
-            applyChoice: ev.applyChoice,
-            choiceUi: ev.choiceUi,
-          });
+            }),
+            ...(ev.taskId ? { designTaskId: ev.taskId } : {}),
+            canResume: false,
+            designResumeToken: undefined,
+          };
         }
         if (
           m.id === opts.userMsg.id &&
@@ -2063,6 +2190,12 @@ function createDesignAgentEventRouter(opts: {
         return;
       case 'error':
         handleUiError(ev);
+        return;
+      case 'paused':
+        handleUiPaused(ev);
+        return;
+      case 'task':
+        handleUiTask(ev);
         return;
       case 'done':
         handleUiDone(ev);
@@ -2199,6 +2332,10 @@ function AgentDock({
   const listRef = useRef<VirtualListHandle | null>(null);
   const inputRef = useRef<AgentComposerHandle | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const liveDesignTaskRef = useRef<string | null>(null);
+  const pauseRequestedRef = useRef(false);
+  /** Avoid re-entrant auto-resume for the same session+task. */
+  const autoResumeKeyRef = useRef<string | null>(null);
   /** Home → editor auto-send; flushed when modelsStatus leaves idle/loading. */
   const pendingAutoSubmitRef = useRef<string | null>(null);
   /** Pre-command document snapshots keyed by user message id. In-memory only. */
@@ -3048,7 +3185,7 @@ function AgentDock({
                 });
               }
             }
-            attachSelection();
+            void attachSelection();
           } else {
             dispatch(
               startCanvasAttachPick({
@@ -3139,19 +3276,172 @@ function AgentDock({
   );
 
   const stopGeneration = () => {
+    const tid = liveDesignTaskRef.current;
+    pauseRequestedRef.current = true;
+    if (tid) {
+      void pauseDesignRun(tid).catch(() => undefined);
+    }
     abortRef.current?.abort();
     dispatch(setAgentBusy(false));
     setSending(false);
     setMessages((prev) =>
+      prev.map((m) => {
+        if (!m.streaming) return m;
+        const taskId = tid || m.designTaskId;
+        if (taskId) {
+          return finishAssistantPatch(m, {
+            content: m.content?.trim() ? m.content : t('agent.pausedHint'),
+            designTaskId: taskId,
+            canResume: true,
+          });
+        }
+        return finishAssistantPatch(m, {
+          content: m.content?.trim() ? m.content : t('agent.stopped'),
+          canResume: false,
+        });
+      })
+    );
+  };
+
+  const resumeGeneration = async (assistantId?: string) => {
+    if (sending) return;
+    const target =
+      (assistantId
+        ? messages.find((m) => m.id === assistantId)
+        : [...messages].reverse().find((m) => m.canResume && m.designTaskId)) ||
+      null;
+    const taskId = String(target?.designTaskId || '').trim();
+    if (!target || !taskId) return;
+
+    const userMsg =
+      [...messages].reverse().find((m) => m.role === 'user' && m.id !== target.id) ||
+      messages.find((m) => m.role === 'user') ||
+      null;
+    if (!userMsg) return;
+
+    const ac = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = ac;
+    pauseRequestedRef.current = false;
+    liveDesignTaskRef.current = taskId;
+    setSending(true);
+    dispatch(setAgentBusy(true));
+    setMessages((prev) =>
       prev.map((m) =>
-        m.streaming
-          ? finishAssistantPatch(m, {
-              content: m.content?.trim() ? m.content : t('agent.stopped'),
-            })
+        m.id === target.id
+          ? {
+              ...m,
+              streaming: true,
+              canResume: false,
+              startedAt: m.startedAt || Date.now(),
+            }
           : m
       )
     );
+
+    const designMutable: DesignSendMutable = {
+      designStarted: true,
+      canvasMutated: false,
+      nodesPainted: false,
+    };
+    const chipNorm = normalizeCanvasSizeChip(imageAspectRatio);
+    const onDesignEvent = createDesignAgentEventRouter({
+      t,
+      assistantId: target.id,
+      userMsg,
+      chipNorm,
+      setMessages,
+      setImageAspectRatio,
+      setDesignScene,
+      designSceneRef,
+      lastAgentFrameIdRef,
+      lastAgentSvgByFrameRef,
+      checkpointsRef,
+      store,
+      finishAssistantPatch,
+      mutable: designMutable,
+    });
+
+    try {
+      await runDesignAgent({
+        userMessage: userMsg.content || '',
+        runMode: 'agent',
+        interactionMode: 'agent',
+        resumeTaskId: taskId,
+        resumeToken: target.designResumeToken || undefined,
+        scene: null,
+        styleGroupId: styleGroupId ?? designCatalog?.style_groups?.[0]?.id ?? null,
+        model: resolveAgentSendModel(canPickModel, model),
+        routeOverrides: resolveAgentRouteOverrides(canPickModel, model),
+        canvasSize: canvasSizeFromChip(chipNorm),
+        canvasId: chatScopeId || undefined,
+        sessionId,
+        projectId: chatScopeId || '__none__',
+        dispatch,
+        getDocument: () => (store.getState() as any).editor.document,
+        signal: ac.signal,
+        onEvent: (ev) => {
+          if (ev.type === 'task') liveDesignTaskRef.current = ev.taskId;
+          if (ev.type === 'paused' && ev.taskId) liveDesignTaskRef.current = ev.taskId;
+          onDesignEvent(ev);
+        },
+      });
+    } finally {
+      dispatch(setAgentBusy(false));
+      setSending(false);
+      if (ac.signal.aborted && pauseRequestedRef.current) {
+        /* stopGeneration already patched the message */
+      } else if (ac.signal.aborted) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === target.id && m.streaming
+              ? finishAssistantPatch(m, {
+                  content: m.content?.trim() ? m.content : t('agent.pausedHint'),
+                  designTaskId: taskId,
+                  canResume: true,
+                })
+              : m
+          )
+        );
+      }
+    }
   };
+
+  // Reopen editor / switch session: if a paused design task is still resumable, continue it.
+  useEffect(() => {
+    if (sending || !open || pauseRequestedRef.current) return;
+    const target = [...messages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.canResume && m.designTaskId);
+    const taskId = String(target?.designTaskId || '').trim();
+    if (!target || !taskId) return;
+    const key = `${sessionId}:${taskId}`;
+    if (autoResumeKeyRef.current === key) return;
+    autoResumeKeyRef.current = key;
+    let cancelled = false;
+    async function autoResumePausedDesign() {
+      try {
+        const st = await fetchDesignRunStatus(taskId);
+        if (cancelled) return;
+        if (!st?.resumable) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === target.id ? { ...m, canResume: false } : m
+            )
+          );
+          return;
+        }
+        await resumeGeneration(target.id);
+      } catch {
+        /* keep Resume button; user can retry */
+      }
+    }
+    void autoResumePausedDesign();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, open, sending, messages]);
 
   const send = async (
     opts?:
@@ -3163,6 +3453,8 @@ function AgentDock({
           raw?: boolean;
           /** Ask confirm: apply proposed ops (forces Design / agent path). */
           applyOps?: ChatUiMessage['proposedOps'];
+          proposalId?: string;
+          proposalTaskId?: string;
           forceAgent?: boolean;
         }
   ) => {
@@ -3187,6 +3479,8 @@ function AgentDock({
           raw: true,
           displayContent: confirm.label,
           applyOps: confirm.ops,
+          proposalId: confirm.proposalId,
+          proposalTaskId: confirm.proposalTaskId,
           forceAgent: true,
         });
         return;
@@ -3323,6 +3617,8 @@ function AgentDock({
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    pauseRequestedRef.current = false;
+    liveDesignTaskRef.current = null;
 
     // Video model → gallery in chat; takes precedence over image gen.
     if (runVideoGen) {
@@ -3626,6 +3922,8 @@ function AgentDock({
             ? 'ask'
             : 'agent',
         applyOps: options.applyOps?.length ? options.applyOps : undefined,
+        proposalId: options.proposalId || undefined,
+        proposalTaskId: options.proposalTaskId || undefined,
         scene: sendScene,
         styleGroupId: styleGroupId ?? designCatalog?.style_groups?.[0]?.id ?? null,
         model: resolveAgentSendModel(canPickModel, model),
@@ -3677,7 +3975,11 @@ function AgentDock({
         // Explicit @ frame / @ node→frame only — not last-agent inference.
         pinnedFrameId: chipFrameId || null,
         signal: ac.signal,
-        onEvent: onDesignEvent,
+        onEvent: (ev) => {
+          if (ev.type === 'task') liveDesignTaskRef.current = ev.taskId;
+          if (ev.type === 'paused' && ev.taskId) liveDesignTaskRef.current = ev.taskId;
+          onDesignEvent(ev);
+        },
       });
     } finally {
       dispatch(setAgentBusy(false));
@@ -3690,14 +3992,21 @@ function AgentDock({
     }
 
     if (ac.signal.aborted) {
+      const tid = liveDesignTaskRef.current;
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId && m.streaming
-            ? finishAssistantPatch(m, {
-                content: m.content?.trim() ? m.content : t('agent.stopped'),
-              })
-            : m
-        )
+        prev.map((m) => {
+          if (m.id !== assistantId || !m.streaming) return m;
+          if (tid || m.designTaskId || pauseRequestedRef.current) {
+            return finishAssistantPatch(m, {
+              content: m.content?.trim() ? m.content : t('agent.pausedHint'),
+              designTaskId: tid || m.designTaskId,
+              canResume: Boolean(tid || m.designTaskId),
+            });
+          }
+          return finishAssistantPatch(m, {
+            content: m.content?.trim() ? m.content : t('agent.stopped'),
+          });
+        })
       );
     }
 
@@ -3719,6 +4028,8 @@ function AgentDock({
           raw: true,
           displayContent: next.text,
           applyOps: next.ops,
+          proposalId: next.proposalId,
+          proposalTaskId: next.proposalTaskId,
           forceAgent: true,
         });
         return;
@@ -4162,11 +4473,21 @@ function AgentDock({
 
   if (!open) return null;
 
+  const askPlaceholder = [...messages]
+    .reverse()
+    .find(
+      (m) =>
+        m.role === 'assistant' &&
+        (m.proposedOps?.length || m.choiceUi) &&
+        !m.streaming
+    )?.choiceUi?.placeholder;
+
   const composerPlaceholder = resolveComposerPlaceholder(t, {
     isImageModel: isImageModelSelected,
     isImageMode: isImageInteraction,
     isVideoMode: isVideoInteraction,
     hasContextChips: contextChips.length > 0,
+    askPlaceholder,
   });
 
   const imageModeControls = buildImageModeControls({
@@ -4328,6 +4649,9 @@ function AgentDock({
         onCancelEdit={cancelEditUserMessage}
         onRestore={restoreCheckpoint}
         onChoice={handleAskChoice}
+        onResume={(id) => {
+          void resumeGeneration(id);
+        }}
         onOpenSession={openSession}
         onDeleteSession={deleteSession}
         formatChatTime={formatChatTime}

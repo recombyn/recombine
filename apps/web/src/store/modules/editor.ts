@@ -53,8 +53,10 @@ export type ImageToolPanelKind =
 export type VideoToolPanelKind = 'trim';
 
 function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
-  const width = Math.max(40, Math.round(partial?.width || 794));
-  const height = Math.max(40, Math.round(partial?.height || 1123));
+  const hasW = partial?.width != null && Number.isFinite(Number(partial.width));
+  const hasH = partial?.height != null && Number.isFinite(Number(partial.height));
+  const width = Math.max(1, Math.round(hasW ? Number(partial!.width) : 794));
+  const height = Math.max(1, Math.round(hasH ? Number(partial!.height) : 1123));
   return {
     id: partial?.id || nanoid(8),
     name: partial?.name || 'Frame',
@@ -63,7 +65,6 @@ function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
     width,
     height,
     backgroundColor: partial?.backgroundColor ?? '#FFFFFF',
-    // Default: show overflow (not clipped). User can enable clip from the frame toolbar.
     clipContent: partial?.clipContent ?? false,
   };
 }
@@ -145,7 +146,7 @@ const initialState = {
   pencilEraseMode: false,
   /** When true, pencil uses stylus/touch pressure (+ brush speed sim). */
   pencilPressureEnabled: true,
-  /** Design = edit; Dev = inspect spacing / margins (Figma-like). */
+  /** Design = edit; Dev = inspect spacing / margins. */
   workspaceMode: 'design' as 'design' | 'dev',
   /** Dev-mode node under pointer (inspect panel + spacing overlay). */
   devHoverNodeId: null as string | null,
@@ -664,8 +665,6 @@ const editorSlice = createSlice({
       const key = `frame:${frame.id}`;
       const order = Array.isArray(next.stackOrder) ? next.stackOrder.map(String) : [];
       if (!order.includes(key)) next.stackOrder = [...order, key];
-      // User draw must set selectedFrameIds too — otherwise the idle grey edge
-      // hides (via activeFrameId) while SelectionChrome never paints.
       if (activate !== false) {
         next.activeFrameId = frame.id;
         state.selectedFrameIds = [frame.id];

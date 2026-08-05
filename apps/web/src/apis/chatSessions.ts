@@ -28,6 +28,27 @@ export type ChatSessionMessageDto = {
   }> | null;
   /** Seedream / image-mode gallery URLs (prefer durable asset URLs). */
   images?: string[] | null;
+  videos?: string[] | null;
+  imageModelId?: string | null;
+  imageModelLabel?: string | null;
+  imageAspectRatio?: string | null;
+  /** Paused LangGraph run — Resume button. */
+  designTaskId?: string | null;
+  canResume?: boolean | null;
+  /** Ask mode propose → Confirm applies these ops. */
+  proposedOps?: Array<{
+    name?: string;
+    args?: Record<string, unknown>;
+    op_id?: string;
+  }> | null;
+  choices?: string[] | null;
+  applyChoice?: string | null;
+  choiceUi?: {
+    mode?: string;
+    placeholder?: string;
+    options?: Array<{ label: string; action: string }>;
+  } | null;
+  proposalId?: string | null;
 };
 
 export type ChatSessionDto = {

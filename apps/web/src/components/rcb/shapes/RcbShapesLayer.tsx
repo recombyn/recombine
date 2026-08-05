@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, memo } from 'react';
-import { useRcbCamera, useRcbCameraMotion, useRcbViewportEl } from '../camera/context';
+import { useRcbCamera, useRcbCameraMotion, useRcbDevicePixelRatio, useRcbViewportEl } from '../camera/context';
 import { rcbViewportSceneBounds } from '../core/math';
 import { toDomPrecision } from '../core/dpr';
 import {
@@ -8,7 +8,7 @@ import {
   nodeSceneAabb,
 } from '../core/spatialIndex';
 import { isNodeHidden, stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
-import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { nodeLeftTop, snapSvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
 import { HEAVY_PATH_D_CHARS } from '@/components/rcb/scene/document/sceneShapes';
 import RcbShapeHost from './RcbShapeHost';
 
@@ -140,6 +140,7 @@ function RcbShapesLayer({
   spatialIndex = null,
 }: Props) {
   const camera = useRcbCamera();
+  const dpr = useRcbDevicePixelRatio();
   const { moving, efficientZoom } = useRcbCameraMotion();
   const viewportEl = useRcbViewportEl();
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -278,13 +279,15 @@ function RcbShapesLayer({
     }
     if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
     const pad = 2;
-    return {
-      minX: toDomPrecision(minX - pad),
-      minY: toDomPrecision(minY - pad),
-      w: toDomPrecision(Math.max(1, maxX - minX + pad * 2)),
-      h: toDomPrecision(Math.max(1, maxY - minY + pad * 2)),
+    const raw = {
+      left: toDomPrecision(minX - pad),
+      top: toDomPrecision(minY - pad),
+      width: toDomPrecision(Math.max(1, maxX - minX + pad * 2)),
+      height: toDomPrecision(Math.max(1, maxY - minY + pad * 2)),
     };
-  }, [document, proxyIds, hiddenNodeId]);
+    const s = snapSvgSurfaceBox(raw, camera, dpr);
+    return { minX: s.left, minY: s.top, w: s.width, h: s.height };
+  }, [document, proxyIds, hiddenNodeId, camera.x, camera.y, camera.zoom, dpr]);
 
   if (!document || !visibleIds.length) return null;
 
@@ -299,16 +302,20 @@ function RcbShapesLayer({
       {lodViewport ? (
         <svg
           data-rcb-lod-layer="1"
+          data-rcb-infinite="1"
           className="pointer-events-none absolute overflow-visible"
           width={lodViewport.w}
           height={lodViewport.h}
           viewBox={`${lodViewport.minX} ${lodViewport.minY} ${lodViewport.w} ${lodViewport.h}`}
+          preserveAspectRatio="none"
           style={{
             left: lodViewport.minX,
             top: lodViewport.minY,
             width: lodViewport.w,
             height: lodViewport.h,
             overflow: 'visible',
+            display: 'block',
+            shapeRendering: 'geometricPrecision',
           }}
           aria-hidden
         >

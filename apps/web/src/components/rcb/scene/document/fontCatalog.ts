@@ -135,24 +135,24 @@ async function loadCatalogFromApi(): Promise<FontFamilyNode[]> {
   return normalizeCatalog(page.items || []);
 }
 
+async function loadFontCatalogOnce(): Promise<FontFamilyNode[]> {
+  try {
+    const data = await loadCatalogFromApi().catch(() => [] as FontFamilyNode[]);
+    catalogCache = data;
+    if (data.length) injectFontFaces(data);
+    return data;
+  } catch {
+    catalogCache = [];
+    return [];
+  } finally {
+    loadPromise = null;
+  }
+}
+
 export async function loadFontCatalog(): Promise<FontFamilyNode[]> {
   if (catalogCache) return catalogCache;
   if (loadPromise) return loadPromise;
-
-  loadPromise = (async () => {
-    try {
-      const data = await loadCatalogFromApi().catch(() => [] as FontFamilyNode[]);
-      catalogCache = data;
-      if (data.length) injectFontFaces(data);
-      return data;
-    } catch {
-      catalogCache = [];
-      return [];
-    } finally {
-      loadPromise = null;
-    }
-  })();
-
+  loadPromise = loadFontCatalogOnce();
   return loadPromise;
 }
 

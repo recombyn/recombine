@@ -194,118 +194,6 @@ function translatePathD(d: string, dx: number, dy: number): string | null {
   );
 }
 
-/**
- * Rasterize an SVG stroke and vectorize the silhouette — fallback only.
- * Prefer `outlineFromSvgStroke` (geometric) for line/pen/pencil/arrow.
- */
-function outlineFromSvgStrokeRaster(opts: {
-  pathD: string;
-  strokeWidth: number;
-  linecap?: CanvasLineCap;
-  linejoin?: CanvasLineJoin;
-  fillColor: string;
-}): OutlineResult | null {
-  if (typeof document === 'undefined') return null;
-  const raw = String(opts.pathD || '').trim();
-  const sw = Math.max(0.5, Number(opts.strokeWidth) || 1);
-  if (!raw) return null;
-
-  const bb = pathDBounds(raw);
-  if (!bb) return null;
-  const pad = sw / 2 + 3;
-  // Higher scale keeps round caps/joins from collapsing into right angles after simplify.
-  const scale = 6;
-  const localW = bb.width + pad * 2;
-  const localH = bb.height + pad * 2;
-  const cw = Math.max(8, Math.ceil(localW * scale));
-  const ch = Math.max(8, Math.ceil(localH * scale));
-  // Cap raster size — very long strokes still outline, just slightly coarser.
-  const maxSide = 4096;
-  const scaleX = cw > maxSide ? maxSide / cw : 1;
-  const scaleY = ch > maxSide ? maxSide / ch : 1;
-  const fit = Math.min(scaleX, scaleY);
-  const rw = Math.max(8, Math.ceil(cw * fit));
-  const rh = Math.max(8, Math.ceil(ch * fit));
-  const rasterScale = scale * fit;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = rw;
-  canvas.height = rh;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-
-  ctx.clearRect(0, 0, rw, rh);
-  ctx.save();
-  ctx.scale(rasterScale, rasterScale);
-  // Draw in pad-shifted space without rewriting path `d` (supports relative cmds).
-  ctx.translate(-(bb.minX - pad), -(bb.minY - pad));
-  ctx.strokeStyle = '#000';
-  ctx.fillStyle = 'transparent';
-  ctx.lineWidth = sw;
-  ctx.lineCap = opts.linecap || 'round';
-  ctx.lineJoin = opts.linejoin || 'round';
-  ctx.miterLimit = 10;
-  try {
-    ctx.stroke(new Path2D(raw));
-  } catch {
-    ctx.restore();
-    return null;
-  }
-  ctx.restore();
-
-  const { data } = ctx.getImageData(0, 0, rw, rh);
-  const solid = (x: number, y: number) => {
-    if (x < 0 || y < 0 || x >= rw || y >= rh) return false;
-    return data[(y * rw + x) * 4 + 3] > 24;
-  };
-
-  const outside = markOutsideEmpty(solid, rw, rh);
-  const outer = traceContoursInRegion(solid, rw, rh);
-  const hole = traceContoursInRegion(
-    (x, y) => {
-      if (x < 0 || y < 0 || x >= rw || y >= rh) return false;
-      return !solid(x, y) && !outside[y * rw + x];
-    },
-    rw,
-    rh
-  );
-  // Prefer the largest outer ring — tiny noise contours looked like “extra pieces”.
-  const outerSorted = [...outer].sort((a, b) => b.length - a.length);
-  const mainOuter = outerSorted[0] ? [outerSorted[0]] : [];
-  const contours = [...mainOuter, ...hole];
-  if (!contours.length) return null;
-
-  // Keep round caps/joins: small RDP eps + corner-aware cap (large eps used to
-  // turn round ends into right angles and leave verts that look “floated”).
-  const roundish =
-    (opts.linecap || 'round') === 'round' || (opts.linejoin || 'round') === 'round';
-  const maxPts = roundish ? 72 : 48;
-  const epsilon = roundish
-    ? Math.max(0.28, Math.min(0.9, sw * 0.06))
-    : Math.max(0.55, sw * 0.14);
-
-  const parts: string[] = [];
-  for (const pts of contours) {
-    const world: Array<[number, number]> = [];
-    for (const [px, py] of pts) {
-      world.push([px / rasterScale - pad + bb.minX, py / rasterScale - pad + bb.minY]);
-    }
-    const simplified = simplifyClosedPolylineCornerAware(world, epsilon, maxPts);
-    if (simplified.length < 3) continue;
-    parts.push(
-      `M ${simplified.map(([a, b]) => `${a.toFixed(2)} ${b.toFixed(2)}`).join(' L ')} Z`
-    );
-  }
-  if (!parts.length) return null;
-
-  return {
-    pathD: parts.join(' '),
-    closed: true,
-    fillColor: opts.fillColor,
-    fillRule: hole.length ? 'evenodd' : 'nonzero',
-  };
-}
-
 function dedupePolylinePts(
   pts: Array<[number, number]>,
   eps = 0.05
@@ -472,9 +360,11 @@ function intersectOffsetLines(
 }
 
 /**
- * Round cap/join as sparse L samples on the circle.
- * - No cubics: path-edit was littered with diamond handles that looked “floated”.
- * - `outward` selects the exterior arc (CCW-always made scalloped/bow-tie ends).
+ * Round cap/join as L samples on the circle (no cubics — path-edit diamonds looked floated).
+ * `outward` picks the exterior arc (CCW-always scalloped / bow-tie ends).
+ *
+ * Step size must stay fine on thick strokes: ~60° samples made a semicircle look like
+ * a triangle (fig.1 round tip → fig.2 needle with tip + two shoulder knobs).
  */
 function appendCircularArcPolyline(
   parts: string[],
@@ -508,7 +398,7 @@ function appendCircularArcPolyline(
     return;
   }
 
-  // ~60° per sample — semicircle tip ≈ 3 verts (fig.2 sparse, not bead string).
+  // ~60° / sample → semicircle ≈ 3 verts (corner knobs, not a bead arc).
   const steps = Math.max(1, Math.ceil(Math.abs(delta) / (Math.PI / 3) - 1e-6));
   for (let s = 1; s <= steps; s += 1) {
     const ang = a0 + (delta * s) / steps;
@@ -518,30 +408,130 @@ function appendCircularArcPolyline(
   }
 }
 
-/** Collapse dense freehand/pen samples so outline stays fig.2-sparse. */
-function sparsifyStrokeCenterline(
+/** Collapse centerline so geometric offset stays stable (no fold needles).
+ * Always enforce seg ≳ half-width — long zigzags were the main spike source.
+ */
+function prepareStrokeCenterline(
   ptsIn: Array<[number, number]>,
   strokeWidth: number
 ): Array<[number, number]> {
-  const minGap = Math.max(0.4, strokeWidth * 0.06);
-  const cleaned = dedupePolylinePts(ptsIn, minGap);
-  if (cleaned.length <= 3) return cleaned;
-  const eps = Math.max(1.1, strokeWidth * 0.4);
+  const half = Math.max(0.5, strokeWidth / 2);
+  const minGap = Math.max(0.85, half * 0.5);
+  const cleaned = dedupePolylinePts(ptsIn, minGap * 0.35);
+  if (cleaned.length <= 2) return cleaned.length >= 2 ? cleaned : ptsIn.slice(0, 2);
+  if (cleaned.length === 3) return enforceMinSegLength(cleaned, minGap);
+
+  const eps = Math.max(0.9, half * 0.35);
   let out = simplifyRdp(cleaned, eps);
-  const maxPts = 28;
+  const maxPts = 24;
   if (out.length > maxPts) {
     let e = eps;
-    for (let g = 0; g < 8 && out.length > maxPts; g += 1) {
+    for (let g = 0; g < 10 && out.length > maxPts; g += 1) {
       e *= 1.35;
       out = simplifyRdp(cleaned, e);
     }
   }
+  out = enforceMinSegLength(out.length >= 2 ? out : cleaned, minGap);
   return out.length >= 2 ? out : cleaned.slice(0, 2);
 }
 
 /**
+ * Join policy for clean corner knobs:
+ * - short simple polylines: keep requested miter/round
+ * - long / many folds: bevel (accurate ribbon, no miter spikes)
+ */
+function strokeJoinForCenterline(
+  pts: Array<[number, number]>,
+  requested: CanvasLineJoin
+): CanvasLineJoin {
+  if (requested === 'bevel') return 'bevel';
+  if (pts.length >= 5) return 'bevel';
+  return requested;
+}
+
+/** Merge consecutive verts closer than `minLen` (keep endpoints). */
+function enforceMinSegLength(
+  pts: Array<[number, number]>,
+  minLen: number
+): Array<[number, number]> {
+  if (pts.length <= 2) return pts;
+  const out: Array<[number, number]> = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i += 1) {
+    const prev = out[out.length - 1];
+    const p = pts[i];
+    if (Math.hypot(p[0] - prev[0], p[1] - prev[1]) >= minLen) out.push(p);
+  }
+  const last = pts[pts.length - 1];
+  const prev = out[out.length - 1];
+  if (Math.hypot(last[0] - prev[0], last[1] - prev[1]) < minLen && out.length > 1) {
+    out[out.length - 1] = last;
+  } else if (Math.hypot(last[0] - prev[0], last[1] - prev[1]) >= 1e-6) {
+    out.push(last);
+  }
+  return out.length >= 2 ? out : pts.slice(0, 2);
+}
+
+/**
+ * Drop needle / hairline tips on a closed outline (self-crossed offset leftovers).
+ * A vert is a needle when both adjacent edges are short and the turn is ~flat back.
+ * Do not treat dense round-cap samples (short chords, gentle turn) as needles.
+ */
+function stripOutlineNeedles(
+  ptsIn: Array<[number, number]>,
+  strokeWidth: number
+): Array<[number, number]> {
+  if (ptsIn.length < 4) return ptsIn;
+  // Only true spikes (≪ half-width); round-cap chords are ~3–4px and must stay.
+  const minEdge = Math.max(0.8, strokeWidth * 0.12);
+  let pts = ptsIn.slice();
+  let guard = 0;
+  while (guard < 24) {
+    guard += 1;
+    const n = pts.length;
+    if (n < 4) break;
+    let removed = false;
+    const next: Array<[number, number]> = [];
+    for (let i = 0; i < n; i += 1) {
+      const prev = pts[(i - 1 + n) % n];
+      const curr = pts[i];
+      const nxt = pts[(i + 1) % n];
+      const d0 = Math.hypot(curr[0] - prev[0], curr[1] - prev[1]);
+      const d1 = Math.hypot(nxt[0] - curr[0], nxt[1] - curr[1]);
+      if (d0 < minEdge && d1 < minEdge) {
+        const ax = curr[0] - prev[0];
+        const ay = curr[1] - prev[1];
+        const bx = nxt[0] - curr[0];
+        const by = nxt[1] - curr[1];
+        const la = d0 || 1;
+        const lb = d1 || 1;
+        const dot = (ax / la) * (bx / lb) + (ay / la) * (by / lb);
+        // Sharp reverse / hairline spike (not a gentle round-cap turn).
+        if (dot < -0.45) {
+          removed = true;
+          continue;
+        }
+      }
+      next.push(curr);
+    }
+    if (!removed || next.length < 3) break;
+    pts = next;
+  }
+  return pts.length >= 3 ? pts : ptsIn;
+}
+
+function closedPathDFromPts(pts: Array<[number, number]>): string {
+  if (pts.length < 3) return '';
+  return `M ${pts.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join(' L ')} Z`;
+}
+
+function parseClosedOutlineVerts(d: string): Array<[number, number]> | null {
+  const linear = polylineVertsFromLinearPath(String(d || '').replace(/[Zz]\s*$/i, ''));
+  return linear && linear.length >= 3 ? linear : null;
+}
+
+/**
  * Uniform-width stroke outline of a polyline.
- * Round caps/joins = sparse L on the silhouette (no cubic handle clutter).
+ * Prepares centerline once, then offsets (bevel on long folds).
  */
 function outlinePolylineStroke(
   ptsIn: Array<[number, number]>,
@@ -549,8 +539,9 @@ function outlinePolylineStroke(
   linecap: CanvasLineCap = 'round',
   linejoin: CanvasLineJoin = 'round'
 ): string | null {
-  const pts = sparsifyStrokeCenterline(ptsIn, strokeWidth);
+  const pts = prepareStrokeCenterline(ptsIn, strokeWidth);
   if (pts.length < 2) return null;
+  const join = strokeJoinForCenterline(pts, linejoin);
   const half = Math.max(0.25, strokeWidth / 2);
   const n = pts.length;
 
@@ -575,9 +566,47 @@ function outlinePolylineStroke(
   if (!segs.length) return null;
 
   const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx;
+  // Skip near-duplicate verts so path-edit does not show stacked / “floated” knobs.
+  // Keep below half-width so butt short-sides (length = strokeWidth) are not dropped.
+  const mergeEps = Math.max(0.2, Math.min(0.85, half * 0.15));
+  let curX = segs[0].l0[0];
+  let curY = segs[0].l0[1];
+  const parts: string[] = [`M ${curX.toFixed(2)} ${curY.toFixed(2)}`];
+  const emitL = (x: number, y: number) => {
+    if (Math.hypot(x - curX, y - curY) < mergeEps) return;
+    parts.push(`L ${x.toFixed(2)} ${y.toFixed(2)}`);
+    curX = x;
+    curY = y;
+  };
+  /** Exterior miter: replace the just-emitted offset end (`from`) with the tip. */
+  const replaceCursorWith = (x: number, y: number) => {
+    if (parts.length <= 1) {
+      parts[0] = `M ${x.toFixed(2)} ${y.toFixed(2)}`;
+    } else {
+      parts[parts.length - 1] = `L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }
+    curX = x;
+    curY = y;
+  };
+  const emitArc = (
+    center: [number, number],
+    from: [number, number],
+    to: [number, number],
+    outward: [number, number]
+  ) => {
+    const before = parts.length;
+    appendCircularArcPolyline(parts, center, from, to, half, outward);
+    for (let i = parts.length - 1; i >= before; i -= 1) {
+      const m = /^L\s+(-?[\d.]+)\s+(-?[\d.]+)/.exec(parts[i]);
+      if (m) {
+        curX = parseFloat(m[1]);
+        curY = parseFloat(m[2]);
+        break;
+      }
+    }
+  };
 
   const appendJoin = (
-    parts: string[],
     vertex: [number, number],
     from: [number, number],
     to: [number, number],
@@ -591,88 +620,80 @@ function outlinePolylineStroke(
     const vy1 = to[1] - vertex[1];
     const cr = cross(vx0, vy0, vx1, vy1);
     const exterior = leftSide ? cr > 1e-8 : cr < -1e-8;
-    if (!exterior || linejoin === 'bevel') {
-      parts.push(`L ${to[0].toFixed(2)} ${to[1].toFixed(2)}`);
+    if (!exterior || join === 'bevel') {
+      emitL(to[0], to[1]);
       return;
     }
-    if (linejoin === 'miter') {
+    if (join === 'miter') {
       const tip = leftSide
         ? intersectOffsetLines(prevSeg.l0, prevSeg.l1, nextSeg.l0, nextSeg.l1)
         : intersectOffsetLines(prevSeg.r0, prevSeg.r1, nextSeg.r0, nextSeg.r1);
       if (tip) {
         const miterLen = Math.hypot(tip[0] - vertex[0], tip[1] - vertex[1]);
-        if (miterLen <= half * 4 + 1e-6) {
-          parts.push(`L ${tip[0].toFixed(2)} ${tip[1].toFixed(2)}`);
-          parts.push(`L ${to[0].toFixed(2)} ${to[1].toFixed(2)}`);
+        // Tight limit (~SVG 2.5): longer tips become needles on acute folds.
+        if (miterLen <= half * 2.5 + 1e-6) {
+          if (Math.hypot(curX - from[0], curY - from[1]) < mergeEps * 4) {
+            replaceCursorWith(tip[0], tip[1]);
+          } else {
+            emitL(tip[0], tip[1]);
+          }
           return;
         }
       }
-      parts.push(`L ${to[0].toFixed(2)} ${to[1].toFixed(2)}`);
+      emitL(to[0], to[1]);
       return;
     }
-    // Exterior round join — bisector of chord ends points outward.
     const len0 = Math.hypot(vx0, vy0) || 1;
     const len1 = Math.hypot(vx1, vy1) || 1;
-    appendCircularArcPolyline(parts, vertex, from, to, half, [
-      vx0 / len0 + vx1 / len1,
-      vy0 / len0 + vy1 / len1,
-    ]);
+    emitArc(vertex, from, to, [vx0 / len0 + vx1 / len1, vy0 / len0 + vy1 / len1]);
   };
 
-  const parts: string[] = [
-    `M ${segs[0].l0[0].toFixed(2)} ${segs[0].l0[1].toFixed(2)}`,
-  ];
   for (let i = 0; i < segs.length; i += 1) {
     const seg = segs[i];
     if (i > 0) {
-      appendJoin(parts, pts[i], segs[i - 1].l1, seg.l0, true, segs[i - 1], seg);
+      appendJoin(pts[i], segs[i - 1].l1, seg.l0, true, segs[i - 1], seg);
     }
-    parts.push(`L ${seg.l1[0].toFixed(2)} ${seg.l1[1].toFixed(2)}`);
+    emitL(seg.l1[0], seg.l1[1]);
   }
 
   const end = pts[n - 1];
   const last = segs[segs.length - 1];
   if (linecap === 'round') {
     const [tx, ty] = segUnitTangent(end[0] - pts[n - 2][0], end[1] - pts[n - 2][1]);
-    appendCircularArcPolyline(parts, end, last.l1, last.r1, half, [tx, ty]);
+    emitArc(end, last.l1, last.r1, [tx, ty]);
   } else if (linecap === 'square') {
     const [tx, ty] = segUnitTangent(end[0] - pts[n - 2][0], end[1] - pts[n - 2][1]);
-    parts.push(
-      `L ${(last.l1[0] + tx * half).toFixed(2)} ${(last.l1[1] + ty * half).toFixed(2)}`
-    );
-    parts.push(
-      `L ${(last.r1[0] + tx * half).toFixed(2)} ${(last.r1[1] + ty * half).toFixed(2)}`
-    );
+    emitL(last.l1[0] + tx * half, last.l1[1] + ty * half);
+    emitL(last.r1[0] + tx * half, last.r1[1] + ty * half);
   } else {
-    parts.push(`L ${last.r1[0].toFixed(2)} ${last.r1[1].toFixed(2)}`);
+    emitL(last.r1[0], last.r1[1]);
   }
 
   for (let i = segs.length - 1; i >= 0; i -= 1) {
     const seg = segs[i];
     if (i < segs.length - 1) {
-      appendJoin(parts, pts[i + 1], segs[i + 1].r0, seg.r1, false, segs[i + 1], seg);
+      appendJoin(pts[i + 1], segs[i + 1].r0, seg.r1, false, segs[i + 1], seg);
     }
-    parts.push(`L ${seg.r0[0].toFixed(2)} ${seg.r0[1].toFixed(2)}`);
+    emitL(seg.r0[0], seg.r0[1]);
   }
 
   const start = pts[0];
   const first = segs[0];
   if (linecap === 'round') {
     const [tx, ty] = segUnitTangent(pts[1][0] - start[0], pts[1][1] - start[1]);
-    // Outward at start = opposite travel direction.
-    appendCircularArcPolyline(parts, start, first.r0, first.l0, half, [-tx, -ty]);
+    emitArc(start, first.r0, first.l0, [-tx, -ty]);
   } else if (linecap === 'square') {
     const [tx, ty] = segUnitTangent(pts[1][0] - start[0], pts[1][1] - start[1]);
-    parts.push(
-      `L ${(first.r0[0] - tx * half).toFixed(2)} ${(first.r0[1] - ty * half).toFixed(2)}`
-    );
-    parts.push(
-      `L ${(first.l0[0] - tx * half).toFixed(2)} ${(first.l0[1] - ty * half).toFixed(2)}`
-    );
+    emitL(first.r0[0] - tx * half, first.r0[1] - ty * half);
+    emitL(first.l0[0] - tx * half, first.l0[1] - ty * half);
   }
 
   parts.push('Z');
-  return parts.join(' ');
+  const rawD = parts.join(' ');
+  const verts = parseClosedOutlineVerts(rawD);
+  if (!verts) return rawD;
+  const cleaned = stripOutlineNeedles(verts, strokeWidth);
+  return closedPathDFromPts(cleaned) || rawD;
 }
 
 /** Sample each SVG subpath into a polyline (absolute). */
@@ -701,7 +722,7 @@ function samplePathSubpaths(d: string, stepPx = 1.25): Array<Array<[number, numb
         const p = el.getPointAtLength((len * i) / n);
         pts.push([p.x, p.y]);
       }
-      // Curves: densify then RDP — outlinePolylineStroke sparsifies again for fig.2.
+      // Curves: sample then RDP; outlinePolylineStroke prepares again for offset.
       const cleaned = dedupePolylinePts(pts);
       const simplified =
         cleaned.length > 8
@@ -716,9 +737,9 @@ function samplePathSubpaths(d: string, stepPx = 1.25): Array<Array<[number, numb
 }
 
 /**
- * Geometric stroke → filled outline (line / pen / pencil / arrow).
- * Single subpath: sparse offset ribbon (fig.2) with round caps/joins as L arcs.
- * Multi-subpath (arrow): one canvas stroke silhouette.
+ * Stroke → filled outline (pen / line / arrow / pencil).
+ * Pure geometric offset — no raster. Clean corner knobs, no miter needles:
+ * prepare centerline (seg ≳ half-width) → offset with bevel on long folds.
  */
 function outlineFromSvgStroke(opts: {
   pathD: string;
@@ -733,18 +754,81 @@ function outlineFromSvgStroke(opts: {
   const linecap = opts.linecap || 'butt';
   const linejoin = opts.linejoin || 'miter';
 
-  const subpaths = samplePathSubpaths(raw, Math.max(0.75, Math.min(2, sw * 0.35)));
-  if (!subpaths.length) {
-    return outlineFromSvgStrokeRaster({ ...opts, linecap, linejoin });
-  }
+  const finish = (d: string | null): OutlineResult | null => {
+    if (!d) return null;
+    const cleaned = sparsifyOutlineForEdit(d, sw) || d;
+    return { pathD: cleaned, closed: true, fillColor: opts.fillColor };
+  };
 
-  if (subpaths.length > 1) {
-    return outlineFromSvgStrokeRaster({ ...opts, linecap, linejoin });
-  }
+  // M/L corners as-is; curves → sparse polyline, then the same geometric offset.
+  const subpaths = samplePathSubpaths(raw, Math.max(1.5, Math.min(4, sw * 0.5)));
+  if (!subpaths.length) return null;
 
-  const d = outlinePolylineStroke(subpaths[0], sw, linecap, linejoin);
-  if (!d) return outlineFromSvgStrokeRaster({ ...opts, linecap, linejoin });
-  return { pathD: d, closed: true, fillColor: opts.fillColor };
+  const parts: OutlineResult[] = [];
+  for (const pts of subpaths) {
+    const d = outlinePolylineStroke(pts, sw, linecap, linejoin);
+    if (d) {
+      parts.push({ pathD: d, closed: true, fillColor: opts.fillColor });
+    }
+  }
+  if (!parts.length) return null;
+  if (parts.length === 1) return finish(parts[0].pathD);
+
+  // Arrow etc.: union geometric ribbons (still no raster).
+  const u = unionOutlineResults(parts, opts.fillColor);
+  return u ? finish(u.pathD) : finish(parts.map((p) => p.pathD).join(' '));
+}
+
+/**
+ * Drop near-duplicate / colinear verts so path-edit shows corner knobs only.
+ * Must not reshape the silhouette (no aggressive maxPts collapse).
+ */
+function sparsifyOutlineForEdit(d: string, strokeWidth: number): string | null {
+  const half = Math.max(0.5, strokeWidth / 2);
+  const mergeEps = Math.max(0.55, Math.min(1.6, half * 0.14));
+  const rdpEps = Math.max(0.45, Math.min(1.2, half * 0.12));
+
+  const rings = String(d || '')
+    .split(/(?=[Mm])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!rings.length) return null;
+  const out: string[] = [];
+  for (const ring of rings) {
+    let verts = polylineVertsFromLinearPath(ring.replace(/[Zz]\s*$/i, ''));
+    if (!verts || verts.length < 3) {
+      const sparse = sparsifyClosedPathD(ring, rdpEps, Math.max(24, verts?.length ?? 48));
+      if (sparse) out.push(sparse);
+      else out.push(ring);
+      continue;
+    }
+    const merged: Array<[number, number]> = [];
+    for (let i = 0; i < verts.length; i += 1) {
+      const p = verts[i];
+      const prev = merged[merged.length - 1];
+      if (!prev || Math.hypot(p[0] - prev[0], p[1] - prev[1]) >= mergeEps) merged.push(p);
+    }
+    if (merged.length > 2) {
+      const a = merged[0];
+      const b = merged[merged.length - 1];
+      if (Math.hypot(a[0] - b[0], a[1] - b[1]) < mergeEps) merged.pop();
+    }
+    // Colinear only — keep every real corner (no hard maxPts cull).
+    const simplified = simplifyClosedPolyline(
+      merged.length >= 3 ? merged : verts,
+      rdpEps,
+      9999,
+      rdpEps * 1.5
+    );
+    if (simplified.length < 3) {
+      out.push(ring);
+      continue;
+    }
+    out.push(
+      `M ${simplified.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join(' L ')} Z`
+    );
+  }
+  return out.length ? out.join(' ') : null;
 }
 
 /** RDP each closed subpath so boolean/raster results stay path-edit friendly. */
@@ -852,9 +936,9 @@ function readStrokeLinecap(
     const v = String(raw).toLowerCase();
     if (v === 'butt' || v === 'square' || v === 'round') return v;
   }
-  // Match create / stroke panel: pen + line → butt; pencil / arrow → round.
-  if (shapeType === 'pencil' || shapeType === 'arrow') return 'round';
-  if (shapeType === 'pen' || shapeType === 'line') return 'butt';
+  // Match create / stroke panel: pen + line + arrow → butt; pencil → round.
+  if (shapeType === 'pencil') return 'round';
+  if (shapeType === 'pen' || shapeType === 'line' || shapeType === 'arrow') return 'butt';
   return 'butt';
 }
 
@@ -867,8 +951,8 @@ function readStrokeLinejoin(
     const v = String(raw).toLowerCase();
     if (v === 'bevel' || v === 'miter' || v === 'round') return v;
   }
-  if (shapeType === 'pencil' || shapeType === 'arrow') return 'round';
-  if (shapeType === 'pen' || shapeType === 'line') return 'miter';
+  if (shapeType === 'pencil') return 'round';
+  if (shapeType === 'pen' || shapeType === 'line' || shapeType === 'arrow') return 'miter';
   return 'miter';
 }
 
@@ -914,7 +998,8 @@ function simplifyRdp(pts: Array<[number, number]>, epsilon: number): Array<[numb
 function simplifyClosedPolyline(
   pts: Array<[number, number]>,
   epsilon: number,
-  maxPts: number
+  maxPts: number,
+  maxEpsilon?: number
 ): Array<[number, number]> {
   if (pts.length < 3) return pts.slice();
   let ring = pts;
@@ -925,38 +1010,54 @@ function simplifyClosedPolyline(
   }
   if (ring.length < 3) return pts.slice();
 
-  let out = simplifyRdp(ring.concat([ring[0]]), epsilon);
-  if (out.length >= 2) {
-    const f = out[0];
-    const l = out[out.length - 1];
-    if (Math.hypot(f[0] - l[0], f[1] - l[1]) < 1e-6) out = out.slice(0, -1);
-  }
+  const closeRing = (arr: Array<[number, number]>) => {
+    if (arr.length < 2) return arr;
+    const f = arr[0];
+    const l = arr[arr.length - 1];
+    if (Math.hypot(f[0] - l[0], f[1] - l[1]) < 1e-6) return arr.slice(0, -1);
+    return arr;
+  };
+
+  let out = closeRing(simplifyRdp(ring.concat([ring[0]]), epsilon));
   if (out.length > maxPts) {
-    // Re-RDP with a larger epsilon instead of uniform stride (stride collapsed
-    // thin stroke ribbons into wedges — one end became a single point).
+    // Grow eps only up to maxEpsilon — unbounded growth collapsed thin ribbons
+    // into wedges / digons (line vanished; ends became needles).
+    const epsCap = maxEpsilon ?? Math.max(epsilon * 4, epsilon + 0.5);
     let eps = epsilon;
     let guarded = 0;
-    while (out.length > maxPts && guarded < 12) {
-      eps *= 1.45;
-      out = simplifyRdp(ring.concat([ring[0]]), eps);
-      if (out.length >= 2) {
-        const f = out[0];
-        const l = out[out.length - 1];
-        if (Math.hypot(f[0] - l[0], f[1] - l[1]) < 1e-6) out = out.slice(0, -1);
-      }
+    while (out.length > maxPts && guarded < 12 && eps < epsCap - 1e-6) {
+      eps = Math.min(epsCap, eps * 1.35);
+      out = closeRing(simplifyRdp(ring.concat([ring[0]]), eps));
       guarded += 1;
     }
     if (out.length > maxPts) {
-      // Last resort: keep evenly spaced but always retain first point.
-      const stride = Math.ceil(out.length / maxPts);
-      const capped: Array<[number, number]> = [];
-      for (let i = 0; i < out.length; i += stride) capped.push(out[i]);
-      const last = out[out.length - 1];
-      const prev = capped[capped.length - 1];
-      if (!prev || Math.hypot(prev[0] - last[0], prev[1] - last[1]) > 1e-6) {
-        capped.push(last);
+      // Drop least-turny verts (preserve butt corners / round-cap samples).
+      const turnMag = (i: number) => {
+        const n = out.length;
+        const prev = out[(i - 1 + n) % n];
+        const curr = out[i];
+        const next = out[(i + 1) % n];
+        const ax = curr[0] - prev[0];
+        const ay = curr[1] - prev[1];
+        const bx = next[0] - curr[0];
+        const by = next[1] - curr[1];
+        const la = Math.hypot(ax, ay) || 1;
+        const lb = Math.hypot(bx, by) || 1;
+        const dot = Math.max(-1, Math.min(1, (ax / la) * (bx / lb) + (ay / la) * (by / lb)));
+        return Math.acos(dot);
+      };
+      while (out.length > maxPts && out.length > 3) {
+        let minI = 0;
+        let minTurn = Infinity;
+        for (let i = 0; i < out.length; i += 1) {
+          const t = turnMag(i);
+          if (t < minTurn) {
+            minTurn = t;
+            minI = i;
+          }
+        }
+        out = out.filter((_, i) => i !== minI);
       }
-      out = capped;
     }
   }
   return out.length >= 3 ? out : ring.slice(0, Math.min(ring.length, maxPts));
@@ -1116,19 +1217,12 @@ function outlinePencilLocal(node: any): OutlineResult | null {
     });
   }
 
-  // Match sceneToSvg: pencil ink is a stroked centerline, not freehand fill.
-  // Dense freehand verts → shatter on offset; RDP first so outline stays sparse (fig.2).
+  // Match sceneToSvg: centerline + SVG stroke → one raster silhouette (shared with pen/line).
   const rawPts = parseSimplePathPoints(raw);
-  let pts = rawPts;
-  if (rawPts.length >= 2) {
-    const tuples: Array<[number, number]> = rawPts.map((p) => [p.x, p.y]);
-    const simplified = simplifyRdp(tuples, Math.max(1.25, inkW * 0.4));
-    pts =
-      simplified.length >= 2
-        ? simplified.map(([x, y]) => ({ x, y }))
-        : rawPts;
-  }
-  const centerline = pts.length >= 2 ? polylinePathD(pts) : raw;
+  const centerline =
+    rawPts.length >= 2
+      ? polylinePathD(rawPts)
+      : raw;
   return withBakedNodeAngle(
     node,
     outlineFromSvgStroke({
@@ -1641,11 +1735,8 @@ export function outlineNodePatch(node: any, outline: OutlineResult) {
       prev['stroke-enabled'] = 'false';
       prev['stroke-visible'] = 'false';
       prev['border-width'] = 0;
-    } else {
-      // Path AABB is tight; outside stroke underlays often clip (esp. left edge).
-      prev.strokeAlign = 'center';
-      prev['stroke-align'] = 'center';
     }
+    // Keep strokeAlign as-is (do not force center — outside→center looks thinner).
   }
   // Rotation baked into pathD for every shape (line/arrow/rect/…).
   if (outline.bakeAngle) {
