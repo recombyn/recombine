@@ -6,7 +6,7 @@ Infinite canvas, multi artboards, vector / bitmap mix; select, shapes, pen, brus
 
 ## Three chat modes
 
-**Agent** / **Ask** / **Image**, with checkpoints and history restore. Auto: Standard / Pro / Max / Custom lanes; members can add third-party models. See [Using Agent](/guide/agent).
+**Agent** / **Ask** / **Image**, with checkpoints, history restore, and pause / resume on long runs. Auto: Standard / Pro / Max / Custom lanes; members can add third-party models. See [Using Agent](/guide/agent).
 
 ## Image generation & edit
 

@@ -56,17 +56,47 @@ import {
   stampSizeForBrush,
   stampSpacingForBrush,
 } from '@/components/rcb/tools/pencilBrushes';
-import { applyFrameContentClip } from '@/components/rcb/frames/frameContentClip';
+import { applyFrameContentClip, detachSceneNodeEl } from '@/components/rcb/frames/frameContentClip';
 import { getTintedStampSrc } from '@/components/rcb/tools/stampTint';
 import { strokeDashForStyle } from '../document/sceneStrokeStyle';
+import type { RcbCamera } from '@/components/rcb/core/types';
 
 const TRANSPARENT_PIXEL_SRC =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+/**
+ * Kept for call-site compatibility (RcbCanvas / host remount). Surface boxes no
+ * longer depend on live camera/DPR — see snapSurfaceBox.
+ */
+export function setInfiniteSvgPaintCamera(_camera: RcbCamera, _dpr?: number) {
+  void _camera;
+  void _dpr;
+}
 
 let clipSeq = 0;
 function nextClipId(prefix: string) {
   clipSeq += 1;
   return `${prefix}-${clipSeq}`;
+}
+
+/** Normalized crop rect from node attrs, or null when full-bleed / invalid. */
+function readNodeCropNorm(node: any): { x: number; y: number; w: number; h: number } | null {
+  const fx = Number(node?.attrs?.cropX);
+  const fy = Number(node?.attrs?.cropY);
+  const fw = Number(node?.attrs?.cropW);
+  const fh = Number(node?.attrs?.cropH);
+  if (
+    Number.isFinite(fx) &&
+    Number.isFinite(fy) &&
+    Number.isFinite(fw) &&
+    Number.isFinite(fh) &&
+    fw > 0 &&
+    fh > 0 &&
+    (fx !== 0 || fy !== 0 || fw !== 1 || fh !== 1)
+  ) {
+    return { x: fx, y: fy, w: fw, h: fh };
+  }
+  return null;
 }
 
 function num(v: any, fallback = 0) {
@@ -613,12 +643,12 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
     align: 'center',
     linecap: hasCapAttr
       ? strokeFull.linecap
-      : shapeType === 'pencil' || shapeType === 'arrow'
+      : shapeType === 'pencil'
         ? 'round'
         : strokeFull.linecap,
     linejoin: hasJoinAttr
       ? strokeFull.linejoin
-      : shapeType === 'pencil' || shapeType === 'arrow'
+      : shapeType === 'pencil'
         ? 'round'
         : strokeFull.linejoin,
   };
@@ -1057,7 +1087,7 @@ export async function nodeToSvgElement(
         width: isGen ? 1 : 1.5,
         dasharray: isGen ? undefined : '6 4',
       });
-      setAttrs(plate, { 'data-radius-body': '1' });
+      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
       if (isGen) {
         // Solid landscape glyph (sun + two peaks) — flat fill, no frame.
         // Scale with the plate (~34% of the shorter side); no tiny absolute cap.
@@ -1130,7 +1160,11 @@ export async function nodeToSvgElement(
         const overlay = appendChild(g, svgEl('path', { d: clipD }));
         setFill(overlay, 'rgba(185, 203, 218, 0.28)');
         setStroke(overlay, { color: '#A8C5E4', width: 1.5 });
-        setAttrs(overlay, { 'pointer-events': 'none', 'data-radius-body': '1' });
+        setAttrs(overlay, {
+          'pointer-events': 'none',
+          'data-radius-body': '1',
+          'data-baseline': '1',
+        });
       } else {
         const gid = nextClipId('img-load');
         const defs = ensureDefs(root);
@@ -1148,7 +1182,7 @@ export async function nodeToSvgElement(
         const plate = appendChild(g, svgEl('path', { d: clipD }));
         setFill(plate, urlRef(gid));
         setStroke(plate, { color: '#A8C5E4', width: 1.5 });
-        setAttrs(plate, { 'data-radius-body': '1' });
+        setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
       }
 
       tagNode(g, nodeId, 'image', undefined, left, top, boxW, boxH);
@@ -1183,6 +1217,17 @@ export async function nodeToSvgElement(
     setAttrs(img, { 'clip-path': urlRef(clipId) });
     setAttrs(g, { 'data-radius-clip-id': clipId });
     (g as any).__sceneCornerRadii = { ...cornerR };
+    // Invisible baseline for host-mirrored selection chrome (clip path lives in defs).
+    appendChild(
+      g,
+      svgEl('path', {
+        d: clipD,
+        fill: 'none',
+        stroke: 'none',
+        'pointer-events': 'none',
+        'data-baseline': '1',
+      })
+    );
     tagNode(g, nodeId, 'image', undefined, left, top, boxW, boxH);
     if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
     applyMeta(g, left, top, meta, boxW, boxH);
@@ -1219,7 +1264,7 @@ export async function nodeToSvgElement(
         width: isGen ? 1 : 1.5,
         dasharray: isGen ? undefined : '6 4',
       });
-      setAttrs(plate, { 'data-radius-body': '1' });
+      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
       if (isGen) {
         // Soft play triangle only — no frame / plus.
         const iconSize = Math.max(72, Math.min(boxW, boxH) * 0.34);
@@ -1282,24 +1327,7 @@ export async function nodeToSvgElement(
     const g = appendChild(parent, svgEl('g'));
     // Live pixels are HTML <video> on the world layer; SVG holds the poster
     // (export / transform underlay).
-    const crop = (() => {
-      const fx = Number(node.attrs?.cropX);
-      const fy = Number(node.attrs?.cropY);
-      const fw = Number(node.attrs?.cropW);
-      const fh = Number(node.attrs?.cropH);
-      if (
-        Number.isFinite(fx) &&
-        Number.isFinite(fy) &&
-        Number.isFinite(fw) &&
-        Number.isFinite(fh) &&
-        fw > 0 &&
-        fh > 0 &&
-        (fx !== 0 || fy !== 0 || fw !== 1 || fh !== 1)
-      ) {
-        return { x: fx, y: fy, w: fw, h: fh };
-      }
-      return null;
-    })();
+    const crop = readNodeCropNorm(node);
     if (poster) {
       const imgW = crop ? boxW / crop.w : boxW;
       const imgH = crop ? boxH / crop.h : boxH;
@@ -1327,10 +1355,22 @@ export async function nodeToSvgElement(
       const plate = appendChild(g, svgEl('path', { d: clipD }));
       setFill(plate, '#111827');
       setStroke(plate, 'none');
-      setAttrs(plate, { 'data-radius-body': '1' });
+      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
     }
     void src;
     (g as any).__sceneCornerRadii = { ...cornerR };
+    if (poster) {
+      appendChild(
+        g,
+        svgEl('path', {
+          d: clipD,
+          fill: 'none',
+          stroke: 'none',
+          'pointer-events': 'none',
+          'data-baseline': '1',
+        })
+      );
+    }
     tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
     if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
     applyMeta(g, left, top, meta, boxW, boxH);
@@ -1374,18 +1414,51 @@ function quantInfiniteScene(n: number) {
   return Math.round(n * 1e4) / 1e4;
 }
 
-/** Apply a known scene AABB as the infinite SVG CSS box + viewBox (pre-paint). */
-export function seedInfiniteSvgViewport(
+type ViewportBox = { minX: number; minY: number; w: number; h: number };
+
+/**
+ * Quantize infinite-SVG CSS box === viewBox onto the scene lattice.
+ *
+ * Do **not** device-pixel-shift per host under fractional browser DPR:
+ * each host would get a different fractional origin while the pixel grid
+ * stays on integer scene units — strokes then sit mid-cell after browser zoom.
+ * Path geometry / draw snap already own grid alignment (incl. *.5 for odd
+ * center strokes); the surface only needs stable scene quantize.
+ */
+function snapSurfaceBox(
+  box: ViewportBox,
+  _camera?: RcbCamera | null,
+  _dpr?: number
+): ViewportBox {
+  void _camera;
+  void _dpr;
+  return {
+    minX: quantInfiniteScene(box.minX),
+    minY: quantInfiniteScene(box.minY),
+    w: Math.max(1, quantInfiniteScene(box.w)),
+    h: Math.max(1, quantInfiniteScene(box.h)),
+  };
+}
+
+/** Origin-only quantize — keep size stable while panning a host. */
+function snapSurfaceOrigin(
+  minX: number,
+  minY: number,
+  _camera?: RcbCamera | null,
+  _dpr?: number
+): { minX: number; minY: number } {
+  void _camera;
+  void _dpr;
+  return { minX: quantInfiniteScene(minX), minY: quantInfiniteScene(minY) };
+}
+
+function writeInfiniteViewport(
   root: SVGSVGElement,
-  box: { left: number; top: number; width: number; height: number },
-  pad = INFINITE_SVG_PAD
+  box: ViewportBox,
+  opts?: { lock?: boolean }
 ) {
-  if (!isInfiniteSvgRoot(root)) return;
-  const minX = quantInfiniteScene(box.left - pad);
-  const minY = quantInfiniteScene(box.top - pad);
-  const w = Math.max(1, quantInfiniteScene(Math.max(1, box.width) + pad * 2));
-  const h = Math.max(1, quantInfiniteScene(Math.max(1, box.height) + pad * 2));
-  setAttrs(root, {
+  const { minX, minY, w, h } = box;
+  const attrs: Record<string, string | number> = {
     width: w,
     height: h,
     viewBox: `${minX} ${minY} ${w} ${h}`,
@@ -1394,7 +1467,9 @@ export function seedInfiniteSvgViewport(
     'shape-rendering': 'geometricPrecision',
     'pointer-events': 'none',
     'data-rcb-infinite': '1',
-  });
+  };
+  if (opts?.lock) attrs['data-rcb-viewport-locked'] = '1';
+  setAttrs(root, attrs);
   setStyles(root, {
     display: 'block',
     overflow: 'visible',
@@ -1407,10 +1482,26 @@ export function seedInfiniteSvgViewport(
   });
 }
 
+/** Apply a known scene AABB as the infinite SVG CSS box + viewBox (pre-paint). */
+export function seedInfiniteSvgViewport(
+  root: SVGSVGElement,
+  box: { left: number; top: number; width: number; height: number },
+  pad = INFINITE_SVG_PAD
+) {
+  if (!isInfiniteSvgRoot(root)) return;
+  const seeded = snapSurfaceBox({
+    minX: box.left - pad,
+    minY: box.top - pad,
+    w: Math.max(1, box.width) + pad * 2,
+    h: Math.max(1, box.height) + pad * 2,
+  });
+  // Seed owns the viewport — getBBox fit must not nudge *.5 → integer.
+  writeInfiniteViewport(root, seeded, { lock: true });
+}
+
 /**
  * Pan an infinite host SVG with a live node translate (no getBBox refit).
- * Keeps sceneLeft inside the viewBox so ink is not painted in overflow — that
- * overflow path AA/composites differently from in-bounds chrome guides at fractional DPR.
+ * Keeps sceneLeft inside the viewBox so ink is not painted in overflow.
  */
 export function panInfiniteSvgViewport(
   root: SVGSVGElement,
@@ -1424,19 +1515,95 @@ export function panInfiniteSvgViewport(
     .split(/[\s,]+/)
     .map(Number);
   if (parts.length < 4 || !parts.every(Number.isFinite)) return;
-  const minX = quantInfiniteScene(parts[0] + dLeft);
-  const minY = quantInfiniteScene(parts[1] + dTop);
+  const origin = snapSurfaceOrigin(parts[0] + dLeft, parts[1] + dTop);
   const w = parts[2];
   const h = parts[3];
-  setAttrs(root, { viewBox: `${minX} ${minY} ${w} ${h}` });
+  setAttrs(root, { viewBox: `${origin.minX} ${origin.minY} ${w} ${h}` });
   setStyles(root, {
-    left: `${minX}px`,
-    top: `${minY}px`,
+    left: `${origin.minX}px`,
+    top: `${origin.minY}px`,
   });
+}
+
+/**
+ * Re-assert host CSS/viewBox quantize after camera pan/zoom or browser zoom.
+ * Scene lattice only — does not device-pixel-shift (keeps ink on the pixel grid).
+ */
+export function snapInfiniteSvgViewportToCamera(
+  root: SVGSVGElement,
+  camera?: RcbCamera | null,
+  dpr?: number
+) {
+  if (!isInfiniteSvgRoot(root)) return;
+  if (camera) setInfiniteSvgPaintCamera(camera, dpr);
+  const parts = (root.getAttribute('viewBox') || '')
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  if (parts.length < 4 || !parts.every(Number.isFinite)) return;
+  const next = snapSurfaceBox(
+    { minX: parts[0], minY: parts[1], w: parts[2], h: parts[3] },
+    camera,
+    dpr
+  );
+  if (
+    next.minX === parts[0] &&
+    next.minY === parts[1] &&
+    next.w === parts[2] &&
+    next.h === parts[3]
+  ) {
+    return;
+  }
+  const lock = root.getAttribute('data-rcb-viewport-locked') === '1';
+  writeInfiniteViewport(root, next, lock ? { lock: true } : undefined);
+}
+
+/**
+ * Same scene-lattice quantize as infinite hosts / pixel grid — use for
+ * draw-preview SVGs so CSS left/top/width stay locked to path ink.
+ */
+export function snapSvgSurfaceBox(
+  box: { left: number; top: number; width: number; height: number },
+  camera?: RcbCamera | null,
+  dpr?: number
+): { left: number; top: number; width: number; height: number } {
+  const next = snapSurfaceBox(
+    { minX: box.left, minY: box.top, w: box.width, h: box.height },
+    camera,
+    dpr
+  );
+  return { left: next.minX, top: next.minY, width: next.w, height: next.h };
+}
+
+/** Apply snapped scene CSS box === viewBox onto an absolute SVG (world layer). */
+export function applySvgSurfaceBox(
+  root: SVGSVGElement,
+  box: { left: number; top: number; width: number; height: number },
+  camera?: RcbCamera | null,
+  dpr?: number
+): { left: number; top: number; width: number; height: number } {
+  const s = snapSvgSurfaceBox(box, camera, dpr);
+  root.setAttribute('width', String(s.width));
+  root.setAttribute('height', String(s.height));
+  root.setAttribute('viewBox', `${s.left} ${s.top} ${s.width} ${s.height}`);
+  root.setAttribute('overflow', 'visible');
+  root.setAttribute('preserveAspectRatio', 'none');
+  root.style.position = 'absolute';
+  root.style.overflow = 'visible';
+  root.style.display = 'block';
+  root.style.left = `${s.left}px`;
+  root.style.top = `${s.top}px`;
+  root.style.width = `${s.width}px`;
+  root.style.height = `${s.height}px`;
+  return s;
 }
 
 export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement | null) {
   if (!isInfiniteSvgRoot(root)) return;
+  // Locked after seedInfiniteSvgViewport — preserve half-pixel origins for
+  // odd center strokes (visual outer on integer grid). getBBox often reports
+  // 269.5 as ~270 and used to rewrite CSS left, which browser zoom amplifies.
+  if (root.getAttribute('data-rcb-viewport-locked') === '1') return;
 
   let minX = 0;
   let minY = 0;
@@ -1478,27 +1645,8 @@ export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement 
     return;
   }
 
-  setAttrs(root, {
-    width: w,
-    height: h,
-    // Keep viewBox origin identical to CSS left/top (no float drift).
-    viewBox: `${minX} ${minY} ${w} ${h}`,
-    overflow: 'visible',
-    preserveAspectRatio: 'none',
-    'shape-rendering': 'geometricPrecision',
-    'pointer-events': 'none',
-    'data-rcb-infinite': '1',
-  });
-  setStyles(root, {
-    display: 'block',
-    overflow: 'visible',
-    position: 'absolute',
-    left: `${minX}px`,
-    top: `${minY}px`,
-    width: `${w}px`,
-    height: `${h}px`,
-    'pointer-events': 'none',
-  });
+  const snapped = snapSurfaceBox({ minX, minY, w, h });
+  writeInfiniteViewport(root, snapped);
 }
 
 export async function loadSceneOntoSvg(
@@ -1566,7 +1714,7 @@ export function dedupeSceneNode(layer: SVGElement, nodeId: string, keep?: SVGEle
     const survivor = keep && matches.includes(keep) ? keep : matches[matches.length - 1];
     matches.forEach((n) => {
       if (n === survivor) return;
-      n.parentNode?.removeChild(n);
+      detachSceneNodeEl(n);
     });
   } catch {
     /* ignore */
@@ -1584,12 +1732,12 @@ export function purgeOrphanSceneNodes(
       const id = n.getAttribute('data-scene-node-id');
       if (!id) return;
       if (allowed && !allowed.has(id)) {
-        n.parentNode?.removeChild(n);
+        detachSceneNodeEl(n);
         return;
       }
       const keep = nodeEls.get(id);
       if (keep && n !== keep) {
-        n.parentNode?.removeChild(n);
+        detachSceneNodeEl(n);
       }
     });
   } catch {
@@ -2311,7 +2459,7 @@ function removeSceneNodesById(layer: SVGElement, nodeId: string) {
   try {
     layer.querySelectorAll('[data-scene-node-id]').forEach((n) => {
       if (n.getAttribute('data-scene-node-id') !== nodeId) return;
-      n.parentNode?.removeChild(n);
+      detachSceneNodeEl(n);
     });
   } catch {
     /* ignore */
@@ -2338,11 +2486,7 @@ export async function replaceSvgNode(
   removeSceneNodesById(layer, nodeId);
   const prev = nodeEls.get(nodeId);
   if (prev) {
-    try {
-      prev.remove();
-    } catch {
-      /* ignore */
-    }
+    detachSceneNodeEl(prev);
     nodeEls.delete(nodeId);
   }
 

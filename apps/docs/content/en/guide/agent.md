@@ -9,10 +9,10 @@ Switch in the chat input area:
 | Mode | Label | Behavior |
 |------|-------|----------|
 | **Agent** | Agent — auto execute | Directly edits the canvas (layout, add elements, swap colors / images, etc.) |
-| **Ask** | Ask — consult first | Answers / proposes plans only; tap **Confirm execute** when ready to apply |
+| **Ask** | Ask — consult first | Answers / proposes a plan; shows an ops preview and applies only after you **Confirm** |
 | **Image** | Image — image generation | Focused on text-to-image / reference-to-image; adjust resolution, aspect ratio, count, and model |
 
-You can **stop** anytime after sending.
+You can **stop** anytime after sending. Long runs support **pause** and **resume** from a checkpoint; after refresh (when chat is synced), pending Ask confirms usually remain available.
 
 ## Checkpoints & restore
 

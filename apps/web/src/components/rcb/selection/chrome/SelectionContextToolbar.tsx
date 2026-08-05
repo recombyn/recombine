@@ -109,6 +109,14 @@ function Sep() {
   return <div className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />;
 }
 
+/** Prefer attrs.lockAspect; default locked for image/video. */
+function resolveImageAspectLocked(node: any, kind: string): boolean {
+  const raw = node?.attrs?.lockAspect;
+  if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return kind === 'image' || kind === 'video';
+}
+
 /** Solid MD glyphs — outline bars-3 reads too light next to B/I/U. */
 function AlignIcon({ align }: { align: string }) {
   const cls = 'h-3.5 w-3.5 text-current';
@@ -227,12 +235,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
   };
 
   const showBlend = !(kind === 'image' && isIconImageNode(node));
-  const imageAspectLocked = (() => {
-    const raw = node?.attrs?.lockAspect;
-    if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
-    if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
-    return kind === 'image' || kind === 'video';
-  })();
+  const imageAspectLocked = resolveImageAspectLocked(node, kind);
   const blendControl = showBlend ? (
     <BlendModeControl
       blendMode={node?.attrs?.blendMode}

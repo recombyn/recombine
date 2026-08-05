@@ -8,6 +8,8 @@
 export type { RcbBox, RcbCamera, RcbVec } from './core/types';
 export { RCB_DEFAULT_CAMERA } from './core/types';
 export {
+  RCB_MIN_ZOOM,
+  RCB_MAX_ZOOM,
   rcbClampZoom,
   rcbCameraCssZoom,
   rcbCameraScreenOffset,

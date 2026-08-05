@@ -72,15 +72,44 @@ describe('ellipseArcPercentFromPointer', () => {
     expect(Math.abs(next)).toBeGreaterThan(90);
   });
 
-  it('sign follows sweep direction from fixed start', async () => {
+  it('keeps one locked direction and does not flip past start', async () => {
     const { ellipseArcPercentFromPointer } = await import(
       '@/components/rcb/scene/document/sceneShapes'
     );
-    // From south: east end → negative (CCW back); west end → positive.
-    const neg = ellipseArcPercentFromPointer(90, 50, 50, 50, -50, 90);
-    const pos = ellipseArcPercentFromPointer(10, 50, 50, 50, 50, 90);
+    // Locked negative: east of south stays negative near-full, not positive.
+    const next = ellipseArcPercentFromPointer(60, 90, 50, 50, -95, 90, {
+      lockSign: -1,
+    });
+    expect(next).toBeLessThan(0);
+    expect(Math.abs(next)).toBeGreaterThan(90);
+  });
+
+  it('sign follows sweep direction from fixed start when unlocked', async () => {
+    const { ellipseArcPercentFromPointer } = await import(
+      '@/components/rcb/scene/document/sceneShapes'
+    );
+    // From south: east end → negative (CW); west end → positive (CCW).
+    const neg = ellipseArcPercentFromPointer(90, 50, 50, 50, -50, 90, {
+      lockSign: -1,
+    });
+    const pos = ellipseArcPercentFromPointer(10, 50, 50, 50, 50, 90, {
+      lockSign: 1,
+    });
     expect(neg).toBeLessThan(0);
     expect(pos).toBeGreaterThan(0);
+  });
+});
+
+describe('snapEllipseArcPercent / snapEllipseInnerRatio', () => {
+  it('snaps near-full arc and near-zero hole', async () => {
+    const { snapEllipseArcPercent, snapEllipseInnerRatio } = await import(
+      '@/components/rcb/scene/document/sceneShapes'
+    );
+    expect(snapEllipseArcPercent(97.5)).toBe(100);
+    expect(snapEllipseArcPercent(-98)).toBe(-100);
+    expect(snapEllipseArcPercent(80)).toBe(80);
+    expect(snapEllipseInnerRatio(0.02)).toBe(0);
+    expect(snapEllipseInnerRatio(0.4)).toBeCloseTo(0.4);
   });
 });
 

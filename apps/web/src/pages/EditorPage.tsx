@@ -22,6 +22,8 @@ import { fetchShareApi, updateShareDocumentApi } from '@/apis/shares';
 import EditorBootOverlay from '@/components/editor/chrome/EditorBootOverlay';
 import {
   RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
+  RCB_MAX_ZOOM,
+  RCB_MIN_ZOOM,
   rcbFitCamera,
   rcbViewportSceneBounds,
   zoomAtPoint,
@@ -80,7 +82,7 @@ import EditorStageWorld from '@/components/editor/page/EditorStageWorld';
 const BOOT_MIN_MS = 520;
 const BOOT_EXIT_MS = 280;
 
-/** Jump diagnostics — console JSON lines + `window.__rcbJumpLog` / `__rcbJumpDump()`. */
+/** Jump diagnostics (`window.__rcbJumpDump`). */
 function rcbJumpLog(event: string, data: Record<string, unknown> = {}) {
   const row = { event, t: Math.round(performance.now()), ...data };
   const w = window as Window & {
@@ -1042,7 +1044,7 @@ function EditorPage() {
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
-      const next = Math.min(8, Number((c.zoom * 1.1).toFixed(4)));
+      const next = Math.min(RCB_MAX_ZOOM, Number((c.zoom * 1.1).toFixed(4)));
       return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);
@@ -1053,7 +1055,7 @@ function EditorPage() {
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
-      const next = Math.max(0.05, Number((c.zoom / 1.1).toFixed(4)));
+      const next = Math.max(RCB_MIN_ZOOM, Number((c.zoom / 1.1).toFixed(4)));
       return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);
