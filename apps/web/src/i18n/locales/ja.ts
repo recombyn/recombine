@@ -1387,6 +1387,8 @@ const ja = {
     stop: '停止',
     send: '送信',
     stopped: '停止しました',
+    pausedHint: '生成を一時停止しました。チェックポイントから再開できます',
+    resume: '再開',
     failed: '失敗',
     done: '完了',
     apply: '適用',

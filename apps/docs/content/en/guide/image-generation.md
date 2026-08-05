@@ -30,7 +30,7 @@ Switch among three modes at the bottom of the right chat:
 | Mode | Description |
 |------|-------------|
 | **Agent** | Direct canvas edits: layout, add elements, swap images, etc. |
-| **Ask** | Answers / plans only; **Confirm execute** to edit canvas when ready |
+| **Ask** | Answers / proposes a plan; shows an ops preview and applies only after **Confirm** |
 | **Image** | Focused text-to-image / reference-to-image; controls similar to generator node |
 
 In **Image** mode, describe the scene and attach references to generate in chat and place on canvas. Home briefs can also pick image scenarios for a full design kickoff.

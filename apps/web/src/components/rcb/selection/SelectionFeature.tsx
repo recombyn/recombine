@@ -21,13 +21,18 @@ import {
   getDocumentGridSize,
   snapBoxToGrid,
   snapResizeToGrid,
+  snapMoveToSmartGuides,
+  snapResizeToSmartGuides,
+  smartSnapThreshold,
   type SceneBox,
+  type SmartGuideLine,
 } from './alignGuides';
 import SelectionChrome from './SelectionChrome';
 import SelectionContextToolbar from './chrome/SelectionContextToolbar';
 import MultiSelectionToolbar from './chrome/MultiSelectionToolbar';
 import NodeTitleLabel from './chrome/NodeTitleLabel';
 import BrushOverlay from './chrome/BrushOverlay';
+import SmartGuidesOverlay from './chrome/SmartGuidesOverlay';
 import CornerRadiusHandlesOverlay from './chrome/CornerRadiusHandlesOverlay';
 import PolygonShapeHandlesOverlay from './chrome/PolygonShapeHandlesOverlay';
 import StarShapeHandlesOverlay from './chrome/StarShapeHandlesOverlay';
@@ -55,6 +60,7 @@ import {
 import {
   TEXT_SELECTION_PAD,
   deflateSelectionBox,
+  inflateSelectionBox,
   strokeChromeOutset,
   strokeVisualOutset,
 } from '@/components/rcb/scene/document/sceneEffects';
@@ -225,8 +231,17 @@ function isHostInjectedSelection(
   singleNode: boolean,
   singleId: string | null,
   shapeOutlines: ShapeOutlineItem[],
-  opts?: { inspectDev?: boolean; node?: any }
+  opts?: { inspectDev?: boolean; node?: any; selectedFrameIds?: string[]; selectedNodeIds?: string[] }
 ): boolean {
+  // Multi path union AABB / single frame AABB is host-mirrored (or scene self-fit).
+  if (shapeOutlines.some((o) => o.unionChrome)) return true;
+  if (
+    opts?.selectedFrameIds?.length === 1 &&
+    (!opts.selectedNodeIds || opts.selectedNodeIds.length === 0) &&
+    shapeOutlines.some((o) => parseFrameSelId(o.id))
+  ) {
+    return true;
+  }
   if (!singleNode || !singleId) return false;
   // Host already paints the path silhouette (with or without handles / aux).
   if (shapeOutlines.some((o) => o.id === singleId)) return true;
@@ -700,29 +715,88 @@ function commitMarqueeSelection(opts: {
 
 type MoveSnapContext = {
   union: SceneBox;
+  /** Chrome boxes at drag start — deflated to path for smart snap. */
+  origins: Array<{ nodeId: string; box: SceneBox }>;
+  document: any;
   dx: number;
   dy: number;
-  disableGrid: boolean;
+  disableSnap: boolean;
   gridSize: number;
+  targets: SceneBox[];
+  threshold: number;
 };
+
+/** Path AABB for smart guides (geom), not stroke-inflated chrome. */
+function pathBoxForSmartGuide(
+  id: string,
+  document: any,
+  chrome: SceneBox | null | undefined
+): SceneBox | null {
+  if (!chrome) return null;
+  if (parseFrameSelId(id)) return { ...chrome };
+  const live = liveShapeGeomBox(id);
+  if (live) return live;
+  return deflateSelectionBox({ ...chrome }, document?.deltaSetLike?.[id]);
+}
+
+function pathBoxFromChromeOrigin(
+  document: any,
+  o: { nodeId: string; box: SceneBox }
+): SceneBox {
+  if (parseFrameSelId(o.nodeId)) return { ...o.box };
+  return deflateSelectionBox({ ...o.box }, document?.deltaSetLike?.[o.nodeId]);
+}
 
 function computeMovedUnion(ctx: MoveSnapContext): {
   nextUnion: SceneBox;
   sdx: number;
   sdy: number;
+  guides: SmartGuideLine[];
 } {
-  let nextUnion = {
-    ...ctx.union,
-    left: ctx.union.left + ctx.dx,
-    top: ctx.union.top + ctx.dy,
+  const pathBoxes = ctx.origins.map((o) => pathBoxFromChromeOrigin(ctx.document, o));
+  const pathUnion =
+    unionOfBoxes(pathBoxes) ||
+    ({
+      left: ctx.union.left,
+      top: ctx.union.top,
+      width: ctx.union.width,
+      height: ctx.union.height,
+    } as SceneBox);
+  let nextPath = {
+    ...pathUnion,
+    left: pathUnion.left + ctx.dx,
+    top: pathUnion.top + ctx.dy,
   };
-  if (!ctx.disableGrid) {
-    nextUnion = snapBoxToGrid(nextUnion, ctx.gridSize);
+  let guides: SmartGuideLine[] = [];
+  if (!ctx.disableSnap) {
+    const smart = snapMoveToSmartGuides({
+      box: nextPath,
+      targets: ctx.targets,
+      threshold: ctx.threshold,
+      gridSize: ctx.gridSize,
+    });
+    nextPath = smart.box;
+    guides = smart.guides;
+    const snappedX = guides.some((g) => g.kind === 'align' && g.axis === 'x');
+    const snappedY = guides.some((g) => g.kind === 'align' && g.axis === 'y');
+    const grid = snapBoxToGrid(nextPath, ctx.gridSize);
+    nextPath = {
+      ...nextPath,
+      left: snappedX ? nextPath.left : grid.left,
+      top: snappedY ? nextPath.top : grid.top,
+    };
   }
+  const sdx = nextPath.left - pathUnion.left;
+  const sdy = nextPath.top - pathUnion.top;
   return {
-    nextUnion,
-    sdx: nextUnion.left - ctx.union.left,
-    sdy: nextUnion.top - ctx.union.top,
+    nextUnion: {
+      ...ctx.union,
+      left: ctx.union.left + sdx,
+      top: ctx.union.top + sdy,
+    },
+    sdx,
+    sdy,
+    guides,
   };
 }
 
@@ -732,14 +806,17 @@ type ResizeSnapContext = {
   dx: number;
   dy: number;
   shiftKey: boolean;
-  disableGrid: boolean;
+  disableSnap: boolean;
   gridSize: number;
+  targets: SceneBox[];
+  threshold: number;
 };
 
 function computeResizedUnion(ctx: ResizeSnapContext): {
   next: SceneBox;
   textMode: TextResizeMode | undefined;
   lockAspect: boolean;
+  guides: SmartGuideLine[];
 } {
   const handle = ctx.drag.handle!;
   const lockAspect = resolveLockAspect(ctx.document, ctx.drag.origins, handle, ctx.shiftKey);
@@ -747,11 +824,42 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
     lockAspect,
     aspectRatio: ctx.drag.aspectRatio,
   });
-  if (!ctx.disableGrid) {
-    next = snapResizeToGrid(next, handle, ctx.gridSize, 8, {
+  let guides: SmartGuideLine[] = [];
+  const singleId = ctx.drag.origins.length === 1 ? ctx.drag.origins[0].nodeId : null;
+  const singleNode = singleId ? ctx.document?.deltaSetLike?.[singleId] : null;
+  const snapAsPath = Boolean(singleId && !parseFrameSelId(singleId));
+  if (!ctx.disableSnap) {
+    const snapBox = snapAsPath ? deflateSelectionBox({ ...next }, singleNode) : next;
+    const smart = snapResizeToSmartGuides({
+      box: snapBox,
+      handle,
+      targets: ctx.targets,
+      threshold: ctx.threshold,
+      min: 8,
+      gridSize: ctx.gridSize,
+    });
+    const snappedPath = smart.box;
+    guides = smart.guides;
+    next = snapAsPath ? inflateSelectionBox({ ...snappedPath }, singleNode) : snappedPath;
+    // Grid only on axes that did not smart-snap.
+    const snappedX = guides.some((g) => g.kind === 'align' && g.axis === 'x');
+    const snappedY = guides.some((g) => g.kind === 'align' && g.axis === 'y');
+    const gridBox = snapAsPath ? snappedPath : next;
+    const grid = snapResizeToGrid(gridBox, handle, ctx.gridSize, 8, {
       lockAspect,
       aspectRatio: ctx.drag.aspectRatio,
     });
+    let left = snappedX ? gridBox.left : grid.left;
+    let top = snappedY ? gridBox.top : grid.top;
+    let right = snappedX ? gridBox.left + gridBox.width : grid.left + grid.width;
+    let bottom = snappedY ? gridBox.top + gridBox.height : grid.top + grid.height;
+    const pathNext = {
+      left,
+      top,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top),
+    };
+    next = snapAsPath ? inflateSelectionBox(pathNext, singleNode) : pathNext;
   }
   next = {
     ...next,
@@ -766,7 +874,25 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
     String(ctx.document?.deltaSetLike?.[ctx.drag.origins[0].nodeId]?.key || '') === 'text'
       ? textResizeModeForHandle(handle)
       : undefined;
-  return { next, textMode, lockAspect };
+  return { next, textMode, lockAspect, guides };
+}
+
+/** Sibling path AABBs for smart guides (exclude selection + hidden/locked). */
+function collectSmartGuideTargets(
+  document: any,
+  listNodeIds: () => string[],
+  getNodeBox: (id: string) => SceneBox | null,
+  excludeIds: Set<string>
+): SceneBox[] {
+  const out: SceneBox[] = [];
+  for (const id of listNodeIds()) {
+    if (excludeIds.has(id)) continue;
+    const node = document?.deltaSetLike?.[id];
+    if (!node || isNodeHidden(node) || isNodeLocked(node)) continue;
+    const box = pathBoxForSmartGuide(id, document, getNodeBox(id));
+    if (box && box.width > 0 && box.height > 0) out.push(box);
+  }
+  return out;
 }
 
 function computeRotateDelta(
@@ -872,6 +998,439 @@ function readNodeShapeType(document: any, nodeId: string) {
 
 function isStrokeShapeType(t: string) {
   return t === 'line' || t === 'arrow';
+}
+
+/** Live angle while rotating / free-angle stroke resize; otherwise stored attrs. */
+function resolveChromeAngle(opts: {
+  enabled: boolean;
+  singleNode: boolean;
+  selectedNodeId: string | undefined;
+  document: any;
+  transforming: boolean;
+  dragMode: string | undefined;
+  hasPathEndpoints: boolean;
+  liveAngle: number;
+}): number {
+  if (!opts.enabled || !opts.singleNode || !opts.selectedNodeId) return 0;
+  const fromDoc = readNodeAngle(opts.document, opts.selectedNodeId);
+  if (!opts.transforming) return fromDoc;
+  if (opts.dragMode === 'rotate') return opts.liveAngle;
+  if (
+    opts.dragMode === 'resize' &&
+    isStrokeShapeType(readNodeShapeType(opts.document, opts.selectedNodeId))
+  ) {
+    return opts.liveAngle;
+  }
+  if (opts.dragMode === 'resize' && opts.hasPathEndpoints) {
+    return opts.liveAngle;
+  }
+  // Move / box-resize: always use stored angle — avoids click flash when liveAngle lags at 0.
+  return fromDoc;
+}
+
+/** Inspect spacing pair: hover first, then sticky pair node. */
+function resolveInspectPairNodeId(opts: {
+  inspectDev: boolean;
+  transforming: boolean;
+  hoverNodeId: string | null;
+  inspectPairNodeId: string | null;
+  inspectPrimaryId: string | null;
+  selectedNodeIds: string[];
+}): string | null {
+  if (!opts.inspectDev || opts.transforming) return null;
+  if (
+    opts.hoverNodeId &&
+    opts.hoverNodeId !== opts.inspectPrimaryId &&
+    !opts.selectedNodeIds.includes(opts.hoverNodeId) &&
+    !parseFrameSelId(opts.hoverNodeId)
+  ) {
+    return opts.hoverNodeId;
+  }
+  if (
+    opts.inspectPairNodeId &&
+    opts.inspectPairNodeId !== opts.inspectPrimaryId &&
+    !opts.selectedNodeIds.includes(opts.inspectPairNodeId) &&
+    !parseFrameSelId(opts.inspectPairNodeId)
+  ) {
+    return opts.inspectPairNodeId;
+  }
+  return null;
+}
+
+function deflateChromeBox(chrome: SceneBox | null | undefined, node: any): SceneBox | null {
+  return chrome ? deflateSelectionBox(chrome, node) : null;
+}
+
+function isVectorStrokeNode(node: any, shapeType: string): boolean {
+  return (
+    shapeType === 'pencil' ||
+    shapeType === 'pen' ||
+    shapeType === 'path' ||
+    shapeType === 'line' ||
+    shapeType === 'arrow' ||
+    String(node?.key || '') === 'path' ||
+    nodeUsesOpenStrokeEndpoints(node)
+  );
+}
+
+function resolveOutlinePathD(node: any, gw: number, gh: number): string {
+  const rawPath = String(node?.attrs?.path || node?.attrs?.d || '');
+  const shapeType = String(node?.attrs?.shapeType || '');
+  // Path / pen / pencil: always host-inject the real painted path — never AABB stand-in.
+  if (isVectorStrokeNode(node, shapeType)) {
+    if (rawPath.trim().length >= 2) return rawPath;
+    return geometryIndicatorPathD(node, { width: gw, height: gh });
+  }
+  if (rawPath.length >= HEAVY_PATH_D_CHARS) {
+    return `M 0 0 H ${gw} V ${gh} H 0 Z`;
+  }
+  return geometryIndicatorPathD(node, { width: gw, height: gh });
+}
+
+function resolveTransformHostGuideBox(
+  sid: string,
+  sn: any,
+  getNodeBox: (id: string) => SceneBox | null,
+  liveOrigins: Array<{ nodeId: string; box: SceneBox }> | null | undefined
+): SceneBox | null {
+  const hostGeom = liveShapeGeomBox(sid);
+  if (hostGeom) return hostGeom;
+  const liveChrome = liveOrigins?.find((o) => o.nodeId === sid)?.box;
+  const fromLive = deflateChromeBox(liveChrome, sn);
+  if (fromLive) return fromLive;
+  return deflateChromeBox(getNodeBox(sid), sn);
+}
+
+/** Host path silhouette / handles / transform spacing aux for vector nodes. */
+function buildShapeOutlines(opts: {
+  enabled: boolean;
+  suppressChrome: boolean;
+  readOnly: boolean;
+  document: any;
+  selectedNodeIds: string[];
+  selectedFrameIds: string[];
+  hoverNodeId: string | null;
+  inspectDev: boolean;
+  transforming: boolean;
+  inspectPrimaryId: string | null;
+  inspectPairNodeId: string | null;
+  singleId: string | null;
+  chromeAngle: number;
+  selectedIsImageGen: boolean;
+  selectedIsVideoGen: boolean;
+  liveOrigins: Array<{ nodeId: string; box: SceneBox }> | null | undefined;
+  getNodeBox: (id: string) => SceneBox | null;
+}): ShapeOutlineItem[] {
+  if (!opts.enabled || opts.suppressChrome) return [];
+
+  const ids: string[] = [];
+  const handleIds = new Set<string>();
+  /** Geom box override while dragging (host live origin). */
+  const hostGuideBoxById = new Map<string, SceneBox>();
+  /** Single: host silhouettes + handles. Multi path: silhouettes + host-mirrored union box. */
+  const hostHandlesOk =
+    !opts.readOnly &&
+    opts.selectedNodeIds.length === 1 &&
+    opts.selectedFrameIds.length === 0;
+
+  const pushId = (id: string | null | undefined) => {
+    if (!id || parseFrameSelId(id) || ids.includes(id)) return;
+    ids.push(id);
+  };
+
+  const inspectPairId = resolveInspectPairNodeId({
+    inspectDev: opts.inspectDev,
+    transforming: opts.transforming,
+    hoverNodeId: opts.hoverNodeId,
+    inspectPairNodeId: opts.inspectPairNodeId,
+    inspectPrimaryId: opts.inspectPrimaryId,
+    selectedNodeIds: opts.selectedNodeIds,
+  });
+
+  // Hover path silhouette — edit + inspect (same algorithm).
+  if (!opts.transforming && opts.hoverNodeId && !opts.selectedNodeIds.includes(opts.hoverNodeId)) {
+    pushId(opts.hoverNodeId);
+  }
+
+  // Inspect click-pair silhouette when not hovering.
+  if (opts.inspectDev && !opts.transforming && inspectPairId) {
+    pushId(inspectPairId);
+  }
+
+  // Inspect select: path silhouette only (spacing/size badges removed — reimplement later).
+  if (
+    opts.inspectDev &&
+    !opts.transforming &&
+    opts.inspectPrimaryId &&
+    !parseFrameSelId(opts.inspectPrimaryId) &&
+    nodeUsesPathChrome(opts.document?.deltaSetLike?.[opts.inspectPrimaryId])
+  ) {
+    pushId(opts.inspectPrimaryId);
+  }
+
+  // Edit idle: selected path chrome + handles (single).
+  if (!opts.inspectDev && !opts.transforming) {
+    for (const sid of opts.selectedNodeIds) {
+      const sn = opts.document?.deltaSetLike?.[sid];
+      if (!nodeUsesPathChrome(sn)) continue;
+      pushId(sid);
+      // Single: host handles. Multi path: host-mirrored union chrome (below).
+      // Generators keep the blue box but no resize knobs (same as SelectionChrome).
+      if (hostHandlesOk) handleIds.add(sid);
+    }
+  }
+
+  // Transform: keep mover path chrome mounted (geometry live-updates with drag).
+  if (
+    !opts.inspectDev &&
+    opts.transforming &&
+    opts.selectedNodeIds.length === 1 &&
+    opts.selectedFrameIds.length === 0
+  ) {
+    const sid = opts.selectedNodeIds[0];
+    const sn = sid ? opts.document?.deltaSetLike?.[sid] : null;
+    if (sid && nodeUsesPathChrome(sn)) {
+      pushId(sid);
+      const anchorBox = resolveTransformHostGuideBox(sid, sn, opts.getNodeBox, opts.liveOrigins);
+      if (anchorBox) hostGuideBoxById.set(sid, anchorBox);
+    }
+  }
+
+  const out: ShapeOutlineItem[] = [];
+  for (const id of ids) {
+    const node = opts.document?.deltaSetLike?.[id];
+    if (!nodeUsesPathChrome(node)) continue;
+    const liveChrome =
+      opts.transforming && opts.liveOrigins
+        ? opts.liveOrigins.find((o) => o.nodeId === id)?.box
+        : null;
+    const chromeBox = liveChrome || opts.getNodeBox(id);
+    if (!chromeBox) continue;
+    const geomBox =
+      hostGuideBoxById.get(id) ||
+      (liveChrome
+        ? deflateSelectionBox(liveChrome, node)
+        : liveShapeGeomBox(id) || deflateSelectionBox(chromeBox, node));
+    const gw = Math.max(1, geomBox.width);
+    const gh = Math.max(1, geomBox.height);
+    const pathD = resolveOutlinePathD(node, gw, gh);
+    if (!pathD) continue;
+    rememberNodePath2D(id, pathD);
+    const angle = id === opts.singleId ? opts.chromeAngle : readNodeAngle(opts.document, id);
+    const lineMode = nodeUsesOpenStrokeEndpoints(node);
+    const shapeType = String(node.attrs?.shapeType || '');
+    const shaftEndpoints = shapeType === 'line' || shapeType === 'arrow';
+    const withHandles = handleIds.has(id);
+    const nodeKey = String(node.key || '');
+    const isGen = isImageGeneratorNode(node) || isVideoGeneratorNode(node);
+    const edgeHandles: 'all' | 'horizontal' | 'none' = isGen
+      ? 'none'
+      : nodeKey === 'video'
+        ? 'horizontal'
+        : 'all';
+    out.push({
+      id,
+      pathD,
+      box: geomBox,
+      angle,
+      color: '#3388ff',
+      withHandles,
+      // Selected with handles: control box only (no blue path silhouette).
+      // Hover / inspect / generator (box via handles+edge none) still show path when no knobs path.
+      // Generators: withHandles + edge none → blue AABB box on host (no knobs).
+      showPath: !withHandles && !opts.transforming,
+      lineMode,
+      shaftEndpoints,
+      edgeHandles,
+      showRotate:
+        withHandles &&
+        !lineMode &&
+        !isGen &&
+        !opts.selectedIsImageGen &&
+        !opts.selectedIsVideoGen &&
+        edgeHandles === 'all',
+    });
+  }
+
+  // Single artboard frame: AABB chrome mirroring the SVG frame host
+  // (same method as generators / rects — plate is SVG, title stays HTML).
+  if (
+    !opts.inspectDev &&
+    !opts.transforming &&
+    opts.selectedFrameIds.length === 1 &&
+    opts.selectedNodeIds.length === 0
+  ) {
+    const fid = opts.selectedFrameIds[0];
+    const frames = Array.isArray(opts.document?.frames) ? opts.document.frames : [];
+    const frame = frames.find((f: any) => f && String(f.id) === String(fid));
+    if (frame) {
+      const left = Number(frame.x) || 0;
+      const top = Number(frame.y) || 0;
+      const width = Math.max(1, Number(frame.width) || 1);
+      const height = Math.max(1, Number(frame.height) || 1);
+      out.push({
+        id: frameSelId(fid),
+        mirrorHostId: String(fid),
+        pathD: '',
+        box: { left, top, width, height },
+        angle: 0,
+        color: '#3388ff',
+        withHandles: !opts.readOnly,
+        showPath: false,
+        unionChrome: true,
+        cornerHandlesOnly: false,
+        showRotate: false,
+        edgeHandles: 'all',
+      });
+    }
+  }
+
+  // Multi path-only: union AABB + corner handles via host-mirrored chrome
+  // (same method as single — world SelectionChrome drifts at high zoom).
+  const multiPathOnly =
+    !opts.inspectDev &&
+    !opts.readOnly &&
+    !opts.transforming &&
+    opts.selectedFrameIds.length === 0 &&
+    opts.selectedNodeIds.length > 1 &&
+    opts.selectedNodeIds.every((id) => nodeUsesPathChrome(opts.document?.deltaSetLike?.[id]));
+  if (multiPathOnly) {
+    const memberBoxes: SceneBox[] = [];
+    for (const id of opts.selectedNodeIds) {
+      const live = liveShapeGeomBox(id);
+      const fallback = opts.getNodeBox(id);
+      const box = live || (fallback ? deflateSelectionBox(fallback, opts.document?.deltaSetLike?.[id]) : null);
+      if (box) memberBoxes.push(box);
+    }
+    const union = unionBoxes(memberBoxes);
+    if (union) {
+      out.push({
+        id: '__rcb_sel_union__',
+        mirrorHostId: opts.selectedNodeIds[0],
+        pathD: '',
+        box: union,
+        angle: 0,
+        color: '#3388ff',
+        withHandles: true,
+        showPath: false,
+        unionChrome: true,
+        cornerHandlesOnly: true,
+        showRotate: false,
+      });
+    }
+  }
+
+  return out;
+}
+
+/** Scene pad beyond chrome to outer stroke ink (center → sw/2 outside the box). */
+function resolveToolbarEdgePadScene(node: any): number {
+  if (!node) return 0;
+  const visual = strokeVisualOutset(node);
+  const chrome = Math.max(0, strokeChromeOutset(node));
+  return Math.max(0, visual - chrome);
+}
+
+/**
+ * Idle selection bounds update in the same paint as Redux; liveUnion lags one
+ * effect tick and used to flash empty chrome when switching frames in preview.
+ */
+function resolveChromeUnion(opts: {
+  transforming: boolean;
+  liveUnion: SceneBox | null;
+  selectionUnion: SceneBox | null;
+  selectedNodeIds: string[];
+  selectedFrameIds: string[];
+}): SceneBox | null {
+  const base = opts.transforming ? opts.liveUnion : opts.selectionUnion;
+  if (!base || opts.transforming) return base;
+  // Prefer live host geom (single + multi path) so chrome matches path ink.
+  // If a host lags a remount after move/resize, fall back to selectionUnion.
+  if (opts.selectedFrameIds.length === 0 && opts.selectedNodeIds.length >= 1) {
+    const lives: SceneBox[] = [];
+    for (const id of opts.selectedNodeIds) {
+      const live = liveShapeGeomBox(id);
+      if (!live) break;
+      lives.push(live);
+    }
+    if (lives.length === opts.selectedNodeIds.length) {
+      const liveUnion = opts.selectedNodeIds.length === 1 ? lives[0] : unionBoxes(lives);
+      if (
+        liveUnion &&
+        Math.abs(liveUnion.left - base.left) < 2 &&
+        Math.abs(liveUnion.top - base.top) < 2 &&
+        Math.abs(liveUnion.width - base.width) < 2 &&
+        Math.abs(liveUnion.height - base.height) < 2
+      ) {
+        return liveUnion;
+      }
+    }
+  }
+  return base;
+}
+
+function resolveHoverImageReplaceId(opts: {
+  inspectDev: boolean;
+  transforming: boolean;
+  suppressToolbars: boolean;
+  hoverNodeId: string | null;
+  selectedNodeIds: string[];
+  document: any;
+}): string | null {
+  if (opts.inspectDev || opts.transforming || opts.suppressToolbars) return null;
+  if (
+    !opts.hoverNodeId ||
+    opts.selectedNodeIds.includes(opts.hoverNodeId) ||
+    parseFrameSelId(opts.hoverNodeId)
+  ) {
+    return null;
+  }
+  const node = opts.document?.deltaSetLike?.[opts.hoverNodeId];
+  if (node?.key !== 'image') return null;
+  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return null;
+  if (String(node?.attrs?.processStatus || '') === 'running') return null;
+  return opts.hoverNodeId;
+}
+
+function resolveHoverVideoReplaceId(opts: {
+  inspectDev: boolean;
+  transforming: boolean;
+  suppressToolbars: boolean;
+  readOnly: boolean;
+  hoverNodeId: string | null;
+  selectedNodeIds: string[];
+  document: any;
+}): string | null {
+  if (opts.inspectDev || opts.transforming || opts.suppressToolbars || opts.readOnly) {
+    return null;
+  }
+  if (
+    !opts.hoverNodeId ||
+    opts.selectedNodeIds.includes(opts.hoverNodeId) ||
+    parseFrameSelId(opts.hoverNodeId)
+  ) {
+    return null;
+  }
+  const node = opts.document?.deltaSetLike?.[opts.hoverNodeId];
+  if (node?.key !== 'video') return null;
+  if (isVideoGeneratorNode(node)) return null;
+  if (String(node?.attrs?.processStatus || '') === 'running') return null;
+  return opts.hoverNodeId;
+}
+
+/** SelectionChrome edge knobs: generators none; video/text L/R only; else all. */
+function resolveSelectionEdgeHandles(opts: {
+  selectedIsImageGen: boolean;
+  selectedIsVideoGen: boolean;
+  selectedIsVideo: boolean;
+  lineChrome: boolean;
+  nodeKey: string | undefined;
+}): 'all' | 'horizontal' | 'none' {
+  if (opts.selectedIsImageGen || opts.selectedIsVideoGen) return 'none';
+  // Video scrubber on bottom — keep L/R only so S handle does not steal events.
+  if (opts.selectedIsVideo) return 'horizontal';
+  if (!opts.lineChrome && opts.nodeKey === 'text') return 'horizontal';
+  return 'all';
 }
 
 /**
@@ -986,8 +1545,8 @@ function SelectionFeature({
   );
   const [liveAngle, setLiveAngle] = useState(0);
   const [marquee, setMarquee] = useState<SceneBox | null>(null);
-  /** Margin labels while moving / arrow-nudging (pink). */
-  /** Neighbor boxes currently driving distance tips — orange outline. */
+  /** Live object-align guides while move / resize. */
+  const [smartGuides, setSmartGuides] = useState<SmartGuideLine[]>([]);
   /** Hide chrome/toolbars while move / resize / rotate is in progress. */
   const [transforming, setTransforming] = useState(false);
   /** Dev inspect: node under pointer (annotations follow mouse). */
@@ -999,6 +1558,7 @@ function SelectionFeature({
 
   const setTransformingNotify = (next: boolean) => {
     setTransforming(next);
+    if (!next) setSmartGuides([]);
     onTransformingChangeRef.current?.(next);
   };
 
@@ -1545,6 +2105,7 @@ function SelectionFeature({
         gridSize,
         readOnly,
         getNodeBox,
+        listNodeIds,
         onGeometryPreview,
         onAnglePreview,
       } = getPointerCtx();
@@ -1592,6 +2153,7 @@ function SelectionFeature({
       if (drag.mode === 'rotate' && drag.center && drag.pointerAngle0 != null) {
         // Soft-click on rotate knob ??ignore OS pointer jitter.
         if (screenDistSq <= DRAG_DISTANCE_SQUARED) return;
+        setSmartGuides([]);
         const { next, delta } = computeRotateDelta(drag, p, e.shiftKey);
         setLiveAngle(next);
         if (drag.origins.length === 1) {
@@ -1629,12 +2191,17 @@ function SelectionFeature({
       if (drag.mode === 'move') {
         // Ignore pointer jitter until the pointer actually moves (protects dblclick).
         if (screenDistSq <= DRAG_DISTANCE_SQUARED) return;
-        const { nextUnion, sdx, sdy } = computeMovedUnion({
+        const exclude = new Set(drag.origins.map((o) => o.nodeId));
+        const { nextUnion, sdx, sdy, guides } = computeMovedUnion({
           union: drag.union,
+          origins: drag.origins,
+          document,
           dx,
           dy,
-          disableGrid: e.ctrlKey || e.metaKey,
+          disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
+          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, exclude),
+          threshold: smartSnapThreshold(zoom),
         });
         const nextOrigins = drag.origins.map((o) => ({
           nodeId: o.nodeId,
@@ -1642,6 +2209,7 @@ function SelectionFeature({
         }));
         setLiveUnion(nextUnion);
         setLiveOrigins(nextOrigins);
+        setSmartGuides(guides);
         onGeometryPreview?.(
           nextOrigins.map((o) => ({
             nodeId: o.nodeId,
@@ -1663,6 +2231,7 @@ function SelectionFeature({
           setLiveUnion(stroke.next);
           setLiveOrigins([{ nodeId: stroke.strokeId, box: stroke.next }]);
           setLiveAngle(stroke.angle);
+          setSmartGuides([]);
           onGeometryPreview?.([
             {
               nodeId: stroke.strokeId,
@@ -1675,15 +2244,19 @@ function SelectionFeature({
           onAnglePreview?.(stroke.strokeId, stroke.angle);
           return;
         }
-        const { next, textMode } = computeResizedUnion({
+        const exclude = new Set(drag.origins.map((o) => o.nodeId));
+        const { next, textMode, guides } = computeResizedUnion({
           document,
           drag,
           dx,
           dy,
           shiftKey: e.shiftKey,
-          disableGrid: e.ctrlKey || e.metaKey,
+          disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
+          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, exclude),
+          threshold: smartSnapThreshold(zoom),
         });
+        setSmartGuides(guides);
         if (drag.origins.length === 1) {
           setLiveUnion(next);
           setLiveOrigins([{ nodeId: drag.origins[0].nodeId, box: next }]);
@@ -1898,12 +2471,17 @@ function SelectionFeature({
           endTransform();
           return;
         }
+        const exclude = new Set(drag.origins.map((o) => o.nodeId));
         const { nextUnion, sdx, sdy } = computeMovedUnion({
           union: drag.union,
+          origins: drag.origins,
+          document,
           dx,
           dy,
-          disableGrid: e.ctrlKey || e.metaKey,
+          disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
+          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, exclude),
+          threshold: smartSnapThreshold(zoom),
         });
         const patches = drag.origins.map((o) => ({
           nodeId: o.nodeId,
@@ -1950,14 +2528,17 @@ function SelectionFeature({
           endTransform();
           return;
         }
+        const excludeUp = new Set(drag.origins.map((o) => o.nodeId));
         const { next, textMode } = computeResizedUnion({
           document,
           drag,
           dx,
           dy,
           shiftKey,
-          disableGrid: e.ctrlKey || e.metaKey,
+          disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
+          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, excludeUp),
+          threshold: smartSnapThreshold(zoom),
         });
         if (drag.origins.length === 1) {
           setLiveUnion(next);
@@ -2141,212 +2722,60 @@ function SelectionFeature({
   const lineChrome =
     singleNode && (singleShapeType === 'line' || singleShapeType === 'arrow');
 
-  /** While rotating (or free-angle stroke resize), show liveAngle; otherwise trust attrs. */
-  const chromeAngle = (() => {
-    if (!enabled) return 0;
-    if (!singleNode) return 0;
-    const id = selectedNodeIds[0];
-    const fromDoc = readNodeAngle(document, id);
-    if (!transforming) return fromDoc;
-    const mode = dragRef.current?.mode;
-    if (mode === 'rotate') return liveAngle;
-    if (mode === 'resize' && isStrokeShapeType(readNodeShapeType(document, id))) {
-      return liveAngle;
-    }
-    if (
-      mode === 'resize' &&
-      dragRef.current?.pathEpLocal0 &&
-      dragRef.current?.pathEpLocal1
-    ) {
-      return liveAngle;
-    }
-    // Move / box-resize: always use stored angle ??avoids click flash when liveAngle lags at 0.
-    return fromDoc;
-  })();
+  const chromeAngle = resolveChromeAngle({
+    enabled,
+    singleNode,
+    selectedNodeId: selectedNodeIds[0],
+    document,
+    transforming,
+    dragMode: dragRef.current?.mode,
+    hasPathEndpoints: Boolean(dragRef.current?.pathEpLocal0 && dragRef.current?.pathEpLocal1),
+    liveAngle,
+  });
 
   /** Single node or single frame — both get size badge + hover spacing. */
   const inspectPrimaryId = resolveInspectPrimaryId(selectedNodeIds, selectedFrameIds);
 
-  /** Host path silhouette / handles / transform spacing aux for vector nodes. */
-  const shapeOutlines = (() => {
-    if (!enabled || suppressChrome) {
-      return [] as ShapeOutlineItem[];
-    }
-    const ids: string[] = [];
-    const handleIds = new Set<string>();
-    /** Geom box override while dragging (host live origin). */
-    const hostGuideBoxById = new Map<string, SceneBox>();
-    /** Multi (nodes and/or frames): host silhouettes only — union handles live on SelectionChrome. */
-    const hostHandlesOk =
-      !readOnly &&
-      selectedNodeIds.length === 1 &&
-      selectedFrameIds.length === 0;
-
-    const pushId = (id: string | null | undefined) => {
-      if (!id || parseFrameSelId(id) || ids.includes(id)) return;
-      ids.push(id);
-    };
-
-    const inspectPairId = (() => {
-      if (!inspectDev || transforming) return null;
-      if (
-        hoverNodeId &&
-        hoverNodeId !== inspectPrimaryId &&
-        !selectedNodeIds.includes(hoverNodeId) &&
-        !parseFrameSelId(hoverNodeId)
-      ) {
-        return hoverNodeId;
-      }
-      if (
-        inspectPairNodeId &&
-        inspectPairNodeId !== inspectPrimaryId &&
-        !selectedNodeIds.includes(inspectPairNodeId) &&
-        !parseFrameSelId(inspectPairNodeId)
-      ) {
-        return inspectPairNodeId;
-      }
-      return null;
-    })();
-
-    // Hover path silhouette — edit + inspect (same algorithm).
-    if (!transforming && hoverNodeId && !selectedNodeIds.includes(hoverNodeId)) {
-      pushId(hoverNodeId);
-    }
-
-    // Inspect click-pair silhouette when not hovering.
-    if (inspectDev && !transforming && inspectPairId) {
-      pushId(inspectPairId);
-    }
-
-    // Inspect select: path silhouette only (spacing/size badges removed — reimplement later).
-    if (
-      inspectDev &&
-      !transforming &&
-      inspectPrimaryId &&
-      !parseFrameSelId(inspectPrimaryId) &&
-      nodeUsesPathChrome(document?.deltaSetLike?.[inspectPrimaryId])
-    ) {
-      pushId(inspectPrimaryId);
-    }
-
-    // Edit idle: selected path chrome + handles (single).
-    if (!inspectDev && !transforming) {
-      for (const sid of selectedNodeIds) {
-        const sn = document?.deltaSetLike?.[sid];
-        if (!nodeUsesPathChrome(sn)) continue;
-        pushId(sid);
-        // Single only — multi uses one world SelectionChrome, not per-host knobs.
-        if (hostHandlesOk) handleIds.add(sid);
-      }
-    }
-
-    // Transform: keep mover path chrome mounted (geometry live-updates with drag).
-    if (
-      !inspectDev &&
-      transforming &&
-      selectedNodeIds.length === 1 &&
-      selectedFrameIds.length === 0
-    ) {
-      const sid = selectedNodeIds[0];
-      const sn = sid ? document?.deltaSetLike?.[sid] : null;
-      if (sid && nodeUsesPathChrome(sn)) {
-        pushId(sid);
-        const hostGeom = liveShapeGeomBox(sid);
-        const liveChrome = liveOrigins?.find((o) => o.nodeId === sid)?.box;
-        const anchorBox =
-          hostGeom ||
-          (liveChrome ? deflateSelectionBox(liveChrome, sn) : null) ||
-          (() => {
-            const chrome = getNodeBox(sid);
-            return chrome ? deflateSelectionBox(chrome, sn) : null;
-          })();
-        if (anchorBox) hostGuideBoxById.set(sid, anchorBox);
-      }
-    }
-
-    const out: ShapeOutlineItem[] = [];
-    for (const id of ids) {
-      const node = document?.deltaSetLike?.[id];
-      if (!nodeUsesPathChrome(node)) continue;
-      const liveChrome =
-        transforming && liveOrigins
-          ? liveOrigins.find((o) => o.nodeId === id)?.box
-          : null;
-      const chromeBox = liveChrome || getNodeBox(id);
-      if (!chromeBox) continue;
-      const geomBox =
-        hostGuideBoxById.get(id) ||
-        (liveChrome
-          ? deflateSelectionBox(liveChrome, node)
-          : liveShapeGeomBox(id) || deflateSelectionBox(chromeBox, node));
-      const gw = Math.max(1, geomBox.width);
-      const gh = Math.max(1, geomBox.height);
-      const rawPath = String(node.attrs?.path || node.attrs?.d || '');
-      const shapeType = String(node.attrs?.shapeType || '');
-      // Path / pen / pencil: always host-inject the real painted path — never AABB stand-in.
-      const vectorStroke =
-        shapeType === 'pencil' ||
-        shapeType === 'pen' ||
-        shapeType === 'path' ||
-        shapeType === 'line' ||
-        shapeType === 'arrow' ||
-        String(node.key || '') === 'path' ||
-        nodeUsesOpenStrokeEndpoints(node);
-      const pathD = vectorStroke
-        ? rawPath.trim().length >= 2
-          ? rawPath
-          : geometryIndicatorPathD(node, { width: gw, height: gh })
-        : rawPath.length >= HEAVY_PATH_D_CHARS
-          ? `M 0 0 H ${gw} V ${gh} H 0 Z`
-          : geometryIndicatorPathD(node, { width: gw, height: gh });
-      if (!pathD) continue;
-      rememberNodePath2D(id, pathD);
-      const angle =
-        id === singleId ? chromeAngle : readNodeAngle(document, id);
-      const lineMode = nodeUsesOpenStrokeEndpoints(node);
-      const shaftEndpoints = shapeType === 'line' || shapeType === 'arrow';
-      const withHandles = handleIds.has(id);
-      out.push({
-        id,
-        pathD,
-        box: geomBox,
-        angle,
-        color: '#3388ff',
-        withHandles,
-        // Selected with handles: control box only (no blue path silhouette).
-        // Hover / inspect without handles still show the path line.
-        showPath: !withHandles && !transforming,
-        lineMode,
-        shaftEndpoints,
-        showRotate: withHandles && !lineMode && !selectedIsImageGen && !selectedIsVideoGen,
-      });
-    }
-    return out;
-  })();
+  const shapeOutlines = buildShapeOutlines({
+    enabled,
+    suppressChrome,
+    readOnly,
+    document,
+    selectedNodeIds,
+    selectedFrameIds,
+    hoverNodeId,
+    inspectDev,
+    transforming,
+    inspectPrimaryId,
+    inspectPairNodeId,
+    singleId,
+    chromeAngle,
+    selectedIsImageGen,
+    selectedIsVideoGen,
+    liveOrigins,
+    getNodeBox,
+  });
 
   const hostInjectedSelection = isHostInjectedSelection(
     singleNode,
     singleId,
     shapeOutlines,
-    { inspectDev, node: singleNodeData }
+    {
+      inspectDev,
+      node: singleNodeData,
+      selectedFrameIds,
+      selectedNodeIds,
+    }
   );
 
-  /** Scene pad beyond chrome to outer stroke ink (center → sw/2 outside the box). */
-  const toolbarEdgePadScene = (() => {
-    if (!singleNodeData) return 0;
-    const visual = strokeVisualOutset(singleNodeData);
-    const chrome = Math.max(0, strokeChromeOutset(singleNodeData));
-    return Math.max(0, visual - chrome);
-  })();
-
-  /** SelectionChrome edge knobs: generators none; video/text L/R only; else all. */
-  function selectionEdgeHandles(): 'all' | 'horizontal' | 'none' {
-    if (selectedIsImageGen || selectedIsVideoGen) return 'none';
-    // Video scrubber on bottom — keep L/R only so S handle does not steal events.
-    if (selectedIsVideo) return 'horizontal';
-    if (!lineChrome && singleNodeData?.key === 'text') return 'horizontal';
-    return 'all';
-  }
+  const toolbarEdgePadScene = resolveToolbarEdgePadScene(singleNodeData);
+  const edgeHandles = resolveSelectionEdgeHandles({
+    selectedIsImageGen,
+    selectedIsVideoGen,
+    selectedIsVideo,
+    lineChrome,
+    nodeKey: singleNodeData?.key,
+  });
 
   // DPR seam diagnostics ??opt-in: window.__RCB_DPR_DEBUG__ = true
   useEffect(() => {
@@ -2365,53 +2794,33 @@ function SelectionFeature({
     logEdgeSamples(`selection(${selectedNodeIds.length})`, samples, dpr, camera);
   }, [enabled, selectedNodeIds, camera.x, camera.y, camera.zoom, getNodeBox, camera]);
 
-  // Idle selection bounds update in the same paint as Redux; liveUnion lags one
-  // effect tick and used to flash empty chrome when switching frames in preview.
-  const chromeUnion = (() => {
-    const base = transforming ? liveUnion : selectionUnion;
-    if (!base || transforming) return base;
-    // Single node: prefer live host geom when it matches document (subpixel align
-    // with path chrome). If the host lags a remount after move/resize, fall back
-    // to selectionUnion so shape knobs don't stick at the old seat.
-    if (selectedNodeIds.length === 1 && selectedFrameIds.length === 0) {
-      const live = liveShapeGeomBox(selectedNodeIds[0]);
-      if (
-        live &&
-        Math.abs(live.left - base.left) < 2 &&
-        Math.abs(live.top - base.top) < 2 &&
-        Math.abs(live.width - base.width) < 2 &&
-        Math.abs(live.height - base.height) < 2
-      ) {
-        return live;
-      }
-    }
-    return base;
-  })();
+  const chromeUnion = resolveChromeUnion({
+    transforming,
+    liveUnion,
+    selectionUnion,
+    selectedNodeIds,
+    selectedFrameIds,
+  });
 
-  const hoverImageReplaceId = (() => {
-    if (inspectDev || transforming || suppressToolbars) return null;
-    if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId) || parseFrameSelId(hoverNodeId)) {
-      return null;
-    }
-    const node = document?.deltaSetLike?.[hoverNodeId];
-    if (node?.key !== 'image') return null;
-    if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return null;
-    if (String(node?.attrs?.processStatus || '') === 'running') return null;
-    return hoverNodeId;
-  })();
+  const hoverImageReplaceId = resolveHoverImageReplaceId({
+    inspectDev,
+    transforming,
+    suppressToolbars,
+    hoverNodeId,
+    selectedNodeIds,
+    document,
+  });
   const hoverImageReplaceBox = hoverImageReplaceId ? getNodeBox(hoverImageReplaceId) : null;
 
-  const hoverVideoReplaceId = (() => {
-    if (inspectDev || transforming || suppressToolbars || readOnly) return null;
-    if (!hoverNodeId || selectedNodeIds.includes(hoverNodeId) || parseFrameSelId(hoverNodeId)) {
-      return null;
-    }
-    const node = document?.deltaSetLike?.[hoverNodeId];
-    if (node?.key !== 'video') return null;
-    if (isVideoGeneratorNode(node)) return null;
-    if (String(node?.attrs?.processStatus || '') === 'running') return null;
-    return hoverNodeId;
-  })();
+  const hoverVideoReplaceId = resolveHoverVideoReplaceId({
+    inspectDev,
+    transforming,
+    suppressToolbars,
+    readOnly,
+    hoverNodeId,
+    selectedNodeIds,
+    document,
+  });
   const hoverVideoReplaceBox = hoverVideoReplaceId ? getNodeBox(hoverVideoReplaceId) : null;
 
   // Marquee only — path multi-select uses host silhouettes + world union box.
@@ -2426,9 +2835,12 @@ function SelectionFeature({
     <>
       <ShapeOutlineSvg outlines={shapeOutlines} />
       <BrushOverlay box={marquee} />
+      <SmartGuidesOverlay
+        guides={smartGuides}
+        mirrorNodeId={liveOrigins?.[0]?.nodeId ?? selectedNodeIds[0] ?? null}
+      />
 
-      {/* World SelectionChrome only when idle — no control box while moving/resizing.
-          Multi: always the union box + corner handles. Single path: host silhouette. */}
+      {/* World SelectionChrome when idle — path single/multi use host-mirrored chrome. */}
       {chromeUnion &&
       !suppressChrome &&
       selectionCount > 0 &&
@@ -2450,7 +2862,7 @@ function SelectionFeature({
           }
           showBoxStroke={!lineChrome}
           interactiveBox={selectedFrameIds.length > 0}
-          edgeHandles={selectionEdgeHandles()}
+          edgeHandles={edgeHandles}
         />
       ) : null}
 

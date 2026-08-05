@@ -70,22 +70,24 @@ function asSingleFont(created: unknown): FkFont | null {
   return any.unitsPerEm ? any : null;
 }
 
+async function fetchFontkitFont(url: string): Promise<FkFont | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`font fetch ${res.status}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    return asSingleFont(createFontkitFont(buf));
+  } catch (err) {
+    console.warn('[outlineTextFont] failed to load font', url, err);
+    fontCache.delete(url);
+    return null;
+  }
+}
+
 async function loadFontkitFont(url: string): Promise<FkFont | null> {
   if (!url) return null;
   let pending = fontCache.get(url);
   if (!pending) {
-    pending = (async () => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`font fetch ${res.status}`);
-        const buf = new Uint8Array(await res.arrayBuffer());
-        return asSingleFont(createFontkitFont(buf));
-      } catch (err) {
-        console.warn('[outlineTextFont] failed to load font', url, err);
-        fontCache.delete(url);
-        return null;
-      }
-    })();
+    pending = fetchFontkitFont(url);
     fontCache.set(url, pending);
   }
   return pending;

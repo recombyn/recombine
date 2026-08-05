@@ -458,11 +458,14 @@ export function createShapeNode({
   const strokeW =
     borderWidth ??
     (shapeType === 'pen' || shapeType === 'pencil' || shapeType === 'line' || shapeType === 'arrow' ? 2 : 1);
-  // Integer scene pixels — half-pixel paths make 800% snap seams look like gaps.
-  const ix = Math.round(Number(x) || 0);
-  const iy = Math.round(Number(y) || 0);
-  const iw = Math.max(1, Math.round(Number(width) || 1));
-  const ih = Math.max(1, Math.round(Number(height) || 1));
+  // Stroke panel default — center on the path (inside/outside are explicit user picks).
+  const strokeAlignDefault = 'center';
+  // Quantize to 0.5px so odd center strokes can sit outer edges on integer grid
+  // (geom = visual ± sw/2). Full integers when sw is even / inside.
+  const ix = Math.round((Number(x) || 0) * 2) / 2;
+  const iy = Math.round((Number(y) || 0) * 2) / 2;
+  const iw = Math.max(1, Math.round((Number(width) || 1) * 2) / 2);
+  const ih = Math.max(1, Math.round((Number(height) || 1) * 2) / 2);
   if (shapeType === 'line' || shapeType === 'arrow') {
     return {
       id,
@@ -478,10 +481,16 @@ export function createShapeNode({
           shapeType,
           'border-color': stroke,
           'border-width': strokeW,
-          strokeAlign: 'center',
-          'stroke-align': 'center',
+          strokeAlign: strokeAlignDefault,
+          'stroke-align': strokeAlignDefault,
           'stroke-enabled': 'true',
           'stroke-visible': 'true',
+          // Must live on this early-return path — the general branch never runs
+          // for line/arrow (panel showed Butt while paint stayed Round).
+          strokeLinecap: 'butt',
+          'stroke-linecap': 'butt',
+          strokeLinejoin: 'miter',
+          'stroke-linejoin': 'miter',
           'fill-color': 'transparent',
           'fill-enabled': 'false',
           opacity: opacityVal,
@@ -508,8 +517,8 @@ export function createShapeNode({
         'fill-type': 'solid',
         'border-color': stroke,
         'border-width': strokeW,
-        strokeAlign: 'center',
-        'stroke-align': 'center',
+        strokeAlign: strokeAlignDefault,
+        'stroke-align': strokeAlignDefault,
         'stroke-enabled': 'true',
         'stroke-visible': 'true',
         'fill-enabled':
@@ -540,14 +549,14 @@ export function createShapeNode({
         ...((shapeType === 'pen' || shapeType === 'path' || path) && {
           closed: closed ? 'true' : 'false',
         }),
-        // Pen / line → butt+miter (stroke panel default). Pencil / arrow stay round.
-        ...((shapeType === 'pencil' || shapeType === 'arrow') && {
+        // Pen / line / arrow → butt+miter (stroke panel default). Pencil stays round.
+        ...(shapeType === 'pencil' && {
           strokeLinecap: 'round',
           'stroke-linecap': 'round',
           strokeLinejoin: 'round',
           'stroke-linejoin': 'round',
         }),
-        ...((shapeType === 'pen' || shapeType === 'line') && {
+        ...((shapeType === 'pen' || shapeType === 'line' || shapeType === 'arrow') && {
           strokeLinecap: 'butt',
           'stroke-linecap': 'butt',
           strokeLinejoin: 'miter',

@@ -17,7 +17,7 @@ export type CollabPeer = {
   /** Artboard / frame selection (data-frame-id). */
   selectedFrameIds: string[];
   cursor: { x: number; y: number } | null;
-  /** Remote viewport — used for Figma-style “follow”. */
+  /** Remote viewport for peer follow. */
   camera: CollabPeerCamera | null;
 };
 

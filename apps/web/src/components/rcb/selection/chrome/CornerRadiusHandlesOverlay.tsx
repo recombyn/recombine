@@ -1,13 +1,15 @@
 /**
  * Shape handles — corner radius.
  * Pointer engine stays in SelectionFeature; this paints world-SVG knobs only.
+ *
+ * Paint shell mirrors the shape-host SVG (same as HostPathChrome sel knobs) so
+ * zoom / fractional DPR cannot desync dots from the blue control box.
  */
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { previewSvgNodeCornerRadii } from '@/components/rcb/scene/paint/sceneToSvg';
-import { useRcbCamera } from '@/components/rcb/camera/context';
-import { toDomPrecision } from '@/components/rcb/core/dpr';
+import { previewSvgNodeCornerRadii, snapSvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
+import { useRcbCamera, useRcbDevicePixelRatio } from '@/components/rcb/camera/context';
 import {
   clampCornerRadii,
   cornerVertexCount,
@@ -27,9 +29,10 @@ import {
   getShapeHost,
   getSharedNodeEls,
   notifyShapeHostGeometry,
+  subscribeShapeHosts,
 } from '@/components/rcb/shapes/shapeHostRegistry';
 import type { SceneBox } from '../alignGuides';
-import { WorldSvgFrame, WorldScreenBadge } from '../SelectionChrome';
+import { WorldScreenBadge } from '../SelectionChrome';
 
 /** Soft-click threshold (screen px²) — match SelectionFeature. */
 const DRAG_DISTANCE_SQUARED = 16;
@@ -53,6 +56,128 @@ function liveNodeEl(nodeId: string): Element | null {
     (getSharedNodeEls()?.get(nodeId) as Element | undefined) ||
     (getShapeHost(nodeId)?.el as Element | null | undefined) ||
     null
+  );
+}
+
+/**
+ * Twin the shape-host infinite SVG viewport (HostPathChrome sel-knob contract).
+ * Local children paint in host-local box space (0..w, 0..h); sceneChildren stay
+ * in absolute scene coords (badges).
+ */
+function HostMirroredKnobSvg({
+  nodeId,
+  box,
+  angle,
+  localChildren,
+  sceneChildren,
+}: {
+  nodeId: string;
+  box: SceneBox;
+  angle: number;
+  localChildren: ReactNode;
+  sceneChildren?: ReactNode;
+}) {
+  const camera = useRcbCamera();
+  const dpr = useRcbDevicePixelRatio();
+  const [hostEpoch, setHostEpoch] = useState(0);
+  useEffect(() => subscribeShapeHosts(() => setHostEpoch((n) => n + 1)), []);
+
+  const host = getShapeHost(nodeId);
+  const hostRoot = host?.root as SVGSVGElement | null | undefined;
+  const el = (host?.el || getSharedNodeEls()?.get(nodeId)) as SVGElement | null | undefined;
+  const w = Math.max(1, box.width);
+  const h = Math.max(1, box.height);
+  const pad = 32;
+
+  const hostViewBox = hostRoot?.getAttribute?.('viewBox') || '';
+  const hostCssLeft = hostRoot?.style?.left || '';
+  const hostCssTop = hostRoot?.style?.top || '';
+  const hostCssW = hostRoot?.style?.width || '';
+  const hostCssH = hostRoot?.style?.height || '';
+  const mirrored = Boolean(hostRoot && hostViewBox && hostCssLeft && hostCssTop);
+  void hostEpoch;
+
+  const hostTransform = el?.getAttribute?.('transform') || '';
+  let bodyTransform: string;
+  if (mirrored && hostTransform) {
+    bodyTransform = hostTransform;
+  } else if (mirrored) {
+    const hl = Number((el as any)?.__sceneLeft);
+    const ht = Number((el as any)?.__sceneTop);
+    bodyTransform = `translate(${Number.isFinite(hl) ? hl : box.left} ${Number.isFinite(ht) ? ht : box.top})`;
+  } else if (Math.abs(angle) > 0.001) {
+    bodyTransform = `translate(${box.left} ${box.top}) rotate(${angle} ${w / 2} ${h / 2})`;
+  } else {
+    bodyTransform = `translate(${box.left} ${box.top})`;
+  }
+
+  if (mirrored && hostRoot) {
+    const attrW = hostRoot.getAttribute('width');
+    const attrH = hostRoot.getAttribute('height');
+    return (
+      <svg
+        data-rcb-infinite="1"
+        className="absolute z-[28] overflow-visible"
+        preserveAspectRatio="none"
+        viewBox={hostViewBox}
+        width={attrW || undefined}
+        height={attrH || undefined}
+        style={{
+          left: hostCssLeft,
+          top: hostCssTop,
+          width: hostCssW || hostRoot.style.width,
+          height: hostCssH || hostRoot.style.height,
+          overflow: 'visible',
+          pointerEvents: 'none',
+          display: 'block',
+          shapeRendering: 'geometricPrecision',
+        }}
+        aria-hidden
+      >
+        <g transform={bodyTransform} style={{ pointerEvents: 'none' }}>
+          {localChildren}
+        </g>
+        {sceneChildren}
+      </svg>
+    );
+  }
+
+  const surf = snapSvgSurfaceBox(
+    {
+      left: box.left - pad,
+      top: box.top - pad,
+      width: w + pad * 2,
+      height: h + pad * 2,
+    },
+    camera,
+    dpr
+  );
+
+  return (
+    <svg
+      data-rcb-infinite="1"
+      className="absolute z-[28] overflow-visible"
+      preserveAspectRatio="none"
+      viewBox={`${surf.left} ${surf.top} ${surf.width} ${surf.height}`}
+      width={surf.width}
+      height={surf.height}
+      style={{
+        left: surf.left,
+        top: surf.top,
+        width: surf.width,
+        height: surf.height,
+        overflow: 'visible',
+        pointerEvents: 'none',
+        display: 'block',
+        shapeRendering: 'geometricPrecision',
+      }}
+      aria-hidden
+    >
+      <g transform={bodyTransform} style={{ pointerEvents: 'none' }}>
+        {localChildren}
+      </g>
+      {sceneChildren}
+    </svg>
   );
 }
 
@@ -122,6 +247,18 @@ function localPointToScene(
 function radiusSeatInset(r: number, halfSide: number, parkScene: number): number {
   const capped = Math.max(0, Math.min(Number(r) || 0, Math.max(0, halfSide - parkScene)));
   return Math.max(parkScene, capped);
+}
+
+/** Path sharp-corner radii list — stored vertices, or uniform fallback from box radii. */
+function resolvePathVertexRadii(
+  attrs: any,
+  pathVertexCount: number,
+  baseRadii: CornerRadii
+): number[] {
+  const stored = parseRadiusVertices(attrs?.radiusVertices);
+  if (stored.length === pathVertexCount) return stored;
+  const u = Math.round((baseRadii.tl + baseRadii.tr + baseRadii.br + baseRadii.bl) / 4);
+  return Array.from({ length: pathVertexCount }, () => (stored.length ? stored[0] ?? u : u));
 }
 
 function patchNodeCornerRadii(opts: {
@@ -252,16 +389,7 @@ function CornerRadiusHandlesOverlay({
   const usePath = Boolean(pathSites && pathSites.length > 0);
   const pathVertexCount = usePath ? pathSites!.length : 0;
   const pathVertices = usePath
-    ? (() => {
-        const stored = parseRadiusVertices(node?.attrs?.radiusVertices);
-        if (stored.length === pathVertexCount) return stored;
-        const u = Math.round(
-          (baseRadii.tl + baseRadii.tr + baseRadii.br + baseRadii.bl) / 4
-        );
-        return Array.from({ length: pathVertexCount }, () =>
-          stored.length ? stored[0] ?? u : u
-        );
-      })()
+    ? resolvePathVertexRadii(node?.attrs, pathVertexCount, baseRadii)
     : [];
 
   // Seat tracks R (scene). Tiny screen-constant park when R≈0 so it stays off the resize knob.
@@ -581,15 +709,6 @@ function CornerRadiusHandlesOverlay({
   const stroke = RADIUS_STROKE_PX * k;
   const halfVis = visualSize / 2;
   const halfHit = hitSize / 2;
-  const left = toDomPrecision(box.left);
-  const top = toDomPrecision(box.top);
-  const bw = toDomPrecision(w);
-  const bh = toDomPrecision(h);
-  // Viewport = box only (SelectionChrome). Knobs overflow so zoom does not resize the shell.
-  const gTransform =
-    Math.abs(angle) > 0.001
-      ? `translate(${left} ${top}) rotate(${angle} ${bw / 2} ${bh / 2})`
-      : `translate(${left} ${top})`;
 
   type HandleSpec = {
     key: string;
@@ -675,53 +794,56 @@ function CornerRadiusHandlesOverlay({
   }
 
   return (
-    <WorldSvgFrame left={left} top={top} width={bw} height={bh} angle={angle} zClass="z-[28]">
-      <g transform={gTransform}>
-        {handles.map((h) => {
-          const isActive = activeKey === h.key;
-          return (
-            <g
-              key={h.key}
-              data-radius-handle={h.key}
-              transform={`translate(${h.lx} ${h.ly})`}
-              style={{
-                pointerEvents: interactive ? 'all' : 'none',
-                cursor: interactive ? 'default' : undefined,
-              }}
-              onPointerDown={interactive ? h.onDown : undefined}
-            >
-              <rect x={-halfHit} y={-halfHit} width={hitSize} height={hitSize} fill="transparent" />
+    <HostMirroredKnobSvg
+      nodeId={nodeId}
+      box={box}
+      angle={angle}
+      localChildren={handles.map((h) => {
+        const isActive = activeKey === h.key;
+        return (
+          <g
+            key={h.key}
+            data-radius-handle={h.key}
+            transform={`translate(${h.lx} ${h.ly})`}
+            style={{
+              pointerEvents: interactive ? 'all' : 'none',
+              cursor: interactive ? 'default' : undefined,
+            }}
+            onPointerDown={interactive ? h.onDown : undefined}
+          >
+            <rect x={-halfHit} y={-halfHit} width={hitSize} height={hitSize} fill="transparent" />
+            <circle
+              r={Math.max(0.01, halfVis - stroke / 2)}
+              fill="#ffffff"
+              stroke="#3388ff"
+              strokeWidth={stroke}
+              style={{ pointerEvents: 'none' }}
+            />
+            {isActive ? (
               <circle
-                r={Math.max(0.01, halfVis - stroke / 2)}
-                fill="#ffffff"
-                stroke="#3388ff"
-                strokeWidth={stroke}
+                r={Math.max(0.01, halfVis + stroke)}
+                fill="none"
+                stroke="rgba(51,136,255,0.35)"
+                strokeWidth={2 * k}
                 style={{ pointerEvents: 'none' }}
               />
-              {isActive ? (
-                <circle
-                  r={Math.max(0.01, halfVis + stroke)}
-                  fill="none"
-                  stroke="rgba(51,136,255,0.35)"
-                  strokeWidth={2 * k}
-                  style={{ pointerEvents: 'none' }}
-                />
-              ) : null}
-            </g>
-          );
-        })}
-      </g>
-      {badgePos ? (
-        <WorldScreenBadge
-          text={`${t('editor.imageToolbar.cornerRadius')} ${badgeVal}`}
-          x={badgePos.x}
-          y={badgePos.y}
-          inv={k}
-          anchor="above"
-          clearance={12 * k}
-        />
-      ) : null}
-    </WorldSvgFrame>
+            ) : null}
+          </g>
+        );
+      })}
+      sceneChildren={
+        badgePos ? (
+          <WorldScreenBadge
+            text={`${t('editor.imageToolbar.cornerRadius')} ${badgeVal}`}
+            x={badgePos.x}
+            y={badgePos.y}
+            inv={k}
+            anchor="above"
+            clearance={12 * k}
+          />
+        ) : null
+      }
+    />
   );
 }
 

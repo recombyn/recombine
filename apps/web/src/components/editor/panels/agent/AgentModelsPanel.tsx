@@ -339,6 +339,34 @@ function modelOptions(
   return out;
 }
 
+function mergeModelCatalogPool(textModels: LlmModel[], imageModels: LlmModel[]): LlmModel[] {
+  const byId = new Map<string, LlmModel>();
+  for (const m of textModels) {
+    if (m?.id) byId.set(m.id, m);
+  }
+  for (const m of imageModels) {
+    if (!m?.id) continue;
+    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
+  }
+  return [...byId.values()];
+}
+
+function routePresetShortLabel(
+  preset: string | undefined,
+  t: (key: string) => string
+): string {
+  switch (preset) {
+    case 'balanced':
+      return t('account.agentRouteCard.balanced.title');
+    case 'quality':
+      return t('account.agentRouteCard.quality.title');
+    case 'custom':
+      return t('account.agentRouteCard.custom.title');
+    default:
+      return t('account.agentRouteCard.platform.title');
+  }
+}
+
 type CompactSubmenu =
   | { kind: 'preset' }
   | { kind: 'field'; key: 'fast' | 'standard' | 'reasoning' | 'vision' | 'image' }
@@ -485,17 +513,7 @@ function AgentRoutePrefsEditor({
     onChanged?.(routePrefs);
   };
 
-  const catalogPool = (() => {
-    const byId = new Map<string, LlmModel>();
-    for (const m of textModels) {
-      if (m?.id) byId.set(m.id, m);
-    }
-    for (const m of imageModels) {
-      if (!m?.id) continue;
-      byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
-    }
-    return [...byId.values()];
-  })();
+  const catalogPool = mergeModelCatalogPool(textModels, imageModels);
   const fastOpts = modelOptions(catalogPool, 'fast');
   const standardOpts = modelOptions(catalogPool, 'standard');
   const reasoningOpts = modelOptions(catalogPool, 'reasoning');
@@ -508,18 +526,7 @@ function AgentRoutePrefsEditor({
     { value: 'custom', label: t('account.agentRoutePresetCustom') },
   ];
 
-  const presetShortLabel = (() => {
-    switch (routePrefs.preset) {
-      case 'balanced':
-        return t('account.agentRouteCard.balanced.title');
-      case 'quality':
-        return t('account.agentRouteCard.quality.title');
-      case 'custom':
-        return t('account.agentRouteCard.custom.title');
-      default:
-        return t('account.agentRouteCard.platform.title');
-    }
-  })();
+  const presetShortLabel = routePresetShortLabel(routePrefs.preset, t);
 
   const fieldRows = [
     { key: 'fast' as const, label: t('account.agentRouteFast'), opts: fastOpts },

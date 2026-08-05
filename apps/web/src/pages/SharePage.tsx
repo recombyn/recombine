@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import DevPropertiesPanel from '@/components/editor/panels/DevPropertiesPanel';
 import {
   RCB_DEFAULT_CAMERA as DEFAULT_CAMERA,
+  RCB_MAX_ZOOM,
+  RCB_MIN_ZOOM,
   rcbFitCamera,
   zoomAtPoint,
   type RcbCamera as CanvasCamera,
@@ -227,7 +229,7 @@ function SharePage() {
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
-      const next = Math.min(8, Number((c.zoom * 1.1).toFixed(4)));
+      const next = Math.min(RCB_MAX_ZOOM, Number((c.zoom * 1.1).toFixed(4)));
       return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);
@@ -237,7 +239,7 @@ function SharePage() {
     setCamera((c) => {
       const el = stageRef.current;
       if (!el) return c;
-      const next = Math.max(0.05, Number((c.zoom / 1.1).toFixed(4)));
+      const next = Math.max(RCB_MIN_ZOOM, Number((c.zoom / 1.1).toFixed(4)));
       return zoomAtPoint(c, next, el.clientWidth / 2, el.clientHeight / 2);
     });
   }, []);

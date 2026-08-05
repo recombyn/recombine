@@ -143,7 +143,7 @@ export function useCanvasClipboard(args: UseCanvasClipboardArgs): CanvasClipboar
       const payload = clipboardRef.current;
       if (!doc || readOnly) return;
       if (!payload?.nodes?.length && !payload?.frames?.length) return;
-      // Keep paste nudge on the snap lattice (default 1px). ~10px feels like Figma.
+      // Paste nudge on the snap lattice (default 1px).
       const g = getDocumentGridSize(doc);
       const nudge = Math.max(10, snapCoordToGrid(10, g));
       const { document: next, ids: newIds, frameIds: newFrameIds } = pasteClipboardIntoDocument(

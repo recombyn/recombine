@@ -1,8 +1,12 @@
 import { readDevicePixelRatio, snapCssToDevicePixel, toDomPrecision } from './dpr';
 import type { RcbBox, RcbCamera, RcbVec } from './types';
 
+/** Camera zoom floor / ceiling (5% … 1200%). */
+export const RCB_MIN_ZOOM = 0.05;
+export const RCB_MAX_ZOOM = 12;
+
 export function rcbClampZoom(z: number) {
-  return Math.min(8, Math.max(0.05, Number(z.toFixed(4))));
+  return Math.min(RCB_MAX_ZOOM, Math.max(RCB_MIN_ZOOM, Number(z.toFixed(4))));
 }
 
 /**
@@ -202,7 +206,7 @@ export function rcbFitCamera(
   const ox = bounds.x || 0;
   const oy = bounds.y || 0;
   const pad = Math.max(0, padding);
-  const cap = Math.max(0.05, Math.min(8, maxZoom));
+  const cap = Math.max(RCB_MIN_ZOOM, Math.min(RCB_MAX_ZOOM, maxZoom));
   const availW = Math.max(1, vw - pad * 2);
   const availH = Math.max(1, vh - pad * 2);
   const zoom = rcbClampZoom(Math.min(availW / aw, availH / ah, cap));

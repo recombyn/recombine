@@ -6,7 +6,9 @@
 
 import type { Dispatch } from '@reduxjs/toolkit';
 import {
+  fetchDesignRunStatus,
   runDesignJob,
+  resumeDesignJob,
   postDesignSceneFeedback,
   type DesignJobEvent,
   type DesignRunMode,
@@ -17,6 +19,7 @@ import {
 import { removeNodesFromDocument, groupNodesInDocument } from '@/components/rcb/scene/document/sceneDocument';
 import { scalePathData } from '@/components/rcb/scene/document/pathScale';
 import { maxRadius, radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import { renderExport } from '@/components/rcb/scene/paint/exportImage';
 import {
   applyClientFrameHints,
   applyMemoryPatch,
@@ -149,6 +152,15 @@ function parseResolvedSize(
   const height = Math.max(64, Number(m[2]) || 0);
   if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
   return { width, height };
+}
+
+/** Client chip WxH — never let backend status rewrite it. */
+function parseLockedClientSize(canvasSize?: string | null): string | null {
+  const s = String(canvasSize || '')
+    .trim()
+    .toLowerCase()
+    .replace('*', 'x');
+  return /^\d+x\d+$/.test(s) ? s : null;
 }
 
 /** Pick artboard for edit context: @ chip → last agent frame → active → sole frame. */
@@ -909,6 +921,51 @@ export async function captureFocusFramePreview(
   } catch {
     return null;
   }
+}
+
+/**
+ * Prefer a real artboard raster for CLIP critique; fall back to schematic boxes.
+ * Caps longest edge so the scene_feedback POST stays small.
+ */
+export async function captureCritiquePreview(
+  doc: any,
+  focusFrameId?: string | null
+): Promise<string | null> {
+  if (typeof window === 'undefined' || !doc) return null;
+  const focus = String(focusFrameId || '').trim();
+  const frames: any[] = Array.isArray(doc.frames) ? doc.frames : [];
+  const frame =
+    (focus && frames.find((f) => f?.id === focus)) ||
+    frames.find((f) => f?.id) ||
+    null;
+  if (frame) {
+    try {
+      const w = Math.max(1, Number(frame.width) || 1);
+      const h = Math.max(1, Number(frame.height) || 1);
+      const maxSide = 640;
+      const multiplier = Math.min(1.25, Math.max(0.2, maxSide / Math.max(w, h)));
+      const rendered = await renderExport({
+        document: doc,
+        format: 'jpeg',
+        compress: true,
+        multiplier,
+        crop: {
+          x: Number(frame.x) || 0,
+          y: Number(frame.y) || 0,
+          width: w,
+          height: h,
+        },
+        backgroundColor: String(frame.backgroundColor || frame.fill || '#FFFFFF'),
+      });
+      if (rendered?.kind === 'raster' && rendered.dataUrl?.startsWith('data:image/')) {
+        // Drop oversized payloads (API caps ~1.5MB text).
+        if (rendered.dataUrl.length <= 1_400_000) return rendered.dataUrl;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return captureFocusFramePreview(doc, focusFrameId);
 }
 
 export type ToolOpResult = {
@@ -2035,10 +2092,20 @@ export type AgentStepEvent =
       painted?: boolean;
       choices?: string[];
       proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+      proposalId?: string;
+      taskId?: string;
       applyChoice?: string;
       choiceUi?: AskChoiceUi;
     }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; resumable?: boolean }
+  | {
+      type: 'paused';
+      taskId: string;
+      resumeToken?: string | null;
+      message?: string;
+      interruptKind?: string;
+    }
+  | { type: 'task'; taskId: string };
 
 export type PipelineProgress = {
   category: string;
@@ -2102,8 +2169,14 @@ export type RunDesignAgentParams = {
   routeOverrides?: Record<string, string> | null;
   /** Ask confirm: skip LLM and apply these ops (agent mode). */
   applyOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }> | null;
+  /** Ask confirm: bind to design_task.meta.ask_proposal. */
+  proposalId?: string | null;
+  proposalTaskId?: string | null;
   /** User-pinned skill keys/ids from `/` chips. */
   skillRefs?: string[] | null;
+  /** Resume a paused LangGraph run instead of starting a new /design/run. */
+  resumeTaskId?: string | null;
+  resumeToken?: string | null;
 };
 
 /** Map agent params → POST /design/run body (omit empty optional fields). */
@@ -2144,6 +2217,10 @@ function buildRunDesignJobBody(
   if (params.memory) body.memory = params.memory;
   if (params.applyOps?.length) {
     body.apply_ops = params.applyOps as Array<Record<string, unknown>>;
+  }
+  if (params.proposalId) body.proposal_id = String(params.proposalId).trim();
+  if (params.proposalTaskId) {
+    body.proposal_task_id = String(params.proposalTaskId).trim();
   }
   if (params.skillRefs?.length) {
     body.skill_refs = params.skillRefs.map((x) => String(x).trim()).filter(Boolean);
@@ -2307,6 +2384,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     painted?: boolean;
     choices?: string[];
     proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+    proposalId?: string;
+    taskId?: string;
     applyChoice?: string;
     choiceUi?: AskChoiceUi;
   } | null = null;
@@ -2317,13 +2396,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
   /** Early greeting divert — ignore Explored stage SSE after clear. */
   let chatDiverted = false;
   /** Client chip WxH — never let backend status rewrite it. */
-  const lockedClientSize = (() => {
-    const s = String(params.canvasSize || '')
-      .trim()
-      .toLowerCase()
-      .replace('*', 'x');
-    return /^\d+x\d+$/.test(s) ? s : null;
-  })();
+  const lockedClientSize = parseLockedClientSize(params.canvasSize);
   let liveCanvasSize = lockedClientSize || params.canvasSize || null;
   /** Pre-draw grade=good refs actually attached to vision (activity UI). */
   let aesRefsAttached = 0;
@@ -2565,7 +2638,10 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
 
   const handleStreamStatus = (ev: any) => {
 
-    if (ev.task_id) liveTaskId = String(ev.task_id);
+    if (ev.task_id) {
+      liveTaskId = String(ev.task_id);
+      params.onEvent({ type: 'task', taskId: liveTaskId });
+    }
     if (ev.status === 'routing') {
       // Legacy status — ignore (no longer emitted).
       return;
@@ -2972,6 +3048,9 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       });
       const opResults = pendingOpResults;
       pendingOpResults = [];
+      const previewImage = await captureCritiquePreview(docNow, focusId).catch(
+        () => null
+      );
       console.info('[scene_feedback] post', {
         taskId,
         round,
@@ -2980,6 +3059,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         frames: frames.map((f) => ({ id: f.id, is_empty: f.is_empty })),
         emptyRects: spatial.empty_rects.length,
         opFailed: opResults.filter((r) => !r.ok).length,
+        hasPreview: Boolean(previewImage),
       });
       await postDesignSceneFeedback(
         taskId,
@@ -2990,6 +3070,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
             : {}),
           spatial_summary: spatial as unknown as Record<string, unknown>,
           ...(opResults.length ? { op_results: opResults } : {}),
+          ...(previewImage ? { preview_image: previewImage } : {}),
           round,
         },
         params.signal
@@ -3073,6 +3154,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     }
     const applyChoice = String(ev.apply_choice || '').trim() || undefined;
     const choiceUi = normalizeChoiceUi(ev.choice_ui);
+    const proposalId = String(ev.proposal_id || '').trim() || undefined;
+    const resultTaskId = String(ev.task_id || '').trim() || undefined;
     emitPhase(Math.max(labels.length, 1), ev.scene || params.scene || 'design');
     pendingDone = {
       summary: resultSummary,
@@ -3083,6 +3166,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         blankArtboard,
       choices: resultChoices.length ? resultChoices : undefined,
       proposedOps: resultProposed?.length ? resultProposed : undefined,
+      proposalId,
+      taskId: resultTaskId,
       applyChoice,
       choiceUi,
     };
@@ -3213,7 +3298,36 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         case 'result':
           handleStreamResult(ev);
           return;
+        case 'paused': {
+          const tid = String(ev.task_id || liveTaskId || '').trim();
+          if (tid) liveTaskId = tid;
+          params.onEvent({
+            type: 'paused',
+            taskId: tid,
+            resumeToken: ev.resume_token || undefined,
+            message: ev.message,
+            interruptKind: ev.interrupt_kind,
+          });
+          return;
+        }
+        case 'cancelled':
+          params.onEvent({
+            type: 'error',
+            message: 'cancelled',
+          });
+          return;
         case 'error':
+          if (ev.resumable && (ev.task_id || liveTaskId)) {
+            const tid = String(ev.task_id || liveTaskId || '').trim();
+            if (tid) liveTaskId = tid;
+            params.onEvent({
+              type: 'paused',
+              taskId: tid,
+              message: ev.message || 'design_paused',
+              interruptKind: 'error',
+            });
+            return;
+          }
           params.onEvent({ type: 'error', message: ev.message || 'design_failed' });
           return;
         default:
@@ -3221,28 +3335,70 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       }
     };
 
-    await runDesignJob(buildRunDesignJobBody(params, runMode), {
-      signal: params.signal,
-      onmessage: (frame) => {
-        const raw = String(frame.data || '').trim();
-        if (!raw || raw === '[DONE]') return;
+    const onStreamMessage = (frame: { event: string; data: string }) => {
+      const raw = String(frame.data || '').trim();
+      if (!raw || raw === '[DONE]') return;
+      try {
+        onStreamEvent(JSON.parse(raw) as DesignJobEvent);
+      } catch {
+        /* ignore malformed SSE frame */
+      }
+    };
+
+    const onStreamError = async (err: Error) => {
+      if (params.signal?.aborted) return;
+      const msg = err.message || String(err);
+      const networkish = /Failed to fetch|NetworkError|ERR_|timeout|aborted/i.test(msg);
+      if (liveTaskId && networkish) {
         try {
-          onStreamEvent(JSON.parse(raw) as DesignJobEvent);
+          const st = await fetchDesignRunStatus(liveTaskId, params.signal);
+          if (st?.resumable) {
+            params.onEvent({
+              type: 'paused',
+              taskId: liveTaskId,
+              resumeToken: st.resume_token,
+              message:
+                'Connection lost — generation paused. You can resume from the checkpoint.',
+              interruptKind: st.interrupt_kind || 'paused',
+            });
+            return;
+          }
         } catch {
-          /* ignore malformed SSE frame */
+          /* fall through to error */
         }
-      },
-      onerror: (err) => {
-        if (params.signal?.aborted) return;
-        const msg = err.message || String(err);
-        params.onEvent({
-          type: 'error',
-          message: /Failed to fetch|NetworkError|ERR_/i.test(msg)
-            ? 'Connection lost (proxy timeout or API reload). Retry; avoid saving API code mid-run.'
-            : msg || 'Failed to fetch',
-        });
-      },
-    });
+      }
+      params.onEvent({
+        type: 'error',
+        message: networkish
+          ? 'Connection lost (proxy timeout or API reload). Retry; avoid saving API code mid-run.'
+          : msg || 'Failed to fetch',
+      });
+    };
+
+    const resumeId = String(params.resumeTaskId || '').trim();
+    if (resumeId) {
+      liveTaskId = resumeId;
+      params.onEvent({ type: 'task', taskId: resumeId });
+      await resumeDesignJob(
+        resumeId,
+        { resume_token: params.resumeToken || undefined },
+        {
+          signal: params.signal,
+          onmessage: onStreamMessage,
+          onerror: (err) => {
+            void onStreamError(err);
+          },
+        }
+      );
+    } else {
+      await runDesignJob(buildRunDesignJobBody(params, runMode), {
+        signal: params.signal,
+        onmessage: onStreamMessage,
+        onerror: (err) => {
+          void onStreamError(err);
+        },
+      });
+    }
     await paintChain.catch(() => undefined);
     params.dispatch(cancelImportPlaceholder());
 
@@ -3256,6 +3412,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         proposedOps: pendingDone.proposedOps?.length
           ? pendingDone.proposedOps
           : undefined,
+        proposalId: pendingDone.proposalId || undefined,
+        taskId: pendingDone.taskId || undefined,
         applyChoice: pendingDone.applyChoice || undefined,
         choiceUi: pendingDone.choiceUi,
       });

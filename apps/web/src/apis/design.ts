@@ -231,7 +231,50 @@ export type DesignJobEvent =
     }
   | { type: 'replan'; action: string; skipped?: string[]; reason?: string }
   | { type: 'subgoals'; goals: string[] }
-  | { type: 'error'; message: string; task_id?: string; refunded_credits?: number };
+  | {
+      type: 'error';
+      message: string;
+      task_id?: string;
+      refunded_credits?: number;
+      resumable?: boolean;
+    }
+  | {
+      type: 'paused';
+      task_id?: string;
+      trace_id?: string;
+      resumable?: boolean;
+      interrupt_kind?: string;
+      message?: string;
+      resume_token?: string;
+    }
+  | {
+      type: 'cancelled';
+      task_id?: string;
+      trace_id?: string;
+      refunded_credits?: number;
+    }
+  | {
+      type: 'status';
+      task_id?: string;
+      trace_id?: string;
+      resumed?: boolean;
+      status?: string;
+      [key: string]: unknown;
+    };
+
+export type DesignRunStatus = {
+  task_id: string;
+  status: string;
+  resumable: boolean;
+  hold_credits?: number;
+  charged_credits?: number;
+  error_message?: string | null;
+  thread_id?: string;
+  interrupt_kind?: string | null;
+  checkpoint_at?: number | null;
+  resume_token?: string | null;
+  updated_at?: number;
+};
 
 export type RunDesignJobBody = {
   run_mode: DesignRunMode;
@@ -265,6 +308,9 @@ export type RunDesignJobBody = {
   };
   /** Ask confirm: apply previously proposed tool_ops without a new LLM plan. */
   apply_ops?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+  /** Bind confirm to design_task.meta.ask_proposal. */
+  proposal_id?: string;
+  proposal_task_id?: string;
   /** User-pinned skills from `/` chips (skill keys or ids). */
   skill_refs?: string[];
 };
@@ -347,6 +393,50 @@ export const runDesignJob = (body: RunDesignJobBody, config: SseHandlers = {}) =
     onclose: config.onclose,
   });
 
+/** GET /design/run/{taskId} — pause/resume status. */
+export const fetchDesignRunStatus = (taskId: string, signal?: AbortSignal) =>
+  request<DesignRunStatus>({
+    url: `/api/v1/design/run/${encodeURIComponent(taskId)}`,
+    method: 'get',
+    signal,
+    timeout: 15000,
+  });
+
+/** POST /design/run/{taskId}/pause — keep LangGraph checkpoint. */
+export const pauseDesignRun = (taskId: string, signal?: AbortSignal) =>
+  request<{ ok?: boolean; status?: string; error?: string; already?: boolean }>({
+    url: `/api/v1/design/run/${encodeURIComponent(taskId)}/pause`,
+    method: 'post',
+    signal,
+    timeout: 15000,
+  });
+
+/** POST /design/run/{taskId}/cancel — abandon + refund. */
+export const cancelDesignRun = (taskId: string, signal?: AbortSignal) =>
+  request<{ ok?: boolean; status?: string; error?: string }>({
+    url: `/api/v1/design/run/${encodeURIComponent(taskId)}/cancel`,
+    method: 'post',
+    signal,
+    timeout: 15000,
+  });
+
+/** POST /design/run/{taskId}/resume SSE — continue from checkpoint. */
+export const resumeDesignJob = (
+  taskId: string,
+  body: { resume_token?: string | null } = {},
+  config: SseHandlers = {}
+) =>
+  sse({
+    url: `/api/v1/design/run/${encodeURIComponent(taskId)}/resume`,
+    method: 'POST',
+    body,
+    signal: config.signal,
+    onopen: config.onopen,
+    onmessage: config.onmessage,
+    onerror: config.onerror,
+    onclose: config.onclose,
+  });
+
 /** After tool_ops paint: push real canvas inventory for the next agent round. */
 export const postDesignSceneFeedback = (
   taskId: string,
@@ -355,6 +445,8 @@ export const postDesignSceneFeedback = (
     scene_frames?: Array<Record<string, unknown>>;
     spatial_summary?: Record<string, unknown>;
     op_results?: Array<{ op_id: string; name: string; ok: boolean; error?: string }>;
+    /** JPEG/PNG data URL of focus artboard for CLIP critique. */
+    preview_image?: string;
     round?: number;
   },
   signal?: AbortSignal
@@ -364,7 +456,7 @@ export const postDesignSceneFeedback = (
     method: 'post',
     data,
     signal,
-    timeout: 15000,
+    timeout: 30000,
   });
 
 /** Official brush wheel from admin material library. */

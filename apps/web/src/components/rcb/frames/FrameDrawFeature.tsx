@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import type { RcbCamera } from '../core/types';
+import { useRcbDevicePixelRatio } from '../camera/context';
+import { snapSvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
 
 
 type FrameDrawFeatureProps = {
@@ -30,13 +32,14 @@ function clientToWorld(
   };
 }
 
-/** Drag on empty world to create an HTML Frame (智能画板). */
+/** Drag on empty world to create an artboard frame (SVG plate). */
 function FrameDrawFeature({
   enabled,
   camera,
   stageEl,
   onCommit,
 }: FrameDrawFeatureProps) {
+  const dpr = useRcbDevicePixelRatio();
   const dragRef = useRef<{ x0: number; y0: number } | null>(null);
   const [preview, setPreview] = useState<{
     x: number;
@@ -97,35 +100,63 @@ function FrameDrawFeature({
   const inv = 1 / Math.max(0.05, camera.zoom || 1);
   const labelFont = 10 * inv;
   const labelGap = 10 * inv;
+  const w = Math.max(1, preview.width);
+  const h = Math.max(1, preview.height);
 
+  // Same scene-lattice quantize as hosts / pixel grid.
+  const surf = snapSvgSurfaceBox(
+    { left: preview.x, top: preview.y, width: w, height: h },
+    camera,
+    dpr
+  );
+  const x = preview.x;
+  const y = preview.y;
   return (
-    <div
-      className="pointer-events-none absolute bg-white"
+    <svg
+      data-frame-draw-preview
+      data-rcb-infinite="1"
+      className="pointer-events-none absolute overflow-visible"
+      width={surf.width}
+      height={surf.height}
+      viewBox={`${surf.left} ${surf.top} ${surf.width} ${surf.height}`}
+      preserveAspectRatio="none"
       style={{
-        left: preview.x,
-        top: preview.y,
-        width: preview.width,
-        height: preview.height,
-        // Match HtmlArtboardFrame default plate edge (grey), not selection blue.
-        boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent)',
+        left: surf.left,
+        top: surf.top,
+        width: surf.width,
+        height: surf.height,
+        overflow: 'visible',
+        display: 'block',
+        shapeRendering: 'geometricPrecision',
       }}
+      aria-hidden
     >
+      <rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        fill="#FFFFFF"
+        stroke="color-mix(in srgb, var(--ink) 12%, transparent)"
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+      />
       {showSize ? (
-        <div
-          className="pointer-events-none absolute left-1/2 whitespace-nowrap font-medium text-[var(--muted)]"
-          style={{
-            top: -labelGap,
-            fontSize: labelFont,
-            lineHeight: 1.2,
-            transform: 'translate(-50%, -100%)',
-          }}
+        <text
+          x={x + w / 2}
+          y={y - labelGap}
+          fill="var(--muted)"
+          fontSize={labelFont}
+          fontWeight={500}
+          textAnchor="middle"
+          dominantBaseline="auto"
         >
           {Math.round(preview.width)}
           {' × '}
           {Math.round(preview.height)}
-        </div>
+        </text>
       ) : null}
-    </div>
+    </svg>
   );
 }
 

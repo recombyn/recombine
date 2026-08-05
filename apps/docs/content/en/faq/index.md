@@ -42,7 +42,7 @@ Deleting an upload placeholder aborts the transfer and **cannot be undone**. If 
 ## Agent & image generation
 
 **Difference between Agent / Ask / Image?**  
-Agent edits canvas directly; Ask answers plans (confirm to execute); Image focused on generation. See [Using Agent](/guide/agent).
+Agent edits the canvas directly; Ask answers / proposes a plan with an ops preview and applies only after **Confirm**; Image focuses on generation. Long runs support pause and resume. See [Using Agent](/guide/agent).
 
 **Checkpoint undo lost after refresh / snapshot invalid?**  
 Some checkpoints are session-only and expire after refresh. Keep or export important results. See [Using Agent · Checkpoints](/guide/agent#checkpoints--restore).

@@ -24,6 +24,24 @@ function videoSrcNeedsAuthFetch(src: string): boolean {
   return isOurStoredImageUrl(s);
 }
 
+function resolveAbsoluteHref(href: string): string {
+  try {
+    return new URL(href, window.location.href).href;
+  } catch {
+    return href;
+  }
+}
+
+function resolveVideoElementAbsSrc(el: HTMLVideoElement): string {
+  try {
+    if (el.currentSrc) return el.currentSrc;
+    const attr = el.getAttribute('src') || '';
+    return attr ? new URL(attr, window.location.href).href : '';
+  } catch {
+    return el.getAttribute('src') || '';
+  }
+}
+
 /**
  * Resolve a canvas / upload video `src` into something the player can play.
  * Auth-gated uploads → blob URL; public / data / blob URLs pass through.
@@ -249,22 +267,8 @@ function VideoJsPlayer({
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !playable) return;
-    const abs = (() => {
-      try {
-        return new URL(playable, window.location.href).href;
-      } catch {
-        return playable;
-      }
-    })();
-    const currentAbs = (() => {
-      try {
-        if (el.currentSrc) return el.currentSrc;
-        const attr = el.getAttribute('src') || '';
-        return attr ? new URL(attr, window.location.href).href : '';
-      } catch {
-        return el.getAttribute('src') || '';
-      }
-    })();
+    const abs = resolveAbsoluteHref(playable);
+    const currentAbs = resolveVideoElementAbsSrc(el);
     if (currentAbs === abs) return;
 
     // Real src change only — do not try to restore previous currentTime.

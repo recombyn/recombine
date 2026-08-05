@@ -81,15 +81,26 @@ export function getShapeBaseline(
   const key = String(node.key || '');
   const shapeType = resolveShapeType(node);
 
-  if (shapeType === 'text' || shapeType === 'image' || key === 'text' || key === 'image') {
+  if (shapeType === 'text' || shapeType === 'image' || key === 'text' || key === 'image' || key === 'video') {
+    // Match sceneToSvg plate / clip path (generators are always sharp).
+    const gen =
+      (key === 'image' &&
+        (node.attrs?.imageGenerator === true ||
+          node.attrs?.imageGenerator === 'true' ||
+          node.attrs?.imageGenerator === 1 ||
+          node.attrs?.imageGenerator === '1')) ||
+      (key === 'video' &&
+        (node.attrs?.videoGenerator === true ||
+          node.attrs?.videoGenerator === 'true' ||
+          node.attrs?.videoGenerator === 1 ||
+          node.attrs?.videoGenerator === '1'));
+    const r = gen
+      ? { tl: 0, tr: 0, br: 0, bl: 0 }
+      : key === 'text'
+        ? { tl: 0, tr: 0, br: 0, bl: 0 }
+        : clampCornerRadii(radiiFromAttrs(node.attrs), w, h);
     return {
-      d: new PathBuilder()
-        .moveTo(0, 0)
-        .lineTo(w, 0)
-        .lineTo(w, h)
-        .lineTo(0, h)
-        .close()
-        .toD(),
+      d: roundedRectPath(w, h, r),
       closed: true,
       kind: 'box',
     };

@@ -21,6 +21,11 @@ import {
   rcbZoomAtPoint,
 } from '../core/math';
 import { RCB_DEFAULT_CAMERA, type RcbCamera } from '../core/types';
+import {
+  setInfiniteSvgPaintCamera,
+  snapInfiniteSvgViewportToCamera,
+} from '../scene/paint/sceneToSvg';
+import { listShapeHosts } from '../shapes/shapeHostRegistry';
 import { DEFAULT_GRID_SIZE, shouldShowPixelGrid } from '../selection/alignGuides';
 
 export type { RcbCamera };
@@ -60,8 +65,8 @@ export type RcbCanvasProps = {
   /** Optional SVG defs / ambient nodes inside the viewport (not scaled). */
   defs?: ReactNode;
   /**
-   * Pixel-grid pitch in scene units (default 1). Overlay auto-shows around ≥400%
-   * zoom and paints only the viewport (screen-space) for performance.
+   * Pixel-grid pitch in scene units (default 1). Overlay auto-shows around ≥800%
+   * zoom; paints a viewport-sized tile on the world layer (scene-aligned).
    */
   gridSize?: number;
   stageRef?: RefObject<HTMLDivElement | null>;
@@ -411,13 +416,36 @@ function RcbCanvas({
   // Must stay in sync with rcbScreenToScene / rcbSceneToScreen.
   const { x: camX, y: camY } = rcbCameraScreenOffset(camera, devicePixelRatio);
   const camZ = rcbCameraCssZoom(camera);
+  // Notify paint module of camera (API compat); host surfaces use scene lattice only.
+  setInfiniteSvgPaintCamera(camera, devicePixelRatio);
   const g = gridSize > 0 ? gridSize : DEFAULT_GRID_SIZE;
-  const showPixelGrid = shouldShowPixelGrid(camZ, devicePixelRatio);
-  // Screen-space cell size + origin so lines lock to scene integers without a
-  // 200k² world tile (that was the perf hit at mid zoom).
-  const gridCellPx = camZ * g;
-  const gridPosX = ((camX % gridCellPx) + gridCellPx) % gridCellPx;
-  const gridPosY = ((camY % gridCellPx) + gridCellPx) % gridCellPx;
+  const showPixelGrid = shouldShowPixelGrid(camZ);
+  // World-layer scene surface in **integer scene** units (same lattice as draw snap
+  // and shape-host CSS/viewBox). Never device-pixel-shift — that desyncs grid
+  // hairlines from path ink under fractional browser DPR.
+  // Hairline ≪ cell: `1/zoom` scene units → ~1 CSS px after `scale(zoom)`.
+  const gridLineScene = Math.min(g * 0.35, 1 / Math.max(0.05, camZ));
+  const stageW = viewportEl?.clientWidth || 0;
+  const stageH = viewportEl?.clientHeight || 0;
+  const sceneLeft = -camX / camZ;
+  const sceneTop = -camY / camZ;
+  const sceneW = stageW > 0 ? stageW / camZ : 0;
+  const sceneH = stageH > 0 ? stageH / camZ : 0;
+  const gridPad = g * 2;
+  const q = (n: number) => Math.round(n * 1e4) / 1e4;
+  const gridCssLeft = q(Math.floor(sceneLeft / g) * g - gridPad);
+  const gridCssTop = q(Math.floor(sceneTop / g) * g - gridPad);
+  const gridCssW = q(Math.ceil(sceneW / g) * g + gridPad * 2);
+  const gridCssH = q(Math.ceil(sceneH / g) * g + gridPad * 2);
+  const gridPatternId = 'rcb-pixel-grid-pat';
+
+  // Re-quantize mounted hosts when camera / browser DPR changes (scene lattice).
+  useEffect(() => {
+    setInfiniteSvgPaintCamera(camera, devicePixelRatio);
+    for (const h of listShapeHosts()) {
+      if (h.root) snapInfiniteSvgViewportToCamera(h.root, camera, devicePixelRatio);
+    }
+  }, [camera.x, camera.y, camera.zoom, devicePixelRatio]);
 
   return (
     <RcbCameraContext.Provider value={camera}>
@@ -448,23 +476,7 @@ function RcbCanvas({
               }}
             >
               {defs}
-              {/* Viewport-only pixel grid (not in the scaled world — cheap + auto ≥400%). */}
-              {showPixelGrid ? (
-                <div
-                  aria-hidden
-                  data-rcb-pixel-grid="1"
-                  className="pointer-events-none absolute inset-0 z-0"
-                  style={{
-                    backgroundImage: [
-                      'linear-gradient(to right, color-mix(in srgb, var(--line) 50%, transparent) 0, color-mix(in srgb, var(--line) 50%, transparent) 1px, transparent 1px)',
-                      'linear-gradient(to bottom, color-mix(in srgb, var(--line) 50%, transparent) 0, color-mix(in srgb, var(--line) 50%, transparent) 1px, transparent 1px)',
-                    ].join(', '),
-                    backgroundSize: `${gridCellPx}px ${gridCellPx}px`,
-                    backgroundPosition: `${gridPosX}px ${gridPosY}px`,
-                  }}
-                />
-              ) : null}
-              {/* Camera layer. Shapes + selection chrome. */}
+              {/* Camera layer. Shapes + selection chrome + scene pixel grid. */}
               <div
                 className="rcb-html-layer absolute left-0 top-0 z-[1] origin-top-left overflow-visible [&>*]:pointer-events-auto"
                 data-rcb-world="1"
@@ -477,6 +489,59 @@ function RcbCanvas({
                   ['--rcb-scale' as string]: `calc(1 / ${camZ})`,
                 }}
               >
+                {/* One scene-surface SVG: pixel grid + draw ephemeral share viewBox. */}
+                {gridCssW > 0 && gridCssH > 0 ? (
+                  <svg
+                    aria-hidden
+                    data-rcb-scene-surface="1"
+                    data-rcb-pixel-grid={showPixelGrid ? '1' : undefined}
+                    data-rcb-infinite="1"
+                    className="pointer-events-none absolute z-0 overflow-visible"
+                    width={gridCssW}
+                    height={gridCssH}
+                    viewBox={`${gridCssLeft} ${gridCssTop} ${gridCssW} ${gridCssH}`}
+                    preserveAspectRatio="none"
+                    style={{
+                      left: gridCssLeft,
+                      top: gridCssTop,
+                      width: gridCssW,
+                      height: gridCssH,
+                      display: 'block',
+                      overflow: 'visible',
+                      shapeRendering: 'geometricPrecision',
+                    }}
+                  >
+                    {showPixelGrid ? (
+                      <>
+                        <defs>
+                          <pattern
+                            id={gridPatternId}
+                            x={0}
+                            y={0}
+                            width={g}
+                            height={g}
+                            patternUnits="userSpaceOnUse"
+                          >
+                            <path
+                              d={`M ${g} 0 V ${g} M 0 ${g} H ${g}`}
+                              fill="none"
+                              stroke="color-mix(in srgb, var(--line) 50%, transparent)"
+                              strokeWidth={gridLineScene}
+                            />
+                          </pattern>
+                        </defs>
+                        <rect
+                          x={gridCssLeft}
+                          y={gridCssTop}
+                          width={gridCssW}
+                          height={gridCssH}
+                          fill={`url(#${gridPatternId})`}
+                        />
+                      </>
+                    ) : null}
+                    <g data-rcb-ephemeral="1" pointerEvents="none" />
+                  </svg>
+                ) : null}
                 {children}
               </div>
               <div
