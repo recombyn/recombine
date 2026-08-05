@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from services.job_store import update_job
-from services.pipeline import run_import
+from app.services.job_store import update_job
+from app.services.pipeline import run_import
 from worker.celery_app import celery
 
 
@@ -32,7 +32,7 @@ def run_import_job(self, job_id: str, source_type: str, file_path: str) -> dict:
 @celery.task(name="worker.tasks.embed_quality_sample_job", bind=True)
 def embed_quality_sample_job(self, sample_id: int) -> dict:
     """OpenCLIP three-tower embed for design_quality_sample."""
-    from services.design.aesthetics.embed_job import embed_quality_sample
+    from app.services.design.aesthetics.embed_job import embed_quality_sample
 
     return embed_quality_sample(int(sample_id))
 
@@ -40,6 +40,6 @@ def embed_quality_sample_job(self, sample_id: int) -> dict:
 @celery.task(name="worker.tasks.run_db_backup_job")
 def run_db_backup_job(reason: str = "celery") -> dict:
     """Periodic DB backup (SQLite snapshot or MySQL/Postgres dump hint)."""
-    from services.db.backup import run_db_backup
+    from app.services.db.backup import run_db_backup
 
     return run_db_backup(reason=reason or "celery")

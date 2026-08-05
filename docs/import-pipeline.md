@@ -97,8 +97,8 @@ make dev-redis && make dev-api && make dev-worker
 
 ## API
 
-- Sync: `POST /api/v1/import/image`
-- Async: `POST /api/v1/import/jobs` → `GET /api/v1/import/jobs/{id}` (`source_type=image`)
+- Sync: `POST /api/v1/import/image` (requires Bearer token)
+- Async: `POST /api/v1/import/jobs` → `GET /api/v1/import/jobs/{id}` (`source_type=image`; requires Bearer)
 
 `meta` fields: `page_images`, `object_keys`, `object_urls`, `palette`, `engines`, `warnings`.
 

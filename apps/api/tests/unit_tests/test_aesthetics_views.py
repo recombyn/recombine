@@ -7,7 +7,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from services.design.aesthetics.views import (
+from app.services.design.aesthetics.views import (
     aesthetic_view,
     color_view,
     layout_view,
@@ -43,7 +43,7 @@ def test_layout_view_is_near_grayscale():
 
 @pytest.mark.unit
 def test_clip_status_without_extras():
-    from services.design.aesthetics.clip_encoder import clip_status
+    from app.services.design.aesthetics.clip_encoder import clip_status
 
     st = clip_status()
     assert "available" in st

@@ -14,6 +14,7 @@ dependencies = [
   "python-multipart>=0.0.12",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.6.0",
+  "sqlmodel>=0.0.22",
   "pdfplumber>=0.11.0",
   "celery[redis]>=5.4.0",
   "redis>=5.0.0",
@@ -74,7 +75,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["api*", "config*", "schemas*", "services*", "worker*"]
+include = ["app*", "worker*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

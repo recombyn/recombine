@@ -1,0 +1,6 @@
+# Generated 20260805T143252Z reason=scheduler
+# Run on a secure host (never commit credentials):
+mysqldump --single-transaction --routines --triggers \
+  --databases <db> > recombyn-20260805T143252Z.sql
+# Or enable CynosDB / RDS automated backups.
+# DATABASE_URL scheme present: mysql

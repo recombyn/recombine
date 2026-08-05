@@ -9,8 +9,8 @@ def _use_tmp_db(tmp_path: Path, monkeypatch, name: str) -> None:
     db = tmp_path / name
     monkeypatch.setenv("SQLITE_DB_PATH", str(db))
     monkeypatch.setenv("DATABASE_URL", "")
-    from config import settings as settings_mod
-    from services import db as db_mod
+    from app.core.config import settings as settings_mod
+    from app.services import db as db_mod
 
     settings_mod.settings.sqlite_db_path = str(db)
     settings_mod.settings.database_url = ""
@@ -21,14 +21,14 @@ def _use_tmp_db(tmp_path: Path, monkeypatch, name: str) -> None:
 def test_upsert_oauth_preserves_custom_profile(tmp_path: Path, monkeypatch):
     _use_tmp_db(tmp_path, monkeypatch, "oauth-profile.db")
 
-    from services.auth.email_store import update_profile, upsert_oauth_user
-    from services.db import init_schema
+    from app.services.auth.email_store import update_profile, upsert_oauth_user
+    from app.services.db import init_schema
 
     init_schema()
 
     # Skip network rehost in unit tests — keep remote URL in default_avatar.
     monkeypatch.setattr(
-        "services.auth.email_store._rehost_remote_avatar",
+        "app.services.auth.email_store._rehost_remote_avatar",
         lambda *a, **k: None,
     )
 
@@ -72,12 +72,12 @@ def test_upsert_oauth_preserves_custom_profile(tmp_path: Path, monkeypatch):
 
 def test_oauth_placeholder_not_stored_as_default(tmp_path: Path, monkeypatch):
     _use_tmp_db(tmp_path, monkeypatch, "oauth-default.db")
-    from services.auth.email_store import upsert_oauth_user
-    from services.db import init_schema
+    from app.services.auth.email_store import upsert_oauth_user
+    from app.services.db import init_schema
 
     init_schema()
     monkeypatch.setattr(
-        "services.auth.email_store._rehost_remote_avatar",
+        "app.services.auth.email_store._rehost_remote_avatar",
         lambda *a, **k: None,
     )
     u = upsert_oauth_user(
@@ -95,13 +95,13 @@ def test_oauth_placeholder_not_stored_as_default(tmp_path: Path, monkeypatch):
 def test_create_session_returns_persisted_profile(tmp_path: Path, monkeypatch):
     _use_tmp_db(tmp_path, monkeypatch, "oauth-session.db")
 
-    from services.auth import SessionUser, create_session
-    from services.auth.email_store import update_profile, upsert_oauth_user
-    from services.db import init_schema
+    from app.services.auth import SessionUser, create_session
+    from app.services.auth.email_store import update_profile, upsert_oauth_user
+    from app.services.db import init_schema
 
     init_schema()
     monkeypatch.setattr(
-        "services.auth.email_store._rehost_remote_avatar",
+        "app.services.auth.email_store._rehost_remote_avatar",
         lambda *a, **k: None,
     )
     upsert_oauth_user(

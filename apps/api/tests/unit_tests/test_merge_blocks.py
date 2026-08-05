@@ -1,4 +1,4 @@
-from services.vision.merge_blocks import merge_text_blocks
+from app.services.vision.merge_blocks import merge_text_blocks
 
 
 def test_merge_text_blocks_joins_same_line():

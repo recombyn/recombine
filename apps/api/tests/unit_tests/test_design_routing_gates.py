@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from services.design.admin.admin_store import STAGE_RULE_DEFAULTS, ensure_stage_rules
-from services.design.readpath.catalog import ensure_design_catalog, get_global_rules
-from services.design.runtime.decision_log import probe_has_target_chip
-from services.design.readpath.canvas_scene import resolve_agent_scene
+from app.services.design.admin.admin_store import STAGE_RULE_DEFAULTS, ensure_stage_rules
+from app.services.design.readpath.catalog import ensure_design_catalog, get_global_rules
+from app.services.design.runtime.decision_log import probe_has_target_chip
+from app.services.design.readpath.canvas_scene import resolve_agent_scene
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -17,7 +17,7 @@ def _catalog(tmp_path_factory):
 
     os.environ["SQLITE_DB_PATH"] = str(db_path)
     os.environ["DATABASE_URL"] = ""
-    from config import settings as settings_mod
+    from app.core.config import settings as settings_mod
 
     settings_mod.settings.sqlite_db_path = str(db_path)
     settings_mod.settings.database_url = ""

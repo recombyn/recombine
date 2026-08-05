@@ -24,29 +24,31 @@ Mixed scenes of about **5k** nodes stay smooth for daily editing (Chromium pan m
 ## Backend layers
 
 ```
-HTTP     api/v1/*                 thin routes
-Domain   services/*               by domain (design / plaza / wallet / …)
+HTTP     app/api/routes/*         thin routes (+ app/api/deps.py)
+Domain   app/services/*           by domain (design / plaza / wallet / …)
+Data     app/models.py + crud.py  SQLModel Session reads/writes
+DDL      app/services/db          init_schema / ensure_* (legacy connect)
 Seeds    data/*.json              flows, dictionaries, fonts → DB
                                   (INSERT missing; do not overwrite existing)
-Design   design.runtime           orchestrator → design_stream → graph
-         design.prompts           Skill / prompt pack / knowledge / token
-         design.ops               tool_ops contract
+Design   app.services.design.runtime   orchestrator → design_stream → graph
+         app.services.design.prompts   Skill / prompt pack / knowledge / token
+         app.services.design.ops       tool_ops contract
 ```
+
+Layout: [api-backend-refactor.md](./api-backend-refactor.md). Runtime: [design-agent-runtime.md](./design-agent-runtime.md).
 
 Design Agent main path:
 
 ```text
 POST /api/v1/design/run
-  → run_design_job → design_stream → run_agent_graph (LangGraph nodes)
+  → run_design_job → design_stream → run_agent_graph
+      # LangGraph outer StateGraph + LangChain inside nodes
 ```
 
-- `runtime/host/` — product primitives (prompt assembly, placement, ops validation, resource loading)
-- `runtime/graph/` — graph compile, nodes, SSE / turn / paint helpers
-- `agent_controller` — compatibility re-exports; not the outer entry
-
-Configurable content (prompt packs, Skills, dictionaries, global rules, etc.) is seeded from `apps/api/data/public/`; Admin / DB is authoritative. Skill namespaces: [design_skills/README.md](../apps/api/data/public/design_skills/README.md).
-
-Package layout, call conventions, and SSE-related interfaces: **[design-agent-runtime.md](./design-agent-runtime.md)**.
+- `app/api/` — FastAPI deps + routes (official layout)
+- `app/core/config.py` · `app/core/db.py` — settings + SQLModel engine
+- `app/services/` — domain (Design Agent, plaza, wallet, …)
+- Package layout: **[api-backend-refactor.md](./api-backend-refactor.md)** · runtime: **[design-agent-runtime.md](./design-agent-runtime.md)**.
 
 Database: SQLite / MySQL / PostgreSQL (see [postgres-switch.md](./postgres-switch.md)); SQLite defaults to WAL with optional periodic backups.
 
@@ -58,7 +60,9 @@ LangGraph short-lived checkpoints: [postgres-switch.md · LangGraph checkpointer
 Image -> OpenCV + OCR/layout ──> scene_builder ──> Scene JSON ──> Web
 ```
 
-Async jobs: Redis + Celery (`POST /api/v1/import/jobs`, `source_type=image`).
+Async jobs: Redis + Celery (`POST /api/v1/import/jobs`, `source_type=image`; requires Bearer).
+
+Auth status codes: [api-backend-refactor.md](./api-backend-refactor.md) — missing Bearer → 401; bad token → 403. `/import/*` requires login.
 
 ## Deploy
 

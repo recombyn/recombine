@@ -7,16 +7,16 @@ from pathlib import Path
 
 
 def test_dialect_sqlite_default(monkeypatch):
-    from config.settings import settings
-    from services import db as dbmod
+    from app.core.config import settings
+    from app.services import db as dbmod
 
     monkeypatch.setattr(settings, "database_url", "")
     assert dbmod.dialect() == "sqlite"
 
 
 def test_dialect_rejects_unknown(monkeypatch):
-    from config.settings import settings
-    from services import db as dbmod
+    from app.core.config import settings
+    from app.services import db as dbmod
 
     monkeypatch.setattr(settings, "database_url", "oracle://x")
     try:
@@ -27,8 +27,8 @@ def test_dialect_rejects_unknown(monkeypatch):
 
 
 def test_dialect_postgres(monkeypatch):
-    from config.settings import settings
-    from services import db as dbmod
+    from app.core.config import settings
+    from app.services import db as dbmod
 
     monkeypatch.setattr(settings, "database_url", "postgresql://u:p@localhost/db")
     assert dbmod.dialect() == "postgres"
@@ -37,8 +37,8 @@ def test_dialect_postgres(monkeypatch):
 
 
 def test_sqlite_wal_and_busy(tmp_path, monkeypatch):
-    from config.settings import settings
-    from services import db as dbmod
+    from app.core.config import settings
+    from app.services import db as dbmod
 
     monkeypatch.setattr(settings, "database_url", "")
     monkeypatch.setattr(settings, "sqlite_db_path", str(tmp_path / "t.db"))
@@ -60,8 +60,8 @@ def test_sqlite_wal_and_busy(tmp_path, monkeypatch):
 
 
 def test_sqlite_readonly(tmp_path, monkeypatch):
-    from config.settings import settings
-    from services import db as dbmod
+    from app.core.config import settings
+    from app.services import db as dbmod
 
     monkeypatch.setattr(settings, "database_url", "")
     monkeypatch.setattr(settings, "sqlite_db_path", str(tmp_path / "ro.db"))
@@ -75,9 +75,9 @@ def test_sqlite_readonly(tmp_path, monkeypatch):
 
 
 def test_backup_sqlite(tmp_path, monkeypatch):
-    from config.settings import settings
-    from services import db as dbmod
-    from services.db.backup import run_db_backup
+    from app.core.config import settings
+    from app.services import db as dbmod
+    from app.services.db.backup import run_db_backup
 
     monkeypatch.setattr(settings, "database_url", "")
     monkeypatch.setattr(settings, "sqlite_db_path", str(tmp_path / "src.db"))
