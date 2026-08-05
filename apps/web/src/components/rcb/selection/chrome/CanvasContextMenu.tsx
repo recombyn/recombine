@@ -52,7 +52,6 @@ type CtxAction =
   | 'back'
   | 'toggleHidden'
   | 'toggleLocked'
-  | 'toggleGrid'
   | 'exportPng'
   | 'exportJpg'
   | 'exportSvg'
@@ -89,8 +88,6 @@ type CanvasContextMenuProps = {
   targetHidden?: boolean;
   /** Current lock of the menu target (all locked → unlock action). */
   targetLocked?: boolean;
-  /** Grid snap + overlay (on → show “hide grid” label). */
-  gridOn?: boolean;
   /** Video-only selection → MP4 / MP3 instead of PNG / JPG / SVG. */
   exportKind?: 'image' | 'video';
   /** Box / multi-select that is not already one shared group. */
@@ -106,23 +103,6 @@ type CanvasContextMenuProps = {
 };
 
 const ICON_CLASS = 'h-3.5 w-3.5 shrink-0 text-[var(--muted)]';
-
-function IconGrid({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      aria-hidden
-    >
-      <rect x="2.5" y="2.5" width="11" height="11" rx="1" />
-      <path d="M2.5 8 H13.5" strokeLinecap="round" />
-      <path d="M8 2.5 V13.5" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 const itemClass =
   'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-[var(--ink)] hover:bg-[var(--accent-soft)] disabled:pointer-events-none disabled:opacity-40';
@@ -358,7 +338,6 @@ function CanvasContextMenu({
   canToggleLocked,
   targetHidden = false,
   targetLocked = false,
-  gridOn = false,
   exportKind = 'image',
   canGroup = false,
   canUngroup = false,
@@ -430,9 +409,6 @@ function CanvasContextMenu({
   const lockLabel = targetLocked
     ? t('editor.contextMenu.unlock')
     : t('editor.contextMenu.lock');
-  const gridLabel = gridOn
-    ? t('editor.contextMenu.hideGrid')
-    : t('editor.contextMenu.showGrid');
 
   useLayoutEffect(() => {
     if (!menu) {
@@ -607,11 +583,6 @@ function CanvasContextMenu({
             shortcut={`${modLabel}+Shift+K`}
             disabled={!lockEnabled}
             onClick={() => runAction('toggleLocked')}
-          />
-          <MenuItem
-            icon={<IconGrid className={ICON_CLASS} />}
-            label={gridLabel}
-            onClick={() => runAction('toggleGrid')}
           />
           <div className="my-1 h-px bg-[var(--line)]" />
           <ExportSubmenu

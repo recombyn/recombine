@@ -670,3 +670,27 @@ async def _run_partial(
             "task_id": task_id,
             "refunded_credits": hold,
         }
+
+
+async def resume_design_job(
+    *,
+    user_id: str,
+    task_id: str,
+    resume_token: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Resume a checkpointed LangGraph design run (rebinds wallet side-effects)."""
+    from services.design.runtime.graph.build import resume_agent_graph
+    from services.llm import reset_byok_user_id, set_byok_user_id
+
+    byok_token = set_byok_user_id(user_id)
+    try:
+        async for ev in resume_agent_graph(
+            task_id=task_id,
+            user_id=user_id,
+            settle_hold_fn=_settle_hold,
+            refund_hold_fn=_refund_hold,
+            resume_token=resume_token,
+        ):
+            yield ev
+    finally:
+        reset_byok_user_id(byok_token)

@@ -1,6 +1,6 @@
 import { nanoid } from '@reduxjs/toolkit';
 import { buildMarkdownTextAttrs, measurePlainTextSize } from './sceneText';
-import { clampShapeSides, DEFAULT_SHAPE_SIDES } from './sceneShapes';
+import { clampShapeSides, DEFAULT_SHAPE_SIDES, DEFAULT_STAR_INNER_RATIO } from './sceneShapes';
 
 /** Default canvas size (approx A4 @ 96dpi); user can change freely */
 export const DEFAULT_CANVAS = { width: 794, height: 1123 };
@@ -534,16 +534,24 @@ export function createShapeNode({
         ...(shapeType === 'polygon' || shapeType === 'star'
           ? { sides: clampShapeSides(sides, DEFAULT_SHAPE_SIDES) }
           : {}),
+        ...(shapeType === 'star' ? { starInnerRatio: DEFAULT_STAR_INNER_RATIO } : {}),
         ...(path ? { path } : {}),
         // Persist open/closed so stroke panel can show linecap for open pens.
         ...((shapeType === 'pen' || shapeType === 'path' || path) && {
           closed: closed ? 'true' : 'false',
         }),
-        ...((shapeType === 'pen' || shapeType === 'pencil' || shapeType === 'arrow') && {
+        // Pen / line → butt+miter (stroke panel default). Pencil / arrow stay round.
+        ...((shapeType === 'pencil' || shapeType === 'arrow') && {
           strokeLinecap: 'round',
           'stroke-linecap': 'round',
           strokeLinejoin: 'round',
           'stroke-linejoin': 'round',
+        }),
+        ...((shapeType === 'pen' || shapeType === 'line') && {
+          strokeLinecap: 'butt',
+          'stroke-linecap': 'butt',
+          strokeLinejoin: 'miter',
+          'stroke-linejoin': 'miter',
         }),
         ...(brushStyle ? { brushStyle } : {}),
         ...(brushStampSrc ? { brushStampSrc } : {}),
@@ -1885,21 +1893,20 @@ export function supportsSideStroke(node: any) {
 /** Nodes that expose corner-radius toolbar + on-canvas handles. */
 export function supportsCornerRadius(node: any) {
   if (!node) return false;
+  // Circles / ellipses have no corners — AABB R-dots sit in the square's empty
+  // corners (outside the disk). Use path/geo edit instead.
+  if (node.key === 'ellipse') return false;
   if (node.key === 'rect' || node.key === 'image') return true;
-  if (node.key === 'path') {
-    return isClosedPathAttrs(node.attrs);
-  }
+  // Freehand / outlined / boolean `path` — radius is baked into `d` (or edited via
+  // path anchors). Do not show the rect-style R dots on the AABB.
+  if (node.key === 'path') return false;
   if (node.key === 'shape') {
     const t = String(node.attrs?.shapeType || 'rect');
+    if (t === 'circle' || t === 'ellipse') return false;
     if (t === 'rect' || t === 'roundRect' || t === 'triangle' || t === 'polygon' || t === 'star') {
       return true;
     }
-    // Boolean / freehand closed paths — same R control as rect (no aspect presets).
-    // Pen strokes never get corner-radius (always raw path).
-    if (t === 'path') {
-      return isClosedPathAttrs(node.attrs);
-    }
-    if (t === 'pen') return false;
+    if (t === 'path' || t === 'pen') return false;
   }
   return false;
 }

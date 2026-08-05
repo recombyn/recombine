@@ -44,7 +44,7 @@ import {
   type CornerRadii,
 } from '../document/sceneRadii';
 import { isCustomPathShape } from '../document/pathScale';
-import { shapeVertexPoints, sidesFromAttrs, clampShapeSides, DEFAULT_SHAPE_SIDES } from '../document/sceneShapes';
+import { shapeVertexPoints, sidesFromAttrs, clampShapeSides, DEFAULT_SHAPE_SIDES, starInnerRatioFromAttrs, ellipseInnerRatioFromAttrs, ellipseArcPercentFromAttrs, ellipseStartDegFromAttrs, clampEllipseInnerRatio, clampEllipseArcPercent, clampEllipseStartDeg } from '../document/sceneShapes';
 import { getShapeBaseline, getShapeBaselineD } from '@/components/rcb/core/geometry';
 import { applyNodeShadow, applySvgFill } from './svgPaint';
 import {
@@ -414,6 +414,50 @@ function readSceneCornerRadii(el: SVGElement): CornerRadii {
   return { tl: 0, tr: 0, br: 0, bl: 0 };
 }
 
+function rememberSceneEllipseParams(
+  el: SVGElement | null | undefined,
+  innerRatio: number,
+  arcPercent: number,
+  startDeg: number
+) {
+  if (!el) return;
+  (el as any).__sceneEllipseInner = clampEllipseInnerRatio(innerRatio);
+  (el as any).__sceneEllipseArc = clampEllipseArcPercent(arcPercent);
+  (el as any).__sceneEllipseStart = clampEllipseStartDeg(startDeg);
+  setAttrs(el, {
+    'data-ellipse-inner': String((el as any).__sceneEllipseInner),
+    'data-ellipse-arc': String((el as any).__sceneEllipseArc),
+    'data-ellipse-start': String((el as any).__sceneEllipseStart),
+  });
+}
+
+function readSceneEllipseParams(el: any): {
+  innerRatio: number;
+  arcPercent: number;
+  startDeg: number;
+} {
+  const memInner = Number(el?.__sceneEllipseInner);
+  const memArc = Number(el?.__sceneEllipseArc);
+  const memStart = Number(el?.__sceneEllipseStart);
+  const attrInner = Number(el?.getAttribute?.('data-ellipse-inner'));
+  const attrArc = Number(el?.getAttribute?.('data-ellipse-arc'));
+  const attrStart = Number(el?.getAttribute?.('data-ellipse-start'));
+  return {
+    innerRatio: clampEllipseInnerRatio(
+      Number.isFinite(memInner) ? memInner : attrInner,
+      0
+    ),
+    arcPercent: clampEllipseArcPercent(
+      Number.isFinite(memArc) ? memArc : attrArc,
+      100
+    ),
+    startDeg: clampEllipseStartDeg(
+      Number.isFinite(memStart) ? memStart : attrStart,
+      90
+    ),
+  };
+}
+
 function roundedShapePath(
   shapeType: string,
   width: number,
@@ -422,7 +466,13 @@ function roundedShapePath(
   sides: number = DEFAULT_SHAPE_SIDES,
   attrs?: Record<string, unknown> | null
 ) {
-  const pts = shapeVertexPoints(shapeType, width, height, sides);
+  const pts = shapeVertexPoints(
+    shapeType,
+    width,
+    height,
+    sides,
+    starInnerRatioFromAttrs(attrs)
+  );
   if (!pts.length) return '';
   const vertexRadii = vertexRadiiFromAttrs(
     attrs ?? {
@@ -563,12 +613,12 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
     align: 'center',
     linecap: hasCapAttr
       ? strokeFull.linecap
-      : shapeType === 'pen' || shapeType === 'pencil' || shapeType === 'arrow'
+      : shapeType === 'pencil' || shapeType === 'arrow'
         ? 'round'
         : strokeFull.linecap,
     linejoin: hasJoinAttr
       ? strokeFull.linejoin
-      : shapeType === 'pen' || shapeType === 'pencil' || shapeType === 'arrow'
+      : shapeType === 'pencil' || shapeType === 'arrow'
         ? 'round'
         : strokeFull.linejoin,
   };
@@ -603,15 +653,25 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
   }
 
   if (shapeType === 'circle') {
+    const innerRatio = ellipseInnerRatioFromAttrs(node.attrs);
+    const arcPercent = ellipseArcPercentFromAttrs(node.attrs);
+    const startDeg = ellipseStartDegFromAttrs(node.attrs);
     const baseline = getShapeBaseline({
       key: 'shape',
       width,
       height,
-      attrs: { ...(node.attrs || {}), shapeType: 'circle' },
+      attrs: {
+        ...(node.attrs || {}),
+        shapeType: 'circle',
+        ellipseInnerRatio: innerRatio,
+        ellipseArcPercent: arcPercent,
+        ellipseStartDeg: startDeg,
+      },
     });
     const g = appendChild(parent, svgEl('g'));
     const path = appendChild(g, svgEl('path', { d: baseline?.d || '' }));
     setAttrs(path, { 'data-baseline': '1' });
+    if (innerRatio > 1e-4) setAttrs(path, { 'fill-rule': 'evenodd' });
     applySvgFill(root, path, paint, `n-${nodeId}`);
     if (strokeWidth > 0 && stroke && stroke !== 'transparent') {
       applyElementStroke(root, path, strokeFull, { hasOpaqueFill: !isTransparentFill(paint) });
@@ -620,6 +680,7 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
       coverRotatedFillFringe(path, paint, stroke, strokeWidth, Number(meta.angle) || 0);
     }
     tagNode(g, nodeId, 'shape', shapeType, left, top, width, height);
+    rememberSceneEllipseParams(g, innerRatio, arcPercent, startDeg);
     applyMeta(g, left, top, meta, width, height);
     applyNodeShadow(root, g, node);
     return g;
@@ -714,15 +775,17 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
         ? resolveFill(node, 'transparent')
         : resolveFill(node, closed ? '#FFFFFF' : 'transparent');
     const baseD = String(d);
-    const cornerR =
-      shapeType === 'pen' || !closed
-        ? { tl: 0, tr: 0, br: 0, bl: 0 }
-        : radiiFromAttrs(node.attrs);
-    const drawD =
-      closed && shapeType !== 'pen' ? filletPathD(baseD, cornerR, node.attrs) : baseD;
+    // `path` geometry already includes any rounding (outline / boolean / pen edit).
+    // Do not re-fillet from leftover radiusTL… attrs — that spawns AABB R-dots' effect
+    // and warps the silhouette (esp. after 矩形路径化).
+    const skipFillet = shapeType === 'pen' || shapeType === 'path' || !closed;
+    const cornerR = skipFillet
+      ? { tl: 0, tr: 0, br: 0, bl: 0 }
+      : radiiFromAttrs(node.attrs);
+    const drawD = skipFillet ? baseD : filletPathD(baseD, cornerR, node.attrs);
     const path = appendChild(parent, svgEl('path', { d: drawD }));
     setAttrs(path, { 'data-baseline': '1' });
-    if (closed && shapeType !== 'pen') {
+    if (closed && shapeType !== 'pen' && shapeType !== 'path') {
       setAttrs(path, { 'data-scene-base-path': baseD });
       (path as any).__sceneBasePath = baseD;
     }
@@ -1307,6 +1370,10 @@ function isInfiniteSvgRoot(root: SVGSVGElement) {
   return root.getAttribute('data-rcb-infinite') === '1';
 }
 
+function quantInfiniteScene(n: number) {
+  return Math.round(n * 1e4) / 1e4;
+}
+
 /** Apply a known scene AABB as the infinite SVG CSS box + viewBox (pre-paint). */
 export function seedInfiniteSvgViewport(
   root: SVGSVGElement,
@@ -1314,10 +1381,10 @@ export function seedInfiniteSvgViewport(
   pad = INFINITE_SVG_PAD
 ) {
   if (!isInfiniteSvgRoot(root)) return;
-  const minX = Math.round((box.left - pad) * 1e4) / 1e4;
-  const minY = Math.round((box.top - pad) * 1e4) / 1e4;
-  const w = Math.max(1, Math.round((Math.max(1, box.width) + pad * 2) * 1e4) / 1e4);
-  const h = Math.max(1, Math.round((Math.max(1, box.height) + pad * 2) * 1e4) / 1e4);
+  const minX = quantInfiniteScene(box.left - pad);
+  const minY = quantInfiniteScene(box.top - pad);
+  const w = Math.max(1, quantInfiniteScene(Math.max(1, box.width) + pad * 2));
+  const h = Math.max(1, quantInfiniteScene(Math.max(1, box.height) + pad * 2));
   setAttrs(root, {
     width: w,
     height: h,
@@ -1340,6 +1407,34 @@ export function seedInfiniteSvgViewport(
   });
 }
 
+/**
+ * Pan an infinite host SVG with a live node translate (no getBBox refit).
+ * Keeps sceneLeft inside the viewBox so ink is not painted in overflow — that
+ * overflow path AA/composites differently from in-bounds chrome guides at fractional DPR.
+ */
+export function panInfiniteSvgViewport(
+  root: SVGSVGElement,
+  dLeft: number,
+  dTop: number
+) {
+  if (!isInfiniteSvgRoot(root)) return;
+  if (!(dLeft || dTop)) return;
+  const parts = (root.getAttribute('viewBox') || '')
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  if (parts.length < 4 || !parts.every(Number.isFinite)) return;
+  const minX = quantInfiniteScene(parts[0] + dLeft);
+  const minY = quantInfiniteScene(parts[1] + dTop);
+  const w = parts[2];
+  const h = parts[3];
+  setAttrs(root, { viewBox: `${minX} ${minY} ${w} ${h}` });
+  setStyles(root, {
+    left: `${minX}px`,
+    top: `${minY}px`,
+  });
+}
+
 export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement | null) {
   if (!isInfiniteSvgRoot(root)) return;
 
@@ -1358,13 +1453,29 @@ export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement 
       (box.width > 0 || box.height > 0)
     ) {
       // Quantize so CSS left/top and viewBox stay identical (getBBox floats → 1690.999…).
-      minX = Math.round((box.x - INFINITE_SVG_PAD) * 1e4) / 1e4;
-      minY = Math.round((box.y - INFINITE_SVG_PAD) * 1e4) / 1e4;
-      w = Math.max(1, Math.round((box.width + INFINITE_SVG_PAD * 2) * 1e4) / 1e4);
-      h = Math.max(1, Math.round((box.height + INFINITE_SVG_PAD * 2) * 1e4) / 1e4);
+      minX = quantInfiniteScene(box.x - INFINITE_SVG_PAD);
+      minY = quantInfiniteScene(box.y - INFINITE_SVG_PAD);
+      w = Math.max(1, quantInfiniteScene(box.width + INFINITE_SVG_PAD * 2));
+      h = Math.max(1, quantInfiniteScene(box.height + INFINITE_SVG_PAD * 2));
     }
   } catch {
     /* empty layer */
+  }
+
+  // Keep a freshly seeded viewport when getBBox only nudges by ≤1px (common
+  // 269.5→270 jump from stroke/getBBox). That half-pixel shift desyncs guides.
+  const prevLeft = parseFloat(root.style.left);
+  const prevTop = parseFloat(root.style.top);
+  const prevW = parseFloat(root.style.width);
+  const prevH = parseFloat(root.style.height);
+  if (
+    [prevLeft, prevTop, prevW, prevH].every(Number.isFinite) &&
+    Math.abs(minX - prevLeft) <= 1 &&
+    Math.abs(minY - prevTop) <= 1 &&
+    Math.abs(w - prevW) <= 1 &&
+    Math.abs(h - prevH) <= 1
+  ) {
+    return;
   }
 
   setAttrs(root, {
@@ -1787,19 +1898,31 @@ function previewResizeLocalGeometry(el: SVGElement, width: number, height: numbe
   }
 
   if (shapeType === 'circle') {
+    const live = readSceneEllipseParams(el);
     const d =
       getShapeBaselineD({
         key: 'shape',
         width,
         height,
-        attrs: { shapeType: 'circle' },
+        attrs: {
+          shapeType: 'circle',
+          ellipseInnerRatio: live.innerRatio,
+          ellipseArcPercent: live.arcPercent,
+          ellipseStartDeg: live.startDeg,
+        },
       }) || '';
+    const body =
+      el.tagName.toLowerCase() === 'path'
+        ? el
+        : el.querySelector('[data-baseline="1"]') ||
+          el.querySelector('path:not([data-stroke-under])');
+    if (live.innerRatio > 1e-4 && body instanceof Element) {
+      body.setAttribute('fill-rule', 'evenodd');
+    } else if (body instanceof Element) {
+      body.removeAttribute('fill-rule');
+    }
     if (el.tagName.toLowerCase() === 'path') return setPathD(el, d);
-    return setPathD(
-      el.querySelector('[data-baseline="1"]') ||
-        el.querySelector('path:not([data-stroke-under])'),
-      d
-    );
+    return setPathD(body, d);
   }
 
   const liveR = clampCornerRadii(readSceneCornerRadii(el), width, height);
@@ -1919,6 +2042,8 @@ export function previewSvgNodeGeometry(
     const dy = box.top - geom.top;
     if (dx || dy) dmoveAbs(el, dx, dy);
     writeGeom(el, { ...geom, left: box.left, top: box.top });
+    const root = el.ownerSVGElement;
+    if (root) panInfiniteSvgViewport(root, dx, dy);
     return true;
   }
 
@@ -1987,7 +2112,12 @@ export function previewSvgNodeGeometry(
     // Pure move: only translate. Regenerating local `d` (even at same size) used
     // to wipe corner radii and flash a sharp rect until commit remounted.
     if (sameSize && !anyEl.__sceneDidResize) {
+      const dLeft = box.left - geom.left;
+      const dTop = box.top - geom.top;
       reapplySceneTransform(el, box.left, box.top, box.width, box.height);
+      // Glue host viewBox to the translate so ink stays in-bounds (not overflow).
+      const root = el.ownerSVGElement;
+      if (root) panInfiniteSvgViewport(root, dLeft, dTop);
       return true;
     }
     if (previewResizeLocalGeometry(el, box.width, box.height)) {
@@ -2067,6 +2197,54 @@ export function previewSvgNodeGeometry(
   });
   reapplySceneTransform(el, box.left, box.top, box.width, box.height);
   return true;
+}
+
+/**
+ * Live circle / ellipse inner-radius + arc preview without remounting.
+ */
+export function previewSvgNodeEllipseParams(
+  nodeEls: Map<string, any>,
+  nodeId: string,
+  opts: {
+    width: number;
+    height: number;
+    innerRatio: number;
+    arcPercent: number;
+    startDeg?: number;
+  }
+): boolean {
+  const el = nodeEls.get(nodeId);
+  if (!el) return false;
+  const w = Math.max(1, opts.width);
+  const h = Math.max(1, opts.height);
+  const innerRatio = clampEllipseInnerRatio(opts.innerRatio);
+  const arcPercent = clampEllipseArcPercent(opts.arcPercent);
+  const startDeg = clampEllipseStartDeg(opts.startDeg);
+  const d =
+    getShapeBaselineD({
+      key: 'shape',
+      width: w,
+      height: h,
+      attrs: {
+        shapeType: 'circle',
+        ellipseInnerRatio: innerRatio,
+        ellipseArcPercent: arcPercent,
+        ellipseStartDeg: startDeg,
+      },
+    }) || '';
+  if (!d) return false;
+  rememberSceneEllipseParams(el, innerRatio, arcPercent, startDeg);
+  const body =
+    el.tagName.toLowerCase() === 'path'
+      ? el
+      : el.querySelector(':scope > [data-baseline="1"]') ||
+        el.querySelector(':scope > path:not([data-stroke-under])');
+  if (body instanceof Element) {
+    if (innerRatio > 1e-4) body.setAttribute('fill-rule', 'evenodd');
+    else body.removeAttribute('fill-rule');
+  }
+  if (el.tagName.toLowerCase() === 'path') return setPathD(el, d);
+  return setPathD(body, d);
 }
 
 /**

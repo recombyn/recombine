@@ -68,6 +68,6 @@ Open the shortcuts panel in the editor for the full list (Mac shows ⌘; Windows
 
 ## Tips
 
-- Pen / path edit: **Enter** or **Esc** to finish.
+- Pen / path edit: **Enter** or **Esc** to finish; the path-edit toolbar switches Select / Pen / Curve before confirming.
 - Inline text edit: **Esc** to exit.
 - Multi-image variants overlay, shortcuts panel, and other overlays: **Esc** to close.

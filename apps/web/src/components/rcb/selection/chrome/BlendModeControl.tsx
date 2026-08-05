@@ -6,7 +6,7 @@ import type { MenuItemType } from '@/components/base/dropdown';
 import { INPUT_NO_SPIN } from '@/components/base/colorPanel';
 import { cn } from '@/utils/classnames';
 
-/** Layer blend modes (Figma / CSS mix-blend-mode). */
+/** Layer blend modes (CSS mix-blend-mode). */
 export type BlendModeId =
   | 'pass-through'
   | 'normal'
@@ -113,7 +113,7 @@ function BlendModeIcon({ mode, className }: { mode: BlendModeId; className?: str
 type Props = {
   blendMode?: unknown;
   opacity?: unknown;
-  /** Pass-through is only meaningful for groups/frames (Figma). */
+  /** Pass-through is only meaningful for groups/frames. */
   allowPassThrough?: boolean;
   onBlendModeChange: (mode: BlendModeId) => void;
   onOpacityChange: (opacity01: number) => void;

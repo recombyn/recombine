@@ -33,7 +33,7 @@ const SKILL_SKELETON_OFFICIAL = 5;
 const SKILL_CARD_SHELL =
   'w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3 text-left shadow-[0_2px_10px_rgba(15,23,42,0.06)]';
 
-/** Dashed “Upload skill” tile — first cell in Mine grid (like New project). */
+/** Dashed upload tile — first cell in Mine grid (icon only, like New project). */
 function UploadSkillCard({
   label,
   disabled = false,
@@ -48,15 +48,16 @@ function UploadSkillCard({
       type="button"
       disabled={disabled}
       onClick={onClick}
+      aria-label={label}
+      title={label}
       className={cn(
         SKILL_CARD_SHELL,
-        'flex min-h-[88px] flex-col items-center justify-center gap-1.5 border-dashed shadow-none',
+        'flex min-h-[88px] flex-col items-center justify-center border-dashed shadow-none',
         'transition hover:border-[var(--muted)] hover:bg-[var(--accent-soft)] hover:shadow-none',
         'disabled:opacity-50'
       )}
     >
       <HiOutlinePlus className="h-7 w-7 text-[var(--muted)]" strokeWidth={1.5} />
-      <span className="text-[13px] font-medium text-[var(--ink)]">{label}</span>
     </button>
   );
 }

@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     design_paint_attempt_timeout_sec: float = 75.0
     # Whole run_agent_graph wall clock; 0 disables.
     design_graph_run_timeout_sec: float = 600.0
+    # On wall-clock timeout: pause + keep checkpoint (resume) vs hard error + refund.
+    design_run_timeout_resumable: bool = True
+    # Unexpected exceptions: keep checkpoint for resume unless explicitly disabled.
+    design_run_error_resumable: bool = True
+    # Orphan paused checkpoint TTL (hours); 0 disables sweeper hook.
+    design_run_checkpoint_ttl_hours: float = 72.0
     # LangGraph long-term memory Store (docs). Empty → same MySQL as DATABASE_URL;
     # else Sqlite at this path; last resort InMemoryStore.
     langgraph_store_url: str = ""

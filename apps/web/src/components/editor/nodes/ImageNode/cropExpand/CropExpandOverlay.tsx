@@ -5,12 +5,9 @@ import {
   useRcbCamera,
   rcbSceneToScreen,
 } from '@/components/rcb';
-import AlignGuidesOverlay, { type AlignGuide } from '@/components/rcb/selection/AlignGuidesOverlay';
 import {
   getDocumentGridSize,
   snapBoxToGrid,
-  snapBoxToGuides,
-  getSnapThreshold,
   type SceneBox,
 } from '@/components/rcb/selection/alignGuides';
 
@@ -276,8 +273,6 @@ type Props = {
   expandFrame: ExpandFrame;
   label?: string;
   /** Sibling / frame boxes for smart guides while dragging. */
-  guideBoxes?: SceneBox[];
-  frameBoxes?: SceneBox[];
   onCropChange: (next: CropRect) => void;
   onExpandChange: (next: ExpandFrame) => void;
 };
@@ -289,18 +284,14 @@ function CropExpandOverlay({
   cropRect,
   expandFrame,
   label = 'Image',
-  guideBoxes = [],
-  frameBoxes = [],
   onCropChange,
   onExpandChange,
 }: Props): ReactNode {
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
-  const isGridMode = useSelector((state: any) => Boolean(state.editor.isGridMode));
   const document = useSelector((state: any) => state.editor.document);
   const gridSize = getDocumentGridSize(document);
   const [dragging, setDragging] = useState(false);
-  const [guides, setGuides] = useState<AlignGuide[]>([]);
   const dragRef = useRef<DragState | null>(null);
   const cropRef = useRef(cropRect);
   const expandRef = useRef(expandFrame);
@@ -310,10 +301,6 @@ function CropExpandOverlay({
   const onExpandRef = useRef(onExpandChange);
   onCropRef.current = onCropChange;
   onExpandRef.current = onExpandChange;
-  const guideBoxesRef = useRef(guideBoxes);
-  const frameBoxesRef = useRef(frameBoxes);
-  guideBoxesRef.current = guideBoxes;
-  frameBoxesRef.current = frameBoxes;
   const imageBoxRef = useRef(imageBox);
   imageBoxRef.current = imageBox;
 
@@ -349,9 +336,6 @@ function CropExpandOverlay({
       const dx = (e.clientX - drag.startX) / z;
       const dy = (e.clientY - drag.startY) / z;
       const img = imageBoxRef.current;
-      const others = guideBoxesRef.current;
-      const frames = frameBoxesRef.current;
-
       if (mode === 'crop') {
         const orig = drag.crop;
         if (drag.type === 'move') {
@@ -362,29 +346,19 @@ function CropExpandOverlay({
             width: moved.w,
             height: moved.h,
           };
-          if (isGridMode && !e.ctrlKey && !e.metaKey) {
+          if (!e.ctrlKey && !e.metaKey) {
             world = snapBoxToGrid(world, gridSize);
           }
-          const threshold = getSnapThreshold(z);
-          const snapped = snapBoxToGuides(world, others, frames, threshold);
           const next = calcCropMove(
             orig,
-            snapped.box.left - img.left - orig.x,
-            snapped.box.top - img.top - orig.y,
+            world.left - img.left - orig.x,
+            world.top - img.top - orig.y,
             cw,
             ch
           );
-          const finalWorld: SceneBox = {
-            left: img.left + next.x,
-            top: img.top + next.y,
-            width: next.w,
-            height: next.h,
-          };
-          setGuides(snapped.guides.length ? snapBoxToGuides(finalWorld, others, frames, 0).guides : []);
           onCropRef.current(next);
           return;
         }
-        setGuides([]);
         const h = drag.handle;
         const isEdge = h === 'n' || h === 's' || h === 'w' || h === 'e';
         onCropRef.current(
@@ -404,29 +378,19 @@ function CropExpandOverlay({
           width: moved.w,
           height: moved.h,
         };
-        if (isGridMode && !e.ctrlKey && !e.metaKey) {
+        if (!e.ctrlKey && !e.metaKey) {
           world = snapBoxToGrid(world, gridSize);
         }
-        const threshold = getSnapThreshold(z);
-        const snapped = snapBoxToGuides(world, others, frames, threshold);
         const next = calcExpandMove(
           orig,
-          snapped.box.left - img.left - orig.ox,
-          snapped.box.top - img.top - orig.oy,
+          world.left - img.left - orig.ox,
+          world.top - img.top - orig.oy,
           cw,
           ch
         );
-        const finalWorld: SceneBox = {
-          left: img.left + next.ox,
-          top: img.top + next.oy,
-          width: next.w,
-          height: next.h,
-        };
-        setGuides(snapped.guides.length ? snapBoxToGuides(finalWorld, others, frames, 0).guides : []);
         onExpandRef.current(next);
         return;
       }
-      setGuides([]);
       const h = drag.handle;
       const isEdge = h === 'n' || h === 's' || h === 'w' || h === 'e';
       onExpandRef.current(
@@ -438,7 +402,6 @@ function CropExpandOverlay({
     const onUp = () => {
       dragRef.current = null;
       setDragging(false);
-      setGuides([]);
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -448,7 +411,7 @@ function CropExpandOverlay({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [mode, z, cw, ch, isGridMode, gridSize]);
+  }, [mode, z, cw, ch, gridSize]);
 
   const startMove = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -475,7 +438,6 @@ function CropExpandOverlay({
       expand: { ...expandRef.current },
     };
     setDragging(true);
-    setGuides([]);
   };
 
   const frameStyle: CSSProperties = {
@@ -726,7 +688,6 @@ function CropExpandOverlay({
           />
         ) : null}
 
-        {guides.length ? <AlignGuidesOverlay guides={guides} space="stage" /> : null}
       </div>
     </RcbOverlayPortal>
   );

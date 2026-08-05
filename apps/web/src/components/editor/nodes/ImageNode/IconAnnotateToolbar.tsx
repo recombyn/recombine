@@ -2,6 +2,7 @@ import { memo, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { LuPencil } from 'react-icons/lu';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
+import { Icon } from '@/components/base/icon';
 import Slider from '@/components/base/slider';
 import Tooltip from '@/components/base/tooltip';
 import {
@@ -18,44 +19,6 @@ type Props = {
 const BTN =
   'inline-flex h-8 w-8 items-center justify-center rounded-lg text-white/85 transition-colors hover:bg-white/10';
 const BTN_ACTIVE = 'bg-white/15 text-white';
-
-function StrokeGlyph({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M2 11c2-3 3.5-4 5-4s3 1 5 4"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function SelectGlyph({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect
-        x="2.5"
-        y="2.5"
-        width="11"
-        height="11"
-        rx="1.5"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeDasharray="2.2 1.8"
-      />
-    </svg>
-  );
-}
-
-function TextGlyph({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M3.5 13h2.1l.55-1.55h3.7L10.4 13h2.1L9.1 3H6.9L3.5 13zm3.15-3.2L8 6.1l1.35 3.7H6.65z" />
-    </svg>
-  );
-}
 
 /**
  * Icon annotate strip (fig.1): pen · select · text · color · stroke width.
@@ -97,7 +60,7 @@ function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode {
           className={cn(BTN, selectActive && !penActive && !textActive && BTN_ACTIVE)}
           onClick={() => dispatch(setActiveTool('select'))}
         >
-          <SelectGlyph className="h-4 w-4" />
+          <Icon name="editor-annotate-select" className="h-4 w-4" />
         </button>
       </Tooltip>
 
@@ -108,7 +71,7 @@ function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode {
           className={cn(BTN, textActive && BTN_ACTIVE)}
           onClick={() => dispatch(setActiveTool('text'))}
         >
-          <TextGlyph className="h-4 w-4" />
+          <Icon name="editor-annotate-text" className="h-4 w-4" />
         </button>
       </Tooltip>
 
@@ -138,7 +101,7 @@ function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode {
       <span className="mx-1 h-4 w-px bg-white/20" aria-hidden />
 
       <div className="flex items-center gap-2 px-1">
-        <StrokeGlyph className="h-4 w-4 shrink-0 text-white/80" />
+        <Icon name="editor-annotate-stroke" className="h-4 w-4 shrink-0 text-white/80" />
         <div className="w-[88px]">
           <Slider
             min={1}

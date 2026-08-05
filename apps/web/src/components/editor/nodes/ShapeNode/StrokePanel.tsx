@@ -19,6 +19,7 @@ import {
   INPUT_NO_SPIN,
 } from '@/components/base/colorPanel';
 import Tooltip from '@/components/base/tooltip';
+import { Icon } from '@/components/base/icon';
 import {
   type StrokeStyle,
   STROKE_STYLES,
@@ -80,151 +81,26 @@ export type StrokePanelValue = {
 
 const DEFAULT_SIDES: StrokeSides = { T: true, R: true, B: true, L: true };
 
-function StrokeWeightGlyph({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <rect x="2" y="3" width="12" height="1.5" rx="0.75" />
-      <rect x="2" y="7" width="12" height="2.5" rx="1" />
-      <rect x="2" y="12" width="12" height="1" rx="0.5" />
-    </svg>
-  );
+function panelIcon(name: string) {
+  return function PanelGlyph({ className }: { className?: string }) {
+    return <Icon name={name} className={className} />;
+  };
 }
 
-/** Path on the outer edge; stroke grows inward. */
-function IconStrokeAlignInside({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1" opacity="0.4" />
-      <rect x="3.75" y="3.75" width="8.5" height="8.5" rx="0.75" stroke="currentColor" strokeWidth="2.5" />
-      <rect x="6" y="6" width="4" height="4" rx="0.5" fill="var(--surface, #fff)" />
-    </svg>
-  );
-}
-
-/** Path through the middle of the stroke band. */
-function IconStrokeAlignCenter({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="4.5" y="4.5" width="7" height="7" rx="0.75" fill="var(--surface, #fff)" />
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="2.75" />
-      <rect
-        x="4.25"
-        y="4.25"
-        width="7.5"
-        height="7.5"
-        rx="0.75"
-        stroke="currentColor"
-        strokeWidth="1"
-        strokeDasharray="1.5 1.25"
-        opacity="0.85"
-      />
-    </svg>
-  );
-}
-
-/** Path on the inner edge; stroke grows outward. */
-function IconStrokeAlignOutside({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="2.5" />
-      <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" fill="var(--surface, #fff)" stroke="currentColor" strokeWidth="1" />
-    </svg>
-  );
-}
-
-function IconStrokeCapButt({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M3 8h10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="butt" />
-      <path d="M3 5v6M13 5v6" stroke="currentColor" strokeWidth="1.25" opacity="0.45" />
-    </svg>
-  );
-}
-
-function IconStrokeCapRound({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M4 8h8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconStrokeCapSquare({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M3 8h10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square" />
-    </svg>
-  );
-}
-
-function IconStrokeJoinMiter({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M3 13V5h8" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="miter" strokeLinecap="butt" />
-    </svg>
-  );
-}
-
-function IconStrokeJoinRound({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M3 13V5h8" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="butt" />
-    </svg>
-  );
-}
-
-function IconStrokeJoinBevel({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M3 13V7l2-2h6" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="bevel" strokeLinecap="butt" />
-    </svg>
-  );
-}
-
-/** All four sides emphasized — “全部”. */
-function IconSideAll({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3.5" y="3.5" width="9" height="9" rx="1" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function IconSideTop({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3.5" y="3.5" width="9" height="9" rx="1" stroke="currentColor" strokeWidth="1.25" opacity="0.35" />
-      <path d="M3.5 4h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconSideRight({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3.5" y="3.5" width="9" height="9" rx="1" stroke="currentColor" strokeWidth="1.25" opacity="0.35" />
-      <path d="M12 3.5v9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconSideBottom({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3.5" y="3.5" width="9" height="9" rx="1" stroke="currentColor" strokeWidth="1.25" opacity="0.35" />
-      <path d="M3.5 12h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconSideLeft({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="3.5" y="3.5" width="9" height="9" rx="1" stroke="currentColor" strokeWidth="1.25" opacity="0.35" />
-      <path d="M4 3.5v9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
+const IconStrokeAlignInside = panelIcon('editor-stroke-align-inside');
+const IconStrokeAlignCenter = panelIcon('editor-stroke-align-center');
+const IconStrokeAlignOutside = panelIcon('editor-stroke-align-outside');
+const IconStrokeCapButt = panelIcon('editor-stroke-cap-butt');
+const IconStrokeCapRound = panelIcon('editor-stroke-cap-round');
+const IconStrokeCapSquare = panelIcon('editor-stroke-cap-square');
+const IconStrokeJoinMiter = panelIcon('editor-stroke-join-miter');
+const IconStrokeJoinRound = panelIcon('editor-stroke-join-round');
+const IconStrokeJoinBevel = panelIcon('editor-stroke-join-bevel');
+const IconSideAll = panelIcon('editor-stroke-side-all');
+const IconSideTop = panelIcon('editor-stroke-side-top');
+const IconSideRight = panelIcon('editor-stroke-side-right');
+const IconSideBottom = panelIcon('editor-stroke-side-bottom');
+const IconSideLeft = panelIcon('editor-stroke-side-left');
 
 /** Compact stroke-style dropdown field (not tabs). */
 function StrokeStyleField({
@@ -358,7 +234,7 @@ function StrokePanel({
     >
       <div className="flex w-full items-center justify-between gap-1.5">
         <label className="inline-flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-[4px] bg-[var(--accent-soft)] px-2 text-[12px] text-[var(--ink)]">
-          <StrokeWeightGlyph className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+          <Icon name="editor-stroke-weight" className="h-4 w-4 shrink-0 text-[var(--muted)]" />
           <input
             type="number"
             min={0}

@@ -1,7 +1,6 @@
 import { useMemo, useState, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineLink, HiOutlineLinkSlash } from 'react-icons/hi2';
 import {
   fillPanelPreview,
   type FillPanelValue,
@@ -31,6 +30,7 @@ import {
   sizeFromAspectPreset,
 } from '@/components/rcb/selection/resizeGeometry';
 import Tooltip from '@/components/base/tooltip';
+import { Icon } from '@/components/base/icon';
 import { cn } from '@/utils/classnames';
 import {
   supportsAspectPresets,
@@ -39,7 +39,7 @@ import {
   supportsShapeSides,
   supportsStroke,
 } from '@/components/rcb/scene/document/sceneDocument';
-import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import { isRadiusLinked, maxRadius, radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import {
   clampShapeSides,
   DEFAULT_SHAPE_SIDES,
@@ -61,6 +61,13 @@ function readAspectLocked(attrs: Record<string, unknown> | undefined): boolean {
   if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
   if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
   return false;
+}
+
+/** Compact toolbar R: linked → any corner; unlinked → max so mixed corners stay visible. */
+function toolbarCornerRadius(attrs: Record<string, unknown> | undefined): number {
+  const r = radiiFromAttrs(attrs);
+  if (isRadiusLinked(attrs)) return Math.round(r.tl);
+  return Math.round(maxRadius(r));
 }
 
 type SceneBox = { left: number; top: number; width: number; height: number };
@@ -117,7 +124,7 @@ function ShapeSelectionToolbar({
     boolEffectAttr(node?.attrs?.['stroke-enabled'], true) &&
     boolEffectAttr(node?.attrs?.['stroke-visible'], true);
   const strokeColor = String(node?.attrs?.['border-color'] || node?.attrs?.stroke || '#333333');
-  const radius = radiiFromAttrs(node?.attrs).tl;
+  const radius = toolbarCornerRadius(node?.attrs);
 
   const patchAttrs = (attrs: Record<string, unknown>) => {
     const shapeType = node?.attrs?.shapeType;
@@ -333,9 +340,9 @@ function ShapeSelectionToolbar({
           }
         >
           {aspectLocked ? (
-            <HiOutlineLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <Icon name="editor-link" width={14} height={14} />
           ) : (
-            <HiOutlineLinkSlash className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <Icon name="editor-unlink" width={14} height={14} />
           )}
         </button>
       </Tooltip>
