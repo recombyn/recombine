@@ -20,18 +20,21 @@ Full contract: Swagger at http://127.0.0.1:8000/docs
 
 ## Health
 
-`GET /api/v1/health` → `{ "status": "ok" }`
+`GET /api/v1/health` → `{ "status": "ok"|"degraded", "checks": { … } }`
 
 ## Design Agent (summary)
 
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/design/run` | SSE: auth → LangGraph agent (event stream) |
-| POST | `/design/run/{taskId}/scene` | FE returns live canvas inventory |
+| POST | `/design/run/{taskId}/scene` | FE returns live canvas inventory (observe interrupt) |
+| POST | `/design/run/{taskId}/pause` | Durable pause intent |
+| POST | `/design/run/{taskId}/cancel` | Cancel + optional refund |
+| POST | `/design/run/{taskId}/resume` | SSE resume from checkpoint |
 | GET | `/design/catalog` | Public catalog |
 | GET | `/design/canvas-tools` | Canvas op capability table |
 
-Backend call chain and package layout: [design-agent-runtime.md](./design-agent-runtime.md).
+Call chain, **LC/LG stack**, lifecycle / HITL: [design-agent-runtime.md](./design-agent-runtime.md).
 
 ## Import (summary)
 

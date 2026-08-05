@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.llm import (
+from app.services.llm import (
     content_text_from_chunk,
     thinking_text_from_chunk,
     to_lc_messages,
@@ -44,7 +44,7 @@ def test_to_lc_messages_roles_and_tools():
 
 def test_multimodal_user_content_uses_langchain_blocks():
     from langchain_core.messages import HumanMessage, convert_to_openai_messages
-    from services.llm import build_user_message_content, openai_user_content, to_lc_messages
+    from app.services.llm import build_user_message_content, openai_user_content, to_lc_messages
 
     plain = build_user_message_content("hello", None)
     assert plain == "hello"
@@ -97,7 +97,7 @@ def test_thinking_and_usage_helpers():
 
 
 def test_compat_chat_preserves_reasoning_delta():
-    from services.llm import LlmEndpoint, _compat_chat_openai_cls
+    from app.services.llm import LlmEndpoint, _compat_chat_openai_cls
     from langchain_core.messages import AIMessageChunk
 
     cls = _compat_chat_openai_cls()
@@ -136,7 +136,7 @@ def test_compat_chat_preserves_reasoning_delta():
 
 
 def test_build_chat_model_uses_init_chat_model():
-    from services.llm import LlmEndpoint, build_chat_model, _compat_chat_openai_cls
+    from app.services.llm import LlmEndpoint, build_chat_model, _compat_chat_openai_cls
 
     ep = LlmEndpoint(
         base_url="https://example.invalid/v1",

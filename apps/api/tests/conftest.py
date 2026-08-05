@@ -10,6 +10,32 @@ import pytest
 os.environ.setdefault("SQLITE_DB_PATH", "storage/test-recombyn.db")
 os.environ.setdefault("DATABASE_URL", "")
 
+_DEFAULT_SQLITE = os.environ["SQLITE_DB_PATH"]
+
+
+def restore_default_sqlite_engine() -> None:
+    """Undo SQLITE_DB_PATH / engine switches so later tests share the default file."""
+    from app.core import db as core_db
+    from app.core.config import settings
+    from app.core.db import reset_engine
+
+    settings.sqlite_db_path = _DEFAULT_SQLITE
+    settings.database_url = ""
+    os.environ["SQLITE_DB_PATH"] = _DEFAULT_SQLITE
+    os.environ["DATABASE_URL"] = ""
+    reset_engine()
+    for mod_path in (
+        "app.services.design.readpath.catalog",
+        "app.services.design.prompts.knowledge_store",
+        "app.services.design.prompts.skill_store",
+    ):
+        try:
+            mod = __import__(mod_path, fromlist=["*"])
+        except Exception:
+            continue
+        if hasattr(mod, "engine"):
+            mod.engine = core_db.engine
+
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
@@ -19,13 +45,16 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "")
 
     # Reload settings / app bindings that read env at import time where needed.
-    from config import settings as settings_mod
+    from app.core.config import settings
+    from app.core.db import reset_engine
 
-    settings_mod.settings.sqlite_db_path = str(db_path)
-    settings_mod.settings.database_url = ""
+    settings.sqlite_db_path = str(db_path)
+    settings.database_url = ""
+    reset_engine()
 
     from fastapi.testclient import TestClient
-    from main import app
+    from app.main import app
 
     with TestClient(app) as c:
         yield c
+    restore_default_sqlite_engine()

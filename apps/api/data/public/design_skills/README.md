@@ -6,6 +6,8 @@ This directory holds optional **extension packs** (`source=file`, namespace `ext
 
 Official MIT encyclopedias ship under repo-root [`.agents/skills/`](../../../../../.agents/skills/) (`ui_ux_pro_max`, `garden_style`, `awesome_design_md`, `shadcn_ui`) and load into the same Skill toolbox.
 
+**Runtime / lifecycle / when to add a Skill vs corpus vs prompt pack:** see repo [docs/design-agent-runtime.md](../../../../../docs/design-agent-runtime.md#what-to-extend-content-not-graph).
+
 ## Namespaces
 
 | Namespace | Kind | Source | Key rules |

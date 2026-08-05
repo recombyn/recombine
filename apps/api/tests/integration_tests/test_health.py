@@ -15,10 +15,10 @@ def test_root_service_meta(client):
 
 def test_health_api_check_always_ok(client):
     with (
-        patch("api.v1.health._check_redis", return_value=False),
-        patch("api.v1.health._check_worker", return_value=False),
-        patch("api.v1.health._check_ocr", return_value=False),
-        patch("api.v1.health._check_db", return_value={"ok": True, "dialect": "sqlite"}),
+        patch("app.api.routes.health._check_redis", return_value=False),
+        patch("app.api.routes.health._check_worker", return_value=False),
+        patch("app.api.routes.health._check_ocr", return_value=False),
+        patch("app.api.routes.health._check_db", return_value={"ok": True, "dialect": "sqlite"}),
     ):
         res = client.get("/api/v1/health")
     assert res.status_code == 200

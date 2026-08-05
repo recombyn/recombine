@@ -25,13 +25,13 @@ _API_ROOT = Path(__file__).resolve().parents[1]
 if str(_API_ROOT) not in sys.path:
     sys.path.insert(0, str(_API_ROOT))
 
-from config.settings import settings  # noqa: E402
-from services.wallet.card_keys import (  # noqa: E402
+from app.core.config import settings  # noqa: E402
+from app.services.wallet.card_keys import (  # noqa: E402
     generate_plaintext_key,
     insert_card_keys,
     require_strong_card_key_salt,
 )
-from services.wallet.db import init_wallet_db  # noqa: E402
+from app.services.wallet.db import init_wallet_db  # noqa: E402
 
 
 def main() -> int:

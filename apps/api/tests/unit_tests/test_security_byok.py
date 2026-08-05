@@ -2,7 +2,7 @@
 """Security: AES BYOK, redaction, rate limit, skill ACL."""
 from __future__ import annotations
 
-from services.security import (
+from app.services.security import (
     api_key_hint,
     check_rate_limit,
     decrypt_secret,
@@ -14,7 +14,7 @@ from services.security import (
 
 def test_aes_roundtrip(monkeypatch):
     monkeypatch.setenv("BYOK_AES_KEY", "unit-test-byok-aes-key-please-change")
-    from config.settings import settings
+    from app.core.config import settings
 
     monkeypatch.setattr(settings, "byok_aes_key", "unit-test-byok-aes-key-please-change")
     plain = "sk-test-secret-key-123456"
@@ -41,9 +41,9 @@ def test_public_http_url():
 
 
 def test_byok_endpoint_resolve(monkeypatch, tmp_path):
-    from config.settings import settings
-    from services import security as sec
-    from services.llm import (
+    from app.core.config import settings
+    from app.services import security as sec
+    from app.services.llm import (
         get_llm_endpoint,
         reset_byok_user_id,
         set_byok_user_id,
@@ -86,7 +86,7 @@ def test_byok_endpoint_resolve(monkeypatch, tmp_path):
 
 
 def test_rate_limit_trips(monkeypatch):
-    from config.settings import settings
+    from app.core.config import settings
 
     monkeypatch.setattr(settings, "rate_limit_enabled", True)
     monkeypatch.setattr(settings, "rate_limit_window_sec", 60)

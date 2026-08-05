@@ -1,10 +1,10 @@
-from services.design.prompts.prompt_pack_store import (
+from app.services.design.prompts.prompt_pack_store import (
     format_prompt_pack_block,
     format_prompt_packs_catalog,
     list_prompt_nodes_from_flow,
     seed_prompt_overlay_nodes,
 )
-from services.design.prompts.skill_store import format_skills_details
+from app.services.design.prompts.skill_store import format_skills_details
 
 
 def test_seed_prompt_overlay_nodes_migrated_to_skills():
@@ -15,7 +15,7 @@ def test_seed_prompt_overlay_nodes_migrated_to_skills():
 
 def test_prompt_packs_catalog_points_to_skills():
     """Scene methodology packs retired — catalog is a stub; skills own playbooks."""
-    from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
+    from app.services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
 
     ensure_design_prompt_packs()
     block = format_prompt_packs_catalog(scene="website")
@@ -27,7 +27,7 @@ def test_prompt_packs_catalog_points_to_skills():
 
 
 def test_methodology_lives_in_skills():
-    from services.design.prompts.skill_store import ensure_design_skills, reset_skills_ready_for_tests
+    from app.services.design.prompts.skill_store import ensure_design_skills, reset_skills_ready_for_tests
 
     reset_skills_ready_for_tests()
     ensure_design_skills(force=True)

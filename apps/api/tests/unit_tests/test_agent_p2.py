@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from services.design.runtime.agent_controller import _parse_agent_turn
-from services.design.ops.tool_ops_contract import (
+from app.services.design.runtime.agent_controller import _parse_agent_turn
+from app.services.design.ops.tool_ops_contract import (
     format_canvas_tools_catalog,
     format_canvas_tools_details,
     normalize_need_tools,
 )
-from services.design.prompts.knowledge_store import (
+from app.services.design.prompts.knowledge_store import (
     format_knowledge_catalog,
     normalize_need_knowledge,
 )
-from services.design.aesthetics.scorer import normalize_need_aesthetics
+from app.services.design.aesthetics.scorer import normalize_need_aesthetics
 
 
 def test_parse_need_tools_in_turn():

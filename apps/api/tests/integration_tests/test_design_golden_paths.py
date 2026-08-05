@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from services.design.runtime.agent_controller import PaintOpsSchema
-from services.design.readpath.catalog import ensure_design_catalog
-from services.design.runtime.models_route import IntentClassifyDecision
+from app.services.design.runtime.agent_controller import PaintOpsSchema
+from app.services.design.readpath.catalog import ensure_design_catalog
+from app.services.design.runtime.models_route import IntentClassifyDecision
 from tests.design_harness import collect_design_events, events_by_type
 
 TEST_USER = "user_eval_golden"
@@ -22,38 +22,43 @@ def _catalog(tmp_path_factory):
 
     os.environ["SQLITE_DB_PATH"] = str(db_path)
     os.environ["DATABASE_URL"] = ""
-    from config import settings as settings_mod
+    from app.core.config import settings as settings_mod
+    from app.core.db import reset_engine
 
-    settings_mod.settings.sqlite_db_path = str(db_path)
-    settings_mod.settings.database_url = ""
-    import services.db as db_mod
-    import services.design.readpath.catalog as catalog_mod
+    settings_mod.sqlite_db_path = str(db_path)
+    settings_mod.database_url = ""
+    import app.services.db as db_mod
+    import app.services.design.readpath.catalog as catalog_mod
 
     db_mod._SCHEMA_READY = False
     catalog_mod._CATALOG_READY = False
+    reset_engine()
+    from app.core import db as core_db
+
+    catalog_mod.engine = core_db.engine
     ensure_design_catalog(force=True)
 
 
 @pytest.fixture(autouse=True)
 def _wallet(monkeypatch):
     monkeypatch.setattr(
-        "services.design.runtime.orchestrator.get_user_tokens",
+        "app.services.design.runtime.orchestrator.get_user_tokens",
         lambda _uid: 200_000,
     )
     monkeypatch.setattr(
-        "services.design.runtime.orchestrator.free_daily_remaining",
+        "app.services.design.runtime.orchestrator.free_daily_remaining",
         lambda _uid: 0,
     )
     monkeypatch.setattr(
-        "services.design.runtime.orchestrator._reserve_design_hold",
+        "app.services.design.runtime.orchestrator._reserve_design_hold",
         lambda *_a, **_k: (100, False),
     )
     monkeypatch.setattr(
-        "services.design.runtime.orchestrator._settle_hold",
+        "app.services.design.runtime.orchestrator._settle_hold",
         lambda *_a, **_k: 10,
     )
     monkeypatch.setattr(
-        "services.design.runtime.orchestrator._refund_hold",
+        "app.services.design.runtime.orchestrator._refund_hold",
         lambda *_a, **_k: None,
     )
 
@@ -67,14 +72,14 @@ def _run(**kwargs):
 @pytest.mark.integration
 def test_permission_gate_denies_when_broke(monkeypatch):
     monkeypatch.setattr(
-        "services.design.runtime.orchestrator.get_user_tokens",
+        "app.services.design.runtime.orchestrator.get_user_tokens",
         lambda _uid: 0,
     )
     monkeypatch.setattr(
-        "services.design.runtime.orchestrator.free_daily_remaining",
+        "app.services.design.runtime.orchestrator.free_daily_remaining",
         lambda _uid: 0,
     )
-    events = _run(prompt="你好")
+    events = _run(prompt="??")
     perms = [e for e in events if e.get("type") == "permission"]
     assert perms
     assert perms[0].get("can_call_llm") is False
@@ -94,19 +99,19 @@ def test_react_chat_hello(monkeypatch):
     async def _classify(**_kwargs: Any) -> IntentClassifyDecision:
         return IntentClassifyDecision(
             intent="chat",
-            reply="你好！有什么可以帮你的？",
+            reply="????????????",
             rationale="greeting",
         )
 
     monkeypatch.setattr(
-        "services.design.runtime.graph.nodes.intent.classify_user_intent",
+        "app.services.design.runtime.graph.nodes.intent.classify_user_intent",
         _classify,
     )
-    events = _run(prompt="你好")
+    events = _run(prompt="??")
     perms = [e for e in events if e.get("type") == "permission"]
     assert perms and perms[0].get("can_call_llm") is True
     tokens = events_by_type(events, "token")
-    assert tokens and "你好" in (tokens[0].get("text") or "")
+    assert tokens and "??" in (tokens[0].get("text") or "")
     assert events_by_type(events, "chat_done")
     assert events_by_type(events, "result")
     assert not events_by_type(events, "tool_ops")
@@ -115,7 +120,7 @@ def test_react_chat_hello(monkeypatch):
 
 @pytest.mark.integration
 def test_react_edit_emits_tool_ops(monkeypatch):
-    """design/edit → decide → paint_ops structured tool_ops → action SSE."""
+    """design/edit ? decide ? paint_ops structured tool_ops ? action SSE."""
 
     async def _classify(**_kwargs: Any) -> IntentClassifyDecision:
         return IntentClassifyDecision(
@@ -138,7 +143,7 @@ def test_react_edit_emits_tool_ops(monkeypatch):
     ) -> tuple[str, str, int, list[dict[str, Any]], str]:
         del system, user, rules, images, max_tokens, enable_thinking, live_emit
         content = (
-            '{"thought":"加标题","intent":"edit","reply":"好",'
+            '{"thought":"???","intent":"edit","reply":"?",'
             '"need_tools":[],"need_skills":[],"tool_ops":[]}'
         )
         return model_family, content, 12, [], ""
@@ -147,12 +152,12 @@ def test_react_edit_emits_tool_ops(monkeypatch):
         return {
             "structured": PaintOpsSchema(
                 intent="edit",
-                reply="已添加标题",
+                reply="?????",
                 tool_ops=[
                     {
                         "name": "create_text",
                         "args": {
-                            "text": "标题",
+                            "text": "??",
                             "x": 40,
                             "y": 40,
                             "w": 400,
@@ -164,20 +169,20 @@ def test_react_edit_emits_tool_ops(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "services.design.runtime.graph.nodes.intent.classify_user_intent",
+        "app.services.design.runtime.graph.nodes.intent.classify_user_intent",
         _classify,
     )
     monkeypatch.setattr(
-        "services.design.runtime.graph.nodes.decide._stream_llm_text",
+        "app.services.design.runtime.graph.nodes.decide._stream_llm_text",
         _stream,
     )
     monkeypatch.setattr(
-        "services.llm.agent.ainvoke_structured",
+        "app.services.llm.agent.ainvoke_structured",
         _structured,
     )
 
     events = _run(
-        prompt="加个标题",
+        prompt="????",
         canvas_size="800x600",
         scene_frames=[{"id": "f1", "name": "Board", "w": 800, "h": 600}],
         scene_nodes=[],
