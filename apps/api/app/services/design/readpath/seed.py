@@ -10,14 +10,14 @@ import logging
 from sqlmodel import Session
 
 from app import crud
-from app.core.db import engine
+from app.core import db as core_db
 
 logger = logging.getLogger(__name__)
 
 
 def seed_design_catalog_if_empty() -> None:
     """Legacy check — runtime skills are upserted by ``ensure_design_skills``."""
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         n = crud.count_design_skills(session=session)
     if n <= 0:
         logger.warning(
