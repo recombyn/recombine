@@ -6,23 +6,42 @@ import os
 
 import pytest
 
-# Prefer isolated sqlite for tests (avoid touching developer DB).
-os.environ.setdefault("SQLITE_DB_PATH", "storage/test-recombyn.db")
-os.environ.setdefault("DATABASE_URL", "")
+# xdist workers must not share one SQLite file (Alembic stamp races).
+# Force sqlite for tests — do not inherit developer MySQL from shell/.env.
+_worker = (os.environ.get("PYTEST_XDIST_WORKER") or "").strip()
+_DEFAULT_SQLITE = (
+    f"storage/test-recombyn-{_worker}.db"
+    if _worker
+    else "storage/test-recombyn.db"
+)
+os.environ["DATABASE_URL"] = ""
+os.environ["SQLITE_DB_PATH"] = _DEFAULT_SQLITE
 
-_DEFAULT_SQLITE = os.environ["SQLITE_DB_PATH"]
+
+def _bind_test_sqlite() -> None:
+    """Point settings + engine at this worker's sqlite file."""
+    from app.core.config import settings
+    from app.core.db import reset_engine
+
+    settings.database_url = ""
+    settings.sqlite_db_path = _DEFAULT_SQLITE
+    os.environ["DATABASE_URL"] = ""
+    os.environ["SQLITE_DB_PATH"] = _DEFAULT_SQLITE
+    reset_engine()
 
 
 def restore_default_sqlite_engine() -> None:
     """Undo SQLITE_DB_PATH / engine switches so later tests share the default file."""
-    from app.core.config import settings
-    from app.core.db import reset_engine
+    _bind_test_sqlite()
 
-    settings.sqlite_db_path = _DEFAULT_SQLITE
-    settings.database_url = ""
-    os.environ["SQLITE_DB_PATH"] = _DEFAULT_SQLITE
-    os.environ["DATABASE_URL"] = ""
-    reset_engine()
+
+@pytest.fixture(scope="session", autouse=True)
+def _session_sqlite_schema() -> None:
+    """Migrate once per xdist worker so tests can query without ad-hoc ensure_*."""
+    _bind_test_sqlite()
+    from app.services.db import init_schema
+
+    init_schema()
 
 
 @pytest.fixture()
@@ -32,13 +51,16 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("SQLITE_DB_PATH", str(db_path))
     monkeypatch.setenv("DATABASE_URL", "")
 
-    # Reload settings / app bindings that read env at import time where needed.
     from app.core.config import settings
     from app.core.db import reset_engine
+    from app.services.db import init_schema
+    import app.services.db as db_mod
 
     settings.sqlite_db_path = str(db_path)
     settings.database_url = ""
     reset_engine()
+    db_mod._SCHEMA_READY = False
+    init_schema()
 
     from fastapi.testclient import TestClient
     from app.main import app
