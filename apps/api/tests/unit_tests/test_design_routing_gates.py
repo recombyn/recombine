@@ -1,4 +1,4 @@
-"""Runtime gates that remain in the live path (no soft prompt→scene invent)."""
+"""Runtime gates that remain in the live path (no soft prompt?scene invent)."""
 
 from __future__ import annotations
 
@@ -18,28 +18,35 @@ def _catalog(tmp_path_factory):
     os.environ["SQLITE_DB_PATH"] = str(db_path)
     os.environ["DATABASE_URL"] = ""
     from app.core.config import settings as settings_mod
+    from app.core.db import reset_engine
+    from app.core import db as core_db
+    import app.services.design.readpath.catalog as catalog_mod
+    import app.services.design.prompts.knowledge_store as knowledge_mod
 
-    settings_mod.settings.sqlite_db_path = str(db_path)
-    settings_mod.settings.database_url = ""
+    settings_mod.sqlite_db_path = str(db_path)
+    settings_mod.database_url = ""
+    reset_engine()
+    catalog_mod.engine = core_db.engine
+    knowledge_mod.engine = core_db.engine
     ensure_design_catalog(force=True)
     ensure_stage_rules()
 
 
 def test_probe_target_chip_detects_payload_only():
-    prompt = "[Target element: rect-1]\n修改圆角为8px"
+    prompt = "[Target element: rect-1]\n?????8px"
     assert probe_has_target_chip(prompt)
-    assert not probe_has_target_chip("你好")
+    assert not probe_has_target_chip("??")
 
 
 def test_scene_follows_ui_tab_only():
     rules = get_global_rules() or dict(STAGE_RULE_DEFAULTS)
     if "canvas.scene_keys" not in rules:
         rules = dict(STAGE_RULE_DEFAULTS)
-    key, overridden = resolve_agent_scene("website", "做一张竖版海报", rules=rules)
+    key, overridden = resolve_agent_scene("website", "???????", rules=rules)
     assert key == "website"
     assert overridden is False
-    key2, _ = resolve_agent_scene("mobile", "设计一个网站首页", rules=rules)
+    key2, _ = resolve_agent_scene("mobile", "????????", rules=rules)
     assert key2 == "mobile"
-    # Empty tab → Admin default only (no prompt soft invent).
-    key3, _ = resolve_agent_scene(None, "设计一个 app 登录页", rules=rules)
+    # Empty tab ? Admin default only (no prompt soft invent).
+    key3, _ = resolve_agent_scene(None, "???? app ???", rules=rules)
     assert key3 == "website"

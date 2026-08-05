@@ -215,22 +215,18 @@ def test_list_stale_resumable_respects_ttl(monkeypatch):
         },
     ]
 
-    class _FakeConn:
-        def execute(self, *_a, **_k):
-            class _R:
-                def fetchall(self_inner):
-                    # Mimic SQL cutoff filter (ttl=1h).
-                    return [r for r in rows if float(r["updated_at"]) < now - 3600]
+    class _FakeRow:
+        def __init__(self, d):
+            self._d = d
 
-            return _R()
+        def model_dump(self):
+            return self._d
 
-        def __enter__(self):
-            return self
+    def fake_list(*, session, statuses, cutoff, limit):
+        _ = session, statuses, limit
+        return [_FakeRow(r) for r in rows if float(r["updated_at"]) < cutoff]
 
-        def __exit__(self, *_a):
-            return False
-
-    monkeypatch.setattr(ts, "connect", lambda: _FakeConn())
+    monkeypatch.setattr("app.crud.list_stale_design_tasks", fake_list)
     ids = ts.list_stale_resumable_task_ids(ttl_hours=1.0, limit=50)
     assert ids == ["old-paused"]
     assert ts.list_stale_resumable_task_ids(ttl_hours=0) == []
@@ -276,7 +272,7 @@ def test_sweep_stale_skips_when_ttl_zero(monkeypatch):
     from app.core.config import settings as settings_mod
     from app.services.design.runtime.graph import build as build_mod
 
-    monkeypatch.setattr(settings_mod.settings, "design_run_checkpoint_ttl_hours", 0)
+    monkeypatch.setattr(settings_mod, "design_run_checkpoint_ttl_hours", 0)
     out = asyncio.run(build_mod.sweep_stale_design_checkpoints())
     assert out["skipped"] is True
     assert out["swept"] == 0
@@ -287,7 +283,7 @@ def test_require_durable_checkpointer_refuses_memory(monkeypatch):
     from app.services.design.runtime.graph import build as build_mod
 
     monkeypatch.setattr(
-        settings_mod.settings, "design_graph_require_durable_checkpoint", True
+        settings_mod, "design_graph_require_durable_checkpoint", True
     )
     monkeypatch.setattr(
         "app.services.llm.agent.get_agent_checkpointer", lambda: object()
@@ -296,7 +292,7 @@ def test_require_durable_checkpointer_refuses_memory(monkeypatch):
     with pytest.raises(RuntimeError, match="durable checkpointer"):
         build_mod._get_design_graph_checkpointer()
     monkeypatch.setattr(
-        settings_mod.settings, "design_graph_require_durable_checkpoint", False
+        settings_mod, "design_graph_require_durable_checkpoint", False
     )
     assert build_mod._get_design_graph_checkpointer() is not None
 
@@ -305,10 +301,12 @@ def _patch_lease_store(monkeypatch, store: dict[str, dict]):
     """In-memory lease store; force meta path (no Redis / no live DB)."""
     monkeypatch.setattr(ts, "_lease_redis", lambda: None)
 
-    def boom_connect(*_a, **_k):
-        raise RuntimeError("no db in unit test")
+    def force_meta(tid, owner, *, ttl, steal_if_expired=True):
+        return ts._claim_lease_meta(
+            tid, owner, ttl=ttl, steal_if_expired=steal_if_expired
+        )
 
-    monkeypatch.setattr(ts, "connect", boom_connect)
+    monkeypatch.setattr(ts, "_claim_lease_db_cas", force_meta)
 
     def get_task(tid):
         return store.get(tid)
@@ -606,7 +604,7 @@ def test_interrupt_payloads_and_scene_from_state():
 
 
 def test_scene_interrupt_bridge_resume():
-    """Minimal graph: interrupt → Command(resume=) completes observe."""
+    """Minimal graph: interrupt ? Command(resume=) completes observe."""
     import asyncio
     from typing import TypedDict
 

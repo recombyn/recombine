@@ -238,7 +238,7 @@ def format_knowledge_catalog(*, scene: str = "website") -> str:
     scene_l = str(scene or "website").strip().lower() or "website"
     rows = [
         r
-        for r in list_knowledge(enabled=True, ensure=False)
+        for r in list_knowledge(enabled=True, ensure=True)
         if _csv_has(str(r.get("scenes") or "all"), scene_l)
     ]
     if not rows:
@@ -257,24 +257,31 @@ def format_knowledge_catalog(*, scene: str = "website") -> str:
 
 
 def normalize_need_knowledge(raw: Any, *, max_n: int = 8) -> list[str]:
-    if raw is None:
+    """Parse model need_knowledge → kind keys (deduped). True → ['*'] (all for scene)."""
+    if raw is None or raw is False:
         return []
-    items: list[str] = []
+    if raw is True:
+        return ["*"]
+    items: list[Any]
     if isinstance(raw, str):
-        items = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+        s = raw.strip()
+        if s.lower() in ("1", "true", "yes", "all", "*"):
+            return ["*"]
+        items = [p.strip() for p in s.replace(";", ",").split(",")]
     elif isinstance(raw, list):
-        for x in raw:
-            s = str(x or "").strip()
-            if s:
-                items.append(s)
+        items = raw
+    else:
+        return []
     out: list[str] = []
     seen: set[str] = set()
-    for s in items:
-        key = s.lower()
-        if key in seen:
+    for item in items:
+        key = str(item or "").strip().lower()
+        if not key or key in seen:
             continue
+        if key in ("all", "*"):
+            return ["*"]
         seen.add(key)
-        out.append(s)
+        out.append(key)
         if len(out) >= max_n:
             break
     return out

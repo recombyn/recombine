@@ -10,12 +10,14 @@ def _use_tmp_db(tmp_path: Path, monkeypatch, name: str) -> None:
     monkeypatch.setenv("SQLITE_DB_PATH", str(db))
     monkeypatch.setenv("DATABASE_URL", "")
     from app.core.config import settings as settings_mod
+    from app.core.db import reset_engine
     from app.services import db as db_mod
 
-    settings_mod.settings.sqlite_db_path = str(db)
-    settings_mod.settings.database_url = ""
+    settings_mod.sqlite_db_path = str(db)
+    settings_mod.database_url = ""
     # init_schema is process-global; reset so each temp DB gets tables.
     db_mod._SCHEMA_READY = False
+    reset_engine()
 
 
 def test_upsert_oauth_preserves_custom_profile(tmp_path: Path, monkeypatch):
@@ -26,7 +28,7 @@ def test_upsert_oauth_preserves_custom_profile(tmp_path: Path, monkeypatch):
 
     init_schema()
 
-    # Skip network rehost in unit tests — keep remote URL in default_avatar.
+    # Skip network rehost in unit tests ? keep remote URL in default_avatar.
     monkeypatch.setattr(
         "app.services.auth.email_store._rehost_remote_avatar",
         lambda *a, **k: None,
@@ -45,18 +47,18 @@ def test_upsert_oauth_preserves_custom_profile(tmp_path: Path, monkeypatch):
     assert first.default_avatar and "googleusercontent" in first.default_avatar
     assert first.avatar == first.default_avatar
 
-    # User uploaded a custom avatar (data URL → local upload path when storage works).
+    # User uploaded a custom avatar (data URL ? local upload path when storage works).
     updated = update_profile(
         first.id,
-        name="本地昵称",
+        name="????",
         avatar="data:image/png;base64,iVBORw0KGgo=",
     )
     assert updated is not None
-    assert updated.name == "本地昵称"
+    assert updated.name == "????"
     assert updated.avatar_custom  # custom field set
     assert updated.avatar == updated.avatar_custom  # display prefers custom
 
-    # Second Google login — keep custom name/avatar; may refresh default_avatar.
+    # Second Google login ? keep custom name/avatar; may refresh default_avatar.
     again = upsert_oauth_user(
         user_id="google:sub-1",
         email="user@example.com",
@@ -65,7 +67,7 @@ def test_upsert_oauth_preserves_custom_profile(tmp_path: Path, monkeypatch):
         provider="google",
         google_sub="sub-1",
     )
-    assert again.name == "本地昵称"
+    assert again.name == "????"
     assert again.avatar_custom == updated.avatar_custom
     assert again.avatar == updated.avatar_custom
 
