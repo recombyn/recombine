@@ -1,6 +1,8 @@
 import { memo, type ReactNode } from 'react';
-import { useRcbCamera } from '../camera/context';
+import { useRcbCamera, useRcbDevicePixelRatio } from '../camera/context';
 import { toDomPrecision } from '../core/dpr';
+import { snapSvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
+import type { RcbCamera } from '../core/types';
 import { cursorForRotate } from './rotateCornerCursor';
 
 export type SceneBox = { left: number; top: number; width: number; height: number };
@@ -108,9 +110,30 @@ export function fittedSvgViewport(
   };
 }
 
+/** fittedSvgViewport + same scene-lattice quantize as shape hosts / grid. */
+export function fittedSnappedSvgViewport(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  angleDeg: number,
+  pad: number,
+  camera: RcbCamera,
+  dpr: number
+): { minX: number; minY: number; w: number; h: number } {
+  const raw = fittedSvgViewport(left, top, width, height, angleDeg, pad);
+  const s = snapSvgSurfaceBox(
+    { left: raw.minX, top: raw.minY, width: raw.w, height: raw.h },
+    camera,
+    dpr
+  );
+  return { minX: s.left, minY: s.top, w: s.width, h: s.height };
+}
+
 /**
  * World-layer SVG shell — shared by selection box, brush, and shape-handle overlays.
  * Children paint in **scene** coordinates (not CSS pixels).
+ * CSS box === viewBox, scene-lattice quantized (same as hosts / pixel grid).
  */
 export function WorldSvgFrame({
   left,
@@ -133,13 +156,17 @@ export function WorldSvgFrame({
   pointerEvents?: 'none' | 'auto';
   children: ReactNode;
 }) {
-  const vp = fittedSvgViewport(left, top, width, height, angle, pad);
+  const camera = useRcbCamera();
+  const dpr = useRcbDevicePixelRatio();
+  const vp = fittedSnappedSvgViewport(left, top, width, height, angle, pad, camera, dpr);
   return (
     <svg
+      data-rcb-infinite="1"
       className={`absolute overflow-visible ${zClass}`}
       width={vp.w}
       height={vp.h}
       viewBox={`${vp.minX} ${vp.minY} ${vp.w} ${vp.h}`}
+      preserveAspectRatio="none"
       style={{
         left: vp.minX,
         top: vp.minY,
@@ -147,6 +174,8 @@ export function WorldSvgFrame({
         height: vp.h,
         overflow: 'visible',
         pointerEvents,
+        display: 'block',
+        shapeRendering: 'geometricPrecision',
       }}
       aria-hidden
     >
@@ -335,6 +364,7 @@ function SelectionChrome({
   showBoxStroke = true,
 }: SelectionChromeProps) {
   const camera = useRcbCamera();
+  const dpr = useRcbDevicePixelRatio();
   const z = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / z;
 
@@ -400,14 +430,25 @@ function SelectionChrome({
   // Viewport fits the **box outline only** — do NOT include handle / rotate hit
   // pads here. Those scale with 1/zoom and made the SVG CSS box resize every
   // zoom tick → path-vs-chrome drift + shake. Handles paint via overflow:visible.
-  const vp = fittedSvgViewport(left, top, w, h, angle, Math.max(1, stroke));
+  const vp = fittedSnappedSvgViewport(
+    left,
+    top,
+    w,
+    h,
+    angle,
+    Math.max(1, stroke),
+    camera,
+    dpr
+  );
 
   return (
     <svg
+      data-rcb-infinite="1"
       className="absolute z-[18] overflow-visible"
       width={vp.w}
       height={vp.h}
       viewBox={`${vp.minX} ${vp.minY} ${vp.w} ${vp.h}`}
+      preserveAspectRatio="none"
       style={{
         left: vp.minX,
         top: vp.minY,
@@ -415,6 +456,8 @@ function SelectionChrome({
         height: vp.h,
         overflow: 'visible',
         pointerEvents: 'none',
+        display: 'block',
+        shapeRendering: 'geometricPrecision',
       }}
       aria-hidden={!showHandles && !interactiveBox}
     >

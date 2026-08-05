@@ -1,13 +1,9 @@
 /**
- * Path indicator + path handles.
- *
- * Not the AABB control box (`SelectionChrome`). Twin the shape-host SVG viewport under
- * `[data-rcb-world]` so silhouette ink shares the paint transform tree — one scheme with
- * SelectionChrome (`left/top === viewBox`, screenPx/zoom), specialized for path accuracy.
- * Gesture / Redux stay in SelectionFeature.
+ * Path indicator + path handles (host-mirrored SVG under world).
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useRcbCamera } from '@/components/rcb/camera/context';
+import { useRcbCamera, useRcbDevicePixelRatio } from '@/components/rcb/camera/context';
+import { applySvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
 import { rememberNodePath2D } from '@/components/rcb/scene/document/sceneShapes';
 import {
   getShapeHost,
@@ -17,6 +13,7 @@ import {
 } from '@/components/rcb/shapes/shapeHostRegistry';
 import type { SceneBox } from './alignGuides';
 import { cursorForRotate } from './rotateCornerCursor';
+import type { RcbCamera } from '@/components/rcb/core/types';
 
 function liveNodeEl(nodeId: string): Element | null {
   return (
@@ -39,14 +36,12 @@ function liveShapeGeomBox(nodeId: string): SceneBox | null {
   return { left, top, width, height };
 }
 
-/**
- * Vector ink that can get a host-injected path outline + handles.
- * Same transform tree as paint — avoids world-layer SelectionChrome drift.
- */
+/** Shape / image / video / path on SVG host (not text / frame). */
 function nodeUsesPathChrome(node: any): boolean {
   if (!node) return false;
   const key = String(node.key || '');
-  if (key === 'image' || key === 'video' || key === 'text' || key === 'frame') return false;
+  if (key === 'text' || key === 'frame') return false;
+  if (key === 'image' || key === 'video') return true;
   if (key === 'shape' || key === 'path' || key === 'rect' || key === 'ellipse') return true;
   return Boolean(node.attrs?.shapeType);
 }
@@ -60,17 +55,16 @@ export type ShapeOutlineItem = {
   /** Selected: inject resize (and rotate) hits into the host with the outline. */
   withHandles?: boolean;
   lineMode?: boolean;
-  /**
-   * Line/arrow: knobs at shaft ends (0,mid)/(w,mid). Arrow `d` includes a V
-   * head — getPointAtLength(end) would land on a wing tip, not the head tip.
-   */
+  /** Line/arrow: knobs at shaft ends (not path tip). */
   shaftEndpoints?: boolean;
   showRotate?: boolean;
-  /**
-   * When false, skip the blue path stroke (handles/edges only).
-   * Default true.
-   */
+  /** When false, handles/edges only. */
   showPath?: boolean;
+  /** Multi-select union AABB; mirrors `mirrorHostId` viewport. */
+  unionChrome?: boolean;
+  mirrorHostId?: string;
+  cornerHandlesOnly?: boolean;
+  edgeHandles?: 'all' | 'horizontal' | 'none';
 };
 
 const SVG_NS = 'http://www.w3.org/2000/svg' as const;
@@ -212,13 +206,23 @@ function readBaselinePathD(baseline: SVGElement | null, fallback: string): strin
   return fallback;
 }
 
-/** Path chrome `d` — prefer live host baseline, else attrs path. */
+/** Keep first subpath only (donut outer). */
+function silhouettePathD(d: string): string {
+  const raw = String(d || '').trim();
+  if (!raw) return raw;
+  // Each M/m starts a subpath; keep only the first (outer).
+  const parts = raw.match(/[Mm][^Mm]*/g);
+  if (!parts || parts.length <= 1) return raw;
+  return parts[0].trim();
+}
+
+/** Path chrome `d` — prefer live host baseline, else attrs path; single contour. */
 function readHostOutlinePathD(
   _el: SVGElement | null | undefined,
   baseline: SVGElement | null,
   o: ShapeOutlineItem
 ): string {
-  return readBaselinePathD(baseline, o.pathD);
+  return silhouettePathD(readBaselinePathD(baseline, o.pathD));
 }
 
 function pathLocalEndpoints(
@@ -232,7 +236,6 @@ function pathLocalEndpoints(
     [0, midY],
     [Math.max(1, w), midY],
   ];
-  // Line / arrow share AABB shaft ends (matches world SelectionChrome line variant).
   if (mode === 'shaft') return fallback;
   const raw = String(d || '').trim();
   if (!raw || typeof document === 'undefined') return fallback;
@@ -339,8 +342,8 @@ function syncHostSelHandles(
     return;
   }
 
-  // Control box + knobs (pen/pencil/path). No path silhouette when selected —
-  // that is toggled via showPath on the outline.
+  // Control box + knobs (pen/pencil/path / image / video). No path silhouette when
+  // selected — that is toggled via showPath on the outline.
   const box = document.createElementNS(SVG_NS, 'rect');
   box.setAttribute(SEL_BOX_ATTR, o.id);
   box.setAttribute('x', '0');
@@ -353,16 +356,31 @@ function syncHostSelHandles(
   box.setAttribute('pointer-events', 'none');
   chrome.appendChild(box);
 
-  const knobs: Array<[string, number, number]> = [
-    ['nw', 0, 0],
-    ['n', w / 2, 0],
-    ['ne', w, 0],
-    ['e', w, h / 2],
-    ['se', w, h],
-    ['s', w / 2, h],
-    ['sw', 0, h],
-    ['w', 0, h / 2],
-  ];
+  const edgeMode = o.edgeHandles || 'all';
+  if (edgeMode === 'none') return;
+
+  const knobs: Array<[string, number, number]> = o.cornerHandlesOnly
+    ? [
+        ['nw', 0, 0],
+        ['ne', w, 0],
+        ['se', w, h],
+        ['sw', 0, h],
+      ]
+    : edgeMode === 'horizontal'
+      ? [
+          ['w', 0, h / 2],
+          ['e', w, h / 2],
+        ]
+      : [
+          ['nw', 0, 0],
+          ['n', w / 2, 0],
+          ['ne', w, 0],
+          ['e', w, h / 2],
+          ['se', w, h],
+          ['s', w / 2, h],
+          ['sw', 0, h],
+          ['w', 0, h / 2],
+        ];
 
   for (const [dir, lx, ly] of knobs) {
     const visFill = document.createElementNS(SVG_NS, 'rect');
@@ -435,6 +453,88 @@ function syncHostSelHandles(
   }
 }
 
+/** Multi-select union AABB; twin member host viewport. */
+function syncHostSelUnionChrome(
+  o: ShapeOutlineItem,
+  stroke: number,
+  inv: number,
+  camera: RcbCamera,
+  dpr: number
+): boolean {
+  const layer = ensureSelChromeLayer();
+  if (!layer) return false;
+
+  const mirrorId = o.mirrorHostId || o.id;
+  const host = getShapeHost(mirrorId);
+  const hostRoot = host?.root as SVGSVGElement | null | undefined;
+
+  const w = Math.max(1, o.box.width);
+  const h = Math.max(1, o.box.height);
+  const pad = Math.max(
+    stroke * 8,
+    SEL_HANDLE_HIT_PX * inv,
+    SEL_ROTATE_HIT_PX * inv + SEL_ROTATE_GAP_PX * inv
+  );
+
+  let root = layer.querySelector(
+    `:scope > svg[${SEL_CHROME_ATTR}="${CSS.escape(o.id)}"]`
+  ) as SVGSVGElement | null;
+  if (!root) {
+    root = document.createElementNS(SVG_NS, 'svg');
+    root.setAttribute(SEL_CHROME_ATTR, o.id);
+    root.setAttribute('overflow', 'visible');
+    root.setAttribute('preserveAspectRatio', 'none');
+    root.style.position = 'absolute';
+    root.style.overflow = 'visible';
+    root.style.pointerEvents = 'none';
+    root.style.display = 'block';
+    layer.appendChild(root);
+  }
+
+  const hostViewBox = hostRoot?.getAttribute?.('viewBox') || '';
+  const hostCssLeft = hostRoot?.style?.left || '';
+  const hostCssTop = hostRoot?.style?.top || '';
+  const hostCssW = hostRoot?.style?.width || '';
+  const hostCssH = hostRoot?.style?.height || '';
+  const mirrored = Boolean(hostRoot && hostViewBox && hostCssLeft && hostCssTop);
+
+  if (mirrored && hostRoot) {
+    root.style.left = hostCssLeft;
+    root.style.top = hostCssTop;
+    root.style.width = hostCssW || hostRoot.style.width;
+    root.style.height = hostCssH || hostRoot.style.height;
+    const attrW = hostRoot.getAttribute('width');
+    const attrH = hostRoot.getAttribute('height');
+    if (attrW) root.setAttribute('width', attrW);
+    if (attrH) root.setAttribute('height', attrH);
+    root.setAttribute('viewBox', hostViewBox);
+  } else {
+    applySvgSurfaceBox(
+      root,
+      {
+        left: o.box.left - pad,
+        top: o.box.top - pad,
+        width: w + pad * 2,
+        height: h + pad * 2,
+      },
+      camera,
+      dpr
+    );
+  }
+
+  let chrome = root.querySelector(`:scope > g[${SEL_CHROME_ATTR}="body"]`) as SVGGElement | null;
+  if (!chrome) {
+    chrome = document.createElementNS(SVG_NS, 'g');
+    chrome.setAttribute(SEL_CHROME_ATTR, 'body');
+    chrome.setAttribute('pointer-events', 'none');
+    root.appendChild(chrome);
+  }
+  // Scene-absolute union box — translate to union origin for local handle math.
+  chrome.setAttribute('transform', `translate(${o.box.left} ${o.box.top})`);
+  syncHostSelHandles(chrome, { ...o, showRotate: false }, stroke, inv, '');
+  return mirrored;
+}
+
 /**
  * Blue path outline (+ handles) on the world chrome layer (z above all hosts).
  *
@@ -442,7 +542,15 @@ function syncHostSelHandles(
  * element's `transform` — same scene mapping as host-injected chrome (no zoom drift).
  * Occlusion: paint lives on the top world layer so sibling hosts cannot cover it.
  */
-function syncHostSelOutline(o: ShapeOutlineItem, stroke: number, inv: number): boolean {
+function syncHostSelOutline(
+  o: ShapeOutlineItem,
+  stroke: number,
+  inv: number,
+  camera: RcbCamera,
+  dpr: number
+): boolean {
+  if (o.unionChrome) return syncHostSelUnionChrome(o, stroke, inv, camera, dpr);
+
   const layer = ensureSelChromeLayer();
   if (!layer) return false;
 
@@ -483,6 +591,8 @@ function syncHostSelOutline(o: ShapeOutlineItem, stroke: number, inv: number): b
   const h = Math.max(1, o.box.height);
   const angle = Number(o.angle) || 0;
   const pad = Math.max(stroke * 8, SEL_HANDLE_HIT_PX * inv, SEL_ROTATE_HIT_PX * inv + SEL_ROTATE_GAP_PX * inv);
+  const left = o.box.left;
+  const top = o.box.top;
 
   let root = layer.querySelector(
     `:scope > svg[${SEL_CHROME_ATTR}="${CSS.escape(o.id)}"]`
@@ -500,7 +610,7 @@ function syncHostSelOutline(o: ShapeOutlineItem, stroke: number, inv: number): b
   }
 
   // Prefer an exact twin of the host infinite SVG viewport (same left/top/viewBox
-  // quantization). Fallback: geometry box + pad when the host is not mounted yet.
+  // quantization). Fallback: scene-absolute surface snap when host not mounted.
   const hostViewBox = hostRoot?.getAttribute?.('viewBox') || '';
   const hostCssLeft = hostRoot?.style?.left || '';
   const hostCssTop = hostRoot?.style?.top || '';
@@ -519,15 +629,17 @@ function syncHostSelOutline(o: ShapeOutlineItem, stroke: number, inv: number): b
     if (attrH) root.setAttribute('height', attrH);
     root.setAttribute('viewBox', hostViewBox);
   } else {
-    const left = o.box.left;
-    const top = o.box.top;
-    root.style.left = `${left - pad}px`;
-    root.style.top = `${top - pad}px`;
-    root.style.width = `${w + pad * 2}px`;
-    root.style.height = `${h + pad * 2}px`;
-    root.setAttribute('width', String(w + pad * 2));
-    root.setAttribute('height', String(h + pad * 2));
-    root.setAttribute('viewBox', `${-pad} ${-pad} ${w + pad * 2} ${h + pad * 2}`);
+    applySvgSurfaceBox(
+      root,
+      {
+        left: left - pad,
+        top: top - pad,
+        width: w + pad * 2,
+        height: h + pad * 2,
+      },
+      camera,
+      dpr
+    );
   }
 
   let chrome = root.querySelector(`:scope > g[${SEL_CHROME_ATTR}="body"]`) as SVGGElement | null;
@@ -548,12 +660,15 @@ function syncHostSelOutline(o: ShapeOutlineItem, stroke: number, inv: number): b
     const ht = Number((el as any)?.__sceneTop);
     chrome.setAttribute(
       'transform',
-      `translate(${Number.isFinite(hl) ? hl : o.box.left} ${Number.isFinite(ht) ? ht : o.box.top})`
+      `translate(${Number.isFinite(hl) ? hl : left} ${Number.isFinite(ht) ? ht : top})`
     );
   } else if (Math.abs(angle) > 0.01) {
-    chrome.setAttribute('transform', `rotate(${angle} ${w / 2} ${h / 2})`);
+    chrome.setAttribute(
+      'transform',
+      `translate(${left} ${top}) rotate(${angle} ${w / 2} ${h / 2})`
+    );
   } else {
-    chrome.removeAttribute('transform');
+    chrome.setAttribute('transform', `translate(${left} ${top})`);
   }
 
   let outline = chrome.querySelector(
@@ -586,17 +701,19 @@ function syncHostSelOutline(o: ShapeOutlineItem, stroke: number, inv: number): b
   return true;
 }
 
-/** Path chrome on the world chrome layer (above hosts); geometry from host baseline. */
+/** Path chrome overlay (host-mirrored). */
 function ShapeOutlineSvg({ outlines }: { outlines: ShapeOutlineItem[] }) {
   const camera = useRcbCamera();
+  const dpr = useRcbDevicePixelRatio();
   const z = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / z;
   const stroke = 1.5 * inv;
   const [hostEpoch, setHostEpoch] = useState(0);
   const outlineKey = outlines
     .map((o) => {
-      const host = getShapeHost(o.id);
-      const hostEl = (host?.el || getSharedNodeEls()?.get(o.id)) as SVGElement | null | undefined;
+      const hostKeyId = o.mirrorHostId || o.id;
+      const host = getShapeHost(hostKeyId);
+      const hostEl = (host?.el || getSharedNodeEls()?.get(hostKeyId)) as SVGElement | null | undefined;
       const baseline =
         hostEl &&
         ((hostEl.getAttribute?.('data-baseline') === '1' ? hostEl : null) ||
@@ -608,7 +725,7 @@ function ShapeOutlineSvg({ outlines }: { outlines: ShapeOutlineItem[] }) {
       const tf = hostEl?.getAttribute?.('transform') || '';
       const anyEl = hostEl as any;
       const origin = `${Number(anyEl?.__sceneLeft) || o.box.left},${Number(anyEl?.__sceneTop) || o.box.top}`;
-      return `${o.id}:${liveD.length}:${liveD.slice(0, 24)}:${liveD.slice(-24)}:${o.box.left.toFixed(1)},${o.box.top.toFixed(1)},${o.box.width}x${o.box.height}:${o.angle.toFixed(2)}:${o.withHandles ? 1 : 0}:${o.showPath === false ? 0 : 1}:${o.lineMode ? 1 : 0}:${o.shaftEndpoints ? 1 : 0}:${o.showRotate ? 1 : 0}:${o.color || ''}:${vb}:${tf}:${origin}`;
+      return `${o.id}:${o.unionChrome ? 1 : 0}:${o.mirrorHostId || ''}:${liveD.length}:${liveD.slice(0, 24)}:${liveD.slice(-24)}:${o.box.left.toFixed(1)},${o.box.top.toFixed(1)},${o.box.width}x${o.box.height}:${o.angle.toFixed(2)}:${o.withHandles ? 1 : 0}:${o.showPath === false ? 0 : 1}:${o.lineMode ? 1 : 0}:${o.shaftEndpoints ? 1 : 0}:${o.showRotate ? 1 : 0}:${o.cornerHandlesOnly ? 1 : 0}:${o.edgeHandles || 'all'}:${o.color || ''}:${vb}:${tf}:${origin}`;
     })
     .join('|');
   const outlinesRef = useRef(outlines);
@@ -619,7 +736,7 @@ function ShapeOutlineSvg({ outlines }: { outlines: ShapeOutlineItem[] }) {
   useLayoutEffect(() => {
     const current = outlinesRef.current;
     const active = new Set(current.map((o) => o.id));
-    let pending = current.filter((o) => !syncHostSelOutline(o, stroke, inv));
+    let pending = current.filter((o) => !syncHostSelOutline(o, stroke, inv, camera, dpr));
     for (const h of listShapeHosts()) {
       if (!active.has(h.nodeId)) clearHostSelOutline(h.nodeId);
     }
@@ -643,7 +760,7 @@ function ShapeOutlineSvg({ outlines }: { outlines: ShapeOutlineItem[] }) {
     const retry = () => {
       if (!pending.length) return;
       tries += 1;
-      pending = pending.filter((o) => !syncHostSelOutline(o, stroke, inv));
+      pending = pending.filter((o) => !syncHostSelOutline(o, stroke, inv, camera, dpr));
       if (pending.length && tries < 120) raf = requestAnimationFrame(retry);
     };
     if (pending.length) raf = requestAnimationFrame(retry);
@@ -656,7 +773,7 @@ function ShapeOutlineSvg({ outlines }: { outlines: ShapeOutlineItem[] }) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outlineKey, stroke, inv, hostEpoch]);
+  }, [outlineKey, stroke, inv, hostEpoch, camera.x, camera.y, camera.zoom, dpr]);
 
   useEffect(() => {
     return () => {

@@ -594,7 +594,7 @@ export function parsePathPressures(raw: unknown, pointCount: number): number[] |
 }
 
 /** Sample S-curve for brush list previews (viewBox 0 0 120 28). */
-export const BRUSH_PREVIEW_POINTS: Pt[] = (() => {
+function buildBrushPreviewPoints(): Pt[] {
   const pts: Pt[] = [];
   for (let i = 0; i <= 24; i += 1) {
     const t = i / 24;
@@ -605,7 +605,9 @@ export const BRUSH_PREVIEW_POINTS: Pt[] = (() => {
     pts.push({ x, y, pressure });
   }
   return pts;
-})();
+}
+
+export const BRUSH_PREVIEW_POINTS: Pt[] = buildBrushPreviewPoints();
 
 export function brushPreviewPath(brush: PencilBrushDef, previewWidth = 10): string {
   return outlinePathFromPoints(BRUSH_PREVIEW_POINTS, previewWidth, brush.id, {

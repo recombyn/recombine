@@ -39,10 +39,16 @@ export type BoolResult = {
   fillRule: 'nonzero' | 'evenodd';
 };
 
-/** Dense enough that rounded corners / circles stay visually smooth after clip. */
-const SAMPLE_STEP_PX = 1.25;
-const MIN_SAMPLE_POINTS = 24;
-const FALLBACK_ELLIPSE_SEGMENTS = 96;
+/**
+ * Curve sample spacing. Was 1.25 → hundreds of verts on long paths, and boolean
+ * kept every clip vertex with no RDP (path-edit looked like a bead string).
+ */
+const SAMPLE_STEP_PX = 2.5;
+const MIN_SAMPLE_POINTS = 16;
+const FALLBACK_ELLIPSE_SEGMENTS = 64;
+/** Post-boolean path-edit budget per ring. */
+const BOOL_RING_MAX_PTS = 72;
+const BOOL_RING_EPS = 0.85;
 
 function rectRing(b: ShapeBox): Ring {
   const { left, top, width, height } = b;
@@ -112,6 +118,197 @@ function dedupeRingPts(pts: Array<[number, number]>, eps = 0.05): Array<[number,
   return out;
 }
 
+/** Corner verts of an M/L/H/V polyline — skip densify (outlined strokes are already L). */
+function linearPathCornerVerts(d: string): Array<[number, number]> | null {
+  const raw = String(d || '').trim();
+  if (!raw || /[AaCcQqSsTt]/.test(raw)) return null;
+  const tokens = raw
+    .replace(/,/g, ' ')
+    .replace(/([MmLlHhVvZz])/g, ' $1 ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return null;
+
+  const pts: Array<[number, number]> = [];
+  let i = 0;
+  let cmd = 'M';
+  let cx = 0;
+  let cy = 0;
+  let startX = 0;
+  let startY = 0;
+
+  const readNum = (): number | null => {
+    if (i >= tokens.length) return null;
+    const n = Number(tokens[i]);
+    if (!Number.isFinite(n)) return null;
+    i += 1;
+    return n;
+  };
+  const push = (x: number, y: number) => {
+    const last = pts[pts.length - 1];
+    if (last && Math.hypot(last[0] - x, last[1] - y) < 1e-4) return;
+    pts.push([x, y]);
+  };
+
+  while (i < tokens.length) {
+    const t = tokens[i];
+    if (/^[MmLlHhVvZz]$/.test(t)) {
+      cmd = t;
+      i += 1;
+      if (cmd === 'Z' || cmd === 'z') {
+        cx = startX;
+        cy = startY;
+        continue;
+      }
+    }
+    if (cmd === 'M' || cmd === 'L') {
+      const x = readNum();
+      const y = readNum();
+      if (x == null || y == null) break;
+      cx = x;
+      cy = y;
+      if (cmd === 'M') {
+        startX = cx;
+        startY = cy;
+      }
+      push(cx, cy);
+      if (cmd === 'M') cmd = 'L';
+    } else if (cmd === 'm' || cmd === 'l') {
+      const x = readNum();
+      const y = readNum();
+      if (x == null || y == null) break;
+      cx += x;
+      cy += y;
+      if (cmd === 'm') {
+        startX = cx;
+        startY = cy;
+      }
+      push(cx, cy);
+      if (cmd === 'm') cmd = 'l';
+    } else if (cmd === 'H') {
+      const x = readNum();
+      if (x == null) break;
+      cx = x;
+      push(cx, cy);
+    } else if (cmd === 'h') {
+      const x = readNum();
+      if (x == null) break;
+      cx += x;
+      push(cx, cy);
+    } else if (cmd === 'V') {
+      const y = readNum();
+      if (y == null) break;
+      cy = y;
+      push(cx, cy);
+    } else if (cmd === 'v') {
+      const y = readNum();
+      if (y == null) break;
+      cy += y;
+      push(cx, cy);
+    } else {
+      break;
+    }
+  }
+  return pts.length >= 2 ? pts : null;
+}
+
+function simplifyRdp(pts: Array<[number, number]>, epsilon: number): Array<[number, number]> {
+  if (pts.length <= 2) return pts.slice();
+  const sq = epsilon * epsilon;
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = true;
+  keep[pts.length - 1] = true;
+  const stack: Array<[number, number]> = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [s0, e0] = stack.pop()!;
+    let maxDist = 0;
+    let maxIdx = s0;
+    const ax = pts[s0][0];
+    const ay = pts[s0][1];
+    const bx = pts[e0][0];
+    const by = pts[e0][1];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    for (let i = s0 + 1; i < e0; i += 1) {
+      const px = pts[i][0];
+      const py = pts[i][1];
+      let dist: number;
+      if (lenSq < 1e-12) {
+        dist = (px - ax) * (px - ax) + (py - ay) * (py - ay);
+      } else {
+        let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        const qx = ax + t * dx;
+        const qy = ay + t * dy;
+        dist = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+      }
+      if (dist > maxDist) {
+        maxDist = dist;
+        maxIdx = i;
+      }
+    }
+    if (maxDist > sq) {
+      keep[maxIdx] = true;
+      if (maxIdx - s0 > 1) stack.push([s0, maxIdx]);
+      if (e0 - maxIdx > 1) stack.push([maxIdx, e0]);
+    }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+/** RDP + drop least-turny verts so boolean results stay path-edit friendly. */
+function sparsifyClosedRing(
+  ringIn: Ring,
+  epsilon = BOOL_RING_EPS,
+  maxPts = BOOL_RING_MAX_PTS
+): Ring {
+  let pts = ringIn.map(([x, y]) => [x, y] as [number, number]);
+  if (pts.length >= 2) {
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6) pts = pts.slice(0, -1);
+  }
+  if (pts.length < 3) return closeRing(pts);
+
+  let out = simplifyRdp(pts.concat([pts[0]]), epsilon);
+  if (out.length >= 2) {
+    const f = out[0];
+    const l = out[out.length - 1];
+    if (Math.hypot(f[0] - l[0], f[1] - l[1]) < 1e-6) out = out.slice(0, -1);
+  }
+  if (out.length > maxPts) {
+    const turnMag = (idx: number) => {
+      const n = out.length;
+      const prev = out[(idx - 1 + n) % n];
+      const curr = out[idx];
+      const next = out[(idx + 1) % n];
+      const ax = curr[0] - prev[0];
+      const ay = curr[1] - prev[1];
+      const bx = next[0] - curr[0];
+      const by = next[1] - curr[1];
+      const la = Math.hypot(ax, ay) || 1;
+      const lb = Math.hypot(bx, by) || 1;
+      const dot = Math.max(-1, Math.min(1, (ax / la) * (bx / lb) + (ay / la) * (by / lb)));
+      return Math.acos(dot);
+    };
+    while (out.length > maxPts && out.length > 3) {
+      let minI = 0;
+      let minTurn = Infinity;
+      for (let i = 0; i < out.length; i += 1) {
+        const t = turnMag(i);
+        if (t < minTurn) {
+          minTurn = t;
+          minI = i;
+        }
+      }
+      out = out.filter((_, i) => i !== minI);
+    }
+  }
+  return closeRing(out.length >= 3 ? out : pts);
+}
+
 /** Local-space painted silhouette `d` (includes corner radii / ellipse params). */
 function localBaselinePathD(b: ShapeBox): string {
   const t = String(b.shapeType || 'rect');
@@ -150,18 +347,25 @@ function sampleLocalPathToRings(d: string, stepPx = SAMPLE_STEP_PX): Ring[] {
   const rings: Ring[] = [];
 
   for (const chunk of chunks) {
+    // Straight polylines (outlined strokes): keep corners only — densify made
+    // boolean results a bead string of path-edit knobs.
+    const linear = linearPathCornerVerts(chunk.replace(/[Zz]\s*$/i, ''));
+    if (linear && linear.length >= 3) {
+      rings.push(closeRing(dedupeRingPts(linear, 0.35)));
+      continue;
+    }
     try {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       el.setAttribute('d', chunk);
       const len = el.getTotalLength?.() ?? 0;
       if (!(len > 0)) continue;
-      const n = Math.max(MIN_SAMPLE_POINTS, Math.ceil(len / Math.max(0.5, stepPx)));
+      const n = Math.max(MIN_SAMPLE_POINTS, Math.ceil(len / Math.max(0.75, stepPx)));
       const pts: Array<[number, number]> = [];
       for (let i = 0; i <= n; i += 1) {
         const p = el.getPointAtLength((len * i) / n);
         pts.push([p.x, p.y]);
       }
-      const cleaned = dedupeRingPts(pts);
+      const cleaned = dedupeRingPts(pts, Math.max(0.35, stepPx * 0.35));
       if (cleaned.length < 3) continue;
       rings.push(closeRing(cleaned));
     } catch {
@@ -241,7 +445,8 @@ function multipolygonToPath(mp: MultiPolygon, originX: number, originY: number):
   let d = '';
   for (const poly of mp) {
     for (const ring of poly) {
-      d += ringToPath(ring, originX, originY);
+      // Clip libraries keep every sample — sparsify so path-edit is not a bead string.
+      d += ringToPath(sparsifyClosedRing(ring), originX, originY);
     }
   }
   return d;

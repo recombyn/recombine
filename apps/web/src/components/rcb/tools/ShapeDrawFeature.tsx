@@ -1,6 +1,5 @@
 import {
   useRcbCamera,
-  useRcbDevicePixelRatio,
   useRcbScreenToScene,
   useRcbViewportEl,
 } from '../camera/context';
@@ -9,9 +8,16 @@ import {
   rcbViewportMetrics,
 } from '../core/math';
 import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
-import { ARROW_HEAD, shapeVertexPoints, fillCachedPath2D, strokeCachedPath2D } from '@/components/rcb/scene/document/sceneShapes';
+import {
+  ARROW_HEAD,
+  fillCachedPath2D,
+  strokeCachedPath2D,
+} from '@/components/rcb/scene/document/sceneShapes';
 import { getShapeBaselineD } from '@/components/rcb/core/geometry';
 import { snapBoxEdgesToGrid, snapCoordToGrid } from '../selection/alignGuides';
+import RcbSceneOverlayCanvas, {
+  type RcbSceneOverlayCanvasHandle,
+} from '../canvas/RcbSceneOverlayCanvas';
 
 function normalizeBox(x0: number, y0: number, x1: number, y1: number) {
   const left = Math.min(x0, x1);
@@ -80,6 +86,69 @@ function squareLockedBox(box: { left: number; top: number; width: number; height
   };
 }
 
+/** Drag-to-create shapes — preview must match createShapeNode paint (width + joins). */
+function defaultShapeBorderWidth(kind: string) {
+  if (kind === 'line' || kind === 'arrow' || kind === 'pen' || kind === 'pencil') return 2;
+  return 1;
+}
+
+/** How far center/outside stroke ink extends past the path box (scene px). */
+function strokeOutsetForDraw(align: 'center' | 'inside' | 'outside', strokeWidth: number): number {
+  const sw = Math.max(0, Number(strokeWidth) || 0);
+  if (!(sw > 0) || align === 'inside') return 0;
+  if (align === 'outside') return sw;
+  return sw / 2;
+}
+
+type DrawBox = { left: number; top: number; width: number; height: number };
+
+/**
+ * Rubber-band → integer visual outer → inset stroke/2 → path geom.
+ */
+function resolveClosedDrawBoxes(
+  raw: DrawBox,
+  useGrid: boolean,
+  gridSize: number,
+  kind: string
+): { visual: DrawBox; geom: DrawBox; outset: number } {
+  let box = raw;
+  if (locksSquareAspect(kind)) box = squareLockedBox(box);
+
+  const strokeW = defaultShapeBorderWidth(kind);
+  const outset = strokeOutsetForDraw('center', strokeW);
+
+  let visual: DrawBox;
+  if (useGrid && gridSize > 0) {
+    const g = snapBoxEdgesToGrid(box, gridSize, 1);
+    visual = {
+      left: snapCoordToGrid(g.left, gridSize),
+      top: snapCoordToGrid(g.top, gridSize),
+      width: Math.max(gridSize, snapCoordToGrid(g.width, gridSize)),
+      height: Math.max(gridSize, snapCoordToGrid(g.height, gridSize)),
+    };
+  } else {
+    visual = {
+      left: Math.round(box.left),
+      top: Math.round(box.top),
+      width: Math.max(1, Math.round(box.width)),
+      height: Math.max(1, Math.round(box.height)),
+    };
+  }
+
+  const minSide = Math.max(1, Math.ceil(outset * 2) + (useGrid && gridSize > 0 ? gridSize : 1));
+  if (visual.width < minSide) visual = { ...visual, width: minSide };
+  if (visual.height < minSide) visual = { ...visual, height: minSide };
+
+  if (!(outset > 0)) return { visual, geom: visual, outset: 0 };
+  const geom: DrawBox = {
+    left: visual.left + outset,
+    top: visual.top + outset,
+    width: Math.max(1, visual.width - outset * 2),
+    height: Math.max(1, visual.height - outset * 2),
+  };
+  return { visual, geom, outset };
+}
+
 export type ShapeDrawCommit = {
   left: number;
   top: number;
@@ -107,7 +176,11 @@ type ShapeDrawFeatureProps = {
   gridSize?: number;
 };
 
-/** Drag-to-create shapes ? preview matches committed geometry. */
+type PreviewState =
+  | { mode: 'box'; geom: DrawBox; visual: DrawBox }
+  | { mode: 'stroke'; x0: number; y0: number; x1: number; y1: number };
+
+/** Drag-to-create shapes — Path2D overlay preview (same stack as pen/pencil). */
 function ShapeDrawFeature({
   enabled,
   shapeKind,
@@ -131,66 +204,53 @@ function ShapeDrawFeature({
   gridSnapRef.current = gridSnap;
   gridSizeRef.current = gridSize;
   const session = useRef<ShapeDrawSession | null>(null);
-  const [preview, setPreview] = useState<{
-    x0: number;
-    y0: number;
-    x1: number;
-    y1: number;
-  } | null>(null);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
 
   useEffect(() => {
-    const hitEl = rcbResolveViewportEl(viewportEl, stageEl, paperEl);
-    if (!enabled || !hitEl) return undefined;
+    if (!enabled) {
+      session.current = null;
+      setPreview(null);
+      overlayRef.current?.clear();
+    }
+  }, [enabled]);
 
-    const applyStrokeEnd = (
-      x0: number,
-      y0: number,
-      rawX1: number,
-      rawY1: number,
-      shiftKey: boolean
-    ) => {
-      const kind = shapeKindRef.current || 'rect';
-      const isStroke = kind === 'line' || kind === 'arrow';
-      if (!isStroke) return { x1: rawX1, y1: rawY1 };
-      return snapStrokeAxis(x0, y0, rawX1, rawY1, shiftKey);
-    };
-
-    const snapPoint = (x: number, y: number, skipGrid: boolean) => {
-      const g = gridSizeRef.current;
-      if (!gridSnapRef.current || skipGrid || !(g > 0)) return { x, y };
-      return { x: snapCoordToGrid(x, g), y: snapCoordToGrid(y, g) };
-    };
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const hitEl = rcbResolveViewportEl(stageEl, paperEl, viewportEl);
+    if (!hitEl) return undefined;
 
     const pointerScene = (clientX: number, clientY: number) =>
       toSceneRef.current(clientX, clientY);
 
-    const releaseCapture = (pointerId: number) => {
-      try {
-        hitEl.releasePointerCapture?.(pointerId);
-      } catch {
-        /* ignore */
-      }
+    const snapPoint = (x: number, y: number, skipGrid: boolean) => {
+      if (skipGrid || !gridSnapRef.current) return { x, y };
+      const g = gridSizeRef.current;
+      return { x: snapCoordToGrid(x, g), y: snapCoordToGrid(y, g) };
     };
 
-    const applyPointerToSession = (
+    const closedPreviewFromPointer = (
       s: ShapeDrawSession,
       clientX: number,
       clientY: number,
-      shiftKey: boolean,
       skipGrid: boolean
     ) => {
       const p = pointerScene(clientX, clientY);
-      const endRaw = applyStrokeEnd(s.x0, s.y0, p.x, p.y, shiftKey);
-      const end = snapPoint(endRaw.x1, endRaw.y1, skipGrid);
       s.currentClientX = clientX;
       s.currentClientY = clientY;
       s.rawX1 = p.x;
       s.rawY1 = p.y;
-      s.shift = shiftKey;
       s.skipGrid = skipGrid;
-      s.x1 = end.x;
-      s.y1 = end.y;
-      return { p, end };
+      s.x1 = p.x;
+      s.y1 = p.y;
+      const kind = shapeKindRef.current || 'rect';
+      const raw = normalizeBox(s.x0, s.y0, p.x, p.y);
+      return resolveClosedDrawBoxes(
+        raw,
+        Boolean(gridSnapRef.current && !skipGrid),
+        gridSizeRef.current,
+        kind
+      );
     };
 
     const onDown = (e: PointerEvent) => {
@@ -199,6 +259,8 @@ function ShapeDrawFeature({
       const p = pointerScene(e.clientX, e.clientY);
       const origin = snapPoint(p.x, p.y, skipGrid);
       const metrics = rcbViewportMetrics(hitEl);
+      const kind = shapeKindRef.current || 'rect';
+      const isStroke = kind === 'line' || kind === 'arrow';
       session.current = {
         x0: origin.x,
         y0: origin.y,
@@ -216,7 +278,17 @@ function ShapeDrawFeature({
         skipGrid,
         pointerId: e.pointerId,
       };
-      setPreview({ x0: origin.x, y0: origin.y, x1: origin.x, y1: origin.y });
+      if (isStroke) {
+        setPreview({ mode: 'stroke', x0: origin.x, y0: origin.y, x1: origin.x, y1: origin.y });
+      } else {
+        const boxes = resolveClosedDrawBoxes(
+          normalizeBox(origin.x, origin.y, origin.x, origin.y),
+          Boolean(gridSnapRef.current && !skipGrid),
+          gridSizeRef.current,
+          kind
+        );
+        setPreview({ mode: 'box', geom: boxes.geom, visual: boxes.visual });
+      }
       hitEl.setPointerCapture?.(e.pointerId);
       e.preventDefault();
       e.stopPropagation();
@@ -225,48 +297,64 @@ function ShapeDrawFeature({
     const onMove = (e: PointerEvent) => {
       const s = session.current;
       if (!s || e.pointerId !== s.pointerId) return;
-      // Position state only updates from move (and down). End events may report 0,0.
       const skipGrid = e.ctrlKey || e.metaKey;
-      const { end } = applyPointerToSession(s, e.clientX, e.clientY, e.shiftKey, skipGrid);
-      setPreview({ x0: s.x0, y0: s.y0, x1: end.x, y1: end.y });
+      const kind = shapeKindRef.current || 'rect';
+      const isStroke = kind === 'line' || kind === 'arrow';
+      if (isStroke) {
+        const p = pointerScene(e.clientX, e.clientY);
+        const endRaw = snapStrokeAxis(s.x0, s.y0, p.x, p.y, e.shiftKey);
+        const end = snapPoint(endRaw.x1, endRaw.y1, skipGrid);
+        s.currentClientX = e.clientX;
+        s.currentClientY = e.clientY;
+        s.rawX1 = p.x;
+        s.rawY1 = p.y;
+        s.shift = e.shiftKey;
+        s.skipGrid = skipGrid;
+        s.x1 = end.x;
+        s.y1 = end.y;
+        setPreview({ mode: 'stroke', x0: s.x0, y0: s.y0, x1: end.x, y1: end.y });
+        return;
+      }
+      const boxes = closedPreviewFromPointer(s, e.clientX, e.clientY, skipGrid);
+      setPreview({ mode: 'box', geom: boxes.geom, visual: boxes.visual });
     };
 
-    /**
-     * End events are a lifecycle signal only. Commit geometry from the session's
-     * current point (last down/move). End-event clientX/Y are unreliable on
-     * narrow / touch / device-mode viewports (often 0,0).
-     */
     const finishSession = (e: PointerEvent) => {
       const s = session.current;
       if (!s || e.pointerId !== s.pointerId) return;
-      const kind = shapeKindRef.current || 'rect';
-      const isStroke = kind === 'line' || kind === 'arrow';
-      const endRaw = applyStrokeEnd(s.x0, s.y0, s.rawX1, s.rawY1, s.shift);
-      const end = snapPoint(endRaw.x1, endRaw.y1, s.skipGrid);
-      const x0 = s.x0;
-      const y0 = s.y0;
-      const x1 = end.x;
-      const y1 = end.y;
-      const box = normalizeBox(x0, y0, x1, y1);
       session.current = null;
       setPreview(null);
-      releaseCapture(e.pointerId);
-
+      overlayRef.current?.clear();
+      try {
+        hitEl.releasePointerCapture?.(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      const kind = shapeKindRef.current || 'rect';
+      const isStroke = kind === 'line' || kind === 'arrow';
       if (isStroke) {
+        const x0 = s.x0;
+        const y0 = s.y0;
+        const x1 = s.x1;
+        const y1 = s.y1;
         if (Math.hypot(x1 - x0, y1 - y0) < 3) return;
+        const box = normalizeBox(x0, y0, x1, y1);
         onCreateRef.current(kind, { ...box, x0, y0, x1, y1 });
         return;
       }
-      // Soft click: do not create a full grid cell from snap expansion alone.
+
       const clientDist = Math.hypot(s.currentClientX - s.clientX0, s.currentClientY - s.clientY0);
-      if (clientDist < 4 && box.width < 3 && box.height < 3) return;
-      let next = box;
-      if (locksSquareAspect(kind)) next = squareLockedBox(next);
-      onCreateRef.current(kind, finalizeDrawBox(next, gridSnapRef.current && !s.skipGrid, gridSizeRef.current));
+      const raw = normalizeBox(s.x0, s.y0, s.rawX1, s.rawY1);
+      if (clientDist < 4 && raw.width < 3 && raw.height < 3) return;
+      const { geom } = resolveClosedDrawBoxes(
+        raw,
+        Boolean(gridSnapRef.current && !s.skipGrid),
+        gridSizeRef.current,
+        kind
+      );
+      onCreateRef.current(kind, geom);
     };
 
-    // Move on window so current point stays fresh even outside the stage.
-    // Up/cancel both finish from session current — not from end-event coords.
     hitEl.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', finishSession);
@@ -283,7 +371,7 @@ function ShapeDrawFeature({
       session.current.shift = shift;
       session.current.x1 = end.x;
       session.current.y1 = end.y;
-      setPreview({ x0, y0, x1: end.x, y1: end.y });
+      setPreview({ mode: 'stroke', x0, y0, x1: end.x, y1: end.y });
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
@@ -295,276 +383,150 @@ function ShapeDrawFeature({
       window.removeEventListener('pointercancel', finishSession);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);
+      overlayRef.current?.clear();
     };
-    // Intentionally omit toScene/onCreate/shapeKind — read via refs so a parent
-    // re-render cannot tear down listeners mid-drag.
   }, [enabled, paperEl, stageEl, viewportEl]);
 
-  if (!enabled || !preview) return null;
-
-  const kind = shapeKind || 'rect';
-  const { x0, y0, x1, y1 } = preview;
-  const isStroke = kind === 'line' || kind === 'arrow';
-  const box = normalizeBox(x0, y0, x1, y1);
-  const w = Math.max(1, box.width);
-  const h = Math.max(1, box.height);
-  const len = Math.hypot(x1 - x0, y1 - y0);
-  const showSize = isStroke ? len >= 3 : w >= 3 || h >= 3;
-
-  let drawW = w;
-  let drawH = h;
-  let drawLeft = box.left;
-  let drawTop = box.top;
-  if (!isStroke && locksSquareAspect(kind)) {
-    const locked = squareLockedBox(box);
-    drawW = locked.width;
-    drawH = locked.height;
-    drawLeft = locked.left;
-    drawTop = locked.top;
-  }
-  // Live snap: grid when enabled, else integer scene px (createShapeNode).
-  if (!isStroke) {
-    const snapped = finalizeDrawBox(
-      { left: drawLeft, top: drawTop, width: drawW, height: drawH },
-      gridSnap && !(session.current?.skipGrid),
-      gridSize
-    );
-    drawLeft = snapped.left;
-    drawTop = snapped.top;
-    drawW = snapped.width;
-    drawH = snapped.height;
-  }
-
-  const displayW = isStroke ? Math.max(1, Math.abs(x1 - x0)) : drawW;
-  const displayH = isStroke ? Math.max(1, Math.abs(y1 - y0)) : drawH;
-  const sizeLabel = isStroke
-    ? String(Math.round(len))
-    : `${displayW} × ${displayH}`;
-
-  return (
-    <ShapeDrawPreviewCanvas
-      kind={kind}
-      x0={x0}
-      y0={y0}
-      x1={x1}
-      y1={y1}
-      drawLeft={isStroke ? Math.min(x0, x1) : drawLeft}
-      drawTop={isStroke ? Math.min(y0, y1) : drawTop}
-      drawW={isStroke ? displayW : drawW}
-      drawH={isStroke ? displayH : drawH}
-      showSize={showSize}
-      sizeLabel={sizeLabel}
-    />
-  );
-}
-
-/** Drag-to-create shapes — preview must match createShapeNode paint (width + joins). */
-function defaultShapeBorderWidth(kind: string) {
-  if (kind === 'line' || kind === 'arrow' || kind === 'pen' || kind === 'pencil') return 2;
-  return 1;
-}
-
-/** Same integer scene snap as createShapeNode — avoids 800% preview→commit jump. */
-function snapSceneBox(box: { left: number; top: number; width: number; height: number }) {
-  return {
-    left: Math.round(box.left),
-    top: Math.round(box.top),
-    width: Math.max(1, Math.round(box.width)),
-    height: Math.max(1, Math.round(box.height)),
-  };
-}
-
-/** Finalize draw box: grid lattice by default; integer px when gridSnap is off / Ctrl. */
-function finalizeDrawBox(
-  box: { left: number; top: number; width: number; height: number },
-  useGrid: boolean,
-  gridSize: number
-) {
-  if (useGrid && gridSize > 0) {
-    const g = snapBoxEdgesToGrid(box, gridSize, 1);
-    return {
-      left: g.left,
-      top: g.top,
-      width: Math.max(gridSize, g.width),
-      height: Math.max(gridSize, g.height),
-    };
-  }
-  return snapSceneBox(box);
-}
-
-function ShapeDrawPreviewCanvas({
-  kind,
-  x0,
-  y0,
-  x1,
-  y1,
-  drawLeft,
-  drawTop,
-  drawW,
-  drawH,
-  showSize,
-  sizeLabel,
-}: {
-  kind: string;
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-  drawLeft: number;
-  drawTop: number;
-  drawW: number;
-  drawH: number;
-  showSize: boolean;
-  sizeLabel: string;
-}) {
   const camera = useRcbCamera();
-  const dpr = useRcbDevicePixelRatio();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const isStroke = kind === 'line' || kind === 'arrow';
   const z = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / z;
-  const fill = isStroke ? null : 'rgba(255,255,255,0.85)';
-  const stroke = '#333333';
-  // Match createShapeNode defaults — preview 1.5 vs commit 1 looked like a size jump at 800%.
-  const strokeW = defaultShapeBorderWidth(kind);
-  // Miter joins stick past stroke/2 on sharp polygon tips (SVG default = miter).
-  const pad =
-    Math.ceil(strokeW * 2) + (kind === 'arrow' ? Math.ceil(ARROW_HEAD) : 2);
-  const left = drawLeft - pad;
-  const top = drawTop - pad;
-  const cssW = Math.max(1, drawW + pad * 2);
-  const cssH = Math.max(1, drawH + pad * 2);
+  const kind = shapeKind || 'rect';
 
   useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const scale = z * Math.max(1, dpr || 1);
-    canvas.width = Math.max(1, Math.round(cssW * scale));
-    canvas.height = Math.max(1, Math.round(cssH * scale));
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
-    // Match SVG applyElementStroke defaults (butt / miter).
-    ctx.lineCap = 'butt';
-    ctx.lineJoin = 'miter';
-    ctx.miterLimit = 10;
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = strokeW;
-    ctx.translate(pad, pad);
-
-    if (isStroke) {
-      const lx0 = x0 - drawLeft;
-      const ly0 = y0 - drawTop;
-      const lx1 = x1 - drawLeft;
-      const ly1 = y1 - drawTop;
-      ctx.beginPath();
-      ctx.moveTo(lx0, ly0);
-      ctx.lineTo(lx1, ly1);
-      ctx.stroke();
-      const len = Math.hypot(x1 - x0, y1 - y0);
-      if (kind === 'arrow' && len >= 3) {
-        const ux = (x1 - x0) / len;
-        const uy = (y1 - y0) / len;
-        const head = Math.min(ARROW_HEAD, len * 0.45);
-        const bx = lx1 - ux * head;
-        const by = ly1 - uy * head;
-        const nx = -uy;
-        const ny = ux;
-        const wing = head * 0.55;
-        ctx.beginPath();
-        ctx.moveTo(bx + nx * wing, by + ny * wing);
-        ctx.lineTo(lx1, ly1);
-        ctx.lineTo(bx - nx * wing, by - ny * wing);
-        ctx.stroke();
-      }
+    const handle = overlayRef.current;
+    if (!enabled || !preview || !handle) {
+      handle?.clear();
       return;
     }
 
-    // Same baseline path as sceneToSvg / getShapeBaseline — not an inset rect.
-    const d =
-      getShapeBaselineD(
-        { key: 'shape', width: drawW, height: drawH, attrs: { shapeType: kind } },
-        { width: drawW, height: drawH }
-      ) || '';
-    if (d) {
-      if (fill) {
-        fillCachedPath2D(ctx, d, { fillStyle: fill });
+    const isStroke = kind === 'line' || kind === 'arrow';
+    const strokeW = defaultShapeBorderWidth(kind);
+    const pad = Math.ceil(strokeW * 2) + (kind === 'arrow' ? Math.ceil(ARROW_HEAD) : 2);
+
+    let drawLeft: number;
+    let drawTop: number;
+    let drawW: number;
+    let drawH: number;
+    let pathLeft = 0;
+    let pathTop = 0;
+    let pathW = 1;
+    let pathH = 1;
+    let x0 = 0;
+    let y0 = 0;
+    let x1 = 0;
+    let y1 = 0;
+
+    if (preview.mode === 'stroke') {
+      x0 = preview.x0;
+      y0 = preview.y0;
+      x1 = preview.x1;
+      y1 = preview.y1;
+      drawLeft = Math.min(x0, x1);
+      drawTop = Math.min(y0, y1);
+      drawW = Math.max(1, Math.abs(x1 - x0));
+      drawH = Math.max(1, Math.abs(y1 - y0));
+    } else {
+      const { geom, visual } = preview;
+      drawLeft = visual.left;
+      drawTop = visual.top;
+      drawW = visual.width;
+      drawH = visual.height;
+      pathLeft = geom.left;
+      pathTop = geom.top;
+      pathW = geom.width;
+      pathH = geom.height;
+    }
+
+    const ctx = handle.beginFrame({
+      left: drawLeft - pad,
+      top: drawTop - pad,
+      width: Math.max(1, drawW + pad * 2),
+      height: Math.max(1, drawH + pad * 2),
+    });
+    if (!ctx) return;
+
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.miterLimit = 10;
+
+    if (isStroke) {
+      ctx.strokeStyle = '#333333';
+      ctx.lineWidth = strokeW;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+      if (kind === 'arrow') {
+        const len = Math.hypot(x1 - x0, y1 - y0);
+        if (len >= 3) {
+          const ux = (x1 - x0) / len;
+          const uy = (y1 - y0) / len;
+          const head = Math.min(ARROW_HEAD, len * 0.45);
+          const bx = x1 - ux * head;
+          const by = y1 - uy * head;
+          const nx = -uy;
+          const ny = ux;
+          const wing = head * 0.55;
+          ctx.beginPath();
+          ctx.moveTo(bx + nx * wing, by + ny * wing);
+          ctx.lineTo(x1, y1);
+          ctx.lineTo(bx - nx * wing, by - ny * wing);
+          ctx.stroke();
+        }
       }
-      strokeCachedPath2D(ctx, d, {
-        strokeStyle: stroke,
+    } else {
+      const pathD =
+        getShapeBaselineD(
+          { key: 'shape', width: pathW, height: pathH, attrs: { shapeType: kind } },
+          { width: pathW, height: pathH }
+        ) || `M 0 0 H ${Math.max(1, pathW)} V ${Math.max(1, pathH)} H 0 Z`;
+      ctx.save();
+      ctx.translate(pathLeft, pathTop);
+      fillCachedPath2D(ctx, pathD, { fillStyle: 'rgba(255,255,255,0.85)' });
+      strokeCachedPath2D(ctx, pathD, {
+        strokeStyle: '#333333',
         lineWidth: strokeW,
         lineCap: 'butt',
         lineJoin: 'miter',
       });
-      return;
+      ctx.restore();
     }
+  }, [enabled, preview, kind, z]);
 
-    if (kind === 'triangle' || kind === 'star' || kind === 'polygon') {
-      const pts = shapeVertexPoints(kind, drawW, drawH);
-      const path = new Path2D();
-      if (pts.length) {
-        path.moveTo(pts[0][0], pts[0][1]);
-        for (let i = 1; i < pts.length; i += 1) path.lineTo(pts[i][0], pts[i][1]);
-        path.closePath();
-      }
-      if (fill) {
-        ctx.fillStyle = fill;
-        ctx.fill(path);
-      }
-      ctx.stroke(path);
-      return;
-    }
+  if (!enabled) return null;
 
-    const path = new Path2D();
-    path.rect(0, 0, Math.max(1, drawW), Math.max(1, drawH));
-    if (fill) {
-      ctx.fillStyle = fill;
-      ctx.fill(path);
+  let sizeLabel: string | null = null;
+  let labelX = 0;
+  let labelY = 0;
+  if (preview?.mode === 'stroke') {
+    const len = Math.hypot(preview.x1 - preview.x0, preview.y1 - preview.y0);
+    if (len >= 3) {
+      sizeLabel = String(Math.round(len));
+      labelX = (preview.x0 + preview.x1) / 2;
+      labelY = Math.min(preview.y0, preview.y1);
     }
-    ctx.stroke(path);
-  }, [
-    kind,
-    x0,
-    y0,
-    x1,
-    y1,
-    drawLeft,
-    drawTop,
-    drawW,
-    drawH,
-    cssW,
-    cssH,
-    pad,
-    isStroke,
-    fill,
-    stroke,
-    strokeW,
-    z,
-    dpr,
-  ]);
+  } else if (preview?.mode === 'box') {
+    const { visual } = preview;
+    if (visual.width >= 3 || visual.height >= 3) {
+      sizeLabel = `${Math.round(visual.width)} × ${Math.round(visual.height)}`;
+      labelX = visual.left + visual.width / 2;
+      labelY = visual.top;
+    }
+  }
 
   const labelFont = 10 * inv;
   const labelGap = 14 * inv;
 
   return (
-    <div
-      data-shape-draw-preview
-      className="pointer-events-none absolute z-20 overflow-visible"
-      style={{ left, top, width: cssW, height: cssH }}
-    >
-      <canvas
-        ref={canvasRef}
-        className="pointer-events-none absolute left-0 top-0"
-        style={{ width: cssW, height: cssH }}
-        aria-hidden
-      />
-      {showSize ? (
+    <>
+      <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />
+      {sizeLabel ? (
         <div
-          className="pointer-events-none absolute whitespace-nowrap font-medium text-[var(--muted)]"
+          data-shape-draw-preview-label
+          className="pointer-events-none absolute z-20 whitespace-nowrap font-medium text-[var(--muted)]"
           style={{
-            left: pad + drawW / 2,
-            top: pad - labelGap,
+            left: labelX,
+            top: labelY - labelGap,
             fontSize: labelFont,
             lineHeight: 1.2,
             transform: 'translate(-50%, -100%)',
@@ -573,7 +535,7 @@ function ShapeDrawPreviewCanvas({
           {sizeLabel}
         </div>
       ) : null}
-    </div>
+    </>
   );
 }
 

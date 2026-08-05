@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineHome, HiOutlineShare } from 'react-icons/hi2';
 import { TbMessage2Filled } from 'react-icons/tb';
@@ -32,6 +32,21 @@ function EditorTopChrome({
   onOpenAgent,
 }: Props) {
   const { t } = useTranslation();
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // SVG canvas pointer handlers stopPropagation, so blank-canvas clicks never
+  // blur this chrome input via the normal focus model — capture + blur like AgentComposerInput.
+  useLayoutEffect(() => {
+    const onPointerDownCapture = (e: PointerEvent) => {
+      const el = titleInputRef.current;
+      if (!el || document.activeElement !== el) return;
+      const t = e.target;
+      if (!(t instanceof Node) || el.contains(t)) return;
+      el.blur();
+    };
+    document.addEventListener('pointerdown', onPointerDownCapture, true);
+    return () => document.removeEventListener('pointerdown', onPointerDownCapture, true);
+  }, []);
 
   return (
     <>
@@ -55,6 +70,7 @@ function EditorTopChrome({
               {projectName || ' '}
             </span>
             <input
+              ref={titleInputRef}
               value={projectName}
               onChange={(e) => onRename(e.target.value)}
               aria-label={t('home.untitled')}

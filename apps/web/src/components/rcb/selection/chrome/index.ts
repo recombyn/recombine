@@ -1,17 +1,4 @@
-/**
- * Selection overlays (roles → React modules):
- *
- * | Role | Module |
- * |---|---|
- * | Selection foreground (AABB + resize) | `../SelectionChrome` |
- * | Path indicator / path handles | `../HostPathChrome` |
- * | Brush (marquee) | `BrushOverlay` |
- * | Shape handles (radius / sides / star) | `*HandlesOverlay` |
- * | Toolbars / menus / title | `*Toolbar*` / `NodeTitleLabel` |
- *
- * Paint: world SVG via `WorldSvgFrame` / host twin — not CSS-scale alignment, not Canvas兜底.
- * Pointer engine + resize math stay in `selection/` (parent).
- */
+/** Selection overlay barrel exports. */
 export { default as MultiSelectionToolbar } from './MultiSelectionToolbar';
 export { default as SelectionContextToolbar } from './SelectionContextToolbar';
 export { default as CanvasContextMenu } from './CanvasContextMenu';

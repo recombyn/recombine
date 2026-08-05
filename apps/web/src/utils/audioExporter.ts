@@ -14,22 +14,24 @@ function coreBaseURL(): string {
   return `${base}ffmpeg`;
 }
 
+async function loadFfmpegOnce(): Promise<FFmpeg> {
+  const ff = new FFmpeg();
+  const base = coreBaseURL();
+  // Must use **esm** core: module worker does `import(coreURL).default`.
+  await ff.load({
+    classWorkerURL: ffmpegWorkerURL,
+    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
+  ffmpegInstance = ff;
+  return ff;
+}
+
 async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance) return ffmpegInstance;
   if (ffmpegLoading) return ffmpegLoading;
 
-  ffmpegLoading = (async () => {
-    const ff = new FFmpeg();
-    const base = coreBaseURL();
-    // Must use **esm** core: module worker does `import(coreURL).default`.
-    await ff.load({
-      classWorkerURL: ffmpegWorkerURL,
-      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
-    });
-    ffmpegInstance = ff;
-    return ff;
-  })().catch((err) => {
+  ffmpegLoading = loadFfmpegOnce().catch((err) => {
     ffmpegInstance = null;
     throw err;
   });

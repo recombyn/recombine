@@ -1,4 +1,5 @@
 import { useEffect, useRef, type CSSProperties, memo } from 'react';
+import { useRcbCamera } from '@/components/rcb/camera/context';
 import { applyFrameContentClip } from '@/components/rcb/frames/frameContentClip';
 import { strokeVisualOutset } from '@/components/rcb/scene/document/sceneEffects';
 import {
@@ -67,6 +68,7 @@ function RcbShapeHost({
   reloadToken = 0,
   forceHidden = false,
 }: Props) {
+  const camera = useRcbCamera();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const bootRef = useRef(0);
@@ -88,6 +90,12 @@ function RcbShapeHost({
     node?.attrs?.stroke,
     node?.attrs?.['stroke-opacity'],
     node?.attrs?.strokeStyle,
+    node?.attrs?.strokeLinecap,
+    node?.attrs?.['stroke-linecap'],
+    node?.attrs?.strokeLinejoin,
+    node?.attrs?.['stroke-linejoin'],
+    node?.attrs?.['stroke-enabled'],
+    node?.attrs?.['stroke-visible'],
     node?.attrs?.['fill-color'],
     node?.attrs?.['fill-type'],
     node?.attrs?.['fill-opacity'],
@@ -161,7 +169,7 @@ function RcbShapeHost({
           el.style.opacity = '1';
           el.setAttribute('opacity', '1');
           if (forceHiddenRef.current) setHostPaintOpacity(el, true);
-          applyFrameContentClip(root, el, document, n);
+          applyFrameContentClip(root, el, document, n, { zoom: camera.zoom });
           const shared = getSharedNodeEls();
           if (shared) shared.set(nodeId, el);
           else nodeEls.set(nodeId, el);
@@ -175,6 +183,16 @@ function RcbShapeHost({
             height: root.style.height,
             viewBox: root.getAttribute('viewBox'),
           };
+          // Freehand / open paths can grow past the seed AABB — allow getBBox fit.
+          // Closed shapes keep the locked seed (preserves *.5 stroke-on-grid).
+          const shapeType = String(n?.attrs?.shapeType || '');
+          const unlockFit =
+            shapeType === 'pen' ||
+            shapeType === 'pencil' ||
+            shapeType === 'path' ||
+            shapeType === 'line' ||
+            shapeType === 'arrow';
+          if (unlockFit) root.removeAttribute('data-rcb-viewport-locked');
           fitInfiniteSvgToContent(root, layer);
           const after = {
             left: root.style.left,

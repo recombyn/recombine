@@ -6,7 +6,7 @@
 
 ## 3 モード
 
-Agent / Ask / Image。チェックポイントと履歴復元。Auto：Standard / Pro / Max / Custom。[Agent](/guide/agent)。
+Agent / Ask / Image。チェックポイントと履歴復元。長時間タスクは一時停止と再開に対応。Auto：Standard / Pro / Max / Custom。[Agent](/guide/agent)。
 
 ## 画像
 

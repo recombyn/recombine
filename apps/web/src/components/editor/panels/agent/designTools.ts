@@ -2028,9 +2028,9 @@ function execSetViewport(
       if (args.percent != null) z = num(args.percent, 100) / 100;
       else if (args.zoom != null) {
         const raw = num(args.zoom, 1);
-        z = raw > 8 ? raw / 100 : raw;
+        z = raw > 12 ? raw / 100 : raw;
       }
-      z = Math.min(8, Math.max(0.05, z));
+      z = Math.min(12, Math.max(0.05, z));
       if (!ui.setZoom) {
         return {
           status: 'error',

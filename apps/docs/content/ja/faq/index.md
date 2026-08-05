@@ -18,6 +18,8 @@
 
 ## Agent
 
+**Agent / Ask / Image の違いは？** Agent はキャンバス直接編集。Ask は回答 / 提案と操作プレビュー、**確認**後に適用。Image は画像生成。長時間タスクは一時停止と再開に対応。[Agent](/guide/agent)。  
+
 **チェックポイントが無効？** リフレッシュ後に失効することがあります。重要結果は保持 / 書き出し。[Agent](/guide/agent)。  
 **Auto が違う？** Standard / Pro / Max / Custom lanes、または固定。  
 **Custom は 5 モデル同時？** いいえ。1 ターン 1 レーン。  

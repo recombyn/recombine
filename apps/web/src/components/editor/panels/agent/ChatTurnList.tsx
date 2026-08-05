@@ -77,6 +77,8 @@ export type ChatUiMessage = {
   choices?: string[];
   /** Ask mode: proposed tool_ops waiting for an option with action=apply. */
   proposedOps?: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
+  /** Server-bound Ask proposal id (design_task.meta.ask_proposal). */
+  proposalId?: string;
   /** Ask mode: label of the apply option (compat). */
   applyChoice?: string;
   /** Ask interaction UI — mode + options; text = freeform reply. */
@@ -95,6 +97,11 @@ export type ChatUiMessage = {
   };
   /** True while canvas nodes are being added one-by-one. */
   drawing?: boolean;
+  /** LangGraph design task id (for pause / resume). */
+  designTaskId?: string;
+  designResumeToken?: string;
+  /** Generation paused with a durable checkpoint — show Resume. */
+  canResume?: boolean;
 };
 
 export type AssistantStep = NonNullable<ChatUiMessage['steps']>[number];
@@ -609,6 +616,7 @@ type Props = {
   onCancelEdit: () => void;
   onRestore: (userId: string) => void;
   onChoice?: (choice: AskChoicePick) => void;
+  onResume?: (assistantId: string) => void;
   className?: string;
 };
 
@@ -921,11 +929,13 @@ function ProcessStepRow({
 function AssistantTurn({
   assistant,
   onChoice,
+  onResume,
   sending,
 }: {
   assistant: ChatUiMessage;
   worked?: string | null;
   onChoice?: (choice: AskChoicePick) => void;
+  onResume?: (assistantId: string) => void;
   sending: boolean;
 }): ReactNode {
   const { t } = useTranslation();
@@ -947,11 +957,6 @@ function AssistantTurn({
     Boolean(assistant.videos?.length) ||
     (Number(assistant.videoPendingCount) || 0) > 0;
   const showMediaGallery = showImageGallery || showVideoGallery;
-  const doneMilestone =
-    !streaming &&
-    (foldable || showMediaGallery) &&
-    Boolean(assistant.content || showMediaGallery);
-
   const showAskChoices =
     !streaming &&
     onChoice &&
@@ -965,6 +970,11 @@ function AssistantTurn({
         assistant.applyChoice ||
         assistant.proposedOps?.length
     );
+  const doneMilestone =
+    !streaming &&
+    !showAskChoices &&
+    (foldable || showMediaGallery) &&
+    Boolean(assistant.content || showMediaGallery);
 
   return (
     <div
@@ -1019,6 +1029,24 @@ function AssistantTurn({
 
       {showAskChoices && onChoice ? (
         <AskChoicePanel assistant={assistant} onChoice={onChoice} sending={sending} />
+      ) : null}
+
+      {!streaming && assistant.canResume && assistant.designTaskId && onResume ? (
+        <div className="flex w-full items-center gap-2">
+          <button
+            type="button"
+            disabled={sending}
+            onClick={() => onResume(assistant.id)}
+            className={cn(
+              'inline-flex h-8 items-center rounded-lg px-3 text-[12px] font-medium',
+              'bg-[var(--home-cta)] text-white transition-opacity hover:opacity-90',
+              'disabled:cursor-not-allowed disabled:opacity-40'
+            )}
+          >
+            {t('agent.resume')}
+          </button>
+          <span className="text-[11px] text-[var(--muted)]">{t('agent.pausedHint')}</span>
+        </div>
       ) : null}
     </div>
   );
@@ -1322,6 +1350,34 @@ function AskChoicePanel({
 
   return (
     <div className="mt-1 flex flex-col items-start gap-1.5">
+      {assistant.proposedOps?.length ? (
+        <div className="w-full rounded-lg border border-[var(--line)] bg-[var(--canvas)]/60 px-2.5 py-2 text-[11px] leading-relaxed text-[var(--muted)]">
+          <div className="mb-1 font-medium text-[var(--ink)]/80">
+            {t('agent.proposeOpsPreview', {
+              count: assistant.proposedOps.length,
+              defaultValue: '将应用 {{count}} 项画布操作',
+            })}
+          </div>
+          <ul className="list-inside list-disc space-y-0.5">
+            {assistant.proposedOps.slice(0, 6).map((op, i) => (
+              <li key={`${op.op_id || op.name || 'op'}-${i}`} className="truncate">
+                {String(op.name || 'op')}
+              </li>
+            ))}
+            {assistant.proposedOps.length > 6 ? (
+              <li>
+                {t('agent.proposeOpsMore', {
+                  count: assistant.proposedOps.length - 6,
+                  defaultValue: '另有 {{count}} 项…',
+                })}
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      ) : null}
+      {assistant.choiceUi?.mode === 'text' && assistant.choiceUi.placeholder ? (
+        <p className="text-[11px] text-[var(--muted)]">{assistant.choiceUi.placeholder}</p>
+      ) : null}
       {ui.options.map((opt, i) => {
         const label = optionLabel(opt);
         return (
@@ -1352,6 +1408,7 @@ const ChatTurnList = forwardRef(function ChatTurnList(
     onCancelEdit,
     onRestore,
     onChoice,
+    onResume,
     className,
   }: Props,
   ref: Ref<VirtualListHandle>
@@ -1454,6 +1511,7 @@ const ChatTurnList = forwardRef(function ChatTurnList(
               <AssistantTurn
                 assistant={assistant}
                 onChoice={onChoice}
+                onResume={onResume}
                 sending={sending}
               />
             ) : null}

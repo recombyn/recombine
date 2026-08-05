@@ -6,6 +6,11 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Same quantize as infinite SVG hosts / artboard plate. */
+function quantClip(n: number) {
+  return Math.round(n * 1e4) / 1e4;
+}
+
 let clipSeq = 0;
 function nextClipId(prefix: string) {
   clipSeq += 1;
@@ -13,10 +18,7 @@ function nextClipId(prefix: string) {
 }
 
 /**
- * Frame that clips this node when `clipContent` is on.
- * Picks the clipContent frame with the largest bbox intersection (not center-only),
- * so strokes that spill out of an artboard still clip to that board.
- * Tie-break: smaller frame (nested), then topmost in the list.
+ * clipContent frame for a node: largest bbox intersection, then smaller area, then topmost.
  */
 export function findClippingFrameForNode(
   document: { frames?: ArtboardFrame[]; x?: number; y?: number } | null | undefined,
@@ -67,38 +69,95 @@ function sceneOrigin(document: { x?: number; y?: number } | null | undefined) {
   return { ox: num(document?.x, 0), oy: num(document?.y, 0) };
 }
 
+function unwrapFrameClip(el: SVGElement) {
+  const wrap = el.parentElement;
+  if (wrap?.getAttribute('data-frame-clip-wrap') !== '1') {
+    el.removeAttribute('clip-path');
+    return;
+  }
+  const parent = wrap.parentNode;
+  if (parent) {
+    parent.insertBefore(el, wrap);
+    try {
+      wrap.remove();
+    } catch {
+      /* ignore */
+    }
+  }
+  el.removeAttribute('clip-path');
+}
+
+/** Remove a painted node (and its frame-clip wrap, if any). */
+export function detachSceneNodeEl(el: Element | null | undefined) {
+  if (!el) return;
+  const wrap = el.parentElement;
+  try {
+    if (wrap?.getAttribute('data-frame-clip-wrap') === '1') wrap.remove();
+    else el.remove();
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
- * Clip an SVG element to its owning clipContent frame.
- * Rect is in the element's local space (after the node's translate).
+ * Clip a shape host to its owning clipContent frame.
+ *
+ * Clip sits on an **untransformed** wrapper with a **scene-absolute** rect — the
+ * same lattice as `HtmlArtboardFrame` plate. Putting clip-path on the node `g`
+ * (local fx−node) fights rotate and can desync half a pixel from the plate SVG
+ * under browser zoom / fractional DPR (leak outside + hairline crop).
  */
 export function applyFrameContentClip(
   root: SVGSVGElement,
   el: SVGElement | null | undefined,
   document: { frames?: ArtboardFrame[]; x?: number; y?: number } | null | undefined,
-  node: Record<string, unknown> | null | undefined
+  node: Record<string, unknown> | null | undefined,
+  opts?: { zoom?: number }
 ): void {
   if (!el || !root) return;
   const frame = findClippingFrameForNode(document, node);
-  if (!frame) return;
+  if (!frame) {
+    unwrapFrameClip(el);
+    return;
+  }
   try {
     const { ox, oy } = sceneOrigin(document);
-    const left = num(node?.x, 0) - ox;
-    const top = num(node?.y, 0) - oy;
-    const fx = num(frame.x) - ox;
-    const fy = num(frame.y) - oy;
+    const fx = quantClip(num(frame.x) - ox);
+    const fy = quantClip(num(frame.y) - oy);
+    const fw = quantClip(Math.max(1, num(frame.width, 1)));
+    const fh = quantClip(Math.max(1, num(frame.height, 1)));
+    // ~½ device px in scene space — kills AA bleed past the sibling plate SVG.
+    const z = Math.max(0.05, Number(opts?.zoom) || 1);
+    const inset = quantClip(0.5 / z);
+
     const id = nextClipId('frame-clip');
     const defs = ensureDefs(root);
-    const clip = svgEl('clipPath', { id });
+    const clip = svgEl('clipPath', {
+      id,
+      clipPathUnits: 'userSpaceOnUse',
+    });
     clip.appendChild(
       svgEl('rect', {
-        x: fx - left,
-        y: fy - top,
-        width: Math.max(1, num(frame.width, 1)),
-        height: Math.max(1, num(frame.height, 1)),
+        x: fx + inset,
+        y: fy + inset,
+        width: Math.max(0, fw - inset * 2),
+        height: Math.max(0, fh - inset * 2),
       })
     );
     defs.appendChild(clip);
-    setAttrs(el, { 'clip-path': urlRef(id) });
+
+    let wrap = el.parentElement;
+    if (wrap?.getAttribute('data-frame-clip-wrap') !== '1') {
+      const parent = el.parentNode;
+      if (!parent) return;
+      wrap = svgEl('g');
+      setAttrs(wrap, { 'data-frame-clip-wrap': '1' });
+      parent.insertBefore(wrap, el);
+      wrap.appendChild(el);
+    }
+    setAttrs(wrap, { 'clip-path': urlRef(id) });
+    // Clip must not live on the transformed node (local CS / rotate).
+    el.removeAttribute('clip-path');
   } catch {
     /* ignore */
   }

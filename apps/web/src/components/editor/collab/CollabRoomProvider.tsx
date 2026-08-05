@@ -97,6 +97,48 @@ const PERSIST_DEBOUNCE_MS = 2000;
 const PEER_COLORS = ['#E4572E', '#29335C', '#F3A712', '#A8C256', '#669BBC', '#6A4C93'];
 const CAMERA_AWARENESS_MS = 80;
 
+/** Debounced cloud PUT of the collab Y scene (owner/editor only). */
+async function persistCloudSnapshot(opts: {
+  id: string;
+  name: string;
+  scene: unknown;
+}): Promise<void> {
+  const { id, name, scene } = opts;
+  const draft = await getProjectDraft(id).catch(() => null);
+  const baseRevision =
+    draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
+      ? Number(draft.cloudRevision)
+      : null;
+  const contentHash = hashDocument(scene);
+  try {
+    const res = await upsertProjectApi({
+      id,
+      name,
+      document: scene,
+      ...(baseRevision != null ? { baseRevision } : {}),
+    });
+    const revision = Number(res?.project?.revision);
+    await markProjectDraftSynced(
+      id,
+      contentHash,
+      Number.isFinite(revision) && revision >= 1 ? revision : null
+    );
+  } catch {
+    // Revision conflict / flake — last-writer full PUT without If-Match.
+    try {
+      const res = await upsertProjectApi({ id, name, document: scene });
+      const revision = Number(res?.project?.revision);
+      await markProjectDraftSynced(
+        id,
+        contentHash,
+        Number.isFinite(revision) && revision >= 1 ? revision : null
+      );
+    } catch {
+      /* keep local Y truth; retry on next edit */
+    }
+  }
+}
+
 type CollabContextValue = {
   status: CollabStatus;
   role: CollabRole | null;
@@ -363,7 +405,7 @@ function CollabPeerPresenceOverlay({
 }
 
 /**
- * Figma-style presence: overlapping peer avatars (not a Live chip).
+ * Peer presence: overlapping avatars.
  * Click an avatar to follow their viewport; click again or pan/zoom to stop.
  */
 export function CollabPresenceBar() {
@@ -579,41 +621,7 @@ export function CollabRoomProvider({
         };
         const tpl = ed.templates?.find((t) => t.id === id);
         const name = String(tpl?.name || 'Untitled');
-        void (async () => {
-          const draft = await getProjectDraft(id).catch(() => null);
-          const baseRevision =
-            draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
-              ? Number(draft.cloudRevision)
-              : null;
-          const contentHash = hashDocument(scene);
-          try {
-            const res = await upsertProjectApi({
-              id,
-              name,
-              document: scene,
-              ...(baseRevision != null ? { baseRevision } : {}),
-            });
-            const revision = Number(res?.project?.revision);
-            await markProjectDraftSynced(
-              id,
-              contentHash,
-              Number.isFinite(revision) && revision >= 1 ? revision : null
-            );
-          } catch {
-            // Revision conflict / flake — last-writer full PUT without If-Match.
-            try {
-              const res = await upsertProjectApi({ id, name, document: scene });
-              const revision = Number(res?.project?.revision);
-              await markProjectDraftSynced(
-                id,
-                contentHash,
-                Number.isFinite(revision) && revision >= 1 ? revision : null
-              );
-            } catch {
-              /* keep local Y truth; retry on next edit */
-            }
-          }
-        })();
+        void persistCloudSnapshot({ id, name, scene });
       }, PERSIST_DEBOUNCE_MS);
     };
 
@@ -837,7 +845,7 @@ export function CollabRoomProvider({
   const followingUserIdRef = useRef<string | null>(null);
   followingUserIdRef.current = followingUserId;
 
-  // Publish local viewport so peers can follow (Figma-style).
+  // Publish local viewport for peer follow.
   useEffect(() => {
     const awareness = awarenessRef.current;
     if (!awareness || !enabled || status === 'idle') return undefined;
