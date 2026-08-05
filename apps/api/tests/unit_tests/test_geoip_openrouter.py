@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def test_openrouter_blocked_for_cn(monkeypatch):
-    from services import geoip
+    from app.services import geoip
 
     monkeypatch.setattr(geoip, "openrouter_block_countries", lambda: {"CN"})
     assert geoip.openrouter_allowed_for_country("CN") is False
@@ -13,7 +13,7 @@ def test_openrouter_blocked_for_cn(monkeypatch):
 
 
 def test_filter_catalog_drops_openrouter_in_cn(monkeypatch):
-    from services import geoip
+    from app.services import geoip
 
     monkeypatch.setattr(geoip, "openrouter_block_countries", lambda: {"CN"})
     models = [
@@ -26,7 +26,7 @@ def test_filter_catalog_drops_openrouter_in_cn(monkeypatch):
 
 
 def test_sanitize_rules_replaces_openrouter_lanes(monkeypatch):
-    from services.design.runtime.models_route import sanitize_rules_for_openrouter_region
+    from app.services.design.runtime.models_route import sanitize_rules_for_openrouter_region
 
     monkeypatch.setenv("CLIENT_COUNTRY_OVERRIDE", "")
     platform = {
@@ -57,7 +57,7 @@ def test_sanitize_rules_replaces_openrouter_lanes(monkeypatch):
 
 
 def test_sanitize_rules_keeps_openrouter_outside_cn():
-    from services.design.runtime.models_route import sanitize_rules_for_openrouter_region
+    from app.services.design.runtime.models_route import sanitize_rules_for_openrouter_region
 
     platform = {
         "precheck.model_threshold": "fast->doubao-seed-2-1-turbo;standard->deepseek-v4-flash",

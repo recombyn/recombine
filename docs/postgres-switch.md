@@ -39,12 +39,25 @@ Local WAL backups under `storage/backups/` can be kept as freeze points before c
 
 ## Read / write split
 
+Runtime data access uses SQLModel (`Session` + `app.crud`). Legacy `connect()` remains only inside DDL (`init_schema` / design table boot). For replica / SQLite read-only / immediate writers when needed:
+
 ```python
-from services.db import connect
+from app.services.db import connect
 
 with connect(readonly=True) as conn:   # replica or SQLite mode=ro
     ...
-with connect(immediate=True) as conn:  # wallet / critical writes
+with connect(immediate=True) as conn:  # wallet / critical writes (DDL / rare)
+    ...
+```
+
+Prefer:
+
+```python
+from sqlmodel import Session
+from app import crud
+from app.core.db import engine
+
+with Session(engine) as session:
     ...
 ```
 
@@ -56,7 +69,7 @@ with connect(immediate=True) as conn:  # wallet / critical writes
 
 ## LangGraph checkpointer (Design Agent / create_agent)
 
-App data (`DATABASE_URL`) and LangGraph **short-term checkpoints** share the same priority chain in `services/llm/agent.py` → `get_agent_checkpointer()`:
+App data (`DATABASE_URL`) and LangGraph **short-term checkpoints** share the same priority chain in `app/services/llm/agent.py` → `get_agent_checkpointer()`:
 
 | Priority | Backend | When |
 |----------|---------|------|

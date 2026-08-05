@@ -2,7 +2,7 @@
 """Verify helpers that remain on the live code-path (no published-graph runtime)."""
 from __future__ import annotations
 
-from services.design.runtime.agent_controller import (
+from app.services.design.runtime.agent_controller import (
     _ops_patch_too_broad,
     _structure_verify_issues,
 )

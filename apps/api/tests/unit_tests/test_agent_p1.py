@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.design.runtime.agent_controller import AgentRunState
+from app.services.design.runtime.agent_controller import AgentRunState
 
 
 def test_run_state_execution_log():
@@ -17,7 +17,7 @@ def test_run_state_execution_log():
 
 
 def test_failure_episode_gate():
-    from services.agent_memory.episodes import should_write_episode
+    from app.services.agent_memory.episodes import should_write_episode
 
     assert (
         should_write_episode(

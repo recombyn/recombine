@@ -1,4 +1,4 @@
-from services.llm.agent import (
+from app.services.llm.agent import (
     assemble_turn_from_lc_tools,
     design_thought_langchain_tools,
     tool_calls_to_canvas_ops,

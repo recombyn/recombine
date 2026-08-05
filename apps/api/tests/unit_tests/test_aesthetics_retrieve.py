@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from services.design.aesthetics.scorer import retrieve_aesthetic_refs
+from app.services.design.aesthetics.scorer import retrieve_aesthetic_refs
 
 
 def test_user_refs_skip_good_ok_corpus():
-    from services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
+    from app.services.design.prompts.prompt_pack_store import ensure_design_prompt_packs
 
     ensure_design_prompt_packs()
     fake_bad = [
@@ -30,7 +30,7 @@ def test_user_refs_skip_good_ok_corpus():
         return list(fake_bad)
 
     with patch(
-        "services.design.aesthetics.scorer.list_ready_embeddings",
+        "app.services.design.aesthetics.scorer.list_ready_embeddings",
         side_effect=_list,
     ):
         out = retrieve_aesthetic_refs(
@@ -65,7 +65,7 @@ def test_user_refs_false_uses_corpus_even_with_urls():
         return []
 
     with patch(
-        "services.design.aesthetics.scorer.list_ready_embeddings",
+        "app.services.design.aesthetics.scorer.list_ready_embeddings",
         side_effect=_list,
     ):
         out = retrieve_aesthetic_refs(
@@ -85,7 +85,7 @@ def test_user_refs_false_uses_corpus_even_with_urls():
         return []
 
     with patch(
-        "services.design.aesthetics.scorer.list_ready_embeddings",
+        "app.services.design.aesthetics.scorer.list_ready_embeddings",
         side_effect=_list,
     ):
         out = retrieve_aesthetic_refs(prompt="海报", scene="website")
