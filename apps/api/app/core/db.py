@@ -134,18 +134,82 @@ def init_db() -> None:
 
 
 def run_migrations() -> None:
-    """Apply Alembic migrations to ``head`` (idempotent)."""
+    """Apply Alembic migrations to ``head`` (idempotent; safe under multi-process)."""
+    import os
+    import time
+    from contextlib import contextmanager
+
     from alembic import command
     from alembic.config import Config
+    from sqlalchemy.exc import IntegrityError, OperationalError
 
     init_db()
+    uri = sqlalchemy_database_uri()
     cfg = Config(str(_API_ROOT / "alembic.ini"))
     # ConfigParser treats ``%`` as interpolation — escape DB URLs with %XX encoding.
-    cfg.set_main_option("sqlalchemy.url", sqlalchemy_database_uri().replace("%", "%%"))
+    cfg.set_main_option("sqlalchemy.url", uri.replace("%", "%%"))
     # script_location in alembic.ini is relative to apps/api cwd when running CLI;
     # pin absolute path for in-process calls from arbitrary working directories.
     cfg.set_main_option("script_location", str(_API_ROOT / "app" / "alembic"))
-    command.upgrade(cfg, "head")
+
+    @contextmanager
+    def _sqlite_lock():
+        if not uri.startswith("sqlite"):
+            yield
+            return
+        raw = uri.split("sqlite:///", 1)[-1].split("?", 1)[0]
+        db_path = Path(raw)
+        lock_path = db_path.with_name(db_path.name + ".alembic.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                while True:
+                    try:
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            else:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            fh.close()
+
+    with _sqlite_lock():
+        try:
+            command.upgrade(cfg, "head")
+        except (IntegrityError, OperationalError) as err:
+            # Concurrent stamp under xdist / multi-worker boot.
+            msg = str(err).lower()
+            if "alembic_version" in msg and (
+                "unique" in msg or "duplicate" in msg
+            ):
+                from alembic.runtime.migration import MigrationContext
+
+                try:
+                    with engine.connect() as conn:
+                        if MigrationContext.configure(conn).get_current_revision():
+                            return
+                except Exception:
+                    pass
+            raise
 
 
 def get_session() -> Session:
