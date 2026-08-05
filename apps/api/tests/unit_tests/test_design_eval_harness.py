@@ -128,11 +128,13 @@ def test_chat_persists_ask_fields(tmp_path, monkeypatch):
     monkeypatch.setenv("SQLITE_DB_PATH", str(db_path))
     monkeypatch.setenv("DATABASE_URL", "")
     from app.core.config import settings as settings_mod
+    from app.core.db import reset_engine
     import app.services.db as db_mod
 
-    settings_mod.settings.sqlite_db_path = str(db_path)
-    settings_mod.settings.database_url = ""
+    settings_mod.sqlite_db_path = str(db_path)
+    settings_mod.database_url = ""
     db_mod._SCHEMA_READY = False
+    reset_engine()
 
     session = chat_store.upsert_session(
         "u_ask",
@@ -142,15 +144,15 @@ def test_chat_persists_ask_fields(tmp_path, monkeypatch):
             {
                 "id": "a1",
                 "role": "assistant",
-                "content": "确认应用？",
+                "content": "?????",
                 "proposedOps": [{"name": "create_text", "args": {"x": 1}}],
                 "proposalId": "prop_z",
                 "designTaskId": "task_z",
                 "choiceUi": {
                     "mode": "confirm",
                     "options": [
-                        {"label": "确认", "action": "apply"},
-                        {"label": "取消", "action": "dismiss"},
+                        {"label": "??", "action": "apply"},
+                        {"label": "??", "action": "dismiss"},
                     ],
                 },
             }

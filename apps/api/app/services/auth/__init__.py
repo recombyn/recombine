@@ -8,7 +8,6 @@ import time
 from sqlmodel import Session
 
 from app import crud
-from app.core.db import engine
 from app.services.auth.email_store import get_user_by_id, heal_avatar_if_data_url, upsert_oauth_user
 from app.services.db import init_schema
 from app.services.wallet.db import ensure_user_balance
@@ -44,6 +43,8 @@ class SessionUser:
 
 def create_session(user: SessionUser) -> tuple[SessionUser, str]:
     """Persist user (OAuth upsert preserves in-app profile) and return (session user, token)."""
+    from app.core.db import engine
+
     init_schema()
     sub = user.id.replace("google:", "", 1) if user.id.startswith("google:") else None
     persisted = upsert_oauth_user(
@@ -82,6 +83,8 @@ def create_session(user: SessionUser) -> tuple[SessionUser, str]:
 def get_session(token: str | None, *, db: Session | None = None) -> SessionUser | None:
     if not token:
         return None
+    from app.core.db import engine
+
     init_schema()
     now = time.time()
     own = db is None
@@ -131,6 +134,8 @@ def get_session(token: str | None, *, db: Session | None = None) -> SessionUser 
 def revoke_session(token: str | None, *, db: Session | None = None) -> None:
     if not token:
         return
+    from app.core.db import engine
+
     init_schema()
     own = db is None
     session = db if db is not None else Session(engine)

@@ -32,7 +32,7 @@ def test_and_edge_condition():
 def test_build_lc_design_graph_nodes():
     from app.core.config import settings as settings_mod
 
-    settings_mod.settings.design_graph_require_durable_checkpoint = False
+    settings_mod.design_graph_require_durable_checkpoint = False
     invalidate_agent_graph_cache()
     compiled = _build_lc_design_graph()
     nodes = set(compiled.nodes)
@@ -58,7 +58,7 @@ def test_design_thread_id():
 def test_design_graph_uses_shared_durable_checkpointer():
     from app.core.config import settings as settings_mod
 
-    settings_mod.settings.design_graph_require_durable_checkpoint = False
+    settings_mod.design_graph_require_durable_checkpoint = False
     invalidate_agent_graph_cache()
     from app.services.llm.agent import checkpointer_backend, get_agent_checkpointer
 

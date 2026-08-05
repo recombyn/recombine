@@ -54,6 +54,23 @@ else:
 engine = create_engine(_uri, connect_args=_connect_args, **_engine_kwargs)
 
 
+def reset_engine() -> None:
+    """Dispose and rebuild ``engine`` after tests change SQLITE_DB_PATH / DATABASE_URL."""
+    global engine, _uri, _connect_args, _engine_kwargs
+    try:
+        engine.dispose()
+    except Exception:
+        pass
+    _uri = sqlalchemy_database_uri()
+    _connect_args = {}
+    _engine_kwargs = {"echo": False}
+    if _uri.startswith("sqlite"):
+        _connect_args["check_same_thread"] = False
+    else:
+        _engine_kwargs["pool_pre_ping"] = True
+    engine = create_engine(_uri, connect_args=_connect_args, **_engine_kwargs)
+
+
 def init_db() -> None:
     """
     Register metadata. Product DDL still lives in ``app.services.db.init_schema``

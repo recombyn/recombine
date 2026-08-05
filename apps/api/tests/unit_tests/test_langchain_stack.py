@@ -169,10 +169,10 @@ def test_sqlite_checkpointer_setup_and_thread_config(tmp_path, monkeypatch):
     from app.core.config import settings as settings_mod
     from app.services.llm import agent as agent_mod
 
-    monkeypatch.setattr(settings_mod.settings, "database_url", "")
-    monkeypatch.setattr(settings_mod.settings, "langgraph_checkpoint_url", "")
+    monkeypatch.setattr(settings_mod, "database_url", "")
+    monkeypatch.setattr(settings_mod, "langgraph_checkpoint_url", "")
     monkeypatch.setattr(
-        settings_mod.settings,
+        settings_mod,
         "langgraph_checkpoint_sqlite_path",
         str(tmp_path / "cp.db"),
     )
@@ -207,9 +207,9 @@ def test_summarization_middleware_matches_docs(monkeypatch):
     from app.services.llm import LlmEndpoint
     from app.services.llm.agent import build_summarization_middleware
 
-    monkeypatch.setattr(settings_mod.settings, "agent_summarize_enabled", True)
-    monkeypatch.setattr(settings_mod.settings, "agent_summarize_trigger_tokens", 4000)
-    monkeypatch.setattr(settings_mod.settings, "agent_summarize_keep_messages", 20)
+    monkeypatch.setattr(settings_mod, "agent_summarize_enabled", True)
+    monkeypatch.setattr(settings_mod, "agent_summarize_trigger_tokens", 4000)
+    monkeypatch.setattr(settings_mod, "agent_summarize_keep_messages", 20)
     ep = LlmEndpoint(
         base_url="https://example.invalid/v1",
         api_key="sk-test",
@@ -229,10 +229,10 @@ def test_langgraph_store_long_term_put_search(tmp_path, monkeypatch):
     from app.core.config import settings as settings_mod
     from app.services.agent_memory import long_term as lt
 
-    monkeypatch.setattr(settings_mod.settings, "database_url", "")
-    monkeypatch.setattr(settings_mod.settings, "langgraph_store_url", "")
+    monkeypatch.setattr(settings_mod, "database_url", "")
+    monkeypatch.setattr(settings_mod, "langgraph_store_url", "")
     monkeypatch.setattr(
-        settings_mod.settings,
+        settings_mod,
         "langgraph_store_sqlite_path",
         str(tmp_path / "store.db"),
     )
