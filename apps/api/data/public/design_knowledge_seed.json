@@ -1,5 +1,27 @@
 {
-  "kindLabels": {},
-  "items": [],
-  "_comment": "OSS stub. Put full knowledge in data/private/design_knowledge_seed.json"
+  "kindLabels": {
+    "palette": "Palette",
+    "layout": "Layout"
+  },
+  "items": [
+    {
+      "kind": "palette",
+      "title": "Basic color roles",
+      "scenes": "all",
+      "skill_categories": "all",
+      "sort_order": 10,
+      "when_to_use": "Choosing primary, secondary, and accent colors",
+      "body": "Use about 60% primary, 30% secondary, and 10% accent. Prefer one hue family for UI chrome; reserve high contrast for CTAs."
+    },
+    {
+      "kind": "layout",
+      "title": "Basic composition",
+      "scenes": "all",
+      "skill_categories": "all",
+      "sort_order": 10,
+      "when_to_use": "Framing hierarchy and focal point",
+      "body": "Establish one clear focal point, group related content, and keep margins consistent across the frame."
+    }
+  ],
+  "_comment": "OSS baseline for Agent cold start. Optional richer overlay: data/private/design_knowledge_seed.json"
 }
