@@ -30,7 +30,13 @@ _CHECKPOINTER_CONN: Any = None
 
 # Design outer graph state (AgentRuntime / nested dataclasses) — msgpack allowlist.
 # No pickle_fallback: callables must stay out of checkpointed state.
+# Keep pre-app/ package paths so older checkpoints still deserialize.
 _CHECKPOINT_MSGPACK_MODULES: tuple[tuple[str, str], ...] = (
+    ("app.services.design.runtime.agent_controller", "AgentRuntime"),
+    ("app.services.design.runtime.agent_controller", "AgentRunState"),
+    ("app.services.design.runtime.graph.state", "AgentRuntime"),
+    ("app.services.design.runtime.graph.state", "AgentRunState"),
+    ("app.services.design.runtime.decision_log", "DesignRunDecision"),
     ("services.design.runtime.agent_controller", "AgentRuntime"),
     ("services.design.runtime.agent_controller", "AgentRunState"),
     ("services.design.runtime.graph.state", "AgentRuntime"),
