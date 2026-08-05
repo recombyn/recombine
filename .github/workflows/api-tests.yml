@@ -39,4 +39,4 @@ jobs:
         run: python -m pytest tests/integration_tests
 
       - name: Coverage (unit + integration)
-        run: python -m pytest --cov=api --cov=services --cov-report=term-missing
+        run: python -m pytest --cov=app --cov-report=term-missing
