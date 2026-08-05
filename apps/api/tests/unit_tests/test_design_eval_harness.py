@@ -130,42 +130,45 @@ def test_chat_persists_ask_fields(tmp_path, monkeypatch):
     from app.core.config import settings as settings_mod
     from app.core.db import reset_engine
     import app.services.db as db_mod
+    from tests.conftest import restore_default_sqlite_engine
 
     settings_mod.sqlite_db_path = str(db_path)
     settings_mod.database_url = ""
     db_mod._SCHEMA_READY = False
     reset_engine()
 
-    session = chat_store.upsert_session(
-        "u_ask",
-        "proj_1",
-        title="ask",
-        messages=[
-            {
-                "id": "a1",
-                "role": "assistant",
-                "content": "?????",
-                "proposedOps": [{"name": "create_text", "args": {"x": 1}}],
-                "proposalId": "prop_z",
-                "designTaskId": "task_z",
-                "choiceUi": {
-                    "mode": "confirm",
-                    "options": [
-                        {"label": "??", "action": "apply"},
-                        {"label": "??", "action": "dismiss"},
-                    ],
-                },
-            }
-        ],
-    )
-    msgs = session.get("messages") or []
-    assert msgs
-    m = msgs[0]
-    assert m.get("proposalId") == "prop_z"
-    assert m.get("designTaskId") == "task_z"
-    assert m.get("proposedOps")
-    assert m.get("choiceUi", {}).get("mode") == "confirm"
-
+    try:
+        session = chat_store.upsert_session(
+            "u_ask",
+            "proj_1",
+            title="ask",
+            messages=[
+                {
+                    "id": "a1",
+                    "role": "assistant",
+                    "content": "?????",
+                    "proposedOps": [{"name": "create_text", "args": {"x": 1}}],
+                    "proposalId": "prop_z",
+                    "designTaskId": "task_z",
+                    "choiceUi": {
+                        "mode": "confirm",
+                        "options": [
+                            {"label": "??", "action": "apply"},
+                            {"label": "??", "action": "dismiss"},
+                        ],
+                    },
+                }
+            ],
+        )
+        msgs = session.get("messages") or []
+        assert msgs
+        m = msgs[0]
+        assert m.get("proposalId") == "prop_z"
+        assert m.get("designTaskId") == "task_z"
+        assert m.get("proposedOps")
+        assert m.get("choiceUi", {}).get("mode") == "confirm"
+    finally:
+        restore_default_sqlite_engine()
 
 def test_thin_corpus_fail_open(monkeypatch):
     from app.services.design.aesthetics import scorer as scorer_mod

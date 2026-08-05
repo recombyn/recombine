@@ -9,7 +9,7 @@ from typing import Any
 from sqlmodel import Session
 
 from app import crud
-from app.core.db import engine
+from app.core import db as core_db
 from app.services.design.readpath.catalog import ensure_design_catalog
 
 _KNOWLEDGE_READY = False
@@ -80,15 +80,23 @@ def _pub(r: Any) -> dict[str, Any]:
     }
 
 
+def _knowledge_seed_needed(session: Session) -> bool:
+    """True when seed rows exist but the active DB has none (stale ready flag / new file)."""
+    if not _SEED:
+        return False
+    return len(crud.list_design_knowledge_keys(session=session)) == 0
+
+
 def ensure_design_knowledge() -> None:
     """Insert missing seed knowledge rows. Never overwrite Admin edits."""
     global _KNOWLEDGE_READY
     if _KNOWLEDGE_READY:
         # Catalog-ready flag can outlive a switched SQLITE_DB_PATH in tests.
         try:
-            with Session(engine) as session:
-                crud.list_design_knowledge(session=session, enabled=None)
-            return
+            with Session(core_db.engine) as session:
+                if not _knowledge_seed_needed(session):
+                    return
+            _KNOWLEDGE_READY = False
         except Exception:
             _KNOWLEDGE_READY = False
     # Do not call ensure_design_catalog() here — catalog invokes this while still
@@ -96,9 +104,10 @@ def ensure_design_knowledge() -> None:
     with _KNOWLEDGE_LOCK:
         if _KNOWLEDGE_READY:
             try:
-                with Session(engine) as session:
-                    crud.list_design_knowledge(session=session, enabled=None)
-                return
+                with Session(core_db.engine) as session:
+                    if not _knowledge_seed_needed(session):
+                        return
+                _KNOWLEDGE_READY = False
             except Exception:
                 _KNOWLEDGE_READY = False
         now = time.time()
@@ -107,7 +116,7 @@ def ensure_design_knowledge() -> None:
 
         init_schema()
         ensure_design_tables_boot()
-        with Session(engine) as session:
+        with Session(core_db.engine) as session:
             existing_keys = crud.list_design_knowledge_keys(session=session)
             for item in _SEED:
                 kind = str(item["kind"])
@@ -139,7 +148,7 @@ def list_knowledge(
     if ensure:
         ensure_design_catalog()
         ensure_design_knowledge()
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_design_knowledge(
             session=session, kind=kind, enabled=enabled
         )
@@ -162,7 +171,7 @@ def upsert_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
     ).strip()[:128] or "all"
     sort_order = int(payload.get("sortOrder") or payload.get("sort_order") or 0)
     enabled = 1 if payload.get("enabled", True) else 0
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         row = crud.upsert_design_knowledge(
             session=session,
             item_id=int(kid) if kid else None,
@@ -181,7 +190,7 @@ def upsert_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
 def soft_delete_knowledge(item_id: int) -> bool:
     ensure_design_catalog()
     ensure_design_knowledge()
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         return crud.soft_delete_design_knowledge(
             session=session, item_id=int(item_id)
         )
