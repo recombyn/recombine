@@ -1,4 +1,4 @@
-"""Streaming LLM agent turn via LangChain + official create_agent (hybrid)."""
+"""Streaming LLM agent turn (create_agent + bind_tools)."""
 
 from __future__ import annotations
 
@@ -44,10 +44,10 @@ _CHECKPOINT_MSGPACK_MODULES: tuple[tuple[str, str], ...] = (
     ("services.design.runtime.decision_log", "DesignRunDecision"),
 )
 
-# Server-executed tools (LangGraph ToolNode / official agent). Canvas ops stay client-side.
+# Server-executed tool names. Canvas ops stay client-side.
 _SERVER_TOOL_NAMES = frozenset({"generate_image"})
 
-# Runtime meta tools (LangChain StructuredTool) — not canvas paint ops.
+# Runtime meta tools — not canvas paint ops.
 _HOST_META_TOOL_NAMES = frozenset(
     {
         "finish",
@@ -62,7 +62,7 @@ _HOST_META_TOOL_NAMES = frozenset(
 
 
 def tool_calls_to_canvas_ops(tool_calls: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """LangChain / OpenAI tool_calls → FE ``tool_ops`` ``{name, args}`` (canvas only)."""
+    """Map tool_calls → FE ``tool_ops`` ``{name, args}`` (canvas only)."""
     import json as _json
 
     out: list[dict[str, Any]] = []
@@ -215,11 +215,9 @@ def assemble_turn_from_lc_tools(
 
 
 def design_thought_langchain_tools() -> list[Any]:
-    """Canvas StructuredTools + runtime meta tools for narrate-then-act thought turns.
+    """Canvas + runtime meta tools for narrate-then-act turns.
 
-    Runtime tools: function ``__name__`` / ``__doc__`` + Pydantic ``args_schema``.
-    ``ask_user`` from design_tools is replaced with a runtime variant that returns
-    ``await_user`` (choices chips) instead of delegated_to_client.
+    Runtime ``ask_user`` returns ``await_user`` (choice chips), not delegated_to_client.
     """
     import json as _json
 
@@ -399,7 +397,7 @@ def _agent_model_id(requested: str | None, endpoint_model: str) -> str:
 
 
 def _tool_calls_from_message(msg: Any) -> list[dict[str, Any]]:
-    """Normalize LangChain tool_calls → OpenAI chat.completions shape."""
+    """Normalize tool_calls → OpenAI chat.completions shape."""
     import json as _json
 
     raw = getattr(msg, "tool_calls", None) or []
@@ -433,7 +431,7 @@ def _tool_calls_from_message(msg: Any) -> list[dict[str, Any]]:
 
 
 def server_langchain_tools() -> list[Any]:
-    """Tools the backend can execute (official agent / ToolNode)."""
+    """Tools the backend executes (e.g. generate_image)."""
     return [
         t
         for t in design_langchain_tools()
@@ -442,7 +440,7 @@ def server_langchain_tools() -> list[Any]:
 
 
 def agent_thread_config(thread_id: str | None) -> dict[str, Any] | None:
-    """LangGraph short-term memory config — docs ``configurable.thread_id``."""
+    """LangGraph config with ``thread_id`` for checkpointed runs."""
     tid = str(thread_id or "").strip()
     if not tid:
         return None
@@ -469,14 +467,14 @@ def configure_langfuse() -> dict[str, Any]:
     sk = (settings.langfuse_secret_key or "").strip()
     base = (settings.langfuse_base_url or "https://cloud.langfuse.com").strip().rstrip("/")
     enabled = bool(settings.langfuse_tracing) and bool(pk) and bool(sk)
-    # Prefer Langfuse over LangSmith auto-tracing.
+    # Disable LangSmith auto-tracing (we use Langfuse).
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
     os.environ.pop("LANGSMITH_TRACING", None)
     if enabled:
         os.environ["LANGFUSE_PUBLIC_KEY"] = pk
         os.environ["LANGFUSE_SECRET_KEY"] = sk
         os.environ["LANGFUSE_BASE_URL"] = base
-        os.environ["LANGFUSE_HOST"] = base  # legacy alias
+        os.environ["LANGFUSE_HOST"] = base
         try:
             from langfuse import get_client
 
@@ -572,9 +570,8 @@ def merge_tracing_config(
         for k, v in metadata.items():
             if v is None:
                 continue
-            # Langfuse prefers string metadata values.
+            # Stringify non-scalars for Langfuse metadata.
             base_m[str(k)] = v if isinstance(v, (str, int, float, bool)) else str(v)
-    # Map common fields → Langfuse special metadata keys.
     uid = str(base_m.get("langfuse_user_id") or base_m.get("user_id") or "").strip()
     if uid:
         base_m["langfuse_user_id"] = uid
@@ -585,7 +582,6 @@ def merge_tracing_config(
         base_m["langfuse_session_id"] = session
     if merged_tags:
         base_m["langfuse_tags"] = list(merged_tags)
-    # Ensure task_id is a plain string for UI filter metadata.task_id
     if base_m.get("task_id") is not None:
         base_m["task_id"] = str(base_m["task_id"])
     if base_m:
@@ -636,7 +632,7 @@ def _checkpoint_sqlite_path() -> Path:
 
 
 def _checkpoint_serde() -> Any:
-    """Shared serde for create_agent + design outer graph (no pickle)."""
+    """Shared checkpoint serde (no pickle)."""
     from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
     return JsonPlusSerializer(
@@ -669,12 +665,9 @@ def _checkpointer_async_is_stub(saver: Any) -> bool:
 
 
 def _wrap_sync_checkpointer_for_async(inner: Any) -> Any:
-    """
-    Make sync savers usable with ``graph.astream``.
+    """Bridge sync savers for ``graph.astream`` (``aget_*`` / ``aput_*``).
 
-    SqliteSaver / PyMySQLSaver only implement sync APIs; LangGraph async paths
-    call ``aget_*`` / ``aput_*``. Mirror InMemorySaver: async methods delegate
-    to the sync implementations (conn is ``check_same_thread=False`` / autocommit).
+    Sqlite/PyMySQL are sync-only; conn uses ``check_same_thread=False`` / autocommit.
     """
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -836,12 +829,7 @@ def _build_sqlite_checkpointer() -> Any:
 
 
 def get_agent_checkpointer() -> Any:
-    """
-    Durable short-term memory checkpointer for ``create_agent`` + design graph.
-
-    Priority: MySQL 8.0.19+ (same DB as app) → Sqlite (async-bridged) → memory.
-    Sync Sqlite/MySQL savers are wrapped so ``graph.astream`` can call ``aget_*``.
-    """
+    """Durable checkpointer: MySQL → Sqlite+async-bridge → memory."""
     global _CHECKPOINTER, _CHECKPOINTER_BACKEND
     if _CHECKPOINTER is not None:
         return _CHECKPOINTER
@@ -890,7 +878,7 @@ def _finalize_client_tool_interrupt(
     tool_calls: list[dict[str, Any]],
     user_id: str | None = None,
 ) -> None:
-    """After interrupt_before=tools: run Store tools server-side; mark canvas as client_applies."""
+    """After tools interrupt: run Store tools server-side; mark canvas as client_applies."""
     if not config or not tool_calls:
         return
     try:
@@ -935,13 +923,7 @@ def build_summarization_middleware(
     source: str = "agent",
     enabled: bool | None = None,
 ) -> list[Any]:
-    """
-    Official LangChain ``SummarizationMiddleware`` (short-term memory docs).
-
-    When history crosses ``trigger`` tokens, older turns are replaced by a model
-    summary while keeping the last ``keep`` messages — avoids losing context
-    that plain trim/delete would drop.
-    """
+    """SummarizationMiddleware when history crosses trigger tokens; keep last N messages."""
     from app.core.config import settings
 
     on = settings.agent_summarize_enabled if enabled is None else bool(enabled)
@@ -995,16 +977,7 @@ def build_official_agent(
     summarize: bool | None = None,
     with_long_term_store: bool = True,
 ):
-    """
-    Official LangChain ``create_agent`` graph (model ↔ tools loop).
-
-    Short-term memory (docs):
-    - ``checkpointer`` + invoke ``thread_id``
-    - ``SummarizationMiddleware`` when history grows
-
-    Long-term memory (docs):
-    - ``store`` (LangGraph Store) + ToolRuntime tools + ``context_schema``
-    """
+    """Build create_agent graph (optional checkpointer, summarization, Store)."""
     from langchain.agents import create_agent
     from app.services.agent_memory.long_term import AgentMemoryContext, get_agent_store
 
@@ -1063,21 +1036,10 @@ async def ainvoke_structured(
     timeout: float | None = None,
     stream_chunk_timeout: float | None = None,
 ) -> dict[str, Any]:
-    """
-    LangChain structured output via ``create_agent(..., response_format=Schema)``.
+    """Structured output via ``with_structured_output``, then create_agent fallback.
 
-    Same pattern as docs::
-
-        agent = create_agent(model, system_prompt=..., response_format=CapitalInfo)
-        response = agent.invoke({\"messages\": [...]})
-        # → response[\"structured_response\"]
-
-    Returns ``{\"structured\": Model|dict|None, \"text\": str, \"messages\": list}``.
-    Falls back to ``llm.with_structured_output`` if the agent path fails.
-
-    ``timeout`` / ``stream_chunk_timeout`` bound ChatOpenAI (request + inter-chunk
-    stall). Paint passes these so a half-open provider stream cannot burn the
-    full LangGraph node budget (default stream_chunk_timeout is 120s).
+    ``timeout`` / ``stream_chunk_timeout`` bound request + inter-chunk stall so a
+    half-open stream cannot burn the full graph node budget (default chunk 120s).
     """
     endpoint = get_llm_endpoint(model)
     model_id = _agent_model_id(model, endpoint.model_id)
@@ -1098,12 +1060,9 @@ async def ainvoke_structured(
         else None
     )
 
-    # Prefer direct structured output first — create_agent often burns multiple
-    # model round-trips (intent_classify hit 6×~4s) for a simple schema fill.
-    #
-    # Use function_calling first: many Doubao-hosted models (e.g. deepseek-v4-flash)
-    # reject response_format=json_schema with HTTP 400, which wasted a full paint
-    # attempt + tokens before the create_agent fallback.
+    # with_structured_output first — create_agent burns multiple round-trips
+    # for a simple schema fill (intent_classify hit 6×~4s).
+    # function_calling before json_schema: Doubao often 400s on json_schema.
     llm = build_chat_model(
         endpoint=endpoint,
         model_id_override=model_id,
@@ -1134,7 +1093,7 @@ async def ainvoke_structured(
                 type(direct_err).__name__,
             )
 
-    # Fallback: official create_agent + response_format.
+    # Fallback: create_agent + response_format.
     from langgraph.checkpoint.memory import InMemorySaver
 
     agent = build_official_agent(
@@ -1189,7 +1148,7 @@ def _prepare_agent_messages(
             if "IDENTITY:" in existing:
                 final.append({"role": "system", "content": existing or base_system})
             elif existing and base_system not in existing:
-                # Prefer Admin IDENTITY prefix from base_system.
+                # Prefix Admin IDENTITY from base_system.
                 final.append(
                     {"role": "system", "content": f"{base_system}\n\n{existing}"}
                 )
@@ -1216,17 +1175,10 @@ async def stream_official_agent(
     metadata: dict[str, Any] | None = None,
     tags: list[str] | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
-    """
-    Stream an official ``create_agent`` run.
+    """Stream create_agent.
 
-    With ``thread_id``, short-term memory is the LangGraph checkpointer.
-    With ``user_id``, long-term Store tools get ``AgentMemoryContext``.
-
-    ``interrupt_before_tools=True`` — canvas tools deferred to FE; Store tools
-    still run server-side when finalizing the interrupt.
-
-    Langfuse: set ``LANGFUSE_PUBLIC_KEY`` + ``LANGFUSE_SECRET_KEY``; pass
-    ``metadata``/``tags`` so Admin can find the run by ``metadata.task_id``.
+    ``thread_id`` → checkpointer; ``user_id`` → Store context;
+    ``interrupt_before_tools`` defers canvas tools to FE.
     """
     from app.services.agent_memory.long_term import AgentMemoryContext
 
@@ -1357,7 +1309,7 @@ async def ainvoke_official_agent(
     thread_id: str | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Blocking official agent run — returns final text + messages."""
+    """Blocking create_agent run — final text + messages."""
     from app.services.agent_memory.long_term import AgentMemoryContext
 
     config = agent_thread_config(thread_id)
@@ -1400,14 +1352,10 @@ async def stream_agent_turn(
     execute_server_tools: bool = True,
     source: str = "agent",
 ) -> AsyncIterator[tuple[str, Any]]:
-    """
-    One agent LLM turn with tools (LangChain ``bind_tools``).
+    """One LLM turn with ``bind_tools``.
 
-    Canvas tools are streamed as ``tool_call`` for the client.
-    Server tools (e.g. ``generate_image``) run via LangGraph ``ToolNode`` when
-    ``execute_server_tools`` is True, yielding ``tool_result``.
-
-    Text tokens stream before tool_calls (narrate-then-act).
+    Canvas → ``tool_call``; server tools → ``tool_result`` when enabled.
+    Text streams before tool_calls.
     """
     endpoint = get_llm_endpoint(model)
     model_id = _agent_model_id(model, endpoint.model_id)

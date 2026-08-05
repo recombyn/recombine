@@ -52,25 +52,3 @@ def test_tools_catalog_nonempty_shape():
 def test_knowledge_catalog_shape():
     text = format_knowledge_catalog(scene="website")
     assert "knowledge" in text.lower() or "`" in text
-
-
-def test_eval_set_metrics_rollup():
-    """P2.3: toy eval rollup — SR / tokens / validate fail / reflect save."""
-    cases = [
-        {"ok": True, "tokens": 40, "validate_fail": False, "reflect_saved": False},
-        {"ok": True, "tokens": 120, "validate_fail": True, "reflect_saved": True},
-        {"ok": False, "tokens": 80, "validate_fail": True, "reflect_saved": False},
-        {"ok": True, "tokens": 30, "validate_fail": False, "reflect_saved": False},
-    ]
-    n = len(cases)
-    sr = sum(1 for c in cases if c["ok"]) / n
-    avg_tokens = sum(c["tokens"] for c in cases) / n
-    validate_fail_rate = sum(1 for c in cases if c["validate_fail"]) / n
-    reflect_save_rate = (
-        sum(1 for c in cases if c["reflect_saved"])
-        / max(1, sum(1 for c in cases if c["validate_fail"]))
-    )
-    assert sr == 0.75
-    assert avg_tokens == 67.5
-    assert validate_fail_rate == 0.5
-    assert reflect_save_rate == 0.5

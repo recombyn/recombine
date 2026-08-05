@@ -2606,19 +2606,8 @@ def get_design_task_for_update(
 
 
 def ensure_app_migrations_table(*, session: Session) -> None:
-    """Best-effort create for ``app_migrations`` when DDL path has not run."""
-    from sqlalchemy import text
-
-    from app.services.db import dialect
-
-    mysql = dialect() == "mysql"
-    ddl = (
-        "CREATE TABLE IF NOT EXISTS app_migrations ("
-        "id VARCHAR(64) PRIMARY KEY, applied_at DOUBLE NOT NULL"
-        ")" + (" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" if mysql else "")
-    )
-    session.connection().execute(text(ddl))
-    session.commit()
+    """No-op: ``app_migrations`` is created by Alembic via ``init_schema()``."""
+    del session
 
 
 def app_migration_applied(*, session: Session, migration_id: str) -> bool:

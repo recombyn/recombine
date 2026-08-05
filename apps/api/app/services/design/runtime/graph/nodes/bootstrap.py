@@ -1,4 +1,3 @@
-"""LangGraph graph nodes."""
 from __future__ import annotations
 
 import asyncio
@@ -166,7 +165,7 @@ async def _hydrate_pinned_skills(rt: AgentRuntime) -> None:
 
 
 def _apply_task_route_flags(rt: AgentRuntime) -> None:
-    """Estimate task tier + mode flags (formerly the standalone「任务分流」node)."""
+    """Estimate task tier + mode flags."""
     st = rt.run
     st.task_tier = clamp_tier(
         estimate_task_tier(
