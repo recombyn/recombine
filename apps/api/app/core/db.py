@@ -54,6 +54,37 @@ else:
 engine = create_engine(_uri, connect_args=_connect_args, **_engine_kwargs)
 
 
+def _invalidate_bootstrap_flags() -> None:
+    """DDL/catalog ready flags are process-global — clear when the engine URI changes."""
+    try:
+        import app.services.db as db_mod
+
+        db_mod._SCHEMA_READY = False
+    except Exception:
+        pass
+    try:
+        import app.services.design.readpath.catalog as catalog_mod
+
+        catalog_mod._CATALOG_READY = False
+    except Exception:
+        pass
+    try:
+        import app.services.design.prompts.knowledge_store as knowledge_mod
+
+        knowledge_mod._KNOWLEDGE_READY = False
+    except Exception:
+        pass
+    try:
+        import app.services.design.prompts.skill_store as skill_mod
+
+        if hasattr(skill_mod, "reset_skills_ready_for_tests"):
+            skill_mod.reset_skills_ready_for_tests()
+        else:
+            skill_mod._SKILLS_READY = False
+    except Exception:
+        pass
+
+
 def reset_engine() -> None:
     """Dispose and rebuild ``engine`` after tests change SQLITE_DB_PATH / DATABASE_URL."""
     global engine, _uri, _connect_args, _engine_kwargs
@@ -69,6 +100,7 @@ def reset_engine() -> None:
     else:
         _engine_kwargs["pool_pre_ping"] = True
     engine = create_engine(_uri, connect_args=_connect_args, **_engine_kwargs)
+    _invalidate_bootstrap_flags()
 
 
 def init_db() -> None:

@@ -9,7 +9,7 @@ from typing import Any
 from sqlmodel import Session
 
 from app import crud
-from app.core.db import engine
+from app.core import db as core_db
 from app.services.db import init_schema
 from app.services.design.prompts.content_pack import resync_design_content
 from app.services.design.readpath.seed import seed_design_catalog_if_empty
@@ -83,13 +83,13 @@ def _orm_dict(row: Any) -> dict[str, Any]:
 
 
 def list_skills() -> list[dict[str, Any]]:
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_enabled_design_skills_catalog(session=session)
     return [_orm_dict(r) for r in rows]
 
 
 def list_skill_groups(scene: str | None = None) -> list[dict[str, Any]]:
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_enabled_design_skill_groups(session=session)
     out = []
     for r in rows:
@@ -103,7 +103,7 @@ def list_skill_groups(scene: str | None = None) -> list[dict[str, Any]]:
 
 
 def get_flow(scene: str) -> dict[str, Any] | None:
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         row = crud.get_enabled_design_execute_flow(session=session, scene=scene)
     if not row:
         return None
@@ -115,7 +115,7 @@ def get_flow(scene: str) -> dict[str, Any] | None:
 
 
 def get_skill(skill_id: int) -> dict[str, Any] | None:
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         row = crud.get_design_skill(session=session, item_id=int(skill_id))
     return _orm_dict(row) if row else None
 
@@ -127,7 +127,7 @@ def get_global_rules() -> dict[str, str]:
     so existing ``_prompt_text(rules, key)`` call sites keep working. Flow-node ``promptText``
     (matched by ``promptKey``) overrides the table — node is source of truth.
     """
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_enabled_design_global_rules(session=session)
     out = {k: v for k, v in rows if k}
     try:
@@ -156,7 +156,7 @@ def get_refine_skill(
     prefer_layer_partial=True: target-layer skill for partial mode.
     """
     scene_l = (scene or "").strip().lower()
-    with Session(engine) as session:
+    with Session(core_db.engine) as session:
         rows = crud.list_enabled_refine_skills(session=session)
     if prefer_layer_partial:
         best: dict[str, Any] | None = None
