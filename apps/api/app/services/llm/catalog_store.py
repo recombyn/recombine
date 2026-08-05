@@ -257,111 +257,30 @@ def _heuristic_vision_id(model_id: str) -> bool:
     return any(m in ref for m in ('vision', 'seed-2-1-pro', 'seed-2-1-turbo', 'seed-2.1-pro', 'seed-2.1-turbo'))
 
 
-def ensure_llm_models_table(conn: Any, *, mysql: bool) -> None:
-    text = 'LONGTEXT' if mysql else 'TEXT'
-    if mysql:
-        conn.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS llm_models (
-                id VARCHAR(128) PRIMARY KEY,
-                label VARCHAR(255) NOT NULL,
-                description {text},
-                provider VARCHAR(64) NOT NULL DEFAULT 'doubao',
-                kind VARCHAR(16) NOT NULL DEFAULT 'text',
-                api_model VARCHAR(255) NOT NULL,
-                icon_key VARCHAR(64),
-                icon_url {text},
-                price VARCHAR(255),
-                max_attachments INTEGER NOT NULL DEFAULT 8,
-                thinking TINYINT NOT NULL DEFAULT 0,
-                enabled TINYINT NOT NULL DEFAULT 1,
-                sort_order INTEGER NOT NULL DEFAULT 100,
-                created_at DOUBLE NOT NULL,
-                updated_at DOUBLE NOT NULL,
-                KEY idx_llm_models_kind_sort (kind, sort_order, enabled)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
-        )
-    else:
-        conn.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS llm_models (
-                id VARCHAR(128) PRIMARY KEY,
-                label VARCHAR(255) NOT NULL,
-                description {text},
-                provider VARCHAR(64) NOT NULL DEFAULT 'doubao',
-                kind VARCHAR(16) NOT NULL DEFAULT 'text',
-                api_model VARCHAR(255) NOT NULL,
-                icon_key VARCHAR(64),
-                icon_url {text},
-                price VARCHAR(255),
-                max_attachments INTEGER NOT NULL DEFAULT 8,
-                thinking INTEGER NOT NULL DEFAULT 0,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                sort_order INTEGER NOT NULL DEFAULT 100,
-                created_at DOUBLE NOT NULL,
-                updated_at DOUBLE NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            'CREATE INDEX IF NOT EXISTS idx_llm_models_kind_sort '
-            'ON llm_models(kind, sort_order, enabled)'
-        )
-    _ensure_price_column(conn, mysql=mysql)
-    _ensure_reference_types_column(conn, mysql=mysql)
-    _ensure_image_limits_column(conn, mysql=mysql)
-    _ensure_price_meta_column(conn, mysql=mysql)
-    _ensure_removed_models_table(conn, mysql=mysql)
-    conn.commit()
-    _ensure_seed_models(conn)
+_CATALOG_SEEDED = False
+
+
+def ensure_llm_catalog_seed(*, force: bool = False) -> None:
+    """Schema via Alembic; insert missing seed rows / retire dropped ids."""
+    global _CATALOG_SEEDED
+    if _CATALOG_SEEDED and not force:
+        return
+    from sqlmodel import Session
+
+    from app.core.db import engine
+
+    init_schema()
+    with Session(engine) as session:
+        _ensure_seed_models(session)
+        _backfill_empty_reference_types(session)
+        _retire_direct_deepseek_models(session)
+        _drop_retired_seed_models(session)
+        session.commit()
     try:
-        apply_ark_reference_prices(conn)
-        conn.commit()
+        apply_ark_reference_prices(only_empty=True)
     except Exception:
         pass
-    _retire_direct_deepseek_models(conn)
-    _drop_retired_seed_models(conn)
-
-
-def _ensure_removed_models_table(conn: Any, *, mysql: bool) -> None:
-    """Tombstones for seed models deleted in admin — prevents auto re-insert."""
-    if mysql:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS llm_models_removed (
-                id VARCHAR(128) PRIMARY KEY,
-                removed_at DOUBLE NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
-        )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS llm_models_removed (
-                id VARCHAR(128) PRIMARY KEY,
-                removed_at DOUBLE NOT NULL
-            )
-            """
-        )
-
-
-def _ensure_price_column(conn: Any, *, mysql: bool) -> None:
-    if mysql:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS c FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'llm_models'
-              AND COLUMN_NAME = 'price'
-            """
-        ).fetchone()
-        if int((row or {}).get('c') or 0) == 0:
-            conn.execute('ALTER TABLE llm_models ADD COLUMN price VARCHAR(255) NULL')
-    else:
-        cols = {str(r['name']) for r in conn.execute('PRAGMA table_info(llm_models)').fetchall()}
-        if 'price' not in cols:
-            conn.execute('ALTER TABLE llm_models ADD COLUMN price VARCHAR(255)')
+    _CATALOG_SEEDED = True
 
 
 def apply_ark_reference_prices(
@@ -478,44 +397,6 @@ def apply_ark_reference_prices(
     }
 
 
-def _ensure_image_limits_column(conn: Any, *, mysql: bool) -> None:
-    text = 'LONGTEXT' if mysql else 'TEXT'
-    if mysql:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS c FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'llm_models'
-              AND COLUMN_NAME = 'image_limits'
-            """
-        ).fetchone()
-        if int((row or {}).get('c') or 0) == 0:
-            conn.execute(f'ALTER TABLE llm_models ADD COLUMN image_limits {text} NULL')
-    else:
-        cols = {str(r['name']) for r in conn.execute('PRAGMA table_info(llm_models)').fetchall()}
-        if 'image_limits' not in cols:
-            conn.execute('ALTER TABLE llm_models ADD COLUMN image_limits TEXT')
-
-
-def _ensure_price_meta_column(conn: Any, *, mysql: bool) -> None:
-    text = 'LONGTEXT' if mysql else 'TEXT'
-    if mysql:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS c FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'llm_models'
-              AND COLUMN_NAME = 'price_meta'
-            """
-        ).fetchone()
-        if int((row or {}).get('c') or 0) == 0:
-            conn.execute(f'ALTER TABLE llm_models ADD COLUMN price_meta {text} NULL')
-    else:
-        cols = {str(r['name']) for r in conn.execute('PRAGMA table_info(llm_models)').fetchall()}
-        if 'price_meta' not in cols:
-            conn.execute('ALTER TABLE llm_models ADD COLUMN price_meta TEXT')
-
-
 def _parse_price_meta(raw: Any) -> dict[str, Any] | None:
     if raw is None:
         return None
@@ -530,31 +411,18 @@ def _parse_price_meta(raw: Any) -> dict[str, Any] | None:
     return None
 
 
-def _ensure_reference_types_column(conn: Any, *, mysql: bool) -> None:
-    if mysql:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS c FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'llm_models'
-              AND COLUMN_NAME = 'reference_types'
-            """
-        ).fetchone()
-        if int((row or {}).get('c') or 0) == 0:
-            conn.execute('ALTER TABLE llm_models ADD COLUMN reference_types TEXT NULL')
-    else:
-        cols = {str(r['name']) for r in conn.execute('PRAGMA table_info(llm_models)').fetchall()}
-        if 'reference_types' not in cols:
-            conn.execute('ALTER TABLE llm_models ADD COLUMN reference_types TEXT')
+def _backfill_empty_reference_types(session: Any) -> None:
+    """Fill empty reference_types cells only (admin edits stick)."""
+    from sqlmodel import select
 
-    # Backfill empty cells only (admin edits stick).
-    rows = conn.execute('SELECT id, kind, reference_types FROM llm_models').fetchall()
-    for r in rows:
-        raw = r['reference_types'] if 'reference_types' in r.keys() else None
+    from app.models import LlmModel
+
+    for r in session.exec(select(LlmModel)).all():
+        raw = r.reference_types
         if raw is not None and str(raw).strip():
             continue
-        mid = str(r['id'] or '')
-        kind = str(r['kind'] or 'text')
+        mid = str(r.id or '')
+        kind = str(r.kind or 'text')
         seed = next((m for m in _SEED if m['id'] == mid), None)
         if seed:
             types = _default_reference_types_for_seed(seed)
@@ -566,10 +434,8 @@ def _ensure_reference_types_column(conn: Any, *, mysql: bool) -> None:
             types = ['text', 'vision']
         else:
             types = ['text']
-        conn.execute(
-            'UPDATE llm_models SET reference_types = ? WHERE id = ?',
-            (_serialize_reference_types(types), mid),
-        )
+        r.reference_types = _serialize_reference_types(types)
+        session.add(r)
 
 
 def _load_id_tuple(key: str) -> tuple[str, ...]:
@@ -593,138 +459,114 @@ _DROPPED_SEED_MODEL_IDS = _load_id_tuple("droppedSeedModelIds")
 _STALE_SEED_DESCRIPTIONS = _load_stale_descriptions()
 
 
-def _retire_direct_deepseek_models(conn: Any) -> None:
+def _retire_direct_deepseek_models(session: Any) -> None:
     """Disable models that call DeepSeek API directly; routing uses Volcengine Ark only."""
+    from sqlmodel import col, or_, select
+
+    from app.models import LlmModel
+
     now = time.time()
-    placeholders = ",".join("?" for _ in _RETIRED_DIRECT_DEEPSEEK_IDS)
-    conn.execute(
-        f"""
-        UPDATE llm_models SET enabled = 0, updated_at = ?
-        WHERE provider = 'deepseek' OR id IN ({placeholders})
-        """,
-        (now, *_RETIRED_DIRECT_DEEPSEEK_IDS),
-    )
-    conn.commit()
+    retired = list(_RETIRED_DIRECT_DEEPSEEK_IDS)
+    conds = [col(LlmModel.provider) == 'deepseek']
+    if retired:
+        conds.append(col(LlmModel.id).in_(retired))
+    for r in session.exec(select(LlmModel).where(or_(*conds))).all():
+        r.enabled = 0
+        r.updated_at = now
+        session.add(r)
 
 
-def _tombstone_removed_model(conn: Any, model_id: str, removed_at: float) -> None:
-    """Record id in llm_models_removed (SQLite / MySQL / fallback)."""
-    mid = (model_id or "").strip()
-    if not mid:
-        return
-    try:
-        conn.execute(
-            """
-            INSERT INTO llm_models_removed (id, removed_at) VALUES (?, ?)
-            ON CONFLICT(id) DO UPDATE SET removed_at = excluded.removed_at
-            """,
-            (mid, removed_at),
-        )
-    except Exception:
-        try:
-            conn.execute(
-                """
-                INSERT INTO llm_models_removed (id, removed_at) VALUES (?, ?)
-                ON DUPLICATE KEY UPDATE removed_at = VALUES(removed_at)
-                """,
-                (mid, removed_at),
-            )
-        except Exception:
-            conn.execute("DELETE FROM llm_models_removed WHERE id = ?", (mid,))
-            conn.execute(
-                "INSERT INTO llm_models_removed (id, removed_at) VALUES (?, ?)",
-                (mid, removed_at),
-            )
-
-
-def _drop_retired_seed_models(conn: Any) -> None:
+def _drop_retired_seed_models(session: Any) -> None:
     """Hard-remove dropped seed ids and tombstone so they cannot come back."""
     if not _DROPPED_SEED_MODEL_IDS:
         return
+    from app.models import LlmModel, LlmModelRemoved
+
     now = time.time()
-    placeholders = ",".join("?" for _ in _DROPPED_SEED_MODEL_IDS)
-    conn.execute(
-        f"DELETE FROM llm_models WHERE id IN ({placeholders})",
-        _DROPPED_SEED_MODEL_IDS,
-    )
     for mid in _DROPPED_SEED_MODEL_IDS:
-        _tombstone_removed_model(conn, mid, now)
-    conn.commit()
+        row = session.get(LlmModel, mid)
+        if row:
+            session.delete(row)
+        tomb = session.get(LlmModelRemoved, mid)
+        if tomb:
+            tomb.removed_at = now
+            session.add(tomb)
+        else:
+            session.add(LlmModelRemoved(id=mid, removed_at=now))
 
 
-def _removed_seed_ids(conn: Any) -> set[str]:
+def _removed_seed_ids(session: Any) -> set[str]:
+    from sqlmodel import select
+
+    from app.models import LlmModelRemoved
+
     try:
-        rows = conn.execute('SELECT id FROM llm_models_removed').fetchall()
+        rows = list(session.exec(select(LlmModelRemoved)).all())
     except Exception:
         return set()
-    return {str(r['id']) for r in rows if r and r['id']}
+    return {str(r.id) for r in rows if r and r.id}
 
 
-def _ensure_seed_models(conn: Any) -> None:
+def _ensure_seed_models(session: Any) -> None:
     """Insert any missing official seed rows (does not overwrite admin edits).
 
     Skips ids tombstoned via admin delete (``llm_models_removed``).
     """
+    from app.models import LlmModel
+
     now = time.time()
-    removed = _removed_seed_ids(conn)
+    removed = _removed_seed_ids(session)
     for m in _SEED:
         if m['id'] in removed:
             continue
-        row = conn.execute(
-            'SELECT * FROM llm_models WHERE id = ?',
-            (m['id'],),
-        ).fetchone()
+        row = session.get(LlmModel, m['id'])
         seed_limits = _image_limits_for_seed(m)
         limits_json = _serialize_image_limits(seed_limits)
         if row:
             # Existing row is Admin-owned: only fill empty icon / description / limits.
-            # Never overwrite non-empty label, description, or image_limits.
-            try:
-                cur_icon = (row['icon_key'] or '').strip() if 'icon_key' in row.keys() else ''
-            except Exception:
-                cur_icon = ''
+            cur_icon = (row.icon_key or '').strip()
             if not cur_icon and m.get('icon_key'):
-                conn.execute(
-                    'UPDATE llm_models SET icon_key = ?, updated_at = ? WHERE id = ?',
-                    (m['icon_key'], now, m['id']),
-                )
-            cur_desc = (row['description'] or '').strip() if 'description' in row.keys() else ''
+                row.icon_key = m['icon_key']
+                row.updated_at = now
+                session.add(row)
+            cur_desc = (row.description or '').strip()
             if not cur_desc and m.get('description'):
-                conn.execute(
-                    'UPDATE llm_models SET description = ?, updated_at = ? WHERE id = ?',
-                    (m['description'], now, m['id']),
-                )
-            if limits_json and 'image_limits' in row.keys():
-                cur_lim = row['image_limits']
+                row.description = m['description']
+                row.updated_at = now
+                session.add(row)
+            if limits_json:
+                cur_lim = row.image_limits
                 empty = cur_lim is None or (
                     isinstance(cur_lim, str) and not str(cur_lim).strip()
                 )
                 if empty:
-                    conn.execute(
-                        """
-                        UPDATE llm_models
-                        SET image_limits = ?, max_attachments = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (limits_json, int(m.get('max_attachments') or 14), now, m['id']),
-                    )
+                    row.image_limits = limits_json
+                    row.max_attachments = int(m.get('max_attachments') or 14)
+                    row.updated_at = now
+                    session.add(row)
             continue
         ref_types = _serialize_reference_types(_default_reference_types_for_seed(m))
-        conn.execute(
-            """
-            INSERT INTO llm_models (
-                id, label, description, provider, kind, api_model,
-                icon_key, icon_url, price, max_attachments, thinking, enabled, sort_order,
-                reference_types, image_limits, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                m['id'], m['label'], m['description'], m['provider'], m['kind'],
-                m['api_model'], m['icon_key'], m.get('price'), m['max_attachments'], m['thinking'],
-                m['enabled'], m['sort_order'], ref_types, limits_json, now, now,
-            ),
+        session.add(
+            LlmModel(
+                id=m['id'],
+                label=m['label'],
+                description=m['description'],
+                provider=m['provider'],
+                kind=m['kind'],
+                api_model=m['api_model'],
+                icon_key=m['icon_key'],
+                icon_url=None,
+                price=m.get('price'),
+                max_attachments=m['max_attachments'],
+                thinking=m['thinking'],
+                enabled=m['enabled'],
+                sort_order=m['sort_order'],
+                reference_types=ref_types,
+                image_limits=limits_json,
+                created_at=now,
+                updated_at=now,
+            )
         )
-    conn.commit()
 
 
 def _row_get(r: Any, name: str, default: Any = None) -> Any:
@@ -792,7 +634,7 @@ def list_catalog(*, kind: str | None = None, enabled_only: bool = True) -> list[
     from app import crud
     from app.core.db import engine
 
-    init_schema()
+    ensure_llm_catalog_seed()
     with Session(engine) as session:
         rows = crud.list_llm_models(
             session=session, kind=kind, enabled_only=enabled_only
@@ -806,7 +648,7 @@ def list_admin_models(*, kind: str | None = None, q: str | None = None) -> list[
     from app import crud
     from app.core.db import engine
 
-    init_schema()
+    ensure_llm_catalog_seed()
     with Session(engine) as session:
         rows = crud.list_llm_models(session=session, kind=kind, q=q)
     return [_pub(r) for r in rows]
@@ -818,7 +660,7 @@ def get_model(model_id: str) -> dict[str, Any] | None:
     from app import crud
     from app.core.db import engine
 
-    init_schema()
+    ensure_llm_catalog_seed()
     mid = (model_id or '').strip()
     if not mid:
         return None
@@ -834,7 +676,7 @@ def upsert_model(payload: dict[str, Any]) -> dict[str, Any]:
     from app.core.db import engine
     from app.models import LlmModel
 
-    init_schema()
+    ensure_llm_catalog_seed()
     mid = str(payload.get('id') or '').strip()
     if not mid:
         raise ValueError('id required')

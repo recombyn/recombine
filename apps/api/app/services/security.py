@@ -267,66 +267,6 @@ def ensure_byok_table() -> None:
     if _BYOK_READY:
         return
     init_schema()
-    from sqlalchemy import text
-    from sqlmodel import Session
-
-    from app.core.db import engine
-    from app.services.db import dialect
-
-    mysql = dialect() == "mysql"
-    text_t = "LONGTEXT" if mysql else "TEXT"
-    engine_sql = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" if mysql else ""
-    sql = f"""
-        CREATE TABLE IF NOT EXISTS user_byok_providers (
-            id VARCHAR(64) PRIMARY KEY,
-            user_id VARCHAR(64) NOT NULL,
-            name VARCHAR(128) NOT NULL,
-            website {text_t},
-            base_url {text_t} NOT NULL,
-            api_model VARCHAR(128) NOT NULL DEFAULT '',
-            model_kind VARCHAR(16) NOT NULL DEFAULT 'text',
-            api_key_cipher {text_t} NOT NULL,
-            api_key_hint VARCHAR(16) NOT NULL DEFAULT '',
-            created_at DOUBLE NOT NULL,
-            updated_at DOUBLE NOT NULL
-        ){engine_sql}
-    """
-    with Session(engine) as session:
-        session.execute(text(sql))
-        session.commit()
-        try:
-            session.execute(
-                text(
-                    "ALTER TABLE user_byok_providers "
-                    "ADD COLUMN api_model VARCHAR(128) NOT NULL DEFAULT ''"
-                )
-            )
-            session.commit()
-        except Exception:
-            try:
-                session.rollback()
-            except Exception:
-                pass
-        try:
-            if mysql:
-                session.execute(
-                    text(
-                        "CREATE INDEX idx_byok_user ON user_byok_providers (user_id, updated_at)"
-                    )
-                )
-            else:
-                session.execute(
-                    text(
-                        "CREATE INDEX IF NOT EXISTS idx_byok_user "
-                        "ON user_byok_providers (user_id, updated_at)"
-                    )
-                )
-            session.commit()
-        except Exception:
-            try:
-                session.rollback()
-            except Exception:
-                pass
     _BYOK_READY = True
 
 

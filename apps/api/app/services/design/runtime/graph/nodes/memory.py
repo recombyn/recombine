@@ -1,4 +1,3 @@
-"""LangGraph graph nodes."""
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +22,6 @@ from app.services.design.runtime.graph.support import (
 async def _node_memory(state: GraphState) -> Command:
     rt = state["rt"]
     st = rt.run
-    # Tier/mode init (no separate route node on the fixed graph).
     _apply_task_route_flags(rt)
     mem_bundle = await asyncio.to_thread(
         memory_service.load,

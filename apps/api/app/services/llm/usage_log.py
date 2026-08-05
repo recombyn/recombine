@@ -16,7 +16,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterator
 
-from app.services.db import dialect
+from app.services.db import init_schema
 
 _log = logging.getLogger("llm.usage_log")
 
@@ -165,112 +165,13 @@ def usage_context(
 
 
 def ensure_model_usage_table(conn: Any | None = None, *, mysql: bool | None = None) -> None:
-    """Idempotent DDL for model_usage."""
+    """Ensure ``model_usage`` exists via Alembic (``init_schema``)."""
     global _TABLE_READY
     if _TABLE_READY and conn is None:
         return
-    own = conn is None
-    if mysql is None:
-        mysql = dialect() == "mysql"
-    pk = "BIGINT AUTO_INCREMENT PRIMARY KEY" if mysql else "INTEGER PRIMARY KEY AUTOINCREMENT"
-    text_t = "LONGTEXT" if mysql else "TEXT"
-
-    def _stmts() -> list[str]:
-        if mysql:
-            return [
-                f"""
-                CREATE TABLE IF NOT EXISTS model_usage (
-                    id {pk},
-                    created_at DOUBLE NOT NULL,
-                    user_id VARCHAR(64) NULL,
-                    task_id VARCHAR(64) NULL,
-                    source VARCHAR(32) NOT NULL DEFAULT 'unknown',
-                    provider VARCHAR(64) NULL,
-                    catalog_model_id VARCHAR(128) NULL,
-                    api_model VARCHAR(256) NULL,
-                    status VARCHAR(32) NOT NULL DEFAULT 'ok',
-                    latency_ms INTEGER NULL,
-                    prompt_tokens INTEGER NULL,
-                    completion_tokens INTEGER NULL,
-                    total_tokens INTEGER NULL,
-                    cached_tokens INTEGER NULL,
-                    reasoning_tokens INTEGER NULL,
-                    image_count INTEGER NULL,
-                    credits_charged INTEGER NULL,
-                    cost_cny DOUBLE NULL,
-                    provider_request_id VARCHAR(128) NULL,
-                    usage_json {text_t} NULL,
-                    meta_json {text_t} NULL,
-                    error {text_t} NULL,
-                    KEY idx_model_usage_created (created_at),
-                    KEY idx_model_usage_model (catalog_model_id, created_at),
-                    KEY idx_model_usage_provider (provider, created_at),
-                    KEY idx_model_usage_user (user_id, created_at),
-                    KEY idx_model_usage_source (source, created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """
-            ]
-        out = [
-            f"""
-            CREATE TABLE IF NOT EXISTS model_usage (
-                id {pk},
-                created_at DOUBLE NOT NULL,
-                user_id TEXT,
-                task_id TEXT,
-                source TEXT NOT NULL DEFAULT 'unknown',
-                provider TEXT,
-                catalog_model_id TEXT,
-                api_model TEXT,
-                status TEXT NOT NULL DEFAULT 'ok',
-                latency_ms INTEGER,
-                prompt_tokens INTEGER,
-                completion_tokens INTEGER,
-                total_tokens INTEGER,
-                cached_tokens INTEGER,
-                reasoning_tokens INTEGER,
-                image_count INTEGER,
-                credits_charged INTEGER,
-                cost_cny REAL,
-                provider_request_id TEXT,
-                usage_json {text_t},
-                meta_json {text_t},
-                error {text_t}
-            )
-            """
-        ]
-        out.extend(
-            [
-                "CREATE INDEX IF NOT EXISTS idx_model_usage_created ON model_usage(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_model_usage_model ON model_usage(catalog_model_id, created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_model_usage_provider ON model_usage(provider, created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_model_usage_user ON model_usage(user_id, created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_model_usage_source ON model_usage(source, created_at)",
-            ]
-        )
-        return out
-
+    del mysql  # signature kept for callers
     try:
-        if own:
-            from sqlalchemy import text
-            from sqlmodel import Session
-
-            from app.core.db import engine
-
-            with Session(engine) as session:
-                for stmt in _stmts():
-                    try:
-                        session.execute(text(stmt))
-                    except Exception:
-                        if "CREATE INDEX" not in stmt.upper():
-                            raise
-                session.commit()
-        else:
-            for stmt in _stmts():
-                try:
-                    conn.execute(stmt)
-                except Exception:
-                    if "CREATE INDEX" not in stmt.upper():
-                        raise
+        init_schema()
         _TABLE_READY = True
     except Exception:
         _log.exception("ensure_model_usage_table failed")

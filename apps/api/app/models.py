@@ -1,7 +1,7 @@
 """Shared API + DB models.
 
-Table DDL remains in ``app.services.db.init_schema`` (dual MySQL/SQLite).
-``table=True`` classes are the SQLModel read/write surface for those tables.
+``table=True`` classes are the SQLModel schema surface. DDL is applied by Alembic
+(``app/alembic``, via ``init_schema()`` → ``run_migrations()``).
 """
 
 from __future__ import annotations
@@ -203,6 +203,16 @@ class PlazaLike(SQLModel, table=True):
 
     user_id: str = Field(primary_key=True, max_length=64)
     submission_id: str = Field(primary_key=True, max_length=64)
+    created_at: float = Field(default=0.0)
+
+
+class UserFollow(SQLModel, table=True):
+    __tablename__ = "user_follows"
+
+    user_id: str = Field(primary_key=True, max_length=64)
+    followee_id: str = Field(primary_key=True, max_length=64)
+    followee_name: str = Field(default="", max_length=255)
+    followee_avatar: Optional[str] = Field(default=None)
     created_at: float = Field(default=0.0)
 
 
