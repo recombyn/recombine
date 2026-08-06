@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from langgraph.types import Command, interrupt
@@ -19,6 +20,18 @@ from app.services.design.runtime.graph.support import (
     _placement_errors_for_free_creates,
     _structure_verify_issues,
 )
+
+# Emoji / symbol ranges that often become tofu without a covering font.
+_EMOJI_GLYPH_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\u2600-\u26FF"
+    "\u2700-\u27BF"
+    "]"
+)
+_LONG_CANVAS_MIN_H = 1400
+_LONG_CANVAS_MIN_ASPECT = 2.2
+_LONG_CANVAS_COVERAGE_MIN = 0.72
 
 
 def _scene_interrupt_payload(st: AgentRunState, *, round_i: int) -> dict[str, Any]:
@@ -228,13 +241,19 @@ def _run_post_paint_critique(
     for issue in _poster_hero_issues(rt):
         if issue not in issues:
             issues.append(issue)
+    for issue in _layout_craft_issues(rt):
+        if issue not in issues:
+            issues.append(issue)
+    for issue in _long_canvas_coverage_issues(rt):
+        if issue not in issues:
+            issues.append(issue)
     for issue in _aesthetic_critique_issues(
         preview_image=preview_image,
         scene_key=str(rt.scene_key or ""),
     ):
         if issue not in issues:
             issues.append(issue)
-    issues = [str(x).strip() for x in issues if str(x).strip()][:8]
+    issues = [str(x).strip() for x in issues if str(x).strip()][:10]
     ok = not issues
     reason = "; ".join(issues)[:400] if issues else "ok"
     _emit(
@@ -254,6 +273,214 @@ def _run_post_paint_critique(
         summary=("画布审阅通过" if ok else f"画布审阅：{reason}")[:160],
     )
     return issues
+
+
+def _node_xywh(n: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    try:
+        x = float(n.get("x") if n.get("x") is not None else 0)
+        y = float(n.get("y") if n.get("y") is not None else 0)
+        w = float(n.get("w") if n.get("w") is not None else n.get("width") or 0)
+        h = float(n.get("h") if n.get("h") is not None else n.get("height") or 0)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return x, y, w, h
+
+
+def _frame_wh(f: dict[str, Any]) -> tuple[float, float] | None:
+    try:
+        w = float(f.get("w") if f.get("w") is not None else f.get("width") or 0)
+        h = float(f.get("h") if f.get("h") is not None else f.get("height") or 0)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return w, h
+
+
+def _hex_luminance(fill: str) -> float | None:
+    s = str(fill or "").strip()
+    if not s.startswith("#") or len(s) < 7:
+        return None
+    try:
+        r = int(s[1:3], 16)
+        g = int(s[3:5], 16)
+        b = int(s[5:7], 16)
+    except ValueError:
+        return None
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+
+
+def _primary_frame(rt: AgentRuntime) -> dict[str, Any] | None:
+    frames = [f for f in (rt.scene_frames or []) if isinstance(f, dict) and f.get("id")]
+    if not frames:
+        return None
+    focus = str(rt.focus_id or "").strip()
+    if focus:
+        for f in frames:
+            if str(f.get("id") or "") == focus:
+                return f
+    best = None
+    best_area = -1.0
+    for f in frames:
+        wh = _frame_wh(f)
+        if not wh:
+            continue
+        area = wh[0] * wh[1]
+        if area > best_area:
+            best_area = area
+            best = f
+    return best
+
+
+def _layout_craft_issues(rt: AgentRuntime) -> list[str]:
+    """Deterministic type/overflow/contrast flags from FE scene inventory."""
+    nodes = [n for n in (rt.scene_nodes or []) if isinstance(n, dict) and n.get("id")]
+    if not nodes:
+        return []
+    frame = _primary_frame(rt)
+    fw = fh = None
+    if frame:
+        wh = _frame_wh(frame)
+        if wh:
+            fw, fh = wh
+
+    issues: list[str] = []
+    clipped = 0
+    oversized_type = 0
+    emoji_n = 0
+    low_contrast = 0
+
+    shape_fills: list[tuple[float, float, float, float, float]] = []
+    for n in nodes:
+        ntype = str(n.get("type") or "").strip().lower()
+        box = _node_xywh(n)
+        if not box:
+            continue
+        x, y, w, h = box
+        if ntype in ("text", "textbox", "label"):
+            continue
+        lum = _hex_luminance(str(n.get("fill") or ""))
+        if lum is not None:
+            shape_fills.append((x, y, w, h, lum))
+
+    for n in nodes:
+        ntype = str(n.get("type") or "").strip().lower()
+        if ntype not in ("text", "textbox", "label"):
+            continue
+        box = _node_xywh(n)
+        if not box:
+            continue
+        x, y, w, h = box
+        if fw is not None and fh is not None:
+            if x + w > fw + 8 or y + h > fh + 8 or x < -8 or y < -8:
+                clipped += 1
+        try:
+            fs = float(n.get("fontSize") or 0)
+        except (TypeError, ValueError):
+            fs = 0.0
+        text = str(n.get("text") or "")
+        if fs > 0 and h > 0 and fs > h * 1.25:
+            oversized_type += 1
+        if fs > 0 and w > 0 and text and fs * max(len(text), 1) * 0.55 > w * 1.35:
+            oversized_type += 1
+        if "\ufffd" in text or _EMOJI_GLYPH_RE.search(text):
+            emoji_n += 1
+        t_lum = _hex_luminance(str(n.get("fill") or n.get("color") or ""))
+        if t_lum is not None and shape_fills:
+            behind = [
+                lum
+                for sx, sy, sw, sh, lum in shape_fills
+                if abs((sx + sw / 2) - (x + w / 2)) <= max(sw, w) * 0.75
+                and abs((sy + sh / 2) - (y + h / 2)) <= max(sh, h) * 0.75
+            ]
+            if behind:
+                bg = sum(behind) / len(behind)
+                if abs(t_lum - bg) < 0.22:
+                    low_contrast += 1
+
+    if clipped:
+        issues.append(
+            f"text clipped/overflow: {clipped} text node(s) extend past artboard — "
+            "shrink fontSize or width, keep glyphs inside frame"
+        )
+    if oversized_type:
+        issues.append(
+            f"type overflow: {oversized_type} text node(s) fontSize too large for box — "
+            "reduce fontSize or widen text box"
+        )
+    if emoji_n:
+        issues.append(
+            f"emoji/tofu risk: {emoji_n} text node(s) use emoji/symbol glyphs — "
+            "replace with create_text catalog fonts or create_image lettering"
+        )
+    if low_contrast:
+        issues.append(
+            f"low contrast: {low_contrast} text node(s) too close to background fill — "
+            "raise contrast (darker/lighter fill) or add solid panel behind type"
+        )
+    return issues[:4]
+
+
+def _long_canvas_coverage_issues(rt: AgentRuntime) -> list[str]:
+    """Tall create boards must fill most of the height; else continue paint below."""
+    intent = str(getattr(rt.run, "intent", "") or rt.classified_paint_lane or "").lower()
+    if intent and intent not in ("create", "design", ""):
+        # edit rounds should not force vertical fill
+        if intent == "edit":
+            return []
+    frame = _primary_frame(rt)
+    if not frame:
+        return []
+    wh = _frame_wh(frame)
+    if not wh:
+        return []
+    fw, fh = wh
+    if fh < _LONG_CANVAS_MIN_H and (fw <= 0 or fh / fw < _LONG_CANVAS_MIN_ASPECT):
+        return []
+
+    nodes = [n for n in (rt.scene_nodes or []) if isinstance(n, dict) and n.get("id")]
+    bottoms: list[float] = []
+    for n in nodes:
+        box = _node_xywh(n)
+        if not box:
+            continue
+        _x, y, _w, h = box
+        bottoms.append(y + h)
+    # Fallback: last paint batch y extents when scene thin
+    if len(bottoms) < 2:
+        for op in rt.paint_ops or []:
+            if not isinstance(op, dict):
+                continue
+            name = str(op.get("name") or op.get("op_key") or "")
+            if not name.startswith("create_"):
+                continue
+            args = op.get("args") if isinstance(op.get("args"), dict) else {}
+            if not isinstance(args, dict):
+                continue
+            try:
+                y = float(args.get("y") or 0)
+                h = float(args.get("h") or args.get("height") or 0)
+            except (TypeError, ValueError):
+                continue
+            if h > 0:
+                bottoms.append(y + h)
+    if not bottoms:
+        return [
+            f"long canvas incomplete: tall artboard {int(fw)}x{int(fh)} has no "
+            "content coverage — continue paint modules top→bottom"
+        ]
+    content_bottom = max(bottoms)
+    coverage = content_bottom / fh if fh > 0 else 1.0
+    if coverage >= _LONG_CANVAS_COVERAGE_MIN:
+        return []
+    next_y = int(min(fh - 80, max(0, content_bottom + 24)))
+    return [
+        f"long canvas incomplete: content ends near y={int(content_bottom)} of "
+        f"{int(fh)} ({coverage:.0%} coverage) — APPEND modules below y={next_y} "
+        "(specs/CTA/sections); do not clear_canvas or rebuild the top"
+    ]
 
 
 def _poster_hero_issues(rt: AgentRuntime) -> list[str]:
@@ -306,6 +533,11 @@ def _format_critique_reflect_note(issues: list[str]) -> str:
             "Hero: emit create_image with genPrompt for the full poster background/"
             "main illustration; keep create_text for copy; do not rebuild with shapes only."
         )
+    if "long canvas incomplete" in joined or "append modules" in joined:
+        lines.append(
+            "Continue long page: ONLY add create_* below the current content bottom; "
+            "no clear_canvas / no recreate top hero; fill remaining height."
+        )
     if any("aesthetics" in str(x).lower() for x in issues):
         lines.append(
             "Aesthetic gaps: improve layout rhythm, contrast, and whitespace; "
@@ -318,11 +550,15 @@ def _format_critique_reflect_note(issues: list[str]) -> str:
         lines.append(
             "Placement: use PLACEMENT empty_rects / suggested_place_world from the host."
         )
-    if any("contrast" in str(x).lower() or "clip" in str(x).lower() for x in issues):
+    if any(
+        k in joined
+        for k in ("contrast", "clip", "overflow", "emoji", "tofu", "type overflow")
+    ):
         lines.append(
-            "Type: raise contrast vs background; shrink fontSize or width so glyphs stay on board."
+            "Type: raise contrast vs background; shrink fontSize/width so glyphs stay "
+            "on board; replace emoji with catalog fonts or lettering images."
         )
-    return "\n".join(lines)[:520]
+    return "\n".join(lines)[:720]
 
 
 async def _retry_paint_from_critique(
