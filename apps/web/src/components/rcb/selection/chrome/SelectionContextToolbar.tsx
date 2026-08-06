@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode, memo } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -69,7 +69,11 @@ import {
 } from '@/components/editor/nodes/VideoNode';
 import ShapeSelectionToolbar from '@/components/editor/nodes/ShapeNode/ShapeSelectionToolbar';
 import { SelectionToolbarShell } from './SelectionToolbarShell';
-import { isRadiusLinked, maxRadius, radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import {
+  cornerRadiusToolbarDisplay,
+  getLiveCornerRadiusPreview,
+  subscribeLiveCornerRadiusPreview,
+} from '@/components/rcb/scene/document/sceneRadii';
 import { supportsCornerRadius } from '@/components/rcb/scene/document/sceneDocument';
 import {
   buildOutlinePathAsync,
@@ -168,6 +172,13 @@ function SelectionContextToolbar(props: Props): ReactNode {
     () => (kind === 'text' ? parseNodeTextStyle(node?.attrs || {}) : null),
     [kind, node?.attrs]
   );
+  const liveCornerRadius = useSyncExternalStore(
+    subscribeLiveCornerRadiusPreview,
+    () => getLiveCornerRadiusPreview(nodeId),
+    () => null
+  );
+  const toolbarCornerRadius =
+    liveCornerRadius ?? cornerRadiusToolbarDisplay(node?.attrs);
 
   useEffect(() => {
     let cancelled = false;
@@ -614,11 +625,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
                               }
                             >
                               <IconCornerRadius className="h-4 w-4" />
-                              <span className="tabular-nums">
-                                {isRadiusLinked(node.attrs)
-                                  ? Math.round(radiiFromAttrs(node.attrs).tl)
-                                  : Math.round(maxRadius(radiiFromAttrs(node.attrs)))}
-                              </span>
+                              <span className="tabular-nums">{toolbarCornerRadius}</span>
                             </button>
                           </Tooltip>
                         ) : null

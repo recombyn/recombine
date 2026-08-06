@@ -26,7 +26,7 @@ import { rcbScreenPxToScene } from '../../core/math';
 const CANVAS_ZOOMS = [0.5, 1, 2.247, 10, 71.61, 80, 100] as const;
 const VIEWPORT_SCALES = [0.75, 0.9, 1, 1.1, 1.25] as const;
 
-describe('nodeTitleLabelWorldPlacement — SVG knob contract', () => {
+describe('nodeTitleLabelWorldPlacement — title layout contract', () => {
   it('clips the name so it cannot overlap the size column on a narrow plate', () => {
     const box = { left: 0, top: 10, width: 32, height: 32 };
     const zoom = 12.84;
@@ -61,7 +61,7 @@ describe('nodeTitleLabelWorldPlacement — SVG knob contract', () => {
     // Title lives fully above the plate.
     expect(place.labelTopScene + place.lineScene).toBeCloseTo(place.labelBottomScene, 10);
     // eslint-disable-next-line no-console
-    console.log('[test:title-svg@8000%]', {
+    console.log('[test:title-layout@8000%]', {
       zoom,
       fontSize: place.fontSize,
       handleVisLike: 8 * inv,

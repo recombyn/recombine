@@ -13,6 +13,7 @@ import {
   isRadiusLinked,
   radiiFromAttrs,
   serializeRadiusVertices,
+  setLiveCornerRadiusPreview,
   type CornerRadii,
 } from '@/components/rcb/scene/document/sceneRadii';
 import {
@@ -335,6 +336,7 @@ function StarShapeHandlesOverlay({
       const along = (local.x - d.site.x) * d.site.ix + (local.y - d.site.y) * d.site.iy;
       const rounded = Math.max(0, Math.min(maxR, Math.round(along)));
       setDragValue(rounded);
+      setLiveCornerRadiusPreview({ nodeId, display: rounded });
       preview({ r: rounded });
     };
 
@@ -347,6 +349,7 @@ function StarShapeHandlesOverlay({
       setDragValue(null);
       setLiveSides(null);
       setLiveInner(null);
+      setLiveCornerRadiusPreview(null);
 
       if (soft) {
         preview({ r: baseR, sides: baseSides, inner: baseInner });
@@ -383,6 +386,7 @@ function StarShapeHandlesOverlay({
       setDragValue(null);
       setLiveSides(null);
       setLiveInner(null);
+      setLiveCornerRadiusPreview(null);
       preview({ r: baseR, sides: baseSides, inner: baseInner });
     };
 
@@ -395,6 +399,7 @@ function StarShapeHandlesOverlay({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       window.removeEventListener('keydown', onKey);
+      setLiveCornerRadiusPreview(null);
     };
   }, [
     interactive,

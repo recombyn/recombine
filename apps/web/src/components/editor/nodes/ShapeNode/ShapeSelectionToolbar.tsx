@@ -1,4 +1,4 @@
-import { useMemo, useState, memo } from 'react';
+import { useMemo, useState, useSyncExternalStore, memo } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
@@ -39,7 +39,11 @@ import {
   supportsShapeSides,
   supportsStroke,
 } from '@/components/rcb/scene/document/sceneDocument';
-import { isRadiusLinked, maxRadius, radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
+import {
+  cornerRadiusToolbarDisplay,
+  getLiveCornerRadiusPreview,
+  subscribeLiveCornerRadiusPreview,
+} from '@/components/rcb/scene/document/sceneRadii';
 import {
   clampShapeSides,
   DEFAULT_SHAPE_SIDES,
@@ -65,9 +69,7 @@ function readAspectLocked(attrs: Record<string, unknown> | undefined): boolean {
 
 /** Compact toolbar R: linked → any corner; unlinked → max so mixed corners stay visible. */
 function toolbarCornerRadius(attrs: Record<string, unknown> | undefined): number {
-  const r = radiiFromAttrs(attrs);
-  if (isRadiusLinked(attrs)) return Math.round(r.tl);
-  return Math.round(maxRadius(r));
+  return cornerRadiusToolbarDisplay(attrs);
 }
 
 type SceneBox = { left: number; top: number; width: number; height: number };
@@ -124,7 +126,12 @@ function ShapeSelectionToolbar({
     boolEffectAttr(node?.attrs?.['stroke-enabled'], true) &&
     boolEffectAttr(node?.attrs?.['stroke-visible'], true);
   const strokeColor = String(node?.attrs?.['border-color'] || node?.attrs?.stroke || '#333333');
-  const radius = toolbarCornerRadius(node?.attrs);
+  const liveCornerRadius = useSyncExternalStore(
+    subscribeLiveCornerRadiusPreview,
+    () => getLiveCornerRadiusPreview(nodeId),
+    () => null
+  );
+  const radius = liveCornerRadius ?? toolbarCornerRadius(node?.attrs);
 
   const patchAttrs = (attrs: Record<string, unknown>) => {
     const shapeType = node?.attrs?.shapeType;
