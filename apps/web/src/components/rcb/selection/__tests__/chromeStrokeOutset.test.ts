@@ -5,6 +5,7 @@ import {
   inflateBoxByVisualOutset,
   strokeChromeOutset,
   strokeVisualOutset,
+  geometryPatchForStrokeVisibilityToggle,
 } from '../../scene/document/sceneEffects';
 
 /**
@@ -116,5 +117,66 @@ describe('selection chrome vs stroke (AABB on path)', () => {
     });
     expect(geomForPolygonKnobs).toEqual(path);
     expect(chrome).toEqual(path);
+  });
+});
+
+describe('geometryPatchForStrokeVisibilityToggle', () => {
+  const rectCenter1 = {
+    key: 'shape',
+    x: 10.5,
+    y: 8.5,
+    width: 42,
+    height: 31,
+    attrs: {
+      shapeType: 'rect',
+      'border-width': 1,
+      'border-color': '#333',
+      strokeAlign: 'center',
+      'stroke-enabled': 'true',
+      'stroke-visible': 'true',
+      'fill-color': '#fff',
+    },
+  };
+
+  it('hide 1px center stroke expands fill to prior outer ink (on grid)', () => {
+    const patch = geometryPatchForStrokeVisibilityToggle(rectCenter1, false);
+    expect(patch).toEqual({ x: 10, y: 8, width: 43, height: 32 });
+    const hidden = {
+      ...rectCenter1,
+      ...patch,
+      attrs: { ...rectCenter1.attrs, 'stroke-enabled': 'false', 'stroke-visible': 'false' },
+    };
+    expect(strokeVisualOutset(hidden)).toBe(0);
+    expect(hidden.x).toBe(10);
+    expect(hidden.y).toBe(8);
+  });
+
+  it('show stroke again insets back to path *.5', () => {
+    const expanded = {
+      ...rectCenter1,
+      x: 10,
+      y: 8,
+      width: 43,
+      height: 32,
+      attrs: { ...rectCenter1.attrs, 'stroke-enabled': 'false', 'stroke-visible': 'false' },
+    };
+    const patch = geometryPatchForStrokeVisibilityToggle(expanded, true);
+    expect(patch).toEqual({ x: 10.5, y: 8.5, width: 42, height: 31 });
+  });
+
+  it('inside stroke: no geom change (outset 0)', () => {
+    const node = {
+      ...rectCenter1,
+      attrs: { ...rectCenter1.attrs, strokeAlign: 'inside', 'stroke-align': 'inside' },
+    };
+    expect(geometryPatchForStrokeVisibilityToggle(node, false)).toBeNull();
+  });
+
+  it('custom path d: skip (AABB alone cannot offset the curve)', () => {
+    const node = {
+      ...rectCenter1,
+      attrs: { ...rectCenter1.attrs, shapeType: 'path', path: 'M0 0 L10 0 L10 10 Z', closed: 'true' },
+    };
+    expect(geometryPatchForStrokeVisibilityToggle(node, false)).toBeNull();
   });
 });
