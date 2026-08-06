@@ -114,8 +114,15 @@ export function radiusHandleParkScreenPx(): number {
 
 /**
  * Scene park for radius seats at any zoom.
- * Ideal park is screen-constant; on-screen budget keeps the seat near the
- * corner so low zoom cannot park/hit near the center and steal move.
+ *
+ * Control-box local model (same space as HostPathChrome resize/rotate):
+ * - box corners at (0,0) / (w,0) / (w,h) / (0,h)
+ * - radius seat at axis inset `(inset, inset)` from that corner
+ * - rotate hotzone = corner ± `rotateHotzoneOutward(...)` in scene units
+ *
+ * Park is screen-constant (`parkPx / zoom`), only clamped so it cannot cross
+ * the box center. Do not scale park with box size — that made seats jump
+ * while resizing.
  */
 export function radiusParkSceneForBox(
   boxW: number,
@@ -125,11 +132,7 @@ export function radiusParkSceneForBox(
 ): number {
   const z = Math.max(0.05, Number(zoom) || 1);
   const half = Math.min(Math.max(1, boxW), Math.max(1, boxH)) / 2;
-  const minScreen = Math.min(Math.max(1, boxW), Math.max(1, boxH)) * z;
-  // Keep park ≤ ~22% of on-screen min side so the seat stays near the corner.
-  const screenBudget = Math.max(0, minScreen * 0.22);
-  const px = Math.min(Math.max(0, parkPx), screenBudget);
-  return Math.min(px / z, half * 0.45);
+  return Math.min(Math.max(0, parkPx) / z, half * 0.45);
 }
 
 /**

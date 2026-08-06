@@ -17,10 +17,12 @@ import {
 import { useRcbCamera } from '@/components/rcb/camera/context';
 import {
   clampCornerRadii,
+  cornerRadiusDisplayFromRadii,
   cornerVertexCount,
   isRadiusLinked,
   radiiFromAttrs,
   serializeRadiusVertices,
+  setLiveCornerRadiusPreview,
   sharpCornerSitesForNode,
   parseRadiusVertices,
   vertexRadiiFromAttrs,
@@ -378,8 +380,9 @@ function CornerRadiusHandlesOverlay({
     ? resolvePathVertexRadii(node?.attrs, pathVertexCount, baseRadii)
     : [];
 
-  // Seat tracks R (scene). Park when R≈0 so radius hit clears the resize hit.
-  // Screen budget keeps seats near corners at every zoom (not only one %).
+  // Seat = max(R, park) in control-box local space — TL at (inset,inset), etc.
+  // Park is screen-constant scene units (see radiusParkSceneForBox); resize /
+  // rotate knobs use the same box corners in HostPathChrome.
   const hitScale = chromeHitScaleForBox(w, h, z);
   const hitPx = CHROME_RADIUS_HIT_PX * hitScale;
   const k = 1 / z;
@@ -392,6 +395,7 @@ function CornerRadiusHandlesOverlay({
 
   const radiusHandleInset = (r: number) => radiusSeatInset(r, halfSide, parkScene);
 
+  /** Control-box local: corner (cx,cy) → seat at axis inset from that corner. */
   const boxHandleLocalPos = (corner: (typeof RADIUS_CORNERS)[number], r: number) => {
     const inset = radiusHandleInset(r);
     return {
@@ -506,13 +510,16 @@ function CornerRadiusHandlesOverlay({
           : d.startVertices.map(() => rounded);
         setDragValue(rounded);
         // DOM preview only — Redux remount mid-drag leaves ghost shadows.
+        // Publish live display so the toolbar R label tracks the drag.
         const u = next[0] ?? rounded;
-        previewRadiiOnHost(
-          d.solo
-            ? { tl: u, tr: u, br: u, bl: u }
-            : { tl: rounded, tr: rounded, br: rounded, bl: rounded },
-          next
-        );
+        const previewRadii: CornerRadii = d.solo
+          ? { tl: u, tr: u, br: u, bl: u }
+          : { tl: rounded, tr: rounded, br: rounded, bl: rounded };
+        setLiveCornerRadiusPreview({
+          nodeId,
+          display: cornerRadiusDisplayFromRadii(previewRadii, !d.solo && d.linked),
+        });
+        previewRadiiOnHost(previewRadii, next);
         return;
       }
       const corner = RADIUS_CORNERS.find((c) => c.key === d.corner);
@@ -522,6 +529,10 @@ function CornerRadiusHandlesOverlay({
         ? { ...d.startRadii, [d.corner]: rounded }
         : { tl: rounded, tr: rounded, br: rounded, bl: rounded };
       setDragValue(rounded);
+      setLiveCornerRadiusPreview({
+        nodeId,
+        display: cornerRadiusDisplayFromRadii(next, !d.solo && d.linked),
+      });
       previewRadiiOnHost(next);
     };
     const onUp = (e: PointerEvent) => {
@@ -531,6 +542,7 @@ function CornerRadiusHandlesOverlay({
       dragRef.current = null;
       setActiveKey(null);
       setDragValue(null);
+      setLiveCornerRadiusPreview(null);
       if (softClick) {
         // Restore any mid-frame preview (none on soft click) and bail.
         if (d.mode === 'path') {
@@ -579,6 +591,7 @@ function CornerRadiusHandlesOverlay({
       dragRef.current = null;
       setActiveKey(null);
       setDragValue(null);
+      setLiveCornerRadiusPreview(null);
       if (d.mode === 'path') {
         previewRadiiOnHost(
           {
@@ -602,6 +615,7 @@ function CornerRadiusHandlesOverlay({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       window.removeEventListener('keydown', onKey);
+      setLiveCornerRadiusPreview(null);
     };
   }, [dispatch, node, nodeId, box, angle, w, h, maxR, toScene, radiusInteractive, linked]);
 

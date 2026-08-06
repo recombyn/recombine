@@ -199,6 +199,17 @@ describe('resize vs radius hit pads (icon-centered)', () => {
     expect(layout.axisClearanceScreen).toBeGreaterThanOrEqual(CHROME_RADIUS_PARK_GAP_PX - 0.05);
   });
 
+  it('park scene distance is stable across box sizes at fixed zoom (no resize jump)', () => {
+    const zoom = 1;
+    const parkPx = radiusHandleParkScreenPx();
+    const a = radiusParkSceneForBox(80, 80, zoom, parkPx);
+    const b = radiusParkSceneForBox(400, 300, zoom, parkPx);
+    const c = radiusParkSceneForBox(1200, 900, zoom, parkPx);
+    expect(a).toBeCloseTo(parkPx / zoom, 5);
+    expect(b).toBeCloseTo(a, 5);
+    expect(c).toBeCloseTo(a, 5);
+  });
+
   it('bisector park matches axis park on 45° corners', () => {
     const park = 13;
     const along = radiusParkAlongBisector(park, -Math.SQRT1_2, -Math.SQRT1_2);
