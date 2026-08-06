@@ -226,8 +226,8 @@ export async function patchProjectToCloud(payload: {
   if (import.meta.env.DEV) {
     console.info('[project-sync] PATCH thumb', {
       id: payload.id,
-      hasThumb: Boolean(thumb),
-      thumbBytes: thumb ? Math.round(thumb.length / 1024) : 0,
+      urls: payload.thumb?.thumbnailUrls?.length || 0,
+      dataUrls: payload.thumb?.thumbnailDataUrls?.length || 0,
     });
   }
   const res = await withProjectConflict(() =>
@@ -456,22 +456,7 @@ export function useProjectCloudSync() {
         keepBaseDocument: true,
       });
 
-      // Logged out: local draft is enough — clear dirty.
-      if (!getToken()) {
-        const after = store.getState().editor as { document: unknown };
-        if (after.document === pushedDoc) dispatch(clearEditorDirty());
-        return;
-      }
-
-      // Live Yjs room owns cloud document writes (debounced PUT in CollabRoomProvider).
-      // Still keep local draft + allow force leave-flush.
-      if (isCollabActive() && !force) {
-        const after = store.getState().editor as { document: unknown };
-        if (after.document === pushedDoc) dispatch(clearEditorDirty());
-        return;
-      }
-
-      // Skip cloud when content + name already ACKed — unless leave-force (refresh cover).
+      // Skip cloud when content + name already ACKed — unless leave-force.
       if (
         !force &&
         draft?.syncedAt &&
@@ -483,9 +468,9 @@ export function useProjectCloudSync() {
         return;
       }
 
+      // Data changed → rebuild cover, then persist (local / thumb-only / full).
       let thumb: ThumbUpload = {};
       try {
-        // Up to 4 per-element snapshots (never skip for thumbnailCustom).
         const tiles = await buildProjectCoverTiles(pushedDoc);
         thumb = thumbPayloadFromTiles(tiles);
         const localPreview =
@@ -513,6 +498,49 @@ export function useProjectCloudSync() {
       } catch (err) {
         if (import.meta.env.DEV) console.warn('[project-sync] cover tiles failed', err);
         /* thumb is best-effort — still upload the document */
+      }
+
+      // Logged out: local draft + in-memory cover is enough.
+      if (!getToken()) {
+        const after = store.getState().editor as { document: unknown };
+        if (after.document === pushedDoc) dispatch(clearEditorDirty());
+        return;
+      }
+
+      // Live Yjs owns document writes — still push cover (thumbnail-only PATCH).
+      if (isCollabActive() && !force) {
+        const baseRevision =
+          draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
+            ? Number(draft.cloudRevision)
+            : null;
+        if (baseRevision != null && (thumb.thumbnailDataUrls || thumb.thumbnailDataUrl || thumb.thumbnailUrls)) {
+          try {
+            const acked = await patchProjectToCloud({
+              id,
+              name,
+              baseRevision,
+              patch: {},
+              thumb,
+            });
+            const nextThumb = ackThumbnail(acked?.thumbnailUrl);
+            if (nextThumb) {
+              dispatch(
+                setTemplateThumbnail({
+                  id,
+                  thumbnail: nextThumb,
+                  custom: false,
+                })
+              );
+            }
+          } catch (err) {
+            if (import.meta.env.DEV) {
+              console.warn('[project-sync] collab cover patch failed', err);
+            }
+          }
+        }
+        const after = store.getState().editor as { document: unknown };
+        if (after.document === pushedDoc) dispatch(clearEditorDirty());
+        return;
       }
 
       const baseRevision =
