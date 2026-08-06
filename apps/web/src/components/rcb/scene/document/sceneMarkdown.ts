@@ -1,6 +1,6 @@
 /**
  * Lightweight markdown helpers for scene text nodes.
- * Canvas Fabric text renders plain text; `attrs.markdown` keeps the source.
+ * Canvas text renders plain text; `attrs.markdown` keeps the source.
  */
 
 export function markdownToPlain(md: string): string {

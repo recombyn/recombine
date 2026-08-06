@@ -47,7 +47,7 @@ export const FILL_SOLID_PRESETS = [
 /** Same grid + transparent (artboard / alpha-capable pickers). */
 export const FILL_ALPHA_PRESETS = ['transparent', ...FILL_SOLID_PRESETS];
 
-/** Fixed panel width (fig.1 reference). */
+/** Fixed panel width. */
 export const COLOR_PANEL_WIDTH = 250;
 /** Preset grid: 9 square swatches per row (2×9). */
 export const COLOR_PANEL_PRESET_COLS = 9;
@@ -143,7 +143,7 @@ export type ColorPanelProps = {
   /** 0–100; shown when showAlpha is true. */
   opacity?: number;
   onOpacityChange?: (opacity: number) => void;
-  /** Show transparency slider + % input (fig.2). */
+  /** Show transparency slider + % input. */
   showAlpha?: boolean;
   /** Panel title, e.g. 画布背景色 / 填充颜色 */
   title?: string;

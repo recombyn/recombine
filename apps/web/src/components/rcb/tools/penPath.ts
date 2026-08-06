@@ -432,6 +432,82 @@ export function penSubpathsToD(
 
 export const CLOSE_THRESHOLD = 10;
 
+export type PenPlaceAction =
+  | { kind: 'close' }
+  | { kind: 'anchor'; index: number }
+  | { kind: 'place'; x: number; y: number };
+
+/**
+ * Pen click decision (pure — used by PenDrawFeature + tests).
+ *
+ * Order matters: hit an existing landing (esp. last) BEFORE close-to-first.
+ * Close only when the tip hits the **first anchor** (idx===0). Empty cells near
+ * the start still place — otherwise “almost back to start” commits and the next
+ * stroke becomes an unlinked path (user: 同落点再次点击就断了).
+ */
+export function resolvePenPlaceAction(opts: {
+  anchors: PenAnchor[];
+  snapped: { x: number; y: number };
+  raw: { x: number; y: number };
+  anchorHitRadius: number;
+  closeThreshold?: number;
+}): PenPlaceAction {
+  const { anchors, snapped, raw, anchorHitRadius } = opts;
+  void opts.closeThreshold;
+  if (!anchors.length) {
+    return { kind: 'place', x: snapped.x, y: snapped.y };
+  }
+
+  const hitNear = (
+    p: { x: number; y: number },
+    radius: number
+  ): number => {
+    let best = -1;
+    let bestD = radius;
+    for (let i = 0; i < anchors.length; i += 1) {
+      const a = anchors[i];
+      const d = Math.hypot(p.x - a.x, p.y - a.y);
+      if (d <= bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+
+  // Prefer snapped lattice (same drop cell) so re-clicking the tip hits the node.
+  let idx = hitNear(snapped, Math.max(anchorHitRadius, 0.75));
+  if (idx < 0) idx = hitNear(raw, anchorHitRadius);
+
+  if (idx === 0 && anchors.length >= 2) {
+    return { kind: 'close' };
+  }
+  if (idx >= 0) {
+    return { kind: 'anchor', index: idx };
+  }
+
+  return { kind: 'place', x: snapped.x, y: snapped.y };
+}
+
+/** Reverse open stroke so continuing from the former start appends at the end. */
+export function reversePenAnchors(anchors: PenAnchor[]): PenAnchor[] {
+  return anchors
+    .slice()
+    .reverse()
+    .map((a) => {
+      const next: PenAnchor = { x: a.x, y: a.y };
+      if (a.outX != null && a.outY != null) {
+        next.inX = a.outX;
+        next.inY = a.outY;
+      }
+      if (a.inX != null && a.inY != null) {
+        next.outX = a.inX;
+        next.outY = a.inY;
+      }
+      return next;
+    });
+}
+
 type SegHit = {
   segIndex: number;
   t: number;
@@ -575,7 +651,7 @@ function splitCubicAt(
 }
 
 /**
- * Insert an anchor on the closest path segment (Illustrator-style “add anchor”).
+ * Insert an anchor on the closest path segment.
  * Returns null when farther than `maxDist` from the path.
  */
 export function insertAnchorOnPath(

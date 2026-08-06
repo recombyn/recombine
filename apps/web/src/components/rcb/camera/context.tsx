@@ -6,7 +6,7 @@ import { RCB_DEFAULT_CAMERA, type RcbCamera, type RcbVec } from '../core/types';
 export const RcbCameraContext = createContext<RcbCamera>(RCB_DEFAULT_CAMERA);
 export const RcbOverlayRootContext = createContext<HTMLElement | null>(null);
 export const RcbViewportElContext = createContext<HTMLElement | null>(null);
-/** Tracks `window.devicePixelRatio` (updates on browser zoom). */
+/** Live `window.devicePixelRatio` (browser zoom). Camera pan snaps to this. */
 export const RcbDevicePixelRatioContext = createContext(1);
 
 /** Camera interaction: pan/zoom in flight → use efficientZoom for cull/LOD. */
@@ -37,12 +37,12 @@ export function useRcbViewportEl(): HTMLElement | null {
   return useContext(RcbViewportElContext);
 }
 
-/** Live devicePixelRatio (browser zoom / HiDPI). */
+/** Live browser devicePixelRatio (updates on browser zoom). */
 export function useRcbDevicePixelRatio(): number {
   return useContext(RcbDevicePixelRatioContext);
 }
 
-/** Pointer helper: `toScene(clientX, clientY)` using camera + viewport. */
+/** Pointer helper: `toScene(clientX, clientY)` using camera + viewport + DPR. */
 export function useRcbScreenToScene(): (clientX: number, clientY: number) => RcbVec {
   const camera = useRcbCamera();
   const viewportEl = useRcbViewportEl();

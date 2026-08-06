@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState, memo } from 'react';
-import { useRcbCamera, useRcbCameraMotion, useRcbDevicePixelRatio, useRcbViewportEl } from '../camera/context';
+import { useRcbCamera, useRcbCameraMotion, useRcbViewportEl } from '../camera/context';
 import { rcbViewportSceneBounds } from '../core/math';
-import { toDomPrecision } from '../core/dpr';
 import {
   RcbSpatialIndex,
   boxesIntersect,
   nodeSceneAabb,
 } from '../core/spatialIndex';
 import { isNodeHidden, stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
-import { nodeLeftTop, snapSvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
+import { nodeLeftTop, sceneSurfaceSvgProps } from '@/components/rcb/scene/paint/sceneToSvg';
 import { HEAVY_PATH_D_CHARS } from '@/components/rcb/scene/document/sceneShapes';
 import RcbShapeHost from './RcbShapeHost';
 
@@ -140,7 +139,6 @@ function RcbShapesLayer({
   spatialIndex = null,
 }: Props) {
   const camera = useRcbCamera();
-  const dpr = useRcbDevicePixelRatio();
   const { moving, efficientZoom } = useRcbCameraMotion();
   const viewportEl = useRcbViewportEl();
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -280,14 +278,14 @@ function RcbShapesLayer({
     if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
     const pad = 2;
     const raw = {
-      left: toDomPrecision(minX - pad),
-      top: toDomPrecision(minY - pad),
-      width: toDomPrecision(Math.max(1, maxX - minX + pad * 2)),
-      height: toDomPrecision(Math.max(1, maxY - minY + pad * 2)),
+      left: minX - pad,
+      top: minY - pad,
+      width: Math.max(1, maxX - minX + pad * 2),
+      height: Math.max(1, maxY - minY + pad * 2),
     };
-    const s = snapSvgSurfaceBox(raw, camera, dpr);
-    return { minX: s.left, minY: s.top, w: s.width, h: s.height };
-  }, [document, proxyIds, hiddenNodeId, camera.x, camera.y, camera.zoom, dpr]);
+    const s = sceneSurfaceSvgProps(raw, camera);
+    return { minX: s.style.left, minY: s.style.top, w: s.width, h: s.height };
+  }, [document, proxyIds, hiddenNodeId, camera.x, camera.y, camera.zoom]);
 
   if (!document || !visibleIds.length) return null;
 

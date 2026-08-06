@@ -3,8 +3,10 @@ import type { VideoGeomOverride } from '@/components/editor/nodes/VideoNode/Vide
 export type FrameGeomLive = { id: string; x: number; y: number; width: number; height: number };
 
 /**
- * Coalesce high-frequency drag writes (frame Redux + video live geom) to one rAF.
- * Keeps pointer-move SVG preview immediate; only Redux/React state is throttled.
+ * Coalesce high-frequency frame Redux writes to one rAF.
+ * Video live geom applies synchronously — SVG preview is already sync, and
+ * rAF-throttled HTML plates leave a second visible layer (SVG poster vs
+ * `<video>`) while moving.
  */
 export function createDragWriteCoalescer(
   apply: (batch: {
@@ -14,21 +16,15 @@ export function createDragWriteCoalescer(
 ) {
   let raf = 0;
   const pendingFrames = new Map<string, FrameGeomLive>();
-  /** Latest intended video overrides (kept after flush for merge-on-move). */
+  /** Latest intended video overrides (kept for merge-on-move / angle preview). */
   let pendingVideo: Record<string, VideoGeomOverride> | null = null;
-  let videoDirty = false;
 
   const runFlush = () => {
     raf = 0;
     const frames = [...pendingFrames.values()];
     pendingFrames.clear();
-    const flushVideo = videoDirty;
-    videoDirty = false;
-    if (!frames.length && !flushVideo) return;
-    apply({
-      frames,
-      videoGeom: flushVideo ? pendingVideo : undefined,
-    });
+    if (!frames.length) return;
+    apply({ frames });
   };
 
   return {
@@ -38,8 +34,7 @@ export function createDragWriteCoalescer(
     },
     queueVideoGeom(next: Record<string, VideoGeomOverride> | null) {
       pendingVideo = next;
-      videoDirty = true;
-      if (!raf) raf = requestAnimationFrame(runFlush);
+      apply({ frames: [], videoGeom: next });
     },
     getPendingVideoGeom() {
       return pendingVideo;
@@ -52,7 +47,6 @@ export function createDragWriteCoalescer(
       }
       pendingFrames.clear();
       pendingVideo = null;
-      videoDirty = false;
     },
   };
 }

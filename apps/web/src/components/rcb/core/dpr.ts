@@ -1,7 +1,10 @@
 /**
  * Device-pixel helpers.
- * Browser zoom changes `window.devicePixelRatio`; we track it and align sizes
- * so CSS transforms don't drift by a subpixel.
+ * Browser zoom changes `window.devicePixelRatio`. We snap:
+ * 1) camera world `translate`, and
+ * 2) each infinite-SVG surface origin (CSS left === viewBox min) under
+ *    fractional DPR — so grid + hosts share one device-pixel lattice without
+ *    moving absolute scene content.
  */
 
 /** Greatest common divisor. */
@@ -32,7 +35,7 @@ export function toDomPrecision(v: number) {
 
 /**
  * Snap a CSS-pixel value onto the device-pixel grid.
- * At dpr=0.9: rounds so `css * dpr` is an integer.
+ * At dpr=0.75: rounds so `css * dpr` is an integer.
  */
 export function snapCssToDevicePixel(cssPx: number, dpr: number): number {
   const d = dpr > 0 ? dpr : 1;

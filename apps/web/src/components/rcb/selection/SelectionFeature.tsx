@@ -11,6 +11,7 @@ import {
   useRcbViewportEl,
 } from '@/components/rcb/camera/context';
 import {
+  rcbCameraCssZoom,
   rcbClientDeltaToScene,
   rcbClientToStageLocal,
   rcbResolveViewportEl,
@@ -60,6 +61,7 @@ import {
 import {
   TEXT_SELECTION_PAD,
   deflateSelectionBox,
+  inflateBoxByVisualOutset,
   inflateSelectionBox,
   strokeChromeOutset,
   strokeVisualOutset,
@@ -384,6 +386,24 @@ function unionBoxes(boxes: SceneBox[]): SceneBox | null {
     bottom = Math.max(bottom, b.top + b.height);
   });
   return { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
+}
+
+/**
+ * Line/arrow nodes use a tall hit AABB (`STROKE_HIT` ≈ 24). Docking the
+ * floating toolbar to that box's top puts it half a hit-height above the shaft
+ * — huge on screen at high zoom. Anchor to the shaft midpoint instead.
+ */
+function toolbarBoxForSelection(
+  box: SceneBox | null | undefined,
+  opts: { lineChrome: boolean; node?: any }
+): SceneBox | null {
+  if (!box) return null;
+  if (!opts.lineChrome) return box;
+  const angle = Number(opts.node?.attrs?.angle) || 0;
+  const ep = strokeEndpointsFromBox(box, angle);
+  const cx = (ep.x0 + ep.x1) / 2;
+  const cy = (ep.y0 + ep.y1) / 2;
+  return { left: cx - 0.5, top: cy - 0.5, width: 1, height: 1 };
 }
 
 type GeometryPatch = {
@@ -726,8 +746,13 @@ type MoveSnapContext = {
   threshold: number;
 };
 
-/** Path AABB for smart guides (geom), not stroke-inflated chrome. */
-function pathBoxForSmartGuide(
+/**
+ * Guide / move-snap box = **painted outer ink** (path + visual outset).
+ * Draw stores path at ±sw/2 so ink sits on the integer grid; snapping the
+ * path itself to the grid yanked ink off-cell. Control box stays on path
+ * (`strokeChromeOutset` === 0) — not the same box as move-snap.
+ */
+function visualGuideBoxForNode(
   id: string,
   document: any,
   chrome: SceneBox | null | undefined
@@ -735,16 +760,17 @@ function pathBoxForSmartGuide(
   if (!chrome) return null;
   if (parseFrameSelId(id)) return { ...chrome };
   const live = liveShapeGeomBox(id);
-  if (live) return live;
-  return deflateSelectionBox({ ...chrome }, document?.deltaSetLike?.[id]);
+  const path = live || deflateSelectionBox({ ...chrome }, document?.deltaSetLike?.[id]);
+  return inflateBoxByVisualOutset(path, document?.deltaSetLike?.[id]);
 }
 
-function pathBoxFromChromeOrigin(
+function visualBoxFromChromeOrigin(
   document: any,
   o: { nodeId: string; box: SceneBox }
 ): SceneBox {
   if (parseFrameSelId(o.nodeId)) return { ...o.box };
-  return deflateSelectionBox({ ...o.box }, document?.deltaSetLike?.[o.nodeId]);
+  const path = deflateSelectionBox({ ...o.box }, document?.deltaSetLike?.[o.nodeId]);
+  return inflateBoxByVisualOutset(path, document?.deltaSetLike?.[o.nodeId]);
 }
 
 function computeMovedUnion(ctx: MoveSnapContext): {
@@ -753,41 +779,74 @@ function computeMovedUnion(ctx: MoveSnapContext): {
   sdy: number;
   guides: SmartGuideLine[];
 } {
-  const pathBoxes = ctx.origins.map((o) => pathBoxFromChromeOrigin(ctx.document, o));
-  const pathUnion =
-    unionOfBoxes(pathBoxes) ||
-    ({
-      left: ctx.union.left,
-      top: ctx.union.top,
-      width: ctx.union.width,
-      height: ctx.union.height,
-    } as SceneBox);
-  let nextPath = {
-    ...pathUnion,
-    left: pathUnion.left + ctx.dx,
-    top: pathUnion.top + ctx.dy,
+  // Snap **painted outer ink** in 1px steps, then apply the same delta to path.
+  // Never fall back to path/chrome as "visual" — that reintroduces half-cell drift.
+  const visualBoxes = ctx.origins.map((o) => visualBoxFromChromeOrigin(ctx.document, o));
+  const visualUnion = unionOfBoxes(visualBoxes);
+  if (!visualUnion) {
+    return {
+      nextUnion: {
+        ...ctx.union,
+        left: ctx.union.left + ctx.dx,
+        top: ctx.union.top + ctx.dy,
+      },
+      sdx: ctx.dx,
+      sdy: ctx.dy,
+      guides: [],
+    };
+  }
+  let nextVisual = {
+    ...visualUnion,
+    left: visualUnion.left + ctx.dx,
+    top: visualUnion.top + ctx.dy,
   };
   let guides: SmartGuideLine[] = [];
   if (!ctx.disableSnap) {
-    const smart = snapMoveToSmartGuides({
-      box: nextPath,
-      targets: ctx.targets,
-      threshold: ctx.threshold,
-      gridSize: ctx.gridSize,
-    });
-    nextPath = smart.box;
-    guides = smart.guides;
-    const snappedX = guides.some((g) => g.kind === 'align' && g.axis === 'x');
-    const snappedY = guides.some((g) => g.kind === 'align' && g.axis === 'y');
-    const grid = snapBoxToGrid(nextPath, ctx.gridSize);
-    nextPath = {
-      ...nextPath,
-      left: snappedX ? nextPath.left : grid.left,
-      top: snappedY ? nextPath.top : grid.top,
-    };
+    if (ctx.gridSize > 0) {
+      // Pixel grid owns translation. Smart guides used to nudge first (and old
+      // code skipped grid on snapped axes) → ink floated between cells while
+      // gap badges still showed "4". Guides are display-only after grid snap.
+      nextVisual = snapBoxToGrid(nextVisual, ctx.gridSize);
+      const shown = snapMoveToSmartGuides({
+        box: nextVisual,
+        targets: ctx.targets,
+        threshold: 0.51,
+        gridSize: ctx.gridSize,
+      });
+      const stillAligned =
+        Math.abs(shown.box.left - nextVisual.left) < 1e-9 &&
+        Math.abs(shown.box.top - nextVisual.top) < 1e-9;
+      guides = stillAligned ? shown.guides : [];
+    } else {
+      const smart = snapMoveToSmartGuides({
+        box: nextVisual,
+        targets: ctx.targets,
+        threshold: ctx.threshold,
+        gridSize: 0,
+      });
+      nextVisual = smart.box;
+      guides = smart.guides;
+    }
   }
-  const sdx = nextPath.left - pathUnion.left;
-  const sdy = nextPath.top - pathUnion.top;
+  const sdx = nextVisual.left - visualUnion.left;
+  const sdy = nextVisual.top - visualUnion.top;
+  if (typeof window !== 'undefined' && (window as any).__RCB_MOVE_GRID_DEBUG__ === true) {
+    // eslint-disable-next-line no-console
+    console.log('[rcb:move-grid]', {
+      dx: ctx.dx,
+      dy: ctx.dy,
+      gridSize: ctx.gridSize,
+      visual0: visualUnion,
+      visual1: nextVisual,
+      path0: ctx.union,
+      sdx,
+      sdy,
+      onGrid:
+        Math.abs(nextVisual.left - Math.round(nextVisual.left / ctx.gridSize) * ctx.gridSize) <
+          1e-9 &&
+        Math.abs(nextVisual.top - Math.round(nextVisual.top / ctx.gridSize) * ctx.gridSize) < 1e-9,
+    });
+  }
   return {
     nextUnion: {
       ...ctx.union,
@@ -829,37 +888,72 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
   const singleNode = singleId ? ctx.document?.deltaSetLike?.[singleId] : null;
   const snapAsPath = Boolean(singleId && !parseFrameSelId(singleId));
   if (!ctx.disableSnap) {
-    const snapBox = snapAsPath ? deflateSelectionBox({ ...next }, singleNode) : next;
-    const smart = snapResizeToSmartGuides({
-      box: snapBox,
-      handle,
-      targets: ctx.targets,
-      threshold: ctx.threshold,
-      min: 8,
-      gridSize: ctx.gridSize,
-    });
-    const snappedPath = smart.box;
-    guides = smart.guides;
-    next = snapAsPath ? inflateSelectionBox({ ...snappedPath }, singleNode) : snappedPath;
-    // Grid only on axes that did not smart-snap.
-    const snappedX = guides.some((g) => g.kind === 'align' && g.axis === 'x');
-    const snappedY = guides.some((g) => g.kind === 'align' && g.axis === 'y');
-    const gridBox = snapAsPath ? snappedPath : next;
-    const grid = snapResizeToGrid(gridBox, handle, ctx.gridSize, 8, {
-      lockAspect,
-      aspectRatio: ctx.drag.aspectRatio,
-    });
-    let left = snappedX ? gridBox.left : grid.left;
-    let top = snappedY ? gridBox.top : grid.top;
-    let right = snappedX ? gridBox.left + gridBox.width : grid.left + grid.width;
-    let bottom = snappedY ? gridBox.top + gridBox.height : grid.top + grid.height;
-    const pathNext = {
-      left,
-      top,
-      width: Math.max(1, right - left),
-      height: Math.max(1, bottom - top),
-    };
-    next = snapAsPath ? inflateSelectionBox(pathNext, singleNode) : pathNext;
+    // Resize the painted outer ink onto the grid, then write path = visual − outset.
+    if (snapAsPath && singleNode) {
+      const path0 = deflateSelectionBox({ ...next }, singleNode);
+      const visual0 = inflateBoxByVisualOutset(path0, singleNode);
+      const smart = snapResizeToSmartGuides({
+        box: visual0,
+        handle,
+        targets: ctx.targets,
+        threshold: ctx.threshold,
+        min: Math.max(8, Math.ceil(strokeVisualOutset(singleNode) * 2) + 1),
+        gridSize: ctx.gridSize,
+      });
+      const gridVisual = snapResizeToGrid(smart.box, handle, ctx.gridSize, 8, {
+        lockAspect,
+        aspectRatio: ctx.drag.aspectRatio,
+      });
+      const outset = Math.max(0, strokeVisualOutset(singleNode));
+      const pathNext = {
+        left: gridVisual.left + outset,
+        top: gridVisual.top + outset,
+        width: Math.max(1, gridVisual.width - outset * 2),
+        height: Math.max(1, gridVisual.height - outset * 2),
+      };
+      const shown = snapResizeToSmartGuides({
+        box: gridVisual,
+        handle,
+        targets: ctx.targets,
+        threshold: 0.51,
+        min: 8,
+        gridSize: ctx.gridSize,
+      });
+      const stillAligned =
+        Math.abs(shown.box.left - gridVisual.left) < 1e-9 &&
+        Math.abs(shown.box.top - gridVisual.top) < 1e-9 &&
+        Math.abs(shown.box.width - gridVisual.width) < 1e-9 &&
+        Math.abs(shown.box.height - gridVisual.height) < 1e-9;
+      guides = stillAligned ? shown.guides : [];
+      next = inflateSelectionBox(pathNext, singleNode);
+    } else {
+      const smart = snapResizeToSmartGuides({
+        box: next,
+        handle,
+        targets: ctx.targets,
+        threshold: ctx.threshold,
+        min: 8,
+        gridSize: ctx.gridSize,
+      });
+      next = snapResizeToGrid(smart.box, handle, ctx.gridSize, 8, {
+        lockAspect,
+        aspectRatio: ctx.drag.aspectRatio,
+      });
+      const shown = snapResizeToSmartGuides({
+        box: next,
+        handle,
+        targets: ctx.targets,
+        threshold: 0.51,
+        min: 8,
+        gridSize: ctx.gridSize,
+      });
+      const stillAligned =
+        Math.abs(shown.box.left - next.left) < 1e-9 &&
+        Math.abs(shown.box.top - next.top) < 1e-9 &&
+        Math.abs(shown.box.width - next.width) < 1e-9 &&
+        Math.abs(shown.box.height - next.height) < 1e-9;
+      guides = stillAligned ? shown.guides : [];
+    }
   }
   next = {
     ...next,
@@ -877,7 +971,7 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
   return { next, textMode, lockAspect, guides };
 }
 
-/** Sibling path AABBs for smart guides (exclude selection + hidden/locked). */
+/** Sibling **visual-outer** AABBs for smart guides (exclude selection + hidden/locked). */
 function collectSmartGuideTargets(
   document: any,
   listNodeIds: () => string[],
@@ -889,7 +983,7 @@ function collectSmartGuideTargets(
     if (excludeIds.has(id)) continue;
     const node = document?.deltaSetLike?.[id];
     if (!node || isNodeHidden(node) || isNodeLocked(node)) continue;
-    const box = pathBoxForSmartGuide(id, document, getNodeBox(id));
+    const box = visualGuideBoxForNode(id, document, getNodeBox(id));
     if (box && box.width > 0 && box.height > 0) out.push(box);
   }
   return out;
@@ -1242,6 +1336,7 @@ function buildShapeOutlines(opts: {
       lineMode,
       shaftEndpoints,
       edgeHandles,
+      chromeOutset: Math.max(0, strokeChromeOutset(node)),
       showRotate:
         withHandles &&
         !lineMode &&
@@ -1253,7 +1348,7 @@ function buildShapeOutlines(opts: {
   }
 
   // Single artboard frame: AABB chrome mirroring the SVG frame host
-  // (same method as generators / rects — plate is SVG, title stays HTML).
+  // (same method as generators / rects — plate + title are world-layer SVG).
   if (
     !opts.inspectDev &&
     !opts.transforming &&
@@ -1297,10 +1392,12 @@ function buildShapeOutlines(opts: {
   if (multiPathOnly) {
     const memberBoxes: SceneBox[] = [];
     for (const id of opts.selectedNodeIds) {
+      const node = opts.document?.deltaSetLike?.[id];
       const live = liveShapeGeomBox(id);
       const fallback = opts.getNodeBox(id);
-      const box = live || (fallback ? deflateSelectionBox(fallback, opts.document?.deltaSetLike?.[id]) : null);
-      if (box) memberBoxes.push(box);
+      const geom =
+        live || (fallback ? deflateSelectionBox(fallback, node) : null);
+      if (geom) memberBoxes.push(inflateSelectionBox(geom, node));
     }
     const union = unionBoxes(memberBoxes);
     if (union) {
@@ -1341,17 +1438,17 @@ function resolveChromeUnion(opts: {
   selectionUnion: SceneBox | null;
   selectedNodeIds: string[];
   selectedFrameIds: string[];
+  document: any;
 }): SceneBox | null {
   const base = opts.transforming ? opts.liveUnion : opts.selectionUnion;
   if (!base || opts.transforming) return base;
-  // Prefer live host geom (single + multi path) so chrome matches path ink.
-  // If a host lags a remount after move/resize, fall back to selectionUnion.
+  // Prefer live host → path chrome (single + multi) so the box tracks remounts.
   if (opts.selectedFrameIds.length === 0 && opts.selectedNodeIds.length >= 1) {
     const lives: SceneBox[] = [];
     for (const id of opts.selectedNodeIds) {
       const live = liveShapeGeomBox(id);
       if (!live) break;
-      lives.push(live);
+      lives.push(inflateSelectionBox(live, opts.document?.deltaSetLike?.[id]));
     }
     if (lives.length === opts.selectedNodeIds.length) {
       const liveUnion = opts.selectedNodeIds.length === 1 ? lives[0] : unionBoxes(lives);
@@ -1469,7 +1566,8 @@ function SelectionFeature({
   const viewportEl = useRcbViewportEl();
   const toScene = useRcbScreenToScene();
   const camera = useRcbCamera();
-  const zoom = Math.max(0.05, camera.zoom || 1);
+  // Same CSS zoom the world layer / grid use (not raw camera.zoom drift).
+  const zoom = Math.max(0.05, rcbCameraCssZoom(camera));
   const workspaceMode = useSelector(
     (s: any) => (s.editor.workspaceMode || 'design') as 'design' | 'dev'
   );
@@ -2351,7 +2449,15 @@ function SelectionFeature({
       if (drag.mode === 'pointing_canvas') {
         setMarquee(null);
         lastTextClickRef.current = null;
-        softSelectFrameAt(toScene, hitTestFrame, onSelectFrame, clientX, clientY);
+        const abs = toScene(clientX, clientY);
+        const frameId = hitTestFrame?.(abs.x, abs.y) ?? null;
+        if (frameId) {
+          softSelectFrameAt(toScene, hitTestFrame, onSelectFrame, clientX, clientY);
+        } else {
+          // Truly empty — ensure selection stays cleared (down already cleared; re-assert).
+          onSelectFrame?.(null);
+          onSelect([]);
+        }
         endTransform();
         return;
       }
@@ -2368,7 +2474,14 @@ function SelectionFeature({
         );
         // Still under brush gate — treat as soft click (select artboard if any).
         if (!passed) {
-          softSelectFrameAt(toScene, hitTestFrame, onSelectFrame, clientX, clientY);
+          const abs = toScene(clientX, clientY);
+          const frameId = hitTestFrame?.(abs.x, abs.y) ?? null;
+          if (frameId) {
+            softSelectFrameAt(toScene, hitTestFrame, onSelectFrame, clientX, clientY);
+          } else {
+            onSelectFrame?.(null);
+            onSelect([]);
+          }
           endTransform();
           return;
         }
@@ -2674,10 +2787,18 @@ function SelectionFeature({
       const step = e.shiftKey ? Math.max(10, gridSize * 10) : Math.max(1, gridSize);
       const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
       const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-      let nextUnion = { ...union, left: union.left + dx, top: union.top + dy };
-      nextUnion = snapBoxToGrid(nextUnion, gridSize);
-      const sdx = nextUnion.left - union.left;
-      const sdy = nextUnion.top - union.top;
+      // Same visual-outer 1px grid as drag-move (not path half-pixels).
+      const { nextUnion, sdx, sdy } = computeMovedUnion({
+        union,
+        origins,
+        document,
+        dx,
+        dy,
+        disableSnap: false,
+        gridSize,
+        targets: [],
+        threshold: 0,
+      });
       const nextOrigins = origins.map((o) => ({
         nodeId: o.nodeId,
         box: { ...o.box, left: o.box.left + sdx, top: o.box.top + sdy },
@@ -2800,7 +2921,14 @@ function SelectionFeature({
     selectionUnion,
     selectedNodeIds,
     selectedFrameIds,
+    document,
   });
+
+  /** Radius / ellipse knobs sit on path geom (host-local), not visual-outer chrome. */
+  const chromeGeomBox =
+    chromeUnion && singleNodeData
+      ? deflateSelectionBox(chromeUnion, singleNodeData)
+      : chromeUnion;
 
   const hoverImageReplaceId = resolveHoverImageReplaceId({
     inspectDev,
@@ -2879,7 +3007,7 @@ function SelectionFeature({
       !suppressChrome &&
       !selectedIsImageGen ? (
         <CornerRadiusHandlesOverlay
-          box={chromeUnion}
+          box={chromeGeomBox || chromeUnion}
           angle={chromeAngle}
           nodeId={singleId}
           node={singleNodeData}
@@ -2902,7 +3030,7 @@ function SelectionFeature({
       !suppressChrome &&
       !selectedIsImageGen ? (
         <CircleShapeHandlesOverlay
-          box={chromeUnion}
+          box={chromeGeomBox || chromeUnion}
           angle={chromeAngle}
           nodeId={singleId}
           node={singleNodeData}
@@ -2924,7 +3052,7 @@ function SelectionFeature({
       !suppressChrome &&
       !selectedIsImageGen ? (
         <PolygonShapeHandlesOverlay
-          box={chromeUnion}
+          box={chromeGeomBox || chromeUnion}
           angle={chromeAngle}
           nodeId={singleId}
           node={singleNodeData}
@@ -2946,7 +3074,7 @@ function SelectionFeature({
       !suppressChrome &&
       !selectedIsImageGen ? (
         <StarShapeHandlesOverlay
-          box={chromeUnion}
+          box={chromeGeomBox || chromeUnion}
           angle={chromeAngle}
           nodeId={singleId}
           node={singleNodeData}
@@ -2960,7 +3088,10 @@ function SelectionFeature({
         <SelectionContextToolbar
           document={document}
           nodeId={selectedNodeIds[0]}
-          box={chromeUnion}
+          box={toolbarBoxForSelection(chromeUnion, {
+            lineChrome,
+            node: singleNodeData,
+          })}
           edgePadScene={toolbarEdgePadScene}
           onOpenAgent={onOpenAgent}
         />

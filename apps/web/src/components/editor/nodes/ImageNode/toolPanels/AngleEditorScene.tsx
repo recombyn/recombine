@@ -98,8 +98,8 @@ function subjectBoxSize(
 
 /**
  * Multi-angle preview
- * - skybox: wireframe cube only — no sphere / arrows / camera
- * - camera: fixed face-on center image (scale only) + orbiting camera (fig.3)
+ * - skybox: wireframe cube only
+ * - camera: face-on center image + orbiting camera
  */
 function AngleEditorScene({
   mode,
@@ -270,7 +270,7 @@ function AngleEditorScene({
   );
 
   if (mode === 'skybox') {
-    // Wireframe cube only (fig.2). Same orbit as camera mode — Front (0,0) is face-on.
+    // Wireframe cube only. Same orbit as camera mode — Front (0,0) is face-on.
     return (
       <div className={cn('rcb-angle-editor-scene', className)}>
         <div

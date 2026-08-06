@@ -99,6 +99,48 @@ export function clearShapeHosts() {
   hosts.clear();
 }
 
+/** One SVG under `[data-rcb-world]` — grid + all shape layers share this lattice. */
+let sceneWorldRoot: SVGSVGElement | null = null;
+let sceneShapesMount: SVGGElement | null = null;
+let sceneDrawPreviewMount: SVGGElement | null = null;
+let sceneSmartGuidesMount: SVGGElement | null = null;
+let sceneWorldEpoch = 0;
+
+export function setSceneWorldRoot(
+  root: SVGSVGElement | null,
+  shapesMount: SVGGElement | null,
+  drawPreviewMount: SVGGElement | null = null,
+  smartGuidesMount: SVGGElement | null = null
+) {
+  sceneWorldRoot = root;
+  sceneShapesMount = shapesMount;
+  sceneDrawPreviewMount = drawPreviewMount;
+  sceneSmartGuidesMount = smartGuidesMount;
+  sceneWorldEpoch += 1;
+  bumpHostEpoch();
+}
+
+export function getSceneWorldRoot() {
+  return sceneWorldRoot;
+}
+
+export function getSceneShapesMount() {
+  return sceneShapesMount;
+}
+
+export function getSceneDrawPreviewMount() {
+  return sceneDrawPreviewMount;
+}
+
+/** Align/gap guides — must share world SVG lattice (not a sibling surface). */
+export function getSceneSmartGuidesMount() {
+  return sceneSmartGuidesMount;
+}
+
+export function getSceneWorldEpoch() {
+  return sceneWorldEpoch;
+}
+
 /**
  * Recover a host after HMR / race cleared the module Map but the DOM mini-board remains.
  */

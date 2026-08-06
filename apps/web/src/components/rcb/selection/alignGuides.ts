@@ -20,7 +20,7 @@ export type SmartGuideAlign = {
   at: number;
   from: number;
   to: number;
-  /** Path keypoints (×) on this guide. */
+  /** Path keypoints on this guide (corners + edge midpoints). */
   marks?: Array<{ x: number; y: number }>;
 };
 
@@ -74,7 +74,7 @@ function mergeMarks(
   return out;
 }
 
-/** Path keypoints (×) for one box on an align guide. */
+/** Path keypoints on an align guide: corners + edge midpoints (上中/下中/左中/右中). */
 function pathMarksForAlign(
   box: SceneBox,
   axis: 'x' | 'y',
@@ -82,23 +82,32 @@ function pathMarksForAlign(
   eps: number
 ): Array<{ x: number; y: number }> {
   if (!(box.width > 0) || !(box.height > 0)) return [];
+  const midX = box.left + box.width / 2;
+  const midY = box.top + box.height / 2;
+  const right = box.left + box.width;
+  const bottom = box.top + box.height;
+
   if (axis === 'y') {
     const hit = boxYMarks(box).find((m) => Math.abs(m.value - at) <= eps);
     if (!hit) return [];
     const y = at;
-    if (hit.role === 'mid') return [{ x: box.left + box.width / 2, y }];
+    // Center line: only the box center. Edge line: L / mid / R (上中·下中).
+    if (hit.role === 'mid') return [{ x: midX, y }];
     return [
       { x: box.left, y },
-      { x: box.left + box.width, y },
+      { x: midX, y },
+      { x: right, y },
     ];
   }
   const hit = boxXMarks(box).find((m) => Math.abs(m.value - at) <= eps);
   if (!hit) return [];
   const x = at;
-  if (hit.role === 'mid') return [{ x, y: box.top + box.height / 2 }];
+  // Center line: only the box center. Edge line: T / mid / B (左中·右中).
+  if (hit.role === 'mid') return [{ x, y: midY }];
   return [
     { x, y: box.top },
-    { x, y: box.top + box.height },
+    { x, y: midY },
+    { x, y: bottom },
   ];
 }
 
@@ -338,7 +347,7 @@ export function snapMoveToSmartGuides(opts: {
   box: SceneBox;
   targets: SceneBox[];
   threshold: number;
-  /** Skip snaps that leave the origin on a half-grid. */
+  /** Skip snaps that leave the box origin off the document grid. */
   gridSize?: number;
 }): { box: SceneBox; guides: SmartGuideLine[] } {
   const { box, targets, threshold } = opts;
@@ -371,13 +380,8 @@ export function snapMoveToSmartGuides(opts: {
         const abs = Math.abs(delta);
         if (abs > threshold) continue;
         const nextLeft = box.left + delta;
-        if (
-          gridSize > 0 &&
-          (m.role === 'mid' || tm.role === 'mid') &&
-          !isOnGrid(nextLeft, gridSize)
-        ) {
-          continue;
-        }
+        // Path control box / visual outer must stay on grid — reject snaps that leave it.
+        if (gridSize > 0 && !isOnGrid(nextLeft, gridSize)) continue;
         if (bestX && abs > bestX.abs + 1e-9) continue;
         if (
           bestX &&
@@ -396,13 +400,7 @@ export function snapMoveToSmartGuides(opts: {
         const abs = Math.abs(delta);
         if (abs > threshold) continue;
         const nextTop = box.top + delta;
-        if (
-          gridSize > 0 &&
-          (m.role === 'mid' || tm.role === 'mid') &&
-          !isOnGrid(nextTop, gridSize)
-        ) {
-          continue;
-        }
+        if (gridSize > 0 && !isOnGrid(nextTop, gridSize)) continue;
         if (bestY && abs > bestY.abs + 1e-9) continue;
         if (
           bestY &&
@@ -458,7 +456,7 @@ export function snapResizeToSmartGuides(opts: {
   targets: SceneBox[];
   threshold: number;
   min?: number;
-  /** Skip mid marks that would park a resized edge on a half-grid. */
+  /** Skip target marks that are off the document grid. */
   gridSize?: number;
 }): { box: SceneBox; guides: SmartGuideLine[] } {
   const { box, handle, targets, threshold } = opts;
@@ -487,7 +485,7 @@ export function snapResizeToSmartGuides(opts: {
     for (const tm of targetsMarks) {
       const abs = Math.abs(tm.value - edge);
       if (abs > threshold) continue;
-      if (gridSize > 0 && tm.role === 'mid' && !isOnGrid(tm.value, gridSize)) continue;
+      if (gridSize > 0 && !isOnGrid(tm.value, gridSize)) continue;
       if (best && abs > best.abs + 1e-9) continue;
       if (best && Math.abs(abs - best.abs) <= 1e-9 && roleRank(tm.role) > roleRank(best.role)) {
         continue;

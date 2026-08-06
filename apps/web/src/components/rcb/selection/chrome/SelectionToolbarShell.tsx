@@ -1,21 +1,18 @@
 import {
   useRef,
   type CSSProperties,
+  type HTMLAttributes,
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   memo,
 } from 'react';
-import {
-  RcbOverlayPortal,
-  useRcbCamera,
-  useRcbScreenToolbarStyle,
-} from '../../camera/context';
-import { rcbScreenPxToScene } from '../../core/math';
+import { useRcbCamera } from '../../camera/context';
+import { rcbCameraCssZoom, rcbScreenPxToScene } from '../../core/math';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import { cn } from '@/utils/classnames';
 
-/** Interactive chrome controls inside canvas overlays (toolbars / generators / menus). */
+/** Interactive controls inside canvas overlays (toolbars / generators / menus). */
 const CHROME_ACTION_SEL =
   'button:not([disabled]), [role="button"]:not([aria-disabled="true"]), [role="menuitem"]:not([aria-disabled="true"])';
 
@@ -29,9 +26,8 @@ function chromeActionFromEvent(
 }
 
 /**
- * Same activation path as canvas node hits: pointer down/up.
- * `element.click()` runs existing onClick handlers; only the following real
- * click (after a synthetic activate) is suppressed — not every button click.
+ * Activate chrome buttons on pointer down/up (same path as node hits).
+ * Suppresses the following real click after a synthetic `.click()`.
  */
 export function useChromePointerActivate() {
   const armedRef = useRef<HTMLElement | null>(null);
@@ -77,22 +73,21 @@ export function useChromePointerActivate() {
 }
 
 /**
- * Title row above frame (must stay in sync with HtmlArtboardFrame).
- * Screen pixels — independent of zoom.
+ * Title row gaps above the frame (screen px → scene via /zoom).
  */
-export const NODE_TITLE_LABEL_GAP_PX = 6;
+export const NODE_TITLE_LABEL_GAP_PX = 10;
 export const NODE_TITLE_LABEL_LINE_PX = 16;
 
-/** Air between title top and toolbar bottom when docking above a titled node. */
-export const SELECTION_TOOLBAR_ABOVE_LABEL_GAP_PX = 10;
+/** Gap between title top and toolbar bottom (above dock, titled). */
+export const SELECTION_TOOLBAR_ABOVE_LABEL_GAP_PX = 8;
 
-/** Air between box edge and toolbar when there is no title row. */
-export const SELECTION_TOOLBAR_ABOVE_BOX_GAP_PX = 12;
+/** Gap between box edge and toolbar when there is no title. */
+export const SELECTION_TOOLBAR_ABOVE_BOX_GAP_PX = 20;
 
-/** Air between box bottom and toolbar top when docking below. */
-export const SELECTION_TOOLBAR_BELOW_BOX_GAP_PX = 8;
+/** Gap between box bottom and toolbar top (below dock). */
+export const SELECTION_TOOLBAR_BELOW_BOX_GAP_PX = 20;
 
-/** Half selection knob + air — knobs sit outside the chrome edge. */
+/** Half knob + air outside the chrome edge. */
 export const SELECTION_HANDLE_CLEARANCE_PX = 6;
 
 export type SelectionToolbarBox = {
@@ -102,7 +97,7 @@ export type SelectionToolbarBox = {
   height: number;
 };
 
-/** Screen px from selection top → toolbar anchor (toolbar bottom when above). */
+/** Screen px from selection top → toolbar bottom (above dock). */
 export function toolbarAboveClearancePx(hasTitleLabel: boolean) {
   if (!hasTitleLabel) return SELECTION_TOOLBAR_ABOVE_BOX_GAP_PX;
   return (
@@ -112,29 +107,109 @@ export function toolbarAboveClearancePx(hasTitleLabel: boolean) {
   );
 }
 
+/** Scene Y of the toolbar bottom edge when docking above `boxTop`. */
+export function selectionToolbarAboveAnchorScene(
+  boxTop: number,
+  zoom: number,
+  hasTitleLabel: boolean,
+  edgePadScene = 0
+): number {
+  const z = Math.max(0.05, zoom || 1);
+  const handleClear = SELECTION_HANDLE_CLEARANCE_PX / z;
+  const clear = handleClear + Math.max(0, edgePadScene);
+  return boxTop - toolbarAboveClearancePx(hasTitleLabel) / z - clear;
+}
+
 /**
- * Shared world-space placement for selection / frame floating toolbars.
- * With `anchor: 'bottom'`, `top` is the bottom edge of the toolbar (clears titles).
+ * Stage layout px from plate top → toolbar bottom (above dock).
+ * Pass `viewportScale` when an ancestor CSS-scales the stage.
+ */
+export function toolbarAboveScreenGapPx(
+  boxTop: number,
+  zoom: number,
+  hasTitleLabel: boolean,
+  edgePadScene = 0,
+  viewportScale = 1
+): number {
+  const z = Math.max(0.05, zoom || 1);
+  const sx = viewportScale > 0 ? viewportScale : 1;
+  const anchor = selectionToolbarAboveAnchorScene(
+    boxTop,
+    z,
+    hasTitleLabel,
+    edgePadScene
+  );
+  return (boxTop - anchor) * z * sx;
+}
+
+/**
+ * World-layer HTML chrome under camera `scale(zoom)`.
+ * Nested: outer `scale(1/zoom)` at the scene anchor, inner %-translate.
+ */
+export function WorldScreenChromeRoot({
+  left,
+  top,
+  anchor = 'bottom',
+  className,
+  style,
+  children,
+  ...rest
+}: {
+  left: number;
+  top: number;
+  anchor?: 'bottom' | 'top';
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+} & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'children'>) {
+  const camera = useRcbCamera();
+  const inv = 1 / rcbCameraCssZoom(camera);
+  return (
+    <div
+      className={className}
+      style={{
+        position: 'absolute',
+        left,
+        top,
+        transform: `scale(${inv})`,
+        transformOrigin: '0 0',
+        ...style,
+      }}
+      {...rest}
+    >
+      <div
+        style={{
+          transform:
+            anchor === 'bottom' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+          width: 'max-content',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * World-space placement for selection / frame floating toolbars.
+ * With `anchor: 'bottom'`, `top` is the toolbar bottom edge.
  */
 export function useSelectionToolbarPlacement(opts: {
   box: SelectionToolbarBox | null | undefined;
-  /** Image / frame name+size row above the box. */
   hasTitleLabel?: boolean;
-  /**
-   * Extra scene-space pad outside the chrome box (e.g. center-stroke ink beyond
-   * the path face). Added on top of handle clearance.
-   */
+  /** Extra scene pad outside the chrome (e.g. stroke ink beyond the path). */
   edgePadScene?: number;
 }): {
-  style: CSSProperties;
   preferAbove: boolean;
   left: number;
   top: number;
+  anchor: 'bottom' | 'top';
 } {
-  const { zoom } = useRcbCamera();
+  const camera = useRcbCamera();
+  const zoom = rcbCameraCssZoom(camera);
   const hasTitle = Boolean(opts.hasTitleLabel);
-  const handleClear = rcbScreenPxToScene(SELECTION_HANDLE_CLEARANCE_PX, zoom);
   const edgePad = Math.max(0, Number(opts.edgePadScene) || 0);
+  const handleClear = rcbScreenPxToScene(SELECTION_HANDLE_CLEARANCE_PX, zoom);
   const clear = handleClear + edgePad;
   const aboveGap = rcbScreenPxToScene(toolbarAboveClearancePx(hasTitle), zoom) + clear;
   const belowGap = rcbScreenPxToScene(SELECTION_TOOLBAR_BELOW_BOX_GAP_PX, zoom) + clear;
@@ -143,36 +218,32 @@ export function useSelectionToolbarPlacement(opts: {
   const left = box ? box.left + box.width / 2 : 0;
   let top = 0;
   if (box) {
-    top = preferAbove ? box.top - aboveGap : box.top + box.height + belowGap;
+    top = preferAbove
+      ? selectionToolbarAboveAnchorScene(box.top, zoom, hasTitle, edgePad)
+      : box.top + box.height + belowGap;
   }
 
-  const style = useRcbScreenToolbarStyle({
+  return {
+    preferAbove,
     left,
     top,
-    anchor: preferAbove ? 'bottom' : 'top',
-  });
-
-  return { style, preferAbove, left, top };
+    anchor: (preferAbove ? 'bottom' : 'top') as 'bottom' | 'top',
+  };
 }
 
 type ShellProps = {
   box: SelectionToolbarBox | null | undefined;
   hasTitleLabel?: boolean;
-  /** Scene-space pad beyond chrome for outer stroke ink. */
+  /** Scene pad beyond chrome for outer stroke ink. */
   edgePadScene?: number;
   children: ReactNode;
   className?: string;
-  /** Mark as frame toolbar for hit-testing / dismiss selectors. */
   isFrameToolbar?: boolean;
-  /** Transparent / unstyled inner (icon image tools). */
   bare?: boolean;
   zIndexClassName?: string;
 };
 
-/**
- * Portal + screen-fixed placement + chrome for selection toolbars.
- * Keeps Frame / Image / Shape bars aligned so titles are never covered.
- */
+/** World-layer selection toolbars (clears titles; aligns Frame / Image / Shape). */
 function SelectionToolbarShell({
   box,
   hasTitleLabel = false,
@@ -183,24 +254,28 @@ function SelectionToolbarShell({
   bare = false,
   zIndexClassName = 'z-30',
 }: ShellProps) {
-  const { style } = useSelectionToolbarPlacement({ box, hasTitleLabel, edgePadScene });
+  const { left, top, anchor } = useSelectionToolbarPlacement({
+    box,
+    hasTitleLabel,
+    edgePadScene,
+  });
   const chromePointer = useChromePointerActivate();
   if (!box) return null;
 
   return (
-    <RcbOverlayPortal>
-      <div
-        data-sel-toolbar
-        {...(isFrameToolbar ? { 'data-frame-toolbar': true } : {})}
-        className={cn('pointer-events-auto absolute overflow-visible', zIndexClassName)}
-        style={style}
-        {...chromePointer}
-      >
-        <FloatingToolbar bare={bare} className={className}>
-          {children}
-        </FloatingToolbar>
-      </div>
-    </RcbOverlayPortal>
+    <WorldScreenChromeRoot
+      left={left}
+      top={top}
+      anchor={anchor}
+      data-sel-toolbar
+      {...(isFrameToolbar ? { 'data-frame-toolbar': true } : {})}
+      className={cn('pointer-events-auto overflow-visible', zIndexClassName)}
+      {...chromePointer}
+    >
+      <FloatingToolbar bare={bare} className={className}>
+        {children}
+      </FloatingToolbar>
+    </WorldScreenChromeRoot>
   );
 }
 

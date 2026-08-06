@@ -49,11 +49,14 @@ import {
 } from '@/components/rcb/scene/document/sceneDocument';
 import { sceneToDocumentCoords } from '@/components/rcb/scene/paint/svgToScene';
 import {
-  rcbCenterOnPoint,
-  rcbFitImageIntoViewport,
+  rcbLayoutGeneratorPlate,
   rcbScreenToScene,
+  GENERATOR_EMPTY_STROKE_OUTSET,
   type RcbCamera,
 } from '@/components/rcb';
+import {
+  getDocumentGridSize,
+} from '@/components/rcb/selection/alignGuides';
 import { cn } from '@/utils/classnames';
 
 const MENU_ICON_CLASS = 'h-4 w-4';
@@ -61,9 +64,68 @@ const TOOL_ICON_CLASS = 'h-4 w-4 shrink-0';
 const STROKE = 1.5;
 const MENU_POPUP = 'min-w-[168px]';
 
+/**
+ * Fit a generator plate into the visible stage, center it, snap painted outer
+ * ink to the document grid (then inset 0.5 for the empty-state center stroke).
+ */
+function layoutGeneratorPlateInView(opts: {
+  document: any;
+  camera: RcbCamera;
+  stageEl: HTMLElement;
+  natural: { width: number; height: number };
+  fit?: { minRatio?: number; maxRatio?: number };
+}): { x: number; y: number; width: number; height: number; debug: Record<string, number> } {
+  const view = opts.stageEl.getBoundingClientRect();
+  const zoom = Math.max(0.05, opts.camera.zoom || 1);
+  const center = rcbScreenToScene(
+    opts.camera,
+    opts.stageEl,
+    view.left + view.width / 2,
+    view.top + view.height / 2
+  );
+  const gridSize = getDocumentGridSize(opts.document);
+  const laid = rcbLayoutGeneratorPlate({
+    natural: opts.natural,
+    viewport: { width: view.width, height: view.height },
+    zoom,
+    center,
+    gridSize,
+    visualOutset: GENERATOR_EMPTY_STROKE_OUTSET,
+    fit: opts.fit,
+  });
+  const origin = sceneToDocumentCoords(opts.document, laid.left, laid.top);
+  const debug = {
+    zoom,
+    viewW: view.width,
+    viewH: view.height,
+    sceneViewW: view.width / zoom,
+    sceneViewH: view.height / zoom,
+    geomW: laid.width,
+    geomH: laid.height,
+    visualL: laid.visual.left,
+    visualT: laid.visual.top,
+    visualW: laid.visual.width,
+    visualH: laid.visual.height,
+    x: origin.x,
+    y: origin.y,
+    gridSize,
+  };
+  if (typeof window !== 'undefined' && (window as any).__RCB_GENERATOR_PLACE_DEBUG__) {
+    // eslint-disable-next-line no-console
+    console.log('[rcb:generator-place]', debug);
+  }
+  return {
+    x: origin.x,
+    y: origin.y,
+    width: laid.width,
+    height: laid.height,
+    debug,
+  };
+}
+
 type LayerIconComponent = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
-/** One family (Lucide) so layer glyphs share stroke weight and optical size. */
+/** Layer glyphs share one stroke weight / optical size. */
 const layerIconByKind: Record<string, LayerIconComponent> = {
   text: LuType,
   image: LuImage,
@@ -333,24 +395,17 @@ function EditorToolStrip({
     if (camera && stageEl) {
       const view = stageEl.getBoundingClientRect();
       if (view.width > 0 && view.height > 0) {
-        const sized = rcbFitImageIntoViewport(
-          { width: 1024, height: 1024 },
-          view,
-          camera.zoom,
-          { minRatio: 0.28, maxRatio: 0.42 }
-        );
-        width = sized.width;
-        height = sized.height;
-        const center = rcbScreenToScene(
+        const laid = layoutGeneratorPlateInView({
+          document,
           camera,
           stageEl,
-          view.left + view.width / 2,
-          view.top + view.height / 2
-        );
-        const placed = rcbCenterOnPoint(center, { width, height });
-        const origin = sceneToDocumentCoords(document, placed.left, placed.top);
-        x = origin.x;
-        y = origin.y;
+          natural: { width: 1024, height: 1024 },
+          fit: { minRatio: 0.28, maxRatio: 0.42 },
+        });
+        width = laid.width;
+        height = laid.height;
+        x = laid.x;
+        y = laid.y;
       }
     }
     dispatch(
@@ -373,24 +428,17 @@ function EditorToolStrip({
     if (camera && stageEl) {
       const view = stageEl.getBoundingClientRect();
       if (view.width > 0 && view.height > 0) {
-        const sized = rcbFitImageIntoViewport(
-          { width: 1280, height: 720 },
-          view,
-          camera.zoom,
-          { minRatio: 0.28, maxRatio: 0.48 }
-        );
-        width = sized.width;
-        height = sized.height;
-        const center = rcbScreenToScene(
+        const laid = layoutGeneratorPlateInView({
+          document,
           camera,
           stageEl,
-          view.left + view.width / 2,
-          view.top + view.height / 2
-        );
-        const placed = rcbCenterOnPoint(center, { width, height });
-        const origin = sceneToDocumentCoords(document, placed.left, placed.top);
-        x = origin.x;
-        y = origin.y;
+          natural: { width: 1280, height: 720 },
+          fit: { minRatio: 0.28, maxRatio: 0.48 },
+        });
+        width = laid.width;
+        height = laid.height;
+        x = laid.x;
+        y = laid.y;
       }
     }
     dispatch(
@@ -466,24 +514,17 @@ function EditorToolStrip({
       camera && stageEl && document && view && view.width > 0 && view.height > 0
         ? { camera, stageEl, document, view }
         : null;
-    const { width, height } = placeable
-      ? rcbFitImageIntoViewport(natural, placeable.view, placeable.camera.zoom)
-      : fitImageSize(natural.width, natural.height, 2400);
-    let x: number | undefined;
-    let y: number | undefined;
     if (placeable) {
-      const center = rcbScreenToScene(
-        placeable.camera,
-        placeable.stageEl,
-        placeable.view.left + placeable.view.width / 2,
-        placeable.view.top + placeable.view.height / 2
-      );
-      const placed = rcbCenterOnPoint(center, { width, height });
-      const origin = sceneToDocumentCoords(placeable.document, placed.left, placed.top);
-      x = origin.x;
-      y = origin.y;
+      const laid = layoutGeneratorPlateInView({
+        document: placeable.document,
+        camera: placeable.camera,
+        stageEl: placeable.stageEl,
+        natural,
+      });
+      return { width: laid.width, height: laid.height, x: laid.x, y: laid.y };
     }
-    return { width, height, x, y };
+    const { width, height } = fitImageSize(natural.width, natural.height, 2400);
+    return { width, height };
   };
 
   const onPickImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -743,7 +784,7 @@ function EditorToolStrip({
         </ToolIcon>
       </ToolBtn>
 
-      {/* 视频生成器 — Remix fill reads heavier than Lucide strokes; soften to match. */}
+      {/* Video generator icon — soften fill weight to match stroke tools. */}
       <ToolBtn tip={L.videoGenerator} disabled={toolsLocked} onClick={spawnVideoGeneratorAtView}>
         <ToolIcon className="h-[18px] w-[18px]">
           <RiVideoAiLine className="opacity-[0.72]" />

@@ -591,7 +591,7 @@ function MultiSelectionToolbar({
     );
   };
 
-  // Fig.1 — selected group: 解除编组 | export
+  // Selected group: 解除编组 | export
   if (groupId) {
     return (
       <SelectionToolbarShell box={box}>

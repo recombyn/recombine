@@ -1,9 +1,9 @@
 import { readDevicePixelRatio, snapCssToDevicePixel, toDomPrecision } from './dpr';
 import type { RcbBox, RcbCamera, RcbVec } from './types';
 
-/** Camera zoom floor / ceiling (5% … 1200%). */
+/** Camera zoom floor / ceiling (5% … 10000%). */
 export const RCB_MIN_ZOOM = 0.05;
-export const RCB_MAX_ZOOM = 12;
+export const RCB_MAX_ZOOM = 100;
 
 export function rcbClampZoom(z: number) {
   return Math.min(RCB_MAX_ZOOM, Math.max(RCB_MIN_ZOOM, Number(z.toFixed(4))));
@@ -11,7 +11,8 @@ export function rcbClampZoom(z: number) {
 
 /**
  * CSS translate written on the camera world layer.
- * Must match `RcbCanvas` so hit-testing and overlays stay locked to pixels.
+ * Snaps pan onto the device-pixel grid (browser zoom / fractional DPR) so the
+ * whole world layer rasterizes together. Must match `RcbCanvas`.
  */
 export function rcbCameraScreenOffset(
   camera: RcbCamera,
@@ -21,6 +22,32 @@ export function rcbCameraScreenOffset(
     x: toDomPrecision(snapCssToDevicePixel(camera.x, dpr)),
     y: toDomPrecision(snapCssToDevicePixel(camera.y, dpr)),
   };
+}
+
+/** Browser zoom to 90%/110%/… → non-integer devicePixelRatio. */
+export function rcbDprIsFractional(dpr: number): boolean {
+  const d = dpr > 0 ? dpr : 1;
+  return Math.abs(d - Math.round(d)) > 0.001;
+}
+
+/**
+ * Scene-space SVG surface origin under fractional DPR.
+ * Chooses origin so `(origin * zoom + cam)` lands on a device pixel, while
+ * keeping CSS `left` === `viewBox` min — absolute scene content still maps to
+ * `scene * zoom + cam`. At integer DPR (100% zoom) returns `scene` unchanged
+ * so half-pixel stroke origins stay intact.
+ */
+export function rcbSnapSceneSurfaceOrigin(
+  scene: number,
+  zoom: number,
+  camSnapped: number,
+  dpr: number
+): number {
+  if (!rcbDprIsFractional(dpr)) return scene;
+  const z = Math.max(0.05, zoom || 1);
+  const screen = scene * z + camSnapped;
+  const screenSnapped = snapCssToDevicePixel(screen, dpr);
+  return (screenSnapped - camSnapped) / z;
 }
 
 /**
@@ -92,49 +119,45 @@ export function rcbSceneToScreen(
   };
 }
 
-/**
- * Snap a scene-axis value so `(scene * zoom + camSnapped) * dpr` lands on an
- * integer device pixel. Needed when browser zoom makes dpr fractional (e.g. 0.9):
- * pan is already snapped, but scene*zoom*dpr is still often frac — SVG strokes
- * and HTML chrome then round to different pixels.
- */
+/** @see rcbSnapSceneSurfaceOrigin */
 export function rcbSnapSceneAxis(
   scene: number,
   zoom: number,
   camSnapped: number,
-  dpr: number
+  dpr?: number
 ): number {
-  const z = Math.max(0.05, zoom || 1);
-  const d = dpr > 0 ? dpr : 1;
-  const screen = scene * z + camSnapped;
-  const snappedScreen = snapCssToDevicePixel(screen, d);
-  return (snappedScreen - camSnapped) / z;
+  return rcbSnapSceneSurfaceOrigin(scene, zoom, camSnapped, dpr ?? readDevicePixelRatio());
 }
 
-/** Snap box corners onto the device-pixel grid under the live camera CSS. */
+/** Snap surface origin (CSS === viewBox); size unchanged. */
 export function rcbSnapSceneBox(
   box: { left: number; top: number; width: number; height: number },
-  camera: RcbCamera,
-  dpr: number = readDevicePixelRatio()
+  camera?: RcbCamera,
+  dpr?: number
 ): { left: number; top: number; width: number; height: number } {
-  const z = Math.max(0.05, camera.zoom || 1);
-  const { x: camX, y: camY } = rcbCameraScreenOffset(camera, dpr);
-  const left = rcbSnapSceneAxis(box.left, z, camX, dpr);
-  const top = rcbSnapSceneAxis(box.top, z, camY, dpr);
-  const right = rcbSnapSceneAxis(box.left + box.width, z, camX, dpr);
-  const bottom = rcbSnapSceneAxis(box.top + box.height, z, camY, dpr);
+  const d = dpr ?? readDevicePixelRatio();
+  if (!camera || !rcbDprIsFractional(d)) {
+    return {
+      left: box.left,
+      top: box.top,
+      width: Math.max(1e-4, box.width),
+      height: Math.max(1e-4, box.height),
+    };
+  }
+  const z = rcbCameraCssZoom(camera);
+  const { x: camX, y: camY } = rcbCameraScreenOffset(camera, d);
   return {
-    left,
-    top,
-    width: Math.max(1e-4, right - left),
-    height: Math.max(1e-4, bottom - top),
+    left: rcbSnapSceneSurfaceOrigin(box.left, z, camX, d),
+    top: rcbSnapSceneSurfaceOrigin(box.top, z, camY, d),
+    width: Math.max(1e-4, box.width),
+    height: Math.max(1e-4, box.height),
   };
 }
 
 /**
  * Screen/client -> scene (page/world).
  * viewportEl is the unscaled stage root.
- * Uses DPR-snapped pan + layout/visual scale correction.
+ * Uses snapped camera pan (same as CSS world translate) + layout/visual scale.
  */
 export function rcbScreenToScene(
   camera: RcbCamera,
@@ -184,7 +207,7 @@ export function rcbZoomAtPoint(
   const z0 = camera.zoom;
   const z1 = rcbClampZoom(nextZoom);
   if (z0 === z1) return camera;
-  // Use raw camera pan (state space). CSS snap is display-only.
+  // Use raw camera pan (state space). Display offset is precision-only (no DPR).
   const sceneX = (localX - camera.x) / z0;
   const sceneY = (localY - camera.y) / z0;
   return { zoom: z1, x: localX - sceneX * z1, y: localY - sceneY * z1 };

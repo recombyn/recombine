@@ -1,7 +1,6 @@
 import { forwardRef, memo, useImperativeHandle, useRef } from 'react';
-import { readDevicePixelRatio } from '../core/dpr';
 import { rcbCameraCssZoom } from '../core/math';
-import { useRcbCamera, useRcbDevicePixelRatio } from '../camera/context';
+import { useRcbCamera } from '../camera/context';
 
 export type SceneOverlayBox = {
   left: number;
@@ -37,10 +36,12 @@ type FrameSlot = {
 };
 
 /**
- * Scene-space Canvas overlay for draw previews / indicators (under the camera layer).
- * Position with CSS `left/top` (no `translate`) so it matches shape-host boxes
- * under browser zoom. 1 scene unit = 1 CSS px under camera scale.
- * Path2D is stroked here; committed ink stays SVG.
+ * @deprecated Prefer scene-surface SVG (`sceneSurfaceSvgProps`) or
+ * `mirrorHostSurface` for anything that must align under browser zoom.
+ * Kept for rare non-alignment Path2D experiments; pen/pencil/path-edit
+ * previews now paint SVG.
+ *
+ * If used: CSS box === scene units; bitmap is a separate paint pipeline.
  */
 const RcbSceneOverlayCanvas = memo(
   forwardRef<RcbSceneOverlayCanvasHandle, Props>(function RcbSceneOverlayCanvas(
@@ -49,12 +50,9 @@ const RcbSceneOverlayCanvas = memo(
   ) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const camera = useRcbCamera();
-    const dprCtx = useRcbDevicePixelRatio();
     const zoomRef = useRef(camera.zoom);
-    const dprRef = useRef(dprCtx);
     const slotRef = useRef<FrameSlot | null>(null);
     zoomRef.current = rcbCameraCssZoom(camera);
-    dprRef.current = dprCtx || readDevicePixelRatio();
 
     useImperativeHandle(
       ref,
@@ -75,45 +73,38 @@ const RcbSceneOverlayCanvas = memo(
           const canvas = canvasRef.current;
           if (!canvas) return null;
           const z = zoomRef.current;
-          // Keep fractional browser-zoom dpr (e.g. 0.9) — clamping to ≥1 mis-sized
-          // the backing store vs physical pixels and drifted indicators vs SVG ink.
-          const dpr = Math.max(0.25, dprRef.current || 1);
           const w = Math.max(1, box.width);
           const h = Math.max(1, box.height);
-          // World layer already CSS-scales by z; bake z*dpr for the backing store.
-          // CSS size = bitmap/scale so setTransform(scale) stays isotropic (no
-          // round(w*scale)/w skew vs SVG hosts under fractional dpr).
-          const scale = z * dpr;
+          // World layer already CSS-scales by z; bake z into the bitmap only.
+          const scale = z;
           const pw = Math.max(1, Math.round(w * scale));
           const ph = Math.max(1, Math.round(h * scale));
-          const cssW = pw / scale;
-          const cssH = ph / scale;
+          const sx = pw / w;
+          const sy = ph / h;
           const prev = slotRef.current;
           const sameSlot =
             prev &&
             prev.pw === pw &&
             prev.ph === ph &&
-            prev.w === cssW &&
-            prev.h === cssH &&
+            prev.w === w &&
+            prev.h === h &&
             prev.left === box.left &&
             prev.top === box.top;
-          // Reassigning canvas.width clears the bitmap and causes draw-preview jitter.
-          // Keep the same buffer when the scene box is unchanged.
           if (!sameSlot) {
             canvas.width = pw;
             canvas.height = ph;
             canvas.style.left = `${box.left}px`;
             canvas.style.top = `${box.top}px`;
-            canvas.style.width = `${cssW}px`;
-            canvas.style.height = `${cssH}px`;
+            canvas.style.width = `${w}px`;
+            canvas.style.height = `${h}px`;
             canvas.style.transform = '';
-            slotRef.current = { left: box.left, top: box.top, w: cssW, h: cssH, pw, ph };
+            slotRef.current = { left: box.left, top: box.top, w, h, pw, ph };
           }
           canvas.style.display = 'block';
           const ctx = canvas.getContext('2d');
           if (!ctx) return null;
-          ctx.setTransform(scale, 0, 0, scale, 0, 0);
-          ctx.clearRect(0, 0, cssW, cssH);
+          ctx.setTransform(sx, 0, 0, sy, 0, 0);
+          ctx.clearRect(0, 0, w, h);
           ctx.translate(-box.left, -box.top);
           return ctx;
         },

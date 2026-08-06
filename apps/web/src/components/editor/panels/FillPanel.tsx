@@ -194,7 +194,7 @@ function ImageAdjustRow({
   );
 }
 
-/** Compact fit dropdown — portals to body so FillPanel never clips it (fig.6). */
+/** Compact fit dropdown — portals to body so FillPanel never clips it. */
 function FitModeSelect({
   value,
   onChange,
@@ -472,7 +472,7 @@ export function fillPanelPreview(value: FillPanelValue): string {
   return cssPreviewForGradient(g, value.fillOpacity);
 }
 
-/** Full fill editor: solid / linear / radial / angular / image (fig.2–6). */
+/** Full fill editor: solid / linear / radial / angular / image. */
 function FillPanel({
   value,
   onChange,

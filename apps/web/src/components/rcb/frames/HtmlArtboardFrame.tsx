@@ -1,20 +1,26 @@
-/** Artboard: SVG plate + HTML title / process chrome. */
+/** Artboard: SVG plate + world-layer title / process chrome. */
 import { useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode, memo } from 'react';
-import { RcbOverlayPortal, useRcbCamera } from '../camera/context';
-import { rcbSceneToScreen } from '../core/math';
+import { useRcbCamera, useRcbDevicePixelRatio } from '../camera/context';
+import { rcbCameraCssZoom } from '../core/math';
 import {
   createSvgBoard,
-  fitInfiniteSvgToContent,
   seedInfiniteSvgViewport,
+  snapInfiniteSvgViewportToCamera,
 } from '@/components/rcb/scene/paint/sceneToSvg';
 import { append, setAttrs, setFill, setStroke, svgEl } from '@/components/rcb/scene/paint/svgDom';
 import {
+  getSceneShapesMount,
+  getSceneWorldRoot,
   registerShapeHost,
   unregisterShapeHost,
   updateShapeHostElement,
 } from '@/components/rcb/shapes/shapeHostRegistry';
 import NodeTitleLabel from '../selection/chrome/NodeTitleLabel';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
+import {
+  FRAME_PLATE_STROKE,
+  framePlateStrokeSceneWidth,
+} from '@/components/rcb/frames/types';
 
 type HtmlArtboardFrameProps = {
   frame: ArtboardFrame;
@@ -38,7 +44,8 @@ function paintFramePlate(
   layer: SVGGElement,
   frame: ArtboardFrame,
   selected: boolean,
-  generating: boolean
+  generating: boolean,
+  zoom: number
 ): SVGGElement {
   while (layer.firstChild) layer.removeChild(layer.firstChild);
 
@@ -82,15 +89,20 @@ function paintFramePlate(
   });
   append(g, plate);
   setFill(plate, bg);
-  // Idle: hairline. Selected: host chrome owns the blue box.
+  // Idle: ~1 CSS px hairline after CSS camera scale (not non-scaling-stroke —
+  // that still thickens under parent `scale(zoom)` and AA-fringes off-grid).
+  // Selected: host chrome owns the blue box.
+  plate.removeAttribute('vector-effect');
   if (selected) {
     setStroke(plate, 'none');
+    plate.removeAttribute('shape-rendering');
   } else {
     setStroke(plate, {
-      color: 'color-mix(in srgb, var(--ink) 12%, transparent)',
-      width: 1,
+      color: FRAME_PLATE_STROKE,
+      width: framePlateStrokeSceneWidth(zoom),
     });
-    setAttrs(plate, { 'vector-effect': 'non-scaling-stroke' });
+    // Prefer hard plate edges vs geometricPrecision soft fringe on deselected.
+    setAttrs(plate, { 'shape-rendering': 'crispEdges' });
   }
   return g;
 }
@@ -108,42 +120,38 @@ function HtmlArtboardFrame({
   zIndex = 0,
 }: HtmlArtboardFrameProps): ReactNode {
   const camera = useRcbCamera();
-  const z = Math.max(0.05, camera.zoom || 1);
+  const dpr = useRcbDevicePixelRatio();
+  const z = rcbCameraCssZoom(camera);
+  const inv = 1 / z;
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const layerRef = useRef<SVGGElement | null>(null);
   const generating = String(frame.processStatus || '') === 'running';
   const processLabel = String(frame.processLabel || 'Preparing…');
 
-  const stageBox = useMemo(() => {
-    const origin = rcbSceneToScreen(camera, frame.x, frame.y);
-    return {
-      left: origin.x,
-      top: origin.y,
-      width: frame.width * z,
-      height: frame.height * z,
-    };
-  }, [camera, frame.x, frame.y, frame.width, frame.height, z]);
-
+  // World-layer process chrome (same lattice as the plate / control box).
   const processOverlayStyle = useMemo(
     (): CSSProperties => ({
       position: 'absolute',
-      left: stageBox.left,
-      top: stageBox.top,
-      width: stageBox.width,
-      height: stageBox.height,
+      left: frame.x,
+      top: frame.y,
+      width: frame.width,
+      height: frame.height,
     }),
-    [stageBox.left, stageBox.top, stageBox.width, stageBox.height]
+    [frame.x, frame.y, frame.width, frame.height]
   );
 
   const processPillStyle = useMemo(
     (): CSSProperties => ({
       position: 'absolute',
-      left: stageBox.left + stageBox.width / 2,
-      top: stageBox.top + stageBox.height - 14,
-      transform: 'translate(-50%, -100%)',
+      left: frame.x + frame.width / 2,
+      top: frame.y + frame.height - 14 * inv,
+      transform: `translate(-50%, -100%) scale(${inv})`,
+      transformOrigin: 'center bottom',
     }),
-    [stageBox.left, stageBox.top, stageBox.width, stageBox.height]
+    [frame.x, frame.y, frame.width, frame.height, inv]
   );
 
+  // Zoom in paintKey so idle hairline stays ~1 CSS px after camera scale.
   const paintKey = [
     frame.id,
     frame.x,
@@ -154,6 +162,7 @@ function HtmlArtboardFrame({
     frame.processStatus,
     selected ? 1 : 0,
     generating ? 1 : 0,
+    z.toFixed(4),
   ].join('|');
 
   useLayoutEffect(() => {
@@ -165,29 +174,47 @@ function HtmlArtboardFrame({
     const y = Number(frame.y) || 0;
     const w = Math.max(1, Number(frame.width) || 1);
     const h = Math.max(1, Number(frame.height) || 1);
-    const { root, layer: sceneLayer } = createSvgBoard(host, 1, 1, { infinite: true });
-    seedInfiniteSvgViewport(root, { left: x, top: y, width: w, height: h });
-    setAttrs(root, { 'data-frame-id': frame.id, 'data-rcb-frame-svg': '1' });
-    const el = paintFramePlate(sceneLayer, frame, selected, generating);
+    const worldRoot = getSceneWorldRoot();
+    const shapesMount = getSceneShapesMount();
+    const { root, layer: sceneLayer, shared } = createSvgBoard(host, 1, 1, {
+      infinite: true,
+      sharedRoot: worldRoot,
+      sharedMount: shapesMount,
+    });
+    layerRef.current = sceneLayer;
+    sceneLayer.setAttribute('data-rcb-frame-layer', frame.id);
+    sceneLayer.setAttribute('data-z', String(zIndex));
+    if (!shared) {
+      seedInfiniteSvgViewport(root, { left: x, top: y, width: w, height: h });
+      setAttrs(root, { 'data-frame-id': frame.id, 'data-rcb-frame-svg': '1' });
+      snapInfiniteSvgViewportToCamera(root, camera, dpr);
+    }
+    const el = paintFramePlate(sceneLayer, frame, selected, generating, z);
     registerShapeHost({ nodeId: frame.id, root, layer: sceneLayer, el, kind: 'svg' });
     updateShapeHostElement(frame.id, el);
-    try {
-      fitInfiniteSvgToContent(root, sceneLayer);
-    } catch {
-      /* seeded viewport is enough */
+
+    // Keep frame plate paint order with shapes on the shared mount.
+    if (shared && shapesMount && sceneLayer.parentElement === shapesMount) {
+      const siblings = [...shapesMount.querySelectorAll(':scope > g[data-rcb-shape-layer], :scope > g[data-rcb-frame-layer]')];
+      siblings.sort(
+        (a, b) => (Number(a.getAttribute('data-z')) || 0) - (Number(b.getAttribute('data-z')) || 0)
+      );
+      for (const g of siblings) shapesMount.appendChild(g);
     }
 
     return () => {
       unregisterShapeHost(frame.id);
       try {
-        root.remove();
+        if (shared) sceneLayer.remove();
+        else root.remove();
       } catch {
         /* ignore */
       }
-      host.innerHTML = '';
+      if (!shared) host.innerHTML = '';
+      layerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layer, paintKey]);
+  }, [layer, paintKey, zIndex]);
 
   if (layer === 'label') {
     return (
@@ -235,7 +262,7 @@ function HtmlArtboardFrame({
         />
       </div>
       {generating ? (
-        <RcbOverlayPortal>
+        <>
           <div
             data-artboard-process-shimmer
             data-frame-id={frame.id}
@@ -251,7 +278,7 @@ function HtmlArtboardFrame({
           >
             {processLabel}
           </div>
-        </RcbOverlayPortal>
+        </>
       ) : null}
     </>
   );
