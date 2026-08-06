@@ -87,8 +87,8 @@ export const SELECTION_TOOLBAR_ABOVE_BOX_GAP_PX = 20;
 /** Gap between box bottom and toolbar top (below dock). */
 export const SELECTION_TOOLBAR_BELOW_BOX_GAP_PX = 20;
 
-/** Half knob + air outside the chrome edge. */
-export const SELECTION_HANDLE_CLEARANCE_PX = 6;
+/** Half knob + air outside the chrome edge (must clear 10px resize hit). */
+export const SELECTION_HANDLE_CLEARANCE_PX = 14;
 
 export type SelectionToolbarBox = {
   left: number;
@@ -144,7 +144,12 @@ export function toolbarAboveScreenGapPx(
 
 /**
  * World-layer HTML chrome under camera `scale(zoom)`.
- * Nested: outer `scale(1/zoom)` at the scene anchor, inner %-translate.
+ *
+ * Why DevTools shows a “phantom” strip on the box while the pill sits above:
+ * anchor is at the selection edge; `translate(-50%,-100%)` only moves paint.
+ * If the wrapper keeps the toolbar’s layout size + `pointer-events:auto`, that
+ * untransformed box covers the top edge / NE resize knob. Same fix as
+ * SelectionFeature overlays: outer `0×0` shell, absolute pe:auto content.
  */
 export function WorldScreenChromeRoot({
   left,
@@ -166,23 +171,28 @@ export function WorldScreenChromeRoot({
   const inv = 1 / rcbCameraCssZoom(camera);
   return (
     <div
-      className={className}
+      className={cn('pointer-events-none absolute overflow-visible', className)}
       style={{
         position: 'absolute',
         left,
         top,
+        width: 0,
+        height: 0,
         transform: `scale(${inv})`,
         transformOrigin: '0 0',
+        // Inline beats world `[&>*]:pointer-events-auto` if mounted there.
+        pointerEvents: 'none',
         ...style,
       }}
-      {...rest}
     >
       <div
+        className="pointer-events-auto absolute left-0 top-0"
         style={{
           transform:
             anchor === 'bottom' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
           width: 'max-content',
         }}
+        {...rest}
       >
         {children}
       </div>
@@ -269,7 +279,7 @@ function SelectionToolbarShell({
       anchor={anchor}
       data-sel-toolbar
       {...(isFrameToolbar ? { 'data-frame-toolbar': true } : {})}
-      className={cn('pointer-events-auto overflow-visible', zIndexClassName)}
+      className={zIndexClassName}
       {...chromePointer}
     >
       <FloatingToolbar bare={bare} className={className}>

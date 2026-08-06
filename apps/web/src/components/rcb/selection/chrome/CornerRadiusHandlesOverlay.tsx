@@ -37,28 +37,21 @@ import {
 } from '@/components/rcb/shapes/shapeHostRegistry';
 import type { SceneBox } from '../alignGuides';
 import {
-  CHROME_HANDLE_HIT_PX,
   CHROME_HANDLE_VIS_PX,
+  CHROME_RADIUS_HIT_PX,
   CHROME_STROKE_PX,
+  chromeHitScaleForBox,
+  radiusHandleParkScreenPx,
+  radiusHandlesFitOnScreen,
+  radiusParkSceneForBox,
   WorldScreenBadge,
 } from '../SelectionChrome';
 
 /** Soft-click threshold (screen px²) — match SelectionFeature. */
 const DRAG_DISTANCE_SQUARED = 16;
 
-/**
- * Screen-constant sizes under world CSS camera scale(z) — same contract as
- * SelectionChrome / path chrome knobs (scene = screenPx / zoom).
- */
-const RADIUS_VIS_PX = CHROME_HANDLE_VIS_PX;
-const RADIUS_HIT_PX = CHROME_HANDLE_HIT_PX;
-const RADIUS_STROKE_PX = CHROME_STROKE_PX;
-const RADIUS_REVEAL_DIST_PX = 56;
-/**
- * When R≈0 (or R is still small), seat this many screen px inside the corner
- * so the radius dot clears the resize knob (~8px) with ~10px spacing.
- */
-const RADIUS_PARK_PX = 10;
+/** Ideal park when the box is large enough on screen (icon-centered hits). */
+const RADIUS_PARK_PX = radiusHandleParkScreenPx();
 
 function liveNodeEl(nodeId: string): Element | null {
   return (
@@ -105,7 +98,7 @@ function HostMirroredKnobSvg({
     return (
       <svg
         data-rcb-infinite="1"
-        className="absolute z-[28] overflow-visible"
+        className="absolute z-[16] overflow-visible"
         preserveAspectRatio="none"
         viewBox={mirror.viewBox}
         width={mirror.width}
@@ -137,7 +130,7 @@ function HostMirroredKnobSvg({
   return (
     <svg
       data-rcb-infinite="1"
-      className="absolute z-[28] overflow-visible"
+      className="absolute z-[16] overflow-visible"
       preserveAspectRatio="none"
       width={surf.width}
       height={surf.height}
@@ -216,12 +209,30 @@ function localPointToScene(
 
 /**
  * Seat inset from the corner: tracks R. When R is below the park distance,
- * keep a screen-constant inset so the dot stays ~10px clear of the resize
- * knob under any zoom.
+ * keep a screen-constant inset so the radius hit clears the resize hit under any zoom.
+ * Park is clamped on tiny boxes so the seat cannot cross the center.
  */
-function radiusSeatInset(r: number, halfSide: number, parkScene: number): number {
-  const capped = Math.max(0, Math.min(Number(r) || 0, Math.max(0, halfSide - parkScene)));
-  return Math.max(parkScene, capped);
+export function radiusSeatInset(r: number, halfSide: number, parkScene: number): number {
+  const park = Math.min(Math.max(0, parkScene), Math.max(0, halfSide * 0.45));
+  const capped = Math.max(0, Math.min(Number(r) || 0, Math.max(0, halfSide - park)));
+  return Math.max(park, capped);
+}
+
+/**
+ * Path seats travel along the inward bisector. Axis AABB clearance needs the
+ * same park on both axes as box-mode `(inset, inset)` — so along ≥ park / min(|ix|,|iy|).
+ */
+export function radiusParkAlongBisector(
+  parkScene: number,
+  ix: number,
+  iy: number
+): number {
+  const park = Math.max(0, parkScene);
+  const ax = Math.abs(Number(ix) || 0);
+  const ay = Math.abs(Number(iy) || 0);
+  const m = Math.min(ax, ay);
+  if (!(m > 1e-9)) return park;
+  return park / m;
 }
 
 /** Path sharp-corner radii list — stored vertices, or uniform fallback from box radii. */
@@ -325,7 +336,7 @@ function CornerRadiusHandlesOverlay({
   nodeId,
   node,
   toScene,
-  stageEl,
+  stageEl: _stageEl,
   interactive = true,
 }: {
   box: SceneBox;
@@ -333,6 +344,7 @@ function CornerRadiusHandlesOverlay({
   nodeId: string;
   node: any;
   toScene: (clientX: number, clientY: number) => { x: number; y: number };
+  /** Kept for call-site parity with other shape overlays (unused — seats always show). */
   stageEl: HTMLElement | null;
   /** False while moving/resizing so dots follow chrome without stealing pointers. */
   interactive?: boolean;
@@ -350,7 +362,6 @@ function CornerRadiusHandlesOverlay({
   const dispatch = useDispatch();
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
-  const [nearCorners, setNearCorners] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [dragValue, setDragValue] = useState<number | null>(null);
   const dragRef = useRef<RadiusHandleDrag | null>(null);
@@ -367,15 +378,16 @@ function CornerRadiusHandlesOverlay({
     ? resolvePathVertexRadii(node?.attrs, pathVertexCount, baseRadii)
     : [];
 
-  // Seat tracks R (scene). Tiny screen-constant park when R≈0 so it stays off the resize knob.
-  const visualPx = RADIUS_VIS_PX;
-  const hitPx = RADIUS_HIT_PX;
-  const revealDist = RADIUS_REVEAL_DIST_PX;
+  // Seat tracks R (scene). Park when R≈0 so radius hit clears the resize hit.
+  // Screen budget keeps seats near corners at every zoom (not only one %).
+  const hitScale = chromeHitScaleForBox(w, h, z);
+  const hitPx = CHROME_RADIUS_HIT_PX * hitScale;
   const k = 1 / z;
-  const parkScene = RADIUS_PARK_PX * k;
+  const parkScene = radiusParkSceneForBox(w, h, z, RADIUS_PARK_PX);
+  const radiusInteractive =
+    interactive && radiusHandlesFitOnScreen(w, h, z, RADIUS_PARK_PX);
   // `box` prop is path geom (caller deflates visual chrome). Host-mirrored
   // local space is also geom — path sites need no chrome pad.
-  const geomOutset = 0;
   const halfSide = Math.min(w, h) / 2;
 
   const radiusHandleInset = (r: number) => radiusSeatInset(r, halfSide, parkScene);
@@ -394,10 +406,10 @@ function CornerRadiusHandlesOverlay({
   };
 
   const pathHandleLocalPos = (site: SharpCornerSite, r: number) => {
-    const along = radiusHandleInset(r);
+    const along = radiusParkAlongBisector(radiusHandleInset(r), site.ix, site.iy);
     return {
-      lx: geomOutset + site.x + site.ix * along,
-      ly: geomOutset + site.y + site.iy * along,
+      lx: site.x + site.ix * along,
+      ly: site.y + site.iy * along,
     };
   };
 
@@ -420,10 +432,11 @@ function CornerRadiusHandlesOverlay({
   };
 
   const radiusAlongPathSite = (site: SharpCornerSite, local: { x: number; y: number }) => {
-    const sx = geomOutset + site.x;
-    const sy = geomOutset + site.y;
-    const along = (local.x - sx) * site.ix + (local.y - sy) * site.iy;
-    return Math.max(0, Math.min(maxR, along));
+    const along = (local.x - site.x) * site.ix + (local.y - site.y) * site.iy;
+    // Inverse of radiusParkAlongBisector: axis park ↔ R (same as box inset).
+    const m = Math.min(Math.abs(site.ix), Math.abs(site.iy));
+    const axis = m > 1e-9 ? along * m : along;
+    return Math.max(0, Math.min(maxR, axis));
   };
 
   const previewRadiiOnHost = (radii: CornerRadii, vertices?: number[]) => {
@@ -457,69 +470,7 @@ function CornerRadiusHandlesOverlay({
   };
 
   useEffect(() => {
-    if (!stageEl || !interactive) return undefined;
-    const onMove = (e: PointerEvent) => {
-      if (dragRef.current) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest?.('[data-radius-handle]')) {
-        setNearCorners(true);
-        return;
-      }
-      const sc = toScene(e.clientX, e.clientY);
-      const local = scenePointToLocal(sc.x, sc.y, box, angle);
-      let best = Infinity;
-      if (usePath && pathSites) {
-        for (const site of pathSites) {
-          const r = pathVertices[site.sharpIndex] ?? 0;
-          const seat = pathHandleScenePos(site, r);
-          const lx = geomOutset + site.x;
-          const ly = geomOutset + site.y;
-          best = Math.min(
-            best,
-            Math.hypot((sc.x - seat.x) * z, (sc.y - seat.y) * z),
-            Math.hypot((local.x - lx) * z, (local.y - ly) * z)
-          );
-        }
-      } else {
-        for (const c of RADIUS_CORNERS) {
-          const r = baseRadii[c.key] ?? 0;
-          const { lx: seatLx, ly: seatLy } = boxHandleLocalPos(c, r);
-          best = Math.min(
-            best,
-            Math.hypot((local.x - c.cx * w) * z, (local.y - c.cy * h) * z),
-            Math.hypot((local.x - seatLx) * z, (local.y - seatLy) * z)
-          );
-        }
-      }
-      setNearCorners(best <= revealDist);
-    };
-    const onLeave = () => {
-      if (!dragRef.current) setNearCorners(false);
-    };
-    window.addEventListener('pointermove', onMove, { passive: true });
-    stageEl.addEventListener('pointerleave', onLeave);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      stageEl.removeEventListener('pointerleave', onLeave);
-    };
-  }, [
-    stageEl,
-    interactive,
-    box,
-    angle,
-    w,
-    h,
-    z,
-    toScene,
-    revealDist,
-    usePath,
-    pathSites,
-    pathVertices,
-    baseRadii,
-  ]);
-
-  useEffect(() => {
-    if (!interactive) return undefined;
+    if (!radiusInteractive) return undefined;
 
     const commitPathRadii = (
       vertices: number[],
@@ -652,7 +603,7 @@ function CornerRadiusHandlesOverlay({
       window.removeEventListener('pointercancel', onUp);
       window.removeEventListener('keydown', onKey);
     };
-  }, [dispatch, node, nodeId, box, angle, w, h, maxR, toScene, interactive, linked]);
+  }, [dispatch, node, nodeId, box, angle, w, h, maxR, toScene, radiusInteractive, linked]);
 
   // Always show while selected — seats track R (park only when R≈0).
   let badgeVal = Math.round(baseRadii.tl);
@@ -681,8 +632,8 @@ function CornerRadiusHandlesOverlay({
   }
 
   const hitSize = hitPx * k;
-  const visualSize = visualPx * k;
-  const stroke = RADIUS_STROKE_PX * k;
+  const visualSize = CHROME_HANDLE_VIS_PX * k;
+  const stroke = CHROME_STROKE_PX * k;
   const halfVis = visualSize / 2;
   const halfHit = hitSize / 2;
 
@@ -720,7 +671,6 @@ function CornerRadiusHandlesOverlay({
               };
               setActiveKey(String(site.sharpIndex));
               setDragValue(Math.round(pathVertices[site.sharpIndex] ?? 0));
-              setNearCorners(true);
             },
           };
         })
@@ -748,7 +698,6 @@ function CornerRadiusHandlesOverlay({
               };
               setActiveKey(corner.key);
               setDragValue(Math.round(baseRadii[corner.key]));
-              setNearCorners(true);
             },
           };
         });
@@ -782,10 +731,10 @@ function CornerRadiusHandlesOverlay({
             data-radius-handle={h.key}
             transform={`translate(${h.lx} ${h.ly})`}
             style={{
-              pointerEvents: interactive ? 'all' : 'none',
-              cursor: interactive ? 'default' : undefined,
+              pointerEvents: radiusInteractive ? 'all' : 'none',
+              cursor: radiusInteractive ? 'default' : undefined,
             }}
-            onPointerDown={interactive ? h.onDown : undefined}
+            onPointerDown={radiusInteractive ? h.onDown : undefined}
           >
             <rect x={-halfHit} y={-halfHit} width={hitSize} height={hitSize} fill="transparent" />
             <circle

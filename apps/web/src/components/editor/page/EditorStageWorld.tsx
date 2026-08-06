@@ -1,4 +1,10 @@
-import { memo, useCallback, useState, type RefObject } from 'react';
+import {
+  memo,
+  useCallback,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from 'react';
 import { useDispatch } from 'react-redux';
 import {
   RcbCanvas,
@@ -22,6 +28,7 @@ import { stackZIndex } from '@/components/rcb/scene/document/sceneDocument';
 import {
   parseFillGradient,
   serializeFillGradient,
+  type FillGradient,
 } from '@/components/rcb/scene/document/sceneFill';
 import {
   addArtboardFrame,
@@ -55,6 +62,72 @@ const EDITOR_PAN_BLOCK_SELECTOR = [
   '[data-video-playback-bar]',
   '[data-video-trim-toolbar]',
 ].join(',');
+
+function isEditableFocusTarget(el: HTMLElement | null | undefined): boolean {
+  if (!el) return false;
+  return (
+    el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || Boolean(el.isContentEditable)
+  );
+}
+
+/** Blur stage inputs when pointer lands on the canvas chrome (not the field itself). */
+function blurStageEditableOnPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+  const active = window.document.activeElement as HTMLElement | null;
+  if (
+    !active ||
+    active === e.currentTarget ||
+    !e.currentTarget.contains(active) ||
+    !isEditableFocusTarget(active)
+  ) {
+    return;
+  }
+  active.blur();
+}
+
+function canvasDiffuseMeshGradient(
+  fill: FillPanelValue
+): FillGradient & { type: 'diffuse' } {
+  return {
+    ...parseFillGradient(fill.fillGradient, 'diffuse', fill.fillColor),
+    type: 'diffuse',
+  };
+}
+
+/** Per-frame label handlers — undefined in inspect/dev so chrome stays inert. */
+function frameLabelInteractionProps(
+  frameId: string,
+  isDevMode: boolean,
+  handlers: {
+    onSelectFrame: (id: string) => void;
+    onRenameFrame: (id: string, name: string) => void;
+    onMoveFrame: (
+      id: string,
+      x: number,
+      y: number,
+      opts?: { skipGrid?: boolean }
+    ) => void;
+    onFrameMoveStart: (id: string) => void;
+    onFrameMoveEnd: () => void;
+  }
+) {
+  if (isDevMode) {
+    return {
+      onSelect: undefined as undefined,
+      onRename: undefined as undefined,
+      onMove: undefined as undefined,
+      onMoveStart: undefined as undefined,
+      onMoveEnd: undefined as undefined,
+    };
+  }
+  return {
+    onSelect: () => handlers.onSelectFrame(frameId),
+    onRename: (name: string) => handlers.onRenameFrame(frameId, name),
+    onMove: (x: number, y: number, opts?: { skipGrid?: boolean }) =>
+      handlers.onMoveFrame(frameId, x, y, opts),
+    onMoveStart: () => handlers.onFrameMoveStart(frameId),
+    onMoveEnd: handlers.onFrameMoveEnd,
+  };
+}
 
 type Props = {
   document: any;
@@ -194,24 +267,47 @@ function EditorStageWorld({
     dispatch(setMixedSelection({ nodeIds: [], frameIds: [] }));
   }, [dispatch]);
 
+  const onRenameFrame = useCallback(
+    (id: string, name: string) => {
+      dispatch(renameArtboardFrame({ id, name }));
+    },
+    [dispatch]
+  );
+
+  const onCanvasDiffuseMeshChange = useCallback(
+    (next: FillGradient) => {
+      dispatch(
+        setCanvasMeta(
+          canvasFillToDocumentMeta(
+            {
+              ...canvasFillValue,
+              fillType: 'diffuse',
+              fillGradient: serializeFillGradient(next),
+              fillColor: next.meshPoints?.[0]?.color || canvasFillValue.fillColor,
+            },
+            false
+          )
+        )
+      );
+    },
+    [canvasFillValue, dispatch]
+  );
+
   if (isMobileViewport || !document) return null;
+
+  const showCanvasDiffuseMesh =
+    canvasBgOpen && canvasFillValue.fillType === 'diffuse';
+  const showFrameToolbar =
+    !isDevMode &&
+    selectedFrames.length >= 1 &&
+    selectedNodeIds.length === 0 &&
+    Boolean(activeFrame) &&
+    movingFrameId !== activeFrame?.id;
 
   return (
     <div
       className="relative min-h-0 flex-1"
-      onPointerDown={(e) => {
-        const active = window.document.activeElement as HTMLElement | null;
-        if (
-          active &&
-          active !== e.currentTarget &&
-          e.currentTarget.contains(active) &&
-          (active.tagName === 'INPUT' ||
-            active.tagName === 'TEXTAREA' ||
-            active.isContentEditable)
-        ) {
-          active.blur();
-        }
-      }}
+      onPointerDown={blurStageEditableOnPointerDown}
     >
       <RcbCanvas
         artboard={worldBounds}
@@ -261,7 +357,7 @@ function EditorStageWorld({
         <CropExpandSessionHost document={document} />
         <VideoTrimSessionHost document={document} />
 
-        {canvasBgOpen && canvasFillValue.fillType === 'diffuse' ? (
+        {showCanvasDiffuseMesh ? (
           <MeshHandlesOverlay
             box={{
               left: 0,
@@ -269,33 +365,11 @@ function EditorStageWorld({
               width: worldSurface.width,
               height: worldSurface.height,
             }}
-            gradient={{
-              ...parseFillGradient(
-                canvasFillValue.fillGradient,
-                'diffuse',
-                canvasFillValue.fillColor
-              ),
-              type: 'diffuse',
-            }}
+            gradient={canvasDiffuseMeshGradient(canvasFillValue)}
             selectedIndex={canvasMeshSelectedIndex}
             showGuides={canvasMeshShowGuides}
             onActivePointChange={setCanvasMeshSelectedIndex}
-            onChange={(next) => {
-              dispatch(
-                setCanvasMeta(
-                  canvasFillToDocumentMeta(
-                    {
-                      ...canvasFillValue,
-                      fillType: 'diffuse',
-                      fillGradient: serializeFillGradient(next),
-                      fillColor:
-                        next.meshPoints?.[0]?.color || canvasFillValue.fillColor,
-                    },
-                    false
-                  )
-                )
-              );
-            }}
+            onChange={onCanvasDiffuseMeshChange}
           />
         ) : null}
 
@@ -306,27 +380,19 @@ function EditorStageWorld({
               frame={frame}
               selected={!isDevMode && selectedFrameIds.includes(frame.id)}
               hideTitle={isDevMode || movingFrameId === frame.id}
-              onSelect={isDevMode ? undefined : () => onSelectFrame(frame.id)}
-              onRename={
-                isDevMode
-                  ? undefined
-                  : (name) => dispatch(renameArtboardFrame({ id: frame.id, name }))
-              }
-              onMove={
-                isDevMode ? undefined : (x, y, opts) => onMoveFrame(frame.id, x, y, opts)
-              }
-              onMoveStart={isDevMode ? undefined : () => onFrameMoveStart(frame.id)}
-              onMoveEnd={isDevMode ? undefined : onFrameMoveEnd}
+              {...frameLabelInteractionProps(frame.id, isDevMode, {
+                onSelectFrame,
+                onRenameFrame,
+                onMoveFrame,
+                onFrameMoveStart,
+                onFrameMoveEnd,
+              })}
               layer="label"
             />
           )
         )}
 
-        {!isDevMode &&
-        selectedFrames.length >= 1 &&
-        selectedNodeIds.length === 0 &&
-        activeFrame &&
-        movingFrameId !== activeFrame.id ? (
+        {showFrameToolbar && activeFrame ? (
           <FrameContextToolbar frame={activeFrame} />
         ) : null}
 

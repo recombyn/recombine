@@ -15,8 +15,7 @@ import { resolveClosedDrawBoxes } from '../../tools/ShapeDrawFeature';
 
 /**
  * Production move policy when gridSize > 0:
- *   nextVisual = snapBoxToGrid(visual0 + delta)   // smart does NOT nudge
- *   path += (nextVisual - visual0)
+ *   smart align (capped threshold, grid-compatible) → snapBoxToGrid → guides
  * Path may stay on *.5; ink outer stays on integer cells.
  */
 function moveSnapVisualOnly(opts: {

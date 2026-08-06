@@ -31,9 +31,11 @@ import {
 } from '@/components/rcb/shapes/shapeHostRegistry';
 import type { SceneBox } from '../alignGuides';
 import {
-  CHROME_HANDLE_HIT_PX,
   CHROME_HANDLE_VIS_PX,
+  CHROME_RADIUS_HIT_PX,
   CHROME_STROKE_PX,
+  radiusHandleParkScreenPx,
+  radiusParkSceneForBox,
   WorldSvgFrame,
   WorldScreenBadge,
 } from '../SelectionChrome';
@@ -41,10 +43,9 @@ import {
 const DRAG_DISTANCE_SQUARED = 16;
 const SIDES_DRAG_STEP_PX = 14;
 const KNOB_VIS_PX = CHROME_HANDLE_VIS_PX;
-const KNOB_HIT_PX = CHROME_HANDLE_HIT_PX;
+const KNOB_HIT_PX = CHROME_RADIUS_HIT_PX;
 const KNOB_STROKE_PX = CHROME_STROKE_PX;
-/** Min inward seat when R=0 so the knob clears the vertex / resize chrome. */
-const RADIUS_MIN_INSET_PX = 18;
+const RADIUS_MIN_INSET_PX = radiusHandleParkScreenPx();
 
 function liveNodeEl(nodeId: string): Element | null {
   return (
@@ -259,7 +260,7 @@ function PolygonShapeHandlesOverlay({
 
   // Seat tracks R along the top-vertex inward normal (same as rect R-dots).
   const insetFor = (r: number) => {
-    const park = RADIUS_MIN_INSET_PX * k;
+    const park = radiusParkSceneForBox(w, h, z, RADIUS_MIN_INSET_PX);
     const maxAlong = Math.max(park, maxR - 1);
     return Math.max(park, Math.min(Math.max(0, Number(r) || 0), maxAlong));
   };

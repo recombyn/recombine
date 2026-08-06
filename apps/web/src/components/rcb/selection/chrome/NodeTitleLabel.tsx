@@ -543,7 +543,7 @@ function NodeTitleLabel({
       <svg
         data-rcb-infinite="1"
         data-rcb-node-title="1"
-        className="absolute z-[1000002] overflow-visible"
+        className="absolute z-[999990] overflow-visible"
         width={surf.width}
         height={surf.height}
         viewBox={surf.viewBox}
