@@ -14,7 +14,8 @@ from app.services.design.runtime.decision_log import DesignRunDecision
 _log = logging.getLogger(__name__)
 logger = _log
 _DEFAULT_MAX_ROUNDS = 4
-_DEFAULT_MAX_REFLECT = 1
+# Allow one craft fix + one long-canvas continue without Admin rule overrides.
+_DEFAULT_MAX_REFLECT = 2
 _SCENE_WAIT_SEC = 12.0
 _PAINT_OP_META_KEYS = frozenset(
     {

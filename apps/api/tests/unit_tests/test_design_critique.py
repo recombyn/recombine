@@ -209,6 +209,109 @@ def test_format_critique_reflect_note_aesthetics_and_placement():
     assert "0.40" in note
 
 
+def test_layout_craft_flags_clip_emoji_contrast():
+    rt = _rt(
+        scene_frames=[{"id": "f1", "w": 400, "h": 600, "is_empty": False}],
+        scene_nodes=[
+            {
+                "id": "bg",
+                "type": "rect",
+                "x": 0,
+                "y": 0,
+                "w": 400,
+                "h": 200,
+                "fill": "#eeeeee",
+            },
+            {
+                "id": "t1",
+                "type": "text",
+                "x": 350,
+                "y": 10,
+                "w": 120,
+                "h": 40,
+                "fontSize": 48,
+                "text": "🎃 HALLOWEEN",
+                "fill": "#f5f5f5",
+            },
+        ],
+    )
+    issues = observe_mod._layout_craft_issues(rt)
+    joined = " ".join(issues).lower()
+    assert "clip" in joined or "overflow" in joined
+    assert "emoji" in joined or "tofu" in joined
+    assert "contrast" in joined
+
+
+def test_long_canvas_coverage_incomplete():
+    rt = _rt(
+        prompt="电商详情长图 750x2400",
+        scene_frames=[{"id": "f1", "w": 750, "h": 2400, "is_empty": False}],
+        scene_nodes=[
+            {"id": "n1", "type": "image", "x": 0, "y": 0, "w": 750, "h": 600},
+            {"id": "n2", "type": "text", "x": 40, "y": 640, "w": 600, "h": 40, "text": "title"},
+            {"id": "n3", "type": "rect", "x": 0, "y": 700, "w": 750, "h": 200},
+        ],
+    )
+    rt.run.intent = "create"
+    issues = observe_mod._long_canvas_coverage_issues(rt)
+    assert issues
+    assert "long canvas incomplete" in issues[0]
+    assert "APPEND" in issues[0]
+
+
+def test_long_canvas_coverage_ok_when_filled():
+    rt = _rt(
+        scene_frames=[{"id": "f1", "w": 750, "h": 2400, "is_empty": False}],
+        scene_nodes=[
+            {"id": "n1", "type": "image", "x": 0, "y": 0, "w": 750, "h": 900},
+            {"id": "n2", "type": "rect", "x": 0, "y": 900, "w": 750, "h": 900},
+            {"id": "n3", "type": "text", "x": 40, "y": 1900, "w": 600, "h": 80, "text": "buy"},
+        ],
+    )
+    rt.run.intent = "create"
+    assert observe_mod._long_canvas_coverage_issues(rt) == []
+
+
+def test_format_critique_reflect_note_long_canvas_and_type():
+    note = observe_mod._format_critique_reflect_note(
+        [
+            "long canvas incomplete: content ends near y=1200 of 2400",
+            "text clipped/overflow: 1 text node(s) extend past artboard",
+            "low contrast: 1 text node(s) too close to background fill",
+        ]
+    )
+    assert "Continue long page" in note
+    assert "Type:" in note
+    assert "APPEND" in note or "below" in note.lower()
+
+
+def test_critique_includes_layout_craft(monkeypatch):
+    emitted: list[dict] = []
+    monkeypatch.setattr(observe_mod, "_emit", lambda ev: emitted.append(ev))
+    monkeypatch.setattr(observe_mod, "_critique_enabled", lambda: True)
+    monkeypatch.setattr(observe_mod, "_spatial_grounding_issues", lambda _rt: [])
+    monkeypatch.setattr(observe_mod, "_aesthetic_critique_issues", lambda **_k: [])
+    monkeypatch.setattr(observe_mod, "_poster_hero_issues", lambda _rt: [])
+    rt = _rt(
+        scene_frames=[{"id": "f1", "w": 300, "h": 400, "is_empty": False}],
+        scene_nodes=[
+            {
+                "id": "t1",
+                "type": "text",
+                "x": 280,
+                "y": 10,
+                "w": 80,
+                "h": 30,
+                "fontSize": 20,
+                "text": "TITLE",
+                "fill": "#111111",
+            }
+        ],
+    )
+    issues = observe_mod._run_post_paint_critique(rt, rt.run, round_i=0)
+    assert any("clip" in x.lower() or "overflow" in x.lower() for x in issues)
+
+
 def test_retry_paint_from_critique_sets_reflect_note(monkeypatch):
     emitted: list[dict] = []
     monkeypatch.setattr(observe_mod, "_emit", lambda ev: emitted.append(ev))
