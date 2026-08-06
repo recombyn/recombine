@@ -2783,14 +2783,32 @@ export function previewSvgNodeCornerRadii(
 
   rememberSceneCornerRadii(el, r);
 
+  let ok = false;
   if (el.tagName.toLowerCase() === 'path') {
-    return setPathD(el, d);
+    ok = setPathD(el, d);
+  } else {
+    const body =
+      el.querySelector(':scope > [data-baseline="1"]') ||
+      el.querySelector(':scope > [data-radius-body="1"]:not([data-stroke-under])') ||
+      el.querySelector(':scope > path:not([data-stroke-under])');
+    ok = setPathD(body, d);
   }
-  const body =
-    el.querySelector(':scope > [data-baseline="1"]') ||
-    el.querySelector(':scope > [data-radius-body="1"]:not([data-stroke-under])') ||
-    el.querySelector(':scope > path:not([data-stroke-under])');
-  return setPathD(body, d);
+
+  // Image / video: visible rounding is a <clipPath> in defs (baseline path is pe:none).
+  const clipId = String(el.getAttribute('data-radius-clip-id') || '').trim();
+  if (clipId) {
+    const root = el.ownerSVGElement;
+    let clipPathEl: Element | null = null;
+    try {
+      const clip = root?.getElementById(clipId);
+      clipPathEl = clip?.querySelector('[data-radius-clip="1"]') || clip?.querySelector('path') || null;
+    } catch {
+      clipPathEl = null;
+    }
+    if (setPathD(clipPathEl, d)) ok = true;
+  }
+
+  return ok;
 }
 
 function removeSceneNodesById(layer: SVGElement, nodeId: string) {

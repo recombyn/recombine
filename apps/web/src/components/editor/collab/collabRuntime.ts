@@ -103,7 +103,7 @@ export function clearCollabUndoStack() {
 /** @returns true when collab handled the gesture (caller should skip Redux history). */
 export function collabUndo(): boolean {
   if (!active || viewOnly || !undoManager) return false;
-  if (!undoManager.canUndo()) return true;
+  if (!undoManager.canUndo()) return false;
   undoManager.undo();
   return true;
 }
@@ -111,7 +111,7 @@ export function collabUndo(): boolean {
 /** @returns true when collab handled the gesture. */
 export function collabRedo(): boolean {
   if (!active || viewOnly || !undoManager) return false;
-  if (!undoManager.canRedo()) return true;
+  if (!undoManager.canRedo()) return false;
   undoManager.redo();
   return true;
 }

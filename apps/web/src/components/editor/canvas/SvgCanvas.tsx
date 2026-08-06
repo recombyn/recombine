@@ -297,8 +297,18 @@ function SvgCanvas({
   const reduxCanUndo = useSelector((s: any) => (s.editor.historyPast?.length || 0) > 0);
   const reduxCanRedo = useSelector((s: any) => (s.editor.historyFuture?.length || 0) > 0);
   useSyncExternalStore(subscribeCollabUndo, getCollabUndoEpoch, getCollabUndoEpoch);
-  const canUndo = isCollabActive() ? canCollabUndo() : reduxCanUndo;
-  const canRedo = isCollabActive() ? canCollabRedo() : reduxCanRedo;
+  // Collab prefers Yjs undo; if that stack is empty (pre-seed / sync lag), fall
+  // back to Redux so the menu and Ctrl+Z stay usable. View-only never undoes.
+  const canUndo = isCollabViewOnly()
+    ? false
+    : isCollabActive()
+      ? canCollabUndo() || reduxCanUndo
+      : reduxCanUndo;
+  const canRedo = isCollabViewOnly()
+    ? false
+    : isCollabActive()
+      ? canCollabRedo() || reduxCanRedo
+      : reduxCanRedo;
   const imageToolPanelKind = useSelector((s: any) => s.editor.imageToolPanel?.kind as string | undefined);
   const shapeStylePanel = useSelector((s: any) => s.editor.shapeStylePanel as null | { kind: string });
   const shapeStylePanelOpen = Boolean(shapeStylePanel);

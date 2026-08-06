@@ -141,7 +141,12 @@ describe('radius park + chrome hits @ all canvas zooms', () => {
       const half = Math.min(box.w, box.h) / 2;
       expect(park).toBeGreaterThanOrEqual(0);
       expect(park).toBeLessThanOrEqual(half * 0.45 + 1e-9);
-      expect(park * zoom).toBeLessThanOrEqual(Math.min(box.w, box.h) * zoom * 0.22 + 1e-6);
+      // Screen-constant: park * zoom == parkPx unless clamped by half-side.
+      const parkPx = radiusHandleParkScreenPx();
+      const unclamped = parkPx / zoom;
+      if (unclamped <= half * 0.45) {
+        expect(park * zoom).toBeCloseTo(parkPx, 5);
+      }
     }
   );
 
@@ -150,16 +155,16 @@ describe('radius park + chrome hits @ all canvas zooms', () => {
     (zoom) => {
       if (!radiusHandlesFitOnScreen(box.w, box.h, zoom)) return;
       const parkPx = radiusHandleParkScreenPx();
-      const minScreen = Math.min(box.w, box.h) * zoom;
       const parkScene = radiusParkSceneForBox(box.w, box.h, zoom, parkPx);
-      const expectedPx = Math.min(parkPx, minScreen * 0.22);
-      expect(parkScene * zoom).toBeCloseTo(expectedPx, 5);
+      const half = Math.min(box.w, box.h) / 2;
+      const expectedScene = Math.min(parkPx / zoom, half * 0.45);
+      expect(parkScene).toBeCloseTo(expectedScene, 5);
       const hitScale = chromeHitScaleForBox(box.w, box.h, zoom);
       // Both hits are icon-centered — park clears halfHit + halfRadius + gap.
       const resizeHalf = (CHROME_HANDLE_HIT_PX * hitScale) / 2 / zoom;
       const radiusHalf = (CHROME_RADIUS_HIT_PX * hitScale) / 2 / zoom;
       const clearance = parkScene - resizeHalf - radiusHalf;
-      if (expectedPx >= parkPx - 1e-6) {
+      if (expectedScene >= parkPx / zoom - 1e-6) {
         expect(clearance * zoom).toBeGreaterThanOrEqual(CHROME_RADIUS_PARK_GAP_PX - 0.05);
       } else {
         expect(clearance).toBeGreaterThanOrEqual(0);
