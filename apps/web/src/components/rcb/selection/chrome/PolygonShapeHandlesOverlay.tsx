@@ -15,6 +15,7 @@ import {
   isRadiusLinked,
   radiiFromAttrs,
   serializeRadiusVertices,
+  setLiveCornerRadiusPreview,
   type CornerRadii,
 } from '@/components/rcb/scene/document/sceneRadii';
 import {
@@ -332,6 +333,7 @@ function PolygonShapeHandlesOverlay({
       const local = scenePointToLocal(sc.x, sc.y, box, angle);
       const rounded = Math.round(radiusAlongSite(d.site, local));
       setDragValue(rounded);
+      setLiveCornerRadiusPreview({ nodeId, display: rounded });
       previewRadii(rounded, sides);
     };
 
@@ -343,6 +345,7 @@ function PolygonShapeHandlesOverlay({
       setActiveKey(null);
       setDragValue(null);
       setLiveSides(null);
+      setLiveCornerRadiusPreview(null);
 
       if (soft) {
         previewRadii(baseR, baseSides);
@@ -368,6 +371,7 @@ function PolygonShapeHandlesOverlay({
       setActiveKey(null);
       setDragValue(null);
       setLiveSides(null);
+      setLiveCornerRadiusPreview(null);
       previewRadii(baseR, baseSides);
     };
 
@@ -380,6 +384,7 @@ function PolygonShapeHandlesOverlay({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       window.removeEventListener('keydown', onKey);
+      setLiveCornerRadiusPreview(null);
     };
   }, [
     interactive,

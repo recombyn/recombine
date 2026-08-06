@@ -1,26 +1,22 @@
+/**
+ * Frame / image / video title row above the control box.
+ * HTML under camera scale (same contract as SelectionToolbarShell) — not world SVG.
+ */
 import {
   useEffect,
-  useId,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   memo,
 } from 'react';
-import {
-  useRcbCamera,
-  useRcbDevicePixelRatio,
-  rcbCameraCssZoom,
-  rcbSceneToScreen,
-  RcbOverlayPortal,
-} from '@/components/rcb';
+import { useRcbCamera, rcbCameraCssZoom } from '@/components/rcb';
 import {
   NODE_TITLE_LABEL_GAP_PX,
   NODE_TITLE_LABEL_LINE_PX,
 } from './SelectionToolbarShell';
-import { selectionChromeSurfaceProps } from '../SelectionChrome';
+import { cn } from '@/utils/classnames';
 
 type NodeTitleLabelBox = {
   left: number;
@@ -55,33 +51,13 @@ type Props = {
 };
 
 const MUTED = 'var(--muted)';
-/** Edit overlay font (matches idle SVG 11px after camera scale). */
-const TITLE_EDIT_FONT_PX = 11;
-
-function rotateLocalToScene(
-  lx: number,
-  ly: number,
-  box: NodeTitleLabelBox,
-  angleDeg: number
-): { x: number; y: number } {
-  if (Math.abs(angleDeg) < 0.001) {
-    return { x: box.left + lx, y: box.top + ly };
-  }
-  const rad = (angleDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  const cx = box.width / 2;
-  const cy = box.height / 2;
-  const dx = lx - cx;
-  const dy = ly - cy;
-  return {
-    x: box.left + cx + dx * cos - dy * sin,
-    y: box.top + cy + dx * sin + dy * cos,
-  };
-}
+/** Idle + edit font (screen px; parent counter-scales under camera zoom). */
+const TITLE_FONT_PX = 11;
+const TITLE_ICON_PX = 12;
 
 /**
- * Scene-space title layout: `scene = screenPx / zoom` under camera scale.
+ * Scene-space title layout: used by toolbar clearance math / tests.
+ * Paint is HTML (`scale(1/zoom)`); these numbers stay `screenPx / zoom`.
  */
 export function nodeTitleLabelWorldPlacement(
   box: NodeTitleLabelBox,
@@ -112,8 +88,8 @@ export function nodeTitleLabelWorldPlacement(
   const inv = 1 / z;
   const gapScene = NODE_TITLE_LABEL_GAP_PX * inv;
   const lineScene = NODE_TITLE_LABEL_LINE_PX * inv;
-  const fontSize = 11 * inv;
-  const iconSize = 12 * inv;
+  const fontSize = TITLE_FONT_PX * inv;
+  const iconSize = TITLE_ICON_PX * inv;
   const labelBottomScene = box.top - gapScene;
   const labelTopScene = labelBottomScene - lineScene;
   const textY = labelTopScene + lineScene * 0.5;
@@ -158,19 +134,8 @@ export function nodeTitleScreenGapPx(
   return (boxTop - place.labelBottomScene) * z * sx;
 }
 
-/** 24×24 stroke icons, scaled into scene via `size`. */
-function TitleIconSvg({
-  kind,
-  x,
-  y,
-  size,
-}: {
-  kind: NodeTitleIcon;
-  x: number;
-  y: number;
-  size: number;
-}) {
-  const s = size / 24;
+/** 24×24 stroke icons at fixed screen size. */
+function TitleIcon({ kind }: { kind: NodeTitleIcon }): ReactNode {
   const common = {
     fill: 'none' as const,
     stroke: MUTED,
@@ -221,11 +186,21 @@ function TitleIconSvg({
       </>
     );
   }
-  return <g transform={`translate(${x} ${y}) scale(${s})`}>{path}</g>;
+  return (
+    <svg
+      width={TITLE_ICON_PX}
+      height={TITLE_ICON_PX}
+      viewBox="0 0 24 24"
+      className="shrink-0"
+      aria-hidden
+    >
+      {path}
+    </svg>
+  );
 }
 
 /**
- * Title row above frames / images / generators (world SVG, `px/zoom`).
+ * Title row above frames / images / generators — HTML chrome, screen-constant type.
  */
 function NodeTitleLabel({
   box,
@@ -258,10 +233,9 @@ function NodeTitleLabel({
     started: boolean;
   } | null>(null);
   const camera = useRcbCamera();
-  const dpr = useRcbDevicePixelRatio();
   const z = rcbCameraCssZoom(camera);
+  const inv = 1 / Math.max(0.05, z);
   const rotated = Math.abs(angle) > 0.001;
-  const clipUid = useId().replace(/:/g, '');
   const sizeText = `${Math.round(sizeWidth)} × ${Math.round(sizeHeight)}`;
 
   useEffect(() => {
@@ -293,75 +267,8 @@ function NodeTitleLabel({
     return () => window.removeEventListener('pointerdown', onPointerDown, true);
   }, [editing, name, onRename]);
 
-  const place = useMemo(
-    () => nodeTitleLabelWorldPlacement(box, z, { sizeText }),
-    [box.left, box.top, box.width, box.height, z, sizeText]
-  );
-
-  // Prefer shared world lattice; pad includes title strip so glyphs are not clipped.
-  const surf = useMemo(
-    () =>
-      selectionChromeSurfaceProps(
-        box,
-        angle,
-        place.gapScene + place.lineScene,
-        camera,
-        dpr
-      ),
-    [
-      box.left,
-      box.top,
-      box.width,
-      box.height,
-      angle,
-      place.gapScene,
-      place.lineScene,
-      camera,
-      dpr,
-    ]
-  );
-
   const iconKind: NodeTitleIcon =
     icon || (dataAttr === 'frame-label' ? 'frame' : 'image');
-
-  const bodyTransform = rotated
-    ? `translate(${box.left} ${box.top}) rotate(${angle} ${box.width / 2} ${box.height / 2})`
-    : null;
-
-  /** Local coords when rotated; else absolute scene. */
-  const local = rotated
-    ? {
-        iconX: 0,
-        iconY: -(place.gapScene + place.lineScene) + (place.lineScene - place.iconSize) * 0.5,
-        nameX: place.iconSize + 4 * place.inv,
-        sizeX: Math.max(1, box.width),
-        textY: -(place.gapScene + place.lineScene * 0.5),
-        hitX: 0,
-        hitY: -(place.gapScene + place.lineScene),
-        hitW: Math.max(1, box.width),
-        hitH: place.lineScene,
-        nameMaxWidth: Math.max(
-          0,
-          Math.max(1, box.width) -
-            (place.iconSize + 4 * place.inv) -
-            8 * place.inv -
-            place.sizeReserve
-        ),
-      }
-    : {
-        iconX: place.iconX,
-        iconY: place.iconY,
-        nameX: place.nameX,
-        sizeX: place.sizeX,
-        textY: place.textY,
-        hitX: place.hitLeft,
-        hitY: place.hitTop,
-        hitW: place.hitWidth,
-        hitH: place.hitHeight,
-        nameMaxWidth: place.nameMaxWidth,
-      };
-
-  const nameClipId = `rcb-title-name-${clipUid}`;
 
   const commit = () => {
     const next = draft.trim() || name;
@@ -377,7 +284,7 @@ function NodeTitleLabel({
       ? { 'data-frame-label': true as const }
       : { 'data-image-label': true as const };
 
-  const onLabelPointerDown = (e: ReactPointerEvent<SVGRectElement>) => {
+  const onLabelPointerDown = (e: ReactPointerEvent<HTMLElement>) => {
     e.stopPropagation();
     if (editing) return;
     onSelect?.();
@@ -416,27 +323,42 @@ function NodeTitleLabel({
     window.addEventListener('pointerup', onUpWin);
   };
 
-  const labelBody = (
-    <>
-      <defs>
-        <clipPath id={nameClipId}>
-          <rect
-            x={local.nameX}
-            y={local.hitY}
-            width={Math.max(0, local.nameMaxWidth)}
-            height={local.hitH}
-          />
-        </clipPath>
-      </defs>
-      <rect
+  // Anchor at box center (scene). Counter-scale so children use screen px.
+  // Title row sits above the top edge: gap + line, left-aligned to the plate.
+  const screenW = Math.max(1, box.width) / inv;
+  const halfH = Math.max(1, box.height) / (2 * inv);
+
+  return (
+    <div
+      data-rcb-node-title="1"
+      className="pointer-events-none absolute z-[999990] overflow-visible"
+      style={{
+        left: box.left + box.width / 2,
+        top: box.top + box.height / 2,
+        width: 0,
+        height: 0,
+        transform: rotated ? `rotate(${angle}deg) scale(${inv})` : `scale(${inv})`,
+        transformOrigin: '0 0',
+        pointerEvents: 'none',
+      }}
+    >
+      <div
         {...attrProps}
         {...dataProps}
-        x={local.hitX}
-        y={local.hitY}
-        width={local.hitW}
-        height={local.hitH}
-        fill="transparent"
-        style={{ pointerEvents: 'all', cursor: onMove ? 'grab' : 'default' }}
+        className={cn(
+          'pointer-events-auto absolute flex min-w-0 items-center gap-1 overflow-hidden font-medium select-none',
+          onMove ? 'cursor-grab' : 'cursor-default'
+        )}
+        style={{
+          left: -screenW / 2,
+          top: -halfH - NODE_TITLE_LABEL_GAP_PX,
+          width: screenW,
+          height: NODE_TITLE_LABEL_LINE_PX,
+          transform: 'translateY(-100%)',
+          color: MUTED,
+          fontSize: TITLE_FONT_PX,
+          lineHeight: `${NODE_TITLE_LABEL_LINE_PX}px`,
+        }}
         onPointerDown={onLabelPointerDown}
         onDoubleClick={(e) => {
           if (!onRename) return;
@@ -446,79 +368,22 @@ function NodeTitleLabel({
           setDraft(name);
           setEditing(true);
         }}
-      />
-      <TitleIconSvg kind={iconKind} x={local.iconX} y={local.iconY} size={place.iconSize} />
-      {!editing ? (
-        <text
-          x={local.nameX}
-          y={local.textY}
-          fill={MUTED}
-          fontSize={place.fontSize}
-          fontWeight={500}
-          fontFamily="ui-sans-serif, system-ui, sans-serif"
-          textAnchor="start"
-          dominantBaseline="central"
-          clipPath={`url(#${nameClipId})`}
-          style={{ pointerEvents: 'none' }}
-        >
-          {name}
-        </text>
-      ) : null}
-      <text
-        x={local.sizeX}
-        y={local.textY}
-        fill={MUTED}
-        fontSize={place.fontSize}
-        fontWeight={500}
-        fontFamily="ui-sans-serif, system-ui, sans-serif"
-        textAnchor="end"
-        dominantBaseline="central"
-        opacity={0.8}
-        style={{ pointerEvents: 'none' }}
       >
-        {sizeText}
-      </text>
-    </>
-  );
-
-  // Unscaled overlay + scene→screen; anchor at text center then translateY(-50%).
-  const editLocalX = rotated ? local.nameX : place.nameX - box.left;
-  const editLocalY = rotated ? local.textY : place.textY - box.top;
-  const editScene = rotateLocalToScene(editLocalX, editLocalY, box, angle);
-  const editScreen = rcbSceneToScreen(camera, editScene.x, editScene.y, dpr);
-  const editScreenW = Math.max(44, local.nameMaxWidth * z);
-
-  const editInput =
-    editing && onRename ? (
-      <RcbOverlayPortal>
-        <div
-          data-rcb-title-edit="1"
-          data-text-inline-editor
-          className="pointer-events-auto absolute z-[40] overflow-hidden"
-          style={{
-            left: editScreen.x,
-            top: editScreen.y,
-            width: editScreenW,
-            height: NODE_TITLE_LABEL_LINE_PX,
-            transform: 'translateY(-50%)',
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
+        <TitleIcon kind={iconKind} />
+        {editing && onRename ? (
           <input
             ref={inputRef}
+            data-rcb-title-edit="1"
+            data-text-inline-editor
             value={draft}
             aria-label={renameAriaLabel || name}
-            className="block w-full appearance-none border-0 bg-transparent p-0 font-medium leading-none text-[var(--ink)] shadow-none outline-none ring-0"
+            className="min-w-0 flex-1 appearance-none overflow-hidden text-ellipsis whitespace-nowrap border-0 bg-transparent p-0 font-medium leading-none text-[var(--ink)] shadow-none outline-none ring-0"
             style={{
-              fontSize: TITLE_EDIT_FONT_PX,
+              fontSize: TITLE_FONT_PX,
               lineHeight: `${NODE_TITLE_LABEL_LINE_PX}px`,
               height: NODE_TITLE_LABEL_LINE_PX,
-              margin: 0,
-              padding: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
             }}
+            onPointerDown={(e) => e.stopPropagation()}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => {
@@ -534,30 +399,14 @@ function NodeTitleLabel({
               e.stopPropagation();
             }}
           />
-        </div>
-      </RcbOverlayPortal>
-    ) : null;
-
-  return (
-    <>
-      <svg
-        data-rcb-infinite="1"
-        data-rcb-node-title="1"
-        className="absolute z-[999990] overflow-visible"
-        width={surf.width}
-        height={surf.height}
-        viewBox={surf.viewBox}
-        preserveAspectRatio="none"
-        style={{
-          ...surf.style,
-          pointerEvents: 'none',
-        }}
-        aria-hidden={false}
-      >
-        {bodyTransform ? <g transform={bodyTransform}>{labelBody}</g> : labelBody}
-      </svg>
-      {editInput}
-    </>
+        ) : (
+          <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+            {name}
+          </span>
+        )}
+        <span className="shrink-0 opacity-80 tabular-nums">{sizeText}</span>
+      </div>
+    </div>
   );
 }
 
