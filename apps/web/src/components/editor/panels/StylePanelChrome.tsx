@@ -163,6 +163,8 @@ function StylePanelShell({
   bodyClassName,
   width,
   dataAttr,
+  /** Extra header controls (e.g. reset) rendered before eye / exit. */
+  headerActions,
   /** Layer visibility (eye) — fill / stroke hide toggles live in the panel header. */
   layerVisible,
   onLayerVisibleChange,
@@ -177,6 +179,7 @@ function StylePanelShell({
   bodyClassName?: string;
   width?: number;
   dataAttr?: string;
+  headerActions?: ReactNode;
   layerVisible?: boolean;
   onLayerVisibleChange?: (visible: boolean) => void;
   layerVisibleTipShow?: string;
@@ -197,6 +200,7 @@ function StylePanelShell({
       <div className="flex h-11 items-center justify-between px-3">
         <span className="text-[13px] font-medium text-[var(--ink)]">{title}</span>
         <div className="flex items-center gap-0.5">
+          {headerActions}
           {showLayerToggle ? (
             <Tooltip
               tip={layerVisible ? layerVisibleTipHide : layerVisibleTipShow}
