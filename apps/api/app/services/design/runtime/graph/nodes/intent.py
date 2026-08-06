@@ -1,34 +1,59 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from typing import Any
 
 from langgraph.types import Command
 
-from app.services.design.runtime.graph.state import AgentRunState, AgentRuntime, GraphState
+from app.services.design.runtime.graph.state import AgentRuntime, GraphState
 from app.services.design.runtime.graph.support import (
     _bump,
     _chat_fallback_text,
     _clip_llm_raw,
-    _commit,
     _emit,
     _emit_design_loading_artboard,
     _goto_cmd,
-    _persist_progress,
 )
 from app.services.design.runtime.models_route import (
     classify_user_intent,
     normalize_intent_decision,
+    normalize_proposal_action,
     paint_ops_intent,
 )
 
 
+def _pending_proposal_flag(rt: AgentRuntime) -> dict[str, Any] | None:
+    raw = rt.flags.get("pending_proposal")
+    if not isinstance(raw, dict) or not raw.get("ops") or not raw.get("id"):
+        return None
+    return raw
+
+
+def _clear_ask_proposal_meta(proposal_task_id: str) -> None:
+    tid = str(proposal_task_id or "").strip()
+    if not tid:
+        return
+    try:
+        from app.services.design.admin.task_store import merge_task_meta
+
+        merge_task_meta(tid, {"ask_proposal": None})
+    except Exception:
+        pass
+
+
+def _drop_pending(rt: AgentRuntime) -> None:
+    rt.flags.pop("pending_proposal", None)
+
+
 async def _node_intent_classify(state: GraphState) -> Command:
-    """Cheap intent gate: chat → end; canvas_op → paint; design → decide (+ skills)."""
+    """Cheap intent gate: chat → end; canvas_op → paint; design → decide (+ skills).
+
+    With Ask PENDING_PROPOSAL: proposal_action apply|dismiss|revise routes first.
+    """
     rt = state["rt"]
     st = rt.run
+    pending = _pending_proposal_flag(rt)
     t_intent = time.perf_counter()
     decision = await classify_user_intent(
         prompt=rt.prompt,
@@ -37,13 +62,17 @@ async def _node_intent_classify(state: GraphState) -> Command:
         canvas_node_count=len(rt.scene_nodes or []),
         scene=rt.scene_key,
         interaction_mode=str(rt.flags.get("mode") or rt.mode or ""),
+        pending_proposal=pending,
     )
     intent_ms = max(0, int((time.perf_counter() - t_intent) * 1000))
     intent, paint_lane = normalize_intent_decision(
         decision.intent, decision.paint_lane
     )
+    action = normalize_proposal_action(
+        decision.proposal_action, has_pending=bool(pending)
+    )
     reply = (decision.reply or "").strip()
-    if intent == "chat" and not reply:
+    if intent == "chat" and not reply and action != "apply":
         reply = _chat_fallback_text(rt)
     rt.classified_intent = intent
     rt.classified_paint_lane = paint_lane
@@ -57,10 +86,12 @@ async def _node_intent_classify(state: GraphState) -> Command:
         phase="intent_classify",
         intent=intent,
         paint_lane=paint_lane or None,
-        reply=(reply[:500] if intent == "chat" else None),
+        proposal_action=action or None,
+        reply=(reply[:500] if intent == "chat" or action == "dismiss" else None),
         summary=(
             f"意图={intent}"
             + (f"/{paint_lane}" if paint_lane else "")
+            + (f" · proposal={action}" if action else "")
             + (f" · {(decision.rationale or '')[:80]}" if decision.rationale else "")
         ),
         duration_ms=intent_ms,
@@ -69,35 +100,55 @@ async def _node_intent_classify(state: GraphState) -> Command:
                 {
                     "intent": intent,
                     "paint_lane": paint_lane,
+                    "proposal_action": action,
                     "rationale": (decision.rationale or "")[:400],
-                    "reply": reply[:400] if intent == "chat" else "",
+                    "reply": reply[:400]
+                    if intent == "chat" or action == "dismiss"
+                    else "",
                 },
                 ensure_ascii=False,
             ),
             limit=1200,
         ),
     )
-    # No Chinese detail — FE i18n via activityThoughtBrief / process labels.
     _emit(
         {
             "type": "activity",
             "id": f"intent-{st.task_id[:8]}",
             "kind": "thought",
             "status": "done",
-            "stage": intent
+            "stage": intent,
         }
     )
+
+    if action == "apply" and pending:
+        ops = [o for o in (pending.get("ops") or []) if isinstance(o, dict)]
+        if ops:
+            rt.apply_ops = ops[:48]
+            rt.flags["apply_ops"] = True
+            _drop_pending(rt)
+            return _goto_cmd(rt, frm="intent_classify", to="apply_confirm")
+
+    if action == "dismiss" and pending:
+        if not reply:
+            reply = _chat_fallback_text(rt) or "已取消"
+        st.reply = reply
+        _emit({"type": "token", "text": reply})
+        _clear_ask_proposal_meta(str(pending.get("task_id") or ""))
+        _drop_pending(rt)
+        return _goto_cmd(rt, frm="intent_classify", to="__settle__")
+
+    # revise / no action — continue normal gate; drop pending so this run won't re-apply.
+    if pending:
+        _drop_pending(rt)
+
     if intent == "chat":
         if reply:
             st.reply = reply
             _emit({"type": "token", "text": reply})
         return _goto_cmd(rt, frm="intent_classify", to="__settle__")
 
-    # Catalogs (tools/skills/knowledge/…) are already on rt.system; skill bodies
-    # load only after the model emits need_skills. Memory is injected in memory node.
     _emit_design_loading_artboard(rt)
     if intent == "canvas_op":
-        # Achievable via canvas tools — skip decide, paint tool_ops immediately.
         return _goto_cmd(rt, frm="intent_classify", to="paint_ops")
     return _goto_cmd(rt, frm="intent_classify", to="design_agent")
-

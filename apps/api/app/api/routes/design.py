@@ -277,6 +277,16 @@ class DesignRunIn(BaseModel):
         default=None,
         description="Ask confirm: apply previously proposed tool_ops without a new LLM plan",
     )
+    proposal_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Ask pending proposal id (typed confirm → intent proposal_action)",
+    )
+    proposal_task_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="design_task id that holds meta.ask_proposal for proposal_id",
+    )
     interaction_mode: str | None = Field(
         default=None,
         description="agent | ask — Ask proposes / clarifies before painting",
@@ -468,6 +478,8 @@ async def design_run(
                     memory=body.memory,
                     route_overrides=body.route_overrides,
                     apply_ops=body.apply_ops,
+                    proposal_id=body.proposal_id,
+                    proposal_task_id=body.proposal_task_id,
                     interaction_mode=body.interaction_mode,
                     client_country=client_country,
                     skill_refs=body.skill_refs,

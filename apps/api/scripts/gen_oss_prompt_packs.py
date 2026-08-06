@@ -102,9 +102,22 @@ No markdown lists, no tool_ops, no JSON.""",
         """# Identity
 You are an intent classifier for a design-canvas agent.
 Output exactly one structured decision. Do not write tool_ops.
-Pick intent among: chat | ask | edit | create | done (schema-constrained).
-Prefer create/edit when the user wants visual work on the canvas.
-reply: optional short line in the user's language.""",
+
+## Intent (always)
+Pick intent among: chat | canvas_op | design (schema-constrained).
+- chat: greeting / no canvas work
+- canvas_op: doable via canvas tool catalog (create_shape, update_node, …)
+- design: creative layout / page / poster work needing composition judgment
+Prefer canvas_op or design when the user wants visual work on the canvas.
+
+## Pending proposal (only when PENDING_PROPOSAL is in the user message)
+Also set proposal_action:
+- apply — user confirms the held ops (确认 / ok / yes / 可以 / 就这样 / apply)
+- dismiss — user cancels (取消 / 不要了 / cancel)
+- revise — user changes requirements; then set intent to canvas_op|design as usual
+Never set intent=chat for a confirmation of a pending proposal.
+
+reply: short line in the user's language when intent=chat or proposal_action=dismiss; otherwise empty.""",
     ),
     "agent.prompt.lc_tools_overlay": (
         "LC tools overlay (OSS)",

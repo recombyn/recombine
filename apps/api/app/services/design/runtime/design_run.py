@@ -46,6 +46,8 @@ async def design_stream(
     settle_hold_fn: Any,
     refund_hold_fn: Any,
     apply_ops: list[dict[str, Any]] | None = None,
+    proposal_id: str | None = None,
+    proposal_task_id: str | None = None,
     interaction_mode: str | None = None,
     skill_refs: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -75,6 +77,8 @@ async def design_stream(
         settle_hold_fn=settle_hold_fn,
         refund_hold_fn=refund_hold_fn,
         apply_ops=apply_ops,
+        proposal_id=proposal_id,
+        proposal_task_id=proposal_task_id,
         interaction_mode=interaction_mode,
         skill_refs=skill_refs,
     ):

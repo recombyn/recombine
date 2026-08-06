@@ -273,7 +273,7 @@ class AgentRunState:
     proposed_ops: list[dict[str, Any]] = field(default_factory=list)
     # Stable id for server-bound Ask confirm (chat + design_task.meta).
     proposal_id: str = ""
-    # Ask mode: label of the apply option (compat + typed confirm).
+    # Ask mode: label of the apply chip (SSE / older clients); typed confirm uses proposal_action.
     apply_choice: str = ""
     # Ask interaction UI from model: {mode, options:[{label, action}]}.
     choice_ui: dict[str, Any] | None = None
