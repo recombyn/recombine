@@ -71,6 +71,8 @@ USER_INTENTS = ("chat", "canvas_op", "design")
 CANVAS_WORK_INTENTS = frozenset({"canvas_op", "design"})
 # Paint tool family for canvas_op / design (create_* vs update_*).
 PAINT_LANES = ("create", "edit")
+# Ask pending proposal side-channel (only when PENDING_PROPOSAL is injected).
+PROPOSAL_ACTIONS = ("apply", "dismiss", "revise")
 
 
 class IntentClassifyDecision(BaseModel):
@@ -80,6 +82,7 @@ class IntentClassifyDecision(BaseModel):
     - canvas_op: request is achievable with catalog canvas tools (create_shape,
       update_node, …) — direct tool path, no methodology skills
     - design: needs design composition / creative judgment beyond a single tool op
+    - proposal_action: only when a PENDING_PROPOSAL block is present
     """
 
     intent: Literal["chat", "canvas_op", "design"] = Field(
@@ -96,13 +99,56 @@ class IntentClassifyDecision(BaseModel):
             "edit=change existing. Empty when intent=chat."
         ),
     )
+    proposal_action: Literal["apply", "dismiss", "revise", ""] = Field(
+        default="",
+        description=(
+            "Only when PENDING_PROPOSAL is present: apply=confirm held ops; "
+            "dismiss=cancel proposal; revise=change requirements and continue; "
+            "empty=no pending / ignore pending"
+        ),
+    )
     reply: str = Field(
         default="",
-        description="Short Chinese reply when intent=chat; empty otherwise",
+        description=(
+            "Short reply in the user's language when intent=chat or "
+            "proposal_action=dismiss; empty otherwise"
+        ),
     )
     rationale: str = Field(
         default="",
         description="Short reason — cite tool names from the catalog when canvas_op",
+    )
+
+
+def normalize_proposal_action(
+    raw: str | None, *, has_pending: bool
+) -> str:
+    """Return apply|dismiss|revise|'' — empty when no pending proposal."""
+    if not has_pending:
+        return ""
+    s = str(raw or "").strip().lower()
+    if s in PROPOSAL_ACTIONS:
+        return s
+    return ""
+
+
+def _pending_proposal_ready(pending: dict[str, Any] | None) -> bool:
+    return bool(
+        isinstance(pending, dict) and pending.get("ops") and pending.get("id")
+    )
+
+
+def _pending_proposal_user_block(pending: dict[str, Any]) -> str:
+    detail = str(pending.get("detail") or "").strip()
+    pid = str(pending.get("id") or "").strip()
+    return (
+        "PENDING_PROPOSAL (Ask mode — ops are held until confirmed):\n"
+        f"proposal_id={pid}\n"
+        f"ops_summary={detail or '(ops prepared)'}\n"
+        "Set proposal_action: apply=user confirms held ops; "
+        "dismiss=user cancels; revise=user wants changes — then also set "
+        "intent to canvas_op|design as usual.\n"
+        "Do NOT set intent=chat for a confirmation like 确认/ok/yes.\n\n"
     )
 
 
@@ -765,15 +811,27 @@ async def classify_user_intent(
     canvas_node_count: int = 0,
     scene: str | None = None,
     interaction_mode: str | None = None,
+    pending_proposal: dict[str, Any] | None = None,
 ) -> IntentClassifyDecision:
     """Cheap structured intent gate. Falls back to ``heuristic_user_intent`` on error.
 
     Injects the live canvas tools catalog so the model judges canvas_op vs design
-    against real capabilities.
+    against real capabilities. When ``pending_proposal`` is set, also judges
+    proposal_action (apply / dismiss / revise).
     """
+    has_pending = _pending_proposal_ready(pending_proposal)
     fallback = heuristic_user_intent(
         prompt, has_images=has_images, canvas_node_count=canvas_node_count
     )
+    if has_pending:
+        # LLM-down: do not auto-apply; treat as revise so Ask can re-propose.
+        fallback = IntentClassifyDecision(
+            intent="design",
+            paint_lane="create",
+            proposal_action="revise",
+            reply="",
+            rationale="heuristic_pending_revise",
+        )
     mode = str(interaction_mode or "").strip().lower()
     try:
         from app.services.design.ops.tool_ops_contract import format_canvas_tools_catalog
@@ -781,12 +839,19 @@ async def classify_user_intent(
         tools_catalog = format_canvas_tools_catalog(rules)
     except Exception:
         tools_catalog = ""
+    pending_block = (
+        _pending_proposal_user_block(pending_proposal)
+        if has_pending and isinstance(pending_proposal, dict)
+        else ""
+    )
     user_blob = (
         f"scene={scene or 'unknown'}\n"
         f"has_images={bool(has_images)}\n"
         f"canvas_node_count={int(canvas_node_count)}\n"
         f"interaction_mode={mode or 'agent'}\n"
+        f"has_pending_proposal={has_pending}\n"
         f"{tools_catalog}\n\n"
+        f"{pending_block}"
         f"user_prompt:\n{(prompt or '').strip()[:4000]}"
     )
     try:
@@ -809,6 +874,7 @@ async def classify_user_intent(
             raw_lane = structured.paint_lane
             rationale = structured.rationale
             reply = structured.reply
+            raw_action = structured.proposal_action
             raw_grade = None
         elif isinstance(structured, dict):
             raw_intent = structured.get("intent")
@@ -816,6 +882,9 @@ async def classify_user_intent(
             raw_grade = structured.get("work_grade") or structured.get("workGrade")
             rationale = structured.get("rationale")
             reply = structured.get("reply")
+            raw_action = structured.get("proposal_action") or structured.get(
+                "proposalAction"
+            )
         else:
             _log.warning(
                 "intent_classify structured empty/unparsed type=%s; using heuristic",
@@ -830,15 +899,22 @@ async def classify_user_intent(
                 "intent_classify invalid intent=%r; using heuristic", raw_intent
             )
             return fallback
+        action = normalize_proposal_action(raw_action, has_pending=has_pending)
         # Trust the intent LLM. Do NOT demote design→canvas_op by char length:
         # Chinese page asks (e.g. 「设计移动端登录页」~13 chars) are shorter than
         # the old English-oriented threshold and were wrongly forced to canvas_op.
         reply_s = str(reply or "").strip()
-        if intent != "chat":
+        if intent != "chat" and action != "dismiss":
+            reply_s = ""
+        # Confirm held ops — do not short-circuit as chat.
+        if action == "apply":
+            intent = "design"
+            lane = lane or "create"
             reply_s = ""
         return IntentClassifyDecision(
             intent=intent,  # type: ignore[arg-type]
             paint_lane=lane if intent != "chat" else "",  # type: ignore[arg-type]
+            proposal_action=action,  # type: ignore[arg-type]
             reply=reply_s[:500],
             rationale=str(rationale or "").strip() or "llm_intent",
         )

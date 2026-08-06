@@ -1237,45 +1237,6 @@ function askProposalBind(m: ChatUiMessage | undefined | null): {
   };
 }
 
-/** Ask mode: typed text matches an apply option → re-send with proposed ops. */
-function findAskApplyConfirm(
-  messages: ChatUiMessage[],
-  typed: string
-): {
-  messageId: string;
-  ops: NonNullable<ChatUiMessage['proposedOps']>;
-  label: string;
-  proposalId?: string;
-  proposalTaskId?: string;
-} | null {
-  const lastAsk = [...messages]
-    .reverse()
-    .find((m) => m.role === 'assistant' && m.proposedOps?.length);
-  if (!lastAsk?.proposedOps?.length) return null;
-  const t = typed.trim();
-  if (!t) return null;
-  const applyLabels = new Set<string>();
-  for (const o of lastAsk.choiceUi?.options || []) {
-    if (o.action === 'apply' && o.label.trim()) applyLabels.add(o.label.trim());
-  }
-  const legacy = String(lastAsk.applyChoice || '').trim();
-  if (legacy) applyLabels.add(legacy);
-  for (const applyLabel of applyLabels) {
-    const confirms =
-      t === applyLabel ||
-      (t.length >= 2 && t.length <= applyLabel.length && applyLabel.includes(t));
-    if (confirms) {
-      return {
-        messageId: lastAsk.id,
-        ops: lastAsk.proposedOps,
-        label: t,
-        ...askProposalBind(lastAsk),
-      };
-    }
-  }
-  return null;
-}
-
 function clearAskProposalFields(m: ChatUiMessage): ChatUiMessage {
   if (m.role !== 'assistant') return m;
   if (
@@ -3463,36 +3424,25 @@ function AgentDock({
     const hasChips = contextChipsRef.current.length > 0;
     if ((!text && !options.applyOps?.length && !hasChips) || sending) return;
 
-    // Confirm a proposed_ops chip (intent-driven Ask on the shared Agent line).
-    if (
-      !options.applyOps?.length &&
-      !options.forceAgent &&
-      text
-    ) {
-      const confirm = findAskApplyConfirm(messages, text);
-      if (confirm) {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === confirm.messageId ? clearAskProposalFields(m) : m))
-        );
-        await send({
-          text: confirm.label,
-          raw: true,
-          displayContent: confirm.label,
-          applyOps: confirm.ops,
-          proposalId: confirm.proposalId,
-          proposalTaskId: confirm.proposalTaskId,
-          forceAgent: true,
-        });
-        return;
-      }
-    }
+    // Typed confirm/revise/dismiss: attach proposal ids; intent LLM judges.
+    // Chip Confirm still passes applyOps (fast path).
+    const lastAsk = findLastAskMessage(messages);
+    const pendingProposal =
+      !options.applyOps?.length && !options.proposalId && lastAsk?.proposedOps?.length
+        ? askProposalBind(lastAsk)
+        : {};
 
     const sendText = resolveSendDisplayText({
       text,
       hasChips,
       hasApplyOps: Boolean(options.applyOps?.length),
     });
-    const forceAgent = Boolean(options.forceAgent || options.applyOps?.length);
+    const forceAgent = Boolean(
+      options.forceAgent ||
+        options.applyOps?.length ||
+        options.proposalId ||
+        pendingProposal.proposalId
+    );
 
     if (
       contextChips.some(
@@ -3922,8 +3872,9 @@ function AgentDock({
             ? 'ask'
             : 'agent',
         applyOps: options.applyOps?.length ? options.applyOps : undefined,
-        proposalId: options.proposalId || undefined,
-        proposalTaskId: options.proposalTaskId || undefined,
+        proposalId: options.proposalId || pendingProposal.proposalId || undefined,
+        proposalTaskId:
+          options.proposalTaskId || pendingProposal.proposalTaskId || undefined,
         scene: sendScene,
         styleGroupId: styleGroupId ?? designCatalog?.style_groups?.[0]?.id ?? null,
         model: resolveAgentSendModel(canPickModel, model),
@@ -4579,7 +4530,7 @@ function AgentDock({
         disabled={false}
         placeholder={composerPlaceholder}
         canSend={!sending && !!editDraft.trim() && available !== false && !attachmentsUploading}
-        sendVariant="square"
+        sendVariant="circle"
         sendTone="ink"
         {...attachProps}
         modelButtonProps={modelButtonProps}
@@ -4689,7 +4640,7 @@ function AgentDock({
                 available !== false &&
                 !attachmentsUploading
               }
-              sendVariant="square"
+              sendVariant="circle"
               sendTone="ink"
               {...attachProps}
               interactionMode={interactionMode}
