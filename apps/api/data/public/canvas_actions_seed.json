@@ -69,14 +69,16 @@
       "kind": "create",
       "label": "Create text",
       "sort_order": 30,
-      "model_hint": "Add a text node. Args: text, x, y, width?, fontSize?, fill?, fontWeight?",
+      "model_hint": "Add a text node. Args: text, x, y, width?, fontSize?, fill?, fontWeight?, fontFamily?. fontFamily MUST be chosen from the Available fonts catalog when the style exists there. Do not invent font names.",
       "args_schema": {
         "text": "string",
         "x": "number",
         "y": "number",
         "width": "number?",
         "fontSize": "number?",
-        "fill": "string?"
+        "fill": "string?",
+        "fontWeight": "string|number?",
+        "fontFamily": "string?"
       }
     },
     {
@@ -84,7 +86,7 @@
       "kind": "create",
       "label": "Create image",
       "sort_order": 40,
-      "model_hint": "Add an image node. Args: src|url or attachmentIndex (user attach), x,y,width,height. Or genPrompt for AI image hydrate. Optional letteringText=visible text in the image (helps later replaceText).",
+      "model_hint": "Add an image node. Args: src|url or attachmentIndex (user attach), x,y,width,height. Or genPrompt for AI image hydrate. Optional letteringText=visible text in the image (helps later replaceText). Finished poster refs with baked text: STYLE only — prefer genPrompt clean bg, not full-bleed attachmentIndex. Lettering: ONLY when Needed style is NOT in Available fonts (brush calligraphy / 3D / decorative effects) → genPrompt + letteringText; otherwise use create_text + fontFamily from the fonts catalog.",
       "args_schema": {
         "src": "string?",
         "attachmentIndex": "number?",
@@ -170,7 +172,7 @@
       "kind": "frame",
       "label": "Delete frame",
       "sort_order": 90,
-      "model_hint": "Delete a frame. Args: frameId|id from SCENE_FRAMES. Destructive — first turn must ask confirmation (reply+choices), emit this op only after user confirms. Never put ids in reply.",
+      "model_hint": "Delete a frame. Args: frameId|id from SCENE_FRAMES. Destructive — first turn must ask confirmation via choice_ui (mode=confirm, apply+dismiss) or legacy reply+choices; emit this op only after user confirms. Never put ids in reply.",
       "args_schema": {
         "frameId": "string"
       }

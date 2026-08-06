@@ -517,6 +517,7 @@ def build_catalog_blocks(
     from app.services.design.aesthetics.scorer import format_aesthetics_catalog
     from app.services.design.prompts.knowledge_store import format_knowledge_catalog
     from app.services.design.ops.tool_ops_contract import format_canvas_tools_catalog
+    from app.services.fonts_store import format_fonts_catalog
 
     blocks: list[str] = []
     for src in catalogs:
@@ -526,6 +527,8 @@ def build_catalog_blocks(
             blocks.append(format_knowledge_catalog(scene=scene))
         elif src == "aesthetics":
             blocks.append(format_aesthetics_catalog(scene=scene))
+        elif src == "fonts":
+            blocks.append(format_fonts_catalog())
     return [b for b in blocks if b]
 
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.api.deps import AdminUser
 from app.api.routes.admin.common import *  # noqa: F403
+from app.api.routes.admin.common import _RUNTIME_SETTING_KEYS
 from app.core.config import settings
 
 router = APIRouter()
@@ -471,6 +472,15 @@ def admin_extract_sample_tokens(
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)[:800]) from e
     return {"meta": meta}
+
+
+@router.post("/design/quality-samples/suggest-meta")
+async def admin_suggest_quality_sample_meta(
+    _admin: AdminUser,
+    body: SuggestSampleMetaIn,
+) -> dict[str, Any]:
+    """Vision LLM: screenshot → comment + tags + structure (no DB write)."""
+    return await admin_suggest_sample_meta(_admin, body)
 
 @router.get("/design/quality-samples")
 def admin_list_quality_samples(

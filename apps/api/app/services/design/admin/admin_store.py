@@ -3036,6 +3036,72 @@ def _skills_from_meta(decision: dict[str, Any], exec_log: dict[str, Any]) -> lis
     return out
 
 
+def _error_blobs(exec_log: dict[str, Any]) -> list[str]:
+    blobs: list[str] = []
+    for err in exec_log.get("errors") or []:
+        s = str(err or "").strip()
+        if s:
+            blobs.append(s)
+    for step in exec_log.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        for key in ("error", "reason", "summary"):
+            s = str(step.get(key) or "").strip()
+            if s:
+                blobs.append(s)
+    note = str(exec_log.get("reflect_note") or "").strip()
+    if note:
+        blobs.append(note)
+    return blobs
+
+
+def _is_paint_timeout_blob(text: str) -> bool:
+    low = text.lower()
+    if "paint" not in low and "paint_ops" not in low:
+        return False
+    return "timed out" in low or "timeout" in low
+
+
+def _accumulate_resilience(resilience: dict[str, int], exec_log: dict[str, Any]) -> None:
+    """Count paint/observe failure signals from one task's execution_log."""
+    blobs = _error_blobs(exec_log)
+    path = [
+        str(p or "").strip().lower()
+        for p in (exec_log.get("path") or [])
+        if str(p or "").strip()
+    ]
+    hit = False
+
+    paint_to = sum(1 for b in blobs if _is_paint_timeout_blob(b))
+    if paint_to:
+        resilience["paintTimeouts"] += paint_to
+        hit = True
+
+    if any("retries_exhausted" in b.lower() for b in blobs):
+        resilience["retriesExhausted"] += 1
+        hit = True
+
+    reflect_n = sum(1 for p in path if p == "reflect")
+    if reflect_n == 0:
+        for step in exec_log.get("steps") or []:
+            if isinstance(step, dict) and str(step.get("phase") or "").lower() == "reflect":
+                reflect_n += 1
+    if reflect_n:
+        resilience["reflectRounds"] += reflect_n
+        hit = True
+
+    if any("scene_feedback_timeout" in b.lower() for b in blobs):
+        resilience["sceneTimeouts"] += 1
+        hit = True
+
+    if any("op_apply_failed" in b.lower() for b in blobs):
+        resilience["opApplyFails"] += 1
+        hit = True
+
+    if hit:
+        resilience["tasksWithResilienceSignal"] += 1
+
+
 def skill_metrics_summary() -> dict[str, Any]:
     """Aggregate design_task: all-time totals + last-500 window breakdowns."""
     from sqlmodel import Session
@@ -3072,6 +3138,14 @@ def skill_metrics_summary() -> dict[str, Any]:
     dual_n = 0
     memory_n = 0
     with_meta_n = 0
+    resilience = {
+        "paintTimeouts": 0,
+        "retriesExhausted": 0,
+        "reflectRounds": 0,
+        "sceneTimeouts": 0,
+        "opApplyFails": 0,
+        "tasksWithResilienceSignal": 0,
+    }
     recent: list[dict[str, Any]] = []
 
     for r in rows:
@@ -3123,6 +3197,8 @@ def skill_metrics_summary() -> dict[str, Any]:
         for sk_key in skills_used:
             _bucket_inc(skill_stats, sk_key, failed=failed_b, ok=ok_b, tokens=tok)
 
+        _accumulate_resilience(resilience, exec_log)
+
         if len(recent) < 50:
             recent.append(
                 {
@@ -3168,6 +3244,14 @@ def skill_metrics_summary() -> dict[str, Any]:
             "avgTokens": round(window_tokens / window_den, 1) if window_n else 0,
             "dualPickedRate": round(dual_n / meta_n, 4) if with_meta_n else 0,
             "memoryInjectedRate": round(memory_n / meta_n, 4) if with_meta_n else 0,
+        },
+        "resilience": {
+            **resilience,
+            "rate": round(
+                resilience["tasksWithResilienceSignal"] / window_den, 4
+            )
+            if window_n
+            else 0,
         },
         "byRoute": _bucket_rows(route_stats, key_name="route"),
         "byIntent": _bucket_rows(intent_stats, key_name="intent"),

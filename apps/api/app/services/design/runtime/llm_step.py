@@ -136,7 +136,7 @@ def prepare_model_and_images(
             allow_switch=allow_vision_switch,
         )
         if switch_reason:
-            _log.info(
+            _log.debug(
                 "[llm_step] vision switch %r → %r (%s) refs=%s",
                 model_family,
                 family,
@@ -147,7 +147,7 @@ def prepare_model_and_images(
             model_supports_vision(family)
             or model_supports_vision(to_endpoint_model_id(family))
         ):
-            _log.info(
+            _log.debug(
                 "[llm_step] vision switch disabled — skip images on %r",
                 family,
             )
@@ -438,8 +438,7 @@ async def stream_skill_step(
         f"max_tokens={tokens} images={len(step_images or [])} "
         f"via=langchain"
     )
-    _log.info(open_msg)
-    print(open_msg, flush=True)
+    _log.debug(open_msg)
 
     async def _consume() -> AsyncIterator[tuple[str, str | int]]:
         nonlocal content_len, usage_total, first
@@ -455,12 +454,11 @@ async def stream_skill_step(
                 content_len += len(thought)
                 if first:
                     first = False
-                    dmsg = (
-                        f"[llm_step] +{_time.time()-t0:6.2f}s  "
-                        f"first_delta thinking preview={thought[:80]!r}"
+                    _log.debug(
+                        "[llm_step] +%.2fs  first_delta thinking chars=%s",
+                        _time.time() - t0,
+                        len(thought),
                     )
-                    _log.info(dmsg)
-                    print(dmsg, flush=True)
                 yield ("thinking", thought)
 
             text = content_text_from_chunk(chunk)
@@ -468,12 +466,11 @@ async def stream_skill_step(
                 content_len += len(text)
                 if first:
                     first = False
-                    dmsg = (
-                        f"[llm_step] +{_time.time()-t0:6.2f}s  "
-                        f"first_delta token preview={text[:80]!r}"
+                    _log.debug(
+                        "[llm_step] +%.2fs  first_delta token chars=%s",
+                        _time.time() - t0,
+                        len(text),
                     )
-                    _log.info(dmsg)
-                    print(dmsg, flush=True)
                 yield ("token", text)
 
         approx = max(1, content_len // 3) if content_len else 1
@@ -485,12 +482,11 @@ async def stream_skill_step(
     while attempt < 4:
         attempt += 1
         try:
-            http_msg = (
-                f"[llm_step] +{_time.time()-t0:6.2f}s  "
-                f"http_ok via=langchain attempt={attempt}"
+            _log.debug(
+                "[llm_step] +%.2fs  http_ok via=langchain attempt=%s",
+                _time.time() - t0,
+                attempt,
             )
-            _log.info(http_msg)
-            print(http_msg, flush=True)
             async for item in _consume():
                 yield item
             return
@@ -505,7 +501,7 @@ async def stream_skill_step(
             ceiling = _parse_max_tokens_ceiling(detail)
             if status == 400 and ceiling is not None and ceiling < tokens:
                 tokens = ceiling
-                _log.info(
+                _log.debug(
                     "[llm_step] +%.2fs  max_tokens retry →%s",
                     _time.time() - t0,
                     ceiling,

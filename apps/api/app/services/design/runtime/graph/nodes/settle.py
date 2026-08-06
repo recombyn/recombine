@@ -51,7 +51,7 @@ async def _node_settle(state: GraphState) -> Command:
 
     if already_settled:
         spend = prior_charged
-        _log.info("settle idempotent skip task=%s charged=%s", st.task_id, spend)
+        _log.debug("settle idempotent skip task=%s charged=%s", st.task_id, spend)
     else:
         spend = await asyncio.to_thread(
             _design_settle_hold_fn(rt),

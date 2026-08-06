@@ -64,7 +64,7 @@ Frontmatter is stripped from the runtime prompt body. Product `_meta.json` wins 
 
 | Key | Role |
 |-----|------|
-| `design_methodology` | Create **steps** + material one-liners (not layout ops) |
+| `design_methodology` | Create **steps** + material one-liners (not layout ops); process: brief → structure → place → self-check |
 | `vision_extract` | User reference images |
 | `aesthetics_align` | Optional sample alignment |
 | `canvas_edit` | Edit existing nodes |
@@ -83,7 +83,7 @@ Frontmatter is stripped from the runtime prompt body. Product `_meta.json` wins 
 | Prompt packs (`design_prompt_packs_seed.json`) | Protocol only: JSON shape, intent, when to `need_*` |
 | Core skills (seed JSON) | Engine playbooks: create steps, vision, edit, image boundary |
 | Ext packs (this folder) | Optional server extension playbooks |
-| Admin skills (`user.*`) | Product workflows + **layout ops** (`user.layout_ops`) |
+| Admin skills (`user.*`) | Product workflows + optional layout/op playbooks (catalog; enable to load) |
 | Knowledge | Numeric/encyclopedia detail |
 
 Designer workflow skills go through **Admin** (`user.*`), not this directory.

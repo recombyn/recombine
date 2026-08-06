@@ -225,6 +225,9 @@ def _run_post_paint_critique(
     for issue in _spatial_grounding_issues(rt):
         if issue not in issues:
             issues.append(issue)
+    for issue in _poster_hero_issues(rt):
+        if issue not in issues:
+            issues.append(issue)
     for issue in _aesthetic_critique_issues(
         preview_image=preview_image,
         scene_key=str(rt.scene_key or ""),
@@ -253,15 +256,60 @@ def _run_post_paint_critique(
     return issues
 
 
+def _poster_hero_issues(rt: AgentRuntime) -> list[str]:
+    """Poster/festive create must include create_image hero — not shape-only piles."""
+    scene = str(rt.scene_key or "").strip().lower()
+    prompt_l = str(rt.prompt or "").strip().lower()
+    wants_poster = scene in ("poster", "roll-up", "rollup", "banner") or any(
+        k in prompt_l
+        for k in (
+            "海报",
+            "易拉宝",
+            "halloween",
+            "万圣",
+            "poster",
+            "flyer",
+            "宣传",
+        )
+    )
+    if not wants_poster:
+        return []
+    ops = [o for o in (rt.paint_ops or []) if isinstance(o, dict)]
+    if not ops:
+        return []
+    names = [str(o.get("name") or o.get("op_key") or "") for o in ops]
+    has_image = "create_image" in names
+    shape_n = sum(1 for n in names if n == "create_shape")
+    if has_image:
+        return []
+    if shape_n >= 4:
+        return [
+            "poster missing create_image hero: replace shape-pile with "
+            "create_image genPrompt full-bleed (or near) main visual, then text"
+        ]
+    if any(n.startswith("create_") for n in names):
+        return [
+            "poster/festive create needs create_image genPrompt hero visual "
+            "before settling"
+        ]
+    return []
+
+
 def _format_critique_reflect_note(issues: list[str]) -> str:
     """Paint-retry brief: structured CRITIQUE block for LAST_ERROR prompt."""
     lines = ["CRITIQUE (fix paint — fix these before settling):"]
     for i, issue in enumerate(issues[:6], 1):
         lines.append(f"{i}. {str(issue).strip()[:200]}")
+    joined = " ".join(str(x).lower() for x in issues)
+    if "create_image" in joined or "hero" in joined or "shape-pile" in joined:
+        lines.append(
+            "Hero: emit create_image with genPrompt for the full poster background/"
+            "main illustration; keep create_text for copy; do not rebuild with shapes only."
+        )
     if any("aesthetics" in str(x).lower() for x in issues):
         lines.append(
             "Aesthetic gaps: improve layout rhythm, contrast, and whitespace; "
-            "avoid stacking everything in one corner."
+            "avoid stacking everything in one corner; no clipped titles."
         )
     if any(
         "empty" in str(x).lower() or "cramped" in str(x).lower() or "place" in str(x).lower()
@@ -270,7 +318,11 @@ def _format_critique_reflect_note(issues: list[str]) -> str:
         lines.append(
             "Placement: use PLACEMENT empty_rects / suggested_place_world from the host."
         )
-    return "\n".join(lines)[:480]
+    if any("contrast" in str(x).lower() or "clip" in str(x).lower() for x in issues):
+        lines.append(
+            "Type: raise contrast vs background; shrink fontSize or width so glyphs stay on board."
+        )
+    return "\n".join(lines)[:520]
 
 
 async def _retry_paint_from_critique(
