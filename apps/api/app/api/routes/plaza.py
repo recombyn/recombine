@@ -101,7 +101,6 @@ def _require_public_plaza_item(submission_id: str) -> dict[str, Any]:
 
 @router.get("/feed")
 def plaza_feed(
-    current_user: CurrentUser,
     page: int = 1,
     pageSize: int | None = None,
     limit: int | None = None,
@@ -110,7 +109,7 @@ def plaza_feed(
     authorIds: str | None = None,
 ) -> dict[str, Any]:
     """
-    Public plaza feed.
+    Public plaza feed (no login required).
     tab=recommended|latest (following deprecated — use authorIds to filter by creator)
     category=optional category filter (website|mobile|image|poster|video)
     authorIds=comma-separated user ids to filter works by creator.

@@ -10,6 +10,8 @@ import { cn } from '@/utils/classnames';
 type Props = {
   value: FillPanelValue;
   onChange: (next: FillPanelValue) => void;
+  /** Clear saved canvas color → follow theme `--canvas`. */
+  onReset?: () => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   meshSelectedIndex?: number;
@@ -22,6 +24,7 @@ type Props = {
 function CanvasBgPicker({
   value,
   onChange,
+  onReset,
   open,
   onOpenChange,
   meshSelectedIndex,
@@ -33,6 +36,7 @@ function CanvasBgPicker({
     <FillPanelPopover
       value={value}
       onChange={onChange}
+      onReset={onReset}
       title={'画布背景色'}
       placement="top-start"
       shiftMainAxis={false}
