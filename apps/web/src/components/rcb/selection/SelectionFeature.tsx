@@ -25,6 +25,7 @@ import {
   snapMoveToSmartGuides,
   snapResizeToSmartGuides,
   smartSnapThreshold,
+  collectSmartGuidesAt,
   type SceneBox,
   type SmartGuideLine,
 } from './alignGuides';
@@ -802,31 +803,27 @@ function computeMovedUnion(ctx: MoveSnapContext): {
   };
   let guides: SmartGuideLine[] = [];
   if (!ctx.disableSnap) {
-    if (ctx.gridSize > 0) {
-      // Pixel grid owns translation. Smart guides used to nudge first (and old
-      // code skipped grid on snapped axes) → ink floated between cells while
-      // gap badges still showed "4". Guides are display-only after grid snap.
-      nextVisual = snapBoxToGrid(nextVisual, ctx.gridSize);
-      const shown = snapMoveToSmartGuides({
-        box: nextVisual,
-        targets: ctx.targets,
-        threshold: 0.51,
-        gridSize: ctx.gridSize,
-      });
-      const stillAligned =
-        Math.abs(shown.box.left - nextVisual.left) < 1e-9 &&
-        Math.abs(shown.box.top - nextVisual.top) < 1e-9;
-      guides = stillAligned ? shown.guides : [];
-    } else {
+    // Smart align (capped screen feel) then pin ink to the pixel grid.
+    // Old "guides display-only" path hid align lines whenever near-snap would
+    // have moved the box — low zoom only showed gap numbers, no orange lines.
+    if (ctx.threshold > 0 && ctx.targets.length) {
       const smart = snapMoveToSmartGuides({
         box: nextVisual,
         targets: ctx.targets,
         threshold: ctx.threshold,
-        gridSize: 0,
+        gridSize: ctx.gridSize > 0 ? ctx.gridSize : 0,
       });
       nextVisual = smart.box;
-      guides = smart.guides;
     }
+    if (ctx.gridSize > 0) {
+      nextVisual = snapBoxToGrid(nextVisual, ctx.gridSize);
+    }
+    // Paint from the settled box: gaps always; align strokes when edges match.
+    guides = collectSmartGuidesAt(
+      nextVisual,
+      ctx.targets,
+      Math.max(0.51, ctx.threshold)
+    );
   }
   const sdx = nextVisual.left - visualUnion.left;
   const sdy = nextVisual.top - visualUnion.top;
@@ -888,71 +885,56 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
   const singleNode = singleId ? ctx.document?.deltaSetLike?.[singleId] : null;
   const snapAsPath = Boolean(singleId && !parseFrameSelId(singleId));
   if (!ctx.disableSnap) {
-    // Resize the painted outer ink onto the grid, then write path = visual − outset.
+    // Resize painted outer ink: smart align (capped) then grid — same as move.
+    // Guides always reflect the settled box (gaps + coincides), never cleared
+    // by a "would have snapped" display probe.
     if (snapAsPath && singleNode) {
       const path0 = deflateSelectionBox({ ...next }, singleNode);
       const visual0 = inflateBoxByVisualOutset(path0, singleNode);
-      const smart = snapResizeToSmartGuides({
-        box: visual0,
-        handle,
-        targets: ctx.targets,
-        threshold: ctx.threshold,
-        min: Math.max(8, Math.ceil(strokeVisualOutset(singleNode) * 2) + 1),
-        gridSize: ctx.gridSize,
-      });
-      const gridVisual = snapResizeToGrid(smart.box, handle, ctx.gridSize, 8, {
-        lockAspect,
-        aspectRatio: ctx.drag.aspectRatio,
-      });
+      let visualNext = visual0;
+      if (ctx.threshold > 0 && ctx.targets.length) {
+        visualNext = snapResizeToSmartGuides({
+          box: visualNext,
+          handle,
+          targets: ctx.targets,
+          threshold: ctx.threshold,
+          min: Math.max(8, Math.ceil(strokeVisualOutset(singleNode) * 2) + 1),
+          gridSize: ctx.gridSize > 0 ? ctx.gridSize : 0,
+        }).box;
+      }
+      if (ctx.gridSize > 0) {
+        visualNext = snapResizeToGrid(visualNext, handle, ctx.gridSize, 8, {
+          lockAspect,
+          aspectRatio: ctx.drag.aspectRatio,
+        });
+      }
       const outset = Math.max(0, strokeVisualOutset(singleNode));
       const pathNext = {
-        left: gridVisual.left + outset,
-        top: gridVisual.top + outset,
-        width: Math.max(1, gridVisual.width - outset * 2),
-        height: Math.max(1, gridVisual.height - outset * 2),
+        left: visualNext.left + outset,
+        top: visualNext.top + outset,
+        width: Math.max(1, visualNext.width - outset * 2),
+        height: Math.max(1, visualNext.height - outset * 2),
       };
-      const shown = snapResizeToSmartGuides({
-        box: gridVisual,
-        handle,
-        targets: ctx.targets,
-        threshold: 0.51,
-        min: 8,
-        gridSize: ctx.gridSize,
-      });
-      const stillAligned =
-        Math.abs(shown.box.left - gridVisual.left) < 1e-9 &&
-        Math.abs(shown.box.top - gridVisual.top) < 1e-9 &&
-        Math.abs(shown.box.width - gridVisual.width) < 1e-9 &&
-        Math.abs(shown.box.height - gridVisual.height) < 1e-9;
-      guides = stillAligned ? shown.guides : [];
+      guides = collectSmartGuidesAt(visualNext, ctx.targets, Math.max(0.51, ctx.threshold));
       next = inflateSelectionBox(pathNext, singleNode);
     } else {
-      const smart = snapResizeToSmartGuides({
-        box: next,
-        handle,
-        targets: ctx.targets,
-        threshold: ctx.threshold,
-        min: 8,
-        gridSize: ctx.gridSize,
-      });
-      next = snapResizeToGrid(smart.box, handle, ctx.gridSize, 8, {
-        lockAspect,
-        aspectRatio: ctx.drag.aspectRatio,
-      });
-      const shown = snapResizeToSmartGuides({
-        box: next,
-        handle,
-        targets: ctx.targets,
-        threshold: 0.51,
-        min: 8,
-        gridSize: ctx.gridSize,
-      });
-      const stillAligned =
-        Math.abs(shown.box.left - next.left) < 1e-9 &&
-        Math.abs(shown.box.top - next.top) < 1e-9 &&
-        Math.abs(shown.box.width - next.width) < 1e-9 &&
-        Math.abs(shown.box.height - next.height) < 1e-9;
-      guides = stillAligned ? shown.guides : [];
+      if (ctx.threshold > 0 && ctx.targets.length) {
+        next = snapResizeToSmartGuides({
+          box: next,
+          handle,
+          targets: ctx.targets,
+          threshold: ctx.threshold,
+          min: 8,
+          gridSize: ctx.gridSize > 0 ? ctx.gridSize : 0,
+        }).box;
+      }
+      if (ctx.gridSize > 0) {
+        next = snapResizeToGrid(next, handle, ctx.gridSize, 8, {
+          lockAspect,
+          aspectRatio: ctx.drag.aspectRatio,
+        });
+      }
+      guides = collectSmartGuidesAt(next, ctx.targets, Math.max(0.51, ctx.threshold));
     }
   }
   next = {
@@ -1853,7 +1835,8 @@ function SelectionFeature({
     if (!enabled || !hitEl) return undefined;
 
     const getPointerCtx = () => ({
-      document: documentRef.current,
+      // Scene model — never shadow DOM Document (elementsFromPoint / querySelector).
+      sceneDoc: documentRef.current,
       toScene: toSceneRef.current,
       zoom: zoomRef.current,
       gridSize: gridSizeRef.current,
@@ -1883,9 +1866,9 @@ function SelectionFeature({
      * Must not run on pointerdown ??otherwise one click (down+up) looks like a double-tap.
      */
     const tryOpenTextEdit = (id: string) => {
-      const { document, onEditText, onSelect, readOnly } = getPointerCtx();
+      const { sceneDoc, onEditText, onSelect, readOnly } = getPointerCtx();
       if (readOnly) return false;
-      const node = document?.deltaSetLike?.[id];
+      const node = sceneDoc?.deltaSetLike?.[id];
       if (node?.key !== 'text' || !onEditText) {
         lastTextClickRef.current = null;
         return false;
@@ -1911,7 +1894,7 @@ function SelectionFeature({
       // New gesture — drop any brush left stuck after a lost pointerup.
       setMarquee(null);
       const {
-        document,
+        sceneDoc,
         toScene,
         readOnly,
         attachPickActive,
@@ -1922,9 +1905,24 @@ function SelectionFeature({
         onSelectFrame,
       } = getPointerCtx();
       const target = e.target as HTMLElement;
+      // Prefer sceneDoc for scene; DOM APIs use globalThis.document.
+      const underPointer =
+        typeof globalThis.document?.elementsFromPoint === 'function'
+          ? globalThis.document.elementsFromPoint(e.clientX, e.clientY)
+          : [];
+      const resizeUnderPointer = () =>
+        underPointer.some(
+          (n) => n instanceof Element && n.getAttribute('data-sel-handle') === 'resize'
+        );
+      // Overlays handle their own pointers — unless a resize hit also sits under
+      // the cursor (corner / control-box must prefer scale).
+      const onOverlayKnob = target.closest(
+        '[data-radius-handle],[data-star-handle],[data-poly-handle],[data-circle-handle],[data-sel-toolbar],[data-frame-toolbar]'
+      );
+      if (onOverlayKnob && !resizeUnderPointer()) return;
       if (
         target.closest(
-          '[data-ctx-menu],[data-sel-toolbar],[data-frame-toolbar],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar],[data-radius-handle],[data-star-handle],[data-poly-handle],[data-circle-handle]'
+          '[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar]'
         )
       )
         return;
@@ -1940,9 +1938,20 @@ function SelectionFeature({
       const liveUnionNow = liveUnionRef.current;
       const liveOriginsNow = liveOriginsRef.current;
       const liveAngleNow = liveAngleRef.current;
-      const lockedSelection = isSelectionOriginsLocked(document, liveOriginsNow);
+      const lockedSelection = isSelectionOriginsLocked(sceneDoc, liveOriginsNow);
 
-      const rotateEl = target.closest('[data-sel-handle="rotate"]') as HTMLElement | null;
+      // Prefer resize over rotate when both are under the pointer (same corner).
+      const resizeEl = underPointer.find(
+        (n) => n instanceof Element && n.getAttribute('data-sel-handle') === 'resize'
+      ) as HTMLElement | undefined;
+      const rotateEl =
+        resizeEl
+          ? null
+          : (underPointer.find(
+              (n) => n instanceof Element && n.getAttribute('data-sel-handle') === 'rotate'
+            ) as HTMLElement | undefined) ||
+            (target.closest('[data-sel-handle="rotate"]') as HTMLElement | null);
+
       if (rotateEl && liveUnionNow && liveOriginsNow?.length) {
         if (readOnly || lockedSelection) return;
         e.preventDefault();
@@ -1954,14 +1963,14 @@ function SelectionFeature({
         const angle0 =
           liveAngleNow ||
           (liveOriginsNow.length === 1
-            ? readNodeAngle(document, liveOriginsNow[0].nodeId)
+            ? readNodeAngle(sceneDoc, liveOriginsNow[0].nodeId)
             : 0);
         const pointerAngle0 = (Math.atan2(p.y - center.y, p.x - center.x) * 180) / Math.PI;
         dragRef.current = seed('rotate', e, p, {
           origins: liveOriginsNow.map((o) => ({
             nodeId: o.nodeId,
             box: { ...o.box },
-            angle0: readNodeAngle(document, o.nodeId),
+            angle0: readNodeAngle(sceneDoc, o.nodeId),
           })),
           union: { ...liveUnionNow },
           angle0,
@@ -1973,18 +1982,20 @@ function SelectionFeature({
         return;
       }
 
-      const resizeEl = target.closest('[data-sel-handle="resize"]') as HTMLElement | null;
-      if (resizeEl && liveUnionNow && liveOriginsNow?.length) {
+      const resizeHandleEl =
+        resizeEl ||
+        (target.closest('[data-sel-handle="resize"]') as HTMLElement | null);
+      if (resizeHandleEl && liveUnionNow && liveOriginsNow?.length) {
         if (readOnly || lockedSelection) return;
         e.preventDefault();
         e.stopPropagation();
-        const handle = (resizeEl.getAttribute('data-resize') || 'se') as ResizeHandle;
+        const handle = (resizeHandleEl.getAttribute('data-resize') || 'se') as ResizeHandle;
         const singleId = liveOriginsNow.length === 1 ? liveOriginsNow[0].nodeId : '';
-        const singleNode = singleId ? document?.deltaSetLike?.[singleId] : null;
+        const singleNode = singleId ? sceneDoc?.deltaSetLike?.[singleId] : null;
         const shapeType = singleNode ? String(singleNode.attrs?.shapeType || '') : '';
         const angle0 =
           liveOriginsNow.length === 1 && !parseFrameSelId(liveOriginsNow[0].nodeId)
-            ? liveAngleNow || readNodeAngle(document, liveOriginsNow[0].nodeId)
+            ? liveAngleNow || readNodeAngle(sceneDoc, liveOriginsNow[0].nodeId)
             : 0;
         let pathEpLocal0: [number, number] | undefined;
         let pathEpLocal1: [number, number] | undefined;
@@ -2051,7 +2062,7 @@ function SelectionFeature({
       // Hit-test scene nodes (selection chrome is non-blocking so empty clicks pass through).
       const hitId = hitTest(p.x, p.y, { clientX: e.clientX, clientY: e.clientY });
       const selectedIds = liveOriginsNow?.map((o) => o.nodeId) ?? [];
-      const plateFrameId = hitId ? frameForFullBleedPlate(document, hitId) : null;
+      const plateFrameId = hitId ? frameForFullBleedPlate(sceneDoc, hitId) : null;
 
       // Composer pick: attach node or artboard; never move / never treat frame as blank cancel.
       if (attachPickActive) {
@@ -2067,7 +2078,7 @@ function SelectionFeature({
             : null);
         if (hitId && !plateFrameId) {
           // Do NOT call onSelectFrame(null) here ??during pick that clears pick mode.
-          onSelect(expandSelectionWithGroups(document, [hitId]));
+          onSelect(expandSelectionWithGroups(sceneDoc, [hitId]));
         } else if (frameUnder) {
           onSelectFrame?.(frameUnder);
         } else {
@@ -2114,7 +2125,7 @@ function SelectionFeature({
         e.preventDefault();
         e.stopPropagation();
         const additive = e.shiftKey;
-        const expandedHit = expandSelectionWithGroups(document, [hitId]);
+        const expandedHit = expandSelectionWithGroups(sceneDoc, [hitId]);
 
         if (readOnly) {
           // Preview / Dev inspect: select only (no move).
@@ -2141,7 +2152,7 @@ function SelectionFeature({
         }
 
         const { origins, union } = buildMoveOriginsForHit({
-          document,
+          document: sceneDoc,
           hitId,
           selectedIds,
           expandedHit,
@@ -2162,10 +2173,10 @@ function SelectionFeature({
 
         // Keep chrome rotation in sync ??transforming flips chromeAngle onto liveAngle.
         if (origins.length === 1 && !parseFrameSelId(origins[0].nodeId)) {
-          setLiveAngle(readNodeAngle(document, origins[0].nodeId));
+          setLiveAngle(readNodeAngle(sceneDoc, origins[0].nodeId));
         }
         // Locked layers stay selectable but cannot start a drag.
-        if (isSelectionOriginsLocked(document, origins)) {
+        if (isSelectionOriginsLocked(sceneDoc, origins)) {
           dragRef.current = seed('blank', e, p);
           capture(e.pointerId);
           return;
@@ -2197,7 +2208,7 @@ function SelectionFeature({
       const drag = dragRef.current;
       if (!drag) return;
       const {
-        document,
+        sceneDoc,
         toScene,
         zoom,
         gridSize,
@@ -2293,12 +2304,12 @@ function SelectionFeature({
         const { nextUnion, sdx, sdy, guides } = computeMovedUnion({
           union: drag.union,
           origins: drag.origins,
-          document,
+          document: sceneDoc,
           dx,
           dy,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, exclude),
+          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
           threshold: smartSnapThreshold(zoom),
         });
         const nextOrigins = drag.origins.map((o) => ({
@@ -2324,7 +2335,7 @@ function SelectionFeature({
         // Soft-click on a handle must not resize: at 3% zoom, 2px jitter ??60+
         // scene units and snap threshold is huge (8/zoom), so the box jumps.
         if (screenDistSq <= DRAG_DISTANCE_SQUARED) return;
-        const stroke = strokeEndpointBox(drag, document, p.x, p.y);
+        const stroke = strokeEndpointBox(drag, sceneDoc, p.x, p.y);
         if (stroke) {
           setLiveUnion(stroke.next);
           setLiveOrigins([{ nodeId: stroke.strokeId, box: stroke.next }]);
@@ -2344,14 +2355,14 @@ function SelectionFeature({
         }
         const exclude = new Set(drag.origins.map((o) => o.nodeId));
         const { next, textMode, guides } = computeResizedUnion({
-          document,
+          document: sceneDoc,
           drag,
           dx,
           dy,
           shiftKey: e.shiftKey,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, exclude),
+          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
           threshold: smartSnapThreshold(zoom),
         });
         setSmartGuides(guides);
@@ -2403,7 +2414,7 @@ function SelectionFeature({
       if (!drag) return;
       dragRef.current = null;
       const {
-        document,
+        sceneDoc,
         toScene,
         zoom,
         gridSize,
@@ -2487,11 +2498,11 @@ function SelectionFeature({
         }
         const candidates = queryNodeIdsInRect?.(box) ?? listNodeIds();
         const rawHits = candidates.filter((id) =>
-          nodeHitsMarquee(document, id, box, getNodeBox, toScene)
+          nodeHitsMarquee(sceneDoc, id, box, getNodeBox, toScene)
         );
-        const frameHits = framesHittingMarquee(document, box).map((f) => f.id);
+        const frameHits = framesHittingMarquee(sceneDoc, box).map((f) => f.id);
         // Full-bleed plate: keep when artboard brushed, or other non-plate content hit.
-        const contentHits = filterMarqueeContentHits(document, rawHits, new Set(frameHits));
+        const contentHits = filterMarqueeContentHits(sceneDoc, rawHits, new Set(frameHits));
         commitMarqueeSelection({
           contentHits,
           frameHits,
@@ -2588,12 +2599,12 @@ function SelectionFeature({
         const { nextUnion, sdx, sdy } = computeMovedUnion({
           union: drag.union,
           origins: drag.origins,
-          document,
+          document: sceneDoc,
           dx,
           dy,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, exclude),
+          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
           threshold: smartSnapThreshold(zoom),
         });
         const patches = drag.origins.map((o) => ({
@@ -2620,7 +2631,7 @@ function SelectionFeature({
           endTransform();
           return;
         }
-        const stroke = strokeEndpointBox(drag, document, p.x, p.y);
+        const stroke = strokeEndpointBox(drag, sceneDoc, p.x, p.y);
         if (stroke) {
           setLiveUnion(stroke.next);
           setLiveOrigins([{ nodeId: stroke.strokeId, box: stroke.next }]);
@@ -2643,14 +2654,14 @@ function SelectionFeature({
         }
         const excludeUp = new Set(drag.origins.map((o) => o.nodeId));
         const { next, textMode } = computeResizedUnion({
-          document,
+          document: sceneDoc,
           drag,
           dx,
           dy,
           shiftKey,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(document, listNodeIds, getNodeBox, excludeUp),
+          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, excludeUp),
           threshold: smartSnapThreshold(zoom),
         });
         if (drag.origins.length === 1) {
@@ -2692,7 +2703,7 @@ function SelectionFeature({
 
     const onDblClick = (e: MouseEvent) => {
       const {
-        document,
+        sceneDoc,
         toScene,
         readOnly,
         hitTest,
@@ -2714,7 +2725,7 @@ function SelectionFeature({
         if (ids.length === 1) hit = ids[0];
       }
       if (!hit) return;
-      const node = document?.deltaSetLike?.[hit];
+      const node = sceneDoc?.deltaSetLike?.[hit];
       if (node?.key === 'text') {
         e.preventDefault();
         e.stopPropagation();
