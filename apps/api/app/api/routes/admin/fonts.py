@@ -59,6 +59,21 @@ def admin_upsert_font(
         raise HTTPException(status_code=400, detail=str(err)) from err
     return {"item": item}
 
+
+@router.post("/fonts/upload")
+async def admin_fonts_upload(
+    admin: AdminUser,
+    file: UploadFile = File(..., description="ttf / otf / woff / woff2"),
+    family: str | None = Form(default=None),
+    displayName: str | None = Form(default=None),
+    weight: int = Form(default=400),
+) -> dict[str, Any]:
+    """Upload a font file and register/merge as a catalog face."""
+    return await admin_upload_font_file(
+        admin, file=file, family=family, displayName=displayName, weight=weight
+    )
+
+
 @router.delete("/fonts/{family}")
 def admin_delete_font(
     _admin: AdminUser,
@@ -74,6 +89,7 @@ def admin_delete_font(
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
 
 @router.delete("/fonts/{family}/faces/{weight}")
 def admin_delete_font_face(

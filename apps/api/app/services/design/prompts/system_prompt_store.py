@@ -352,4 +352,14 @@ def upsert_system_prompt(
             sort_order=next_sort,
             enabled=next_en,
         )
+        # Runtime prefers design_prompt_pack — keep pack body in sync when Admin edits here.
+        for pack in crud.list_design_prompt_packs_by_kind(session=session, kind=prompt_key):
+            pack.body = next_body
+            if (next_label or "").strip():
+                pack.title = next_label
+            pack.when_to_use = str(next_desc or "")
+            pack.enabled = next_en
+            pack.updated_at = time.time()
+            session.add(pack)
+        session.commit()
     return _row_to_item(out)

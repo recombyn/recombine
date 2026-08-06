@@ -136,6 +136,18 @@ async def _hydrate_tool_ops_images(
     async def _one(op: dict[str, Any]) -> dict[str, Any]:
         args = dict(op.get("args") or {}) if isinstance(op.get("args"), dict) else {}
         prompt = str(args.get("genPrompt") or args.get("prompt") or "").strip()
+        lettering = str(args.get("letteringText") or args.get("lettering_text") or "").strip()
+        # letteringText must reach the image model — otherwise calligraphy gens ignore glyphs.
+        if lettering and lettering not in prompt:
+            prompt = (
+                f"{prompt}\nExact glyphs to render (letteringText): {lettering}. "
+                "Isolated lettering only on a plain solid background (for cutout)."
+                if prompt
+                else (
+                    f"Render exact text only: {lettering}. "
+                    "Isolated lettering on a plain solid background (for cutout)."
+                )
+            )
         aspect = _aspect_or_size_from_args(args)
         try:
             result = await generate_image(
@@ -149,7 +161,23 @@ async def _hydrate_tool_ops_images(
         except Exception:
             url = None
         if url:
-            args["src"] = str(url)
+            src = str(url)
+            # Lettering layers must be transparent overlays; models often return opaque
+            # white plates — auto cutout so FE can composite cleanly + keep replaceText.
+            if lettering:
+                try:
+                    from app.services.vision.remove_bg import remove_background
+
+                    cut = await remove_background(
+                        src, meta={"cutoutMode": "product"}
+                    )
+                    cut_src = str((cut or {}).get("image") or "").strip()
+                    if cut_src:
+                        src = cut_src
+                        args["cutoutApplied"] = True
+                except Exception:
+                    pass
+            args["src"] = src
         next_op: dict[str, Any] = {"name": "create_image", "args": args}
         if op.get("op_id"):
             next_op["op_id"] = op["op_id"]

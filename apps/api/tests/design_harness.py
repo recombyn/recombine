@@ -18,6 +18,37 @@ def events_by_type(events: list[dict[str, Any]], typ: str) -> list[dict[str, Any
     return [e for e in events if e.get("type") == typ]
 
 
+def last_execution_log(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    rows = events_by_type(events, "execution_log")
+    return rows[-1] if rows else None
+
+
+def resilience_signals(exec_log: dict[str, Any] | None) -> dict[str, bool]:
+    """Booleans derived from execution_log errors (for failure-path asserts)."""
+    if not exec_log:
+        return {
+            "paint_timeout": False,
+            "retries_exhausted": False,
+            "scene_timeout": False,
+            "op_apply_failed": False,
+            "has_reflect": False,
+        }
+    errors = [str(e or "").lower() for e in (exec_log.get("errors") or [])]
+    joined = "\n".join(errors)
+    path = [str(p or "").lower() for p in (exec_log.get("path") or [])]
+    return {
+        "paint_timeout": any("timed out" in e and "paint" in e for e in errors),
+        "retries_exhausted": "retries_exhausted" in joined,
+        "scene_timeout": "scene_feedback_timeout" in joined,
+        "op_apply_failed": "op_apply_failed" in joined,
+        "has_reflect": "reflect" in path
+        or any(
+            isinstance(s, dict) and str(s.get("phase") or "").lower() == "reflect"
+            for s in (exec_log.get("steps") or [])
+        ),
+    }
+
+
 def event_types(events: list[dict[str, Any]]) -> list[str]:
     return [str(e.get("type") or "") for e in events if e.get("type")]
 

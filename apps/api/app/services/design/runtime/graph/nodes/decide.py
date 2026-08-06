@@ -20,7 +20,6 @@ from app.services.design.runtime.graph.support import (
     _bump,
     _chat_fallback_text,
     _clip_llm_raw,
-    _clip_urls,
     _commit,
     _emit,
     _flush_host_events,
@@ -215,7 +214,7 @@ async def _node_design_agent(state: GraphState) -> Command:
             model=st.family,
             reply=(reply[:500] if reply else None),
             has_images=bool(turn_images) or None,
-            llm_image_urls=_clip_urls(turn_images) if turn_images else None,
+            # llm_image_urls comes only from _llm_io_fields (avoid duplicate kw).
             tokens=used_hint or None,
             duration_ms=max(0, int((time.perf_counter() - t_decide) * 1000)),
             llm_raw=_clip_llm_raw(content, limit=4000),

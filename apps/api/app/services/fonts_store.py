@@ -137,3 +137,30 @@ def delete_font(family: str) -> bool:
         return False
     with Session(engine) as session:
         return crud.delete_font_by_family(session=session, family=fam)
+
+
+def format_fonts_catalog(*, limit: int = 80) -> str:
+    """Short font family list for Agent decide/paint (create_text fontFamily)."""
+    try:
+        data = list_fonts(page=1, page_size=max(1, min(int(limit or 80), 200)))
+    except Exception:
+        return ""
+    items = [it for it in (data.get("items") or []) if isinstance(it, dict)]
+    if not items:
+        return ""
+    lines = [
+        "Available fonts (create_text.fontFamily — pick from this list only):",
+        "If the needed style is NOT here (brush calligraphy, 3D/extruded type, "
+        "decorative lettering fonts cannot render) → create_image + genPrompt + "
+        "letteringText instead of inventing a fontFamily.",
+    ]
+    for it in items:
+        family = str(it.get("family") or "").strip()
+        if not family:
+            continue
+        display = str(it.get("displayName") or "").strip()
+        if display and display != family:
+            lines.append(f"- `{family}` ({display})")
+        else:
+            lines.append(f"- `{family}`")
+    return "\n".join(lines)
