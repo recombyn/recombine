@@ -313,7 +313,7 @@ def test_agent_model_id_prefers_api_model():
 
 
 def test_paint_tool_keys_structural_not_shape_specific():
-    """canvas_op create: shape+text only — no create_frame / update."""
+    """canvas_op create: shape+text+image — no create_frame / update."""
     from types import SimpleNamespace
 
     from app.services.design.runtime.agent_controller import (
@@ -335,7 +335,8 @@ def test_paint_tool_keys_structural_not_shape_specific():
     )
     assert _is_lean_paint_turn(rt) is True
     keys = _paint_tool_keys_for_turn(rt)
-    assert keys == ["create_shape", "create_text"]
+    # create_image is exposed on create turns for genPrompt heroes (no attachment required)
+    assert keys == ["create_shape", "create_text", "create_image"]
     assert "create_frame" not in keys
     assert "update_node" not in keys
 
