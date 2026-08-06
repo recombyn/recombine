@@ -8,7 +8,7 @@ export type FontChild = {
   /** Optional file URL — registered as its own @font-face family when set. */
   url?: string;
   format?: FontFaceFormat;
-  /** CSS / Fabric fontWeight when several children share one family name. */
+  /** CSS fontWeight when several children share one family name. */
   weight?: number;
 };
 

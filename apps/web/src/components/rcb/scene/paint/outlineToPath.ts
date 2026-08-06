@@ -364,7 +364,7 @@ function intersectOffsetLines(
  * `outward` picks the exterior arc (CCW-always scalloped / bow-tie ends).
  *
  * Step size must stay fine on thick strokes: ~60° samples made a semicircle look like
- * a triangle (fig.1 round tip → fig.2 needle with tip + two shoulder knobs).
+ * a triangle (round tip → needle with tip + two shoulder knobs).
  */
 function appendCircularArcPolyline(
   parts: string[],

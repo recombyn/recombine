@@ -336,7 +336,7 @@ function PenStrokeToolbar({
         className
       )}
     >
-      <FloatingToolbar className="relative gap-1 px-2">
+      <FloatingToolbar className="relative h-8 gap-1 px-2 py-0">
         <ColorPanelPopover
           value={color}
           onChange={(hex) => dispatch(setPenStrokeColor(hex))}
@@ -353,13 +353,13 @@ function PenStrokeToolbar({
             <Tooltip tip={'颜色'} placement={docked ? 'bottom' : 'top'}>
               <span
                 className={cn(
-                  'inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+                  'inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors',
                   open ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]',
                   eraseMode && 'opacity-40'
                 )}
               >
                 <span
-                  className="h-4 w-4 rounded-full border border-black/15"
+                  className="h-3.5 w-3.5 rounded-full border border-black/15"
                   style={{
                     background: hex,
                     opacity: isPencil ? Math.max(0.05, swatchOpacity / 100) : 1,
@@ -370,7 +370,7 @@ function PenStrokeToolbar({
           )}
         </ColorPanelPopover>
 
-        <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
+        <span className="mx-0.5 h-3.5 w-px bg-[var(--line)]" aria-hidden />
 
         {isPencil ? (
           <div
@@ -395,7 +395,7 @@ function PenStrokeToolbar({
                   setBrushOpen((v) => !v);
                 }}
                 className={cn(
-                  'inline-flex h-8 w-[120px] items-center justify-center rounded-lg px-1.5 transition-colors',
+                  'inline-flex h-6 w-[120px] items-center justify-center rounded-md px-1.5 transition-colors',
                   brushOpen ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]',
                   eraseMode && 'cursor-not-allowed opacity-40'
                 )}
@@ -403,7 +403,7 @@ function PenStrokeToolbar({
                 <BrushStrokePreview
                   brushId={brush.id}
                   color={color}
-                  className="h-4 w-full min-w-0"
+                  className="h-3.5 w-full min-w-0"
                 />
               </button>
             </Tooltip>
@@ -494,15 +494,15 @@ function PenStrokeToolbar({
           </div>
         ) : null}
 
-        {isPencil ? <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden /> : null}
+        {isPencil ? <span className="mx-0.5 h-3.5 w-px bg-[var(--line)]" aria-hidden /> : null}
 
         {/* Width: number input, no upper cap */}
         <label
-          className="inline-flex h-8 items-center gap-1.5 rounded-[4px] bg-[var(--accent-soft)] px-2"
+          className="inline-flex h-6 items-center gap-1 rounded-[4px] bg-[var(--accent-soft)] px-1.5"
           onPointerDown={(e) => e.stopPropagation()}
           title={eraseMode ? '橡皮尺寸' : '粗细'}
         >
-          <Icon name="editor-stroke-weight" className="h-4 w-4 shrink-0 text-[var(--ink)]" />
+          <Icon name="editor-stroke-weight" className="h-3.5 w-3.5 shrink-0 text-[var(--ink)]" />
           <input
             type="number"
             min={1}
@@ -510,9 +510,9 @@ function PenStrokeToolbar({
             onChange={(e) =>
               dispatch(setPenStrokeWidth(Math.max(1, Math.round(Number(e.target.value) || 1))))
             }
-            className="w-12 min-w-0 bg-transparent text-[12px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            className="w-10 min-w-0 bg-transparent text-[11px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
-          <span className="shrink-0 text-[11px] text-[var(--muted)]">Px</span>
+          <span className="shrink-0 text-[10px] text-[var(--muted)]">Px</span>
         </label>
 
         {isPencil ? (
@@ -529,17 +529,17 @@ function PenStrokeToolbar({
                 disabled={eraseMode}
                 onClick={() => dispatch(setPencilPressureEnabled(!pressureEnabled))}
                 className={cn(
-                  'inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+                  'inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors',
                   pressureEnabled
                     ? 'bg-[var(--ink)] text-[var(--on-brand)]'
                     : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]',
                   eraseMode && 'cursor-not-allowed opacity-40'
                 )}
               >
-                <Icon name="editor-pressure" className="h-4 w-4" />
+                <Icon name="editor-pressure" className="h-3.5 w-3.5" />
               </button>
             </Tooltip>
-            <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
+            <span className="mx-0.5 h-3.5 w-px bg-[var(--line)]" aria-hidden />
             <Tooltip tip={'\u64e6\u76ae\u64e6'} placement={docked ? 'bottom' : 'top'}>
               <button
                 type="button"
@@ -547,28 +547,28 @@ function PenStrokeToolbar({
                 aria-pressed={eraseMode}
                 onClick={() => dispatch(setPencilEraseMode(!eraseMode))}
                 className={cn(
-                  'inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+                  'inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors',
                   eraseMode
                     ? 'bg-[var(--ink)] text-[var(--on-brand)]'
                     : 'text-[var(--ink)] hover:bg-[var(--accent-soft)]'
                 )}
               >
-                <LuEraser className="h-4 w-4" strokeWidth={1.5} />
+                <LuEraser className="h-3.5 w-3.5" strokeWidth={1.5} />
               </button>
             </Tooltip>
           </>
         ) : (
           <>
-            <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
+            <span className="mx-0.5 h-3.5 w-px bg-[var(--line)]" aria-hidden />
             <Tooltip tip={`${t('editor.exitPenEdit')} (Esc)`} placement={docked ? 'bottom' : 'top'}>
               <button
                 type="button"
                 aria-label={t('editor.exitPenEdit')}
                 onClick={exitPenEdit}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--ink)] text-[var(--on-brand)] transition-opacity hover:opacity-90"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[var(--ink)] text-[var(--on-brand)] transition-opacity hover:opacity-90"
               >
-                <HiOutlineCheck className="h-4 w-4" strokeWidth={2} />
+                <HiOutlineCheck className="h-3.5 w-3.5" strokeWidth={2} />
               </button>
             </Tooltip>
           </>

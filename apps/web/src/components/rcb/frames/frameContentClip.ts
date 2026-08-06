@@ -6,11 +6,6 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** Same quantize as infinite SVG hosts / artboard plate. */
-function quantClip(n: number) {
-  return Math.round(n * 1e4) / 1e4;
-}
-
 let clipSeq = 0;
 function nextClipId(prefix: string) {
   clipSeq += 1;
@@ -122,13 +117,13 @@ export function applyFrameContentClip(
   }
   try {
     const { ox, oy } = sceneOrigin(document);
-    const fx = quantClip(num(frame.x) - ox);
-    const fy = quantClip(num(frame.y) - oy);
-    const fw = quantClip(Math.max(1, num(frame.width, 1)));
-    const fh = quantClip(Math.max(1, num(frame.height, 1)));
-    // ~½ device px in scene space — kills AA bleed past the sibling plate SVG.
+    const fx = num(frame.x) - ox;
+    const fy = num(frame.y) - oy;
+    const fw = Math.max(1, num(frame.width, 1));
+    const fh = Math.max(1, num(frame.height, 1));
+    // ~½ CSS px in scene space — kills AA bleed past the sibling plate SVG.
     const z = Math.max(0.05, Number(opts?.zoom) || 1);
-    const inset = quantClip(0.5 / z);
+    const inset = 0.5 / z;
 
     const id = nextClipId('frame-clip');
     const defs = ensureDefs(root);

@@ -34,7 +34,7 @@ function BucketFillToolbar({ className }: { className?: string }) {
 
   return (
     <div className={cn('pointer-events-auto', className)}>
-      <FloatingToolbar className="gap-1 px-2">
+      <FloatingToolbar className="h-8 gap-1 px-2 py-0">
         <FillPanelPopover
           value={value}
           onChange={(next) => dispatch(setBucketFill(next))}
@@ -48,12 +48,12 @@ function BucketFillToolbar({ className }: { className?: string }) {
             <Tooltip tip="填充颜色" placement="bottom" disabled={open}>
               <span
                 className={cn(
-                  'inline-flex h-8 w-8 items-center justify-center rounded-[4px] transition-colors',
+                  'inline-flex h-6 w-6 items-center justify-center rounded-[4px] transition-colors',
                   open ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]'
                 )}
               >
                 <span
-                  className="relative h-4 w-4 overflow-hidden rounded-full border border-black/15"
+                  className="relative h-3.5 w-3.5 overflow-hidden rounded-full border border-black/15"
                   style={{ background: preview }}
                 />
               </span>

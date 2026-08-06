@@ -34,7 +34,7 @@ export type SegmentedControlProps<T extends string = string> = {
 };
 
 const TRACK_RADIUS: Record<SegmentedRadius, string> = {
-  /** Soft rect — fill type / stroke icon tracks (fig.1). */
+  /** Soft rect — fill type / stroke icon tracks. */
   xl: 'rounded-md',
   full: 'rounded-full',
 };

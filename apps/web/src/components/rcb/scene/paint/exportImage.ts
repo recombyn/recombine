@@ -621,6 +621,7 @@ export async function renderExport(options: ExportImageOptions): Promise<ExportR
         'position:fixed;left:-99999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
       window.document.body.appendChild(ephemeralHost);
       const { root, layer } = createSvgBoard(ephemeralHost, 794, 1123, { infinite: true });
+      root.setAttribute('data-rcb-export-surface', '1');
       const map = await loadSceneOntoSvg(
         root,
         layer,

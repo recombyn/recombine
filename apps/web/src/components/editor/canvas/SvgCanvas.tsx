@@ -41,6 +41,7 @@ import { computeShapeBoolean, type ShapeBox } from '@/components/rcb/selection/s
 import {
   HEAVY_PATH_D_CHARS,
   STROKE_HIT,
+  sceneHitSlop,
   distPointToPathD,
   distPointToSegment,
   hitTestPath2DLocal,
@@ -165,6 +166,8 @@ import {
   STAMP_TINT_READY_EVENT,
   rcbCenterOnPoint,
   getDocumentGridSize,
+  snapCoordToGrid,
+  rcbDefaultPlaceFontSize,
 } from '@/components/rcb';
 import { parseFrameSelId } from '@/components/rcb/selection/SelectionFeature';
 import ImageProcessOverlay from '@/components/editor/nodes/ImageNode/ImageProcessOverlay';
@@ -386,6 +389,8 @@ function SvgCanvas({
     setGeometryTransforming(next);
     if (!next) {
       dragWriteCoalesceRef.current.cancel();
+      // Clear live geom with the Redux document write in onGeometryCommit when
+      // possible. Soft-click / cancelled transforms still need a clear here.
       setVideoLiveGeom(null);
     }
   }, []);
@@ -598,7 +603,7 @@ function SvgCanvas({
       width: Math.max(1, Number(node.width) || 1),
       height: Math.max(1, Number(node.height) || 1),
     };
-    // Chrome sits on the vector path (inflateSelectionBox / strokeChromeOutset = 0).
+    // Control box = path + stroke visual outer (resize / rotate follow ink).
     return inflateSelectionBox(geom, node);
   }, []);
 
@@ -627,14 +632,15 @@ function SvgCanvas({
       const board = boardRef.current;
       // Infinite paper is 0×0 — always use camera zoom (page-space margin).
       const zoom = Math.max(0.05, camera.zoom || 1);
-      // ~12px on screen, at least half the stroke hit pad in world units.
-      const pad = Math.max(STROKE_HIT / 2, 12 / zoom);
+      // ~12 CSS px slop → scene units (must scale with zoom; raw STROKE_HIT as
+      // scene pad ≈ 480px fat finger at 4000% and blocks blank-click deselect).
+      const pad = sceneHitSlop(zoom);
       const allIds = listNodeIds();
       let order = [...allIds].reverse();
       // Large scenes: only test spatially nearby candidates (z-order preserved among them).
       // Falling through the full list made hover O(N) even with an index.
       if (allIds.length >= 48) {
-        const nearby = nodeSpatialIndex.searchPoint(x, y, pad + 64);
+        const nearby = nodeSpatialIndex.searchPoint(x, y, pad + 64 / zoom);
         if (nearby.length) {
           const allow = new Set(nearby.map((n) => n.id));
           order = order.filter((id) => allow.has(id));
@@ -666,7 +672,8 @@ function SvgCanvas({
               ly = dx * Math.sin(rad) + dy * Math.cos(rad) + cy;
             }
             const { strokeWidth: sw } = resolveStroke(node, '#333333');
-            const hitW = Math.max(sw > 0 ? sw : STROKE_HIT, pad * 2);
+            // Painted stroke + screen slop (not Math.max(sw, STROKE_HIT) in scene units).
+            const hitW = Math.max(sw > 0 ? sw : 2, 0) + pad * 2;
             rememberNodePath2D(id, d);
             if (hitTestPath2DLocal(d, lx, ly, { strokeWidth: hitW, lineCap: 'round', lineJoin: 'round' })) {
               return id;
@@ -684,7 +691,7 @@ function SvgCanvas({
             1,
             Number(node.attrs?.borderWidth ?? node.attrs?.['border-width'] ?? 2) || 2
           );
-          const pathPad = Math.max(sw / 2 + 2, 10 / zoom);
+          const pathPad = sw / 2 + sceneHitSlop(zoom, 10);
           // Closed boolean/path fills: hit interior, not only the outline.
           const fillHit = shapeType !== 'pen' && supportsFill(node);
           const inLooseBox =
@@ -712,7 +719,7 @@ function SvgCanvas({
           }
           if (!heavyPath && d) {
             rememberNodePath2D(id, d);
-            const hitW = Math.min(Math.max(sw * 2, pathPad * 2), sw + 24 / zoom);
+            const hitW = sw + pathPad * 2;
             if (
               hitTestPath2DLocal(d, lx, ly, {
                 fill: fillHit,
@@ -732,8 +739,7 @@ function SvgCanvas({
           const svgEl = board?.nodeEls?.get(id);
           if (svgEl && screen) {
             const mode = shapeType === 'pencil' || fillHit ? 'auto' : 'stroke';
-            // Cap temporary stroke width — huge values ≈ AABB at low zoom.
-            const hitW = Math.min(Math.max(sw * 2, pathPad * 2), sw + 24 / zoom);
+            const hitW = sw + pathPad * 2;
             if (
               hitTestSvgNodeAtClient(svgEl, screen.clientX, screen.clientY, {
                 mode,
@@ -800,12 +806,10 @@ function SvgCanvas({
             }
             const { stroke, strokeWidth: sw } = resolveStroke(node, '#333333');
             const align = resolveStrokeAlign(node.attrs);
-            // Outside paints a 2× underlay — widen stroke hit so the outer ink stays clickable.
+            // Match painted ink + screen slop. Never Math.max(sw, 12) in scene units.
             const strokeHit =
               stroke && stroke !== 'transparent' && sw > 0
-                ? align === 'outside'
-                  ? Math.max(sw * 2, pad)
-                  : Math.max(sw, pad)
+                ? (align === 'outside' ? sw * 2 : sw) + pad * 2
                 : 0;
             rememberNodePath2D(id, d);
             if (
@@ -831,18 +835,18 @@ function SvgCanvas({
             const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
             const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
             if (
-              Math.abs(lx) <= hitBox.width / 2 + hitPad * 0.25 &&
-              Math.abs(ly) <= hitBox.height / 2 + hitPad * 0.25
+              Math.abs(lx) <= hitBox.width / 2 + hitPad &&
+              Math.abs(ly) <= hitBox.height / 2 + hitPad
             ) {
               return id;
             }
             continue;
           }
           if (
-            x >= hitBox.left - hitPad * 0.15 &&
-            x <= hitBox.left + hitBox.width + hitPad * 0.15 &&
-            y >= hitBox.top - hitPad * 0.15 &&
-            y <= hitBox.top + hitBox.height + hitPad * 0.15
+            x >= hitBox.left - hitPad &&
+            x <= hitBox.left + hitBox.width + hitPad &&
+            y >= hitBox.top - hitPad &&
+            y <= hitBox.top + hitBox.height + hitPad
           ) {
             return id;
           }
@@ -863,18 +867,18 @@ function SvgCanvas({
           const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
           const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
           if (
-            Math.abs(lx) <= hitBox.width / 2 + hitPad * 0.25 &&
-            Math.abs(ly) <= hitBox.height / 2 + hitPad * 0.25
+            Math.abs(lx) <= hitBox.width / 2 + hitPad &&
+            Math.abs(ly) <= hitBox.height / 2 + hitPad
           ) {
             return id;
           }
           continue;
         }
         if (
-          x >= hitBox.left - hitPad * 0.15 &&
-          x <= hitBox.left + hitBox.width + hitPad * 0.15 &&
-          y >= hitBox.top - hitPad * 0.15 &&
-          y <= hitBox.top + hitBox.height + hitPad * 0.15
+          x >= hitBox.left - hitPad &&
+          x <= hitBox.left + hitBox.width + hitPad &&
+          y >= hitBox.top - hitPad &&
+          y <= hitBox.top + hitBox.height + hitPad
         ) {
           return id;
         }
@@ -1204,7 +1208,7 @@ function SvgCanvas({
       patches: Array<{ nodeId: string; left: number; top: number; width: number; height: number }>,
       options?: { textResizeMode?: 'scale' | 'wrap'; skipHistory?: boolean }
     ) => {
-      // Drop coalesced previews — commit writes the final document once.
+      // Drop coalesced frame previews — commit writes the final document once.
       dragWriteCoalesceRef.current.cancel();
       const doc = documentRef.current;
       const board = boardRef.current;
@@ -1279,6 +1283,9 @@ function SvgCanvas({
       }
       frameGeomHistoryPushedRef.current = false;
       dispatch(setDocumentFromCanvas(next));
+      // Same React turn as Redux doc — HTML plates must not fall back to stale
+      // coords between commit and onTransformingChange(false).
+      setVideoLiveGeom(null);
     },
     [dispatch, readOnly, normalizeGeomPatches, toGeometryPatches, applyFrameGeometryPatches]
   );
@@ -1479,24 +1486,15 @@ function SvgCanvas({
         return;
       }
 
-      // Circles / regular polygons / stars stay proportional: lock to a square.
-      let width = box.width;
-      let height = box.height;
-      let left = box.left;
-      let top = box.top;
-      if (kind === 'circle' || kind === 'polygon' || kind === 'star') {
-        const size = Math.max(3, Math.max(box.width, box.height));
-        left = box.left + (box.width - size) / 2;
-        top = box.top + (box.height - size) / 2;
-        width = size;
-        height = size;
-      }
-      const origin = sceneToDocumentCoords(doc, left, top);
+      // Circles / regular polygons / stars are already squared in ShapeDrawFeature
+      // (visual→geom). Do NOT Math.max(3, size) here — that inflated geom 2→3 and
+      // made committed ink jump from visual 3×3 to 4×4 after center stroke.
+      const origin = sceneToDocumentCoords(doc, box.left, box.top);
       const { id, node } = createShapeNode({
         x: origin.x,
         y: origin.y,
-        width,
-        height,
+        width: box.width,
+        height: box.height,
         shapeType: kind,
         fill: '#FFFFFF',
       });
@@ -1516,14 +1514,26 @@ function SvgCanvas({
       const doc = documentRef.current;
       if (!doc || readOnly) return;
       const autoSize = point.autoSize !== false;
-      const origin = sceneToDocumentCoords(doc, point.x, point.y);
+      const gridSize = getDocumentGridSize(doc);
+      const zoom = Math.max(0.05, camera.zoom || 1);
+      // Screen-constant ~14px so 3000% zoom does not spawn document-14 glyphs.
+      const fontSize = rcbDefaultPlaceFontSize(zoom, 14);
+      const origin = sceneToDocumentCoords(
+        doc,
+        snapCoordToGrid(point.x, gridSize),
+        snapCoordToGrid(point.y, gridSize)
+      );
+      const fixedW = autoSize
+        ? 2
+        : Math.max(gridSize, snapCoordToGrid(Math.max(gridSize, point.width || 160), gridSize));
       const { id, node } = createTextNode({
         x: origin.x,
         y: origin.y,
         text: '',
-        width: autoSize ? 2 : Math.max(16, Math.round(point.width || 160)),
-        height: 20,
+        width: fixedW,
+        // Height comes from measured font metrics — do not hardcode 20.
         autoSize,
+        fontSize,
       });
       const next = addNodeToDocument(doc, id, node);
       documentRef.current = next;
@@ -1533,7 +1543,7 @@ function SvgCanvas({
       setEditingTextId(id);
       finishToSelect();
     },
-    [dispatch, readOnly]
+    [dispatch, readOnly, camera.zoom]
   );
 
   const onTextEditCommit = useCallback(
@@ -1901,11 +1911,39 @@ function SvgCanvas({
     (
       pathD: string,
       box: { left: number; top: number; width: number; height: number },
-      closed: boolean
+      closed: boolean,
+      opts?: { replaceNodeId?: string }
     ) => {
       const doc = documentRef.current;
       if (!doc || readOnly) return;
       const origin = sceneToDocumentCoords(doc, box.left, box.top);
+      const replaceId = opts?.replaceNodeId;
+      if (replaceId && doc.deltaSetLike?.[replaceId]) {
+        const prev = doc.deltaSetLike[replaceId];
+        const prevType = String(prev?.attrs?.shapeType || 'pen');
+        const shapeType = prevType === 'path' ? 'path' : 'pen';
+        dispatch(pushEditorHistory());
+        dispatch(
+          patchDocumentNode({
+            nodeId: replaceId,
+            patch: {
+              x: origin.x,
+              y: origin.y,
+              width: Math.max(1, box.width),
+              height: Math.max(1, box.height),
+              attrs: {
+                shapeType,
+                path: pathD,
+                closed: closed ? 'true' : 'false',
+                'border-color': penStrokeColor,
+                'border-width': penStrokeWidth,
+              },
+            },
+          })
+        );
+        dispatch(setSelectedNodeIds([replaceId]));
+        return;
+      }
       const { id, node } = createShapeNode({
         x: origin.x,
         y: origin.y,
@@ -2943,6 +2981,8 @@ function SvgCanvas({
             stageEl={stageEl}
             strokeColor={penStrokeColor}
             strokeWidth={penStrokeWidth}
+            gridSnap
+            gridSize={getDocumentGridSize(document)}
             onCommit={onPenCommit}
             onCancel={finishToSelect}
             hitTest={hitTest}
@@ -2968,6 +3008,8 @@ function SvgCanvas({
               convertPointMode={pathEditSubtool === 'curve'}
               newStrokeColor={penStrokeColor}
               newStrokeWidth={penStrokeWidth}
+              gridSnap
+              gridSize={getDocumentGridSize(document)}
               onCommitNewShape={({ pathD, box, closed }) => {
                 if (!editingPenId) return;
                 onPathEditUnionNewShape(editingPenId, { pathD, box, closed }, penStrokeWidth);

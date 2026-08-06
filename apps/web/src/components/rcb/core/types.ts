@@ -1,4 +1,4 @@
-/** recombyn canvas (rcb) — shared types. */
+/** RCB canvas — shared types. */
 
 export type RcbVec = { x: number; y: number };
 

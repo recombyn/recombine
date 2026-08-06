@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import { useRcbCamera, useRcbScreenToScene } from '../camera/context';
+import { rcbDefaultPlaceFontSize } from '../core/layout';
 
 /** `dragDistanceSquared` default = 16 → 4px; fixed-width needs ~6× that. */
 const BASE_DRAG_PX = 4;
@@ -108,7 +109,14 @@ function TextPlaceFeature({
       }
       const left = Math.min(pt.originX, p.x);
       const width = Math.max(1, Math.abs(p.x - pt.originX));
-      setPreview({ left, top: pt.originY, width, height: 24 });
+      const zoom = Math.max(0.05, camera.zoom || 1);
+      const fs = rcbDefaultPlaceFontSize(zoom, 14);
+      setPreview({
+        left,
+        top: pt.originY,
+        width,
+        height: Math.max(1, Math.ceil(fs * 1.4)),
+      });
     };
 
     const finish = (e: PointerEvent, commit: boolean) => {
