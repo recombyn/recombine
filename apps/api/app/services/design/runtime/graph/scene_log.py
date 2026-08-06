@@ -233,6 +233,18 @@ def _existing_run_lifecycle(task_id: str) -> dict[str, Any] | None:
         return None
 
 
+def _existing_ask_proposal(task_id: str) -> dict[str, Any] | None:
+    """Keep Ask held ops across Admin meta rewrites (typed confirm needs this)."""
+    try:
+        from app.services.design.admin.task_store import get_design_task, parse_task_meta
+
+        row = get_design_task(task_id)
+        prop = parse_task_meta((row or {}).get("meta_json")).get("ask_proposal")
+        return prop if isinstance(prop, dict) and prop.get("ops") else None
+    except Exception:
+        return None
+
+
 def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: AgentRunState) -> None:
     """Persist decision + slim step path/timing for Admin; full I/O also in Langfuse."""
     try:
@@ -271,6 +283,18 @@ def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: Agen
             "traceId": lf_trace or None,
             "hint": "在 Langfuse 用 metadata.task_id 搜索本任务"
         }
+        # Prefer in-memory proposal from this run; else keep prior meta (settle rewrite).
+        ask_proposal = None
+        if state.proposal_id and state.proposed_ops:
+            now = time.time()
+            ask_proposal = {
+                "id": str(state.proposal_id),
+                "ops": list(state.proposed_ops)[:48],
+                "created_at": now,
+                "expires_at": now + 3600.0,
+            }
+        if ask_proposal is None:
+            ask_proposal = _existing_ask_proposal(task_id)
         _update_task(
             task_id,
             meta_json=json.dumps(
@@ -288,6 +312,8 @@ def _persist_task_meta(task_id: str, *, decision: DesignRunDecision, state: Agen
                         if (prev_lc := _existing_run_lifecycle(task_id))
                         else {}
                     ),
+                    # Ask typed confirm resolves ops from meta.ask_proposal.
+                    **({"ask_proposal": ask_proposal} if ask_proposal else {}),
                 },
                 ensure_ascii=False,
             ),

@@ -123,6 +123,119 @@ def test_ask_proposal_resolve_roundtrip(monkeypatch):
     assert ts.resolve_ask_proposal_ops("missing", "prop_1") is None
 
 
+def test_normalize_proposal_action():
+    from app.services.design.runtime.models_route import normalize_proposal_action
+
+    assert normalize_proposal_action("apply", has_pending=True) == "apply"
+    assert normalize_proposal_action("DISMISS", has_pending=True) == "dismiss"
+    assert normalize_proposal_action("revise", has_pending=True) == "revise"
+    assert normalize_proposal_action("apply", has_pending=False) == ""
+    assert normalize_proposal_action("nope", has_pending=True) == ""
+    assert normalize_proposal_action("", has_pending=True) == ""
+
+
+def test_bind_pending_ask_proposal(monkeypatch):
+    from app.services.design.runtime.graph.build import _bind_pending_ask_proposal
+
+    monkeypatch.setattr(
+        "app.services.design.admin.task_store.resolve_ask_proposal_ops",
+        lambda tid, pid: [{"name": "create_text", "args": {"text": "hi"}}]
+        if tid == "T1" and pid == "prop_x"
+        else None,
+    )
+    rt = _rt(prompt="确认")
+    # Chip path: apply_ops present → skip bind.
+    _bind_pending_ask_proposal(
+        rt,
+        proposal_id="prop_x",
+        proposal_task_id="T1",
+        apply_list=[{"name": "create_text"}],
+    )
+    assert "pending_proposal" not in rt.flags
+
+    _bind_pending_ask_proposal(
+        rt,
+        proposal_id="prop_x",
+        proposal_task_id="T1",
+        apply_list=[],
+    )
+    pending = rt.flags.get("pending_proposal")
+    assert isinstance(pending, dict)
+    assert pending["id"] == "prop_x"
+    assert pending["ops"][0]["name"] == "create_text"
+
+
+def test_intent_classify_apply_pending_routes_to_apply_confirm(monkeypatch):
+    import asyncio
+
+    from app.services.design.runtime.graph.nodes import intent as intent_mod
+    from app.services.design.runtime.models_route import IntentClassifyDecision
+
+    async def _classify(**_kwargs):
+        return IntentClassifyDecision(
+            intent="chat",
+            paint_lane="",
+            proposal_action="apply",
+            reply="",
+            rationale="user_confirmed",
+        )
+
+    monkeypatch.setattr(intent_mod, "classify_user_intent", _classify)
+    monkeypatch.setattr(intent_mod, "_clear_ask_proposal_meta", lambda tid: None)
+    monkeypatch.setattr(intent_mod, "_emit", lambda *_a, **_k: None)
+    monkeypatch.setattr(intent_mod, "_emit_design_loading_artboard", lambda *_a, **_k: None)
+
+    rt = _rt(prompt="确认")
+    rt.flags["mode"] = "ask"
+    rt.flags["pending_proposal"] = {
+        "id": "prop_1",
+        "task_id": "T1",
+        "ops": [{"name": "create_text", "args": {"text": "Hi"}}],
+        "detail": "create_text",
+    }
+    cmd = asyncio.run(intent_mod._node_intent_classify({"rt": rt}))
+    assert cmd.goto == "apply_confirm"
+    assert rt.apply_ops and rt.apply_ops[0]["name"] == "create_text"
+    assert "pending_proposal" not in rt.flags
+
+
+def test_intent_classify_dismiss_pending_settles(monkeypatch):
+    import asyncio
+
+    from app.services.design.runtime.graph.nodes import intent as intent_mod
+    from app.services.design.runtime.models_route import IntentClassifyDecision
+
+    async def _classify(**_kwargs):
+        return IntentClassifyDecision(
+            intent="chat",
+            paint_lane="",
+            proposal_action="dismiss",
+            reply="已取消这次改动",
+            rationale="user_cancelled",
+        )
+
+    monkeypatch.setattr(intent_mod, "classify_user_intent", _classify)
+    cleared: list[str] = []
+    monkeypatch.setattr(
+        intent_mod, "_clear_ask_proposal_meta", lambda tid: cleared.append(tid)
+    )
+    monkeypatch.setattr(intent_mod, "_emit", lambda *_a, **_k: None)
+
+    rt = _rt(prompt="取消")
+    rt.flags["mode"] = "ask"
+    rt.flags["pending_proposal"] = {
+        "id": "prop_1",
+        "task_id": "T1",
+        "ops": [{"name": "create_text"}],
+        "detail": "create_text",
+    }
+    cmd = asyncio.run(intent_mod._node_intent_classify({"rt": rt}))
+    assert cmd.goto == "__settle__"
+    assert rt.run.reply == "已取消这次改动"
+    assert cleared == ["T1"]
+    assert "pending_proposal" not in rt.flags
+
+
 def test_chat_persists_ask_fields(tmp_path, monkeypatch):
     db_path = tmp_path / "chat_ask.db"
     monkeypatch.setenv("SQLITE_DB_PATH", str(db_path))

@@ -622,6 +622,34 @@ def _lc_design_graph():
     return _LC_DESIGN_GRAPH
 
 
+def _bind_pending_ask_proposal(
+    rt: AgentRuntime,
+    *,
+    proposal_id: str | None,
+    proposal_task_id: str | None,
+    apply_list: list[dict[str, Any]],
+) -> None:
+    """Load Ask held ops for typed confirm (intent proposal_action). Chip path skips this."""
+    if apply_list:
+        return
+    pid = _as_text(proposal_id).strip()
+    tid = _as_text(proposal_task_id).strip()
+    if not pid or not tid:
+        return
+    from app.services.design.admin.task_store import resolve_ask_proposal_ops
+    from app.services.design.ops.tool_ops_contract import tool_ops_batch_detail
+
+    ops = resolve_ask_proposal_ops(tid, pid)
+    if not ops:
+        return
+    rt.flags["pending_proposal"] = {
+        "id": pid,
+        "task_id": tid,
+        "ops": ops,
+        "detail": (tool_ops_batch_detail(ops) or "")[:400],
+    }
+
+
 async def run_agent_graph(
     *,
     user_id: str,
@@ -647,6 +675,8 @@ async def run_agent_graph(
     settle_hold_fn: Any,
     refund_hold_fn: Any,
     apply_ops: list[dict[str, Any]] | None = None,
+    proposal_id: str | None = None,
+    proposal_task_id: str | None = None,
     interaction_mode: str | None = None,
     skill_refs: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -770,6 +800,12 @@ async def run_agent_graph(
         spatial_summary=spatial_summary if isinstance(spatial_summary, dict) else None,
     )
     rt.flags["mode"] = ui_mode
+    _bind_pending_ask_proposal(
+        rt,
+        proposal_id=proposal_id,
+        proposal_task_id=proposal_task_id,
+        apply_list=apply_list,
+    )
     pinned_refs = [
         str(x).strip() for x in (skill_refs or []) if str(x).strip()
     ][:8]

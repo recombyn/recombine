@@ -175,6 +175,8 @@ async def run_design_job(
     memory: dict[str, Any] | None = None,
     route_overrides: dict[str, Any] | None = None,
     apply_ops: list[dict[str, Any]] | None = None,
+    proposal_id: str | None = None,
+    proposal_task_id: str | None = None,
     interaction_mode: str | None = None,
     client_country: str | None = None,
     skill_refs: list[str] | None = None,
@@ -315,6 +317,8 @@ async def run_design_job(
                 settle_hold_fn=_settle_hold,
                 refund_hold_fn=_refund_hold,
                 apply_ops=apply_ops,
+                proposal_id=proposal_id,
+                proposal_task_id=proposal_task_id,
                 interaction_mode=ui_mode,
                 skill_refs=skill_refs,
             ):
