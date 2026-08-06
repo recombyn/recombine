@@ -232,20 +232,20 @@ async def load_deferred_resources(rt: Any, turn: dict[str, Any], *, round_i: int
     need_skills = list(turn.get("need_skills") or [])
     need_aesthetics = bool(turn.get("need_aesthetics"))
     use_user_refs = turn.get("use_user_refs") is True
-    # Aesthetics-gated hard triggers only after the model asks need_aesthetics.
-    if need_aesthetics:
-        for k in resolve_triggered_skill_keys(
-            scene=rt.scene_key or "website",
-            empty_canvas=_canvas_is_empty(rt),
-            has_images=bool(rt.images),
-            intent="create",
-            need_aesthetics=True,
-            prompt_chars=len(str(rt.prompt or "").strip()),
-            already_loaded=list(st.skills_loaded or []) + list(need_skills),
-            aesthetics_triggers_only=True,
-        ):
-            if k not in need_skills:
-                need_skills.append(k)
+    # Auto-merge enabled skills whose triggers match (empty_canvas / intent / …).
+    # No hardcoded skill keys — Admin/user enable+triggers decide what loads.
+    intent_l = str(turn.get("intent") or st.intent or "").strip() or "create"
+    for k in resolve_triggered_skill_keys(
+        scene=rt.scene_key or "website",
+        empty_canvas=_canvas_is_empty(rt),
+        has_images=bool(rt.images),
+        intent=intent_l,
+        need_aesthetics=need_aesthetics,
+        prompt_chars=len(str(rt.prompt or "").strip()),
+        already_loaded=list(st.skills_loaded or []) + list(need_skills),
+    ):
+        if k not in need_skills:
+            need_skills.append(k)
     # Custom skills cannot unlock knowledge / aesthetics without ACL.
     acl_skills = list(st.skills_loaded or []) + list(need_skills)
     need_knowledge, need_aesthetics, acl_errs = filter_need_resources_by_skill_acl(

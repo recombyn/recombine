@@ -2,12 +2,12 @@
   "skill_key": "ui_ux_pro_max",
   "name": "ui_ux_pro_max",
   "displayName": "UI/UX Pro Max",
-  "description": "设计知识百科：风格、配色、字体、无障碍与交互质量门槛",
-  "when_to_use": "做页面/组件视觉决策、选风格配色字体、或审查 UI/UX 质量时加载",
+  "description": "设计知识百科：风格、配色、字体、对比度、溢出与海报层级",
+  "when_to_use": "从零创作或审查画面时加载：字体/对比度/防溢出/海报文案层级与装饰克制",
   "category": "knowledge",
   "scenes": "all",
-  "sort_weight": 40,
-  "version": "1.0.0",
+  "sort_weight": 85,
+  "version": "1.2.0",
   "preferred_tools": [
     "create_frame",
     "create_shape",
@@ -17,17 +17,26 @@
     "update_node"
   ],
   "allowed_resources": ["knowledge", "aesthetics", "tools"],
-  "triggers": [],
+  "triggers": [
+    {
+      "empty_canvas": true,
+      "intent_in": ["create"]
+    },
+    {
+      "intent_in": ["create"],
+      "min_prompt_chars": 8
+    }
+  ],
   "mutex_group": "",
-  "prompt_negative": "不要编造产品价格电话；不要用 emoji 当图标；不要为了炫技牺牲可读性与对比度。",
+  "prompt_negative": "不要编造产品价格电话；不要用 emoji 当图标或塞进 create_text；不要为了炫技牺牲可读性与对比度；禁止裁切标题；禁止无关 Material/UI 图标当装饰。",
   "locales": {
     "zh-CN": {
       "displayName": "UI/UX Pro Max",
-      "description": "设计知识百科：风格、配色、字体、无障碍与交互质量门槛"
+      "description": "设计知识百科：风格、配色、字体、对比度、溢出与海报层级"
     },
     "en": {
       "displayName": "UI/UX Pro Max",
-      "description": "Design encyclopedia: styles, palettes, type, a11y, and UX quality bars"
+      "description": "Design encyclopedia: type, contrast, overflow, poster hierarchy, a11y"
     }
   }
 }

@@ -5,7 +5,7 @@
       "skill_key": "design_methodology",
       "name": "Design methodology",
       "category": "create",
-      "when_to_use": "Create from scratch: confirm deliverable and step skeleton; layout ops live in layout_ops",
+      "when_to_use": "Create from scratch: confirm deliverable and step skeleton; visual craft from Skills catalog",
       "scenes": "all",
       "sort_weight": 100,
       "preferred_tools": [
@@ -16,8 +16,8 @@
         "create_svg",
         "update_node"
       ],
-      "prompt_positive": "# Design methodology\n\nStep skeleton for create-from-scratch. Which op, where to place, vector vs image-gen vs transparent bg → need_skills=[\"user.layout_ops\"]. Numeric details (palette, banner px, …) → need_knowledge (pick from the Knowledge catalog).\n\n## Deliverables (one line each)\n- **website / landing**: nav → hero → benefits → CTA → footer\n- **mobile / H5**: single column; primary CTA in the thumb zone\n- **ecommerce hero**: ~1:1; subject largest; no nav, no forms\n- **ecommerce detail**: hero → title/price → benefits → specs → rich text\n- **Banner**: copy in the middle safe band\n- **poster / roll-up**: hero visual + info group; tall top/mid/bottom\n- **image**: subject graphic; no page chrome\n\n## Steps\n1. Confirm deliverable, size, required copy; ask if missing; never invent price/phone\n2. Fixed size → create_frame first, then place layers inside (see user.layout_ops)\n3. User attached images → need_skills includes vision_extract; product workflows add user.* from the catalog\n4. Node ids must come from SCENE\n",
-      "prompt_negative": "Do not dump tool_ops when key info is missing; do not invent prices or phone numbers; do not expand layout coordinates or op cheat-sheets in this skill.",
+      "prompt_positive": "# Design methodology\n\nProcess (think → act): brief → structure → place → self-check.\nThis skill is the **step skeleton only** — not typography/aesthetic encyclopedia.\nVisual craft (type mood, contrast, overflow, decoration): `need_skills` entries from the **Skills catalog** whose when_to_use matches (enabled skills only; never invent skill keys).\nLayout/op cheat-sheets: same — pick from catalog if present.\nNumeric details (palette, banner px, …) → need_knowledge (Knowledge catalog).\n\n## Brief (one line in thought)\nName deliverable, audience/job, and size. Ask if missing; never invent price/phone.\n\n## Deliverables (one line each)\n- **website / landing**: nav → hero → benefits → CTA → footer\n- **mobile / H5**: single column; primary CTA in the thumb zone\n- **ecommerce hero**: ~1:1; subject largest; no nav, no forms\n- **ecommerce detail**: hero → title/price → benefits → specs → rich text\n- **Banner**: copy in the middle safe band\n- **poster / roll-up**: **create_image genPrompt hero** + info group; tall top/mid/bottom — do not fake the hero with shape piles\n- **image**: subject graphic; no page chrome\n\n## Steps\n1. Confirm deliverable, size, required copy; ask if missing; never invent price/phone\n2. Fixed size → create_frame first, then place layers inside\n3. Before heavy place: `need_skills` any enabled catalog skills for type/layout/aesthetics that match the job\n4. Poster / festive / illustrated jobs: first full-bleed (or near) `create_image` hero, then text layers\n5. Hierarchy: one signature focus; keep surroundings quiet (avoid generic AI template looks)\n6. User attached images → need_skills includes vision_extract; product workflows add matching user.* from the catalog\n7. Type: if style exists in Available fonts → create_text + fontFamily; if not (brush/3D/effect lettering) or font mood mismatches the art → create_image + letteringText\n8. Node ids must come from SCENE\n9. Before done: self-check — hero image present for posters, no clipped titles, contrast OK, no junk SVG/emoji tofu, copy language match\n",
+      "prompt_negative": "Do not dump tool_ops when key info is missing; do not invent prices or phone numbers; do not hardcode skill keys that are not in the Skills catalog; do not expand layout coordinate cheat-sheets in this skill; do not ship a long essay in reply — keep process in thought; do not invent fontFamily names outside Available fonts; do not substitute shape piles for poster hero imagery.",
       "triggers": [
         {
           "empty_canvas": true,
@@ -33,7 +33,7 @@
         }
       ],
       "mutex_group": "methodology",
-      "version": 7
+      "version": 11
     },
     {
       "skill_key": "vision_extract",
@@ -49,8 +49,8 @@
         "create_image",
         "update_node"
       ],
-      "prompt_positive": "# Vision extract\n\nOnly describe what is visible. Label deliverable: hero / PDP / Banner / poster / roll-up / web or App / illustration icon.\n\nList: regions, key elements and rough placement, 3–5 main colors, suggested size or aspect.\nHero: subject + badges; PDP: module sections; Banner: whether copy sits mid-band; tall art: top/mid/bottom.\n",
-      "prompt_negative": "Do not invent prices, copy, or modules that are not in the image.",
+      "prompt_positive": "# Vision extract\n\nOnly describe what is visible. Label deliverable: hero / PDP / Banner / poster / roll-up / web or App / illustration icon.\n\nList: regions, key elements and rough placement, 3–5 main colors, suggested size or aspect.\nHero: subject + badges; PDP: module sections; Banner: whether copy sits mid-band; tall art: top/mid/bottom.\n\n## Attached images → canvas ops\n- Finished poster/design with baked-in text: STYLE reference only. Do NOT full-bleed create_image(attachmentIndex) (double text).\n- Prefer create_image genPrompt for a clean background/subject, then create_text for UI copy.\n- Brush/calligraphy hero titles: create_image genPrompt + letteringText (transparent bg).\n- attachmentIndex: only when placing the user's raw photo/product cutout as a layer.\n",
+      "prompt_negative": "Do not invent prices, copy, or modules that are not in the image. Do not paste a finished poster attach as a full-bleed image layer.",
       "triggers": [
         {
           "has_images": true,
@@ -60,7 +60,7 @@
         }
       ],
       "mutex_group": "vision",
-      "version": 6
+      "version": 7
     },
     {
       "skill_key": "aesthetics_align",
@@ -111,19 +111,32 @@
       "skill_key": "image_gen",
       "name": "Image generation",
       "category": "image",
-      "when_to_use": "When create_image is needed (including stylized lettering as bitmap)",
+      "when_to_use": "Poster/hero bitmap, genPrompt backgrounds, or stylized lettering as image",
       "scenes": "all",
-      "sort_weight": 60,
+      "sort_weight": 88,
       "preferred_tools": [
         "create_image",
         "create_frame",
         "update_node"
       ],
-      "prompt_positive": "# Image generation\n\n`create_image` `genPrompt` (or `prompt`): natural-language brief for the image model to make a bitmap — not an editable canvas text node.\n\n## Choose (your judgment; no fixed copy→op checklist)\n- **create_image**: photo / illustration / material, or text that is a visual effect (calligraphy strokes, color-block type, extrusion — fonts cannot do this) → generate as one graphic; prompt must state the glyphs, style, palette, transparent bg or not.\n- **create_text**: editable, rewritable layout text (not the effects above).\n\nIf the user forbids image gen, skip create_image; fall back to plain create_text for effect lettering — do not pretend a calligraphy font exists.\nStylized lettering may set letteringText (exact on-image string) so image_process kind=replaceText (meta.originalText+newText) can swap words.\nDo not invent facts into the image.\nSize, transparent bg, stacking → user.layout_ops (do not expand here).\n",
-      "prompt_negative": "If the user forbids image gen, do not create_image; do not fake calligraphy/3D type with create_text; do not hardcode “this copy category must use that op”.",
-      "triggers": [],
+      "prompt_positive": "# Image generation\n\n`create_image` `genPrompt` (or `prompt`): natural-language brief for the image model to make a bitmap — not an editable canvas text node.\n\n## Choose (your judgment; no fixed copy→op checklist)\n- **Poster / festive / illustrated hero**: always start with `create_image` + genPrompt for the main visual (full or near-full board). Do not replace the hero with shape stacks.\n- **create_text + fontFamily**: UI / body / title when the style exists in Available fonts.\n- **create_image** also for photo / illustration / material, OR text that fonts cannot do (brush calligraphy, color-block type, extrusion) → generate as one graphic; set letteringText + put those glyphs in genPrompt; ask for isolated glyphs on a plain solid plate (hydrate auto-cutouts to transparent PNG).\n\nIf the user forbids image gen, skip create_image; fall back to plain create_text for effect lettering — do not pretend a calligraphy font exists.\nDo not invent facts into the image.\nSize, transparent bg, stacking → need_skills from Skills catalog for layout/ops (do not expand here).\n",
+      "prompt_negative": "If the user forbids image gen, do not create_image; do not fake calligraphy/3D type with create_text; do not invent fontFamily outside Available fonts; do not use create_image lettering when a catalog font already fits the mood; do not ship poster/festive work as shape-only geometry.",
+      "triggers": [
+        {
+          "empty_canvas": true,
+          "intent_in": [
+            "create"
+          ]
+        },
+        {
+          "intent_in": [
+            "create"
+          ],
+          "min_prompt_chars": 8
+        }
+      ],
       "mutex_group": "image",
-      "version": 10
+      "version": 15
     }
   ]
 }

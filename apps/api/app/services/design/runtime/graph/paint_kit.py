@@ -152,7 +152,7 @@ def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
 
     - Always: create_shape + create_text.
     - create_frame: design-grade create on empty / no artboard — not canvas_op adds.
-    - create_image when attachments.
+    - create_image: attachments **or** create/design turns (genPrompt hero / lettering).
     - update/delete when paint_lane=edit and scene has nodes.
     - Plus any tools already requested via need_tools.
     """
@@ -174,7 +174,9 @@ def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
     allow_frame = classified == "design" and want == "create"
     if allow_frame:
         keys.insert(0, "create_frame")
-    if has_images:
+    # Without this, no-ref poster create never sees create_image in TOOL_DETAILS
+    # and falls back to shape-only "programmer art".
+    if has_images or want == "create":
         keys.append("create_image")
     if want == "edit" and nodes:
         for k in ("update_node", "delete_nodes"):
@@ -211,11 +213,19 @@ def _paint_ops_system(rt: Any) -> str:
     if not isinstance(flags, dict):
         flags = {}
     ask_mode = str(flags.get("mode") or "").strip().lower() == "ask"
+    fonts_block = ""
+    try:
+        from app.services.fonts_store import format_fonts_catalog
+
+        fonts_block = format_fonts_catalog()
+    except Exception:
+        fonts_block = ""
     return assemble_stage_system(
         rt.rules,
         stage="paint",
         ask_mode=ask_mode,
         persona=str(getattr(rt, "persona", "") or ""),
+        catalog_blocks=[fonts_block] if fonts_block else None,
     )
 
 def _paint_ops_user(rt: Any) -> str:

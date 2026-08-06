@@ -268,6 +268,33 @@ def _refine_product_edges(img):
     return Image.fromarray(np.dstack([rgb, alpha_out]), mode="RGBA")
 
 
+def _cutout_plate(raw: bytes, *, tol: int = 28):
+    """Knock out near-uniform plate color sampled from corners (no rembg/cv2)."""
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(raw)).convert("RGBA")
+    px = img.load()
+    w, h = img.size
+    samples = [
+        px[2, 2][:3],
+        px[w - 3, 2][:3],
+        px[2, h - 3][:3],
+        px[w - 3, h - 3][:3],
+    ]
+    # Median-ish plate color from corners
+    br = sorted(s[0] for s in samples)[1]
+    bg = sorted(s[1] for s in samples)[1]
+    bb = sorted(s[2] for s in samples)[1]
+    out = img.copy()
+    opx = out.load()
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = opx[x, y]
+            if abs(r - br) <= tol and abs(g - bg) <= tol and abs(b - bb) <= tol:
+                opx[x, y] = (r, g, b, 0)
+    return out
+
+
 def _cutout_grabcut(raw: bytes, mode: CutoutMode = "hair"):
     import cv2
     import numpy as np
@@ -343,10 +370,23 @@ async def remove_background(
             rgba = _cutout_grabcut(raw, mode=mode)
             logger.warning("rembg unavailable (%s); used GrabCut", rembg_exc)
         except Exception as grab_exc:  # noqa: BLE001
-            raise RuntimeError(
-                "去背景失败。请安装免费本地依赖: pip install -e '.[vision]' "
-                f"(rembg)。详情: rembg={rembg_exc}; grabcut={grab_exc}"
-            ) from grab_exc
+            try:
+                # Lightweight fallback (no rembg/cv2): knock out near-uniform plate
+                # color from corners — enough for lettering / solid-bg cutouts.
+                engine = "plate"
+                model_name = "plate"
+                rgba = _cutout_plate(raw)
+                logger.warning(
+                    "rembg/grabcut unavailable (rembg=%s; grabcut=%s); used plate cutout",
+                    rembg_exc,
+                    grab_exc,
+                )
+            except Exception as plate_exc:  # noqa: BLE001
+                raise RuntimeError(
+                    "去背景失败。请安装免费本地依赖: pip install -e '.[vision]' "
+                    f"(rembg)。详情: rembg={rembg_exc}; grabcut={grab_exc}; "
+                    f"plate={plate_exc}"
+                ) from plate_exc
 
     rgba = _trim_transparent(rgba)
     return {

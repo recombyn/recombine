@@ -16,7 +16,10 @@
     "precheck.router_model": "doubao-seed-2-1-turbo",
     "assets.image_default_model": "doubao-seedream-5-0-lite",
     "precheck.user_preset.balanced": "fast->doubao-seed-2-1-turbo;standard->or-gpt-5-6-luna;reasoning->or-gemini-3-flash-preview;vision->or-gemini-3-flash-preview;image->or-gpt-image-2",
-    "precheck.user_preset.quality": "fast->or-gemini-3-flash-preview;standard->or-gemini-3-5-flash;reasoning->or-gpt-5-6-sol;vision->or-gemini-3-5-flash;image->or-gpt-image-2"
+    "precheck.user_preset.quality": "fast->or-gemini-3-flash-preview;standard->or-gemini-3-5-flash;reasoning->or-gpt-5-6-sol;vision->or-gemini-3-5-flash;image->or-gpt-image-2",
+    "agent.attach.max_images": "4",
+    "agent.attach.max_data_url_chars": "2500000",
+    "agent.attach.place_hint": "User attached {n} image(s) (indices 0..{max_index}). Finished poster/design with baked-in text → STYLE only: do NOT create_image(attachmentIndex) full-bleed (double text). Prefer create_image genPrompt for clean bg/subject, then create_text; brush/calligraphy titles → genPrompt + letteringText (transparent bg). attachmentIndex only for raw photo/product cutouts."
   },
   "descriptions": {
     "legacy.agent_zero_v3": "Legacy wipe marker v3: rules/skills/flows removed",
@@ -41,6 +44,9 @@
     "precheck.router_model": "Lane classifier model (cheap)",
     "assets.image_default_model": "Standard default image-gen model",
     "precheck.user_preset.balanced": "User Auto preference · Pro",
-    "precheck.user_preset.quality": "User Auto preference · Max"
+    "precheck.user_preset.quality": "User Auto preference · Max",
+    "agent.attach.max_images": "Max reference images per design run",
+    "agent.attach.max_data_url_chars": "Max data-URL chars per attached image",
+    "agent.attach.place_hint": "Prompt note when user attaches images (how to place / style-only)"
   }
 }

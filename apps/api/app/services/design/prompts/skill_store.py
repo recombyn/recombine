@@ -1902,6 +1902,7 @@ def ensure_design_skills(*, force: bool = False) -> None:
                     now=now,
                     skip_sources=_PROTECTED_FROM_FILE,
                 )
+            _bump_unchanged_seed_skill_bodies(session, now=now)
             # Retired need_* packs (design_spec/vision/aesthetics) → Skills; delete leftovers.
             try:
                 crud.delete_design_prompt_packs_by_kinds(
@@ -1913,6 +1914,199 @@ def ensure_design_skills(*, force: bool = False) -> None:
         invalidate_skill_key_cache()
         _DISK_SIGNATURE = _skills_disk_signature()
         _SKILLS_READY = True
+
+
+# Prior seed skill bodies that may be replaced once (Admin-owned rows are kept).
+_SEED_SKILL_BODY_PREV: dict[str, tuple[str, ...]] = {
+    "design_methodology": (
+        "# Design methodology\n\n"
+        "Step skeleton for create-from-scratch. Which op, where to place, vector vs image-gen "
+        "vs transparent bg → need_skills=[\"user.layout_ops\"]. Numeric details (palette, "
+        "banner px, …) → need_knowledge (pick from the Knowledge catalog).\n\n"
+        "## Deliverables (one line each)\n"
+        "- **website / landing**: nav → hero → benefits → CTA → footer\n"
+        "- **mobile / H5**: single column; primary CTA in the thumb zone\n"
+        "- **ecommerce hero**: ~1:1; subject largest; no nav, no forms\n"
+        "- **ecommerce detail**: hero → title/price → benefits → specs → rich text\n"
+        "- **Banner**: copy in the middle safe band\n"
+        "- **poster / roll-up**: hero visual + info group; tall top/mid/bottom\n"
+        "- **image**: subject graphic; no page chrome\n\n"
+        "## Steps\n"
+        "1. Confirm deliverable, size, required copy; ask if missing; never invent price/phone\n"
+        "2. Fixed size → create_frame first, then place layers inside (see user.layout_ops)\n"
+        "3. User attached images → need_skills includes vision_extract; product workflows "
+        "add user.* from the catalog\n"
+        "4. Node ids must come from SCENE\n",
+        "# Design methodology\n\n"
+        "Process (think → act): brief → structure → place → self-check.\n"
+        "Which op, where to place, vector vs image-gen vs transparent bg → "
+        "need_skills=[\"user.layout_ops\"]. Numeric details (palette, banner px, …) → "
+        "need_knowledge (pick from the Knowledge catalog).\n\n"
+        "## Brief (one line in thought)\n"
+        "Name deliverable, audience/job, and size. Ask if missing; never invent price/phone.\n\n"
+        "## Deliverables (one line each)\n"
+        "- **website / landing**: nav → hero → benefits → CTA → footer\n"
+        "- **mobile / H5**: single column; primary CTA in the thumb zone\n"
+        "- **ecommerce hero**: ~1:1; subject largest; no nav, no forms\n"
+        "- **ecommerce detail**: hero → title/price → benefits → specs → rich text\n"
+        "- **Banner**: copy in the middle safe band\n"
+        "- **poster / roll-up**: hero visual + info group; tall top/mid/bottom\n"
+        "- **image**: subject graphic; no page chrome\n\n"
+        "## Steps\n"
+        "1. Confirm deliverable, size, required copy; ask if missing; never invent price/phone\n"
+        "2. Fixed size → create_frame first, then place layers inside (see user.layout_ops)\n"
+        "3. Hierarchy: one signature focus; keep surroundings quiet (avoid generic AI template looks)\n"
+        "4. User attached images → need_skills includes vision_extract; product workflows "
+        "add user.* from the catalog\n"
+        "5. Node ids must come from SCENE\n"
+        "6. Before done: quick self-check — hierarchy, safe margins, copy language match\n",
+        "# 设计方法论\n\n"
+        "从零创作的步骤骨架。元素用什么 op、放哪、矢量/生图/透明底 → need_skills=[\"user.layout_ops\"]。"
+        "配色/Banner 像素等数字细则 → need_knowledge（从 Knowledge 目录选）。\n\n"
+        "## 物料（一句话）\n"
+        "- **website / 落地页**：导航 → 英雄 → 卖点 → CTA → 页脚\n"
+        "- **mobile / H5**：单列；主 CTA 在易触区\n"
+        "- **电商主图**：约 1:1；主体最大；无导航无表单\n"
+        "- **电商详情**：主图 → 标题价格 → 卖点 → 规格 → 图文\n"
+        "- **Banner**：文案在中部安全带\n"
+        "- **poster / 易拉宝**：主视觉 + 信息组；竖长上中下\n"
+        "- **image**：主体图形；无页面壳\n\n"
+        "## 步骤\n"
+        "1. 确认物料、尺寸、必出文案；缺则 ask；未提供的价格/电话不写\n"
+        "2. 固定尺寸先 create_frame，再板内落层（细则见 user.layout_ops）\n"
+        "3. 有附图 → need_skills 含 vision_extract；产品工作流（需求整理等）按目录再加 user.*\n"
+        "4. 节点 id 必须来自 SCENE\n",
+        "# Design methodology\n\n"
+        "Process (think → act): brief → structure → place → self-check.\n"
+        "This skill is the **step skeleton only** — not typography/aesthetic encyclopedia.\n"
+        "Visual craft (type mood, contrast, overflow, decoration): `need_skills` entries from the "
+        "**Skills catalog** whose when_to_use matches (enabled skills only; never invent skill keys).\n"
+        "Layout/op cheat-sheets: same — pick from catalog if present.\n"
+        "Numeric details (palette, banner px, …) → need_knowledge (Knowledge catalog).\n\n"
+        "## Brief (one line in thought)\n"
+        "Name deliverable, audience/job, and size. Ask if missing; never invent price/phone.\n\n"
+        "## Deliverables (one line each)\n"
+        "- **website / landing**: nav → hero → benefits → CTA → footer\n"
+        "- **mobile / H5**: single column; primary CTA in the thumb zone\n"
+        "- **ecommerce hero**: ~1:1; subject largest; no nav, no forms\n"
+        "- **ecommerce detail**: hero → title/price → benefits → specs → rich text\n"
+        "- **Banner**: copy in the middle safe band\n"
+        "- **poster / roll-up**: hero visual + info group; tall top/mid/bottom\n"
+        "- **image**: subject graphic; no page chrome\n\n"
+        "## Steps\n"
+        "1. Confirm deliverable, size, required copy; ask if missing; never invent price/phone\n"
+        "2. Fixed size → create_frame first, then place layers inside\n"
+        "3. Before heavy place: `need_skills` any enabled catalog skills for type/layout/aesthetics "
+        "that match the job\n"
+        "4. Hierarchy: one signature focus; keep surroundings quiet (avoid generic AI template looks)\n"
+        "5. User attached images → need_skills includes vision_extract; product workflows "
+        "add matching user.* from the catalog\n"
+        "6. Type: if style exists in Available fonts → create_text + fontFamily; if not "
+        "(brush/3D/effect lettering) or font mood mismatches the art → create_image + letteringText\n"
+        "7. Node ids must come from SCENE\n"
+        "8. Before done: self-check — no clipped titles, contrast OK, no junk SVG/emoji tofu, "
+        "copy language match\n",
+    ),
+    "vision_extract": (
+        "# Vision extract\n\n"
+        "Only describe what is visible. Label deliverable: hero / PDP / Banner / poster / "
+        "roll-up / web or App / illustration icon.\n\n"
+        "List: regions, key elements and rough placement, 3–5 main colors, suggested size or aspect.\n"
+        "Hero: subject + badges; PDP: module sections; Banner: whether copy sits mid-band; "
+        "tall art: top/mid/bottom.\n",
+    ),
+    "image_gen": (
+        "# Image generation\n\n"
+        "`create_image` `genPrompt` (or `prompt`): natural-language brief for the image model "
+        "to make a bitmap — not an editable canvas text node.\n\n"
+        "## Choose (your judgment; no fixed copy→op checklist)\n"
+        "- **create_image**: photo / illustration / material, or text that is a visual effect "
+        "(calligraphy strokes, color-block type, extrusion — fonts cannot do this) → generate "
+        "as one graphic; prompt must state the glyphs, style, palette, transparent bg or not.\n"
+        "- **create_text**: editable, rewritable layout text (not the effects above).\n\n"
+        "If the user forbids image gen, skip create_image; fall back to plain create_text for "
+        "effect lettering — do not pretend a calligraphy font exists.\n"
+        "Stylized lettering may set letteringText (exact on-image string) so image_process "
+        "kind=replaceText (meta.originalText+newText) can swap words.\n"
+        "Do not invent facts into the image.\n"
+        "Size, transparent bg, stacking → user.layout_ops (do not expand here).\n",
+        "# Image generation\n\n"
+        "`create_image` `genPrompt` (or `prompt`): natural-language brief for the image model "
+        "to make a bitmap — not an editable canvas text node.\n\n"
+        "## Choose (your judgment; no fixed copy→op checklist)\n"
+        "- **create_image**: photo / illustration / material, or text that is a visual effect "
+        "(calligraphy strokes, color-block type, extrusion — fonts cannot do this) → generate "
+        "as one graphic; prompt must state the glyphs, style, palette, transparent bg or not.\n"
+        "- **create_text**: editable, rewritable layout text (not the effects above).\n\n"
+        "If the user forbids image gen, skip create_image; fall back to plain create_text for "
+        "effect lettering — do not pretend a calligraphy font exists.\n"
+        "Stylized lettering: set letteringText to the exact on-image string AND put those same "
+        "glyphs in genPrompt (hydrate forwards letteringText into the image model).\n"
+        "Do not invent facts into the image.\n"
+        "Size, transparent bg, stacking → user.layout_ops (do not expand here).\n",
+        "# Image generation\n\n"
+        "`create_image` `genPrompt` (or `prompt`): natural-language brief for the image model "
+        "to make a bitmap — not an editable canvas text node.\n\n"
+        "## Choose (your judgment; no fixed copy→op checklist)\n"
+        "- **create_text + fontFamily**: UI / body / title when the style exists in Available fonts.\n"
+        "- **create_image**: photo / illustration / material, OR text that fonts cannot do "
+        "(brush calligraphy, color-block type, extrusion) → generate as one graphic; set "
+        "letteringText + put those glyphs in genPrompt; ask for isolated glyphs on a plain "
+        "solid plate (hydrate auto-cutouts to transparent PNG).\n\n"
+        "If the user forbids image gen, skip create_image; fall back to plain create_text for "
+        "effect lettering — do not pretend a calligraphy font exists.\n"
+        "Do not invent facts into the image.\n"
+        "Size, transparent bg, stacking → need_skills from Skills catalog for layout/ops "
+        "(do not expand here).\n",
+    ),
+}
+
+
+def _norm_skill_body(text: str) -> str:
+    return str(text or "").replace("\r\n", "\n").strip()
+
+
+def _bump_unchanged_seed_skill_bodies(session: Any, *, now: float) -> None:
+    """Replace listed seed skills when body matches a prior seed, or seed version is newer."""
+    seed_by_key = {
+        str(it.get("skill_key") or "").strip(): it
+        for it in _SEED
+        if isinstance(it, dict) and str(it.get("skill_key") or "").strip()
+    }
+    for key in _SEED_SKILL_BODY_PREV:
+        seed_item = seed_by_key.get(key) or {}
+        new_pos = str(seed_item.get("prompt_positive") or "").strip()
+        new_neg = str(seed_item.get("prompt_negative") or "")
+        if not new_pos:
+            continue
+        row = crud.get_design_skill_by_key(session=session, skill_key=key)
+        if not row:
+            continue
+        src = _normalize_source(_row_get(row, "source"), default=SOURCE_SEED)
+        if src != SOURCE_SEED:
+            continue
+        try:
+            seed_ver = int(seed_item.get("version") or 0)
+            cur_ver = int(_row_get(row, "version") or 0)
+        except (TypeError, ValueError):
+            seed_ver, cur_ver = 0, 0
+        cur = _norm_skill_body(str(_row_get(row, "prompt_positive") or ""))
+        new_norm = _norm_skill_body(new_pos)
+        prev_norms = {
+            _norm_skill_body(p) for p in (_SEED_SKILL_BODY_PREV.get(key) or ())
+        }
+        version_bump = seed_ver > cur_ver
+        body_match = cur in prev_norms
+        if cur == new_norm:
+            continue
+        if not version_bump and not body_match:
+            continue
+        row.prompt_positive = new_pos
+        if new_neg:
+            row.prompt_negative = new_neg
+        row.version = max(cur_ver, seed_ver)
+        row.updated_at = now
+        session.add(row)
 
 
 def stop_skills_hot_reload() -> None:

@@ -73,6 +73,15 @@ def _safe_print(msg: str) -> None:
             pass
 
 
+def _exec_trace_verbose() -> bool:
+    try:
+        from app.core.config import settings
+
+        return bool(getattr(settings, "design_exec_trace", False))
+    except Exception:
+        return False
+
+
 def exec_trace(
     t0: float | None,
     phase: str,
@@ -80,22 +89,22 @@ def exec_trace(
     mode: str = "run",
     **extra: Any,
 ) -> None:
-    """Full-run execution log for classifying stalls (chat / memory / llm / …).
-
-    Always prints + logs. Prefix ``[exec]`` so API stdout is easy to filter.
-    """
+    """Stage timer for classifying stalls. Debug by default; stdout only when enabled."""
     if t0 is None:
         head = f"[exec] mode={mode} phase={phase}"
     else:
         head = f"[exec] +{time.time() - t0:6.2f}s mode={mode} phase={phase}"
     bits = " ".join(f"{k}={v!r}" for k, v in extra.items() if v is not None)
     msg = head + (f"  {bits}" if bits else "")
-    _log.info(msg)
-    _safe_print(msg)
+    if _exec_trace_verbose():
+        _log.info(msg)
+        _safe_print(msg)
+    else:
+        _log.debug(msg)
 
 
 def _stage(t0: float, label: str, **extra: Any) -> None:
-    """Always-visible stage timer for diagnosing design-run stalls."""
+    """Stage timer for diagnosing design-run stalls."""
     exec_trace(t0, label, mode="run", **extra)
 
 
