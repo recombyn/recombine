@@ -11,8 +11,10 @@ import {
 } from '@/components/rcb/scene/document/sceneDocument';
 import {
   coverDocumentHasContent,
+  extractFrameDocument,
   extractPlazaCoverDocument,
   findPlazaCoverFrame,
+  listArtboardFrames,
   type PlazaCoverFrame,
 } from '@/utils/plazaCover';
 
@@ -142,14 +144,21 @@ export function pickCoverElementIds(document: unknown): string[] {
 /** Rasterize one element (cropped to its bbox) for a collage tile. */
 async function rasterizeElementTile(
   document: unknown,
-  nodeId: string
+  nodeId: string,
+  opts?: { maxEdge?: number; format?: 'webp' | 'png' | 'jpeg'; compress?: boolean }
 ): Promise<string | null> {
   const dsl = (document as { deltaSetLike?: Record<string, unknown> })?.deltaSetLike;
   const node = dsl?.[nodeId];
   if (!node || typeof node !== 'object') return null;
   const w = Math.max(1, num((node as Record<string, unknown>).width, 1));
   const h = Math.max(1, num((node as Record<string, unknown>).height, 1));
-  const multiplier = Math.max(0.25, Math.min(1, TILE_MAX_EDGE / Math.max(w, h)));
+  const maxEdge = Math.max(64, Math.round(opts?.maxEdge || TILE_MAX_EDGE));
+  // Allow >1× so small scene boxes still fill the tile sharply on retina.
+  const multiplier = Math.max(0.25, Math.min(2, maxEdge / Math.max(w, h)));
+  const format = opts?.format || 'jpeg';
+  // renderExport only accepts png|jpeg|svg — map webp tiles to png.
+  const exportFormat = format === 'webp' ? 'png' : format;
+  const compress = opts?.compress ?? exportFormat === 'jpeg';
 
   try {
     const result = await renderExport({
@@ -157,8 +166,8 @@ async function rasterizeElementTile(
       selectionOnly: true,
       nodeIds: [nodeId],
       multiplier,
-      format: 'jpeg',
-      compress: true,
+      format: exportFormat,
+      compress,
       backgroundColor: '#ffffff',
     });
     if (result?.kind === 'raster' && result.dataUrl) return result.dataUrl;
@@ -209,24 +218,81 @@ export type ProjectCoverTiles = {
   dataUrls?: string[];
 };
 
+export type ProjectCoverTileOptions = {
+  /** Longest edge for each tile (default list-card 360). Publish modal should pass ~960+. */
+  maxEdge?: number;
+  format?: 'webp' | 'png' | 'jpeg';
+  /** JPEG only — list cards compress; HD previews should pass false. */
+  compress?: boolean;
+  /** Full-board fallback max edge (default 480 list / use PREVIEW_PNG_MAX_EDGE for modal). */
+  fullBoardMaxEdge?: number;
+};
+
+/** List thumbs use webp; jpeg callers map to webp. PNG kept for HD publish preview. */
+function resolveCoverTileRasterOpts(opts?: ProjectCoverTileOptions) {
+  let format: 'webp' | 'png' = 'webp';
+  if (opts?.format === 'png') format = 'png';
+
+  const tileMax = opts?.maxEdge ?? TILE_MAX_EDGE;
+
+  let fullMax = MAX_EDGE;
+  if (opts?.fullBoardMaxEdge != null) fullMax = opts.fullBoardMaxEdge;
+  else if (opts?.maxEdge != null) fullMax = opts.maxEdge;
+
+  return { format, tileMax, fullMax };
+}
+
 /**
- * Up to 4 per-element snapshots for 最近打开 / 我的项目 collage.
- * Falls back to one full-artboard cover only when no element tile succeeds.
+ * Up to 4 cover tiles for 最近打开 / 我的项目 / Publish.
+ * Prefer one snapshot per artboard when there are 2+ boards (matches Share collage);
+ * else per-element crops; else one full-board cover.
  */
-export async function buildProjectCoverTiles(document: unknown): Promise<ProjectCoverTiles> {
+export async function buildProjectCoverTiles(
+  document: unknown,
+  opts?: ProjectCoverTileOptions
+): Promise<ProjectCoverTiles> {
   if (!document || typeof document !== 'object') return {};
 
-  const ids = pickCoverElementIds(document);
-  if (ids.length) {
+  const { format: thumbFormat, tileMax, fullMax } = resolveCoverTileRasterOpts(opts);
+
+  const frames = listArtboardFrames(document).slice(0, MAX_TILES);
+  if (frames.length >= 2) {
     const dataUrls: string[] = [];
-    for (const id of ids) {
-      const data = await rasterizeElementTile(document, id);
+    for (const frame of frames) {
+      const slice = extractFrameDocument(document, frame, { contentFit: true });
+      if (!slice) continue;
+      const data = await renderDocumentThumbnail(slice, {
+        allowEmpty: true,
+        format: thumbFormat,
+        maxEdge: tileMax,
+      });
       if (data) dataUrls.push(data);
     }
     if (dataUrls.length) return { dataUrls };
   }
 
-  const one = await renderProjectThumbnail(document);
+  const ids = pickCoverElementIds(document);
+  if (ids.length) {
+    const dataUrls: string[] = [];
+    for (const id of ids) {
+      const data = await rasterizeElementTile(document, id, {
+        maxEdge: opts?.maxEdge,
+        format: opts?.format,
+        compress: opts?.compress,
+      });
+      if (data) dataUrls.push(data);
+    }
+    if (dataUrls.length) return { dataUrls };
+  }
+
+  const one = await renderDocumentThumbnail(
+    extractPlazaCoverDocument(document, { contentFit: true }) || document,
+    {
+      allowEmpty: true,
+      format: thumbFormat,
+      maxEdge: fullMax,
+    }
+  );
   return one ? { dataUrls: [one] } : {};
 }
 
