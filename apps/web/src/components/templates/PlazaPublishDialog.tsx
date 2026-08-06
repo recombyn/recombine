@@ -5,7 +5,10 @@ import { Button, Dialog, message } from '@/components/base';
 import ProjectCoverCollage from '@/components/home/ProjectCoverCollage';
 import { checkPlazaCoverForPublish, coverDocumentHasContent } from '@/utils/plazaCover';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
-import { buildProjectCoverTiles } from '@/utils/renderProjectThumbnail';
+import { buildProjectCoverTiles, PREVIEW_PNG_MAX_EDGE } from '@/utils/renderProjectThumbnail';
+
+/** Publish modal preview — sharper than list-card 360px JPEG thumbs. */
+const PUBLISH_PREVIEW_TILE_EDGE = Math.max(960, Math.round(PREVIEW_PNG_MAX_EDGE / 2));
 
 /** `<img src>` cannot send Bearer — skip auth-only upload routes. */
 function canUseAsImgSrc(url: string): boolean {
@@ -72,7 +75,9 @@ function PlazaPublishForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Enter Publish tab: use rewritten public collage URLs, else build homepage tiles.
+  // Same source as Share / homepage: prefer saved collage URLs.
+  // Only live-raster when nothing is stored yet (or regenerate failed to
+  // load). Live element crops of white frames look blank in a 2×2 grid.
   useEffect(() => {
     let cancelled = false;
 
@@ -93,7 +98,12 @@ function PlazaPublishForm({
       }
       if (!cancelled) setResolvingCover(true);
       try {
-        const tiles = await buildProjectCoverTiles(document);
+        const tiles = await buildProjectCoverTiles(document, {
+          maxEdge: PUBLISH_PREVIEW_TILE_EDGE,
+          fullBoardMaxEdge: PREVIEW_PNG_MAX_EDGE,
+          format: 'png',
+          compress: false,
+        });
         if (cancelled) return;
         const next = (tiles.dataUrls || tiles.urls || [])
           .map((u) => String(u || '').trim())
