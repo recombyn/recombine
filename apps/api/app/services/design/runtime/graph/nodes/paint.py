@@ -59,12 +59,7 @@ async def _await_or_abandon(coro: Any, *, timeout_sec: float, label: str) -> Any
     if done:
         return done.pop().result()
     task.cancel()
-    _log.warning(
-        "%s timed out after %.1fs — abandoned in-flight call (task may still "
-        "drain until provider/stream_chunk_timeout)",
-        label,
-        timeout_sec,
-    )
+    _log.warning("%s timed out after %.1fs", label, timeout_sec)
     raise TimeoutError(f"{label} timed out after {timeout_sec:.0f}s")
 
 
@@ -106,7 +101,7 @@ async def _node_paint_ops(state: GraphState) -> Command:
     from app.services.llm.agent import ainvoke_structured
 
     lean = _is_lean_paint_turn(rt)
-    _log.info(
+    _log.debug(
         "paint_ops enter task=%s model=%s lean=%s intent=%s prompt_chars=%s "
         "images=%s tools=%s",
         st.task_id[:8],
@@ -162,7 +157,7 @@ async def _node_paint_ops(state: GraphState) -> Command:
             # Inter-chunk stall bound — langchain-openai default is 120s; that alone
             # made "add a rect" look hung after decide already finished.
             chunk_sec = min(45.0, attempt_sec) if attempt_sec > 0 else 45.0
-            _log.info(
+            _log.debug(
                 "paint_ops LLM start task=%s attempt=%s/%s model=%s "
                 "sys_chars=%s user_chars=%s timeout=%.0fs chunk_timeout=%.0fs",
                 st.task_id[:8],
@@ -224,7 +219,7 @@ async def _node_paint_ops(state: GraphState) -> Command:
             content = json.dumps(raw_obj, ensure_ascii=False)[:8000]
             used_hint = max(1, len(content) // 3)
             st.total_tokens += used_hint
-            _log.info(
+            _log.debug(
                 "paint_ops LLM ok task=%s attempt=%s model=%s elapsed=%.2fs "
                 "ops_raw=%s reply_chars=%s",
                 st.task_id[:8],

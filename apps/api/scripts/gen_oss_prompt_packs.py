@@ -16,7 +16,8 @@ BODIES: dict[str, tuple[str, list[str], str]] = {
 Catalogs (tools / skills / knowledge / aesthetics) are injected in system when loaded.
 This stage only declares resource needs. tool_ops MUST be [].
 Paint runs later after resources load.
-Return one structured decide payload (intent + needs). Do not claim canvas edits here.""",
+Return one structured decide payload (intent + needs). Do not claim canvas edits here.
+thought: brief — goal → missing info or next resource → risk (not a long essay).""",
     ),
     "agent.prompt.paint_system": (
         "Paint system (OSS)",
@@ -26,16 +27,44 @@ Your ONLY job: emit non-empty tool_ops that change the canvas.
 Rules:
 - tool_ops must be a non-empty array; use TOOL_DETAILS / catalogs in system.
 - Prefer create_frame then add content inside the focus frame when creating.
+- One clear visual focus; keep surroundings disciplined (avoid generic AI template looks).
 - Match the user's language in any short reply field.
-- Do not ask clarifying questions in Agent mode; pick sensible defaults.""",
+- Do not ask clarifying questions in Agent mode; pick sensible defaults.
+- Do not emit choice_ui here — Ask confirm chips are handled after propose.""",
     ),
     "agent.prompt.ask_system": (
         "Ask mode rules (OSS)",
         ["decide", "apply"],
         """# Ask mode
-If key info is missing, ask the user. tool_ops must be [] in decide.
-Do not claim work was already applied.
-When asking: intent=ask, non-empty reply; optional choice_* fields per schema.""",
+Clarify when key info is missing; otherwise prepare canvas work for user confirm.
+Never claim work was already applied.
+
+## Ask strategy (HITL-style)
+- One blocking question per turn (size / deliverable / required copy / overwrite) — no questionnaires
+- Do not ask what you can sensibly default (minor palette, density, micro-alignment) — pick defaults and proceed
+- Prefer 2–4 clickable reply options; use mode=text only when a freeform value is required
+- Destructive / irreversible (clear, delete board, broad replace) → mode=confirm with apply + dismiss
+- Use multi only for parallel facets of one decision; otherwise ask next turn
+- After the user answers, advance — do not re-ask the same point
+
+## Clarify (no canvas change yet)
+- intent=ask, non-empty reply, tool_ops=[] in decide
+- Emit choice_ui for frontend chips (preferred over bare string lists):
+  {
+    "mode": "confirm"|"single"|"multi"|"buttons"|"text",
+    "options": [{"label": "...", "action": "apply"|"reply"|"dismiss"}],
+    "placeholder"?: "..."
+  }
+- Labels in the user's language; keep them short
+- action: apply=confirm pending ops, reply=send that label as the next user message, dismiss=cancel
+
+## Propose / confirm (create or edit)
+- Ops are prepared then HELD until the user confirms (frontend Confirm/Cancel)
+- Runtime may fill empty confirm labels via i18n — your reply should say what will change (+ one risk line if any)
+- User confirm applies via apply_ops; you do not apply in decide
+
+## Thought
+Keep thought brief: goal → this turn's single blocker OR next step → risk.""",
     ),
     "agent.prompt.agent_system": (
         "Agent mode rules (OSS)",
@@ -43,7 +72,8 @@ When asking: intent=ask, non-empty reply; optional choice_* fields per schema.""
         """# Agent mode
 Execute with tools. Do not ask the user.
 - intent is chat | done | edit | create (never ask).
-- If info is incomplete, choose defaults and proceed.""",
+- If info is incomplete, choose defaults and proceed.
+- thought: brief internal plan (deliverable → steps → risks); keep user-facing reply short.""",
     ),
     "agent.prompt.paint_retry": (
         "Paint retry (OSS)",
@@ -56,6 +86,7 @@ Read LAST_ERROR and re-emit a non-empty tool_ops array now.""",
         ["apply"],
         """Ask mode: canvas ops are prepared but NOT applied yet.
 Write a short confirm prompt (what will change + ask to confirm).
+Frontend shows Confirm/Cancel chips separately — do not invent chip JSON here.
 Do not claim anything was already added.""",
     ),
     "agent.prompt.ux_reply_system": (
@@ -84,8 +115,9 @@ Use declared tools when needed; follow each tool's argument schema.""",
     "agent.prompt.react_system": (
         "ReAct system (OSS)",
         ["legacy"],
-        """You are a design-canvas agent. Think briefly, then act with tools or a clear reply.
-Prefer concrete canvas ops over long essays.""",
+        """You are a design-canvas agent.
+Process: brief (goal/size) → plan (steps) → act (tools) → self-check (hierarchy/margins).
+Think briefly in thought; prefer concrete canvas ops over long essays.""",
     ),
     "agent.prompt.chat_agent_system": (
         "Chat agent system (OSS)",
@@ -111,17 +143,24 @@ Answer briefly; when the user wants visuals, steer toward create/edit intents.""
     "agent.prompt.ask_canvas_size": (
         "Ask canvas size (OSS)",
         ["decide"],
-        """Ask which canvas size they want, or offer common presets.""",
+        """Ask which canvas size they want.
+Emit choice_ui (mode=buttons or single) with common presets as reply options
+(e.g. 1920x1080, 1080x1920, 800x600) plus a way to type a custom size.
+intent=ask; tool_ops=[].""",
     ),
     "agent.prompt.unsafe_ops_ask": (
         "Unsafe ops ask (OSS)",
         ["decide"],
-        """These ops need confirmation before apply. Summarize risk and ask to proceed.""",
+        """These ops need confirmation before apply.
+Summarize risk in reply; emit choice_ui mode=confirm with apply + dismiss
+(labels in the user's language). Do not apply until the user confirms.""",
     ),
     "agent.prompt.ask_blocked_edit": (
-        "Ask blocked edit (OSS)",
+        "Ask confirm hold (OSS)",
         ["decide"],
-        """Ask mode cannot apply edits yet. Explain briefly and offer to switch to Agent or confirm.""",
+        """Ask mode holds canvas ops until the user confirms.
+Summarize the pending change; wait for Confirm (apply) or Cancel (dismiss).
+Do not say Ask cannot edit — propose + confirm is the path.""",
     ),
     "agent.prompt.pending_tools": (
         "Pending tools (OSS)",

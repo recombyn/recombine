@@ -2,12 +2,12 @@
   "skill_key": "garden_style",
   "name": "garden_style",
   "displayName": "Garden Style",
-  "description": "风格配方引擎：大胆审美方向 + 像素级执行标准",
-  "when_to_use": "需要高完成度视觉风格、避免通用 AI 审美、或做设计质检时加载",
+  "description": "风格配方引擎：大胆审美方向 + 字体气质匹配 + 海报质检",
+  "when_to_use": "需要高完成度视觉、避免通用 AI 审美、或海报字体/装饰质检时加载",
   "category": "aesthetics",
   "scenes": "all",
-  "sort_weight": 38,
-  "version": "1.0.0",
+  "sort_weight": 82,
+  "version": "1.2.0",
   "preferred_tools": [
     "create_frame",
     "create_shape",
@@ -17,17 +17,26 @@
     "update_node"
   ],
   "allowed_resources": ["knowledge", "aesthetics", "tools"],
-  "triggers": [],
+  "triggers": [
+    {
+      "empty_canvas": true,
+      "intent_in": ["create"]
+    },
+    {
+      "intent_in": ["create"],
+      "min_prompt_chars": 8
+    }
+  ],
   "mutex_group": "",
-  "prompt_negative": "禁止套用紫渐变白底、Inter/Roboto 默认栈、无意义发光与满屏圆角胶囊；勿复制参考图 Logo/二维码/价格。",
+  "prompt_negative": "禁止套用紫渐变白底、Inter/Roboto 默认栈、无意义发光与满屏圆角胶囊；勿复制参考图 Logo/二维码/价格；禁止 UI 图标当节日装饰；禁止标题裁切与低对比文案。",
   "locales": {
     "zh-CN": {
       "displayName": "Garden 风格配方",
-      "description": "风格配方引擎：大胆审美方向 + 像素级执行标准"
+      "description": "风格配方引擎：大胆审美方向 + 字体气质匹配 + 海报质检"
     },
     "en": {
       "displayName": "Garden Style",
-      "description": "Style recipe engine: bold aesthetic direction with pixel-level craft"
+      "description": "Style recipe engine: bold direction, type-mood fit, poster craft checks"
     }
   }
 }

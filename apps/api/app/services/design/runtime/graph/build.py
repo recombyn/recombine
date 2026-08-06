@@ -49,6 +49,7 @@ from app.services.design.ops.tool_ops_contract import format_canvas_tools_catalo
 from app.services.design.prompts.knowledge_store import format_knowledge_catalog
 from app.services.design.prompts.skill_store import format_skills_catalog
 from app.services.design.aesthetics.scorer import format_aesthetics_catalog
+from app.services.fonts_store import format_fonts_catalog
 from app.services.design.admin.task_store import (
     STATUS_CANCELLED,
     STATUS_ERROR,
@@ -456,7 +457,7 @@ def _get_design_graph_checkpointer() -> Any:
 
     cp = get_agent_checkpointer()
     backend = checkpointer_backend()
-    _log.info("design graph checkpointer backend=%s", backend)
+    _log.debug("design graph checkpointer backend=%s", backend)
     require_durable = bool(
         getattr(settings, "design_graph_require_durable_checkpoint", True)
     )
@@ -707,10 +708,13 @@ async def run_agent_graph(
     tools_block = format_canvas_tools_for_model(rules)
     tools_catalog = format_canvas_tools_catalog(rules)
     scene_for_cat = scene_key or "website"
-    skills_catalog, knowledge_catalog, aesthetics_catalog = await asyncio.gather(
-        asyncio.to_thread(format_skills_catalog, scene=scene_for_cat, user_id=user_id),
-        asyncio.to_thread(format_knowledge_catalog, scene=scene_for_cat),
-        asyncio.to_thread(format_aesthetics_catalog, scene=scene_for_cat),
+    skills_catalog, knowledge_catalog, aesthetics_catalog, fonts_catalog = (
+        await asyncio.gather(
+            asyncio.to_thread(format_skills_catalog, scene=scene_for_cat, user_id=user_id),
+            asyncio.to_thread(format_knowledge_catalog, scene=scene_for_cat),
+            asyncio.to_thread(format_aesthetics_catalog, scene=scene_for_cat),
+            asyncio.to_thread(format_fonts_catalog),
+        )
     )
     defer_tools = S._flag_on(rules, "agent.react.defer_tools", "1")
     persona = S._resolve_agent_persona(rules, user_selected_model)
@@ -727,6 +731,7 @@ async def run_agent_graph(
             skills_catalog,
             knowledge_catalog,
             aesthetics_catalog,
+            fonts_catalog,
         ],
     )
 
