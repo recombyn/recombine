@@ -7,6 +7,7 @@ export { default as AspectRatioPresetMenu } from './AspectRatioPresetMenu';
 export { AspectPresetGlyph, ELEMENT_ASPECT_PRESETS } from './AspectRatioPresetMenu';
 export {
   SelectionToolbarShell,
+  WorldScreenChromeRoot,
   useChromePointerActivate,
   SELECTION_TOOLBAR_BELOW_BOX_GAP_PX,
   NODE_TITLE_LABEL_GAP_PX,

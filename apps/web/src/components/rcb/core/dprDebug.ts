@@ -10,7 +10,8 @@
  * Default OFF — enable explicitly when debugging browser-zoom seams.
  */
 
-import { nearestDprMultiple, snapCssToDevicePixel, toDomPrecision } from './dpr';
+import { nearestDprMultiple } from './dpr';
+import { rcbSceneToScreen } from './math';
 import type { RcbCamera } from './types';
 
 declare global {
@@ -19,8 +20,10 @@ declare global {
     __RCB_ALIGN_DEBUG__?: boolean;
     __rcbDumpDpr?: () => void;
     __rcbDumpAlign?: () => void;
+    __rcbDumpGrid?: () => Record<string, unknown>;
     __rcbLastDprDump?: Record<string, unknown>;
     __rcbLastAlignDump?: Record<string, unknown>;
+    __rcbLastGridDump?: Record<string, unknown>;
   }
 }
 
@@ -43,16 +46,9 @@ function classify(devicePx: number) {
   return 'frac';
 }
 
-/** Scene → CSS px under camera (same as rcbSceneToScreen — DPR-snapped pan). */
+/** Scene → CSS px under camera (uses snapped camera pan). */
 export function sceneToCss(camera: RcbCamera, sceneX: number, sceneY: number, dpr?: number) {
-  const z = Math.max(0.05, camera.zoom || 1);
-  const d = dpr ?? (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
-  const camX = toDomPrecision(snapCssToDevicePixel(camera.x, d));
-  const camY = toDomPrecision(snapCssToDevicePixel(camera.y, d));
-  return {
-    x: sceneX * z + camX,
-    y: sceneY * z + camY,
-  };
+  return rcbSceneToScreen(camera, sceneX, sceneY, dpr);
 }
 
 export type DprEdgeSample = {
@@ -131,9 +127,9 @@ export function logDprCameraState(opts: {
     dprIsFractional: Math.abs(dpr - Math.round(dpr)) > 0.02,
     camera: { ...camera },
     camCssWritten: camCss ?? {
-      x: toDomPrecision(camera.x),
-      y: toDomPrecision(camera.y),
-      z: toDomPrecision(camera.zoom),
+      x: camera.x,
+      y: camera.y,
+      z: camera.zoom,
     },
     // After CSS scale(z) translate(x,y), a scene unit becomes zoom CSS px → zoom*dpr device px.
     sceneUnitDevicePx: camera.zoom * dpr,
@@ -226,6 +222,125 @@ export function installDprDebugHelpers(getState: () => {
     }
     console.log(TAG, 'align dump (copy JSON)', JSON.stringify(last, null, 2));
   };
+  window.__rcbDumpGrid = () => dumpGridVsHosts(getState);
+}
+
+const GRID_TAG = '[rcb:grid]';
+
+function parsePx(v: string | null | undefined): number | null {
+  if (v == null || v === '') return null;
+  const n = Number.parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
+function onGrid(value: number, g: number) {
+  if (!(g > 0)) return true;
+  const q = Math.round(value / g) * g;
+  return Math.abs(value - q) < 1e-6;
+}
+
+/** Measure infinite-canvas grid SVG vs shape hosts — always prints JSON. */
+export function dumpGridVsHosts(getState: () => {
+  dpr: number;
+  camera: RcbCamera;
+  boxes?: Array<{ id: string; left: number; top: number; width: number; height: number }>;
+}): Record<string, unknown> {
+  const { dpr, camera, boxes = [] } = getState();
+  const world = document.querySelector('[data-rcb-world="1"]') as HTMLElement | null;
+  const grid = document.querySelector('[data-rcb-pixel-grid="1"]') as SVGSVGElement | null;
+  const g = Number(grid?.getAttribute('data-rcb-grid-size') || 1) || 1;
+  const gridLeft = parsePx(grid?.getAttribute('data-rcb-grid-left'));
+  const gridTop = parsePx(grid?.getAttribute('data-rcb-grid-top'));
+  const gridStyleLeft = parsePx(grid?.style?.left);
+  const gridStyleTop = parsePx(grid?.style?.top);
+  const gridRect = grid?.getBoundingClientRect?.() ?? null;
+  const worldTf = world?.style?.transform || '';
+
+  const hosts = Array.from(document.querySelectorAll('[data-rcb-infinite="1"]:not([data-rcb-pixel-grid])'));
+  const hostRows = hosts.slice(0, 24).map((node, i) => {
+    const el = node as SVGSVGElement;
+    const left = parsePx(el.style.left) ?? parsePx(el.getAttribute('x'));
+    const top = parsePx(el.style.top) ?? parsePx(el.getAttribute('y'));
+    const vb = (el.getAttribute('viewBox') || '').trim();
+    const rect = el.getBoundingClientRect();
+    const sceneLeft = left;
+    const sceneTop = top;
+    return {
+      i,
+      tag: el.tagName,
+      sceneLeft,
+      sceneTop,
+      viewBox: vb,
+      onGridX: sceneLeft == null ? null : onGrid(sceneLeft, g),
+      onGridY: sceneTop == null ? null : onGrid(sceneTop, g),
+      fracX: sceneLeft == null ? null : sceneLeft - Math.round(sceneLeft / g) * g,
+      fracY: sceneTop == null ? null : sceneTop - Math.round(sceneTop / g) * g,
+      client: {
+        left: +rect.left.toFixed(3),
+        top: +rect.top.toFixed(3),
+        width: +rect.width.toFixed(3),
+        height: +rect.height.toFixed(3),
+      },
+    };
+  });
+
+  const boxRows = boxes.map((b) => {
+    const sample = sampleBoxEdges(b.id, b, camera, dpr);
+    return {
+      id: b.id,
+      scene: sample.scene,
+      onGrid: {
+        left: onGrid(b.left, g),
+        top: onGrid(b.top, g),
+        right: onGrid(b.left + b.width, g),
+        bottom: onGrid(b.top + b.height, g),
+      },
+      frac: {
+        left: b.left - Math.round(b.left / g) * g,
+        top: b.top - Math.round(b.top / g) * g,
+        right: b.left + b.width - Math.round((b.left + b.width) / g) * g,
+        bottom: b.top + b.height - Math.round((b.top + b.height) / g) * g,
+      },
+      css: sample.css,
+      device: sample.device,
+      edgeClass: sample.edgeClass,
+    };
+  });
+
+  // Same parent? Grid must be under [data-rcb-world], sibling of shape hosts.
+  const gridParentIsWorld = Boolean(grid && world && grid.parentElement === world);
+
+  const payload: Record<string, unknown> = {
+    dpr,
+    visualViewportScale: window.visualViewport?.scale ?? null,
+    camera: { ...camera },
+    grid: {
+      present: Boolean(grid),
+      parentIsWorld: gridParentIsWorld,
+      gridSize: g,
+      attrOrigin: { left: gridLeft, top: gridTop },
+      styleOrigin: { left: gridStyleLeft, top: gridStyleTop },
+      viewBox: grid?.getAttribute('viewBox') || null,
+      pathLen: grid?.querySelector('path')?.getAttribute('d')?.length ?? 0,
+      usesPattern: Boolean(grid?.querySelector('pattern')),
+      client: gridRect
+        ? {
+            left: +gridRect.left.toFixed(3),
+            top: +gridRect.top.toFixed(3),
+            width: +gridRect.width.toFixed(3),
+            height: +gridRect.height.toFixed(3),
+          }
+        : null,
+    },
+    worldTransform: worldTf,
+    stateBoxes: boxRows,
+    domHosts: hostRows,
+  };
+
+  window.__rcbLastGridDump = payload;
+  console.log(GRID_TAG, 'dump', payload);
+  console.log(GRID_TAG, 'json', JSON.stringify(payload));
+  return payload;
 }
 
 const ALIGN_TAG = '[rcb:align]';

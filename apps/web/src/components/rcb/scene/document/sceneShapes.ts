@@ -353,6 +353,18 @@ export function ptsAttr(pts: Array<[number, number]>) {
 /** Hit/selection thickness for line & arrow nodes (world units). */
 export const STROKE_HIT = 24;
 
+/**
+ * Hit-test slop in **scene** units from a constant screen-pixel budget.
+ * Must divide by zoom — using raw `STROKE_HIT/2` as scene pad makes a ~12u
+ * fat finger at 4000% zoom (~480 CSS px) and blocks blank-click deselect.
+ */
+export function sceneHitSlop(
+  zoom: number,
+  screenPx: number = Math.max(STROKE_HIT / 2, 12)
+): number {
+  return Math.max(0, screenPx) / Math.max(0.05, Number(zoom) || 1);
+}
+
 export type StrokeEndpoints = { x0: number; y0: number; x1: number; y1: number };
 
 /** Build node placement for a free-angle line/arrow from two endpoints. */

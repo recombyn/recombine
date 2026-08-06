@@ -24,6 +24,7 @@ apps/api/storage/results/*
 apps/api/storage/backups/*
 apps/api/storage/*.db
 apps/api/storage/langgraph_*.db
+apps/api/storage/*.alembic.lock
 !apps/api/storage/uploads/.gitkeep
 !apps/api/storage/results/.gitkeep
 !apps/api/storage/backups/.gitkeep

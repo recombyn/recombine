@@ -30,13 +30,19 @@ import {
   notifyShapeHostGeometry,
 } from '@/components/rcb/shapes/shapeHostRegistry';
 import type { SceneBox } from '../alignGuides';
-import { WorldSvgFrame, WorldScreenBadge } from '../SelectionChrome';
+import {
+  CHROME_HANDLE_HIT_PX,
+  CHROME_HANDLE_VIS_PX,
+  CHROME_STROKE_PX,
+  WorldSvgFrame,
+  WorldScreenBadge,
+} from '../SelectionChrome';
 
 const DRAG_DISTANCE_SQUARED = 16;
 const SIDES_DRAG_STEP_PX = 14;
-const KNOB_VIS_PX = 8;
-const KNOB_HIT_PX = 18;
-const KNOB_STROKE_PX = 1.5;
+const KNOB_VIS_PX = CHROME_HANDLE_VIS_PX;
+const KNOB_HIT_PX = CHROME_HANDLE_HIT_PX;
+const KNOB_STROKE_PX = CHROME_STROKE_PX;
 /** Min inward seat when R=0 so the knob clears the vertex / resize chrome. */
 const RADIUS_MIN_INSET_PX = 18;
 

@@ -340,9 +340,10 @@ function EditorStageWorld({
 
         <FrameDrawFeature
           enabled={!isDevMode && frameMode}
-          camera={camera}
           stageEl={stageEl}
           onCommit={onCommitFrame}
+          gridSnap
+          gridSize={gridSize}
         />
       </RcbCanvas>
     </div>

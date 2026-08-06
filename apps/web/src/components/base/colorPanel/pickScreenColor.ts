@@ -192,7 +192,7 @@ function pickColorWithLoupe(): Promise<string | null> {
         LOUPE_SIZE
       );
 
-      // Center pixel target (fig.2).
+      // Center pixel target.
       const cx = LOUPE_SIZE / 2;
       const cy = LOUPE_SIZE / 2;
       const s = Math.max(LOUPE_ZOOM, 8);
@@ -266,10 +266,7 @@ function pickColorWithLoupe(): Promise<string | null> {
   });
 }
 
-/**
- * Pick a screen color. Uses Chromium EyeDropper (loupe like fig.2) when available;
- * otherwise falls back to a canvas loupe over the editor stage.
- */
+/** Pick a screen color via EyeDropper when available, else a canvas loupe. */
 export async function pickScreenColor(signal?: AbortSignal): Promise<string | null> {
   const Ctor = (window as unknown as { EyeDropper?: EyeDropperCtor }).EyeDropper;
   if (typeof Ctor === 'function') {

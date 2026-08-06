@@ -68,7 +68,7 @@ function TextInlineEditor({
   styleRef.current = style;
   const autoSizeRef = useRef(autoSize);
   autoSizeRef.current = autoSize;
-  const boxWidthRef = useRef(resolveTextBoxWidth(node?.width, true));
+  const boxWidthRef = useRef(resolveTextBoxWidth(node?.width, true, style.fontSize));
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
   const onCancelRef = useRef(onCancel);
@@ -106,14 +106,19 @@ function TextInlineEditor({
       ? hasContent
         ? Math.max(nodeW, Math.ceil(measurePlainTextSize(value, style).width))
         : Math.max(2, nodeW)
-      : resolveTextBoxWidth(node?.width, true));
+      : resolveTextBoxWidth(node?.width, true, fontSize));
   boxWidthRef.current = widthWorld;
 
   const contentBox = autoSize
     ? hasContent
       ? measurePlainTextSize(value, style)
-      : { width: widthWorld, height: Math.max(fontSize * lineH, 20) }
-    : measureWrappedTextSize(value || 'M', style, Math.max(24, widthWorld));
+      : // Caret line only — never a document-20px floor (blows up at high zoom).
+        { width: widthWorld, height: Math.ceil(fontSize * lineH) }
+    : measureWrappedTextSize(
+        value || 'M',
+        style,
+        Math.max(Math.ceil(fontSize), widthWorld)
+      );
 
   // Prefer content height (tight, even top/bottom). Grow past nodeH only if wrapping needs it.
   const heightWorld = Math.max(
@@ -139,7 +144,7 @@ function TextInlineEditor({
       return;
     }
     const s = styleRef.current;
-    const boxW = Math.max(24, boxWidthRef.current);
+    const boxW = Math.max(Math.ceil(s.fontSize || 14), boxWidthRef.current);
     const measuredBox = autoSizeRef.current
       ? measurePlainTextSize(trimmed, s)
       : measureWrappedTextSize(trimmed, s, boxW);
@@ -169,14 +174,21 @@ function TextInlineEditor({
     if (!node || node.key !== 'text') return;
     const s = styleRef.current;
     const plain = valueRef.current;
-    const fixedW = resolveTextBoxWidth(node.width, Boolean(plain.trim()));
+    const has = Boolean(plain.trim());
+    const fixedW = resolveTextBoxWidth(node.width, has, s.fontSize);
     const box = autoSizeRef.current
-      ? measurePlainTextSize(plain || ' ', s)
+      ? measurePlainTextSize(has ? plain : 'M', s)
       : measureWrappedTextSize(plain || 'M', s, fixedW);
+    // Empty autoSize: keep the thin caret width — do not inflate to a measured "M"/space.
     const nextW = autoSizeRef.current
-      ? Math.max(Math.round(Number(node.width) || 0), Math.round(box.width))
+      ? has
+        ? Math.max(Math.round(Number(node.width) || 0), Math.round(box.width))
+        : Math.max(1, Math.round(Number(node.width) || Math.ceil((s.fontSize || 14) * 0.15)))
       : Math.round(fixedW);
-    const nextH = Math.max(Math.ceil((s.fontSize || 14) * (s.lineHeight || 1.4)), Math.round(box.height));
+    const nextH = Math.max(
+      Math.ceil((s.fontSize || 14) * (s.lineHeight || 1.4)),
+      Math.round(box.height)
+    );
     const curW = Math.round(Number(node.width) || 0);
     const curH = Math.round(Number(node.height) || 0);
     if (nextW !== curW || nextH !== curH) {
@@ -218,9 +230,9 @@ function TextInlineEditor({
       let nextW = d.width0;
       let nextL = d.left0;
       if (d.side === 'e') {
-        nextW = Math.max(16, d.width0 + dx);
+        nextW = Math.max(fontSize, d.width0 + dx);
       } else {
-        nextW = Math.max(16, d.width0 - dx);
+        nextW = Math.max(fontSize, d.width0 - dx);
         nextL = d.left0 + (d.width0 - nextW);
       }
       setDragWidth(nextW);
@@ -253,7 +265,7 @@ function TextInlineEditor({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [isEdgeDragging, z]);
+  }, [isEdgeDragging, z, fontSize]);
 
   if (!node || node.key !== 'text') return null;
 

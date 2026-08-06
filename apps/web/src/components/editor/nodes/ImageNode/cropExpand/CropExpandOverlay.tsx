@@ -277,7 +277,7 @@ type Props = {
   onExpandChange: (next: ExpandFrame) => void;
 };
 
-/** Fig.1 — dashed frame, L-corners, edge bars, grid; expand shows gray margins. */
+/** Dashed frame, L-corners, edge bars, grid; expand shows gray margins. */
 function CropExpandOverlay({
   mode,
   imageBox,
@@ -450,7 +450,7 @@ function CropExpandOverlay({
 
   const dimLabel = `${Math.round(frameWorld.width)} × ${Math.round(frameWorld.height)}`;
 
-  /** L-bracket corner (fig.1). */
+  /** L-bracket corner. */
   const corner = (id: HandlePos): CSSProperties => {
     const arm = 14;
     const thick = 3;

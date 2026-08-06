@@ -199,10 +199,10 @@ export function measurePlainTextSize(text: string, style: Partial<TextStyle> = {
     maxW = Math.max(maxW, measureLineWidth(ctx, line.length ? line : ' ', fontSize, letterSpacing));
   }
 
-  // Tight box = ink metrics only (no asymmetric pad — that made selection bottom-heavy
-  // and caused a jump vs the inline editor).
+  // Tight box = ink metrics only. Floor scales with fontSize so high-zoom
+  // (scene font ~1px) does not keep a document-24px-wide empty chrome.
   return {
-    width: Math.max(24, Math.ceil(maxW)),
+    width: Math.max(Math.ceil(fontSize), Math.ceil(maxW)),
     height: Math.max(
       Math.ceil(fontSize * lineHeight),
       Math.ceil(sample.length * fontSize * lineHeight)
@@ -219,7 +219,10 @@ export function measureWrappedTextSize(
   const merged = { ...DEFAULT_TEXT_STYLE, ...style };
   const fontSize = Math.max(1, Number(merged.fontSize) || 14);
   const lineHeight = Math.max(0.8, Number(merged.lineHeight) || 1.4);
-  const boxW = Math.max(24, Math.round(maxWidth) || DEFAULT_TEXT_BOX_WIDTH);
+  const boxW = Math.max(
+    Math.ceil(fontSize),
+    Math.round(maxWidth) || DEFAULT_TEXT_BOX_WIDTH
+  );
   const lines = wrapPlainTextLines(text, merged, boxW);
   return {
     width: boxW,
@@ -232,13 +235,21 @@ export function measureWrappedTextSize(
 }
 
 /** Resolve editor / node width for wrapping (empty caret stays thin until typing). */
-export function resolveTextBoxWidth(nodeWidth: unknown, hasContent: boolean) {
+export function resolveTextBoxWidth(
+  nodeWidth: unknown,
+  hasContent: boolean,
+  fontSize = DEFAULT_TEXT_STYLE.fontSize
+) {
+  const fs = Math.max(1, Number(fontSize) || DEFAULT_TEXT_STYLE.fontSize);
   const w = Number(nodeWidth);
   if (hasContent) {
-    return Math.max(24, Number.isFinite(w) && w > 8 ? Math.round(w) : DEFAULT_TEXT_BOX_WIDTH);
+    return Math.max(
+      Math.ceil(fs),
+      Number.isFinite(w) && w > fs * 0.5 ? Math.round(w) : DEFAULT_TEXT_BOX_WIDTH
+    );
   }
-  if (Number.isFinite(w) && w > 8) return Math.round(w);
-  return 2;
+  if (Number.isFinite(w) && w > fs * 0.5) return Math.round(w);
+  return Math.max(1, Math.round(fs * 0.15));
 }
 
 /** Content height of n line boxes (CSS-style). */

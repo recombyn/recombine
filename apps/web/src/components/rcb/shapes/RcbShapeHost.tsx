@@ -1,5 +1,6 @@
-import { useEffect, useRef, type CSSProperties, memo } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, memo } from 'react';
 import { useRcbCamera } from '@/components/rcb/camera/context';
+import { rcbCameraCssZoom } from '@/components/rcb/core/math';
 import { applyFrameContentClip } from '@/components/rcb/frames/frameContentClip';
 import { strokeVisualOutset } from '@/components/rcb/scene/document/sceneEffects';
 import {
@@ -15,8 +16,12 @@ import {
   parseLayerOpacity,
 } from '@/components/rcb/selection/chrome/BlendModeControl';
 import {
+  getSceneShapesMount,
+  getSceneWorldEpoch,
+  getSceneWorldRoot,
   getSharedNodeEls,
   registerShapeHost,
+  subscribeShapeHosts,
   unregisterShapeHost,
   updateShapeHostElement,
 } from '@/components/rcb/shapes/shapeHostRegistry';
@@ -57,9 +62,8 @@ function setHostPaintOpacity(el: Element | null | undefined, hidden: boolean) {
 
 /**
  * One paint host per scene node under the camera world layer.
- * Committed ink is SVG (vector stays sharp under CSS camera zoom).
- * Canvas Path2D caches geometry for hit-test + draw-tool overlays (see sceneShapes).
- * Only mounted while in (or near) the viewport — see RcbShapesLayer culling.
+ * Prefers the shared scene-world SVG (grid + shapes, one raster lattice).
+ * Falls back to a private infinite SVG when the world root is not mounted yet.
  */
 function RcbShapeHost({
   nodeId,
@@ -71,9 +75,21 @@ function RcbShapeHost({
   const camera = useRcbCamera();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const layerRef = useRef<SVGGElement | null>(null);
   const bootRef = useRef(0);
   const forceHiddenRef = useRef(forceHidden);
   forceHiddenRef.current = forceHidden;
+  const [worldEpoch, setWorldEpoch] = useState(() => getSceneWorldEpoch());
+  useEffect(
+    () =>
+      subscribeShapeHosts(() => {
+        setWorldEpoch((prev) => {
+          const next = getSceneWorldEpoch();
+          return prev === next ? prev : next;
+        });
+      }),
+    []
+  );
   const node = document?.deltaSetLike?.[nodeId];
   const blendMode = parseBlendMode(node?.attrs?.blendMode, { allowPassThrough: false });
   const layerOpacity = parseLayerOpacity(node?.attrs?.opacity, 1);
@@ -119,6 +135,12 @@ function RcbShapeHost({
     node?.attrs?.shapeType,
     node?.attrs?.brushStyle,
     node?.attrs?.pathPressure,
+    // Empty generator / process hairlines are screen-constant (css/zoom) — remount on zoom.
+    String(node?.attrs?.processStatus || '') === 'running' ||
+    node?.attrs?.imageGenerator ||
+    node?.attrs?.videoGenerator
+      ? rcbCameraCssZoom(camera).toFixed(3)
+      : '',
   ].join('|');
 
   useEffect(() => {
@@ -129,10 +151,20 @@ function RcbShapeHost({
     const n = document.deltaSetLike?.[nodeId];
     let cancelled = false;
 
-    const { root, layer } = createSvgBoard(host, 1, 1, { infinite: true });
-    // Seed CSS box from node AABB before paint — avoids 1×1→fit jump under browser zoom.
+    const { root, layer, shared } = createSvgBoard(host, 1, 1, {
+      infinite: true,
+      sharedRoot: getSceneWorldRoot(),
+      sharedMount: getSceneShapesMount(),
+    });
+    layerRef.current = layer;
+    layer.setAttribute('data-rcb-shape-id', nodeId);
+    layer.style.opacity = forceHiddenRef.current ? '0' : String(layerOpacity);
+    if (blendCss) layer.style.mixBlendMode = blendCss;
+    else layer.style.removeProperty('mix-blend-mode');
+
+    // Private-host seed only — shared world viewport is owned by RcbCanvas.
     let seedBox: { left: number; top: number; width: number; height: number } | null = null;
-    if (n) {
+    if (!shared && n) {
       try {
         const { left, top } = nodeLeftTop(document, n);
         const w = Math.max(1, Number(n.width) || 1);
@@ -170,11 +202,12 @@ function RcbShapeHost({
           el.setAttribute('opacity', '1');
           if (forceHiddenRef.current) setHostPaintOpacity(el, true);
           applyFrameContentClip(root, el, document, n, { zoom: camera.zoom });
-          const shared = getSharedNodeEls();
-          if (shared) shared.set(nodeId, el);
+          const sharedMap = getSharedNodeEls();
+          if (sharedMap) sharedMap.set(nodeId, el);
           else nodeEls.set(nodeId, el);
           updateShapeHostElement(nodeId, el);
         }
+        if (shared) return;
         try {
           const before = {
             left: root.style.left,
@@ -183,8 +216,6 @@ function RcbShapeHost({
             height: root.style.height,
             viewBox: root.getAttribute('viewBox'),
           };
-          // Freehand / open paths can grow past the seed AABB — allow getBBox fit.
-          // Closed shapes keep the locked seed (preserves *.5 stroke-on-grid).
           const shapeType = String(n?.attrs?.shapeType || '');
           const unlockFit =
             shapeType === 'pen' ||
@@ -223,14 +254,16 @@ function RcbShapeHost({
       hostJumpLog('host.unmount', { nodeId, paintToken: String(paintToken).slice(0, 120) });
       unregisterShapeHost(nodeId);
       try {
-        root.remove();
+        if (shared) layer.remove();
+        else root.remove();
       } catch {
         /* ignore */
       }
-      host.innerHTML = '';
+      if (!shared) host.innerHTML = '';
+      layerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId, reloadToken, paintToken]);
+  }, [nodeId, reloadToken, paintToken, worldEpoch]);
 
   // Toggle hide without remounting (enter / leave inline text edit).
   useEffect(() => {
@@ -238,7 +271,29 @@ function RcbShapeHost({
       getSharedNodeEls()?.get(nodeId) ||
       (hostRef.current?.querySelector?.('[data-scene-node-id]') as Element | null);
     setHostPaintOpacity(el, forceHidden);
-  }, [forceHidden, nodeId, paintToken, reloadToken]);
+    const layer = layerRef.current;
+    if (layer) layer.style.opacity = forceHidden ? '0' : String(layerOpacity);
+  }, [forceHidden, nodeId, paintToken, reloadToken, layerOpacity]);
+
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    if (blendCss) layer.style.mixBlendMode = blendCss;
+    else layer.style.removeProperty('mix-blend-mode');
+  }, [blendCss, paintToken]);
+
+  // Keep SVG paint order ≈ document z when sharing one scene root.
+  useEffect(() => {
+    const layer = layerRef.current;
+    const mount = getSceneShapesMount();
+    if (!layer || !mount || layer.parentElement !== mount) return;
+    layer.setAttribute('data-z', String(zIndex));
+    const siblings = [...mount.querySelectorAll(':scope > g[data-rcb-shape-layer]')];
+    siblings.sort(
+      (a, b) => (Number(a.getAttribute('data-z')) || 0) - (Number(b.getAttribute('data-z')) || 0)
+    );
+    for (const g of siblings) mount.appendChild(g);
+  }, [zIndex, paintToken]);
 
   return (
     <div
@@ -247,8 +302,9 @@ function RcbShapeHost({
       className="pointer-events-none absolute left-0 top-0 overflow-visible"
       style={{
         zIndex,
-        opacity: forceHidden ? 0 : layerOpacity,
-        mixBlendMode: (blendCss || undefined) as CSSProperties['mixBlendMode'],
+        // Shared-world paint lives in the scene SVG; wrap is a React anchor only.
+        opacity: getSceneWorldRoot() ? 1 : forceHidden ? 0 : layerOpacity,
+        mixBlendMode: (getSceneWorldRoot() ? undefined : blendCss || undefined) as CSSProperties['mixBlendMode'],
       }}
     >
       <div

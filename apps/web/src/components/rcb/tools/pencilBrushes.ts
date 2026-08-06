@@ -338,7 +338,9 @@ export function stampSpacing(brush: PencilBrushDef, strokeWidth: number) {
   const size = brushSize(brush, strokeWidth);
   const factor = Number(brush.spacingFactor);
   const f = Number.isFinite(factor) && factor > 0 ? factor : 0.45;
-  return Math.max(2, size * f);
+  // Scene units — never floor at 2 (that left huge gaps under 1px grid / high zoom,
+  // so stamp strokes looked like disconnected sausages).
+  return Math.max(size * 0.12, size * f);
 }
 
 /** Convert input points to perfect-freehand input (real pressure or speed simulation). */
@@ -643,6 +645,42 @@ export function samplePolyline(points: Pt[], spacing: number): Pt[] {
     out[out.length - 1] = last;
   }
   return out;
+}
+
+/**
+ * EMA streamline for live pencil capture (brush.options.streamline).
+ * `amount` 0 = raw, ~0.35–0.7 = smoother. Last point stays on the tip.
+ */
+export function streamlinePencilPoints(points: Pt[], amount: number): Pt[] {
+  if (points.length < 2) return points.slice();
+  const a = Math.min(0.92, Math.max(0, Number(amount) || 0));
+  if (!(a > 0)) return points.map((p) => ({ ...p }));
+  const out: Pt[] = [{ ...points[0] }];
+  let px = points[0].x;
+  let py = points[0].y;
+  for (let i = 1; i < points.length; i += 1) {
+    const p = points[i];
+    px = px + (p.x - px) * (1 - a);
+    py = py + (p.y - py) * (1 - a);
+    out.push({
+      x: px,
+      y: py,
+      ...(p.pressure != null ? { pressure: p.pressure } : {}),
+    });
+  }
+  const last = points[points.length - 1];
+  out[out.length - 1] = {
+    x: last.x,
+    y: last.y,
+    ...(last.pressure != null ? { pressure: last.pressure } : {}),
+  };
+  return out;
+}
+
+/** Min scene step between stored samples — scales with ink size, stays dense at high zoom. */
+export function pencilSampleMinStep(strokeWidth: number, brush?: PencilBrushDef | null): number {
+  const size = brush ? brushSize(brush, strokeWidth) : Math.max(1, strokeWidth);
+  return Math.max(0.12, Math.min(0.4, size * 0.1));
 }
 
 export function stampSizeForBrush(brush: PencilBrushDef, strokeWidth: number) {
