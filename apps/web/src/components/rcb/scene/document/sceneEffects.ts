@@ -195,6 +195,95 @@ export function inflateBoxByVisualOutset<
   return padBox(box, strokeVisualOutset(node));
 }
 
+/** Half-pixel quantize — same as createShapeNode (odd center strokes). */
+function quantizeHalfPx(n: number) {
+  return Math.round(n * 2) / 2;
+}
+
+/**
+ * Outset as if stroke were painted (ignore current stroke-visible/enabled).
+ * Used when turning stroke back on to inset geom again.
+ */
+function strokeVisualOutsetAssumingPainted(node: any): number {
+  if (!node) return 0;
+  return strokeVisualOutset({
+    ...node,
+    attrs: {
+      ...(node.attrs || {}),
+      'stroke-enabled': 'true',
+      'stroke-visible': 'true',
+    },
+  });
+}
+
+/**
+ * Closed shapes drawn with center stroke store path geom inset by sw/2 so outer
+ * ink sits on the integer grid. Hiding stroke without expanding leaves the fill
+ * on half-pixels. Expand/inset AABB to keep the visible edge stable.
+ *
+ * Skips open strokes / freehand / custom path `d` (AABB alone would not offset the curve).
+ */
+export function geometryPatchForStrokeVisibilityToggle(
+  node: any,
+  nextVisible: boolean
+): { x: number; y: number; width: number; height: number } | null {
+  if (!node) return null;
+  const shapeType = String(node.attrs?.shapeType || '');
+  if (
+    shapeType === 'line' ||
+    shapeType === 'arrow' ||
+    shapeType === 'pencil' ||
+    shapeType === 'pen' ||
+    shapeType === 'path'
+  ) {
+    return null;
+  }
+  if (node.key === 'text' || node.key === 'frame' || node.key === 'image' || node.key === 'video') {
+    return null;
+  }
+  // Boolean / pasted outlines keep absolute local `path` — resizing the box alone
+  // would not grow the fill to the old outer ink.
+  if (typeof node.attrs?.path === 'string' && String(node.attrs.path).trim()) {
+    return null;
+  }
+
+  const attrs = node.attrs || {};
+  const currentlyVisible =
+    boolEffectAttr(attrs['stroke-enabled'], true) && boolEffectAttr(attrs['stroke-visible'], true);
+  if (currentlyVisible === nextVisible) return null;
+
+  const outset = nextVisible
+    ? strokeVisualOutsetAssumingPainted(node)
+    : strokeVisualOutset(node);
+  if (!(outset > 0)) return null;
+
+  const x = Number(node.x) || 0;
+  const y = Number(node.y) || 0;
+  const width = Math.max(1, Number(node.width) || 1);
+  const height = Math.max(1, Number(node.height) || 1);
+
+  if (nextVisible) {
+    // Show stroke → inset path so outer ink matches current fill edge.
+    const nextW = Math.max(1, width - outset * 2);
+    const nextH = Math.max(1, height - outset * 2);
+    if (nextW >= width && nextH >= height) return null;
+    return {
+      x: quantizeHalfPx(x + outset),
+      y: quantizeHalfPx(y + outset),
+      width: quantizeHalfPx(nextW),
+      height: quantizeHalfPx(nextH),
+    };
+  }
+
+  // Hide stroke → expand fill to previous outer ink.
+  return {
+    x: quantizeHalfPx(x - outset),
+    y: quantizeHalfPx(y - outset),
+    width: quantizeHalfPx(width + outset * 2),
+    height: quantizeHalfPx(height + outset * 2),
+  };
+}
+
 /** Scene-space air between text glyphs and selection chrome (flush / ~0). */
 export const TEXT_SELECTION_PAD = 0;
 
