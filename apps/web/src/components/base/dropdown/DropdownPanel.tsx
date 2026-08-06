@@ -44,9 +44,7 @@ type DropdownPanelItemProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
 };
 
-/**
- * Menu row — full-width soft selected fill (fig. aspect “原始”), fixed height.
- */
+/** Menu row — full-width soft selected fill, fixed height. */
 export const DropdownPanelItem = memo(
   forwardRef<HTMLButtonElement, DropdownPanelItemProps>(function DropdownPanelItem(
     { selected = false, className, children, type = 'button', disabled, ...rest },

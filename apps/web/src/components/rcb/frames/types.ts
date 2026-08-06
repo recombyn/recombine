@@ -1,4 +1,19 @@
 /** Editor artboard frame (document.frames). Canvas domain — not Redux-specific. */
+
+/**
+ * Idle artboard plate chrome — screen-constant hairline (not closed-rect #333).
+ * World camera uses CSS `scale(zoom)`, so `vector-effect: non-scaling-stroke`
+ * still thickens under zoom. Paint stroke in **scene** units = CSS_px / zoom.
+ */
+export const FRAME_PLATE_STROKE = 'color-mix(in srgb, var(--ink) 28%, transparent)';
+/** Target hairline in CSS px after camera scale. */
+export const FRAME_PLATE_STROKE_WIDTH = 1;
+
+/** Scene stroke width so CSS `scale(zoom)` yields ~FRAME_PLATE_STROKE_WIDTH CSS px. */
+export function framePlateStrokeSceneWidth(zoom: number): number {
+  return FRAME_PLATE_STROKE_WIDTH / Math.max(0.05, Number(zoom) || 1);
+}
+
 export type ArtboardFrame = {
   id: string;
   name: string;

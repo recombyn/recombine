@@ -41,7 +41,7 @@ const confirmBtnClass =
 const clampInt = (v: number, min: number, max: number) =>
   Math.round(Math.max(min, Math.min(max, v)));
 
-/** Multi-angle tool: left preview + right controls (fig. 2 style). */
+/** Multi-angle tool: left preview + right controls. */
 function MultiAngleToolPanel({
   imageSrc,
   onCancel,

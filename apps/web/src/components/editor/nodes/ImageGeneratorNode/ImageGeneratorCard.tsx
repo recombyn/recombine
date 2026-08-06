@@ -17,11 +17,11 @@ import { Dropdown, DropdownPanel, message, Tooltip } from '@/components/base';
 import {
   rcbScreenPxToScene,
   useRcbCamera,
-  useRcbScreenToolbarStyle,
 } from '@/components/rcb';
 import {
   SELECTION_TOOLBAR_BELOW_BOX_GAP_PX,
   useChromePointerActivate,
+  WorldScreenChromeRoot,
 } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import AgentComposerInput, {
   chipBaseKey,
@@ -817,31 +817,33 @@ function ImageGeneratorCard({
     );
   };
 
-  // Same placement contract as selection toolbars: centered under the box.
-  const composerStyle = useRcbScreenToolbarStyle({
-    left: sceneBox.x + sceneBox.width / 2,
-    top:
-      sceneBox.y +
-      sceneBox.height +
-      rcbScreenPxToScene(SELECTION_TOOLBAR_BELOW_BOX_GAP_PX, zoom),
-    anchor: 'top',
-  });
+  // Same placement contract as selection toolbars: world-layer under the box.
+  const composerLeft = sceneBox.x + sceneBox.width / 2;
+  const composerTop =
+    sceneBox.y +
+    sceneBox.height +
+    rcbScreenPxToScene(SELECTION_TOOLBAR_BELOW_BOX_GAP_PX, zoom);
 
   return (
     <>
       {showComposer ? (
-        <div
+        <WorldScreenChromeRoot
+          left={composerLeft}
+          top={composerTop}
+          anchor="top"
           data-image-generator
           data-sel-toolbar
           data-scene-node-id={nodeId}
-          className={cn(
-            'pointer-events-auto absolute z-[32] flex h-[200px] w-[500px] flex-col overflow-visible',
-            'rounded-2xl border border-[var(--line)] bg-[var(--surface)]',
-            'shadow-[0_8px_28px_rgba(15,23,42,0.12)]'
-          )}
-          style={composerStyle}
+          className="pointer-events-auto z-[32] overflow-visible"
           {...chromePointer}
         >
+          <div
+            className={cn(
+              'flex h-[200px] w-[500px] flex-col overflow-visible',
+              'rounded-2xl border border-[var(--line)] bg-[var(--surface)]',
+              'shadow-[0_8px_28px_rgba(15,23,42,0.12)]'
+            )}
+          >
           {/* Reference images occupy their own row, using the chat attachment chip. */}
           <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5">
             {attachments.map((att) => (
@@ -1068,7 +1070,8 @@ function ImageGeneratorCard({
               </Tooltip>
             </div>
           </div>
-        </div>
+          </div>
+        </WorldScreenChromeRoot>
       ) : null}
 
       {showComposer && mentionOpen ? (

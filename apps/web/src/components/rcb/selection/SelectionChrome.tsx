@@ -1,7 +1,11 @@
 import { memo, type ReactNode } from 'react';
 import { useRcbCamera, useRcbDevicePixelRatio } from '../camera/context';
-import { toDomPrecision } from '../core/dpr';
-import { snapSvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
+import {
+  hostMirrorSvgProps,
+  sceneSurfaceSvgProps,
+  snapSvgSurfaceBox,
+} from '@/components/rcb/scene/paint/sceneToSvg';
+import { getSceneWorldRoot } from '@/components/rcb/shapes/shapeHostRegistry';
 import type { RcbCamera } from '../core/types';
 import { cursorForRotate } from './rotateCornerCursor';
 
@@ -12,7 +16,7 @@ type SelectionChromeProps = {
   box: SceneBox;
   angle?: number;
   showHandles?: boolean;
-  /** Multi-select (Fig.1): only four corner knobs. */
+  /** Multi-select: only four corner knobs. */
   cornerHandlesOnly?: boolean;
   /**
    * `line`: shaft + two free endpoints (length + angle). No box / corners / rotate knob.
@@ -41,30 +45,36 @@ type SelectionChromeProps = {
 };
 
 /**
- * Selection foreground overlay (AABB box + resize / rotate knobs).
- *
- * **One paint contract for all ephemeral canvas UI** (box / brush / shape handles):
- * - Mount under `[data-rcb-world]` (CSS camera translate+scale)
- * - Scene coords in SVG; CSS `left/top/width/height` === `viewBox`
- * - Screen-constant ink: `lineWidth = screenPx / zoom`
- *
- * Path ink indicators use the same world layer but twin the shape-host viewport
- * (`HostPathChrome`) so fractional DPR cannot desync from path stroke.
+ * Selection overlay: AABB box + resize / rotate knobs.
+ * Screen-constant ink: `lineWidth = screenPx / zoom`.
+ * Prefer shared world surface; path chrome may mirror a shape host.
  */
 export const CHROME_STROKE_PX = 1.5;
 export const CHROME_HANDLE_VIS_PX = 8;
 export const CHROME_HANDLE_HIT_PX = 18;
+/** Transparent rotate hotzone (screen px) — shared with HostPathChrome. */
+export const CHROME_ROTATE_HIT_PX = 22;
+export const CHROME_ROTATE_GAP_PX = 2;
+/** Line / arrow endpoint chrome (screen px). */
+export const CHROME_LINE_ENDPOINT_VIS_PX = 8;
+export const CHROME_LINE_ENDPOINT_HALO_PX = 22;
+export const CHROME_LINE_ENDPOINT_HIT_PX = 28;
+export const CHROME_LINE_SHAFT_HIT_PX = 28;
 
-const HANDLE_VIS_PX = CHROME_HANDLE_VIS_PX;
-const HANDLE_HIT_PX = CHROME_HANDLE_HIT_PX;
-const LINE_ENDPOINT_VIS_PX = 8;
-const LINE_ENDPOINT_HALO_PX = 22;
-const LINE_ENDPOINT_HIT_PX = 28;
-const LINE_SHAFT_HIT_PX = 28;
-const STROKE_PX = CHROME_STROKE_PX;
-const ROTATE_HIT_PX = 22;
-const ROTATE_GAP_PX = 2;
 const SEL_BASELINE = '#3388ff';
+
+/**
+ * Scene distance from a corner knob center to the rotate hotzone center.
+ * Axis-aligned into the outer quadrant — diagonal push made the rotate AABB
+ * overlap the resize hit and steal corner clicks after zoom.
+ */
+export function rotateHotzoneOutward(
+  handleHit: number,
+  rotateGap: number,
+  rotateHit: number
+): number {
+  return handleHit / 2 + rotateGap + rotateHit / 2;
+}
 
 /** Scene AABB that covers a (possibly rotated) box plus chrome pad. */
 export function fittedSvgViewport(
@@ -100,17 +110,17 @@ export function fittedSvgViewport(
     maxY = Math.max(maxY, y);
   }
   const p = Math.max(0, pad);
-  minX = toDomPrecision(minX - p);
-  minY = toDomPrecision(minY - p);
+  minX = minX - p;
+  minY = minY - p;
   return {
     minX,
     minY,
-    w: toDomPrecision(Math.max(1, maxX - minX + p * 2)),
-    h: toDomPrecision(Math.max(1, maxY - minY + p * 2)),
+    w: Math.max(1, maxX - minX + p * 2),
+    h: Math.max(1, maxY - minY + p * 2),
   };
 }
 
-/** fittedSvgViewport + same scene-lattice quantize as shape hosts / grid. */
+/** fittedSvgViewport + surface box (raw scene). */
 export function fittedSnappedSvgViewport(
   left: number,
   top: number,
@@ -118,8 +128,8 @@ export function fittedSnappedSvgViewport(
   height: number,
   angleDeg: number,
   pad: number,
-  camera: RcbCamera,
-  dpr: number
+  camera?: RcbCamera,
+  dpr?: number
 ): { minX: number; minY: number; w: number; h: number } {
   const raw = fittedSvgViewport(left, top, width, height, angleDeg, pad);
   const s = snapSvgSurfaceBox(
@@ -131,9 +141,56 @@ export function fittedSnappedSvgViewport(
 }
 
 /**
- * World-layer SVG shell — shared by selection box, brush, and shape-handle overlays.
- * Children paint in **scene** coordinates (not CSS pixels).
- * CSS box === viewBox, scene-lattice quantized (same as hosts / pixel grid).
+ * AABB selection chrome SVG surface.
+ * Prefer the shared world root (same lattice as shape ink + full viewport so
+ * handle hits outside the geom still receive pointers). Never inflate a
+ * per-box surface with 1/zoom handle pads — that resizes the CSS box every
+ * zoom tick and desyncs the blue box from ink.
+ */
+export function selectionChromeSurfaceProps(
+  box: { left: number; top: number; width: number; height: number },
+  angle: number,
+  strokePad: number,
+  camera?: RcbCamera,
+  dpr?: number
+): {
+  width: number | string;
+  height: number | string;
+  viewBox: string;
+  style: {
+    left: number | string;
+    top: number | string;
+    width: number | string;
+    height: number | string;
+    overflow: 'visible';
+    display: 'block';
+    shapeRendering: 'geometricPrecision';
+  };
+} {
+  const worldRoot = getSceneWorldRoot();
+  const mirrored = worldRoot ? hostMirrorSvgProps(worldRoot) : null;
+  if (mirrored) return mirrored;
+  const vp = fittedSnappedSvgViewport(
+    box.left,
+    box.top,
+    box.width,
+    box.height,
+    angle,
+    // Screen-constant stroke only — never floor at 1 scene unit (at 8000%
+    // that is a huge pad and reintroduces chrome/ink drift).
+    Math.max(1e-4, strokePad),
+    camera,
+    dpr
+  );
+  return sceneSurfaceSvgProps(
+    { left: vp.minX, top: vp.minY, width: vp.w, height: vp.h },
+    camera,
+    dpr
+  );
+}
+
+/**
+ * World-layer SVG shell — CSS box === viewBox in scene units.
  */
 export function WorldSvgFrame({
   left,
@@ -157,25 +214,22 @@ export function WorldSvgFrame({
   children: ReactNode;
 }) {
   const camera = useRcbCamera();
-  const dpr = useRcbDevicePixelRatio();
-  const vp = fittedSnappedSvgViewport(left, top, width, height, angle, pad, camera, dpr);
+  const vp = fittedSnappedSvgViewport(left, top, width, height, angle, pad, camera);
+  const surf = sceneSurfaceSvgProps(
+    { left: vp.minX, top: vp.minY, width: vp.w, height: vp.h },
+    camera
+  );
   return (
     <svg
       data-rcb-infinite="1"
       className={`absolute overflow-visible ${zClass}`}
-      width={vp.w}
-      height={vp.h}
-      viewBox={`${vp.minX} ${vp.minY} ${vp.w} ${vp.h}`}
+      width={surf.width}
+      height={surf.height}
+      viewBox={surf.viewBox}
       preserveAspectRatio="none"
       style={{
-        left: vp.minX,
-        top: vp.minY,
-        width: vp.w,
-        height: vp.h,
-        overflow: 'visible',
+        ...surf.style,
         pointerEvents,
-        display: 'block',
-        shapeRendering: 'geometricPrecision',
       }}
       aria-hidden
     >
@@ -258,7 +312,7 @@ const HANDLE_DIR_DEG: Record<ResizeHandle, number> = {
   ne: 315,
 };
 
-function cursorForResize(handle: ResizeHandle, angleDeg: number): string {
+export function cursorForResize(handle: ResizeHandle, angleDeg: number): string {
   const dirs = [
     'e-resize',
     'se-resize',
@@ -368,21 +422,21 @@ function SelectionChrome({
   const z = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / z;
 
-  const left = toDomPrecision(box.left);
-  const top = toDomPrecision(box.top);
-  const w = toDomPrecision(Math.max(1, box.width));
-  const h = toDomPrecision(Math.max(1, box.height));
+  const left = box.left;
+  const top = box.top;
+  const w = Math.max(1, box.width);
+  const h = Math.max(1, box.height);
   const lineMode = variant === 'line';
 
-  const stroke = STROKE_PX * inv;
-  const handleVis = HANDLE_VIS_PX * inv;
-  const handleHit = HANDLE_HIT_PX * inv;
-  const lineEpVis = LINE_ENDPOINT_VIS_PX * inv;
-  const lineEpHalo = LINE_ENDPOINT_HALO_PX * inv;
-  const lineEpHit = LINE_ENDPOINT_HIT_PX * inv;
-  const lineShaftHit = LINE_SHAFT_HIT_PX * inv;
-  const rotateHit = ROTATE_HIT_PX * inv;
-  const rotateGap = ROTATE_GAP_PX * inv;
+  const stroke = CHROME_STROKE_PX * inv;
+  const handleVis = CHROME_HANDLE_VIS_PX * inv;
+  const handleHit = CHROME_HANDLE_HIT_PX * inv;
+  const lineEpVis = CHROME_LINE_ENDPOINT_VIS_PX * inv;
+  const lineEpHalo = CHROME_LINE_ENDPOINT_HALO_PX * inv;
+  const lineEpHit = CHROME_LINE_ENDPOINT_HIT_PX * inv;
+  const lineShaftHit = CHROME_LINE_SHAFT_HIT_PX * inv;
+  const rotateHit = CHROME_ROTATE_HIT_PX * inv;
+  const rotateGap = CHROME_ROTATE_GAP_PX * inv;
   const metaOffset = 16 * inv;
   const metaFont = 10 * inv;
   const halfVis = handleVis / 2;
@@ -427,37 +481,21 @@ function SelectionChrome({
         ]
       : [];
 
-  // Viewport fits the **box outline only** — do NOT include handle / rotate hit
-  // pads here. Those scale with 1/zoom and made the SVG CSS box resize every
-  // zoom tick → path-vs-chrome drift + shake. Handles paint via overflow:visible.
-  const vp = fittedSnappedSvgViewport(
-    left,
-    top,
-    w,
-    h,
-    angle,
-    Math.max(1, stroke),
-    camera,
-    dpr
-  );
+  // World root when available (hits + lattice). Fallback: box outline only —
+  // never include 1/zoom handle pads (that desynced chrome from ink).
+  const surf = selectionChromeSurfaceProps(box, angle, stroke, camera, dpr);
 
   return (
     <svg
       data-rcb-infinite="1"
       className="absolute z-[18] overflow-visible"
-      width={vp.w}
-      height={vp.h}
-      viewBox={`${vp.minX} ${vp.minY} ${vp.w} ${vp.h}`}
+      width={surf.width}
+      height={surf.height}
+      viewBox={surf.viewBox}
       preserveAspectRatio="none"
       style={{
-        left: vp.minX,
-        top: vp.minY,
-        width: vp.w,
-        height: vp.h,
-        overflow: 'visible',
+        ...surf.style,
         pointerEvents: 'none',
-        display: 'block',
-        shapeRendering: 'geometricPrecision',
       }}
       aria-hidden={!showHandles && !interactiveBox}
     >
@@ -616,15 +654,13 @@ function SelectionChrome({
 
       {showRotate && !lineMode
         ? ROTATE_CORNERS.map(({ corner, localX, localY, iconDeg, label }) => {
-            // Fixed hotzone just outside each corner — cursor only, no on-canvas icon.
+            // Axis-aligned outer quadrant — same lattice as resize knobs.
+            const signX = localX === 0 ? -1 : 1;
+            const signY = localY === 0 ? -1 : 1;
+            const out = rotateHotzoneOutward(handleHit, rotateGap, rotateHit);
             const cornerPt = toScene(localX * w, localY * h);
-            const mid = toScene(w / 2, h / 2);
-            const vx = cornerPt.x - mid.x;
-            const vy = cornerPt.y - mid.y;
-            const len = Math.hypot(vx, vy) || 1;
-            const push = handleHit / 2 + rotateGap + rotateHit / 2;
-            const cx = cornerPt.x + (vx / len) * push;
-            const cy = cornerPt.y + (vy / len) * push;
+            const cx = cornerPt.x + signX * out;
+            const cy = cornerPt.y + signY * out;
             return (
               <g key={`rot-${corner}`} className="sel-hit" transform={`translate(${cx} ${cy})`}>
                 <title>{label}</title>

@@ -31,6 +31,10 @@ export {
   rcbCenterInBox,
   rcbCenterOnPoint,
   rcbFitImageIntoViewport,
+  rcbLayoutGeneratorPlate,
+  generatorEmptyIconSize,
+  rcbDefaultPlaceFontSize,
+  GENERATOR_EMPTY_STROKE_OUTSET,
   type RcbAlign,
   type RcbBoxLike,
 } from './core/layout';
@@ -54,8 +58,8 @@ export type { RcbCameraMotion } from './camera/context';
 
 export {
   nearestDprMultiple,
-  toDomPrecision,
   snapCssToDevicePixel,
+  toDomPrecision,
   readDevicePixelRatio,
   subscribeDevicePixelRatio,
 } from './core/dpr';

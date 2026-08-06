@@ -12,7 +12,7 @@ import type { ImageLimits } from '@/apis/chat';
 import { cn } from '@/utils/classnames';
 
 /**
- * Image-gen ratio row (fig.1): Smart + common landscape → square → portrait.
+ * Image-gen ratio row: Smart + common landscape → square → portrait.
  * `smart` lets the model pick; pixel tables treat it as 1:1.
  */
 export const IMAGE_ASPECT_RATIOS = [
@@ -511,7 +511,7 @@ function isRatioActive(current: string, preset: string, resolution: string) {
 }
 
 type Props = {
-  /** design = device presets; image = ratio / resolution / count / px (fig.1). */
+  /** design = device presets; image = ratio / resolution / count / px. */
   variant?: 'design' | 'image';
   /** Kept for API callers; image UI no longer exposes quality. */
   quality?: string;
@@ -533,7 +533,7 @@ type Props = {
   className?: string;
 };
 
-/** Pill track — light gray rail; selected cell is white with a soft shadow (fig.2). */
+/** Pill track — light gray rail; selected cell is white with a soft shadow. */
 function SegmentedTrack({
   children,
   className,
@@ -623,7 +623,7 @@ function DimField({
   );
 }
 
-/** Image gen (fig.1 ratio chips) / design canvas size (SizePresetPanel). */
+/** Image gen (ratio chips) / design canvas size (SizePresetPanel). */
 function ImageAspectRatioPicker({
   variant = 'image',
   resolution = DEFAULT_IMAGE_RESOLUTION,

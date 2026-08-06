@@ -34,6 +34,7 @@ import {
 import type { StrokeAlign, StrokeLinecap, StrokeLinejoin } from '../document/sceneEffects';
 import { isTransparentFill, resolveDocumentBackground, resolveFill } from '../document/sceneFill';
 import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isNodeHidden, isVideoGeneratorNode } from '../document/sceneDocument';
+import { generatorEmptyIconSize } from '../../core/layout';
 import {
   clampCornerRadii,
   filletPathD,
@@ -60,17 +61,79 @@ import { applyFrameContentClip, detachSceneNodeEl } from '@/components/rcb/frame
 import { getTintedStampSrc } from '@/components/rcb/tools/stampTint';
 import { strokeDashForStyle } from '../document/sceneStrokeStyle';
 import type { RcbCamera } from '@/components/rcb/core/types';
+import {
+  rcbCameraCssZoom,
+  rcbCameraScreenOffset,
+  rcbDprIsFractional,
+  rcbSnapSceneSurfaceOrigin,
+} from '@/components/rcb/core/math';
+import { readDevicePixelRatio } from '@/components/rcb/core/dpr';
 
 const TRANSPARENT_PIXEL_SRC =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
+/** Live camera + DPR + stage size for the shared world viewport (set from RcbCanvas). */
+let paintCamera: RcbCamera | null = null;
+let paintDpr = 1;
+let paintStage = { w: 0, h: 0 };
+
+export function setInfiniteSvgPaintCamera(
+  camera: RcbCamera,
+  dpr?: number,
+  stage?: { width: number; height: number }
+) {
+  paintCamera = camera;
+  if (typeof dpr === 'number' && dpr > 0) paintDpr = dpr;
+  if (stage && stage.width > 0 && stage.height > 0) {
+    paintStage = { w: stage.width, h: stage.height };
+  }
+}
+
+function resolvePaintCamera(camera?: RcbCamera | null): RcbCamera | null {
+  return camera ?? paintCamera;
+}
+
+function resolvePaintDpr(dpr?: number): number {
+  if (typeof dpr === 'number' && dpr > 0) return dpr;
+  if (paintDpr > 0) return paintDpr;
+  return readDevicePixelRatio();
+}
+
 /**
- * Kept for call-site compatibility (RcbCanvas / host remount). Surface boxes no
- * longer depend on live camera/DPR — see snapSurfaceBox.
+ * Editor-only hairline under CSS camera `scale(zoom)`.
+ * Fixed scene widths (e.g. 1.5) become huge screen rings at 800%+ and look
+ * like the control box is larger than the image / generator plate.
  */
-export function setInfiniteSvgPaintCamera(_camera: RcbCamera, _dpr?: number) {
-  void _camera;
-  void _dpr;
+export function editorChromeStrokeSceneWidth(cssPx = 1): number {
+  const cam = resolvePaintCamera();
+  const z = cam ? rcbCameraCssZoom(cam) : 1;
+  return Math.max(1e-4, cssPx / Math.max(0.05, z));
+}
+
+/**
+ * One shared scene viewport for pixel grid + every shape host.
+ * Same CSS `left/top/width/height` === `viewBox` → one raster lattice under
+ * browser zoom (fractional DPR). Content stays in absolute scene coords.
+ */
+export function worldCameraViewport(
+  camera?: RcbCamera | null,
+  dpr?: number,
+  stageW?: number,
+  stageH?: number
+): { left: number; top: number; width: number; height: number } | null {
+  const cam = resolvePaintCamera(camera);
+  const w = typeof stageW === 'number' && stageW > 0 ? stageW : paintStage.w;
+  const h = typeof stageH === 'number' && stageH > 0 ? stageH : paintStage.h;
+  if (!cam || !(w > 0) || !(h > 0)) return null;
+  const d = resolvePaintDpr(dpr);
+  const z = rcbCameraCssZoom(cam);
+  const { x: camX, y: camY } = rcbCameraScreenOffset(cam, d);
+  return {
+    left: -camX / z,
+    top: -camY / z,
+    width: w / z,
+    height: h / z,
+  };
 }
 
 let clipSeq = 0;
@@ -151,7 +214,9 @@ function setSvgImageHref(img: SVGImageElement, href: string) {
 
 /**
  * Stroke paints along the element's vector baseline.
- * Align is paint-only — selection chrome stays on the path (strokeChromeOutset = 0).
+ * Align is paint-only on the path; selection chrome stays on path geom
+ * (`strokeChromeOutset` === 0). Draw uses a separate visual→geom inset when
+ * committing path size.
  *
  * Outside: a 2× underlay stroke behind an opaque fill (fill covers the inner half).
  * Inside: 2× stroke clipped to the fill region.
@@ -1082,16 +1147,35 @@ export async function nodeToSvgElement(
       const plate = appendChild(g, svgEl('path', { d: clipD }));
       // Generator empty uses --gen-empty (light: cool wash #e9eaee; dark: raised surface).
       setFill(plate, isGen ? 'var(--gen-empty)' : '#E5E7EB');
-      setStroke(plate, {
-        color: isGen ? 'var(--line)' : '#9CA3AF',
-        width: isGen ? 1 : 1.5,
-        dasharray: isGen ? undefined : '6 4',
-      });
+      if (isGen) {
+        // Border drawn inset so the painted outer edge === path geom === pixel grid
+        // (center stroke would sit ink on *.5 and look like "half a cell").
+        setStroke(plate, 'none');
+        const sw = editorChromeStrokeSceneWidth(1);
+        const inset = sw / 2;
+        const border = appendChild(
+          g,
+          svgEl('path', {
+            d: roundedRectPath(Math.max(1, boxW - sw), Math.max(1, boxH - sw), cornerR),
+            transform: `translate(${inset},${inset})`,
+            'pointer-events': 'none',
+          })
+        );
+        setFill(border, 'none');
+        setStroke(border, { color: 'var(--line)', width: sw });
+      } else {
+        setStroke(plate, {
+          color: '#9CA3AF',
+          width: editorChromeStrokeSceneWidth(1.5),
+          dasharray: '6 4',
+        });
+      }
       setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
       if (isGen) {
         // Solid landscape glyph (sun + two peaks) — flat fill, no frame.
-        // Scale with the plate (~34% of the shorter side); no tiny absolute cap.
-        const iconSize = Math.max(72, Math.min(boxW, boxH) * 0.34);
+        // Scale with the plate; must fit inside (never a fixed 72 scene-px floor).
+        const iconSize = generatorEmptyIconSize(boxW, boxH);
+        if (iconSize >= 4) {
         const ix = (boxW - iconSize) / 2;
         const iy = (boxH - iconSize) / 2;
         const s = iconSize / 24;
@@ -1118,6 +1202,7 @@ export async function nodeToSvgElement(
         );
         setFill(peaks, 'var(--muted)');
         setStroke(peaks, 'none');
+        }
       } else {
         const wash = appendChild(
           g,
@@ -1159,7 +1244,9 @@ export async function nodeToSvgElement(
         if (cssFilter) setStyles(img, { filter: cssFilter });
         const overlay = appendChild(g, svgEl('path', { d: clipD }));
         setFill(overlay, 'rgba(185, 203, 218, 0.28)');
-        setStroke(overlay, { color: '#A8C5E4', width: 1.5 });
+        // Screen hairline — fixed scene 1.5 blows up under camera scale and
+        // reads as "selection larger than the photo" while uploading.
+        setStroke(overlay, { color: '#A8C5E4', width: editorChromeStrokeSceneWidth(1.5) });
         setAttrs(overlay, {
           'pointer-events': 'none',
           'data-radius-body': '1',
@@ -1181,7 +1268,7 @@ export async function nodeToSvgElement(
         defs.appendChild(grad);
         const plate = appendChild(g, svgEl('path', { d: clipD }));
         setFill(plate, urlRef(gid));
-        setStroke(plate, { color: '#A8C5E4', width: 1.5 });
+        setStroke(plate, { color: '#A8C5E4', width: editorChromeStrokeSceneWidth(1.5) });
         setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
       }
 
@@ -1259,15 +1346,32 @@ export async function nodeToSvgElement(
       const g = appendChild(parent, svgEl('g'));
       const plate = appendChild(g, svgEl('path', { d: clipD }));
       setFill(plate, isGen ? 'var(--gen-empty)' : '#E5E7EB');
-      setStroke(plate, {
-        color: isGen ? 'var(--line)' : '#9CA3AF',
-        width: isGen ? 1 : 1.5,
-        dasharray: isGen ? undefined : '6 4',
-      });
+      if (isGen) {
+        setStroke(plate, 'none');
+        const sw = editorChromeStrokeSceneWidth(1);
+        const inset = sw / 2;
+        const border = appendChild(
+          g,
+          svgEl('path', {
+            d: roundedRectPath(Math.max(1, boxW - sw), Math.max(1, boxH - sw), cornerR),
+            transform: `translate(${inset},${inset})`,
+            'pointer-events': 'none',
+          })
+        );
+        setFill(border, 'none');
+        setStroke(border, { color: 'var(--line)', width: sw });
+      } else {
+        setStroke(plate, {
+          color: '#9CA3AF',
+          width: editorChromeStrokeSceneWidth(1.5),
+          dasharray: '6 4',
+        });
+      }
       setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
       if (isGen) {
         // Soft play triangle only — no frame / plus.
-        const iconSize = Math.max(72, Math.min(boxW, boxH) * 0.34);
+        const iconSize = generatorEmptyIconSize(boxW, boxH);
+        if (iconSize >= 4) {
         const ix = (boxW - iconSize) / 2;
         const iy = (boxH - iconSize) / 2;
         const s = iconSize / 24;
@@ -1288,6 +1392,7 @@ export async function nodeToSvgElement(
         );
         setFill(play, 'var(--muted)');
         setStroke(play, { color: 'var(--muted)', width: 2.75 });
+        }
       }
       tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
       if (isGen || processing) setAttrs(g, { 'data-export-ignore': '1' });
@@ -1313,7 +1418,7 @@ export async function nodeToSvgElement(
       } else {
         const plate = appendChild(g, svgEl('path', { d: clipD }));
         setFill(plate, '#B9CBDA');
-        setStroke(plate, { color: '#A8C5E4', width: 1.5 });
+        setStroke(plate, { color: '#A8C5E4', width: editorChromeStrokeSceneWidth(1.5) });
         setAttrs(plate, { 'data-radius-body': '1' });
       }
       tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
@@ -1325,9 +1430,25 @@ export async function nodeToSvgElement(
     }
 
     const g = appendChild(parent, svgEl('g'));
-    // Live pixels are HTML <video> on the world layer; SVG holds the poster
-    // (export / transform underlay).
+    // Infinite editor: HTML <video> paints. SVG hit/baseline only.
+    // Export boards (`data-rcb-export-surface`) still paint the poster.
+    const svgOwnsPixels = videoSvgOwnsPixels(root);
     const crop = readNodeCropNorm(node);
+    if (src && !processing && !svgOwnsPixels) {
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, 'transparent');
+      setStroke(plate, 'none');
+      setAttrs(plate, {
+        'data-radius-body': '1',
+        'data-baseline': '1',
+        'data-rcb-video-html-hit': '1',
+      });
+      (g as any).__sceneCornerRadii = { ...cornerR };
+      tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
+      if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
+      applyMeta(g, left, top, meta, boxW, boxH);
+      return g;
+    }
     if (poster) {
       const imgW = crop ? boxW / crop.w : boxW;
       const imgH = crop ? boxH / crop.h : boxH;
@@ -1341,6 +1462,7 @@ export async function nodeToSvgElement(
           x: imgX,
           y: imgY,
           preserveAspectRatio: 'none',
+          'data-rcb-video-svg-underlay': '1',
         })
       );
       setSvgImageHref(img, poster);
@@ -1355,7 +1477,11 @@ export async function nodeToSvgElement(
       const plate = appendChild(g, svgEl('path', { d: clipD }));
       setFill(plate, '#111827');
       setStroke(plate, 'none');
-      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
+      setAttrs(plate, {
+        'data-radius-body': '1',
+        'data-baseline': '1',
+        'data-rcb-video-svg-underlay': '1',
+      });
     }
     void src;
     (g as any).__sceneCornerRadii = { ...cornerR };
@@ -1410,54 +1536,55 @@ function isInfiniteSvgRoot(root: SVGSVGElement) {
   return root.getAttribute('data-rcb-infinite') === '1';
 }
 
-function quantInfiniteScene(n: number) {
-  return Math.round(n * 1e4) / 1e4;
+/**
+ * Whether the SVG board should paint video poster pixels.
+ * Infinite editor hosts also mount HTML `<video>` (VideoNodeOverlay) — painting
+ * a poster there creates a second visible layer (ghost on move). Export boards
+ * mark `data-rcb-export-surface` and keep the poster.
+ */
+export function videoSvgOwnsPixels(root: SVGSVGElement): boolean {
+  if (!isInfiniteSvgRoot(root)) return true;
+  if (root.getAttribute('data-rcb-export-surface') === '1') return true;
+  return false;
 }
 
 type ViewportBox = { minX: number; minY: number; w: number; h: number };
 
 /**
- * Quantize infinite-SVG CSS box === viewBox onto the scene lattice.
- *
- * Do **not** device-pixel-shift per host under fractional browser DPR:
- * each host would get a different fractional origin while the pixel grid
- * stays on integer scene units — strokes then sit mid-cell after browser zoom.
- * Path geometry / draw snap already own grid alignment (incl. *.5 for odd
- * center strokes); the surface only needs stable scene quantize.
+ * Infinite-SVG CSS box === viewBox.
+ * Under fractional browser DPR, snap the origin onto the device-pixel lattice
+ * (matched left + viewBox min) so sibling surfaces (grid / hosts) do not round
+ * apart. Absolute scene content still maps to scene*zoom+cam.
  */
 function snapSurfaceBox(
   box: ViewportBox,
-  _camera?: RcbCamera | null,
-  _dpr?: number
+  camera?: RcbCamera | null,
+  dpr?: number
 ): ViewportBox {
-  void _camera;
-  void _dpr;
+  const w = Math.max(1, box.w);
+  const h = Math.max(1, box.h);
+  const cam = resolvePaintCamera(camera);
+  const d = resolvePaintDpr(dpr);
+  if (!cam || !rcbDprIsFractional(d)) {
+    return { minX: box.minX, minY: box.minY, w, h };
+  }
+  const z = rcbCameraCssZoom(cam);
+  const { x: camX, y: camY } = rcbCameraScreenOffset(cam, d);
   return {
-    minX: quantInfiniteScene(box.minX),
-    minY: quantInfiniteScene(box.minY),
-    w: Math.max(1, quantInfiniteScene(box.w)),
-    h: Math.max(1, quantInfiniteScene(box.h)),
+    minX: rcbSnapSceneSurfaceOrigin(box.minX, z, camX, d),
+    minY: rcbSnapSceneSurfaceOrigin(box.minY, z, camY, d),
+    w,
+    h,
   };
-}
-
-/** Origin-only quantize — keep size stable while panning a host. */
-function snapSurfaceOrigin(
-  minX: number,
-  minY: number,
-  _camera?: RcbCamera | null,
-  _dpr?: number
-): { minX: number; minY: number } {
-  void _camera;
-  void _dpr;
-  return { minX: quantInfiniteScene(minX), minY: quantInfiniteScene(minY) };
 }
 
 function writeInfiniteViewport(
   root: SVGSVGElement,
-  box: ViewportBox,
-  opts?: { lock?: boolean }
+  snapped: ViewportBox,
+  opts?: { lock?: boolean; intent?: ViewportBox }
 ) {
-  const { minX, minY, w, h } = box;
+  const intent = opts?.intent ?? snapped;
+  const { minX, minY, w, h } = snapped;
   const attrs: Record<string, string | number> = {
     width: w,
     height: h,
@@ -1467,6 +1594,11 @@ function writeInfiniteViewport(
     'shape-rendering': 'geometricPrecision',
     'pointer-events': 'none',
     'data-rcb-infinite': '1',
+    // Pre-snap scene intent — re-snap when browser DPR / camera changes.
+    'data-rcb-surface-x': intent.minX,
+    'data-rcb-surface-y': intent.minY,
+    'data-rcb-surface-w': intent.w,
+    'data-rcb-surface-h': intent.h,
   };
   if (opts?.lock) attrs['data-rcb-viewport-locked'] = '1';
   setAttrs(root, attrs);
@@ -1482,6 +1614,15 @@ function writeInfiniteViewport(
   });
 }
 
+function readSurfaceIntent(root: SVGSVGElement): ViewportBox | null {
+  const minX = Number(root.getAttribute('data-rcb-surface-x'));
+  const minY = Number(root.getAttribute('data-rcb-surface-y'));
+  const w = Number(root.getAttribute('data-rcb-surface-w'));
+  const h = Number(root.getAttribute('data-rcb-surface-h'));
+  if (![minX, minY, w, h].every(Number.isFinite) || !(w > 0) || !(h > 0)) return null;
+  return { minX, minY, w, h };
+}
+
 /** Apply a known scene AABB as the infinite SVG CSS box + viewBox (pre-paint). */
 export function seedInfiniteSvgViewport(
   root: SVGSVGElement,
@@ -1489,19 +1630,21 @@ export function seedInfiniteSvgViewport(
   pad = INFINITE_SVG_PAD
 ) {
   if (!isInfiniteSvgRoot(root)) return;
-  const seeded = snapSurfaceBox({
+  const intent: ViewportBox = {
     minX: box.left - pad,
     minY: box.top - pad,
     w: Math.max(1, box.width) + pad * 2,
     h: Math.max(1, box.height) + pad * 2,
-  });
+  };
+  const seeded = snapSurfaceBox(intent);
   // Seed owns the viewport — getBBox fit must not nudge *.5 → integer.
-  writeInfiniteViewport(root, seeded, { lock: true });
+  writeInfiniteViewport(root, seeded, { lock: true, intent });
 }
 
 /**
  * Pan an infinite host SVG with a live node translate (no getBBox refit).
- * Keeps sceneLeft inside the viewBox so ink is not painted in overflow.
+ * No-op for shared world-surface hosts — ink moves via element transform;
+ * the CSS box stays the camera viewport so it stays locked to the grid.
  */
 export function panInfiniteSvgViewport(
   root: SVGSVGElement,
@@ -1509,25 +1652,30 @@ export function panInfiniteSvgViewport(
   dTop: number
 ) {
   if (!isInfiniteSvgRoot(root)) return;
+  if (root.getAttribute('data-rcb-world-surface') === '1') return;
   if (!(dLeft || dTop)) return;
+  const intent = readSurfaceIntent(root);
   const parts = (root.getAttribute('viewBox') || '')
     .trim()
     .split(/[\s,]+/)
     .map(Number);
   if (parts.length < 4 || !parts.every(Number.isFinite)) return;
-  const origin = snapSurfaceOrigin(parts[0] + dLeft, parts[1] + dTop);
-  const w = parts[2];
-  const h = parts[3];
-  setAttrs(root, { viewBox: `${origin.minX} ${origin.minY} ${w} ${h}` });
-  setStyles(root, {
-    left: `${origin.minX}px`,
-    top: `${origin.minY}px`,
-  });
+  const base = intent || { minX: parts[0], minY: parts[1], w: parts[2], h: parts[3] };
+  const nextIntent: ViewportBox = {
+    minX: base.minX + dLeft,
+    minY: base.minY + dTop,
+    w: base.w,
+    h: base.h,
+  };
+  const snapped = snapSurfaceBox(nextIntent);
+  const lock = root.getAttribute('data-rcb-viewport-locked') === '1';
+  writeInfiniteViewport(root, snapped, { lock: lock || undefined, intent: nextIntent });
 }
 
 /**
- * Re-assert host CSS/viewBox quantize after camera pan/zoom or browser zoom.
- * Scene lattice only — does not device-pixel-shift (keeps ink on the pixel grid).
+ * Bind host CSS/viewBox to the shared camera world viewport (same box as the
+ * pixel grid). Falls back to re-snapping a per-host intent when stage size is
+ * not known yet.
  */
 export function snapInfiniteSvgViewportToCamera(
   root: SVGSVGElement,
@@ -1536,16 +1684,28 @@ export function snapInfiniteSvgViewportToCamera(
 ) {
   if (!isInfiniteSvgRoot(root)) return;
   if (camera) setInfiniteSvgPaintCamera(camera, dpr);
+  const world = worldCameraViewport(camera, dpr);
+  if (world) {
+    const intent: ViewportBox = {
+      minX: world.left,
+      minY: world.top,
+      w: world.width,
+      h: world.height,
+    };
+    // Identical box for every host — do not per-origin fractional-shift.
+    writeInfiniteViewport(root, intent, { lock: true, intent });
+    root.setAttribute('data-rcb-world-surface', '1');
+    return;
+  }
   const parts = (root.getAttribute('viewBox') || '')
     .trim()
     .split(/[\s,]+/)
     .map(Number);
   if (parts.length < 4 || !parts.every(Number.isFinite)) return;
-  const next = snapSurfaceBox(
-    { minX: parts[0], minY: parts[1], w: parts[2], h: parts[3] },
-    camera,
-    dpr
-  );
+  const intent =
+    readSurfaceIntent(root) ||
+    ({ minX: parts[0], minY: parts[1], w: parts[2], h: parts[3] } as ViewportBox);
+  const next = snapSurfaceBox(intent, camera, dpr);
   if (
     next.minX === parts[0] &&
     next.minY === parts[1] &&
@@ -1555,13 +1715,10 @@ export function snapInfiniteSvgViewportToCamera(
     return;
   }
   const lock = root.getAttribute('data-rcb-viewport-locked') === '1';
-  writeInfiniteViewport(root, next, lock ? { lock: true } : undefined);
+  writeInfiniteViewport(root, next, { lock: lock || undefined, intent });
 }
 
-/**
- * Same scene-lattice quantize as infinite hosts / pixel grid — use for
- * draw-preview SVGs so CSS left/top/width stay locked to path ink.
- */
+/** Pass-through scene CSS box sizes for React/DOM. Prefer applySceneSurface at call sites. */
 export function snapSvgSurfaceBox(
   box: { left: number; top: number; width: number; height: number },
   camera?: RcbCamera | null,
@@ -1575,7 +1732,10 @@ export function snapSvgSurfaceBox(
   return { left: next.minX, top: next.minY, width: next.w, height: next.h };
 }
 
-/** Apply snapped scene CSS box === viewBox onto an absolute SVG (world layer). */
+/**
+ * World-layer surface: CSS left/top/width/height === viewBox in scene units.
+ * Use for grid, AABB chrome, guides, draw previews.
+ */
 export function applySvgSurfaceBox(
   root: SVGSVGElement,
   box: { left: number; top: number; width: number; height: number },
@@ -1588,6 +1748,7 @@ export function applySvgSurfaceBox(
   root.setAttribute('viewBox', `${s.left} ${s.top} ${s.width} ${s.height}`);
   root.setAttribute('overflow', 'visible');
   root.setAttribute('preserveAspectRatio', 'none');
+  root.setAttribute('data-rcb-infinite', '1');
   root.style.position = 'absolute';
   root.style.overflow = 'visible';
   root.style.display = 'block';
@@ -1598,8 +1759,185 @@ export function applySvgSurfaceBox(
   return s;
 }
 
+/** Alias — prefer this name at new call sites. */
+export const applySceneSurface = applySvgSurfaceBox;
+
+export type HostSurfaceSnapshot = {
+  viewBox: string;
+  left: string;
+  top: string;
+  width: string;
+  height: string;
+  attrWidth: string | null;
+  attrHeight: string | null;
+};
+
+/** Read a mounted shape-host infinite SVG surface (CSS box + viewBox). */
+export function readHostSurface(hostRoot: SVGSVGElement): HostSurfaceSnapshot | null {
+  const viewBox = hostRoot.getAttribute('viewBox') || '';
+  const left = hostRoot.style?.left || '';
+  const top = hostRoot.style?.top || '';
+  if (!viewBox || !left || !top) return null;
+  return {
+    viewBox,
+    left,
+    top,
+    width: hostRoot.style.width || '',
+    height: hostRoot.style.height || '',
+    attrWidth: hostRoot.getAttribute('width'),
+    attrHeight: hostRoot.getAttribute('height'),
+  };
+}
+
+/**
+ * Copy the shape host's CSS box + viewBox onto a chrome twin SVG
+ * so path ink and chrome share one lattice under browser zoom.
+ */
+export function mirrorHostSurface(target: SVGSVGElement, hostRoot: SVGSVGElement): boolean {
+  const s = readHostSurface(hostRoot);
+  if (!s) return false;
+  target.style.position = 'absolute';
+  target.style.overflow = 'visible';
+  target.style.display = 'block';
+  target.style.left = s.left;
+  target.style.top = s.top;
+  target.style.width = s.width || hostRoot.style.width;
+  target.style.height = s.height || hostRoot.style.height;
+  if (s.attrWidth) target.setAttribute('width', s.attrWidth);
+  if (s.attrHeight) target.setAttribute('height', s.attrHeight);
+  target.setAttribute('viewBox', s.viewBox);
+  target.setAttribute('overflow', 'visible');
+  target.setAttribute('preserveAspectRatio', 'none');
+  target.setAttribute('data-rcb-infinite', '1');
+  return true;
+}
+
+/**
+ * Grow an infinite SVG CSS box + viewBox by scene pad without re-snapping.
+ * Needed so resize/rotate hits that sit outside the path geom still receive
+ * pointer events (overflow:visible paints outside the box but does not hit-test).
+ */
+export function expandInfiniteSvgPad(root: SVGSVGElement, pad: number): boolean {
+  const p = Math.max(0, Number(pad) || 0);
+  if (p < 1e-9) return false;
+  const parts = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  if (parts.length < 4 || parts.some((n) => !Number.isFinite(n))) return false;
+  const [minX, minY, w, h] = parts;
+  const left = minX - p;
+  const top = minY - p;
+  const width = Math.max(1e-4, w + p * 2);
+  const height = Math.max(1e-4, h + p * 2);
+  root.setAttribute('viewBox', `${left} ${top} ${width} ${height}`);
+  root.setAttribute('width', String(width));
+  root.setAttribute('height', String(height));
+  root.style.left = `${left}px`;
+  root.style.top = `${top}px`;
+  root.style.width = `${width}px`;
+  root.style.height = `${height}px`;
+  return true;
+}
+
+/**
+ * Body `<g transform>` matching host ink.
+ * `mirrored`: prefer live host `transform` / `__sceneLeft`; else box translate (+ rotate).
+ */
+export function hostChromeBodyTransform(
+  el: SVGElement | null | undefined,
+  box: { left: number; top: number; width: number; height: number },
+  angleDeg: number,
+  mirrored: boolean
+): string {
+  if (mirrored) {
+    const hostTransform = el?.getAttribute?.('transform') || '';
+    if (hostTransform) return hostTransform;
+    const hl = Number((el as { __sceneLeft?: number } | null | undefined)?.__sceneLeft);
+    const ht = Number((el as { __sceneTop?: number } | null | undefined)?.__sceneTop);
+    const left = Number.isFinite(hl) ? hl : box.left;
+    const top = Number.isFinite(ht) ? ht : box.top;
+    return `translate(${left} ${top})`;
+  }
+  const w = Math.max(1, box.width);
+  const h = Math.max(1, box.height);
+  const angle = Number(angleDeg) || 0;
+  if (Math.abs(angle) > 0.01) {
+    return `translate(${box.left} ${box.top}) rotate(${angle} ${w / 2} ${h / 2})`;
+  }
+  return `translate(${box.left} ${box.top})`;
+}
+
+/** React props for a scene-surface SVG (CSS box === viewBox). */
+export function sceneSurfaceSvgProps(
+  box: { left: number; top: number; width: number; height: number },
+  camera?: RcbCamera | null,
+  dpr?: number
+): {
+  width: number;
+  height: number;
+  viewBox: string;
+  style: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    overflow: 'visible';
+    display: 'block';
+    shapeRendering: 'geometricPrecision';
+  };
+} {
+  const s = snapSvgSurfaceBox(box, camera, dpr);
+  return {
+    width: s.width,
+    height: s.height,
+    viewBox: `${s.left} ${s.top} ${s.width} ${s.height}`,
+    style: {
+      left: s.left,
+      top: s.top,
+      width: s.width,
+      height: s.height,
+      overflow: 'visible',
+      display: 'block',
+      shapeRendering: 'geometricPrecision',
+    },
+  };
+}
+
+/** React props mirroring a host surface, or null when host is incomplete. */
+export function hostMirrorSvgProps(hostRoot: SVGSVGElement): {
+  viewBox: string;
+  width: string | undefined;
+  height: string | undefined;
+  style: {
+    left: string;
+    top: string;
+    width: string;
+    height: string;
+    overflow: 'visible';
+    display: 'block';
+    shapeRendering: 'geometricPrecision';
+  };
+} | null {
+  const s = readHostSurface(hostRoot);
+  if (!s) return null;
+  return {
+    viewBox: s.viewBox,
+    width: s.attrWidth || undefined,
+    height: s.attrHeight || undefined,
+    style: {
+      left: s.left,
+      top: s.top,
+      width: s.width || hostRoot.style.width,
+      height: s.height || hostRoot.style.height,
+      overflow: 'visible',
+      display: 'block',
+      shapeRendering: 'geometricPrecision',
+    },
+  };
+}
+
 export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement | null) {
   if (!isInfiniteSvgRoot(root)) return;
+  // Shared world surface — never shrink to content bbox (would desync from grid).
+  if (root.getAttribute('data-rcb-world-surface') === '1') return;
   // Locked after seedInfiniteSvgViewport — preserve half-pixel origins for
   // odd center strokes (visual outer on integer grid). getBBox often reports
   // 269.5 as ~270 and used to rewrite CSS left, which browser zoom amplifies.
@@ -1619,11 +1957,10 @@ export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement 
       Number.isFinite(box.height) &&
       (box.width > 0 || box.height > 0)
     ) {
-      // Quantize so CSS left/top and viewBox stay identical (getBBox floats → 1690.999…).
-      minX = quantInfiniteScene(box.x - INFINITE_SVG_PAD);
-      minY = quantInfiniteScene(box.y - INFINITE_SVG_PAD);
-      w = Math.max(1, quantInfiniteScene(box.width + INFINITE_SVG_PAD * 2));
-      h = Math.max(1, quantInfiniteScene(box.height + INFINITE_SVG_PAD * 2));
+      minX = box.x - INFINITE_SVG_PAD;
+      minY = box.y - INFINITE_SVG_PAD;
+      w = Math.max(1, box.width + INFINITE_SVG_PAD * 2);
+      h = Math.max(1, box.height + INFINITE_SVG_PAD * 2);
     }
   } catch {
     /* empty layer */
@@ -1631,22 +1968,23 @@ export function fitInfiniteSvgToContent(root: SVGSVGElement, layer?: SVGElement 
 
   // Keep a freshly seeded viewport when getBBox only nudges by ≤1px (common
   // 269.5→270 jump from stroke/getBBox). That half-pixel shift desyncs guides.
-  const prevLeft = parseFloat(root.style.left);
-  const prevTop = parseFloat(root.style.top);
-  const prevW = parseFloat(root.style.width);
-  const prevH = parseFloat(root.style.height);
+  const prevIntent = readSurfaceIntent(root);
+  const prevMinX = prevIntent?.minX ?? parseFloat(root.style.left);
+  const prevMinY = prevIntent?.minY ?? parseFloat(root.style.top);
+  const prevW = prevIntent?.w ?? parseFloat(root.style.width);
+  const prevH = prevIntent?.h ?? parseFloat(root.style.height);
   if (
-    [prevLeft, prevTop, prevW, prevH].every(Number.isFinite) &&
-    Math.abs(minX - prevLeft) <= 1 &&
-    Math.abs(minY - prevTop) <= 1 &&
+    [prevMinX, prevMinY, prevW, prevH].every(Number.isFinite) &&
+    Math.abs(minX - prevMinX) <= 1 &&
+    Math.abs(minY - prevMinY) <= 1 &&
     Math.abs(w - prevW) <= 1 &&
     Math.abs(h - prevH) <= 1
   ) {
     return;
   }
 
-  const snapped = snapSurfaceBox({ minX, minY, w, h });
-  writeInfiniteViewport(root, snapped);
+  const intent: ViewportBox = { minX, minY, w, h };
+  writeInfiniteViewport(root, snapSurfaceBox(intent), { intent });
 }
 
 export async function loadSceneOntoSvg(
@@ -2511,9 +2849,23 @@ export function createSvgBoard(
   host: HTMLElement,
   width: number,
   height: number,
-  opts?: { infinite?: boolean }
-) {
+  opts?: {
+    infinite?: boolean;
+    /** Attach a layer `<g>` into the shared world SVG instead of a private root. */
+    sharedRoot?: SVGSVGElement | null;
+    sharedMount?: SVGGElement | null;
+  }
+): { root: SVGSVGElement; layer: SVGGElement; shared: boolean } {
   const infinite = Boolean(opts?.infinite);
+  const sharedRoot = opts?.sharedRoot;
+  const sharedMount = opts?.sharedMount;
+  if (infinite && sharedRoot && sharedMount) {
+    const layer = appendChild(
+      sharedMount,
+      svgEl('g', { id: 'scene-layer', 'data-rcb-shape-layer': '1' })
+    );
+    return { root: sharedRoot, layer, shared: true };
+  }
   const root = createSvgRoot(host);
   if (infinite) {
     applyInfiniteSvgViewport(root);
@@ -2533,5 +2885,5 @@ export function createSvgBoard(
     });
   }
   const layer = appendChild(root, svgEl('g', { id: 'scene-layer' }));
-  return { root, layer };
+  return { root, layer, shared: false };
 }

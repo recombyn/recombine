@@ -378,6 +378,7 @@ export function createTextNode({
   width,
   height,
   autoSize = true,
+  fontSize,
 }: {
   x?: number;
   y?: number;
@@ -386,14 +387,20 @@ export function createTextNode({
   height?: number;
   /** true = hug content; false = fixed wrap width from L/R resize or drag-create. */
   autoSize?: boolean;
+  /** Scene-px font size (T-tool passes zoom-fitted size so high zoom is not huge). */
+  fontSize?: number;
 } = {}) {
   const id = nanoid(10);
   const content = String(text ?? '');
-  const measured = measurePlainTextSize(content || 'M', {});
+  const style =
+    fontSize != null && Number.isFinite(fontSize) && fontSize > 0
+      ? { fontSize: Math.max(1, Number(fontSize)) }
+      : {};
+  const measured = measurePlainTextSize(content || 'M', style);
   // Empty autoSize = caret only (tiny width). Fixed-width keeps the dragged box.
   const w = width ?? (content ? measured.width : autoSize ? 2 : 160);
   const h = height ?? measured.height;
-  const attrs = buildMarkdownTextAttrs(content);
+  const attrs = buildMarkdownTextAttrs(content, style);
   (attrs as any).autoSize = autoSize ? 'true' : 'false';
   return {
     id,
@@ -970,15 +977,19 @@ export function createImageGeneratorNode({
   name?: string;
 } = {}) {
   const id = nanoid(10);
-  const iw = Math.max(120, Math.round(Number(width) || 360));
-  const ih = Math.max(120, Math.round(Number(height) || 360));
+  // Integer quantize — empty gen uses inset border so path === outer ink on the grid.
+  // (Half-pixel was only needed for center strokes.)
+  const iw = Math.max(1, Math.round(Number(width) || 360));
+  const ih = Math.max(1, Math.round(Number(height) || 360));
+  const ix = Math.round(Number(x) || 0);
+  const iy = Math.round(Number(y) || 0);
   return {
     id,
     node: {
       id,
       key: 'image',
-      x: Math.round(Number(x) || 0),
-      y: Math.round(Number(y) || 0),
+      x: ix,
+      y: iy,
       z: 0,
       width: iw,
       height: ih,
@@ -1123,15 +1134,18 @@ export function createVideoGeneratorNode({
   name?: string;
 } = {}) {
   const id = nanoid(10);
-  const iw = Math.max(160, Math.round(Number(width) || 640));
-  const ih = Math.max(120, Math.round(Number(height) || 360));
+  // Integer quantize — inset border means path === outer ink on the grid.
+  const iw = Math.max(1, Math.round(Number(width) || 640));
+  const ih = Math.max(1, Math.round(Number(height) || 360));
+  const ix = Math.round(Number(x) || 0);
+  const iy = Math.round(Number(y) || 0);
   return {
     id,
     node: {
       id,
       key: 'video',
-      x: Math.round(Number(x) || 0),
-      y: Math.round(Number(y) || 0),
+      x: ix,
+      y: iy,
       z: 0,
       width: iw,
       height: ih,
@@ -1179,16 +1193,23 @@ export function createVideoNode({
 } = {}) {
   const id = nanoid(10);
   const d = Number(duration);
+  // Integer quantize only — do NOT floor to 80×60. High-zoom viewport place
+  // yields small scene sizes; independent floors destroy the natural aspect
+  // and stretch the video (object-fit: fill / preserveAspectRatio none).
+  const iw = Math.max(1, Math.round(Number(width) || 640));
+  const ih = Math.max(1, Math.round(Number(height) || 360));
+  const ix = Math.round(Number(x) || 0);
+  const iy = Math.round(Number(y) || 0);
   return {
     id,
     node: {
       id,
       key: 'video',
-      x: Math.round(Number(x) || 0),
-      y: Math.round(Number(y) || 0),
+      x: ix,
+      y: iy,
       z: 0,
-      width: Math.max(80, Math.round(Number(width) || 640)),
-      height: Math.max(60, Math.round(Number(height) || 360)),
+      width: iw,
+      height: ih,
       attrs: {
         src,
         poster: poster || '',

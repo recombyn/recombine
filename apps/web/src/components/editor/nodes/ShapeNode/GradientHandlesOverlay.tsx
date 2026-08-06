@@ -87,10 +87,7 @@ function projectOffset(
   return clamp01(((px - x1) * dx + (py - y1) * dy) / len2);
 }
 
-/**
- * On-canvas gradient editors (fig.2 linear · fig.3 radial · fig.4 angular).
- * World-space geometry; rendered in stage overlay so handles stay sharp.
- */
+/** On-canvas linear / radial / angular gradient editors (world-space overlay). */
 function GradientHandlesOverlay({
   box,
   angle = 0,
@@ -337,7 +334,7 @@ function GradientHandlesOverlay({
     const radius = (rPct / 100) * h;
     const center = rotateLocal(cx, cy, w, h, angle);
     const rim = rotateLocal(cx, cy + radius, w, h, angle);
-    // Side handle (fig.3) — horizontal radius end; maps to same r for circular SVG.
+    // Side handle — horizontal radius end; maps to same r for circular SVG.
     const side = rotateLocal(cx - (rPct / 100) * w, cy, w, h, angle);
 
     body = (

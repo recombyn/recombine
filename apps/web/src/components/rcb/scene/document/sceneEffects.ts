@@ -53,7 +53,8 @@ export function resolveStroke(node: any, fallback = '#333333') {
   const stroke = normalizeColor(attrs['border-color'] || attrs.stroke || fallback);
   const opacity = Number(attrs['stroke-opacity'] ?? 100);
   const color = hexWithOpacity(stroke, opacity);
-  const rawW = attrs['border-width'] ?? attrs.strokeWidth;
+  // Document writes `border-width`; some live patches use camelCase.
+  const rawW = attrs['border-width'] ?? attrs.borderWidth ?? attrs.strokeWidth;
   const parsed = rawW == null || rawW === '' ? 1 : parseFloat(String(rawW));
   const strokeWidth = Math.max(0, Number.isFinite(parsed) ? parsed : 0);
   return { stroke: color, strokeWidth };
@@ -76,7 +77,8 @@ function strokePaintMeta(node: any): { align: StrokeAlign; strokeWidth: number }
   // Line/arrow use a dedicated hit height; freehand / pen store padded AABB already.
   if (shapeType === 'line' || shapeType === 'arrow' || shapeType === 'pencil' || shapeType === 'pen')
     return null;
-  if (key === 'image' || key === 'text' || key === 'frame') return null;
+  if (key === 'text' || key === 'frame') return null;
+  if (key === 'image' || key === 'video') return null;
 
   // Same color fallback as sceneToSvg — a missing border-color still paints #333.
   const { stroke, strokeWidth } = resolveStroke(node, '#333333');
@@ -115,8 +117,10 @@ export function strokeVisualOutset(node: any): number {
 }
 
 /**
- * Selection chrome sits on the **vector path** (geometry AABB).
- * strokeAlign is paint-only — do not offset the control box from the path.
+ * How far selection chrome sits outside the geometric box (≥ 0).
+ * Control box = **vector path** (geometry AABB). Stroke align is paint-only —
+ * do not pad the blue box to outer ink. Move/snap still uses visual outer via
+ * `strokeVisualOutset` / `inflateBoxByVisualOutset`.
  */
 export function strokeChromeOutset(node: any): number {
   void node;
@@ -141,9 +145,8 @@ export function strokeIndicatorOutset(node: any): number {
 }
 
 /**
- * Align / snap / spacing boxes — **vector path only** (same as selection chrome).
- * Stroke align is paint-only; never emit outer/inner ink faces (those pulled
- * guides and gap measures onto the stroke edge instead of the path line).
+ * Align / snap / spacing boxes — **vector path only**.
+ * Guides / snap use visual outer separately; selection chrome stays on path.
  */
 export type StrokeBandFace = 'inner' | 'path' | 'outer';
 
@@ -171,7 +174,7 @@ function padBox<T extends { left: number; top: number; width: number; height: nu
   };
 }
 
-/** Selection chrome AABB from geometry (uses strokeChromeOutset — inside insets). */
+/** Selection chrome AABB from geometry (path only — chrome outset is 0). */
 export function inflateBoxByStrokeOutset<
   T extends { left: number; top: number; width: number; height: number },
 >(box: T, node: any): T {
@@ -224,9 +227,8 @@ export function deflateBoxByTextSelectionPad<
 }
 
 /**
- * Selection / snap / guide box = path AABB (+ text pad).
- * strokeAlign does not move chrome — control box stays on the path.
- * Stored geom stays on the path via deflateSelectionBox on commit.
+ * Selection chrome AABB = path geom (+ text pad). Stroke does not expand the
+ * control box — knobs sit on the path; outer-ink snap uses visual outset.
  */
 export function inflateSelectionBox<
   T extends { left: number; top: number; width: number; height: number },

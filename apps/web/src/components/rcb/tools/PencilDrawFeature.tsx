@@ -1,14 +1,16 @@
-import { useEffect, useRef, memo } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import {
   brushPad,
   brushSize,
   findPencilBrush,
   isStampBrush,
+  pencilSampleMinStep,
   polylinePathD,
   samplePolyline,
   serializePathPressures,
   stampSizeForBrush,
   stampSpacingForBrush,
+  streamlinePencilPoints,
   type PencilBrushId,
 } from './pencilBrushes';
 import { getTintedStampSrc } from './stampTint';
@@ -27,10 +29,38 @@ import {
 import {
   type RcbCamera as CanvasCamera,
 } from '../core/types';
-import RcbSceneOverlayCanvas, {
-  type RcbSceneOverlayCanvasHandle,
-  type SceneOverlayBox,
-} from '../canvas/RcbSceneOverlayCanvas';
+import { sceneSurfaceSvgProps } from '@/components/rcb/scene/paint/sceneToSvg';
+
+type SceneBox = { left: number; top: number; width: number; height: number };
+
+type PencilPreview =
+  | {
+      box: SceneBox;
+      mode: 'erase';
+      trailD: string;
+      tip: { x: number; y: number } | null;
+      tipR: number;
+      trailW: number;
+      tipStroke: number;
+      tipDash: string;
+    }
+  | {
+      box: SceneBox;
+      mode: 'stroke';
+      pathD: string;
+      color: string;
+      opacity: number;
+      lineWidth: number;
+    }
+  | {
+      box: SceneBox;
+      mode: 'stamp';
+      samples: Array<{ x: number; y: number }>;
+      size: number;
+      src: string;
+      opacity: number;
+    };
+
 import pencilCursorUrl from '@/assets/svg/editor/cursor_pencil.svg?url';
 import eraserCursorUrl from '@/assets/svg/editor/cursor_eraser.svg?url';
 import penCursorUrl from '@/assets/svg/editor/cursor_pen.svg?url';
@@ -39,7 +69,8 @@ import bucketCursorUrl from '@/assets/svg/editor/cursor_bucket.svg?url';
 /** CSS cursors — icons in `assets/svg/editor/cursor_*.svg` (hotspot = tip). */
 export const PENCIL_CURSOR = `url("${pencilCursorUrl}") 2 13, crosshair`;
 export const ERASER_CURSOR = `url("${eraserCursorUrl}") 3 15, crosshair`;
-export const PEN_CURSOR = `url("${penCursorUrl}") 2 2, crosshair`;
+/** Pen nib is at viewBox (2,2) on 24→18 CSS: hotspot ≈ (1.5,1.5) → use 2 2 was ~0.5px late; 1 1 tracks the tip. */
+export const PEN_CURSOR = `url("${penCursorUrl}") 1 1, crosshair`;
 export const BUCKET_CURSOR = `url("${bucketCursorUrl}") 15 18, cell`;
 
 function clientToPaperScene(
@@ -77,11 +108,11 @@ function clientToDrawScene(
   return clientToPaperScene(opts.paperEl, opts.artboard, clientX, clientY);
 }
 
-/** Stable scene rect covering the current viewport (for stroke preview — avoids per-point canvas resize jitter). */
+/** Stable scene rect covering the current viewport (for stroke preview — avoids per-point shell resize jitter). */
 function visibleSceneOverlayBox(
   camera: CanvasCamera,
   stageEl: HTMLElement | null
-): SceneOverlayBox | null {
+): SceneBox | null {
   const stage = rcbResolveViewportEl(stageEl);
   if (!stage) return null;
   const { clientWidth, clientHeight } = rcbViewportMetrics(stage);
@@ -97,7 +128,7 @@ function visibleSceneOverlayBox(
   };
 }
 
-function unionSceneOverlayBox(a: SceneOverlayBox, b: SceneOverlayBox): SceneOverlayBox {
+function unionSceneOverlayBox(a: SceneBox, b: SceneBox): SceneBox {
   const left = Math.min(a.left, b.left);
   const top = Math.min(a.top, b.top);
   const right = Math.max(a.left + a.width, b.left + b.width);
@@ -197,10 +228,9 @@ function PencilDrawFeature({
   const lastClientRef = useRef<{ x: number; y: number } | null>(null);
   const strokeScaleRef = useRef({ scaleX: 1, scaleY: 1 });
   const drawing = useRef(false);
-  /** Locked overlay viewport for the active stroke — stops per-point canvas resize jitter. */
-  const strokeViewBoxRef = useRef<SceneOverlayBox | null>(null);
-  const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
-  const stampImageRef = useRef<HTMLImageElement | null>(null);
+  /** Locked overlay viewport for the active stroke — stops per-point shell resize jitter. */
+  const strokeViewBoxRef = useRef<SceneBox | null>(null);
+  const [preview, setPreview] = useState<PencilPreview | null>(null);
   const lastTipPosRef = useRef<{ x: number; y: number } | null>(null);
   const brushRef = useRef(brushId);
   const widthRef = useRef(strokeWidth);
@@ -255,8 +285,6 @@ function PencilDrawFeature({
   };
 
   const redrawOverlay = () => {
-    const handle = overlayRef.current;
-    if (!handle) return;
     const zoom = Math.max(0.05, cameraRef.current.zoom || 1);
     const tip = lastTipPosRef.current;
     const points = pts.current;
@@ -270,7 +298,7 @@ function PencilDrawFeature({
     if (tip) all.push(tip);
     const contentBox = pointsBounds(all, pad);
     if (!contentBox) {
-      handle.clear();
+      setPreview(null);
       strokeViewBoxRef.current = null;
       return;
     }
@@ -298,72 +326,50 @@ function PencilDrawFeature({
       }
       box = view;
     }
-    const ctx = handle.beginFrame(box);
-    if (!ctx) return;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
 
     if (eraseModeRef.current) {
-      if (points.length >= 2) {
-        ctx.strokeStyle = 'rgba(20,20,20,0.28)';
-        ctx.lineWidth = eraseTipDiameter();
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
-        ctx.stroke();
-      }
-      if (tip) {
-        const r = eraseTipRadius();
-        ctx.fillStyle = 'rgba(20,20,20,0.12)';
-        ctx.strokeStyle = 'rgba(20,20,20,0.85)';
-        ctx.lineWidth = 1.25 / zoom;
-        ctx.setLineDash([3 / zoom, 2 / zoom]);
-        ctx.beginPath();
-        ctx.arc(tip.x, tip.y, r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
+      setPreview({
+        box,
+        mode: 'erase',
+        trailD: points.length >= 2 ? polylinePathD(points) : '',
+        tip,
+        tipR: eraseTipRadius(),
+        trailW: eraseTipDiameter(),
+        tipStroke: 1.25 / zoom,
+        tipDash: `${3 / zoom} ${2 / zoom}`,
+      });
       return;
     }
 
-    if (points.length < 2) return;
+    if (points.length < 2) {
+      setPreview(null);
+      return;
+    }
     const brush = findPencilBrush(brushRef.current);
     if (isStampBrush(brush.id, brush.stampSrc) && brush.stampSrc) {
       const size = stampSizeForBrush(brush, widthRef.current);
       const spacing = stampSpacingForBrush(brush, widthRef.current);
       const samples = samplePolyline(points, spacing);
-      const tipSrc = getTintedStampSrc(brush.stampSrc, colorRef.current);
-      let img = stampImageRef.current;
-      if (!img || img.src !== tipSrc) {
-        img = new Image();
-        img.src = tipSrc;
-        stampImageRef.current = img;
-      }
-      ctx.globalAlpha = opacityRef.current;
-      for (const p of samples) {
-        try {
-          ctx.drawImage(img, p.x - size / 2, p.y - size / 2, size, size);
-        } catch {
-          /* decode pending */
-        }
-      }
-      ctx.globalAlpha = 1;
+      setPreview({
+        box,
+        mode: 'stamp',
+        samples,
+        size,
+        src: getTintedStampSrc(brush.stampSrc, colorRef.current),
+        opacity: opacityRef.current,
+      });
       return;
     }
 
-    // Match committed paint (sceneToSvg): centerline + stroke — same as pen.
     const inkW = brushSize(brush, widthRef.current);
-    ctx.strokeStyle = colorRef.current;
-    ctx.globalAlpha = opacityRef.current;
-    ctx.lineWidth = inkW;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    setPreview({
+      box,
+      mode: 'stroke',
+      pathD: polylinePathD(points),
+      color: colorRef.current,
+      opacity: opacityRef.current,
+      lineWidth: inkW,
+    });
   };
 
   const paintTipCursor = (p: { x: number; y: number } | null) => {
@@ -443,34 +449,76 @@ function PencilDrawFeature({
       return toScene(e.clientX, e.clientY);
     };
 
+    const appendStrokePoint = (raw: {
+      x: number;
+      y: number;
+      pressure?: number;
+    }) => {
+      const brush = findPencilBrush(brushRef.current);
+      const minStep = pencilSampleMinStep(widthRef.current, brush);
+      const last = pts.current[pts.current.length - 1];
+      if (last && Math.hypot(raw.x - last.x, raw.y - last.y) < minStep) {
+        return false;
+      }
+      const streamline = Number(brush.options?.streamline) || 0;
+      if (last && streamline > 0) {
+        const a = Math.min(0.92, Math.max(0, streamline));
+        const smoothed = {
+          x: last.x + (raw.x - last.x) * (1 - a),
+          y: last.y + (raw.y - last.y) * (1 - a),
+          ...(raw.pressure != null ? { pressure: raw.pressure } : {}),
+        };
+        if (Math.hypot(smoothed.x - last.x, smoothed.y - last.y) < minStep * 0.5) {
+          return false;
+        }
+        pts.current.push(smoothed);
+      } else {
+        pts.current.push(raw);
+      }
+      return true;
+    };
+
     const onMove = (e: PointerEvent) => {
       if (!drawing.current) {
         paintTipCursor(toScene(e.clientX, e.clientY));
         return;
       }
-      const p = sampleScenePoint(e);
-      const pressure = pressureRef.current ? pointerPressure(e) : undefined;
-      const pt = pressure != null ? { ...p, pressure } : p;
-      if (eraseModeRef.current) {
-        const last = pts.current[pts.current.length - 1];
-        if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.5) {
-          paintTipCursor(p);
-          return;
+      const coalesced =
+        typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+      const events = coalesced.length ? coalesced : [e];
+      let changed = false;
+      let tip = pts.current[pts.current.length - 1] || toScene(e.clientX, e.clientY);
+      for (const ev of events) {
+        const p = sampleScenePoint(ev);
+        tip = p;
+        const pressure = pressureRef.current ? pointerPressure(ev) : undefined;
+        const pt = pressure != null ? { ...p, pressure } : p;
+        if (eraseModeRef.current) {
+          const last = pts.current[pts.current.length - 1];
+          const minStep = Math.max(0.12, eraseTipRadius() * 0.15);
+          if (last && Math.hypot(p.x - last.x, p.y - last.y) < minStep) {
+            continue;
+          }
+          pts.current.push(pt);
+          changed = true;
+        } else if (appendStrokePoint(pt)) {
+          changed = true;
         }
-        pts.current.push(pt);
-        paintTipCursor(p);
-        paintEraseTrail(pts.current);
-        return;
       }
-      const last = pts.current[pts.current.length - 1];
-      // Skip near-duplicates to keep streamline stable.
-      if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.6) {
-        paintTipCursor(p);
-        return;
-      }
-      pts.current.push(pt);
-      paintTipCursor(p);
-      paintPreview(pts.current);
+      paintTipCursor(tip);
+      if (!changed) return;
+      if (eraseModeRef.current) paintEraseTrail(pts.current);
+      else paintPreview(pts.current);
+    };
+
+    const onMoveWhileDrawing = (e: PointerEvent) => {
+      if (!drawing.current) return;
+      onMove(e);
+    };
+
+    const onMoveIdle = (e: PointerEvent) => {
+      if (drawing.current) return;
+      paintTipCursor(toScene(e.clientX, e.clientY));
     };
 
     const finishStroke = (e: PointerEvent, commit: boolean) => {
@@ -483,8 +531,30 @@ function PencilDrawFeature({
       } catch {
         /* ignore */
       }
-      overlayRef.current?.clear();
+      setPreview(null);
       const wasErase = eraseModeRef.current;
+      // Pin the last sample to the real tip, then optional full-path polish.
+      if (!wasErase && pts.current.length >= 1) {
+        const tip = toScene(e.clientX, e.clientY);
+        const pressure = pressureRef.current ? pointerPressure(e) : undefined;
+        const last = pts.current[pts.current.length - 1];
+        if (Math.hypot(tip.x - last.x, tip.y - last.y) > 0.05) {
+          pts.current.push(
+            pressure != null ? { ...tip, pressure } : tip
+          );
+        } else {
+          pts.current[pts.current.length - 1] = {
+            x: tip.x,
+            y: tip.y,
+            ...(pressure != null ? { pressure } : {}),
+          };
+        }
+        const brush = findPencilBrush(brushRef.current);
+        const streamline = Number(brush.options?.streamline) || 0;
+        if (streamline > 0 && pts.current.length >= 3) {
+          pts.current = streamlinePencilPoints(pts.current, streamline * 0.45);
+        }
+      }
       const points = pts.current;
       pts.current = [];
       if (!wasErase) paintTipCursor(null);
@@ -545,18 +615,20 @@ function PencilDrawFeature({
     };
 
     hitEl.addEventListener('pointerdown', onDown, true);
-    hitEl.addEventListener('pointermove', onMove);
-    hitEl.addEventListener('pointerup', onUp);
-    hitEl.addEventListener('pointercancel', onCancel);
-    hitEl.addEventListener('pointerleave', onLeave);
+    hitEl.addEventListener('pointermove', onMoveIdle);
+    // Window move/up while drawing — stage-only move drops samples when the
+    // pointer briefly leaves / is coalesced away (feels choppy / broken).
+    window.addEventListener('pointermove', onMoveWhileDrawing);
+    window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+    hitEl.addEventListener('pointerleave', onLeave);
     return () => {
       hitEl.removeEventListener('pointerdown', onDown, true);
-      hitEl.removeEventListener('pointermove', onMove);
-      hitEl.removeEventListener('pointerup', onUp);
-      hitEl.removeEventListener('pointercancel', onCancel);
-      hitEl.removeEventListener('pointerleave', onLeave);
+      hitEl.removeEventListener('pointermove', onMoveIdle);
+      window.removeEventListener('pointermove', onMoveWhileDrawing);
+      window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
+      hitEl.removeEventListener('pointerleave', onLeave);
       paintTipCursor(null);
     };
   }, [enabled, stageEl, paperEl, viewportEl, artboard, onCommit, liveStage]);
@@ -576,7 +648,72 @@ function PencilDrawFeature({
 
   if (!enabled) return null;
 
-  return <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />;
+  if (!preview) return null;
+  const surf = sceneSurfaceSvgProps(preview.box, camera);
+  return (
+    <svg
+      data-pencil-draw-preview
+      data-rcb-infinite="1"
+      className="pointer-events-none absolute z-20 overflow-visible"
+      width={surf.width}
+      height={surf.height}
+      viewBox={surf.viewBox}
+      preserveAspectRatio="none"
+      style={surf.style}
+      aria-hidden
+    >
+      {preview.mode === 'erase' ? (
+        <>
+          {preview.trailD ? (
+            <path
+              d={preview.trailD}
+              fill="none"
+              stroke="rgba(20,20,20,0.28)"
+              strokeWidth={preview.trailW}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ) : null}
+          {preview.tip ? (
+            <circle
+              cx={preview.tip.x}
+              cy={preview.tip.y}
+              r={preview.tipR}
+              fill="rgba(20,20,20,0.12)"
+              stroke="rgba(20,20,20,0.85)"
+              strokeWidth={preview.tipStroke}
+              strokeDasharray={preview.tipDash}
+            />
+          ) : null}
+        </>
+      ) : null}
+      {preview.mode === 'stroke' ? (
+        <path
+          d={preview.pathD}
+          fill="none"
+          stroke={preview.color}
+          strokeOpacity={preview.opacity}
+          strokeWidth={preview.lineWidth}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : null}
+      {preview.mode === 'stamp'
+        ? preview.samples.map((pt, i) => (
+            <image
+              key={i}
+              href={preview.src}
+              x={pt.x - preview.size / 2}
+              y={pt.y - preview.size / 2}
+              width={preview.size}
+              height={preview.size}
+              opacity={preview.opacity}
+              preserveAspectRatio="xMidYMid meet"
+            />
+          ))
+        : null}
+    </svg>
+  );
 }
 
 export default memo(PencilDrawFeature);

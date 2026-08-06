@@ -1,11 +1,11 @@
-﻿import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
+﻿import { useEffect, useRef, useState, memo, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   useRcbCamera,
   useRcbScreenToScene,
 } from '../camera/context';
 import {
   boundsOfAnchors,
-  CLOSE_THRESHOLD,
   findClosestPathHit,
   localizeAnchors,
   offsetAnchors,
@@ -17,9 +17,12 @@ import {
 } from './penPath';
 import { nodeLeftTop } from '../scene/paint/sceneToSvg';
 import { normalizePathDForEdit } from '../scene/paint/outlineToPath';
-import RcbSceneOverlayCanvas, {
-  type RcbSceneOverlayCanvasHandle,
-} from '../canvas/RcbSceneOverlayCanvas';
+import { snapPenAnchorPoint } from './PenDrawFeature';
+import {
+  getSceneDrawPreviewMount,
+  getSceneWorldEpoch,
+  subscribeShapeHosts,
+} from '../shapes/shapeHostRegistry';
 
 type HandleSide = 'in' | 'out';
 type AnchorRef = { sub: number; index: number };
@@ -30,7 +33,7 @@ type PenSubpath = { anchors: PenAnchor[]; closed: boolean };
 type DragKind =
   | { kind: 'anchor'; sub: number; index: number; ox: number; oy: number; start: PenAnchor }
   | { kind: 'handle'; sub: number; index: number; side: HandleSide; mirror: boolean }
-  /** Alt/Option-drag on anchor 鈥?Adobe Convert Point: pull out mirrored handles. */
+  /** Alt-drag on an anchor: pull mirrored handles. */
   | { kind: 'convert'; sub: number; index: number; ax: number; ay: number; pulled: boolean };
 
 function anchorHasHandles(a: PenAnchor) {
@@ -59,6 +62,9 @@ type Props = {
   /** Stroke paint for newly drawn paths (path-edit Pen). */
   newStrokeColor?: string;
   newStrokeWidth?: number;
+  /** Snap anchors to grid corners (default on). Hold Ctrl to drag/place free. */
+  gridSnap?: boolean;
+  gridSize?: number;
   onCommitNewShape?: (payload: {
     pathD: string;
     box: { left: number; top: number; width: number; height: number };
@@ -194,36 +200,29 @@ type HandleDraw = {
   active: boolean;
 };
 
-function paintAnchorKnob(
-  ctx: CanvasRenderingContext2D,
-  a: AnchorDraw,
-  strokeW: number
-) {
-  ctx.beginPath();
-  ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
-  ctx.fillStyle = a.fill;
-  ctx.fill();
-  ctx.strokeStyle = a.strokeColor;
-  ctx.lineWidth = strokeW;
-  ctx.stroke();
+function AnchorKnobSvg({ a, strokeW }: { a: AnchorDraw; strokeW: number }) {
+  return (
+    <circle
+      cx={a.x}
+      cy={a.y}
+      r={a.r}
+      fill={a.fill}
+      stroke={a.strokeColor}
+      strokeWidth={strokeW}
+    />
+  );
 }
 
-function paintHandleDiamond(
-  ctx: CanvasRenderingContext2D,
-  h: HandleDraw,
-  strokeW: number
-) {
-  ctx.beginPath();
-  ctx.moveTo(h.x, h.y - h.r);
-  ctx.lineTo(h.x + h.r, h.y);
-  ctx.lineTo(h.x, h.y + h.r);
-  ctx.lineTo(h.x - h.r, h.y);
-  ctx.closePath();
-  ctx.fillStyle = h.active ? SEL_BASELINE : '#fff';
-  ctx.fill();
-  ctx.strokeStyle = h.active ? SEL_BASELINE : '#383838';
-  ctx.lineWidth = strokeW;
-  ctx.stroke();
+function HandleDiamondSvg({ h, strokeW }: { h: HandleDraw; strokeW: number }) {
+  const d = `M ${h.x} ${h.y - h.r} L ${h.x + h.r} ${h.y} L ${h.x} ${h.y + h.r} L ${h.x - h.r} ${h.y} Z`;
+  return (
+    <path
+      d={d}
+      fill={h.active ? SEL_BASELINE : '#fff'}
+      stroke={h.active ? SEL_BASELINE : '#383838'}
+      strokeWidth={strokeW}
+    />
+  );
 }
 
 function hitHandle(
@@ -421,18 +420,16 @@ function loadSceneAnchors(document: any, nodeId: string) {
 }
 
 /**
- * Double-click pen path 鈫?edit anchors / Bezier handles.
- * Path-edit: Esc / ✓ finish. Empty-canvas click never auto-exits
- * (Pen subtool keeps adding draft points; Select subtool only clears handle chrome).
- * Path-edit toolbar Pen: hover path shows a preview dot; click draws a new
- * path in-place (does not activate the global Pen tool).
+ * Double-click pen path → edit anchors / Bezier handles.
+ * Exit via Esc / ✓ only. Empty-canvas click never auto-exits.
+ * Path-edit Pen: hover shows a preview dot; click adds a path in-place.
  *
- * Convert Point (same idea as PS / AI):
- * - Alt/Option + drag on an anchor → pull out mirrored handles (restore curve)
- * - Alt/Option + click on an anchor with handles → remove handles (corner)
+ * Convert point:
+ * - Alt + drag anchor → pull mirrored handles
+ * - Alt + click anchor with handles → remove handles (corner)
  * - Double-click anchor → remove handles
- * - Alt/Option + click a handle → delete that side's handle
- * - Path-edit Curve subtool → same convert behavior without holding Alt
+ * - Alt + click a handle → delete that side
+ * - Curve subtool → same convert without Alt
  */
 function PenPathEditFeature({
   enabled,
@@ -444,6 +441,8 @@ function PenPathEditFeature({
   convertPointMode = false,
   newStrokeColor = '#333333',
   newStrokeWidth = 2,
+  gridSnap = true,
+  gridSize = 1,
   onCommitNewShape,
   onCommit,
   onExit,
@@ -478,12 +477,16 @@ function PenPathEditFeature({
   const drawNewRef = useRef(drawNewShapeMode);
   const convertPointRef = useRef(convertPointMode);
   const newStrokeWidthRef = useRef(newStrokeWidth);
+  const gridSnapRef = useRef(gridSnap);
+  const gridSizeRef = useRef(gridSize);
   onCommitRef.current = onCommit;
   onExitRef.current = onExit;
   onCommitNewShapeRef.current = onCommitNewShape;
   drawNewRef.current = drawNewShapeMode;
   convertPointRef.current = convertPointMode;
   newStrokeWidthRef.current = newStrokeWidth;
+  gridSnapRef.current = gridSnap;
+  gridSizeRef.current = gridSize;
 
   subpathsRef.current = subpaths;
   strokeWidthRef.current = strokeWidth;
@@ -629,15 +632,31 @@ function PenPathEditFeature({
       // Path-edit Pen: draw a new path in-place (keep edge hover; never leave to Pen tool).
       if (drawNewRef.current) {
         const draft = draftAnchorsRef.current;
-        const hover = pathHoverRef.current;
-        const place =
-          hover && Math.hypot(hover.x - p.x, hover.y - p.y) < 24 / Math.max(0.05, camera.zoom || 1)
-            ? { x: hover.x, y: hover.y }
-            : p;
+        const skipGrid = e.ctrlKey || !gridSnapRef.current;
+        const place = snapPenAnchorPoint(p.x, p.y, gridSizeRef.current, skipGrid);
         if (draft.length >= 2) {
           const first = draft[0];
-          if (Math.hypot(place.x - first.x, place.y - first.y) <= CLOSE_THRESHOLD) {
+          const last = draft[draft.length - 1];
+          const onFirst =
+            Math.hypot(place.x - first.x, place.y - first.y) <= 0.75 ||
+            Math.hypot(p.x - first.x, p.y - first.y) <= radii().anchor;
+          const onLast =
+            Math.hypot(place.x - last.x, place.y - last.y) <= 0.75 ||
+            Math.hypot(p.x - last.x, p.y - last.y) <= radii().anchor;
+          // Same landing as last → keep stroke linked (do not close / split).
+          if (onLast && !onFirst) {
+            setDraftCursor(place);
+            return;
+          }
+          // Only close when tip hits the first anchor (not merely nearby).
+          if (onFirst) {
             commitDraftIfAny(true);
+            return;
+          }
+        } else if (draft.length === 1) {
+          const only = draft[0];
+          if (Math.hypot(place.x - only.x, place.y - only.y) <= 0.75) {
+            setDraftCursor(place);
             return;
           }
         }
@@ -684,7 +703,7 @@ function PenPathEditFeature({
       if (aRef) {
         const a = list[aRef.sub]?.anchors[aRef.index];
         if (!a) return;
-        // Adobe Convert Point: Alt/Option, or Curve subtool (no modifier).
+        // Convert point: Alt/Option, or Curve subtool (no modifier).
         if (convertMod && !e.metaKey) {
           dragRef.current = {
             kind: 'convert',
@@ -751,16 +770,16 @@ function PenPathEditFeature({
         const { anchor: anchorR, handle: handleR, path: pathR } = radii();
         const list = subpathsRef.current;
         if (drawNewRef.current) {
-          // Always show edge preview on the edited path 鈥?even mid-draw.
+          // Always show edge preview on the edited path — even mid-draw.
           const nearest = findClosestOnSubpaths(list, p.x, p.y);
           if (nearest && nearest.dist <= pathR) {
             setPathHover({ x: nearest.x, y: nearest.y });
           } else {
             setPathHover(null);
           }
-          if (draftAnchorsRef.current.length > 0) {
-            setDraftCursor(p);
-          }
+          const skipGrid = e.ctrlKey || !gridSnapRef.current;
+          // Snap tip even before the first draft click (CSS cursor ≠ lattice).
+          setDraftCursor(snapPenAnchorPoint(p.x, p.y, gridSizeRef.current, skipGrid));
           setHoverAnchor(null);
           setHoverHandle(null);
           return;
@@ -793,20 +812,29 @@ function PenPathEditFeature({
 
       if (drag.kind === 'anchor') {
         dirtyRef.current = true;
+        const skipGrid = e.ctrlKey || !gridSnapRef.current;
         const dx = p.x - drag.ox;
         const dy = p.y - drag.oy;
+        const snapped = snapPenAnchorPoint(
+          drag.start.x + dx,
+          drag.start.y + dy,
+          gridSizeRef.current,
+          skipGrid
+        );
+        const adx = snapped.x - drag.start.x;
+        const ady = snapped.y - drag.start.y;
         setSubpaths((prev) =>
           mapSubpathAnchor(prev, drag.sub, drag.index, () => {
             const s = drag.start;
             return {
               ...s,
-              x: s.x + dx,
-              y: s.y + dy,
+              x: snapped.x,
+              y: snapped.y,
               ...(s.inX != null && s.inY != null
-                ? { inX: s.inX + dx, inY: s.inY + dy }
+                ? { inX: s.inX + adx, inY: s.inY + ady }
                 : {}),
               ...(s.outX != null && s.outY != null
-                ? { outX: s.outX + dx, outY: s.outY + dy }
+                ? { outX: s.outX + adx, outY: s.outY + ady }
                 : {}),
             };
           })
@@ -961,7 +989,7 @@ function PenPathEditFeature({
   });
 
   return (
-    <PenPathEditInkCanvas
+    <PenPathEditInkSvg
       pathD={d}
       fillColor={fillColor}
       fillRule={fillRule === 'evenodd' ? 'evenodd' : 'nonzero'}
@@ -975,8 +1003,6 @@ function PenPathEditFeature({
       draftColor={newStrokeColor}
       draftSw={draftSw}
       inv={inv}
-      subpaths={subpaths}
-      draftAnchors={draftAnchors}
       draftCursor={draftCursor}
       anchorsDraw={anchorsDraw}
       handlesDraw={handlesDraw}
@@ -986,7 +1012,7 @@ function PenPathEditFeature({
   );
 }
 
-function PenPathEditInkCanvas({
+function PenPathEditInkSvg({
   pathD,
   fillColor,
   fillRule,
@@ -1000,8 +1026,6 @@ function PenPathEditInkCanvas({
   draftColor,
   draftSw,
   inv,
-  subpaths,
-  draftAnchors,
   draftCursor,
   anchorsDraw,
   handlesDraw,
@@ -1010,7 +1034,7 @@ function PenPathEditInkCanvas({
 }: {
   pathD: string;
   fillColor: string;
-  fillRule: CanvasFillRule;
+  fillRule: 'evenodd' | 'nonzero';
   editStrokeOn: boolean;
   editStrokeColor: string;
   pathSw: number;
@@ -1021,181 +1045,112 @@ function PenPathEditInkCanvas({
   draftColor: string;
   draftSw: number;
   inv: number;
-  subpaths: PenSubpath[];
-  draftAnchors: PenAnchor[];
   draftCursor: { x: number; y: number } | null;
   anchorsDraw: AnchorDraw[];
   handlesDraw: HandleDraw[];
   knobStroke: number;
   handleStroke: number;
 }) {
-  const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
-  /**
-   * Expand-only paint slot. Tight min-bbox every drag frame retargets
-   * canvas.style.left/top + bitmap size → whole ink shakes (same class of bug
-   * as SelectionChrome zoom-dependent shell).
-   */
-  const slotBoxRef = useRef<{
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  } | null>(null);
-  const slotPathKeyRef = useRef<string>('');
+  // Portal into shared world SVG — sibling sceneSurfaceSvgProps drifts under fractional DPR.
+  const [, setWorldEpoch] = useState(() => getSceneWorldEpoch());
+  useEffect(
+    () =>
+      subscribeShapeHosts(() => {
+        setWorldEpoch((prev) => {
+          const next = getSceneWorldEpoch();
+          return prev === next ? prev : next;
+        });
+      }),
+    []
+  );
+  const previewMount = getSceneDrawPreviewMount();
+  const tipArm = 4 * inv;
+  const tipR = Math.max(0.01, (3 * inv) / 2);
+  const dash = `${4 * inv} ${3 * inv}`;
 
-  useLayoutEffect(() => {
-    const handle = overlayRef.current;
-    if (!handle) return;
-    const pts: Array<{ x: number; y: number }> = [];
-    for (const sp of subpaths) {
-      for (const a of sp.anchors) {
-        pts.push({ x: a.x, y: a.y });
-        if (a.inX != null && a.inY != null) pts.push({ x: a.inX, y: a.inY });
-        if (a.outX != null && a.outY != null) pts.push({ x: a.outX, y: a.outY });
-      }
-    }
-    for (const a of draftAnchors) pts.push({ x: a.x, y: a.y });
-    if (draftCursor) pts.push(draftCursor);
-    for (const a of anchorsDraw) pts.push({ x: a.x, y: a.y });
-    for (const h of handlesDraw) pts.push({ x: h.x, y: h.y });
-    if (!pts.length && !pathD) {
-      handle.clear();
-      slotBoxRef.current = null;
-      slotPathKeyRef.current = '';
-      return;
-    }
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const p of pts) {
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x);
-      maxY = Math.max(maxY, p.y);
-    }
-    if (!Number.isFinite(minX)) {
-      handle.clear();
-      return;
-    }
-    const pad = Math.max(pathSw, draftSw, linkSw, knobStroke * 8, 12) * 2;
-    // Extra room so small drags do not grow the slot every pixel.
-    const slack = Math.max(48, pad * 2);
-    const needLeft = minX - pad;
-    const needTop = minY - pad;
-    const needRight = maxX + pad;
-    const needBottom = maxY + pad;
+  const children: ReactNode = (
+    <g data-pen-path-edit-preview pointerEvents="none" aria-hidden>
+      {linkSegs.map((s, i) => (
+        <line
+          key={`link-${i}`}
+          x1={s.x1}
+          y1={s.y1}
+          x2={s.x2}
+          y2={s.y2}
+          stroke="#8b8b8b"
+          strokeWidth={linkSw}
+          strokeLinecap="round"
+        />
+      ))}
+      {pathD ? (
+        <path
+          d={pathD}
+          fill={fillColor !== 'none' ? fillColor : 'none'}
+          fillRule={fillRule}
+          stroke={editStrokeOn && pathSw > 0 ? editStrokeColor : 'none'}
+          strokeWidth={pathSw}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : null}
+      {draftD ? (
+        <path
+          d={draftD}
+          fill="none"
+          stroke={draftColor}
+          strokeWidth={draftSw}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : null}
+      {draftRubber ? (
+        <path
+          d={draftRubber}
+          fill="none"
+          stroke={draftColor}
+          strokeWidth={draftSw}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray={dash}
+          opacity={0.7}
+        />
+      ) : null}
+      {draftCursor ? (
+        <g data-pen-snap-tip="1">
+          <circle
+            cx={draftCursor.x}
+            cy={draftCursor.y}
+            r={tipR}
+            fill={SEL_BASELINE}
+            stroke="none"
+            shapeRendering="geometricPrecision"
+          />
+          <path
+            d={`M ${draftCursor.x - tipArm} ${draftCursor.y} L ${draftCursor.x + tipArm} ${draftCursor.y} M ${draftCursor.x} ${draftCursor.y - tipArm} L ${draftCursor.x} ${draftCursor.y + tipArm}`}
+            fill="none"
+            stroke={SEL_BASELINE}
+            strokeWidth={knobStroke}
+            strokeLinecap="butt"
+            shapeRendering="geometricPrecision"
+            opacity={0.9}
+          />
+        </g>
+      ) : null}
+      {handlesDraw.map((h, i) => (
+        <HandleDiamondSvg key={`h-${i}`} h={h} strokeW={handleStroke} />
+      ))}
+      {anchorsDraw.map((a, i) => (
+        <AnchorKnobSvg key={`a-${i}`} a={a} strokeW={knobStroke} />
+      ))}
+    </g>
+  );
 
-    // Topology change (load / add / delete verts): reset slot. Dragging only expands.
-    const pathKey = `${fillColor}:${subpaths.map((s) => `${s.anchors.length}:${s.closed ? 1 : 0}`).join('|')}`;
-    if (pathKey !== slotPathKeyRef.current) {
-      slotPathKeyRef.current = pathKey;
-      slotBoxRef.current = null;
-    }
+  if (!previewMount) return null;
+  if (!pathD && !draftD && !draftRubber && !anchorsDraw.length && !handlesDraw.length) {
+    return null;
+  }
 
-    let slot = slotBoxRef.current;
-    if (!slot) {
-      slot = {
-        left: needLeft - slack,
-        top: needTop - slack,
-        width: Math.max(1, needRight - needLeft + slack * 2),
-        height: Math.max(1, needBottom - needTop + slack * 2),
-      };
-      slotBoxRef.current = slot;
-    } else {
-      const slotRight = slot.left + slot.width;
-      const slotBottom = slot.top + slot.height;
-      const growL = needLeft < slot.left;
-      const growT = needTop < slot.top;
-      const growR = needRight > slotRight;
-      const growB = needBottom > slotBottom;
-      if (growL || growT || growR || growB) {
-        const left = growL ? needLeft - slack : slot.left;
-        const top = growT ? needTop - slack : slot.top;
-        const right = growR ? needRight + slack : slotRight;
-        const bottom = growB ? needBottom + slack : slotBottom;
-        slot = {
-          left,
-          top,
-          width: Math.max(1, right - left),
-          height: Math.max(1, bottom - top),
-        };
-        slotBoxRef.current = slot;
-      }
-    }
-
-    const ctx = handle.beginFrame(slot);
-    if (!ctx) return;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    for (const s of linkSegs) {
-      ctx.strokeStyle = '#8b8b8b';
-      ctx.lineWidth = linkSw;
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.moveTo(s.x1, s.y1);
-      ctx.lineTo(s.x2, s.y2);
-      ctx.stroke();
-    }
-
-    if (pathD) {
-      const path = new Path2D(pathD);
-      if (fillColor !== 'none') {
-        ctx.fillStyle = fillColor;
-        ctx.fill(path, fillRule);
-      }
-      if (editStrokeOn && pathSw > 0) {
-        ctx.strokeStyle = editStrokeColor;
-        ctx.lineWidth = pathSw;
-        ctx.setLineDash([]);
-        ctx.stroke(path);
-      }
-    }
-
-    if (draftD) {
-      ctx.strokeStyle = draftColor;
-      ctx.lineWidth = draftSw;
-      ctx.setLineDash([]);
-      ctx.stroke(new Path2D(draftD));
-    }
-    if (draftRubber) {
-      ctx.strokeStyle = draftColor;
-      ctx.lineWidth = draftSw;
-      ctx.globalAlpha = 0.7;
-      ctx.setLineDash([4 * inv, 3 * inv]);
-      ctx.stroke(new Path2D(draftRubber));
-      ctx.globalAlpha = 1;
-      ctx.setLineDash([]);
-    }
-
-    ctx.setLineDash([]);
-    for (const h of handlesDraw) paintHandleDiamond(ctx, h, handleStroke);
-    for (const a of anchorsDraw) paintAnchorKnob(ctx, a, knobStroke);
-  }, [
-    pathD,
-    fillColor,
-    fillRule,
-    editStrokeOn,
-    editStrokeColor,
-    pathSw,
-    linkSegs,
-    linkSw,
-    draftD,
-    draftRubber,
-    draftColor,
-    draftSw,
-    inv,
-    subpaths,
-    draftAnchors,
-    draftCursor,
-    anchorsDraw,
-    handlesDraw,
-    knobStroke,
-    handleStroke,
-  ]);
-
-  return <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />;
+  return createPortal(children, previewMount);
 }
 
 export default memo(PenPathEditFeature);

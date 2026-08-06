@@ -197,7 +197,7 @@ export async function outlineTextFromFont(node: any): Promise<OutlineResult | nu
     const baseline = lineTop + ascentPx;
 
     const run = font.layout(raw);
-    // Latin-only face + CJK text → identical .notdef boxes (user fig.1). Bail to canvas.
+    // Latin-only face + CJK text → identical .notdef boxes. Bail to canvas.
     if (runHasMissingGlyphs(run)) {
       console.warn(
         '[outlineTextFont] missing glyphs for face',

@@ -19,6 +19,41 @@ function pointInRect(x: number, y: number, r: DOMRect) {
   return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 }
 
+function readCropNorm(opts: {
+  cropX?: number;
+  cropY?: number;
+  cropW?: number;
+  cropH?: number;
+}): { x: number; y: number; w: number; h: number } | null {
+  const x = Number(opts.cropX);
+  const y = Number(opts.cropY);
+  const w = Number(opts.cropW);
+  const h = Number(opts.cropH);
+  if (
+    ![x, y, w, h].every(Number.isFinite) ||
+    !(w > 0) ||
+    !(h > 0) ||
+    (x === 0 && y === 0 && w === 1 && h === 1)
+  ) {
+    return null;
+  }
+  return { x, y, w, h };
+}
+
+function mediaCropStyle(crop: { x: number; y: number; w: number; h: number } | null): CSSProperties {
+  if (!crop) {
+    return { width: '100%', height: '100%', objectFit: 'fill' };
+  }
+  return {
+    position: 'absolute',
+    left: `${(-crop.x / crop.w) * 100}%`,
+    top: `${(-crop.y / crop.h) * 100}%`,
+    width: `${(1 / crop.w) * 100}%`,
+    height: `${(1 / crop.h) * 100}%`,
+    objectFit: 'fill',
+  };
+}
+
 /** Freeze the current decoded video frame as a JPEG data URL. */
 export function captureFrameFromVideoEl(video: HTMLVideoElement): string | null {
   if (video.readyState < 2) return null;

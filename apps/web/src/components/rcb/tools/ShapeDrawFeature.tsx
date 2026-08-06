@@ -7,17 +7,12 @@ import {
   rcbResolveViewportEl,
   rcbViewportMetrics,
 } from '../core/math';
-import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
-import {
-  ARROW_HEAD,
-  fillCachedPath2D,
-  strokeCachedPath2D,
-} from '@/components/rcb/scene/document/sceneShapes';
+import { createPortal } from 'react-dom';
+import { useEffect, useRef, useState, memo, type ReactNode } from 'react';
+import { ARROW_HEAD } from '@/components/rcb/scene/document/sceneShapes';
 import { getShapeBaselineD } from '@/components/rcb/core/geometry';
 import { snapBoxEdgesToGrid, snapCoordToGrid } from '../selection/alignGuides';
-import RcbSceneOverlayCanvas, {
-  type RcbSceneOverlayCanvasHandle,
-} from '../canvas/RcbSceneOverlayCanvas';
+import { getSceneDrawPreviewMount } from '../shapes/shapeHostRegistry';
 
 function normalizeBox(x0: number, y0: number, x1: number, y1: number) {
   const left = Math.min(x0, x1);
@@ -77,7 +72,8 @@ function locksSquareAspect(kind: string) {
 }
 
 function squareLockedBox(box: { left: number; top: number; width: number; height: number }) {
-  const size = Math.max(3, Math.max(box.width, box.height));
+  // No hardcoded min size — visual min is enforced after grid snap (minSide).
+  const size = Math.max(box.width, box.height);
   return {
     left: box.left + (box.width - size) / 2,
     top: box.top + (box.height - size) / 2,
@@ -104,8 +100,9 @@ type DrawBox = { left: number; top: number; width: number; height: number };
 
 /**
  * Rubber-band → integer visual outer → inset stroke/2 → path geom.
+ * Preview and commit must both use this (do not re-inflate geom on create).
  */
-function resolveClosedDrawBoxes(
+export function resolveClosedDrawBoxes(
   raw: DrawBox,
   useGrid: boolean,
   gridSize: number,
@@ -180,7 +177,7 @@ type PreviewState =
   | { mode: 'box'; geom: DrawBox; visual: DrawBox }
   | { mode: 'stroke'; x0: number; y0: number; x1: number; y1: number };
 
-/** Drag-to-create shapes — Path2D overlay preview (same stack as pen/pencil). */
+/** Drag-to-create shapes — preview paints into shared scene SVG (same lattice as grid). */
 function ShapeDrawFeature({
   enabled,
   shapeKind,
@@ -205,13 +202,11 @@ function ShapeDrawFeature({
   gridSizeRef.current = gridSize;
   const session = useRef<ShapeDrawSession | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
-  const overlayRef = useRef<RcbSceneOverlayCanvasHandle>(null);
 
   useEffect(() => {
     if (!enabled) {
       session.current = null;
       setPreview(null);
-      overlayRef.current?.clear();
     }
   }, [enabled]);
 
@@ -324,7 +319,6 @@ function ShapeDrawFeature({
       if (!s || e.pointerId !== s.pointerId) return;
       session.current = null;
       setPreview(null);
-      overlayRef.current?.clear();
       try {
         hitEl.releasePointerCapture?.(e.pointerId);
       } catch {
@@ -383,7 +377,6 @@ function ShapeDrawFeature({
       window.removeEventListener('pointercancel', finishSession);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);
-      overlayRef.current?.clear();
     };
   }, [enabled, paperEl, stageEl, viewportEl]);
 
@@ -391,113 +384,17 @@ function ShapeDrawFeature({
   const z = Math.max(0.05, camera.zoom || 1);
   const inv = 1 / z;
   const kind = shapeKind || 'rect';
-
-  useLayoutEffect(() => {
-    const handle = overlayRef.current;
-    if (!enabled || !preview || !handle) {
-      handle?.clear();
-      return;
-    }
-
-    const isStroke = kind === 'line' || kind === 'arrow';
-    const strokeW = defaultShapeBorderWidth(kind);
-    const pad = Math.ceil(strokeW * 2) + (kind === 'arrow' ? Math.ceil(ARROW_HEAD) : 2);
-
-    let drawLeft: number;
-    let drawTop: number;
-    let drawW: number;
-    let drawH: number;
-    let pathLeft = 0;
-    let pathTop = 0;
-    let pathW = 1;
-    let pathH = 1;
-    let x0 = 0;
-    let y0 = 0;
-    let x1 = 0;
-    let y1 = 0;
-
-    if (preview.mode === 'stroke') {
-      x0 = preview.x0;
-      y0 = preview.y0;
-      x1 = preview.x1;
-      y1 = preview.y1;
-      drawLeft = Math.min(x0, x1);
-      drawTop = Math.min(y0, y1);
-      drawW = Math.max(1, Math.abs(x1 - x0));
-      drawH = Math.max(1, Math.abs(y1 - y0));
-    } else {
-      const { geom, visual } = preview;
-      drawLeft = visual.left;
-      drawTop = visual.top;
-      drawW = visual.width;
-      drawH = visual.height;
-      pathLeft = geom.left;
-      pathTop = geom.top;
-      pathW = geom.width;
-      pathH = geom.height;
-    }
-
-    const ctx = handle.beginFrame({
-      left: drawLeft - pad,
-      top: drawTop - pad,
-      width: Math.max(1, drawW + pad * 2),
-      height: Math.max(1, drawH + pad * 2),
-    });
-    if (!ctx) return;
-
-    ctx.lineCap = 'butt';
-    ctx.lineJoin = 'miter';
-    ctx.miterLimit = 10;
-
-    if (isStroke) {
-      ctx.strokeStyle = '#333333';
-      ctx.lineWidth = strokeW;
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.stroke();
-      if (kind === 'arrow') {
-        const len = Math.hypot(x1 - x0, y1 - y0);
-        if (len >= 3) {
-          const ux = (x1 - x0) / len;
-          const uy = (y1 - y0) / len;
-          const head = Math.min(ARROW_HEAD, len * 0.45);
-          const bx = x1 - ux * head;
-          const by = y1 - uy * head;
-          const nx = -uy;
-          const ny = ux;
-          const wing = head * 0.55;
-          ctx.beginPath();
-          ctx.moveTo(bx + nx * wing, by + ny * wing);
-          ctx.lineTo(x1, y1);
-          ctx.lineTo(bx - nx * wing, by - ny * wing);
-          ctx.stroke();
-        }
-      }
-    } else {
-      const pathD =
-        getShapeBaselineD(
-          { key: 'shape', width: pathW, height: pathH, attrs: { shapeType: kind } },
-          { width: pathW, height: pathH }
-        ) || `M 0 0 H ${Math.max(1, pathW)} V ${Math.max(1, pathH)} H 0 Z`;
-      ctx.save();
-      ctx.translate(pathLeft, pathTop);
-      fillCachedPath2D(ctx, pathD, { fillStyle: 'rgba(255,255,255,0.85)' });
-      strokeCachedPath2D(ctx, pathD, {
-        strokeStyle: '#333333',
-        lineWidth: strokeW,
-        lineCap: 'butt',
-        lineJoin: 'miter',
-      });
-      ctx.restore();
-    }
-  }, [enabled, preview, kind, z]);
+  const strokeW = defaultShapeBorderWidth(kind);
 
   if (!enabled) return null;
 
   let sizeLabel: string | null = null;
   let labelX = 0;
   let labelY = 0;
+  let previewSvg: ReactNode = null;
+
+  const previewMount = getSceneDrawPreviewMount();
+
   if (preview?.mode === 'stroke') {
     const len = Math.hypot(preview.x1 - preview.x0, preview.y1 - preview.y0);
     if (len >= 3) {
@@ -505,13 +402,69 @@ function ShapeDrawFeature({
       labelX = (preview.x0 + preview.x1) / 2;
       labelY = Math.min(preview.y0, preview.y1);
     }
+    let arrowHead: ReactNode = null;
+    if (kind === 'arrow' && len >= 3) {
+      const ux = (preview.x1 - preview.x0) / len;
+      const uy = (preview.y1 - preview.y0) / len;
+      const head = Math.min(ARROW_HEAD, len * 0.45);
+      const bx = preview.x1 - ux * head;
+      const by = preview.y1 - uy * head;
+      const nx = -uy;
+      const ny = ux;
+      const wing = head * 0.55;
+      arrowHead = (
+        <path
+          d={`M ${bx + nx * wing} ${by + ny * wing} L ${preview.x1} ${preview.y1} L ${bx - nx * wing} ${by - ny * wing}`}
+          fill="none"
+          stroke="#333333"
+          strokeWidth={strokeW}
+          strokeLinecap="butt"
+          strokeLinejoin="miter"
+        />
+      );
+    }
+    const strokePreview = (
+      <g data-shape-draw-preview pointerEvents="none" aria-hidden>
+        <line
+          x1={preview.x0}
+          y1={preview.y0}
+          x2={preview.x1}
+          y2={preview.y1}
+          stroke="#333333"
+          strokeWidth={strokeW}
+          strokeLinecap="butt"
+        />
+        {arrowHead}
+      </g>
+    );
+    previewSvg = previewMount ? createPortal(strokePreview, previewMount) : null;
   } else if (preview?.mode === 'box') {
-    const { visual } = preview;
+    const { visual, geom } = preview;
     if (visual.width >= 3 || visual.height >= 3) {
       sizeLabel = `${Math.round(visual.width)} × ${Math.round(visual.height)}`;
       labelX = visual.left + visual.width / 2;
       labelY = visual.top;
     }
+    const pathD =
+      getShapeBaselineD(
+        { key: 'shape', width: geom.width, height: geom.height, attrs: { shapeType: kind } },
+        { width: geom.width, height: geom.height }
+      ) || `M 0 0 H ${Math.max(1, geom.width)} V ${Math.max(1, geom.height)} H 0 Z`;
+    const boxPreview = (
+      <g data-shape-draw-preview pointerEvents="none" aria-hidden>
+        <g transform={`translate(${geom.left} ${geom.top})`}>
+          <path
+            d={pathD}
+            fill="rgba(255,255,255,0.85)"
+            stroke="#333333"
+            strokeWidth={strokeW}
+            strokeLinecap="butt"
+            strokeLinejoin="miter"
+          />
+        </g>
+      </g>
+    );
+    previewSvg = previewMount ? createPortal(boxPreview, previewMount) : null;
   }
 
   const labelFont = 10 * inv;
@@ -519,7 +472,7 @@ function ShapeDrawFeature({
 
   return (
     <>
-      <RcbSceneOverlayCanvas ref={overlayRef} zClass="z-20" />
+      {previewSvg}
       {sizeLabel ? (
         <div
           data-shape-draw-preview-label

@@ -8,8 +8,13 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { previewSvgNodeCornerRadii, snapSvgSurfaceBox } from '@/components/rcb/scene/paint/sceneToSvg';
-import { useRcbCamera, useRcbDevicePixelRatio } from '@/components/rcb/camera/context';
+import {
+  hostChromeBodyTransform,
+  hostMirrorSvgProps,
+  previewSvgNodeCornerRadii,
+  sceneSurfaceSvgProps,
+} from '@/components/rcb/scene/paint/sceneToSvg';
+import { useRcbCamera } from '@/components/rcb/camera/context';
 import {
   clampCornerRadii,
   cornerVertexCount,
@@ -23,7 +28,6 @@ import {
   type CornerRadii,
   type SharpCornerSite,
 } from '@/components/rcb/scene/document/sceneRadii';
-import { strokeChromeOutset } from '@/components/rcb/scene/document/sceneEffects';
 import { patchDocumentNode } from '@/store/modules/editor';
 import {
   getShapeHost,
@@ -32,7 +36,12 @@ import {
   subscribeShapeHosts,
 } from '@/components/rcb/shapes/shapeHostRegistry';
 import type { SceneBox } from '../alignGuides';
-import { WorldScreenBadge } from '../SelectionChrome';
+import {
+  CHROME_HANDLE_HIT_PX,
+  CHROME_HANDLE_VIS_PX,
+  CHROME_STROKE_PX,
+  WorldScreenBadge,
+} from '../SelectionChrome';
 
 /** Soft-click threshold (screen px²) — match SelectionFeature. */
 const DRAG_DISTANCE_SQUARED = 16;
@@ -41,9 +50,9 @@ const DRAG_DISTANCE_SQUARED = 16;
  * Screen-constant sizes under world CSS camera scale(z) — same contract as
  * SelectionChrome / path chrome knobs (scene = screenPx / zoom).
  */
-const RADIUS_VIS_PX = 8;
-const RADIUS_HIT_PX = 18;
-const RADIUS_STROKE_PX = 1.5;
+const RADIUS_VIS_PX = CHROME_HANDLE_VIS_PX;
+const RADIUS_HIT_PX = CHROME_HANDLE_HIT_PX;
+const RADIUS_STROKE_PX = CHROME_STROKE_PX;
 const RADIUS_REVEAL_DIST_PX = 56;
 /**
  * When R≈0 (or R is still small), seat this many screen px inside the corner
@@ -60,9 +69,8 @@ function liveNodeEl(nodeId: string): Element | null {
 }
 
 /**
- * Twin the shape-host infinite SVG viewport (HostPathChrome sel-knob contract).
- * Local children paint in host-local box space (0..w, 0..h); sceneChildren stay
- * in absolute scene coords (badges).
+ * Twin the shape-host SVG viewport.
+ * Local children: host-local box; sceneChildren: absolute scene (badges).
  */
 function HostMirroredKnobSvg({
   nodeId,
@@ -78,7 +86,6 @@ function HostMirroredKnobSvg({
   sceneChildren?: ReactNode;
 }) {
   const camera = useRcbCamera();
-  const dpr = useRcbDevicePixelRatio();
   const [hostEpoch, setHostEpoch] = useState(0);
   useEffect(() => subscribeShapeHosts(() => setHostEpoch((n) => n + 1)), []);
 
@@ -88,49 +95,24 @@ function HostMirroredKnobSvg({
   const w = Math.max(1, box.width);
   const h = Math.max(1, box.height);
   const pad = 32;
-
-  const hostViewBox = hostRoot?.getAttribute?.('viewBox') || '';
-  const hostCssLeft = hostRoot?.style?.left || '';
-  const hostCssTop = hostRoot?.style?.top || '';
-  const hostCssW = hostRoot?.style?.width || '';
-  const hostCssH = hostRoot?.style?.height || '';
-  const mirrored = Boolean(hostRoot && hostViewBox && hostCssLeft && hostCssTop);
   void hostEpoch;
 
-  const hostTransform = el?.getAttribute?.('transform') || '';
-  let bodyTransform: string;
-  if (mirrored && hostTransform) {
-    bodyTransform = hostTransform;
-  } else if (mirrored) {
-    const hl = Number((el as any)?.__sceneLeft);
-    const ht = Number((el as any)?.__sceneTop);
-    bodyTransform = `translate(${Number.isFinite(hl) ? hl : box.left} ${Number.isFinite(ht) ? ht : box.top})`;
-  } else if (Math.abs(angle) > 0.001) {
-    bodyTransform = `translate(${box.left} ${box.top}) rotate(${angle} ${w / 2} ${h / 2})`;
-  } else {
-    bodyTransform = `translate(${box.left} ${box.top})`;
-  }
+  const mirror = hostRoot ? hostMirrorSvgProps(hostRoot) : null;
+  const mirrored = Boolean(mirror);
+  const bodyTransform = hostChromeBodyTransform(el, box, angle, mirrored);
 
-  if (mirrored && hostRoot) {
-    const attrW = hostRoot.getAttribute('width');
-    const attrH = hostRoot.getAttribute('height');
+  if (mirror) {
     return (
       <svg
         data-rcb-infinite="1"
         className="absolute z-[28] overflow-visible"
         preserveAspectRatio="none"
-        viewBox={hostViewBox}
-        width={attrW || undefined}
-        height={attrH || undefined}
+        viewBox={mirror.viewBox}
+        width={mirror.width}
+        height={mirror.height}
         style={{
-          left: hostCssLeft,
-          top: hostCssTop,
-          width: hostCssW || hostRoot.style.width,
-          height: hostCssH || hostRoot.style.height,
-          overflow: 'visible',
+          ...mirror.style,
           pointerEvents: 'none',
-          display: 'block',
-          shapeRendering: 'geometricPrecision',
         }}
         aria-hidden
       >
@@ -142,15 +124,14 @@ function HostMirroredKnobSvg({
     );
   }
 
-  const surf = snapSvgSurfaceBox(
+  const surf = sceneSurfaceSvgProps(
     {
       left: box.left - pad,
       top: box.top - pad,
       width: w + pad * 2,
       height: h + pad * 2,
     },
-    camera,
-    dpr
+    camera
   );
 
   return (
@@ -158,18 +139,12 @@ function HostMirroredKnobSvg({
       data-rcb-infinite="1"
       className="absolute z-[28] overflow-visible"
       preserveAspectRatio="none"
-      viewBox={`${surf.left} ${surf.top} ${surf.width} ${surf.height}`}
       width={surf.width}
       height={surf.height}
+      viewBox={surf.viewBox}
       style={{
-        left: surf.left,
-        top: surf.top,
-        width: surf.width,
-        height: surf.height,
-        overflow: 'visible',
+        ...surf.style,
         pointerEvents: 'none',
-        display: 'block',
-        shapeRendering: 'geometricPrecision',
       }}
       aria-hidden
     >
@@ -398,8 +373,9 @@ function CornerRadiusHandlesOverlay({
   const revealDist = RADIUS_REVEAL_DIST_PX;
   const k = 1 / z;
   const parkScene = RADIUS_PARK_PX * k;
-  // `box` is the chrome AABB; path sites are geometry-local.
-  const geomOutset = strokeChromeOutset(node);
+  // `box` prop is path geom (caller deflates visual chrome). Host-mirrored
+  // local space is also geom — path sites need no chrome pad.
+  const geomOutset = 0;
   const halfSide = Math.min(w, h) / 2;
 
   const radiusHandleInset = (r: number) => radiusSeatInset(r, halfSide, parkScene);

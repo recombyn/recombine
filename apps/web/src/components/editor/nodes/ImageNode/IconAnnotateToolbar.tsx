@@ -21,7 +21,7 @@ const BTN =
 const BTN_ACTIVE = 'bg-white/15 text-white';
 
 /**
- * Icon annotate strip (fig.1): pen · select · text · color · stroke width.
+ * Icon annotate strip: pen · select · text · color · stroke width.
  * No photo tools (remove-bg / upscale / eraser …).
  */
 function IconAnnotateToolbar({ downloadSlot }: Props): ReactNode {

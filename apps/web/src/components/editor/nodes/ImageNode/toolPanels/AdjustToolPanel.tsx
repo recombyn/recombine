@@ -72,7 +72,7 @@ export function parseAdjustValues(raw: unknown): AdjustValues {
   return out;
 }
 
-/** Fig.5 — Adjust: category tabs + light/color sliders (live preview via onChange). */
+/** Adjust: category tabs + light/color sliders (live preview via onChange). */
 function AdjustToolPanel({
   initialValues,
   onCancel,

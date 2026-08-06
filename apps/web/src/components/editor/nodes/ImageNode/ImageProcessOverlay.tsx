@@ -1,9 +1,5 @@
 import { useMemo, type CSSProperties, type ReactNode, memo } from 'react';
-import {
-  RcbOverlayPortal,
-  useRcbCamera,
-  rcbSceneToScreen,
-} from '@/components/rcb';
+import { useRcbCamera, rcbCameraCssZoom } from '@/components/rcb';
 import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
@@ -14,33 +10,29 @@ function readNodeAngle(node: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function useProcessStageBox(document: any, node: any) {
+function useProcessWorldBox(document: any, node: any) {
   const camera = useRcbCamera();
   const { left, top } = nodeLeftTop(document, node);
   const width = Math.max(1, Number(node.width) || 1);
   const height = Math.max(1, Number(node.height) || 1);
-  const z = Math.max(0.05, camera.zoom || 1);
-  const origin = rcbSceneToScreen(camera, left, top);
-  const stageW = width * z;
-  const stageH = height * z;
+  const z = rcbCameraCssZoom(camera);
+  const inv = 1 / z;
   const radii = radiiFromAttrs(node.attrs || {});
   const angle = readNodeAngle(node);
   return {
-    camera,
     left,
     top,
     width,
     height,
     z,
-    origin,
-    stageW,
-    stageH,
+    inv,
     angle,
-    borderRadius: `${radii.tl * z}px ${radii.tr * z}px ${radii.br * z}px ${radii.bl * z}px`,
+    // Radii stay in scene units (shell is under camera scale).
+    borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
   };
 }
 
-/** Shimmer plate + status pill, both locked to the node's rotation. */
+/** Shimmer plate + status pill on the world layer (same lattice as the control box). */
 function ProcessNodeChrome({
   nodeId,
   node,
@@ -50,21 +42,26 @@ function ProcessNodeChrome({
   node: any;
   document: any;
 }): ReactNode {
-  const { origin, stageW, stageH, borderRadius, angle } = useProcessStageBox(document, node);
+  const { left, top, width, height, inv, borderRadius, angle } = useProcessWorldBox(
+    document,
+    node
+  );
   const label = String(node.attrs?.processLabel || '处理中');
 
-  const frameStyle = useMemo(
-    (): CSSProperties => ({
+  const frameStyle = useMemo((): CSSProperties => {
+    const style: CSSProperties = {
       position: 'absolute',
-      left: origin.x,
-      top: origin.y,
-      width: stageW,
-      height: stageH,
-      transform: Math.abs(angle) > 0.001 ? `rotate(${angle}deg)` : undefined,
-      transformOrigin: 'center center',
-    }),
-    [origin.x, origin.y, stageW, stageH, angle]
-  );
+      left,
+      top,
+      width,
+      height,
+    };
+    if (Math.abs(angle) > 0.001) {
+      style.transform = `rotate(${angle}deg)`;
+      style.transformOrigin = 'center center';
+    }
+    return style;
+  }, [left, top, width, height, angle]);
 
   const shimmerStyle = useMemo(
     (): CSSProperties => ({
@@ -75,14 +72,16 @@ function ProcessNodeChrome({
     [borderRadius]
   );
 
+  // Counter-scale the pill so typography stays screen-constant under camera zoom.
   const pillStyle = useMemo(
     (): CSSProperties => ({
       position: 'absolute',
       left: '50%',
-      top: stageH - PILL_BOTTOM_PAD_PX,
-      transform: 'translate(-50%, -100%)',
+      top: height - PILL_BOTTOM_PAD_PX * inv,
+      transform: `translate(-50%, -100%) scale(${inv})`,
+      transformOrigin: 'center bottom',
     }),
-    [stageH]
+    [height, inv]
   );
 
   return (
@@ -109,9 +108,8 @@ function ProcessNodeChrome({
 }
 
 /**
- * Screen-fixed shimmer + status pills for image process jobs.
- * The SVG plate stays in world space; shimmer/label are portaled so zoom
- * does not enlarge the sweep animation typography — but they rotate with the node.
+ * World-layer shimmer + status pills for image process jobs.
+ * Same positioning contract as selection chrome — no unscaled overlay portal.
  */
 function ImageProcessOverlay({
   document,
@@ -127,20 +125,20 @@ function ImageProcessOverlay({
       const node = document?.deltaSetLike?.[id];
       if (node?.key !== 'image' && node?.key !== 'video') return false;
       // Include generator plates while generating (same sweep as process jobs).
-      return String(node?.attrs?.processStatus || '') === 'running';
+      return String(node.attrs?.processStatus || '') === 'running';
     });
   }, [document]);
 
   if (hidden || !ids.length) return null;
 
   return (
-    <RcbOverlayPortal>
+    <>
       {ids.map((id) => {
         const node = document.deltaSetLike[id];
         if (!node) return null;
         return <ProcessNodeChrome key={id} nodeId={id} node={node} document={document} />;
       })}
-    </RcbOverlayPortal>
+    </>
   );
 }
 
