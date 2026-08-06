@@ -130,6 +130,9 @@ const THEME_FOLLOW_CANVAS_BGS = new Set([
   '#f3f3f3',
   '#f5f5f5',
   '#fafafa',
+  // Dark theme `--canvas` / near-canvas neutrals
+  '#1e1e1e',
+  '#141414',
 ]);
 
 export function isThemeFollowCanvasBg(raw: string) {
@@ -146,6 +149,17 @@ export function canvasFillToDocumentMeta(next: FillPanelValue, followTheme: bool
     backgroundImageFit: next.fillImageFit,
     backgroundImageRotate: next.fillImageRotate,
     backgroundImageAdjust: next.fillImageAdjust,
+  };
+}
+
+/** Clear user-saved canvas fill so the stage follows theme `--canvas` again. */
+export function themeDefaultCanvasMeta() {
+  return {
+    backgroundColor: '',
+    backgroundFillType: 'solid',
+    backgroundOpacity: 100,
+    backgroundGradient: '',
+    backgroundImageSrc: '',
   };
 }
 
@@ -403,6 +417,7 @@ function EditorBottomHud({
                       next.fillType === 'solid' && isThemeFollowCanvasBg(next.fillColor);
                     dispatch(setCanvasMeta(canvasFillToDocumentMeta(next, follow)));
                   }}
+                  onReset={() => dispatch(setCanvasMeta(themeDefaultCanvasMeta()))}
                 />
                 <HudBtn tip={t('editor.layers')} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
                   <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
