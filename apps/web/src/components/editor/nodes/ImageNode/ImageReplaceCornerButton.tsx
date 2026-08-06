@@ -113,7 +113,7 @@ function ImageReplaceCornerButton({
           className={
             visible
               ? 'pointer-events-auto absolute opacity-100 transition-opacity duration-150'
-              : 'pointer-events-auto absolute opacity-0 transition-opacity duration-150'
+              : 'pointer-events-none absolute opacity-0 transition-opacity duration-150'
           }
           style={btnWrapStyle}
           onPointerDown={(e) => e.stopPropagation()}

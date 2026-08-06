@@ -8,6 +8,12 @@ export const DEFAULT_GRID_SIZE = 1;
 
 /** Screen-px threshold for object-to-object smart guides. */
 export const SMART_SNAP_PX = 5;
+/**
+ * Cap scene-space snap for every zoom. Uncapped `SMART_SNAP_PX/zoom` stays
+ * screen-constant, but at low zoom that is dozens of document cells and feels
+ * like a distant magnet. High zoom is unchanged (5/zoom already &lt; this cap).
+ */
+export const SMART_SNAP_SCENE_MAX = 8;
 
 /** Alignment + spacing guide color. */
 export const SMART_GUIDE_COLOR = '#FF6B35';
@@ -36,8 +42,12 @@ export type SmartGuideGap = {
 
 export type SmartGuideLine = SmartGuideAlign | SmartGuideGap;
 
+/**
+ * Scene snap radius for guides — `min(screenPx/zoom, sceneCap)` at every zoom.
+ */
 export function smartSnapThreshold(zoom: number): number {
-  return SMART_SNAP_PX / Math.max(0.05, Number(zoom) || 1);
+  const z = Math.max(0.05, Number(zoom) || 1);
+  return Math.min(SMART_SNAP_PX / z, SMART_SNAP_SCENE_MAX);
 }
 
 type AxisMark = { value: number; role: 'min' | 'mid' | 'max' };
@@ -340,6 +350,25 @@ function finishSmartGuides(
   }
   const gaps = collectGapGuides(box, targets);
   return [...aligns, ...gaps];
+}
+
+/**
+ * Paint-only guides for the current box — gaps always; aligns when edges
+ * coincide within `eps` (does not move the box).
+ */
+export function collectSmartGuidesAt(
+  box: SceneBox,
+  targets: SceneBox[],
+  eps: number = GUIDE_COINCIDE_EPS
+): SmartGuideLine[] {
+  const coincide = Math.max(GUIDE_COINCIDE_EPS, Number(eps) || 0);
+  const aligns = collectAlignGuides(box, targets, coincide).map((g) => ({
+    ...g,
+    marks: g.marks?.length
+      ? g.marks
+      : marksAlongGuide(box, targets, g.axis, g.at, GUIDE_COINCIDE_EPS),
+  }));
+  return [...aligns, ...collectGapGuides(box, targets)];
 }
 
 /** Snap a moving AABB to sibling path edges / centers. */

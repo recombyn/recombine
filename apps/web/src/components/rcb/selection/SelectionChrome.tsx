@@ -51,10 +51,19 @@ type SelectionChromeProps = {
  */
 export const CHROME_STROKE_PX = 1.5;
 export const CHROME_HANDLE_VIS_PX = 8;
-export const CHROME_HANDLE_HIT_PX = 18;
+/**
+ * Resize hit — barely larger than the 8px knob. Hits follow the icon; do not
+ * inflate into a big magnet that swallows radius seats inside the box.
+ */
+export const CHROME_HANDLE_HIT_PX = 10;
+/** Corner-radius hit — icon-sized, slightly under resize so corner prefers scale. */
+export const CHROME_RADIUS_HIT_PX = 8;
+/** Air between resize hit edge and radius hit edge (screen px). */
+export const CHROME_RADIUS_PARK_GAP_PX = 6;
 /** Transparent rotate hotzone (screen px) — shared with HostPathChrome. */
-export const CHROME_ROTATE_HIT_PX = 22;
-export const CHROME_ROTATE_GAP_PX = 2;
+export const CHROME_ROTATE_HIT_PX = 14;
+/** Air between resize hit outer edge and rotate hit inner edge (screen px). */
+export const CHROME_ROTATE_GAP_PX = 8;
 /** Line / arrow endpoint chrome (screen px). */
 export const CHROME_LINE_ENDPOINT_VIS_PX = 8;
 export const CHROME_LINE_ENDPOINT_HALO_PX = 22;
@@ -74,6 +83,83 @@ export function rotateHotzoneOutward(
   rotateHit: number
 ): number {
   return handleHit / 2 + rotateGap + rotateHit / 2;
+}
+
+/**
+ * Scene pad so resize + rotate hits outside the geom (and chromeOutset) still
+ * receive pointer events when the chrome SVG is tight to the box.
+ */
+export function chromeOutsideHitPadScene(
+  inv: number,
+  chromeOutset = 0,
+  strokePad = 0
+): number {
+  const outset = Math.max(0, chromeOutset);
+  const handleHit = CHROME_HANDLE_HIT_PX * inv;
+  const rotateHit = CHROME_ROTATE_HIT_PX * inv;
+  const rotateGap = CHROME_ROTATE_GAP_PX * inv;
+  const rotateOuter =
+    rotateHotzoneOutward(handleHit, rotateGap, rotateHit) + rotateHit / 2;
+  return Math.max(strokePad, outset + handleHit / 2, outset + rotateOuter);
+}
+
+/**
+ * Screen px from corner (resize / control-box icon center) → radius seat when R≈0.
+ * Both hits are centered on their icons; axis park `(inset, inset)` clears
+ * `halfResizeHit + halfRadiusHit + gap` along each axis.
+ */
+export function radiusHandleParkScreenPx(): number {
+  return CHROME_HANDLE_HIT_PX / 2 + CHROME_RADIUS_HIT_PX / 2 + CHROME_RADIUS_PARK_GAP_PX;
+}
+
+/**
+ * Scene park for radius seats at any zoom.
+ * Ideal park is screen-constant; on-screen budget keeps the seat near the
+ * corner so low zoom cannot park/hit near the center and steal move.
+ */
+export function radiusParkSceneForBox(
+  boxW: number,
+  boxH: number,
+  zoom: number,
+  parkPx = radiusHandleParkScreenPx()
+): number {
+  const z = Math.max(0.05, Number(zoom) || 1);
+  const half = Math.min(Math.max(1, boxW), Math.max(1, boxH)) / 2;
+  const minScreen = Math.min(Math.max(1, boxW), Math.max(1, boxH)) * z;
+  // Keep park ≤ ~22% of on-screen min side so the seat stays near the corner.
+  const screenBudget = Math.max(0, minScreen * 0.22);
+  const px = Math.min(Math.max(0, parkPx), screenBudget);
+  return Math.min(px / z, half * 0.45);
+}
+
+/**
+ * True when the box is large enough on screen for radius hits without covering move.
+ */
+export function radiusHandlesFitOnScreen(
+  boxW: number,
+  boxH: number,
+  zoom: number,
+  parkPx = radiusHandleParkScreenPx()
+): boolean {
+  const z = Math.max(0.05, Number(zoom) || 1);
+  const minScreen = Math.min(Math.max(1, boxW), Math.max(1, boxH)) * z;
+  return minScreen >= parkPx * 2 + CHROME_HANDLE_HIT_PX;
+}
+
+/**
+ * Scale chrome hit pads down when the box is tiny on screen so move stays reachable.
+ * Driven by on-screen size (any zoom), not a single zoom value.
+ */
+export function chromeHitScaleForBox(
+  boxW: number,
+  boxH: number,
+  zoom: number,
+  minScreenPx = 56
+): number {
+  const z = Math.max(0.05, Number(zoom) || 1);
+  const minScreen = Math.min(Math.max(1, boxW), Math.max(1, boxH)) * z;
+  if (minScreen >= minScreenPx) return 1;
+  return Math.max(0.35, minScreen / minScreenPx);
 }
 
 /** Scene AABB that covers a (possibly rotated) box plus chrome pad. */
@@ -373,11 +459,18 @@ function selectResizeKnobs(opts: {
   const { lineMode, cornerHandlesOnly, edgeHandles, w, h } = opts;
   if (lineMode) return [['w', 0, h / 2], ['e', w, h / 2]];
   const all = buildAllKnobs(w, h);
-  if (cornerHandlesOnly) return all.filter(([dir]) => isCornerHandle(dir));
-  if (edgeHandles === 'horizontal') {
-    return all.filter(([dir]) => isCornerHandle(dir) || dir === 'e' || dir === 'w');
+  let picked: Knob[];
+  if (cornerHandlesOnly) picked = all.filter(([dir]) => isCornerHandle(dir));
+  else if (edgeHandles === 'horizontal') {
+    picked = all.filter(([dir]) => isCornerHandle(dir) || dir === 'e' || dir === 'w');
+  } else {
+    picked = all;
   }
-  return all;
+  // Edges first, corners last — corner hits must win when AABBs overlap on tiny boxes.
+  return [
+    ...picked.filter(([dir]) => isEdgeHandle(dir)),
+    ...picked.filter(([dir]) => isCornerHandle(dir)),
+  ];
 }
 
 function selectVisualKnobs(
@@ -429,13 +522,14 @@ function SelectionChrome({
   const lineMode = variant === 'line';
 
   const stroke = CHROME_STROKE_PX * inv;
+  const hitScale = chromeHitScaleForBox(w, h, z);
   const handleVis = CHROME_HANDLE_VIS_PX * inv;
-  const handleHit = CHROME_HANDLE_HIT_PX * inv;
+  const handleHit = CHROME_HANDLE_HIT_PX * inv * hitScale;
   const lineEpVis = CHROME_LINE_ENDPOINT_VIS_PX * inv;
   const lineEpHalo = CHROME_LINE_ENDPOINT_HALO_PX * inv;
-  const lineEpHit = CHROME_LINE_ENDPOINT_HIT_PX * inv;
-  const lineShaftHit = CHROME_LINE_SHAFT_HIT_PX * inv;
-  const rotateHit = CHROME_ROTATE_HIT_PX * inv;
+  const lineEpHit = CHROME_LINE_ENDPOINT_HIT_PX * inv * hitScale;
+  const lineShaftHit = CHROME_LINE_SHAFT_HIT_PX * inv * hitScale;
+  const rotateHit = CHROME_ROTATE_HIT_PX * inv * hitScale;
   const rotateGap = CHROME_ROTATE_GAP_PX * inv;
   const metaOffset = 16 * inv;
   const metaFont = 10 * inv;
@@ -470,16 +564,6 @@ function SelectionChrome({
   const lineLen = Math.hypot(lineEnd.x - lineStart.x, lineEnd.y - lineStart.y) || 1;
   const lineAngleDeg =
     (Math.atan2(lineEnd.y - lineStart.y, lineEnd.x - lineStart.x) * 180) / Math.PI;
-
-  const edgeHits: Array<[ResizeHandle, number, number]> =
-    !lineMode && !cornerHandlesOnly && edgeHandles === 'all'
-      ? [
-          ['n', w / 2, 0],
-          ['s', w / 2, h],
-          ['e', w, h / 2],
-          ['w', 0, h / 2],
-        ]
-      : [];
 
   // World root when available (hits + lattice). Fallback: box outline only —
   // never include 1/zoom handle pads (that desynced chrome from ink).
@@ -516,6 +600,40 @@ function SelectionChrome({
           {metaLabel}
         </text>
       ) : null}
+
+      {showRotate && !lineMode
+        ? ROTATE_CORNERS.map(({ corner, localX, localY, iconDeg, label }) => {
+            // Under resize hits in paint order — control-box / corner prefer scale.
+            const signX = localX === 0 ? -1 : 1;
+            const signY = localY === 0 ? -1 : 1;
+            const out = rotateHotzoneOutward(handleHit, rotateGap, rotateHit);
+            // Rotate measures from the control-box / resize icon center (same as hit).
+            const cornerPt = toScene(localX * w, localY * h);
+            const cx = cornerPt.x + signX * out;
+            const cy = cornerPt.y + signY * out;
+            return (
+              <g key={`rot-${corner}`} className="sel-hit" transform={`translate(${cx} ${cy})`}>
+                <title>{label}</title>
+                <rect
+                  data-sel-handle="rotate"
+                  data-rotate-corner={corner}
+                  data-testid={`selection.rotate.${corner}`}
+                  role="button"
+                  aria-label={label}
+                  x={-rotateHit / 2}
+                  y={-rotateHit / 2}
+                  width={rotateHit}
+                  height={rotateHit}
+                  fill="transparent"
+                  style={{
+                    pointerEvents: 'all',
+                    cursor: cursorForRotate(iconDeg, angle),
+                  }}
+                />
+              </g>
+            );
+          })
+        : null}
 
       {lineMode ? (
         <g transform={`translate(${lineStart.x} ${lineStart.y}) rotate(${lineAngleDeg})`}>
@@ -558,18 +676,18 @@ function SelectionChrome({
           ) : null}
           {showHandles
             ? visualKnobs.map(([dir, lx, ly]) => (
-                <g key={`knob-${dir}`} style={{ pointerEvents: 'none' }}>
+                <g key={`knob-${dir}`} transform={`translate(${lx} ${ly})`} style={{ pointerEvents: 'none' }}>
                   <rect
-                    x={lx - halfVis}
-                    y={ly - halfVis}
+                    x={-halfVis}
+                    y={-halfVis}
                     width={handleVis}
                     height={handleVis}
                     fill="#ffffff"
                     stroke="none"
                   />
                   <rect
-                    x={lx - halfVis}
-                    y={ly - halfVis}
+                    x={-halfVis}
+                    y={-halfVis}
                     width={handleVis}
                     height={handleVis}
                     fill="none"
@@ -580,37 +698,21 @@ function SelectionChrome({
               ))
             : null}
           {showHandles
-            ? edgeHits.map(([dir, lx, ly]) => (
-                <rect
-                  key={`edge-hit-${dir}`}
-                  {...{ [handleDataAttr]: handleDataValue }}
-                  data-resize={dir}
-                  role="button"
-                  aria-label={`resize-${dir}`}
-                  x={lx - halfHit}
-                  y={ly - halfHit}
-                  width={handleHit}
-                  height={handleHit}
-                  fill="transparent"
-                  style={{ pointerEvents: 'all', cursor: cursorForResize(dir, angle) }}
-                />
-              ))
-            : null}
-          {showHandles
             ? knobs.map(([dir, lx, ly]) => (
-                <rect
-                  key={`hit-${dir}`}
-                  {...{ [handleDataAttr]: handleDataValue }}
-                  data-resize={dir}
-                  role="button"
-                  aria-label={`resize-${dir}`}
-                  x={lx - halfHit}
-                  y={ly - halfHit}
-                  width={handleHit}
-                  height={handleHit}
-                  fill="transparent"
-                  style={{ pointerEvents: 'all', cursor: cursorForResize(dir, angle) }}
-                />
+                <g key={`hit-${dir}`} transform={`translate(${lx} ${ly})`}>
+                  <rect
+                    {...{ [handleDataAttr]: handleDataValue }}
+                    data-resize={dir}
+                    role="button"
+                    aria-label={`resize-${dir}`}
+                    x={-halfHit}
+                    y={-halfHit}
+                    width={handleHit}
+                    height={handleHit}
+                    fill="transparent"
+                    style={{ pointerEvents: 'all', cursor: cursorForResize(dir, angle) }}
+                  />
+                </g>
               ))
             : null}
         </g>
@@ -646,39 +748,6 @@ function SelectionChrome({
                   height={lineEpHit}
                   fill="transparent"
                   style={{ pointerEvents: 'all', cursor: 'grab' }}
-                />
-              </g>
-            );
-          })
-        : null}
-
-      {showRotate && !lineMode
-        ? ROTATE_CORNERS.map(({ corner, localX, localY, iconDeg, label }) => {
-            // Axis-aligned outer quadrant — same lattice as resize knobs.
-            const signX = localX === 0 ? -1 : 1;
-            const signY = localY === 0 ? -1 : 1;
-            const out = rotateHotzoneOutward(handleHit, rotateGap, rotateHit);
-            const cornerPt = toScene(localX * w, localY * h);
-            const cx = cornerPt.x + signX * out;
-            const cy = cornerPt.y + signY * out;
-            return (
-              <g key={`rot-${corner}`} className="sel-hit" transform={`translate(${cx} ${cy})`}>
-                <title>{label}</title>
-                <rect
-                  data-sel-handle="rotate"
-                  data-rotate-corner={corner}
-                  data-testid={`selection.rotate.${corner}`}
-                  role="button"
-                  aria-label={label}
-                  x={-rotateHit / 2}
-                  y={-rotateHit / 2}
-                  width={rotateHit}
-                  height={rotateHit}
-                  fill="transparent"
-                  style={{
-                    pointerEvents: 'all',
-                    cursor: cursorForRotate(iconDeg, angle),
-                  }}
                 />
               </g>
             );
