@@ -193,6 +193,26 @@ def _op_names(ops: list[dict[str, Any]]) -> list[str]:
     return [str(o.get("name") or o.get("op_key") or "") for o in ops]
 
 
+def _propose_ask_ids(
+    monkeypatch: Any,
+    *,
+    ops: list[dict[str, Any]],
+    prompt: str,
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Propose once; return (proposed_ops, proposal_id, task_id)."""
+    _mock_paint_path(monkeypatch, intent="create", ops=ops)
+    events = _ask(prompt=prompt, scene_nodes=[], **_BOARD)
+    res = events_by_type(events, "result")[-1]
+    proposed = [o for o in (res.get("proposed_ops") or []) if isinstance(o, dict)]
+    proposal_id = str(res.get("proposal_id") or "").strip()
+    task_id = str(res.get("task_id") or "").strip()
+    if not task_id:
+        status = events_by_type(events, "status")
+        task_id = str((status[0] if status else {}).get("task_id") or "").strip()
+    assert proposed and proposal_id and task_id, res
+    return proposed, proposal_id, task_id
+
+
 @pytest.mark.integration
 def test_agent_create_text_and_shape(monkeypatch):
     _mock_paint_path(
@@ -296,6 +316,95 @@ def test_ask_design_propose_then_confirm_apply(monkeypatch):
     names = _op_names([o for o in (applied[0].get("ops") or []) if isinstance(o, dict)])
     assert "create_text" in names
     assert events_by_type(confirm_events, "result")
+
+
+@pytest.mark.integration
+def test_ask_typed_confirm_via_proposal_id(monkeypatch):
+    """Ask typed「确认」with proposal_id (no apply_ops) → intent apply → live tool_ops."""
+    proposed, proposal_id, task_id = _propose_ask_ids(
+        monkeypatch,
+        ops=[
+            {
+                "name": "create_text",
+                "args": {"text": "Typed Confirm", "x": 60, "y": 60, "w": 280, "h": 56},
+            }
+        ],
+        prompt="加个标题 Typed Confirm",
+    )
+    del proposed
+
+    async def _classify_confirm(**kwargs: Any) -> IntentClassifyDecision:
+        pending = kwargs.get("pending_proposal")
+        if isinstance(pending, dict) and pending.get("ops"):
+            return IntentClassifyDecision(
+                intent="design",
+                paint_lane="create",
+                proposal_action="apply",
+                rationale="typed_confirm",
+            )
+        return IntentClassifyDecision(
+            intent="design", paint_lane="create", rationale="unexpected"
+        )
+
+    monkeypatch.setattr(
+        "app.services.design.runtime.graph.nodes.intent.classify_user_intent",
+        _classify_confirm,
+    )
+    confirm_events = _ask(
+        prompt="确认",
+        proposal_id=proposal_id,
+        proposal_task_id=task_id,
+        scene_nodes=[],
+        **_BOARD,
+    )
+    applied = events_by_type(confirm_events, "tool_ops")
+    assert applied, confirm_events
+    assert "create_text" in _op_names(
+        [o for o in (applied[0].get("ops") or []) if isinstance(o, dict)]
+    )
+
+
+@pytest.mark.integration
+def test_ask_typed_dismiss_via_proposal_id(monkeypatch):
+    """Ask typed dismiss with proposal_id → settle, no live tool_ops."""
+    _, proposal_id, task_id = _propose_ask_ids(
+        monkeypatch,
+        ops=[
+            {
+                "name": "create_text",
+                "args": {"text": "Will Cancel", "x": 60, "y": 60, "w": 280, "h": 56},
+            }
+        ],
+        prompt="加个标题 Will Cancel",
+    )
+
+    async def _classify_dismiss(**kwargs: Any) -> IntentClassifyDecision:
+        pending = kwargs.get("pending_proposal")
+        if isinstance(pending, dict) and pending.get("ops"):
+            return IntentClassifyDecision(
+                intent="chat",
+                proposal_action="dismiss",
+                reply="已取消",
+                rationale="typed_dismiss",
+            )
+        return IntentClassifyDecision(intent="chat", reply="hi", rationale="x")
+
+    monkeypatch.setattr(
+        "app.services.design.runtime.graph.nodes.intent.classify_user_intent",
+        _classify_dismiss,
+    )
+    dismiss_events = _ask(
+        prompt="取消",
+        proposal_id=proposal_id,
+        proposal_task_id=task_id,
+        scene_nodes=[],
+        **_BOARD,
+    )
+    assert not events_by_type(dismiss_events, "tool_ops")
+    tokens = "".join(
+        str(e.get("text") or "") for e in dismiss_events if e.get("type") == "token"
+    )
+    assert "取消" in tokens or "已取消" in tokens
 
 
 @pytest.mark.integration
