@@ -28,6 +28,8 @@ import {
   CHROME_ROTATE_GAP_PX,
   CHROME_ROTATE_HIT_PX,
   CHROME_STROKE_PX,
+  chromeHitScaleForBox,
+  chromeOutsideHitPadScene,
   cursorForResize,
   rotateHotzoneOutward,
 } from './SelectionChrome';
@@ -102,6 +104,28 @@ const SEL_BADGE_ATTR = 'data-rcb-sel-badge';
 const SEL_CHROME_LAYER_ATTR = 'data-rcb-sel-chrome-layer';
 const SEL_EP_HOVER_STYLE = 'g.sel-hit:hover > .sel-ep-halo { opacity: 1; }';
 
+/**
+ * World chrome layer hit-shell — must stay `0×0` + overflow visible (same as
+ * SelectionFeature / SvgCanvas overlay wrappers). Never full-bleed `inset-0`:
+ * that keeps paint visible but drops `data-sel-handle` out of hit-testing under
+ * world `[&>*]:pointer-events-auto`.
+ */
+export function selChromeLayerShell(): {
+  className: string;
+  width: string;
+  height: string;
+  zIndex: string;
+  pointerEvents: 'none';
+} {
+  return {
+    className: 'pointer-events-none absolute left-0 top-0 overflow-visible',
+    width: '0',
+    height: '0',
+    zIndex: '1000000',
+    pointerEvents: 'none',
+  };
+}
+
 function ensureSelEpHoverStyle(root: SVGSVGElement) {
   if (root.querySelector('style[data-rcb-sel-ep-style]')) return;
   const style = document.createElementNS(SVG_NS, 'style');
@@ -156,6 +180,10 @@ function boxFromLocalAnchor(
   return { left: centerX - cx, top: centerY - cy, width: w, height: h };
 }
 
+/**
+ * Host selection chrome mount. Applies {@link selChromeLayerShell}; inline
+ * pe:none beats world auto so only pe:all kids receive hits.
+ */
 function ensureSelChromeLayer(): HTMLElement | null {
   if (typeof document === 'undefined') return null;
   const world = document.querySelector('[data-rcb-world="1"]') as HTMLElement | null;
@@ -166,14 +194,68 @@ function ensureSelChromeLayer(): HTMLElement | null {
   if (!layer) {
     layer = document.createElement('div');
     layer.setAttribute(SEL_CHROME_LAYER_ATTR, '1');
-    layer.className = 'pointer-events-none absolute left-0 top-0 overflow-visible';
-    layer.style.zIndex = '1000000';
-    layer.style.width = '0';
-    layer.style.height = '0';
     world.appendChild(layer);
   }
-  if (world.lastElementChild !== layer) world.appendChild(layer);
+  const shell = selChromeLayerShell();
+  layer.className = shell.className;
+  layer.style.width = shell.width;
+  layer.style.height = shell.height;
+  layer.style.zIndex = shell.zIndex;
+  layer.style.pointerEvents = shell.pointerEvents;
+  // Do not re-append every sync — z-index already stacks above hosts.
   return layer;
+}
+
+/** Fingerprint for resize/rotate DOM — skip tear-down when only camera pan updates. */
+function hostSelHandlesKey(
+  o: ShapeOutlineItem,
+  stroke: number,
+  inv: number,
+  outlineD: string
+): string {
+  const b = o.box;
+  return [
+    o.withHandles ? 1 : 0,
+    o.showRotate ? 1 : 0,
+    o.lineMode ? 1 : 0,
+    o.shaftEndpoints ? 1 : 0,
+    o.cornerHandlesOnly ? 1 : 0,
+    o.edgeHandles || 'all',
+    o.color || '',
+    stroke.toFixed(5),
+    inv.toFixed(6),
+    b.left.toFixed(2),
+    b.top.toFixed(2),
+    b.width.toFixed(2),
+    b.height.toFixed(2),
+    (Number(o.angle) || 0).toFixed(3),
+    Number(o.chromeOutset) || 0,
+    outlineD.length,
+    outlineD.slice(0, 32),
+    outlineD.slice(-32),
+  ].join('|');
+}
+
+function syncHostSelHandlesIfNeeded(
+  chrome: SVGGElement,
+  o: ShapeOutlineItem,
+  stroke: number,
+  inv: number,
+  outlineD: string
+) {
+  const key = hostSelHandlesKey(o, stroke, inv, outlineD);
+  if (!o.withHandles) {
+    if (chrome.getAttribute('data-rcb-handles-key')) {
+      chrome
+        .querySelectorAll(`g.sel-hit,[data-sel-handle],[data-rcb-sel-knob],[${SEL_BOX_ATTR}]`)
+        .forEach((n) => n.remove());
+      chrome.removeAttribute('data-rcb-handles-key');
+    }
+    return;
+  }
+  if (chrome.getAttribute('data-rcb-handles-key') === key) return;
+  syncHostSelHandles(chrome, o, stroke, inv, outlineD);
+  chrome.setAttribute('data-rcb-handles-key', key);
 }
 
 function clearHostSelOutline(nodeId: string) {
@@ -232,11 +314,7 @@ function silhouettePathD(d: string): string {
 }
 
 /** Path chrome `d` — prefer live host baseline, else attrs path; single contour. */
-function readHostOutlinePathD(
-  _el: SVGElement | null | undefined,
-  baseline: SVGElement | null,
-  o: ShapeOutlineItem
-): string {
+function readHostOutlinePathD(baseline: SVGElement | null, o: ShapeOutlineItem): string {
   return silhouettePathD(readBaselinePathD(baseline, o.pathD));
 }
 
@@ -277,6 +355,42 @@ function nodeUsesOpenStrokeEndpoints(node: any): boolean {
   const t = String(node.attrs?.shapeType || '');
   return t === 'line' || t === 'arrow';}
 
+type BoxResizeKnob = ['n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw', number, number];
+
+/** Control-box resize seats for the given edge/corner policy. */
+function boxResizeKnobs(
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  opts: { cornerHandlesOnly?: boolean; edgeHandles?: 'all' | 'horizontal' | 'none' }
+): BoxResizeKnob[] {
+  if (opts.cornerHandlesOnly) {
+    return [
+      ['nw', bx, by],
+      ['ne', bx + bw, by],
+      ['se', bx + bw, by + bh],
+      ['sw', bx, by + bh],
+    ];
+  }
+  if (opts.edgeHandles === 'horizontal') {
+    return [
+      ['w', bx, by + bh / 2],
+      ['e', bx + bw, by + bh / 2],
+    ];
+  }
+  return [
+    ['nw', bx, by],
+    ['n', bx + bw / 2, by],
+    ['ne', bx + bw, by],
+    ['e', bx + bw, by + bh / 2],
+    ['se', bx + bw, by + bh],
+    ['s', bx + bw / 2, by + bh],
+    ['sw', bx, by + bh],
+    ['w', bx, by + bh / 2],
+  ];
+}
+
 function syncHostSelHandles(
   chrome: SVGGElement,
   o: ShapeOutlineItem,
@@ -287,13 +401,14 @@ function syncHostSelHandles(
   const w = Math.max(1, o.box.width);
   const h = Math.max(1, o.box.height);
   const color = o.color || '#3388ff';
+  const hitScale = chromeHitScaleForBox(w, h, 1 / Math.max(0.05, inv));
   const handleVis = CHROME_HANDLE_VIS_PX * inv;
-  const handleHit = CHROME_HANDLE_HIT_PX * inv;
+  const handleHit = CHROME_HANDLE_HIT_PX * inv * hitScale;
   const halfVis = handleVis / 2;
   const halfHit = handleHit / 2;
   const lineEpVis = CHROME_LINE_ENDPOINT_VIS_PX * inv;
-  const lineEpHit = CHROME_LINE_ENDPOINT_HIT_PX * inv;
-  const rotateHit = CHROME_ROTATE_HIT_PX * inv;
+  const lineEpHit = CHROME_LINE_ENDPOINT_HIT_PX * inv * hitScale;
+  const rotateHit = CHROME_ROTATE_HIT_PX * inv * hitScale;
   const rotateGap = CHROME_ROTATE_GAP_PX * inv;
 
   // Drop previous handle/rotate/box children (keep path silhouette outline).
@@ -380,33 +495,55 @@ function syncHostSelHandles(
   const edgeMode = o.edgeHandles || 'all';
   if (edgeMode === 'none') return;
 
-  const knobs: Array<
-    ['n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw', number, number]
-  > = o.cornerHandlesOnly
-    ? [
-        ['nw', bx, by],
-        ['ne', bx + bw, by],
-        ['se', bx + bw, by + bh],
-        ['sw', bx, by + bh],
-      ]
-    : edgeMode === 'horizontal'
-      ? [
-          ['w', bx, by + bh / 2],
-          ['e', bx + bw, by + bh / 2],
-        ]
-      : [
-          ['nw', bx, by],
-          ['n', bx + bw / 2, by],
-          ['ne', bx + bw, by],
-          ['e', bx + bw, by + bh / 2],
-          ['se', bx + bw, by + bh],
-          ['s', bx + bw / 2, by + bh],
-          ['sw', bx, by + bh],
-          ['w', bx, by + bh / 2],
-        ];
+  const knobs = boxResizeKnobs(bx, by, bw, bh, {
+    cornerHandlesOnly: o.cornerHandlesOnly,
+    edgeHandles: edgeMode,
+  });
 
   const angle = Number(o.angle) || 0;
-  for (const [dir, lx, ly] of knobs) {
+  // Rotate first, then resize on top — corner / control-box clicks prefer scale.
+  if (o.showRotate) {
+    const corners: Array<['nw' | 'ne' | 'se' | 'sw', number, number, number, number, number]> = [
+      ['nw', bx, by, -1, -1, 0],
+      ['ne', bx + bw, by, 1, -1, 90],
+      ['se', bx + bw, by + bh, 1, 1, 180],
+      ['sw', bx, by + bh, -1, 1, 270],
+    ];
+    const out = rotateHotzoneOutward(handleHit, rotateGap, rotateHit);
+    for (const [corner, lx, ly, signX, signY, iconDeg] of corners) {
+      // Axis-aligned outer quadrant from the control-box corner (same center as resize).
+      const g = document.createElementNS(SVG_NS, 'g');
+      g.setAttribute('class', 'sel-hit');
+      g.setAttribute('pointer-events', 'all');
+      g.setAttribute('transform', `translate(${lx + signX * out} ${ly + signY * out})`);
+      const hit = document.createElementNS(SVG_NS, 'rect');
+      hit.setAttribute('data-sel-handle', 'rotate');
+      hit.setAttribute('data-rotate-corner', corner);
+      hit.setAttribute('role', 'button');
+      hit.setAttribute('aria-label', 'Rotate');
+      hit.setAttribute('x', String(-rotateHit / 2));
+      hit.setAttribute('y', String(-rotateHit / 2));
+      hit.setAttribute('width', String(rotateHit));
+      hit.setAttribute('height', String(rotateHit));
+      hit.setAttribute('fill', 'transparent');
+      hit.setAttribute('pointer-events', 'all');
+      hit.style.cursor = cursorForRotate(iconDeg, angle);
+      g.appendChild(hit);
+      chrome.appendChild(g);
+    }
+  }
+
+  // Edges first, corners last — on tiny boxes edge hits otherwise cover corners
+  // (e paints after ne → TR white square becomes east-resize / feels broken).
+  const isCorner = (d: string) => d === 'nw' || d === 'ne' || d === 'se' || d === 'sw';
+  const orderedKnobs = [
+    ...knobs.filter(([d]) => !isCorner(d)),
+    ...knobs.filter(([d]) => isCorner(d)),
+  ];
+
+  // Direct chrome children (absolute local x/y) — same as pre-regression HEAD.
+  // A wrapping pe:none <g> under chrome pe:none dropped pe:all hits in practice.
+  for (const [dir, lx, ly] of orderedKnobs) {
     const visFill = document.createElementNS(SVG_NS, 'rect');
     visFill.setAttribute('data-rcb-sel-knob', '1');
     visFill.setAttribute('x', String(lx - halfVis));
@@ -441,35 +578,6 @@ function syncHostSelHandles(
     hit.style.cursor = cursorForResize(dir, angle);
     chrome.appendChild(hit);
   }
-
-  if (o.showRotate) {
-    // Transparent corner hotzones only — rotate icon appears as the cursor, not on canvas.
-    // Axis-aligned outer quadrant so rotate AABB never overlaps resize hits.
-    const corners: Array<['nw' | 'ne' | 'se' | 'sw', number, number, number, number, number]> = [
-      ['nw', bx, by, -1, -1, 0],
-      ['ne', bx + bw, by, 1, -1, 90],
-      ['se', bx + bw, by + bh, 1, 1, 180],
-      ['sw', bx, by + bh, -1, 1, 270],
-    ];
-    const out = rotateHotzoneOutward(handleHit, rotateGap, rotateHit);
-    for (const [corner, lx, ly, signX, signY, iconDeg] of corners) {
-      const hx = lx + signX * out;
-      const hy = ly + signY * out;
-      const hit = document.createElementNS(SVG_NS, 'rect');
-      hit.setAttribute('data-sel-handle', 'rotate');
-      hit.setAttribute('data-rotate-corner', corner);
-      hit.setAttribute('role', 'button');
-      hit.setAttribute('aria-label', 'Rotate');
-      hit.setAttribute('x', String(hx - rotateHit / 2));
-      hit.setAttribute('y', String(hy - rotateHit / 2));
-      hit.setAttribute('width', String(rotateHit));
-      hit.setAttribute('height', String(rotateHit));
-      hit.setAttribute('fill', 'transparent');
-      hit.setAttribute('pointer-events', 'all');
-      hit.style.cursor = cursorForRotate(iconDeg, angle);
-      chrome.appendChild(hit);
-    }
-  }
 }
 
 /** Multi-select union AABB; twin member host viewport. */
@@ -488,11 +596,8 @@ function syncHostSelUnionChrome(
 
   const w = Math.max(1, o.box.width);
   const h = Math.max(1, o.box.height);
-  const pad = Math.max(
-    stroke * 8,
-    CHROME_HANDLE_HIT_PX * inv,
-    CHROME_ROTATE_HIT_PX * inv + CHROME_ROTATE_GAP_PX * inv
-  );
+  const outset = Math.max(0, Number(o.chromeOutset) || 0);
+  const pad = chromeOutsideHitPadScene(inv, outset, stroke * 8);
 
   let root = layer.querySelector(
     `:scope > svg[${SEL_CHROME_ATTR}="${CSS.escape(o.id)}"]`
@@ -508,6 +613,7 @@ function syncHostSelUnionChrome(
     root.style.display = 'block';
     layer.appendChild(root);
   }
+  root.style.pointerEvents = 'none';
 
   const mirrored = Boolean(hostRoot && mirrorHostSurface(root, hostRoot));
   if (mirrored) {
@@ -537,7 +643,7 @@ function syncHostSelUnionChrome(
   }
   // Scene-absolute union box — translate to union origin for local handle math.
   chrome.setAttribute('transform', `translate(${o.box.left} ${o.box.top})`);
-  syncHostSelHandles(chrome, { ...o, showRotate: false }, stroke, inv, '');
+  syncHostSelHandlesIfNeeded(chrome, { ...o, showRotate: false }, stroke, inv, '');
   return mirrored;
 }
 
@@ -568,7 +674,7 @@ function syncHostSelOutline(
       (el.querySelector?.('[data-baseline="1"]') as SVGElement | null)
     : null;
 
-  const d = readHostOutlinePathD(el, baseline, o);
+  const d = readHostOutlinePathD(baseline, o);
   if (!d) {
     clearHostSelOutline(o.id);
     return false;
@@ -595,11 +701,8 @@ function syncHostSelOutline(
   const w = Math.max(1, o.box.width);
   const h = Math.max(1, o.box.height);
   const angle = Number(o.angle) || 0;
-  const pad = Math.max(
-    stroke * 8,
-    CHROME_HANDLE_HIT_PX * inv,
-    CHROME_ROTATE_HIT_PX * inv + CHROME_ROTATE_GAP_PX * inv
-  );
+  const outset = Math.max(0, Number(o.chromeOutset) || 0);
+  const pad = chromeOutsideHitPadScene(inv, outset, stroke * 8);
   const left = o.box.left;
   const top = o.box.top;
 
@@ -617,6 +720,7 @@ function syncHostSelOutline(
     root.style.display = 'block';
     layer.appendChild(root);
   }
+  root.style.pointerEvents = 'none';
 
   // Host-mirrored surface; fallback: scene surface.
   // World hosts already cover the viewport — do not expandInfiniteSvgPad
@@ -671,12 +775,8 @@ function syncHostSelOutline(
   outline.setAttribute('stroke-linejoin', roundStroke ? 'round' : 'miter');
   outline.setAttribute('stroke-linecap', roundStroke ? 'round' : 'butt');
 
-  if (o.withHandles) syncHostSelHandles(chrome, o, stroke, inv, d);
-  else {
-    chrome
-      .querySelectorAll(`g.sel-hit,[data-sel-handle],[data-rcb-sel-knob],[${SEL_BOX_ATTR}]`)
-      .forEach((n) => n.remove());
-  }
+  if (o.withHandles) syncHostSelHandlesIfNeeded(chrome, o, stroke, inv, d);
+  else syncHostSelHandlesIfNeeded(chrome, { ...o, withHandles: false }, stroke, inv, d);
 
   return true;
 }
@@ -770,5 +870,6 @@ export {
   pathLocalEndpoints,
   localPointToWorld,
   boxFromLocalAnchor,
+  hostSelHandlesKey,
   ShapeOutlineSvg,
 };

@@ -178,15 +178,22 @@ function ImageVariantsOverlay({
 
   return (
     <RcbOverlayPortal>
-      <div data-image-variants data-sel-toolbar data-scene-node-id={nodeId}>
+      <div
+        data-image-variants
+        data-sel-toolbar
+        data-scene-node-id={nodeId}
+        className="pointer-events-none"
+      >
         {/* One corner bar: replace + count — shared position, hover-visible */}
         <div className="pointer-events-none absolute z-[36]" style={frameStyle}>
           <div
             data-image-replace
             data-image-node-id={nodeId}
             className={cn(
-              'pointer-events-auto absolute flex items-center gap-1 transition-opacity duration-150',
-              visible ? 'opacity-100' : 'opacity-0'
+              'absolute flex items-center gap-1 transition-opacity duration-150',
+              visible
+                ? 'pointer-events-auto opacity-100'
+                : 'pointer-events-none opacity-0'
             )}
             style={{ right: EDGE_PAD, top: EDGE_PAD }}
             onPointerDown={(e) => e.stopPropagation()}
