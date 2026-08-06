@@ -40,6 +40,7 @@ import {
   boolEffectAttr,
   inflateBoxByVisualOutset,
   inflateBoxByTextSelectionPad,
+  geometryPatchForStrokeVisibilityToggle,
 } from '@/components/rcb/scene/document/sceneEffects';
 import { supportsFill, supportsCornerRadius } from '@/components/rcb/scene/document/sceneDocument';
 import {
@@ -443,10 +444,12 @@ function ShapeStylePanelHost({ document }: { document: any }): ReactNode {
       const node = document?.deltaSetLike?.[id];
       if (!node) continue;
       const shapeType = node?.attrs?.shapeType;
+      const geom = geometryPatchForStrokeVisibilityToggle(node, visible);
       dispatch(
         patchDocumentNode({
           nodeId: id,
           patch: {
+            ...(geom || {}),
             attrs: {
               ...(shapeType != null ? { shapeType } : {}),
               'stroke-enabled': visible ? 'true' : 'false',
