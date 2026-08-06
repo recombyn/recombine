@@ -1,9 +1,10 @@
 /* Dark theme — Figma-like charcoal stack (not near-black) */
 html[data-theme='dark'] {
-  /* Chrome / panels sit above the canvas, matching Figma home + editor. */
+  /* Chrome / panels sit above the canvas, matching Figma home + editor.
+     --rail must differ from --surface so inset tracks / size fields read on panels. */
   --surface: #2c2c2c;
   --canvas: #1e1e1e;
-  --rail: #2c2c2c;
+  --rail: #242424;
   --account-rail: #2c2c2c;
   --account-main: #1e1e1e;
   --account-card: #2c2c2c;

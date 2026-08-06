@@ -487,6 +487,7 @@ function FillPanel({
   onLayerVisibleChange,
   activeStopIndex,
   onActiveStopIndexChange,
+  onReset,
 }: {
   value: FillPanelValue;
   onChange: (next: FillPanelValue) => void;
@@ -504,6 +505,8 @@ function FillPanel({
   /** Sync gradient stop selection with on-canvas handles. */
   activeStopIndex?: number;
   onActiveStopIndexChange?: (index: number) => void;
+  /** Optional header reset (e.g. canvas bg → clear saved color / follow theme). */
+  onReset?: () => void;
 }) {
   const fillType = parseFillType(value.fillType);
   const panelType = (FILL_PANEL_TYPES.includes(fillType) ? fillType : 'solid') as FillType;
@@ -630,6 +633,20 @@ function FillPanel({
       onLayerVisibleChange={onLayerVisibleChange}
       layerVisibleTipShow="显示填充"
       layerVisibleTipHide="隐藏填充"
+      headerActions={
+        onReset ? (
+          <Tooltip tip="恢复默认" placement="bottom">
+            <button
+              type="button"
+              aria-label="恢复默认"
+              onClick={onReset}
+              className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+            >
+              <HiOutlineArrowPath className="h-[18px] w-[18px]" />
+            </button>
+          </Tooltip>
+        ) : null
+      }
     >
         <SegmentedControl
           size="sm"
@@ -827,6 +844,7 @@ export type FillPanelPopoverProps = {
   onMeshSelectedIndexChange?: (index: number) => void;
   meshShowGuides?: boolean;
   onMeshShowGuidesChange?: (show: boolean) => void;
+  onReset?: () => void;
 };
 
 /** Floating fill panel (type tabs + solid / gradients / image). */
@@ -848,6 +866,7 @@ function FillPanelPopover({
   onMeshSelectedIndexChange,
   meshShowGuides,
   onMeshShowGuidesChange,
+  onReset,
 }: FillPanelPopoverProps) {
   const [localOpen, setLocalOpen] = useState(false);
   const open = controlledOpen ?? localOpen;
@@ -939,6 +958,7 @@ function FillPanelPopover({
               onChange={onChange}
               title={title}
               onClose={() => setOpen(false)}
+              onReset={onReset}
               meshSelectedIndex={meshSelectedIndex}
               onMeshSelectedIndexChange={onMeshSelectedIndexChange}
               meshShowGuides={meshShowGuides}
