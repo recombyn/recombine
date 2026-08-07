@@ -1034,6 +1034,34 @@ async function applyAgentToolOps(opts: {
     return { created, updated, deleted, nodeIds, frameId: outFrameId, opResults };
   }
 
+  const pickTargetFrameIdForCreate = (
+    doc: any,
+    args: Record<string, unknown>,
+    fallback: string | null
+  ): string | null => {
+    const frames = Array.isArray(doc?.frames) ? doc.frames : [];
+    if (frames.length <= 1) {
+      return fallback || (frames[0]?.id != null ? String(frames[0].id) : null);
+    }
+    const x = Number(args.x);
+    const y = Number(args.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
+    let best: { id: string; area: number } | null = null;
+    for (const f of frames) {
+      const id = String(f?.id || '').trim();
+      if (!id) continue;
+      const fx = Number(f.x) || 0;
+      const fy = Number(f.y) || 0;
+      const fw = Math.max(1, Number(f.width) || 1);
+      const fh = Math.max(1, Number(f.height) || 1);
+      if (x >= fx && x < fx + fw && y >= fy && y < fy + fh) {
+        const area = fw * fh;
+        if (!best || area < best.area) best = { id, area };
+      }
+    }
+    return best?.id || fallback;
+  };
+
   dispatch(pushEditorHistory());
   for (let i = 0; i < allowed.length; i++) {
     if (signal?.aborted) break;
@@ -1051,7 +1079,19 @@ async function applyAgentToolOps(opts: {
       continue;
     }
     const opId = String((op as { op_id?: string })?.op_id || '');
-    const args = op?.args && typeof op.args === 'object' ? op.args : {};
+    const args = op?.args && typeof op.args === 'object' ? { ...op.args } : {};
+    if (
+      name.startsWith('create_') &&
+      name !== 'create_frame' &&
+      name !== 'create_page'
+    ) {
+      const picked = pickTargetFrameIdForCreate(
+        getDocument(),
+        args,
+        toolCtx.targetFrameId
+      );
+      if (picked) toolCtx.targetFrameId = picked;
+    }
     if (name === 'create_shape' && (args.path != null || String(args.type || args.shapeType || '') === 'path')) {
       console.info('[tool_ops raw create_shape]', {
         i,
@@ -2912,14 +2952,23 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       const pinned = explicitPinnedFrameId({
         pinnedFrameId: params.pinnedFrameId,
       });
-      const aiCreatesFrame = ops.some(
+      const createFrameCount = ops.filter(
         (o: { name?: string }) => String(o?.name || '').trim() === 'create_frame'
-      );
+      ).length;
+      const multiArtboards = createFrameCount >= 2;
+      const aiCreatesFrame = createFrameCount > 0;
       // Free-canvas add (rect/text/…) must not inherit ambient FOCUS / page frame.
       const bindToBoard = Boolean(pinned || aiCreatesFrame || editInPlace);
 
-      // Fallback if backend did not emit open_artboard: Host opens plate first.
-      if (!pinned && !live.frameId && aiCreatesFrame && !editInPlace) {
+      // Single-plate fallback if backend did not emit open_artboard.
+      // Multi create_frame: do not pre-open — applyAgentToolOps retargets after each plate.
+      if (
+        !pinned &&
+        !live.frameId &&
+        aiCreatesFrame &&
+        !editInPlace &&
+        !multiArtboards
+      ) {
         const fromOp = sizeFromCreateFrameOp(ops);
         const resolved =
           parseResolvedSize(paintCanvasSize()) ||
@@ -2940,21 +2989,25 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         }
       }
 
-      // Host already opened → drop model create_frame so we don't get a second plate.
-      // Do not reject create_* that carry frameId — placement follows the model / user intent.
+      // Host already opened one plate → drop model create_frame (avoid duplicate).
+      // Multi-artboard batches keep every create_frame so sibling boards are created.
       const paintOps =
-        live.frameId || pinned
-          ? ops.filter((o) => String(o?.name || '').trim() !== 'create_frame')
-          : ops;
+        multiArtboards
+          ? ops
+          : live.frameId || pinned
+            ? ops.filter((o) => String(o?.name || '').trim() !== 'create_frame')
+            : ops;
 
-      const frameId = bindToBoard
-        ? resolveToolOpsFrameId({
-            editInPlace,
-            liveFrameId: live.frameId,
-            targetFrameId: params.targetFrameId,
-            pinnedFrameId: params.pinnedFrameId,
-          })
-        : null;
+      const frameId = multiArtboards
+        ? null
+        : bindToBoard
+          ? resolveToolOpsFrameId({
+              editInPlace,
+              liveFrameId: live.frameId,
+              targetFrameId: params.targetFrameId,
+              pinnedFrameId: params.pinnedFrameId,
+            })
+          : null;
       if (frameId) {
         live.frameId = frameId;
         // Plate scan-light only for new/blank boards — not for adding a rect onto a page.
