@@ -847,6 +847,7 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
       }
 
       // Variable-width freehand silhouette (pressure + brush thinning / taper).
+      // Outline is built around `pts` in place — do not translate relative to the path.
       // Keep an invisible centerline baseline for selection chrome hit-testing.
       const pressures = parsePathPressures(node.attrs?.pathPressure, pts.length);
       const outlineD = pencilInkPathFromPoints(pts, strokeWidth, brushId, {
