@@ -114,11 +114,39 @@ def _emit_design_loading_artboard(rt: Any) -> bool:
     )
 
 def _emit_canvas_size_from_ops(rt: Any, step_ops: list[dict[str, Any]]) -> bool:
-    """Open an artboard only when ops include create_frame.
+    """Open an artboard only when ops include a single create_frame.
 
     Infinite canvas: create_shape / create_text / … do not need a frame plate.
+    Multi create_frame (UI set / multi-poster): FE applies each plate — do not
+    host-open one shimmer board that would collapse the set.
     """
-    from app.services.design.runtime.graph.paint_kit import _wh_from_create_frame_ops
+    from app.services.design.runtime.graph.paint_kit import (
+        _count_create_frame_ops,
+        _is_multi_artboard_batch,
+        _wh_from_create_frame_ops,
+    )
+
+    if _is_multi_artboard_batch(step_ops):
+        st = rt.run
+        n = _count_create_frame_ops(step_ops)
+        _emit(
+            {
+                "type": "activity",
+                "id": f"multi-artboard-{st.task_id[:8]}-{n}",
+                "kind": "explored",
+                "status": "done",
+                "stage": "scene",
+                "detail": f"multi_artboard:{n}",
+                "summary": f"{n} artboards",
+                "index": int(getattr(st, "round", 0) or 0),
+            }
+        )
+        st.push_log(
+            phase="canvas_size",
+            intent=str(rt.classified_intent or st.intent or ""),
+            summary=f"multi_artboard {n} (paint_ops)",
+        )
+        return False
     ow, oh = _wh_from_create_frame_ops(step_ops)
     if ow <= 0 or oh <= 0:
         return False
