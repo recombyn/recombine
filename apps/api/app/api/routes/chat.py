@@ -45,6 +45,13 @@ _MESSAGE_TOKEN_COST = 10
 _FREE_IMAGE_MODEL = "doubao-seedream-4-0"
 
 
+def _desktop_local() -> bool:
+    """Tauri local flavor — BYOK only, no platform catalog / wallet billing."""
+    from app.core.config import settings
+
+    return bool(getattr(settings, "desktop_local_auto_login", False))
+
+
 class ChatMessageIn(BaseModel):
     message: str = Field(..., min_length=1)
     model: str | None = None
@@ -90,6 +97,8 @@ class VideoGenerateIn(BaseModel):
 
 
 def _charge(user_id: str, amount: int, detail: str) -> None:
+    if _desktop_local():
+        return
     try:
         spend_tokens(user_id, amount, detail)
     except ValueError as err:
@@ -99,6 +108,8 @@ def _charge(user_id: str, amount: int, detail: str) -> None:
 
 
 def _charge_image_credits(user_id: str, amount: int, detail: str) -> None:
+    if _desktop_local():
+        return
     try:
         spend_image_credits(user_id, amount, detail)
     except ValueError as err:
@@ -119,6 +130,9 @@ def _charge_image(
     Free plan: force Seedream 4.0; use 积分 or today's free daily run.
     Returns (model id to call, credits actually charged).
     """
+    if _desktop_local():
+        mid = (requested_model or "").strip() or None
+        return mid, 0
     n = max(1, min(4, int(count or 1)))
     plan = get_user_plan(user_id)
     if plan == "free":
@@ -148,6 +162,17 @@ def _charge_image(
 def get_models(request: Request) -> dict[str, Any]:
     # Keep text/chat and image catalogs separate — FE merges with dedupe.
     # Do not use list_all_models() here or image ids appear twice under models + imageModels.
+    # Local desktop: no platform seed catalog — UI uses BYOK/custom providers only.
+    if _desktop_local():
+        return {
+            "models": [],
+            "available": True,
+            "imageModels": [],
+            "videoModels": [],
+            "clientRegion": "local",
+            "openrouterAvailable": False,
+        }
+
     from app.services.geoip import (
         filter_catalog_models_for_region,
         openrouter_allowed_for_country,

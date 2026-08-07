@@ -18,6 +18,7 @@ import AgentModelsPanel from '@/components/editor/panels/agent/AgentModelsPanel'
 import AccountProfilePanel from '@/components/layout/AccountProfilePanel';
 import AccountNotificationsPanel from '@/components/layout/AccountNotificationsPanel';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { cn } from '@/utils/classnames';
 
 /** Content tabs inside the shell (plans / top-up open as separate dialogs). */
@@ -60,12 +61,14 @@ function SettingsMobileNavBar({
   onSelectTab,
   onOpenPlans,
   onOpenRedeem,
+  hideCommerce,
 }: {
   tab: ContentTab;
   contentNav: { id: ContentTab; label: string }[];
   onSelectTab: (id: ContentTab) => void;
-  onOpenPlans: () => void;
-  onOpenRedeem: () => void;
+  onOpenPlans?: () => void;
+  onOpenRedeem?: () => void;
+  hideCommerce?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -79,26 +82,30 @@ function SettingsMobileNavBar({
         aria-label={t('wallet.settingsTitle')}
         className="pointer-events-auto max-w-full gap-1 overflow-x-auto px-1.5 py-1"
       >
-        <button
-          type="button"
-          title={t('wallet.settingsNavPlans')}
-          aria-label={t('wallet.settingsNavPlans')}
-          onClick={onOpenPlans}
-          className={cn(MOBILE_NAV_BTN, 'text-[var(--muted)] hover:text-[var(--ink)]')}
-        >
-          <HiOutlineCubeTransparent className="h-4 w-4" strokeWidth={1.75} />
-        </button>
-        <button
-          type="button"
-          title={t('wallet.settingsNavRedeem')}
-          aria-label={t('wallet.settingsNavRedeem')}
-          onClick={onOpenRedeem}
-          className={cn(MOBILE_NAV_BTN, 'text-[var(--muted)] hover:text-[var(--ink)]')}
-        >
-          <HiOutlineBolt className="h-4 w-4" strokeWidth={1.75} />
-        </button>
+        {!hideCommerce ? (
+          <>
+            <button
+              type="button"
+              title={t('wallet.settingsNavPlans')}
+              aria-label={t('wallet.settingsNavPlans')}
+              onClick={onOpenPlans}
+              className={cn(MOBILE_NAV_BTN, 'text-[var(--muted)] hover:text-[var(--ink)]')}
+            >
+              <HiOutlineCubeTransparent className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+            <button
+              type="button"
+              title={t('wallet.settingsNavRedeem')}
+              aria-label={t('wallet.settingsNavRedeem')}
+              onClick={onOpenRedeem}
+              className={cn(MOBILE_NAV_BTN, 'text-[var(--muted)] hover:text-[var(--ink)]')}
+            >
+              <HiOutlineBolt className="h-4 w-4" strokeWidth={1.75} />
+            </button>
 
-        <span className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />
+            <span className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />
+          </>
+        ) : null}
 
         {contentNav.map((item) => {
           const active = tab === item.id;
@@ -134,6 +141,7 @@ function AccountSettingsDialog({
   initialTab = 'profile',
 }: Props) {
   const { t } = useTranslation();
+  const desktopLocal = isDesktopLocal();
   const [tab, setTab] = useState<ContentTab>(toContentTab(initialTab));
   const [plansOpen, setPlansOpen] = useState(false);
   const [redeemOpen, setRedeemOpen] = useState(false);
@@ -145,12 +153,15 @@ function AccountSettingsDialog({
       return;
     }
     // Never auto-open plans/redeem — user clicks the left rail.
-    const nextTab =
+    let nextTab: AccountSettingsTab =
       initialTab === 'plans' || initialTab === 'redeem' ? 'billing' : initialTab;
+    if (desktopLocal && (nextTab === 'billing' || nextTab === 'plans' || nextTab === 'redeem')) {
+      nextTab = 'profile';
+    }
     setTab(toContentTab(nextTab));
     setPlansOpen(false);
     setRedeemOpen(false);
-  }, [open, initialTab]);
+  }, [open, initialTab, desktopLocal]);
 
   const dismiss = useCallback(() => {
     const active = document.activeElement;
@@ -161,7 +172,9 @@ function AccountSettingsDialog({
   const contentNav: { id: ContentTab; label: string }[] = [
     { id: 'profile', label: t('wallet.settingsNavProfile') },
     { id: 'agent', label: t('wallet.settingsNavAgent') },
-    { id: 'billing', label: t('wallet.settingsNavBilling') },
+    ...(desktopLocal
+      ? []
+      : [{ id: 'billing' as const, label: t('wallet.settingsNavBilling') }]),
     { id: 'notices', label: t('wallet.settingsNavNotices') },
   ];
 
@@ -215,24 +228,31 @@ function AccountSettingsDialog({
                       {t('wallet.settingsTitle')}
                     </h2>
                     <nav className="flex flex-1 flex-col gap-0.5">
-                      <button
-                        type="button"
-                        onClick={() => setPlansOpen(true)}
-                        className={actionBtn}
-                      >
-                        <HiOutlineCubeTransparent className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-                        {t('wallet.settingsNavPlans')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRedeemOpen(true)}
-                        className={actionBtn}
-                      >
-                        <HiOutlineBolt className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-                        {t('wallet.settingsNavRedeem')}
-                      </button>
+                      {!desktopLocal ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setPlansOpen(true)}
+                            className={actionBtn}
+                          >
+                            <HiOutlineCubeTransparent
+                              className="h-4 w-4 shrink-0"
+                              strokeWidth={1.75}
+                            />
+                            {t('wallet.settingsNavPlans')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRedeemOpen(true)}
+                            className={actionBtn}
+                          >
+                            <HiOutlineBolt className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+                            {t('wallet.settingsNavRedeem')}
+                          </button>
 
-                      <div className="my-2 border-t border-[var(--line)]" />
+                          <div className="my-2 border-t border-[var(--line)]" />
+                        </>
+                      ) : null}
 
                       {contentNav.map((item) => {
                         const active = tab === item.id;
@@ -280,15 +300,19 @@ function AccountSettingsDialog({
                     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
                       {tab === 'profile' && <AccountProfilePanel />}
                       {tab === 'agent' && (
-                        <AgentModelsPanel onRequestUpgrade={() => setPlansOpen(true)} />
+                        <AgentModelsPanel
+                          onRequestUpgrade={
+                            desktopLocal ? undefined : () => setPlansOpen(true)
+                          }
+                        />
                       )}
-                      {tab === 'billing' && (
+                      {tab === 'billing' && !desktopLocal ? (
                         <WalletLedgerPanel
                           embedded
                           onRequestPlans={() => setPlansOpen(true)}
                           onRequestRedeem={() => setRedeemOpen(true)}
                         />
-                      )}
+                      ) : null}
                       {tab === 'notices' && <AccountNotificationsPanel />}
                     </div>
                   </div>
@@ -298,8 +322,9 @@ function AccountSettingsDialog({
                     tab={tab}
                     contentNav={contentNav}
                     onSelectTab={setTab}
-                    onOpenPlans={() => setPlansOpen(true)}
-                    onOpenRedeem={() => setRedeemOpen(true)}
+                    hideCommerce={desktopLocal}
+                    onOpenPlans={desktopLocal ? undefined : () => setPlansOpen(true)}
+                    onOpenRedeem={desktopLocal ? undefined : () => setRedeemOpen(true)}
                   />
                 </DialogPanel>
               </TransitionChild>

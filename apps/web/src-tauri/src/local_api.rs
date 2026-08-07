@@ -119,8 +119,11 @@ fn apply_local_env(cmd: &mut Command, data_dir: &Path) {
   let db_path = storage.join("recombyn.db");
   let upload_dir = storage.join("uploads");
   let result_dir = storage.join("results");
+  // Explicit sqlite URL — empty DATABASE_URL can be dropped on Windows spawn and
+  // then apps/api/.env MySQL would be used by mistake.
+  let db_url = format!("sqlite:///{}", db_path.to_string_lossy().replace('\\', "/"));
 
-  cmd.env("DATABASE_URL", "")
+  cmd.env("DATABASE_URL", db_url)
     .env("SQLITE_DB_PATH", db_path.to_string_lossy().as_ref())
     .env("UPLOAD_DIR", upload_dir.to_string_lossy().as_ref())
     .env("RESULT_DIR", result_dir.to_string_lossy().as_ref())

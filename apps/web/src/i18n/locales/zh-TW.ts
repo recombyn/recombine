@@ -666,6 +666,7 @@ const zhTW = {
     agentRouteVision: '多模態',
     agentRouteImage: '生圖模型',
     agentRouteFollowPlatform: '跟隨平台',
+    agentRouteLaneEmpty: '請選擇模型',
     agentRouteCostNote:
       '不會一次呼叫多個模型；失敗重試由平台限制次數。貴模型僅在對應車道或看圖時使用。',
     agentRoutePlatformNote: '目前使用標準版（平台預設）路由，無需額外設定。',

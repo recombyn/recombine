@@ -8,6 +8,7 @@ import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import UserAccountPanel, { UserAvatar } from '@/components/layout/UserAccountPanel';
 import { formatTokens } from '@/utils/wallet';
 import { buildLoginUrl } from '@/utils/authReturnTo';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { cn } from '@/utils/classnames';
 
 type Props = {
@@ -39,22 +40,28 @@ function WalletAccountChip({ className }: Props) {
   ];
 
   if (user) {
+    const local = isDesktopLocal();
     return (
       <UserAccountPanel open={accountOpen} onOpenChange={setAccountOpen}>
         <button
           type="button"
           className={cn(
-            'pointer-events-auto flex h-8 max-w-[12rem] items-center gap-2 rounded-full bg-[var(--accent-soft)] pl-2.5 pr-0.5 transition hover:opacity-90',
+            'pointer-events-auto flex h-8 items-center transition hover:opacity-90',
+            local
+              ? 'w-8 justify-center rounded-full bg-[var(--accent-soft)]'
+              : 'max-w-[12rem] gap-2 rounded-full bg-[var(--accent-soft)] pl-2.5 pr-0.5',
             className
           )}
-          title={tip}
+          title={local ? user?.name || user?.email || t('home.account') : tip}
         >
-          <span className="inline-flex min-w-0 items-center gap-1 text-[var(--ink)]">
-            <HiOutlineBolt className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden />
-            <span className="min-w-0 truncate text-[12px] font-semibold tabular-nums tracking-tight">
-              {formatTokens(tokens)}
+          {!local ? (
+            <span className="inline-flex min-w-0 items-center gap-1 text-[var(--ink)]">
+              <HiOutlineBolt className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden />
+              <span className="min-w-0 truncate text-[12px] font-semibold tabular-nums tracking-tight">
+                {formatTokens(tokens)}
+              </span>
             </span>
-          </span>
+          ) : null}
           <UserAvatar name={user.name} email={user.email} avatar={user.avatar} size={28} />
         </button>
       </UserAccountPanel>
