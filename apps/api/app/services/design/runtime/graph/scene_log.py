@@ -166,18 +166,50 @@ def _scene_digest(
     frames: list[dict[str, Any]],
     *,
     focus_id: str,
+    focus_w: int = 0,
+    focus_h: int = 0,
     limit: int = 40,
 ) -> str:
     lines: list[str] = []
-    if focus_id:
-        lines.append(f"FOCUS_FRAME_ID: {focus_id}")
-    if frames:
+    focus = str(focus_id or "").strip()
+    host_plate = focus.startswith("ab_")
+    try:
+        tw = int(focus_w or 0)
+        th = int(focus_h or 0)
+    except (TypeError, ValueError):
+        tw, th = 0, 0
+    if focus:
+        lines.append(f"FOCUS_FRAME_ID: {focus}")
+        if host_plate:
+            size_bit = (
+                f" TARGET_CANVAS={tw}x{th} (frame-local 0..{tw}, 0..{th} only)."
+                if tw > 0 and th > 0
+                else ""
+            )
+            lines.append(
+                "HOST_ARTBOARD: plate already open — place ALL content inside "
+                f"FOCUS_FRAME_ID={focus}; do NOT emit create_frame for this plate."
+                f"{size_bit} "
+                "New design: do NOT update_node/delete ambient SCENE nodes on other boards."
+            )
+    frame_rows = list(frames or [])
+    if frame_rows or host_plate:
         lines.append("SCENE_FRAMES (world x/y):")
-        for f in frames[:16]:
+        for f in frame_rows[:16]:
             lines.append(
                 f"- id={f.get('id')} name={f.get('name') or ''} "
                 f"x={f.get('x')} y={f.get('y')} "
                 f"w={f.get('w')} h={f.get('h')} empty={f.get('is_empty')}"
+            )
+        # Host reserved a plate id before FE scene snapshot caught up.
+        if host_plate and not any(str(f.get("id") or "") == focus for f in frame_rows):
+            wh = (
+                f"x=0 y=0 w={tw} h={th} "
+                if tw > 0 and th > 0
+                else ""
+            )
+            lines.append(
+                f"- id={focus} name=Design (host loading plate) {wh}empty=true"
             )
     if nodes:
         lines.append("SCENE_NODES:")

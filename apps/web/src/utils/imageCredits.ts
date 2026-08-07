@@ -166,3 +166,33 @@ export function estimateVideoCredits(model?: LlmModel | null): number {
   if (price == null || price <= 0) return 8;
   return Math.max(1, Math.ceil(price * (PLUS_FACE_CREDITS / PLUS_LIST_CNY) * DEFAULT_MARKUP));
 }
+
+/**
+ * Lottie gen credit estimate — LLM structured JSON, billed like chat tokens.
+ * Matches wallet `TOKENS_PER_CREDIT` (15k billed ≈ 1 积分). Catalog chat `price`
+ * is 元/百万 tokens; scale vs mid-tier ¥2.
+ */
+const LOTTIE_TOKENS_PER_CREDIT = 15_000;
+const LOTTIE_FALLBACK_CREDITS = 2;
+const LOTTIE_MID_PRICE_CNY_PER_MTOK = 2;
+
+export function estimateLottieCredits(
+  model?: LlmModel | null,
+  durationSec = 3
+): number {
+  const sec = Math.max(0.5, Math.min(30, Number(durationSec) || 3));
+  // Bodymovin JSON is token-heavy; longer clips → denser layer estimate.
+  const estTokens = Math.round(10_000 + sec * 3_000);
+  const billed = Math.ceil(estTokens * DEFAULT_MARKUP);
+  let credits = Math.max(1, Math.ceil(billed / LOTTIE_TOKENS_PER_CREDIT));
+
+  const price = parsePriceAmount(model?.price);
+  if (price != null && price > 0) {
+    const kind = String(model?.kind || '').toLowerCase();
+    if (kind !== 'image' && kind !== 'video') {
+      const scale = Math.min(3, Math.max(0.5, price / LOTTIE_MID_PRICE_CNY_PER_MTOK));
+      credits = Math.max(1, Math.ceil(credits * scale));
+    }
+  }
+  return credits || LOTTIE_FALLBACK_CREDITS;
+}

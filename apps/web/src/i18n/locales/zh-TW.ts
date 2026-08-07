@@ -929,6 +929,7 @@ const zhTW = {
       lottieGenUploadHint: '請上傳圖片或 Lottie JSON',
       lottieGenRefImage: '參考圖',
       lottieGenNeedPrompt: '請先描述要生成的動畫',
+      lottieGenNeedVisionModel: '附圖需要支援看圖的多模態模型',
       lottieGenInvalidJson: '無效的 Lottie JSON',
       lottieGenerating: 'Lottie 生成中',
       lottieGenFail: 'Lottie 生成失敗',

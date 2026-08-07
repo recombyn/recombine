@@ -339,11 +339,15 @@ function activityRowSummary(opts: {
   label: string;
   detailText: string;
   summaryText: string;
+  bodyText?: string;
 }): string | undefined {
-  const { kind, label, detailText, summaryText } = opts;
-  if (summaryText && summaryText !== label) return summaryText;
+  const { kind, label, detailText, summaryText, bodyText } = opts;
+  const body = (bodyText || '').trim();
+  if (summaryText && summaryText !== label && summaryText !== body) {
+    return summaryText;
+  }
   if (!DETAIL_SUMMARY_KINDS.has(kind)) return undefined;
-  if (detailText && detailText !== label) return detailText;
+  if (detailText && detailText !== label && detailText !== body) return detailText;
   return undefined;
 }
 
@@ -401,6 +405,16 @@ function patchChatDoneAssistant(
   });
 }
 
+function isProgressChatLine(text: string): boolean {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (/[…⋯]$/.test(s) || /\.\.\.$/.test(s)) return true;
+  if (/^(正在|创建中|生成中|处理中|working|creating|generating|painting)/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
 function patchDesignDoneAssistant(
   m: ChatUiMessage,
   opts: {
@@ -426,15 +440,19 @@ function patchDesignDoneAssistant(
       Boolean(rawProcess) && !/<svg\b|<\/svg>/i.test(rawProcess);
     const fromSummary = opts.summary?.trim() || '';
     // Prefer short done copy — long summary is usually the decide/paint essay
-    // already shown as gray process thought.
-    const summaryIsShortDone = fromSummary.length > 0 && fromSummary.length <= 48;
+    // already shown as gray process thought. Progress lines ("正在创建…") are not done copy.
+    const summaryIsShortDone =
+      fromSummary.length > 0 &&
+      fromSummary.length <= 48 &&
+      !isProgressChatLine(fromSummary);
     if (summaryIsShortDone) result = fromSummary;
     else if (hasIntentAnalysis) result = opts.t('agent.canvasReadyHint');
     else result = opts.t('agent.canvasUpdated');
   } else if (opts.designStarted) {
     result = opts.t('agent.designEmptyResult');
   } else {
-    result = m.content?.trim() || opts.t('agent.stopped');
+    const kept = m.content?.trim() || '';
+    result = kept && !isProgressChatLine(kept) ? kept : opts.t('agent.stopped');
   }
   return opts.finish(m, {
     content: result,
@@ -1558,7 +1576,9 @@ function resolveDesignFocusFrameId(opts: {
   chipFrameId: string | null | undefined;
 }): string | null {
   if (opts.freeCanvasMention) return null;
-  return opts.editTargetId || opts.chipFrameId || null;
+  // Only explicit @ artboard is FOCUS. Do not auto-bind lastAgent/active —
+  // that made every「新设计登录页」rewrite the previous plate.
+  return opts.chipFrameId || null;
 }
 
 type ImageGenFinishKind = 'aborted' | 'failed' | 'success';
@@ -1786,13 +1806,10 @@ function buildDesignSceneSnapshot(opts: {
   const freeCanvasMention = Boolean(
     opts.mentionNodeIds.length && !chipFrameId && !opts.frameChip
   );
+  // Seed / focus only when user @ a frame — otherwise Host opens a sibling plate.
   let editTarget: ReturnType<typeof resolveDesignTargetFrame> | null = null;
-  if (opts.docNow && !freeCanvasMention) {
-    editTarget = resolveDesignTargetFrame(
-      opts.docNow,
-      chipFrameId,
-      opts.lastAgentFrameId || opts.taskStateFrameId || null
-    );
+  if (opts.docNow && chipFrameId) {
+    editTarget = resolveDesignTargetFrame(opts.docNow, chipFrameId, null);
   }
   const targetFrameId = resolveDesignFocusFrameId({
     freeCanvasMention,
@@ -1949,11 +1966,13 @@ function createDesignAgentEventRouter(opts: {
     if (!label) return;
     const detailText = (ev.detail || '').trim();
     const summaryText = String(ev.summary || '').trim();
+    const bodyText = ev.body ? String(ev.body) : '';
     const summary = activityRowSummary({
       kind: ev.kind,
       label,
       detailText,
       summaryText,
+      bodyText,
     });
     const variant = activityRowVariant(actStatus, ev.kind);
     const nestItem = activityNestItem(opts.t, ev.item);
@@ -1968,7 +1987,7 @@ function createDesignAgentEventRouter(opts: {
           summary,
           variant,
           nestItem,
-          bodyMd: ev.body ? String(ev.body) : '',
+          bodyMd: bodyText,
         });
         return next ? { ...m, steps: next } : m;
       })

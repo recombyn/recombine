@@ -466,6 +466,35 @@ export const fetchDesignBrushes = () =>
     method: 'get',
   });
 
+export type GenerateLottieInput = {
+  prompt: string;
+  width?: number;
+  height?: number;
+  duration_sec?: number;
+  model?: string;
+  /** Reference images (data URL / https) — requires a vision-capable model. */
+  images?: string[];
+};
+
+export type GenerateLottieResult = {
+  animationData: Record<string, unknown>;
+  w?: number;
+  h?: number;
+};
+
+/** POST /design/lottie/generate — Bodymovin JSON for the on-canvas Lottie plate. */
+export const generateLottie = (
+  data: GenerateLottieInput,
+  opts?: { signal?: AbortSignal }
+) =>
+  request<GenerateLottieResult>({
+    url: '/api/v1/design/lottie/generate',
+    method: 'post',
+    data,
+    signal: opts?.signal,
+    timeout: 90000,
+  });
+
 /** Skills for `/` picker, `mine=true`, or toolbox `manage=true` (includes disabled). */
 export const fetchDesignSkills = (opts?: {
   scene?: string;

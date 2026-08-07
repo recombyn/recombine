@@ -16,6 +16,7 @@ import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import {
   RcbOverlayPortal,
   useRcbCamera,
+  useRcbDevicePixelRatio,
   rcbSceneToScreen,
 } from '@/components/rcb';
 import { uploadImageFromSrc } from '@/utils/uploadImage';
@@ -74,13 +75,20 @@ async function confirmEraserAsNewNode(opts: {
   }
 }
 
+/** Dock Eraser / Replace text / … to the image's top-right (not the selection toolbar). */
 function panelStyleRight(
   camera: { x: number; y: number; zoom: number },
-  box: { left: number; top: number; width: number; height: number }
+  box: { left: number; top: number; width: number; height: number },
+  dpr?: number
 ): CSSProperties {
   const gap = 16 / Math.max(0.05, camera.zoom);
-  // Top-aligned with the image (not vertically centered on the box).
-  const { x, y } = rcbSceneToScreen(camera, box.left + box.width + gap, box.top);
+  // Top edge of the image, just outside the right edge — same as Eraser card.
+  const { x, y } = rcbSceneToScreen(
+    camera,
+    box.left + box.width + gap,
+    box.top,
+    dpr
+  );
   return {
     position: 'absolute',
     left: x,
@@ -109,6 +117,7 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   const store = useStore();
   const { t } = useTranslation();
   const camera = useRcbCamera();
+  const dpr = useRcbDevicePixelRatio();
   const panel = useSelector((s: any) => s.editor.imageToolPanel as null | {
     nodeId: string;
     kind: ImageToolPanelKind;
@@ -205,7 +214,7 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
     close();
   };
 
-  const style = panelStyleRight(camera, box);
+  const style = panelStyleRight(camera, box, dpr);
 
   const writeAdjustAttrs = (opts: AdjustValues, mode: 'preview' | 'commit') => {
     const node = document?.deltaSetLike?.[panel.nodeId];

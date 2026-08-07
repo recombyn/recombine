@@ -97,7 +97,7 @@ describe('image vs video paint layers', () => {
     });
   });
 
-  it('video on world surface paints zero <image> (HTML plate is the only bitmap)', async () => {
+  it('video on world surface paints poster underlay (image-parity drag path)', async () => {
     const { root, layer } = svgRoot({
       'data-rcb-infinite': '1',
       'data-rcb-world-surface': '1',
@@ -105,7 +105,9 @@ describe('image vs video paint layers', () => {
     const el = await nodeToSvgElement(root, layer, doc, videoNode(box), 'vid1');
     expect(el).toBeTruthy();
     expect(el!.getAttribute('data-scene-node-key')).toBe('video');
-    expect(el!.querySelectorAll('image').length).toBe(0);
+    // Poster underlay moves via previewSvgNodeGeometry; HTML covers while idle.
+    expect(el!.querySelectorAll('image').length).toBe(1);
+    expect(el!.querySelector('[data-rcb-video-svg-underlay="1"]')).toBeTruthy();
     expect(el!.querySelector('[data-baseline="1"],[data-rcb-video-html-hit="1"]')).toBeTruthy();
     // eslint-disable-next-line no-console
     console.log('[test:video-world-layer]', {
@@ -114,11 +116,11 @@ describe('image vs video paint layers', () => {
     });
   });
 
-  it('video on private infinite host also paints zero <image> (same HTML overlay)', async () => {
+  it('video on private infinite host also paints poster underlay', async () => {
     const { root, layer } = svgRoot({ 'data-rcb-infinite': '1' });
     const el = await nodeToSvgElement(root, layer, doc, videoNode(box), 'vid2');
     expect(el).toBeTruthy();
-    expect(el!.querySelectorAll('image').length).toBe(0);
+    expect(el!.querySelectorAll('image').length).toBe(1);
     // eslint-disable-next-line no-console
     console.log('[test:video-private-host-layer]', {
       images: el!.querySelectorAll('image').length,

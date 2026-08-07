@@ -3,6 +3,7 @@ from __future__ import annotations
 """SSE emit helpers and canvas chrome events for graph nodes."""
 
 import logging
+import uuid
 from typing import Any
 from langgraph.config import get_stream_writer
 from app.services.design.prompts.rules_text import _as_text
@@ -16,14 +17,53 @@ from app.services.design.runtime.graph.state import AgentRunState
 _log = logging.getLogger(__name__)
 
 
+def _reserve_artboard_frame_id(rt: Any) -> str:
+    """Stable plate id for this run — FE opens with it; paint sees FOCUS_FRAME_ID."""
+    existing = str(rt.flags.get("artboard_frame_id") or "").strip()
+    if existing:
+        return existing
+    frame_id = f"ab_{uuid.uuid4().hex[:12]}"
+    rt.flags["artboard_frame_id"] = frame_id
+    return frame_id
 
-def _should_early_open_artboard(_rt: Any) -> bool:
-    """Do not invent an artboard before paint.
 
-    Infinite canvas: shapes/text need no plate. A plate opens only when paint
-    emits ``create_frame`` (see ``_emit_canvas_size_from_ops``).
+def _bind_host_artboard_focus(rt: Any, frame_id: str) -> None:
+    """Host opened the shimmer plate — that id is FOCUS for the model (not ambient boards)."""
+    fid = str(frame_id or "").strip()
+    if not fid:
+        return
+    rt.flags["artboard_frame_id"] = fid
+    rt.focus_id = fid
+
+
+def _should_early_open_artboard(rt: Any) -> bool:
+    """Open shimmer before paint only for fixed-size design create.
+
+    Free-canvas Auto / canvas_op (加矩形、改字…): never invent a plate here —
+    wait for paint ``create_frame`` (or none). User @ a board: no sibling plate.
     """
-    return False
+    if str(rt.flags.get("mode") or "") == "ask":
+        return False
+    if str(getattr(rt, "focus_id", "") or "").strip():
+        return False
+    from app.services.design.runtime.models_route import (
+        normalize_user_intent,
+        paint_ops_intent,
+    )
+
+    classified = normalize_user_intent(getattr(rt, "classified_intent", None))
+    if classified != "design":
+        return False
+    lane = (
+        str(getattr(rt, "classified_paint_lane", None) or "").strip()
+        or str(rt.flags.get("paint_lane") or "").strip()
+        or None
+    )
+    want = paint_ops_intent(classified, lane)
+    if want != "create":
+        return False
+    return explicit_canvas_size(getattr(rt, "canvas_size", None))
+
 
 def _resolve_loading_wh(rt: Any) -> tuple[int, int]:
     """Concrete WxH for early loading plate (client lock or scene stock default)."""
@@ -42,6 +82,7 @@ def _resolve_loading_wh(rt: Any) -> tuple[int, int]:
         focus_id=str(rt.focus_id or ""),
     )
 
+
 def _emit_canvas_size_step(
     rt: Any,
     *,
@@ -59,6 +100,9 @@ def _emit_canvas_size_step(
     size = f"{ow}x{oh}"
     prev = str(rt.flags.get("artboard_size") or "")
     already = bool(rt.flags.get("artboard_opened")) and prev == size
+    frame_id = _reserve_artboard_frame_id(rt)
+    # Always hand the Host plate to the model as FOCUS (even if ambient focus lingered).
+    _bind_host_artboard_focus(rt, frame_id)
     if not already:
         _emit(
             {
@@ -66,10 +110,11 @@ def _emit_canvas_size_step(
                 "task_id": st.task_id,
                 "trace_id": st.trace_id,
                 "open_artboard": True,
+                "frame_id": frame_id,
                 "canvas_width": ow,
                 "canvas_height": oh,
                 "canvas_size": size,
-                "design_loading": bool(design_loading)
+                "design_loading": bool(design_loading),
             }
         )
         rt.flags["artboard_opened"] = True
@@ -91,15 +136,16 @@ def _emit_canvas_size_step(
                 "stage": "scene",
                 "detail": f"canvas_size:{size}",
                 "summary": size,
-                "index": int(getattr(st, "round", 0) or 0)
+                "index": int(getattr(st, "round", 0) or 0),
             }
         )
         st.push_log(
             phase="canvas_size",
             intent=str(rt.classified_intent or st.intent or ""),
-            summary=f"canvas_size {size} ({reason})",
+            summary=f"canvas_size {size} frame_id={frame_id} ({reason})",
         )
     return True
+
 
 def _emit_design_loading_artboard(rt: Any) -> bool:
     """Open artboard + shimmer as design loading (after intent, before paint/action)."""
@@ -216,6 +262,13 @@ def _paint_user_reply(raw: str | None, *, limit: int = 40) -> str:
     low = text.lower()
     if any(b.lower() in low for b in banned) or len(text) > limit:
         return ""
+    # Progress / WIP lines are not a finished reply (FE would keep them after done).
+    if text.endswith(("…", "...", "⋯")):
+        return ""
+    if text.startswith(("正在", "创建中", "生成中", "处理中")):
+        return ""
+    if low.startswith(("working", "creating", "generating", "painting")):
+        return ""
     return text[:limit]
 
 def _emit_deferred_paint_reply(st: AgentRunState, *, ops_sent: bool) -> None:
@@ -230,6 +283,8 @@ def _emit_deferred_paint_reply(st: AgentRunState, *, ops_sent: bool) -> None:
     _emit({"type": "token", "text": text})
 
 __all__ = [
+    '_reserve_artboard_frame_id',
+    '_bind_host_artboard_focus',
     '_should_early_open_artboard',
     '_resolve_loading_wh',
     '_emit_canvas_size_step',

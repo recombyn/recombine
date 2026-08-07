@@ -277,6 +277,7 @@ def _placement_errors_for_free_creates(rt: Any, ops: list[dict[str, Any]]) -> li
     """Reject free-canvas creates outside the camera; teach via suggested_place_world.
 
     Does not mutate ops. Frame-scoped creates (frameId set) are skipped.
+    create_frame is a paint/LLM choice (user may opt out) — not enforced here.
     """
     if not ops:
         return []

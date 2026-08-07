@@ -756,6 +756,42 @@ def design_brushes() -> dict[str, Any]:
     return {"items": list_public_brushes()}
 
 
+class LottieGenerateIn(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=2000)
+    width: int = Field(default=200, ge=32, le=2048)
+    height: int = Field(default=200, ge=32, le=2048)
+    duration_sec: float = Field(default=3.0, ge=0.5, le=30.0)
+    model: str | None = Field(default=None, max_length=128)
+    images: list[str] | None = Field(default=None, max_length=8)
+
+
+@router.post("/lottie/generate")
+async def design_lottie_generate(
+    current_user: CurrentUser,
+    body: LottieGenerateIn,
+) -> dict[str, Any]:
+    """Generate Bodymovin JSON for the on-canvas Lottie generator plate."""
+    _ = current_user
+    prompt = body.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="empty prompt")
+    from app.services.design.ops.lottie_hydrate import generate_lottie_animation
+
+    animation = await generate_lottie_animation(
+        prompt=prompt,
+        width=int(body.width),
+        height=int(body.height),
+        duration_sec=float(body.duration_sec),
+        model=body.model,
+        images=body.images,
+    )
+    return {
+        "animationData": animation,
+        "w": animation.get("w"),
+        "h": animation.get("h"),
+    }
+
+
 class LongMemoryIn(BaseModel):
     kind: str = Field(default="preference", max_length=32)
     text: str = Field(..., min_length=1, max_length=2000)

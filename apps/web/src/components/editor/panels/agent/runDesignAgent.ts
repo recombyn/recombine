@@ -1039,13 +1039,21 @@ async function applyAgentToolOps(opts: {
     args: Record<string, unknown>,
     fallback: string | null
   ): string | null => {
+    // Host shimmer / @ pin / live plate already bound — never spatialize onto
+    // ambient boards (model world x/y or guessed frameId often hits the old plate).
+    if (fallback) return fallback;
+    const explicit = String(args.frameId || args.id || '').trim();
+    if (explicit) {
+      const frames = Array.isArray(doc?.frames) ? doc.frames : [];
+      if (frames.some((f: any) => f && String(f.id) === explicit)) return explicit;
+    }
     const frames = Array.isArray(doc?.frames) ? doc.frames : [];
     if (frames.length <= 1) {
-      return fallback || (frames[0]?.id != null ? String(frames[0].id) : null);
+      return frames[0]?.id != null ? String(frames[0].id) : null;
     }
     const x = Number(args.x);
     const y = Number(args.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     let best: { id: string; area: number } | null = null;
     for (const f of frames) {
       const id = String(f?.id || '').trim();
@@ -1059,7 +1067,7 @@ async function applyAgentToolOps(opts: {
         if (!best || area < best.area) best = { id, area };
       }
     }
-    return best?.id || fallback;
+    return best?.id || null;
   };
 
   dispatch(pushEditorHistory());
@@ -1197,6 +1205,7 @@ function ensureFrameSize(opts: {
   width: number;
   height: number;
   skipHistory?: boolean;
+  name?: string;
 }): string | null {
   const toolCtxBase = {
     dispatch: opts.dispatch,
@@ -1212,7 +1221,8 @@ function ensureFrameSize(opts: {
     const created = executeDesignTool(
       'create_frame',
       JSON.stringify({
-        name: 'Design',
+        ...(frameId ? { id: frameId } : {}),
+        name: String(opts.name || 'Design').trim() || 'Design',
         x: slot.x,
         y: slot.y,
         width: opts.width,
@@ -2306,15 +2316,32 @@ function activityDetailParts(ev: {
 }): { detail: string; summaryRaw: string; body: string } {
   const detailRaw = String(ev.detail || '').trim();
   const summaryRaw = String(ev.summary || '').trim();
-  const detail =
-    detailRaw ||
-    (summaryRaw.length > 0 && summaryRaw.length <= 48 ? summaryRaw : '');
-  const bodyFromSummary =
-    !detailRaw && summaryRaw.length > 48 ? summaryRaw : '';
+  const bodyRaw = String(ev.body || '').trim();
+  const shortSummary =
+    summaryRaw.length > 0 && summaryRaw.length <= 48 ? summaryRaw : '';
+  const longSummary =
+    summaryRaw.length > 48 ? summaryRaw : '';
+
+  if (detailRaw) {
+    const distinctShort =
+      shortSummary && shortSummary !== detailRaw ? shortSummary : '';
+    const bodyFromLong =
+      longSummary && longSummary !== detailRaw ? longSummary : '';
+    return {
+      detail: detailRaw,
+      // Keep a distinct short summary only; long copy belongs in body once.
+      summaryRaw: distinctShort,
+      body: bodyRaw || bodyFromLong,
+    };
+  }
+  // No detail: short summary drives the label; long summary is body only (never both).
+  if (shortSummary) {
+    return { detail: shortSummary, summaryRaw: '', body: bodyRaw };
+  }
   return {
-    detail,
-    summaryRaw,
-    body: String(ev.body || bodyFromSummary || '').trim(),
+    detail: '',
+    summaryRaw: '',
+    body: bodyRaw || summaryRaw,
   };
 }
 
@@ -2703,6 +2730,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
 
     // Design: size resolved + needs a plate → open artboard + shimmer before content.
     // User @ board → bind + shimmer only (no second plate).
+    // Host may send frame_id so paint/FOCUS and FE plate share one id.
     if (ev.open_artboard === true) {
       const sizeRaw =
         (ev.canvas_size && String(ev.canvas_size)) ||
@@ -2724,10 +2752,22 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       if (!resolved) return;
       live.nodeIds = [];
       live.fingerprintById = {};
+      let hostFrameId =
+        String(ev.frame_id || '').trim() || live.frameId || null;
+      // Occupied ambient plate without user @ → sibling (do not rewrite old login).
+      if (hostFrameId) {
+        const docNow = params.getDocument();
+        const exists = (Array.isArray(docNow?.frames) ? docNow.frames : []).some(
+          (f: any) => f && String(f.id) === hostFrameId
+        );
+        if (exists && nodeIdsInsideFrame(docNow, hostFrameId).length > 0) {
+          hostFrameId = null;
+        }
+      }
       const frameId = ensureFrameSize({
         dispatch: params.dispatch,
         getDocument: params.getDocument,
-        frameId: null,
+        frameId: hostFrameId,
         width: resolved.width,
         height: resolved.height,
       });
@@ -2920,7 +2960,7 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       status: actStatus,
       count: typeof ev.count === 'number' ? ev.count : undefined,
       detail: detail || undefined,
-      summary: summaryRaw && summaryRaw !== detail ? summaryRaw : undefined,
+      summary: summaryRaw || undefined,
       skillName: ev.skillName || ev.skill_name || undefined,
       durationSec: typeof ev.durationSec === 'number' ? ev.durationSec : undefined,
       stage: stage || undefined,
@@ -2957,11 +2997,15 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       ).length;
       const multiArtboards = createFrameCount >= 2;
       const aiCreatesFrame = createFrameCount > 0;
-      // Free-canvas add (rect/text/…) must not inherit ambient FOCUS / page frame.
-      const bindToBoard = Boolean(pinned || aiCreatesFrame || editInPlace);
+      // Host may already have opened a plate via open_artboard (create_frame stripped).
+      // Bind into that live plate — do not inherit ambient FOCUS alone.
+      const bindToBoard = Boolean(
+        pinned || aiCreatesFrame || editInPlace || live.frameId
+      );
 
       // Single-plate fallback if backend did not emit open_artboard.
       // Multi create_frame: do not pre-open — applyAgentToolOps retargets after each plate.
+      // When live.frameId is set (host shimmer), never spawn a second blank cover.
       if (
         !pinned &&
         !live.frameId &&
