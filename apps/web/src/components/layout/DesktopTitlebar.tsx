@@ -1,10 +1,54 @@
-import { useCallback, useEffect, useState, memo, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  memo,
+  type ReactNode,
+} from 'react';
 import { useTranslation } from 'react-i18next';
+import { useLocation } from 'react-router-dom';
 import { VscChromeClose, VscChromeMaximize, VscChromeMinimize, VscChromeRestore } from 'react-icons/vsc';
 import AppLogo from '@/components/base/AppLogo';
 import { cn } from '@/utils/classnames';
 
+function isEditorRoute(pathname: string): boolean {
+  return pathname === '/editor' || pathname.startsWith('/editor/');
+}
+
 export const DESKTOP_TITLEBAR_H = 35;
+
+type LeadingCtx = {
+  leading: ReactNode | null;
+  setLeading: (node: ReactNode | null) => void;
+};
+
+const DesktopTitlebarLeadingContext = createContext<LeadingCtx | null>(null);
+
+/** Wraps shell so editor (and others) can replace the titlebar brand with page chrome. */
+export function DesktopTitlebarProvider({ children }: { children: ReactNode }) {
+  const [leading, setLeadingState] = useState<ReactNode | null>(null);
+  const setLeading = useCallback((node: ReactNode | null) => {
+    setLeadingState(node);
+  }, []);
+  const value = useMemo(() => ({ leading, setLeading }), [leading, setLeading]);
+  return (
+    <DesktopTitlebarLeadingContext.Provider value={value}>
+      {children}
+    </DesktopTitlebarLeadingContext.Provider>
+  );
+}
+
+/** Register custom leading content; clears on unmount. Null when provider missing. */
+export function useSetDesktopTitlebarLeading(): ((node: ReactNode | null) => void) | null {
+  return useContext(DesktopTitlebarLeadingContext)?.setLeading ?? null;
+}
+
+function useDesktopTitlebarLeading(): ReactNode | null {
+  return useContext(DesktopTitlebarLeadingContext)?.leading ?? null;
+}
 
 function isTauriShell(): boolean {
   if (typeof window === 'undefined') return false;
@@ -38,9 +82,13 @@ async function getWin(): Promise<WinApi | null> {
 /**
  * Custom titlebar — same `--rail` chrome as the home left nav so the OS bar
  * does not sit as a mismatched light/black strip above the app.
+ * Editor can replace the logo/name with home + filename via the leading slot.
  */
 function DesktopTitlebar() {
   const { t } = useTranslation();
+  const { pathname } = useLocation();
+  const leading = useDesktopTitlebarLeading();
+  const hideBrand = Boolean(leading) || isEditorRoute(pathname);
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -84,25 +132,36 @@ function DesktopTitlebar() {
       className="relative z-[80] flex shrink-0 select-none items-stretch border-b border-[var(--line)] bg-[var(--rail)] text-[var(--ink)]"
       style={{ height: DESKTOP_TITLEBAR_H }}
     >
-      {/* Aligns with 64px home rail — brand mark lives here on desktop. */}
-      <div
-        className="flex w-16 shrink-0 items-center justify-center"
-        data-tauri-drag-region
-      >
-        <AppLogo size={22} />
-      </div>
+      {hideBrand ? (
+        <>
+          {leading ? (
+            <div className="flex min-w-0 shrink items-center pl-2.5 pr-1">{leading}</div>
+          ) : null}
+          <div className="min-w-[12px] flex-1" data-tauri-drag-region />
+        </>
+      ) : (
+        <>
+          {/* Aligns with 64px home rail — brand mark lives here on desktop. */}
+          <div
+            className="flex w-16 shrink-0 items-center justify-center"
+            data-tauri-drag-region
+          >
+            <AppLogo size={22} />
+          </div>
 
-      <div
-        className="flex min-w-0 flex-1 items-center gap-2 pl-0.5"
-        data-tauri-drag-region
-      >
-        <span
-          className="truncate text-[13px] font-medium tracking-tight text-[var(--ink)]/90"
-          data-tauri-drag-region
-        >
-          {t('app.name')}
-        </span>
-      </div>
+          <div
+            className="flex min-w-0 flex-1 items-center gap-2 pl-0.5"
+            data-tauri-drag-region
+          >
+            <span
+              className="truncate text-[13px] font-medium tracking-tight text-[var(--ink)]/90"
+              data-tauri-drag-region
+            >
+              {t('app.name')}
+            </span>
+          </div>
+        </>
+      )}
 
       <div className="flex shrink-0 items-stretch">
         <TitlebarBtn label="Minimize" onClick={onMinimize}>
