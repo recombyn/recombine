@@ -9,6 +9,7 @@ import {
 } from 'react-icons/hi2';
 import { Dialog, message } from '@/components/base';
 import { PLAN_CATALOG, PLAN_ORDER, type PlanId } from '@/utils/wallet';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { cn } from '@/utils/classnames';
 
 type PlansPanelProps = {
@@ -316,6 +317,8 @@ type DialogProps = {
 /** Standalone membership dialog. */
 function PlansDialog({ open, onClose }: DialogProps) {
   const { t } = useTranslation();
+  // Local desktop has no cloud subscription — never surface the catalog.
+  if (isDesktopLocal()) return null;
   return (
     <Dialog
       show={open}

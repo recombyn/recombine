@@ -673,6 +673,7 @@ const ja = {
     agentRouteVision: 'マルチモーダル',
     agentRouteImage: '画像モデル',
     agentRouteFollowPlatform: 'プラットフォームに従う',
+    agentRouteLaneEmpty: 'モデルを選択',
     agentRouteCostNote:
       '一度に全モデルを呼びません。再試行回数は上限あり。高コストモデルは該当車線または画像時のみ。',
     agentRoutePlatformNote: 'スタンダード（プラットフォーム既定）ルートを使用中です。',

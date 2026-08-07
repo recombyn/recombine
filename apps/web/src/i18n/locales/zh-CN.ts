@@ -687,6 +687,7 @@ const zhCN = {
     agentRouteVision: '多模态',
     agentRouteImage: '生图模型',
     agentRouteFollowPlatform: '跟随平台',
+    agentRouteLaneEmpty: '请选择模型',
     agentRouteCostNote:
       '不会一次调用多个模型；失败重试由平台限制次数。贵模型仅在对应车道或看图时使用。',
     agentRoutePlatformNote: '当前使用标准版路由（优先国内 Seed / DeepSeek / Seedream）。',
