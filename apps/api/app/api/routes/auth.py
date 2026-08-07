@@ -74,6 +74,24 @@ def _super_admin_test_code() -> str:
     return (getattr(settings, "super_admin_test_code", None) or "").strip()
 
 
+def _console_login_code_enabled() -> bool:
+    """Opt-in self-host path — Cloud / prod must keep AUTH_CONSOLE_LOGIN_CODE off."""
+    return bool(getattr(settings, "auth_console_login_code", False))
+
+
+def _issue_console_login_code(email: str) -> dict[str, Any]:
+    """Self-host without SES: store OTP and print it to API logs."""
+    code = generate_code()
+    store_code(email, code)
+    logger.warning(
+        "LOGIN CODE (AUTH_CONSOLE_LOGIN_CODE) email=%s code=%s — "
+        "enter this in the UI; configure SES for real mail, or disable the flag",
+        email,
+        code,
+    )
+    return {"ok": True, "expiresIn": 300, "mode": "console"}
+
+
 def _normalize_email(raw: str) -> str:
     email = (raw or "").strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
@@ -261,6 +279,8 @@ def email_send_code(body: EmailSendCodeIn, request: Request) -> dict[str, Any]:
         )
 
     if not ses_configured():
+        if _console_login_code_enabled():
+            return _issue_console_login_code(email)
         raise HTTPException(
             status_code=503,
             detail="Email signup is temporarily unavailable. Try again later or use another sign-in method.",

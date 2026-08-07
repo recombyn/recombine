@@ -41,7 +41,7 @@
       "kind": "create",
       "label": "Create shape",
       "sort_order": 20,
-      "model_hint": "Add a shape. Args: shapeType|type = rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil (+ path for pen/pencil/path; sides for polygon/star), x,y,width,height, fill, stroke, borderWidth, strokeAlign=center|inside|outside (default center — ink + selection indicator sit on stroke mid-band; outside/inside shift the band). Optional: strokeStyle, strokeLinecap, strokeLinejoin, strokeOpacity. Pen=pen+path; brush=pencil+path (stroke-only; brushStyle?; pathPressure?). Line/arrow are open center strokes (full arrow path includes head). Icons: create_svg / create_icon.",
+      "model_hint": "Add a shape. Args: shapeType|type = rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil (+ path for pen/pencil/path; sides for polygon/star), x,y,width,height, fill, stroke, borderWidth, strokeAlign=center|inside|outside (default center — ink + selection indicator sit on stroke mid-band; outside/inside shift the band). Optional: strokeStyle, strokeLinecap, strokeLinejoin, strokeOpacity. Pen=pen+path; brush/板绘=pencil+path+pathPressure (csv 0.05-1 per point)+brushStyle (calligraphy|soft|marker|fountain|solid); stroke-only. Line/arrow are open center strokes (full arrow path includes head). Icons: create_svg / create_icon. For Q-illustration / pencil sketch do NOT collage with circles — use multiple pencil strokes with pressure.",
       "args_schema": {
         "shapeType": "rect|ellipse|circle|line|arrow|triangle|polygon|star|path|pen|pencil",
         "x": "number",
@@ -145,7 +145,7 @@
       "kind": "frame",
       "label": "Create frame",
       "sort_order": 60,
-      "model_hint": "Create a frame/artboard. Args: x,y,width,height, name?",
+      "model_hint": "Create a frame/artboard. Args: x,y,width,height,name?. Multi-screen or multi-poster: one create_frame per board (name it), then that board's content, then the next create_frame — do not merge into one tall frame.",
       "args_schema": {
         "x": "number",
         "y": "number",

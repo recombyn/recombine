@@ -76,6 +76,19 @@ docker compose up -d --build
 
 On first API start, schema + seed data are applied automatically.
 
+### First login (no mail provider)
+
+Self-host only (`AUTH_CONSOLE_LOGIN_CODE=true`, set by default in `docker-compose.yml`).  
+When SES is unset, email login prints the OTP to API logs — **do not enable this on Cloud / public production**.
+
+1. Open the web UI → sign in with any email you control.
+2. Request a code — the UI says to check API logs.
+3. Read `LOGIN CODE (AUTH_CONSOLE_LOGIN_CODE) … code=######` in the API container / `npm run dev:api` terminal.
+4. Enter that 6-digit code in the UI.
+
+Dev without compose: set `AUTH_CONSOLE_LOGIN_CODE=true` in `apps/api/.env`.  
+Configure SES (`TENCENT_SECRET_*`, `SES_FROM_EMAIL`, `SES_TEMPLATE_ID`, …) for real email. Google OAuth is optional (`GOOGLE_CLIENT_ID`).
+
 Bring your own LLM keys (DeepSeek / Doubao / OpenRouter / …). Without keys, Agent features will not call models.
 
 ### Credits & membership (self-host)
@@ -153,6 +166,7 @@ Do this **before** exposing port 3000 / 8000 to the internet:
 8. Restrict CORS (`CORS_ORIGINS`) to your real origins.
 9. Confirm Redis/MySQL are host-only (`127.0.0.1:…` in compose — do not publish them publicly).
 10. Confirm DB backups (`DB_BACKUP_*`) or cloud automated backups.
+11. Set `AUTH_CONSOLE_LOGIN_CODE=false` (or unset) once SES/Google auth is configured — never leave log OTPs on a public host.
 
 API startup logs **warnings** if admin password, collab secret, default MySQL password, card salt, or BYOK key look like local defaults.
 
