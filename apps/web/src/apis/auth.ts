@@ -114,3 +114,14 @@ export const logout = () =>
     url: '/api/v1/auth/logout',
     method: 'post',
   });
+
+/**
+ * Desktop-local auto login (OS user → local SQLite account).
+ * Only when API has DESKTOP_LOCAL_AUTO_LOGIN=true (Tauri local sidecar).
+ */
+export const loginDesktopLocal = (payload?: { username?: string }) =>
+  request<{ user: AuthUserDto; token: string }>({
+    url: '/api/v1/auth/desktop-local',
+    method: 'post',
+    data: payload || {},
+  });

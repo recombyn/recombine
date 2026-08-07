@@ -8,6 +8,7 @@ import {
   uploadFiles,
   type UploadedFileItem,
 } from '@/apis/upload';
+import { resolveApiUrl } from '@/utils/apiBase';
 import { getToken } from '@/utils/token';
 
 /** In-flight canvas placeholder uploads — delete node → abort. */
@@ -230,7 +231,7 @@ async function fetchUploadBytesByKey(key: string): Promise<Blob> {
     .filter(Boolean)
     .map(encodeURIComponent)
     .join('/');
-  const absolute = `${window.location.origin}/api/v1/uploads/files/${path}`;
+  const absolute = resolveApiUrl(`/api/v1/uploads/files/${path}`);
   const headers: HeadersInit = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -242,7 +243,9 @@ async function fetchUploadBytesByKey(key: string): Promise<Blob> {
 }
 
 async function fetchUploadBytesByDisplayUrl(src: string): Promise<Blob> {
-  const absolute = `${window.location.origin}/api/v1/uploads/content?url=${encodeURIComponent(src)}`;
+  const absolute = resolveApiUrl(
+    `/api/v1/uploads/content?url=${encodeURIComponent(src)}`
+  );
   const headers: HeadersInit = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -283,7 +286,7 @@ export async function imageSrcToFile(
       }
     }
     if (!blob) {
-      const absolute = s.startsWith('/') ? `${window.location.origin}${s}` : s;
+      const absolute = s.startsWith('/') ? resolveApiUrl(s) : s;
       const headers: HeadersInit = {};
       const token = getToken();
       if (token && (s.startsWith('/api/') || absolute.includes('/api/v1/uploads/'))) {

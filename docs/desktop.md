@@ -1,86 +1,88 @@
-# Desktop app (Tauri v2)
+# Desktop (Tauri v2)
 
-Recombyn’s desktop shell wraps the same React app in [`apps/web`](../apps/web) with **Tauri 2**. There is no separate frontend — the window loads Vite (`devUrl`) or the production `dist` build.
+| | Command | API | Product id |
+|--|---------|-----|------------|
+| **Local** | `npm run dev:desktop` / `build:desktop` | Bundled API sidecar + SQLite (app data) | `com.recombyn.app` · Recombyn |
+| **Cloud** | `npm run dev:desktop:cloud` / `build:desktop:cloud` | `VITE_API_BASE_URL` (default `https://recombyn.com`) | `com.recombyn.app.cloud` · Recombyn Cloud |
 
-| Item | Value |
-|------|--------|
-| Product name | Recombyn |
-| Bundle id | `com.recombyn.app` |
-| Shell | `apps/web/src-tauri/` |
-| Dev URL | `http://localhost:3000` (same as web) |
-| API | Vite proxy → `127.0.0.1:8000` (run `npm run dev:api` as needed) |
+## Local data & login
+
+UI still calls `/api/v1/...` on **`127.0.0.1:8000`**. Projects, skills, uploads, wallet live in app-data SQLite + `storage/uploads`.
+
+**Login:** Local desktop auto-signs in as the OS user (`DESKTOP_LOCAL_AUTO_LOGIN`, loopback-only `POST /auth/desktop-local`). No email OTP. Cloud desktop / browser still use normal login.
 
 ## Prerequisites
 
-1. **Node.js** + repo `npm install` (workspace root).
-2. **Rust** via [rustup](https://rustup.rs) — `cargo` on `PATH` (or under `~/.cargo/bin`; `scripts/dev-desktop.mjs` prepends that on Windows).
-3. **Platform toolchain**
-   - **Windows:** [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with **Desktop development with C++** (MSVC). WebView2 is usually already present on Win10/11.
-   - **macOS:** Xcode Command Line Tools.
-   - **Linux:** see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
-
-Optional for full product behavior while developing: `npm run dev:api`, Redis / `npm run dev:collab` (same as web).
+1. **Node.js** + repo `npm install`
+2. **Rust** ([rustup](https://rustup.rs)) + platform C++/WebView toolchain
+3. **Local flavor**
+   - **Dev:** `apps/api` Python venv (`pip install -e ".[dev]"`)
+   - **Release EXE:** PyInstaller sidecar (`pip install -e ".[desktop]"` or the build script installs `pyinstaller`)
 
 ## Commands
 
-From the **repo root**:
-
 ```bash
-npm run dev:desktop      # tauri dev + Vite on :3000
-npm run build:desktop    # production web build + native installers
+# Dev local — live Python API on :8000 + Tauri window
+npm run dev:desktop
+
+# Build API sidecar only (PyInstaller onedir → src-tauri/sidecars/recombyn-api/)
+npm run build:desktop:sidecar
+
+# Release local installer (builds sidecar if missing, embeds it as Tauri resources)
+npm run build:desktop
+
+# Force rebuild sidecar then app:
+# RECOMBYN_REBUILD_SIDECAR=1 npm run build:desktop
+
+# Cloud desktop (no sidecar)
+npm run dev:desktop:cloud
+npm run build:desktop:cloud
 ```
 
-Equivalents under `apps/web`:
+### Output paths (after `build:desktop`)
 
-```bash
-npm run tauri:dev
-npm run tauri:build
+| What | Path |
+|------|------|
+| Installers (NSIS / MSI 等) | `apps/web/src-tauri/target/release/bundle/` |
+| Unpacked main EXE | `apps/web/src-tauri/target/release/recombyn.exe` |
+| API sidecar (build staging) | `apps/web/src-tauri/sidecars/recombyn-api/recombyn-api.exe` |
+
+Cloud build uses the same `bundle/` tree; product name is **Recombyn Cloud**.
+
+## Architecture
+
+```
+Local release
+  Recombyn.exe
+    → spawns resources/recombyn-api/recombyn-api.exe  (PyInstaller onedir)
+    → SQLite + uploads under app data dir
+
+Local dev
+  npm run dev:desktop
+    → ensure-desktop-api.mjs (uvicorn from apps/api/.venv)
+    → Tauri loads Vite :3000 (proxy /api → :8000)
+
+Cloud desktop
+  UI only → VITE_API_BASE_URL
 ```
 
-`dev:desktop` / `build:desktop` call [`scripts/dev-desktop.mjs`](../scripts/dev-desktop.mjs), which ensures `cargo` is discoverable before invoking the workspace scripts.
-
-## Architecture notes
-
-```
-AppShell
-  └─ DesktopTitlebar   # only when running in Tauri (decorations: false)
-  └─ Outlet            # same routes as the browser app
-```
-
-- **Custom titlebar** — native decorations are off (`decorations: false` in `tauri.conf.json`). UI chrome uses `--rail` so light/dark match the home sidebar. Height: `DESKTOP_TITLEBAR_H` in `DesktopTitlebar.tsx`.
-- **Detection** — `useIsDesktopShell()` / `__TAURI_INTERNALS__` / `import.meta.env.TAURI_ENV_PLATFORM`.
-- **Navigation** — Prefer same-window `navigate` inside Tauri; `window.open(..., '_blank')` does not open a useful window in WebView. Home → editor boot uses `goEditor` / `homeAgentBoot` desktop paths.
-- **External links** — Help / docs / mailto go through `openExternalUrl()` (`docsUrl.ts`) + `@tauri-apps/plugin-opener` so the **system browser** opens. Desktop prefers `https://docs.recombyn.com` when a local docs server is not the target.
-- **Theme** — `applyTheme` also calls Tauri `setTheme` so the shell follows the app theme.
-- **Narrow windows** — Titlebar keeps the brand mark; content-area mobile brand / rail logo are suppressed so they do not duplicate the chrome.
-
-Vite (`apps/web/vite.config.ts`) sets `clearScreen: false`, `strictPort`, and ignores `src-tauri` for watch — required for `tauri dev`.
-
-## Icons
-
-Regenerate from the mark:
-
-```bash
-cd apps/web
-npx tauri icon public/logo-mark.png
-```
-
-Outputs land under `apps/web/src-tauri/icons/`.
+- **Sidecar entry:** `apps/api/scripts/desktop_sidecar_main.py`
+- **Stage script:** `scripts/build-desktop-sidecar.mjs`
+- **Tauri resources (local build):** `src-tauri/tauri.local.conf.json`
+- **Spawn logic:** `src-tauri/src/local_api.rs` (bundled exe first, Python fallback)
+- **API URL helper:** `apps/web/src/utils/apiBase.ts`
 
 ## Troubleshooting
 
 | Symptom | What to try |
 |---------|-------------|
-| `cargo` not found | Install rustup; reopen the terminal; or use `npm run dev:desktop` (PATH fix). |
-| Windows link / compile errors | Open a “x64 Native Tools” / Developer Prompt, or run after `vcvars64.bat`. Ensure MSVC Build Tools are installed. |
-| Port 3000 already in use | Stop the other Vite / previous `tauri:dev`; avoid two `beforeDevCommand` instances. |
-| `failed to remove … recombyn.exe` (Windows) | Quit every Recombyn window / kill `recombyn.exe`, then retry. |
-| Clicks / “open in new tab” do nothing | Must use desktop navigation / `openExternalUrl` — not raw `window.open`. |
-| Titlebar / theme looks wrong after config change | Fully quit and restart `dev:desktop` (`decorations` and native config are not hot-reloaded). |
-| API / fonts 404 or proxy errors | Start `npm run dev:api` (and Redis if you need queues). |
+| Skills / projects “Request failed” | Re-login — old cloud JWT won’t match a fresh local SQLite DB |
+| Sidecar build fails | `cd apps/api && .venv\Scripts\activate && pip install -e ".[desktop]"` |
+| Release app won’t start API | Confirm `sidecars/recombyn-api/recombyn-api.exe` exists before/after build |
+| Port 8000 in use | Quit other API / previous desktop; or reuse the existing listener |
+| Want cloud MySQL in desktop | Use **cloud** flavor, not local |
 
 ## Related
 
-- Web local setup: [README.md](../README.md) · [self-hosting.md](./self-hosting.md)
-- Layout shell: `apps/web/src/components/layout/AppShell.tsx`, `DesktopTitlebar.tsx`
-- Tauri config: `apps/web/src-tauri/tauri.conf.json`
+- [self-hosting.md](./self-hosting.md) · [architecture.md](./architecture.md)
+- `scripts/dev-desktop.mjs` · `scripts/ensure-desktop-api.mjs`

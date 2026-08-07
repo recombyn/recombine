@@ -1,6 +1,6 @@
 import { useEffect, memo } from 'react';
 import { useDispatch } from 'react-redux';
-import { getMe } from '@/apis/auth';
+import { getMe, loginDesktopLocal } from '@/apis/auth';
 import { fetchWallet } from '@/apis/wallet';
 import AppRouter from '@/router';
 import { logout, setSession, clearSessionCaches } from '@/store/modules/auth';
@@ -8,7 +8,37 @@ import { clearProjectsLibrary } from '@/store/modules/editor';
 import { clearWallet } from '@/store/modules/wallet';
 import type { LedgerEntry } from '@/utils/wallet';
 import { syncFromServer } from '@/store/modules/wallet';
-import { getToken } from '@/utils/token';
+import { getDesktopMode } from '@/utils/apiBase';
+import { getToken, setToken } from '@/utils/token';
+
+function applySessionUser(
+  dispatch: ReturnType<typeof useDispatch>,
+  user: {
+    id?: string;
+    email: string;
+    name: string;
+    avatar?: string | null;
+    provider: string;
+    bio?: string | null;
+    role?: string;
+  },
+  token?: string
+) {
+  dispatch(
+    setSession({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatar: user.avatar,
+        provider: user.provider,
+        bio: user.bio,
+        role: user.role,
+      },
+      token,
+    })
+  );
+}
 
 function App() {
   const dispatch = useDispatch();
@@ -24,34 +54,14 @@ function App() {
     return () => window.removeEventListener('recombine:auth-unauthorized', onUnauthorized);
   }, [dispatch]);
 
-  // Logged-in boot: refresh user + credit balance from API (not localStorage alone).
+  // Boot: desktop-local auto-login as OS user; then refresh me + wallet.
   useEffect(() => {
-    if (!getToken()) return;
     let cancelled = false;
-    void getMe()
-      .then((res) => {
-        if (cancelled || !getToken()) return;
-        dispatch(
-          setSession({
-            user: {
-              id: res.user.id,
-              email: res.user.email,
-              name: res.user.name,
-              avatar: res.user.avatar,
-              provider: res.user.provider,
-              bio: res.user.bio,
-              role: res.user.role,
-            },
-            token: getToken() || undefined,
-          })
-        );
-        if (typeof res.tokens === 'number') {
-          dispatch(syncFromServer({ tokens: res.tokens }));
-        }
-      })
-      .catch(() => undefined);
-    void fetchWallet()
-      .then((res) => {
+
+    async function refreshWallet() {
+      if (!getToken()) return;
+      try {
+        const res = await fetchWallet();
         if (cancelled || !getToken()) return;
         dispatch(
           syncFromServer({
@@ -62,8 +72,56 @@ function App() {
             ledger: (res.ledger || []) as LedgerEntry[],
           })
         );
-      })
-      .catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    async function refreshMe() {
+      if (!getToken()) return false;
+      try {
+        const res = await getMe();
+        if (cancelled || !getToken()) return false;
+        applySessionUser(dispatch, res.user, getToken() || undefined);
+        if (typeof res.tokens === 'number') {
+          dispatch(syncFromServer({ tokens: res.tokens }));
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    async function ensureDesktopLocalSession() {
+      if (getDesktopMode() !== 'local') return;
+      if (getToken()) {
+        const ok = await refreshMe();
+        if (ok || cancelled) return;
+        // Stale cloud / old-DB token — drop and auto-provision local OS user.
+        setToken(null);
+        dispatch(logout());
+        clearSessionCaches();
+      }
+      if (getToken() || cancelled) return;
+      try {
+        const res = await loginDesktopLocal();
+        if (cancelled) return;
+        applySessionUser(dispatch, res.user, res.token);
+      } catch {
+        /* flag off or API not ready */
+      }
+    }
+
+    async function boot() {
+      await ensureDesktopLocalSession();
+      if (cancelled) return;
+      if (getDesktopMode() !== 'local') {
+        await refreshMe();
+      }
+      await refreshWallet();
+    }
+
+    void boot();
     return () => {
       cancelled = true;
     };

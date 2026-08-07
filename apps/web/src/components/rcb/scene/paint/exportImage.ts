@@ -4,6 +4,7 @@ import { createSvgBoard, loadSceneOntoSvg } from './sceneToSvg';
 import { nodeLeftTop } from './sceneToSvg';
 import { isExportableSceneNode } from '../document/sceneDocument';
 import { strokeVisualOutset } from '../document/sceneEffects';
+import { resolveApiUrl } from '@/utils/apiBase';
 import { getToken } from '@/utils/token';
 
 export type ExportImageFormat = 'png' | 'jpeg' | 'svg';
@@ -296,9 +297,7 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
 /** Last-resort: draw via HTMLImageElement (works when img already paints on canvas). */
 function rasterizeViaHtmlImage(src: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const absolute = src.startsWith('/')
-      ? `${window.location.origin}${src}`
-      : src;
+    const absolute = src.startsWith('/') ? resolveApiUrl(src) : src;
     const el = new Image();
     let settled = false;
     const finish = (data: string | null) => {
@@ -353,9 +352,7 @@ async function fetchHrefAsDataUrl(
     console.warn('[export] imageSrcToFile failed', err);
   }
   try {
-    const absolute = src.startsWith('/')
-      ? `${window.location.origin}${src}`
-      : src;
+    const absolute = src.startsWith('/') ? resolveApiUrl(src) : src;
     const headers: HeadersInit = {};
     const token = getToken();
     if (token && (src.startsWith('/api/') || absolute.includes('/api/v1/uploads/'))) {
