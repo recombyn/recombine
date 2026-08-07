@@ -15,8 +15,11 @@ import {
   spawnVideoUploadPlaceholderNode,
   createImageGeneratorNode,
   createVideoGeneratorNode,
+  createLottieNode,
+  createLottieGeneratorNode,
   promoteImageGeneratorToImage,
   promoteVideoGeneratorToVideo,
+  promoteLottieGeneratorToLottie,
   addNodeToDocument,
   removeNodesFromDocument,
   isEphemeralUploadNode,
@@ -47,7 +50,8 @@ export type ImageToolPanelKind =
   | 'adjust'
   | 'flipRotate'
   | 'quickEdit'
-  | 'replaceText';
+  | 'replaceText'
+  | 'lottieEdit';
 
 /** On-canvas video tool sessions (trim timeline). Spatial crop reuses image crop panel. */
 export type VideoToolPanelKind = 'trim';
@@ -1494,6 +1498,49 @@ const editorSlice = createSlice({
       state.pendingImageSrc = null;
       state.activeTool = 'select';
     },
+    /** Spawn canvas Lottie Generator plate at given document coords. */
+    spawnLottieGenerator(state, action) {
+      if (!state.document) return;
+      pushHistory(state);
+      const { id, node } = createLottieGeneratorNode({
+        x: action.payload?.x,
+        y: action.payload?.y,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        name: action.payload?.name,
+      });
+      state.document = addNodeToDocument(state.document, id, node);
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+    },
+    /** Spawn finished Lottie plate (sample or Agent JSON) at document coords. */
+    spawnLottie(state, action) {
+      if (!state.document) return;
+      pushHistory(state);
+      try {
+        const { id, node } = createLottieNode({
+          x: action.payload?.x,
+          y: action.payload?.y,
+          width: action.payload?.width,
+          height: action.payload?.height,
+          name: action.payload?.name,
+          animationData: action.payload?.animationData,
+        });
+        state.document = addNodeToDocument(state.document, id, node);
+        state.dirty = true;
+        state.sceneReloadToken += 1;
+        state.selectedNodeId = id;
+        state.selectedNodeIds = [id];
+        state.pendingImageSrc = null;
+        state.activeTool = 'select';
+      } catch {
+        /* invalid animationData — no-op */
+      }
+    },
     /** Convert Image Generator plate → normal image node (same id). */
     /** Pull one multi-gen variant out into a sibling image node (undoable). */
     detachImageVariant(state, action) {
@@ -1557,6 +1604,33 @@ const editorSlice = createSlice({
         name: action.payload?.name,
         genPrompt: action.payload?.genPrompt,
       });
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = nodeId;
+      state.selectedNodeIds = [nodeId];
+      if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+      syncLibraryOnEdit(state);
+    },
+    /** Convert Lottie Generator plate → normal Lottie node (same id). */
+    finishLottieGenerator(state, action) {
+      const nodeId = String(action.payload?.nodeId || '');
+      const animationData = action.payload?.animationData;
+      if (!state.document || !nodeId || animationData == null) return;
+      pushHistory(state);
+      const next = promoteLottieGeneratorToLottie(state.document, nodeId, {
+        animationData,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        x: action.payload?.x,
+        y: action.payload?.y,
+        name: action.payload?.name,
+        genPrompt: action.payload?.genPrompt,
+      });
+      if (next === state.document) {
+        state.historyPast.pop();
+        return;
+      }
+      state.document = next;
       state.dirty = true;
       state.sceneReloadToken += 1;
       state.selectedNodeId = nodeId;
@@ -1903,8 +1977,11 @@ export const {
   startVideoUploadPlaceholder,
   spawnImageGenerator,
   spawnVideoGenerator,
+  spawnLottieGenerator,
+  spawnLottie,
   finishImageGenerator,
   finishVideoGenerator,
+  finishLottieGenerator,
   detachImageVariant,
   startImageProcess,
   finishImageProcess,

@@ -22,6 +22,7 @@ import {
   ungroupNodesInDocument,
   updateNodeInDocument,
   isVideoNode,
+  isLottieNode,
   isExportableSceneNode,
   isGeneratorNode,
   type SceneClipboardPayload,
@@ -173,9 +174,13 @@ import { parseFrameSelId } from '@/components/rcb/selection/SelectionFeature';
 import ImageProcessOverlay from '@/components/editor/nodes/ImageNode/ImageProcessOverlay';
 import ImageGeneratorOverlay from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorOverlay';
 import VideoGeneratorOverlay from '@/components/editor/nodes/VideoGeneratorNode/VideoGeneratorOverlay';
+import LottieGeneratorOverlay from '@/components/editor/nodes/LottieGeneratorNode/LottieGeneratorOverlay';
 import VideoNodeOverlay, {
   type VideoGeomOverride,
 } from '@/components/editor/nodes/VideoNode/VideoNodeOverlay';
+import LottieNodeOverlay, {
+  type LottieGeomOverride,
+} from '@/components/editor/nodes/LottieNode/LottieNodeOverlay';
 import { downloadVideoNodeAsset } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
 import type { PencilEraseStroke } from '@/components/rcb';
 import { erasePencilNode } from '@/components/rcb';
@@ -1330,7 +1335,7 @@ function SvgCanvas({
                 height: Math.max(1, Number(node.height) || p.height),
               }
             : p;
-        if (node?.key === 'video') {
+        if (node?.key === 'video' || node?.key === 'lottie') {
           hasVideo = true;
           const pending = dragWriteCoalesceRef.current.getPendingVideoGeom()?.[p.nodeId];
           videoOverrides[p.nodeId] = {
@@ -1421,8 +1426,8 @@ function SvgCanvas({
           board.root ? board : null
         );
       }
-      // HTML video plates read Redux doc — push live angle so rotate tracks chrome.
-      if (isVideoNode(node)) {
+      // HTML video / lottie plates read Redux doc — push live angle so rotate tracks chrome.
+      if (isVideoNode(node) || isLottieNode(node)) {
         const live = documentRef.current?.deltaSetLike?.[nodeId] || node;
         const { left, top } = nodeLeftTop(documentRef.current, live);
         const pending = dragWriteCoalesceRef.current.getPendingVideoGeom()?.[nodeId];
@@ -2866,6 +2871,12 @@ function SvgCanvas({
             geometryOverrides={videoLiveGeom}
           />
         ) : null}
+        {infinite ? (
+          <LottieNodeOverlay
+            document={document}
+            geometryOverrides={videoLiveGeom as Record<string, LottieGeomOverride> | null}
+          />
+        ) : null}
         {/* Scene-space HTML overlays (selection / draw previews). Origin matches SVG. */}
         {/* Above frame/node stackOrder so preview select/hover strokes aren't covered. */}
         {/* Above HostPathChrome (z=1e6) so poly/star/radius knobs receive hits
@@ -2928,6 +2939,11 @@ function SvgCanvas({
                 readOnly={readOnly}
               />
               <VideoGeneratorOverlay
+                document={document}
+                hidden={geometryTransforming}
+                readOnly={readOnly}
+              />
+              <LottieGeneratorOverlay
                 document={document}
                 hidden={geometryTransforming}
                 readOnly={readOnly}

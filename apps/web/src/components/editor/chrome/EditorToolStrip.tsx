@@ -18,6 +18,7 @@ import {
   LuStar,
   LuTriangle,
   LuType,
+  LuClapperboard,
 } from 'react-icons/lu';
 import { RiVideoAiLine } from 'react-icons/ri';
 import { Dropdown, Tooltip, message } from '@/components/base';
@@ -39,6 +40,7 @@ import {
   startVideoUploadPlaceholder,
   spawnImageGenerator,
   spawnVideoGenerator,
+  spawnLottieGenerator,
   finishImageProcess,
   failImageProcess,
 } from '@/store/modules/editor';
@@ -344,6 +346,8 @@ function EditorToolStrip({
       uploadMedia: t('editor.tools.uploadMedia', { defaultValue: '上传图片/视频' }),
       imageGenerator: t('editor.tools.imageGenerator'),
       videoGenerator: t('editor.tools.videoGenerator'),
+      lottieGenerator: t('editor.tools.lottieGenerator', { defaultValue: 'Lottie generator' }),
+      lottie: t('editor.tools.lottie'),
       uploading: t('editor.tools.uploading'),
       uploadFail: t('editor.tools.uploadFail'),
     }),
@@ -452,6 +456,39 @@ function EditorToolStrip({
     );
   };
 
+  const spawnLottieGeneratorAtView = () => {
+    if (!document) return;
+    let width = 200;
+    let height = 200;
+    let x = 40;
+    let y = 40;
+    if (camera && stageEl) {
+      const view = stageEl.getBoundingClientRect();
+      if (view.width > 0 && view.height > 0) {
+        const laid = layoutGeneratorPlateInView({
+          document,
+          camera,
+          stageEl,
+          natural: { width: 200, height: 200 },
+          fit: { minRatio: 0.18, maxRatio: 0.32 },
+        });
+        width = laid.width;
+        height = laid.height;
+        x = laid.x;
+        y = laid.y;
+      }
+    }
+    dispatch(
+      spawnLottieGenerator({
+        x,
+        y,
+        width,
+        height,
+        name: L.lottieGenerator,
+      })
+    );
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -459,7 +496,7 @@ function EditorToolStrip({
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         target?.isContentEditable ||
-        target?.closest?.('[contenteditable="true"],[data-agent-composer],[data-image-generator],[data-video-generator]')
+        target?.closest?.('[contenteditable="true"],[data-agent-composer],[data-image-generator],[data-video-generator],[data-lottie-generator]')
       ) {
         return;
       }
@@ -504,7 +541,7 @@ function EditorToolStrip({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // Intentionally stable: always call latest spawn via closure from this render's effect re-run when deps change.
-  }, [camera, dispatch, document, L.imageGenerator, L.videoGenerator, stageEl, toolsLocked]);
+  }, [camera, dispatch, document, L.imageGenerator, L.videoGenerator, L.lottieGenerator, stageEl, toolsLocked]);
 
   const placeAtViewportCenter = (
     natural: { width: number; height: number }
@@ -788,6 +825,12 @@ function EditorToolStrip({
       <ToolBtn tip={L.videoGenerator} disabled={toolsLocked} onClick={spawnVideoGeneratorAtView}>
         <ToolIcon className="h-[18px] w-[18px]">
           <RiVideoAiLine className="opacity-[0.72]" />
+        </ToolIcon>
+      </ToolBtn>
+
+      <ToolBtn tip={L.lottieGenerator} disabled={toolsLocked} onClick={spawnLottieGeneratorAtView}>
+        <ToolIcon>
+          <LuClapperboard className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
         </ToolIcon>
       </ToolBtn>
 

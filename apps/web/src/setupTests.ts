@@ -37,6 +37,25 @@ vi.stubGlobal('ResizeObserver', ResizeObserverStub);
 // Prefer measureText fallback math in sceneText (no canvas native dep in CI).
 HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(null) as any;
 
+// lottie-web creates a canvas at import time; getContext(null) above would crash it.
+vi.mock('lottie-web', () => ({
+  default: {
+    loadAnimation: vi.fn(() => ({
+      play: vi.fn(),
+      pause: vi.fn(),
+      destroy: vi.fn(),
+      setSpeed: vi.fn(),
+      setLoop: vi.fn(),
+      goToAndStop: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      isPaused: false,
+      totalFrames: 0,
+      currentFrame: 0,
+    })),
+  },
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, opts?: { defaultValue?: string; count?: string | number }) => {

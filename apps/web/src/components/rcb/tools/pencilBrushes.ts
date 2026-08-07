@@ -530,7 +530,10 @@ export function splitPolylineByDash(points: Pt[], dasharray: string): Pt[][] {
   return dashes.length ? dashes : [points];
 }
 
-/** Build freehand outline path(s); dashed styles return multiple closed outlines joined. */
+/**
+ * Build freehand outline path(s); dashed styles return multiple closed outlines joined.
+ * Silhouette stays centered on the input polyline (no extra translate / pad bake-in).
+ */
 export function pencilInkPathFromPoints(
   points: Pt[],
   strokeWidth: number,
