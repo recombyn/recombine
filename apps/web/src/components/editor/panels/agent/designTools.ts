@@ -50,6 +50,7 @@ import {
   canOutlineNode,
   outlineNodePatch,
 } from '@/components/rcb/scene/paint/outlineToPath';
+import { findPencilBrush } from '@/components/rcb/tools/pencilBrushes';
 
 const IMAGE_PLACEHOLDER =
   "data:image/svg+xml," +
@@ -398,13 +399,72 @@ function resolveCreateShapeBorderWidth(opts: {
   return 0;
 }
 
+/** Tip brush ids Agent may emit (matches FE PENCIL_BRUSHES). */
+const PENCIL_TIP_BRUSH_IDS = new Set([
+  'solid',
+  'pencil-hb',
+  'soft',
+  'fountain',
+  'calligraphy',
+  'brushpen',
+  'marker',
+  'highlighter',
+  'chalk',
+  'charcoal',
+  'bristle',
+  'airbrush',
+  'watercolor',
+  'needle',
+  'bold',
+]);
+
+/** Legacy freehand / seed ids → tip brush (keep in sync with pencilBrushes LEGACY_FREEHAND_ALIAS). */
+const PENCIL_BRUSH_LEGACY_ALIAS: Record<string, string> = {
+  crayon: 'chalk',
+  dry: 'bristle',
+  ink: 'calligraphy',
+  sketch: 'pencil-hb',
+  'tip-soft': 'soft',
+  'tip-hard': 'solid',
+  'tip-chalk': 'chalk',
+  'tip-bristle': 'bristle',
+};
+
 function resolvePencilBrushStyle(
   mapped: string,
   args: Record<string, unknown>
 ): string | undefined {
   if (mapped !== 'pencil') return undefined;
-  if (args.brushStyle != null) return String(args.brushStyle);
-  return 'solid';
+  const raw = args.brushStyle != null ? String(args.brushStyle).trim() : '';
+  if (!raw) return 'solid';
+  const aliased = PENCIL_BRUSH_LEGACY_ALIAS[raw] || raw;
+  if (PENCIL_TIP_BRUSH_IDS.has(aliased)) return aliased;
+  // Unknown / custom — keep as-is; findPencilBrush falls back at paint time.
+  return aliased;
+}
+
+function normalizeBrushHardnessArg(raw: unknown): number | undefined {
+  if (raw == null || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  const t = n > 0 && n <= 1 ? n * 100 : n;
+  return Math.min(100, Math.max(0, Math.round(t)));
+}
+
+function normalizePressureEnabledArg(
+  raw: unknown,
+  opts: { hasPathPressure: boolean }
+): boolean | undefined {
+  const hasPathPressure = Boolean(opts?.hasPathPressure);
+  if (raw == null || raw === '') {
+    // Match FE default: pressure on when a pressure curve is present.
+    return hasPathPressure ? true : undefined;
+  }
+  if (typeof raw === 'boolean') return raw;
+  const s = String(raw).trim().toLowerCase();
+  if (s === '1' || s === 'true' || s === 'yes' || s === 'on') return true;
+  if (s === '0' || s === 'false' || s === 'no' || s === 'off') return false;
+  return hasPathPressure ? true : undefined;
 }
 
 function summarizeCreateImage(opts: {
@@ -1445,6 +1505,20 @@ function execCreateShape(
   const brushStyle = resolvePencilBrushStyle(mapped, args);
   const pathPressure =
     mapped === 'pencil' ? normalizePathPressureArg(args.pathPressure) : undefined;
+  const brushHardness =
+    mapped === 'pencil'
+      ? normalizeBrushHardnessArg(args.brushHardness ?? args.hardness)
+      : undefined;
+  const pressureEnabled =
+    mapped === 'pencil'
+      ? normalizePressureEnabledArg(args.pressureEnabled, {
+          hasPathPressure: Boolean(pathPressure),
+        })
+      : undefined;
+  const brushStampSrc =
+    mapped === 'pencil' && brushStyle
+      ? String(findPencilBrush(brushStyle).stampSrc || '').trim() || undefined
+      : undefined;
   const { id, node } = createShapeNode({
     x: placed.x,
     y: placed.y,
@@ -1459,6 +1533,9 @@ function execCreateShape(
     sides: args.sides != null ? num(args.sides, 5) : undefined,
     angle: args.rotation != null ? num(args.rotation) : undefined,
     brushStyle,
+    brushStampSrc,
+    brushHardness,
+    pressureEnabled,
     pathPressure,
     opacity,
   });
@@ -1633,6 +1710,12 @@ const UPDATE_NODE_STYLE_ARG_KEYS = [
   'closed',
   'name',
   'sides',
+  'brushStyle',
+  'brushHardness',
+  'hardness',
+  'pathPressure',
+  'pressureEnabled',
+  'brushStampSrc',
   'text',
   'fontSize',
   'fontWeight',
@@ -1810,6 +1893,43 @@ function execUpdateNode(
   if (args.path != null) shell.attrs.path = String(args.path);
   if (args.closed != null) shell.attrs.closed = truthy(args.closed) ? 'true' : 'false';
   if (args.name != null) shell.attrs.name = String(args.name);
+
+  if (args.brushStyle != null || args.brushHardness != null || args.hardness != null) {
+    const nextStyle =
+      args.brushStyle != null
+        ? resolvePencilBrushStyle('pencil', args)
+        : shell.attrs.brushStyle != null
+          ? String(shell.attrs.brushStyle)
+          : undefined;
+    if (nextStyle) {
+      shell.attrs.brushStyle = nextStyle;
+      const tip = findPencilBrush(nextStyle).stampSrc;
+      if (tip) shell.attrs.brushStampSrc = tip;
+    }
+  }
+  if (args.brushHardness != null || args.hardness != null) {
+    const hard = normalizeBrushHardnessArg(args.brushHardness ?? args.hardness);
+    if (hard != null) shell.attrs.brushHardness = hard;
+  }
+  if (args.pathPressure != null) {
+    const pp = normalizePathPressureArg(args.pathPressure);
+    if (pp) shell.attrs.pathPressure = pp;
+    else delete shell.attrs.pathPressure;
+  }
+  if (args.pressureEnabled != null || args.pathPressure != null) {
+    const hasPp = Boolean(
+      shell.attrs.pathPressure != null && String(shell.attrs.pathPressure).trim()
+    );
+    const pe = normalizePressureEnabledArg(args.pressureEnabled, {
+      hasPathPressure: hasPp,
+    });
+    if (pe != null) shell.attrs.pressureEnabled = pe;
+  }
+  if (args.brushStampSrc != null) {
+    const src = String(args.brushStampSrc).trim();
+    if (src) shell.attrs.brushStampSrc = src;
+    else delete shell.attrs.brushStampSrc;
+  }
 
   const shapeTypeRaw = args.shapeType ?? args.type;
   if (shapeTypeRaw != null && String(shapeTypeRaw).trim() && latest.key === 'shape') {

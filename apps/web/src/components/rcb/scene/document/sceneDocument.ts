@@ -433,6 +433,8 @@ export function createShapeNode({
   angle = 0,
   brushStyle,
   brushStampSrc,
+  brushHardness,
+  pressureEnabled,
   pathPressure,
   sides,
   opacity = 1,
@@ -448,10 +450,14 @@ export function createShapeNode({
   closed?: boolean;
   borderWidth?: number;
   angle?: number;
-  /** Pencil brush preset id (solid / calligraphy / marker / …). */
+  /** Pencil tip brush id (solid / pencil-hb / calligraphy / …). */
   brushStyle?: string;
   /** Embedded stamp tip for custom / portable stamp brushes. */
   brushStampSrc?: string;
+  /** Tip edge hardness 0–100 (soft→hard); stamp paint default 80. */
+  brushHardness?: number;
+  /** When false, ignore pathPressure for width modulation. */
+  pressureEnabled?: boolean;
   /** Comma-separated 0–1 pressures aligned with path points (pencil). */
   pathPressure?: string;
   /** Polygon side count / star point count (default 5). */
@@ -578,6 +584,19 @@ export function createShapeNode({
         }),
         ...(brushStyle ? { brushStyle } : {}),
         ...(brushStampSrc ? { brushStampSrc } : {}),
+        ...(shapeType === 'pencil' &&
+        brushHardness != null &&
+        Number.isFinite(Number(brushHardness))
+          ? {
+              brushHardness: Math.min(
+                100,
+                Math.max(0, Math.round(Number(brushHardness)))
+              ),
+            }
+          : {}),
+        ...(shapeType === 'pencil' && pressureEnabled != null
+          ? { pressureEnabled: pressureEnabled ? true : false }
+          : {}),
         ...(shapeType === 'pencil' && pathPressure ? { pathPressure } : {}),
       },
       children: [],
