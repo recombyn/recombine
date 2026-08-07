@@ -2,6 +2,8 @@
 
 Run the full product on your own machine or server with Docker Compose (or local npm + SQLite).
 
+For the **native desktop window** (Tauri) wrapping the same web UI, see **[desktop.md](./desktop.md)** — that path still talks to this API stack locally or remotely.
+
 ## What you get
 
 | Piece | Default |

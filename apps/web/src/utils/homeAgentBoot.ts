@@ -69,8 +69,12 @@ export function seedHomeAgentBootOnWindow(win: Window, boot: HomeAgentBoot) {
  * Returns null if the popup was blocked (caller should same-tab navigate).
  */
 export function openEditorWindowWithBoot(dest: string, boot: HomeAgentBoot): Window | null {
-  // Same-tab fallback if popup blocked.
+  // Same-tab fallback if popup blocked / desktop shell.
   saveHomeAgentBoot(boot);
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  if (w.__TAURI_INTERNALS__ || w.__TAURI__ || import.meta.env.TAURI_ENV_PLATFORM) {
+    return null;
+  }
   const abs = new URL(dest, window.location.href).href;
   const win = window.open('about:blank', '_blank');
   if (!win) return null;
