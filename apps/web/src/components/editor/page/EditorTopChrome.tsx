@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef } from 'react';
+import { memo, useLayoutEffect, useRef, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineHome, HiOutlineShare } from 'react-icons/hi2';
 import { TbMessage2Filled } from 'react-icons/tb';
@@ -7,7 +7,12 @@ import { CollabPresenceBar } from '@/components/editor/collab/CollabRoomProvider
 import { EditorTopExportButton } from '@/components/editor/panels/ExportSelectionPanel';
 import { getInspectDockWidth } from '@/components/editor/panels/DevPropertiesPanel';
 import WalletAccountChip from '@/components/layout/WalletAccountChip';
+import {
+  useIsDesktopShell,
+  useSetDesktopTitlebarLeading,
+} from '@/components/layout/DesktopTitlebar';
 import { flushCurrentProjectNow } from '@/components/editor/useProjectCloudSync';
+import { cn } from '@/utils/classnames';
 
 type Props = {
   projectName: string;
@@ -19,6 +24,85 @@ type Props = {
   onShare: () => void;
   onOpenAgent: () => void;
 };
+
+type HomeTitleProps = {
+  projectName: string;
+  onGoHome: () => void;
+  onRename: (name: string) => void;
+  titleInputRef: RefObject<HTMLInputElement | null>;
+  /** titlebar = compact chrome in desktop custom titlebar; float = canvas overlay */
+  variant: 'float' | 'titlebar';
+};
+
+function EditorHomeTitleCluster({
+  projectName,
+  onGoHome,
+  onRename,
+  titleInputRef,
+  variant,
+}: HomeTitleProps) {
+  const { t } = useTranslation();
+  const titlebar = variant === 'titlebar';
+
+  return (
+    <div className={cn('flex items-center', titlebar ? 'gap-1.5' : 'gap-2')}>
+      <Tooltip tip={t('editor.home', { defaultValue: '首页' })} placement="bottom">
+        <button
+          type="button"
+          aria-label={t('editor.home', { defaultValue: '首页' })}
+          onClick={onGoHome}
+          className={cn(
+            'inline-flex shrink-0 items-center justify-center text-[var(--ink)] transition',
+            titlebar
+              ? 'h-7 w-7 rounded-md hover:bg-[color-mix(in_srgb,var(--ink)_8%,transparent)]'
+              : 'h-8 w-8 rounded-xl bg-[var(--accent-soft)] shadow-sm ring-1 ring-[var(--line)] hover:bg-[var(--line)]'
+          )}
+        >
+          <HiOutlineHome className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+      </Tooltip>
+      <span
+        className={cn(
+          'inline-grid min-w-0 items-center overflow-hidden',
+          titlebar ? 'max-w-[min(18rem,40vw)]' : 'max-w-[min(16rem,calc(100vw-18rem))]'
+        )}
+      >
+        <span
+          className={cn(
+            'invisible col-start-1 row-start-1 max-w-full truncate whitespace-pre px-1 font-medium',
+            titlebar ? 'text-[13px]' : 'text-[14px]'
+          )}
+          aria-hidden
+        >
+          {projectName || ' '}
+        </span>
+        <input
+          ref={titleInputRef}
+          value={projectName}
+          onChange={(e) => onRename(e.target.value)}
+          aria-label={t('home.untitled')}
+          title={projectName}
+          className={cn(
+            'col-start-1 row-start-1 w-full min-w-0 truncate border-0 bg-transparent px-1 font-medium text-[var(--ink)] outline-none placeholder:text-[var(--muted)]',
+            titlebar ? 'h-7 text-[13px]' : 'h-8 text-[14px]'
+          )}
+        />
+      </span>
+    </div>
+  );
+}
+
+function bindTitleInputBlurOnOutsidePointer(titleInputRef: RefObject<HTMLInputElement | null>) {
+  const onPointerDownCapture = (e: PointerEvent) => {
+    const el = titleInputRef.current;
+    if (!el || document.activeElement !== el) return;
+    const target = e.target;
+    if (!(target instanceof Node) || el.contains(target)) return;
+    el.blur();
+  };
+  document.addEventListener('pointerdown', onPointerDownCapture, true);
+  return () => document.removeEventListener('pointerdown', onPointerDownCapture, true);
+}
 
 /** Top-left home/title + top-right export/share/account/chat. */
 function EditorTopChrome({
@@ -32,54 +116,44 @@ function EditorTopChrome({
   onOpenAgent,
 }: Props) {
   const { t } = useTranslation();
+  const desktop = useIsDesktopShell();
+  const setTitlebarLeading = useSetDesktopTitlebarLeading();
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   // SVG canvas pointer handlers stopPropagation, so blank-canvas clicks never
   // blur this chrome input via the normal focus model — capture + blur like AgentComposerInput.
+  useLayoutEffect(() => bindTitleInputBlurOnOutsidePointer(titleInputRef), []);
+
+  // Desktop: home + filename live in the custom titlebar (no logo there).
   useLayoutEffect(() => {
-    const onPointerDownCapture = (e: PointerEvent) => {
-      const el = titleInputRef.current;
-      if (!el || document.activeElement !== el) return;
-      const t = e.target;
-      if (!(t instanceof Node) || el.contains(t)) return;
-      el.blur();
-    };
-    document.addEventListener('pointerdown', onPointerDownCapture, true);
-    return () => document.removeEventListener('pointerdown', onPointerDownCapture, true);
-  }, []);
+    if (!desktop || !setTitlebarLeading) return;
+    setTitlebarLeading(
+      <EditorHomeTitleCluster
+        projectName={projectName}
+        onGoHome={onGoHome}
+        onRename={onRename}
+        titleInputRef={titleInputRef}
+        variant="titlebar"
+      />
+    );
+    return () => setTitlebarLeading(null);
+  }, [desktop, setTitlebarLeading, projectName, onGoHome, onRename]);
 
   return (
     <>
-      <div className="pointer-events-none absolute left-4 top-3 z-20 hidden md:block">
-        <div className="pointer-events-auto flex items-center gap-2">
-          <Tooltip tip={t('editor.home', { defaultValue: '首页' })} placement="bottom">
-            <button
-              type="button"
-              aria-label={t('editor.home', { defaultValue: '首页' })}
-              onClick={onGoHome}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--ink)] shadow-sm ring-1 ring-[var(--line)] transition hover:bg-[var(--line)]"
-            >
-              <HiOutlineHome className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          </Tooltip>
-          <span className="inline-grid min-w-0 max-w-[min(16rem,calc(100vw-18rem))] items-center overflow-hidden">
-            <span
-              className="invisible col-start-1 row-start-1 max-w-full truncate whitespace-pre px-1 text-[14px] font-medium"
-              aria-hidden
-            >
-              {projectName || ' '}
-            </span>
-            <input
-              ref={titleInputRef}
-              value={projectName}
-              onChange={(e) => onRename(e.target.value)}
-              aria-label={t('home.untitled')}
-              title={projectName}
-              className="col-start-1 row-start-1 h-8 w-full min-w-0 truncate border-0 bg-transparent px-1 text-[14px] font-medium text-[var(--ink)] outline-none placeholder:text-[var(--muted)]"
+      {!desktop ? (
+        <div className="pointer-events-none absolute left-4 top-3 z-20 hidden md:block">
+          <div className="pointer-events-auto">
+            <EditorHomeTitleCluster
+              projectName={projectName}
+              onGoHome={onGoHome}
+              onRename={onRename}
+              titleInputRef={titleInputRef}
+              variant="float"
             />
-          </span>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <div
         className="pointer-events-none absolute top-3 z-40 hidden md:block"
