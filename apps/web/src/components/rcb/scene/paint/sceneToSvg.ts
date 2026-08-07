@@ -52,7 +52,9 @@ import {
   brushSize,
   findPencilBrush,
   isStampBrush,
+  parsePathPressures,
   parseSimplePathPoints,
+  pencilInkPathFromPoints,
   samplePolyline,
   stampSizeForBrush,
   stampSpacingForBrush,
@@ -844,25 +846,33 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
         return g;
       }
 
-      // Same as pen: centerline path + SVG stroke (selection chrome shares data-baseline).
-      const inkW = brushSize(brush, strokeWidth);
-      const path = appendChild(parent, svgEl('path', { d: String(d) }));
-      setAttrs(path, { 'data-baseline': '1', 'pointer-events': 'stroke' });
-      setFill(path, 'none');
-      applyElementStroke(
-        root,
-        path,
-        {
-          ...strokeOpen,
-          color: ink,
-          width: inkW,
-        },
-        { hasOpaqueFill: false }
-      );
-      tagNode(path, nodeId, 'shape', shapeType, left, top, width, height);
-      applyMeta(path, left, top, meta, width, height);
-      applyNodeShadow(root, path, node);
-      return path;
+      // Variable-width freehand silhouette (pressure + brush thinning / taper).
+      // Keep an invisible centerline baseline for selection chrome hit-testing.
+      const pressures = parsePathPressures(node.attrs?.pathPressure, pts.length);
+      const outlineD = pencilInkPathFromPoints(pts, strokeWidth, brushId, {
+        linecap: strokeOpen.linecap,
+        dasharray: strokeFull.dasharray,
+        pressures,
+        pressureEnabled: true,
+      });
+      const g = appendChild(parent, svgEl('g'));
+      if (outlineD) {
+        const inkPath = appendChild(g, svgEl('path', { d: outlineD }));
+        setFill(inkPath, ink);
+        setStroke(inkPath, 'none');
+        setAttrs(inkPath, { 'pointer-events': 'none' });
+      }
+      const hit = appendChild(g, svgEl('path', { d: String(d) }));
+      setFill(hit, 'none');
+      setStroke(hit, {
+        color: 'transparent',
+        width: Math.max(brushSize(brush, strokeWidth), strokeWidth),
+      });
+      setAttrs(hit, { 'pointer-events': 'stroke', 'data-baseline': '1' });
+      tagNode(g, nodeId, 'shape', shapeType, left, top, width, height);
+      applyMeta(g, left, top, meta, width, height);
+      applyNodeShadow(root, g, node);
+      return g;
     }
 
     const fillPaint =
