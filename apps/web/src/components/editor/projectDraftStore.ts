@@ -165,6 +165,8 @@ export function buildProjectDocumentPatch(
     if (id === 'ROOT') continue;
     const a = baseDelta[id];
     const c = nextDelta[id];
+    // Same Immer ref ⇒ unchanged (skip stringify).
+    if (a === c) continue;
     if (a === undefined || stableJson(a) !== stableJson(c)) {
       upsertNodes[id] = c;
     }
@@ -248,9 +250,9 @@ export async function putProjectDraft(input: {
 
   try {
     const db = await openDb();
-    const prev = (await idbReq(
-      db.transaction(STORE_DRAFTS, 'readonly').objectStore(STORE_DRAFTS).get(persistenceKey)
-    )) as ProjectDraftRecord | undefined;
+    const tx = db.transaction(STORE_DRAFTS, 'readwrite');
+    const store = tx.objectStore(STORE_DRAFTS);
+    const prev = (await idbReq(store.get(persistenceKey))) as ProjectDraftRecord | undefined;
 
     let syncedAt: number | null =
       input.syncedAt !== undefined ? input.syncedAt : null;
@@ -299,9 +301,7 @@ export async function putProjectDraft(input: {
       baseDocument: baseDocument ?? null,
     };
 
-    await idbReq(
-      db.transaction(STORE_DRAFTS, 'readwrite').objectStore(STORE_DRAFTS).put(record)
-    );
+    await idbReq(store.put(record));
     db.close();
     return record;
   } catch {
@@ -334,35 +334,32 @@ export async function markProjectDraftSynced(
   contentHash: string,
   cloudRevision?: number | null
 ): Promise<void> {
-  const draft = await getProjectDraft(projectId);
-  if (!draft || draft.contentHash !== contentHash) return;
-  await putProjectDraft({
-    projectId: draft.projectId,
-    name: draft.name,
-    document: draft.document,
-    updatedAt: draft.updatedAt,
-    syncedAt: Date.now(),
-    cloudRevision:
-      cloudRevision !== undefined ? cloudRevision : draft.cloudRevision ?? null,
-    // After ACK, live document is the new diff base.
-    baseDocument: draft.document,
-  });
-}
-
-export async function setProjectDraftCloudRevision(
-  projectId: string,
-  cloudRevision: number | null
-): Promise<void> {
-  const draft = await getProjectDraft(projectId);
-  if (!draft) return;
-  await putProjectDraft({
-    projectId: draft.projectId,
-    name: draft.name,
-    document: draft.document,
-    updatedAt: draft.updatedAt,
-    syncedAt: draft.syncedAt,
-    cloudRevision,
-  });
+  const id = String(projectId || '').trim();
+  if (!id || !contentHash) return;
+  try {
+    const db = await openDb();
+    const tx = db.transaction(STORE_DRAFTS, 'readwrite');
+    const store = tx.objectStore(STORE_DRAFTS);
+    const draft = (await idbReq(
+      store.get(projectPersistenceKey(id))
+    )) as ProjectDraftRecord | undefined;
+    if (!draft || draft.contentHash !== contentHash) {
+      db.close();
+      return;
+    }
+    const record: ProjectDraftRecord = {
+      ...draft,
+      syncedAt: Date.now(),
+      cloudRevision:
+        cloudRevision !== undefined ? cloudRevision : draft.cloudRevision ?? null,
+      // After ACK, live document is the new diff base.
+      baseDocument: draft.document,
+    };
+    await idbReq(store.put(record));
+    db.close();
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function deleteProjectDraft(projectId: string): Promise<void> {
@@ -384,9 +381,7 @@ export async function deleteProjectDraft(projectId: string): Promise<void> {
 }
 
 export async function deleteProjectDrafts(projectIds: string[]): Promise<void> {
-  for (const id of projectIds) {
-    await deleteProjectDraft(id);
-  }
+  await Promise.all(projectIds.map((id) => deleteProjectDraft(id)));
 }
 
 /** Wipe every local draft + editor session (logout). */

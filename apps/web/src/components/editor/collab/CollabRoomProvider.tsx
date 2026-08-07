@@ -1,6 +1,6 @@
 /**
  * Yjs room lifecycle: mint token → IndexedDB (offline) + WebsocketProvider → bridge scene ↔ Redux.
- * Presence (selection / cursors) via Awareness. Persist via debounced cloud PUT.
+ * Presence (selection / cursors) via Awareness. Persist via debounced cloud PATCH (or PUT).
  * Offline: y-indexeddb keeps the room locally; reconnect merges with peers / server.
  * @see https://docs.yjs.dev/getting-started/allowing-offline-editing
  */
@@ -23,15 +23,20 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
 import { mintCollabRoomTokenApi } from '@/apis/collab';
-import { upsertProjectApi } from '@/apis/projects';
 import { updateShareDocumentApi } from '@/apis/shares';
 import { rcbSceneToScreen, rcbScreenToScene } from '@/components/rcb/core/math';
 import type { RcbCamera } from '@/components/rcb/core/types';
 import {
+  buildProjectDocumentPatch,
   getProjectDraft,
   hashDocument,
   markProjectDraftSynced,
 } from '@/components/editor/projectDraftStore';
+import {
+  patchProjectToCloud,
+  ProjectRevisionConflictError,
+  pushProjectToCloud,
+} from '@/components/editor/useProjectCloudSync';
 import store from '@/store';
 import { applyCollabDocument, applyCollabScenePatch, EMPTY_ID_LIST } from '@/store/modules/editor';
 import { getToken } from '@/utils/token';
@@ -39,6 +44,7 @@ import {
   bindCollabUndoManager,
   clearCollabUndoStack,
   setCollabActive,
+  setCollabCloudPersistOwned,
   setCollabViewOnly,
 } from './collabRuntime';
 import type { CollabPeer, CollabRole, CollabStatus } from './collabTypes';
@@ -97,7 +103,7 @@ const PERSIST_DEBOUNCE_MS = 2000;
 const PEER_COLORS = ['#E4572E', '#29335C', '#F3A712', '#A8C256', '#669BBC', '#6A4C93'];
 const CAMERA_AWARENESS_MS = 80;
 
-/** Debounced cloud PUT of the collab Y scene (owner/editor only). */
+/** Debounced cloud persist of the collab Y scene (owner/editor only) — PATCH when possible. */
 async function persistCloudSnapshot(opts: {
   id: string;
   name: string;
@@ -109,30 +115,49 @@ async function persistCloudSnapshot(opts: {
     draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
       ? Number(draft.cloudRevision)
       : null;
+  const baseDoc = draft?.baseDocument ?? null;
   const contentHash = hashDocument(scene);
+  const delta =
+    baseDoc && baseRevision != null ? buildProjectDocumentPatch(baseDoc, scene) : null;
+
   try {
-    const res = await upsertProjectApi({
-      id,
-      name,
-      document: scene,
-      ...(baseRevision != null ? { baseRevision } : {}),
-    });
-    const revision = Number(res?.project?.revision);
-    await markProjectDraftSynced(
-      id,
-      contentHash,
-      Number.isFinite(revision) && revision >= 1 ? revision : null
-    );
+    let acked: { revision: number } | undefined;
+    if (delta && !delta.preferFull && baseRevision != null) {
+      try {
+        acked = await patchProjectToCloud({
+          id,
+          name,
+          baseRevision,
+          patch: delta.patch,
+        });
+      } catch (err) {
+        if (err instanceof ProjectRevisionConflictError) throw err;
+        acked = await pushProjectToCloud({
+          id,
+          name,
+          document: scene,
+          baseRevision,
+        });
+      }
+    } else {
+      acked = await pushProjectToCloud({
+        id,
+        name,
+        document: scene,
+        baseRevision,
+      });
+    }
+    await markProjectDraftSynced(id, contentHash, acked?.revision ?? null);
   } catch {
     // Revision conflict / flake — last-writer full PUT without If-Match.
     try {
-      const res = await upsertProjectApi({ id, name, document: scene });
-      const revision = Number(res?.project?.revision);
-      await markProjectDraftSynced(
+      const acked = await pushProjectToCloud({
         id,
-        contentHash,
-        Number.isFinite(revision) && revision >= 1 ? revision : null
-      );
+        name,
+        document: scene,
+        baseRevision: null,
+      });
+      await markProjectDraftSynced(id, contentHash, acked?.revision ?? null);
     } catch {
       /* keep local Y truth; retry on next edit */
     }
@@ -575,6 +600,7 @@ export function CollabRoomProvider({
   useEffect(() => {
     if (!enabled || !currentId || !user?.id || !getToken()) {
       setCollabActive(false);
+      setCollabCloudPersistOwned(false);
       setStatus('idle');
       setRole(null);
       setPeers([]);
@@ -589,6 +615,11 @@ export function CollabRoomProvider({
     setStatus('connecting');
     setError(null);
     setCollabActive(true);
+    setCollabCloudPersistOwned(false);
+
+    const refreshCloudPersistOwned = () => {
+      setCollabCloudPersistOwned(roleRef.current === 'edit' && seededRef.current);
+    };
 
     // Track only local scene writes — seed / remote / undo replay stay out of the stack.
     const undoManager = new Y.UndoManager(
@@ -740,6 +771,7 @@ export function CollabRoomProvider({
         setRole(tokenRes.role);
         roleRef.current = tokenRes.role;
         setCollabViewOnly(tokenRes.role === 'view');
+        refreshCloudPersistOwned();
 
         // Local offline replica (same room id as WS). Meshable with WebsocketProvider.
         const persistence = new IndexeddbPersistence(tokenRes.roomId, ydoc);
@@ -751,6 +783,7 @@ export function CollabRoomProvider({
         if (!isYDocEmpty(ydoc)) {
           hydrateFromY();
           seededRef.current = true;
+          refreshCloudPersistOwned();
         }
 
         const awareness = new Awareness(ydoc);
@@ -784,8 +817,12 @@ export function CollabRoomProvider({
         provider.on('sync', (isSynced: boolean) => {
           if (cancelled || !isSynced) return;
           setStatus('synced');
-          if (seededRef.current) return;
+          if (seededRef.current) {
+            refreshCloudPersistOwned();
+            return;
+          }
           seededRef.current = true;
+          refreshCloudPersistOwned();
           resolveInitialRoomContent(awareness);
         });
       } catch (err) {
@@ -794,6 +831,7 @@ export function CollabRoomProvider({
         setStatus('error');
         setError(err instanceof Error ? err.message : 'collab_connect_failed');
         setCollabActive(false);
+        setCollabCloudPersistOwned(false);
       }
     };
 

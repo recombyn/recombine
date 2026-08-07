@@ -239,11 +239,19 @@ def _next_thumbnail(
             data_list = [one]
 
     if data_list:
+        from concurrent.futures import ThreadPoolExecutor
+
+        batch = list(enumerate(data_list[:4]))
+
+        def _one(item: tuple[int, str]) -> str | None:
+            i, data_url = item
+            return _thumb_key_from_data_url(user_id, project_id, data_url, index=i)
+
         uploaded: list[str] = []
-        for i, data_url in enumerate(data_list[:4]):
-            key = _thumb_key_from_data_url(user_id, project_id, data_url, index=i)
-            if key:
-                uploaded.append(key)
+        with ThreadPoolExecutor(max_workers=min(4, len(batch))) as pool:
+            for key in pool.map(_one, batch):
+                if key:
+                    uploaded.append(key)
         if uploaded:
             _delete_thumb_entries(existing_key)
             custom = True if mark_custom is True else False
@@ -463,6 +471,16 @@ def patch_project(
 
     if old_key and old_key != doc_key:
         delete_object(old_key)
+
+    # Keep linked share snapshots warm (same as upsert) — PATCH used to skip this.
+    try:
+        from app.services.shares.store import sync_project_share_documents
+
+        sync_project_share_documents(
+            owner_id=user_id, project_id=pid, document=merged
+        )
+    except Exception:
+        pass
 
     return {
         "id": pid,

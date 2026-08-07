@@ -1,7 +1,7 @@
 /**
- * Debounced project sync: IndexedDB draft then PATCH (node delta) or PUT (full doc).
- * Local draft survives refresh / flaky network; cloud remains source of truth when newer.
- * Camera / selection live in a separate local session store — never uploaded.
+ * Debounced project sync: IndexedDB draft → incremental PATCH (or PUT) for document.
+ * Cover tiles rebuild only on force leave / first save — existing thumbnailUrl is reused
+ * so edits do not re-fetch scene PNGs or re-upload COS thumbs every debounce.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -34,7 +34,7 @@ import {
   markProjectDraftSynced,
   putProjectDraft,
 } from '@/components/editor/projectDraftStore';
-import { isCollabActive } from '@/components/editor/collab/collabRuntime';
+import { isCollabCloudPersistOwned } from '@/components/editor/collab/collabRuntime';
 
 const DEBOUNCE_MS = 800;
 /** Coalesce rapid Ctrl/⌘+S into one flush. */
@@ -119,14 +119,16 @@ function thumbPayloadFromTiles(tiles: {
   dataUrls?: string[];
   urls?: string[];
 }): ThumbUpload {
+  // Up to 4 tiles in one projects request (not separate cover PATCHes).
   if (tiles.urls?.length) return { thumbnailUrls: tiles.urls.slice(0, 4) };
-  if (tiles.dataUrls?.length) {
-    const dataUrls = tiles.dataUrls.slice(0, 4);
-    return dataUrls.length === 1
-      ? { thumbnailDataUrl: dataUrls[0], thumbnailDataUrls: dataUrls }
-      : { thumbnailDataUrls: dataUrls };
-  }
-  return {};
+  const dataUrls = (tiles.dataUrls || [])
+    .map((u) => String(u || '').trim())
+    .filter((u) => u.startsWith('data:image/'))
+    .slice(0, 4);
+  if (!dataUrls.length) return {};
+  return dataUrls.length === 1
+    ? { thumbnailDataUrl: dataUrls[0], thumbnailDataUrls: dataUrls }
+    : { thumbnailDataUrls: dataUrls };
 }
 
 function applyThumbUpload(
@@ -142,6 +144,69 @@ function ackThumbnail(url: string | string[] | null | undefined, version?: numbe
   const list = normalizeProjectThumbnailUrls(url, version);
   if (!list.length) return null;
   return list.length === 1 ? list[0] : list;
+}
+
+async function buildSyncCoverThumb(
+  document: unknown,
+  dispatch: ReturnType<typeof useDispatch>,
+  projectId: string
+): Promise<ThumbUpload> {
+  try {
+    const tiles = await buildProjectCoverTiles(document);
+    const thumb = thumbPayloadFromTiles(tiles);
+    const localPreview =
+      tiles.urls?.length ? tiles.urls : tiles.dataUrls?.length ? tiles.dataUrls : null;
+    if (import.meta.env.DEV) {
+      console.info('[project-sync] cover tiles', {
+        id: projectId,
+        urls: tiles.urls?.length || 0,
+        dataUrls: tiles.dataUrls?.length || 0,
+      });
+    }
+    if (localPreview) {
+      dispatch(
+        setTemplateThumbnail({
+          id: projectId,
+          thumbnail: localPreview.length === 1 ? localPreview[0] : localPreview,
+          custom: false,
+        })
+      );
+    }
+    return thumb;
+  } catch (err) {
+    if (import.meta.env.DEV) console.warn('[project-sync] cover tiles failed', err);
+    return {};
+  }
+}
+
+/** Prefer already-hosted cover URLs — skip raster + scene image fetches. */
+function existingCoverThumb(template: { thumbnail?: unknown } | null | undefined): ThumbUpload {
+  const urls = normalizeProjectThumbnailUrls(template?.thumbnail as string | string[] | null);
+  return urls.length ? { thumbnailUrls: urls.slice(0, 4) } : {};
+}
+
+/**
+ * Rebuild covers only when forced (leave / Ctrl+S force) or the project has no cover yet.
+ * Incremental edits keep server thumbnailUrl as-is (omit thumb payload).
+ */
+async function resolveSyncCoverThumb(opts: {
+  force: boolean;
+  document: unknown;
+  template: { thumbnail?: unknown } | null | undefined;
+  dispatch: ReturnType<typeof useDispatch>;
+  projectId: string;
+}): Promise<ThumbUpload> {
+  const existing = existingCoverThumb(opts.template);
+  if (!opts.force && existing.thumbnailUrls?.length) {
+    if (import.meta.env.DEV) {
+      console.info('[project-sync] reuse thumbnailUrl', {
+        id: opts.projectId,
+        n: existing.thumbnailUrls.length,
+      });
+    }
+    return {};
+  }
+  return buildSyncCoverThumb(opts.document, opts.dispatch, opts.projectId);
 }
 
 /** Push one owned project to the API (no-op when logged out). */
@@ -274,10 +339,12 @@ export async function removeProjectsFromCloud(ids: string[]): Promise<void> {
 /** Ask the open editor to flush the project to the cloud immediately. */
 export function requestProjectFlush() {
   try {
+    // Clears debounce timers when useProjectCloudSync is mounted.
     window.dispatchEvent(new CustomEvent(FLUSH_NOW_EVENT));
   } catch {
     /* ignore */
   }
+  // Single flush — event only clears timers (does not enqueue a second flush).
   void flushCurrentProjectNow();
 }
 
@@ -316,7 +383,7 @@ export async function renameProjectOnCloud(id: string, name: string): Promise<vo
       });
       await markProjectDraftSynced(
         projectId,
-        hashDocument(draft.document),
+        draft.contentHash,
         acked?.revision ?? rev
       );
       return;
@@ -402,9 +469,8 @@ export function useProjectCloudSync() {
   const flushingRef = useRef(false);
   /** Delete/edit while a flush is in-flight — run again after current finishes. */
   const pendingFlushRef = useRef(false);
-  const flushRef = useRef<(opts?: FlushProjectOptions) => Promise<void>>(async () => {});
-  const latestRef = useRef({ document, currentId, template, dirty });
-  latestRef.current = { document, currentId, template, dirty };
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
 
   const scheduleFlush = useCallback((delayMs: number) => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -415,8 +481,7 @@ export function useProjectCloudSync() {
   }, []);
 
   const flush = useCallback(async (opts?: FlushProjectOptions) => {
-    // Read Redux directly — requestProjectFlush may fire before this hook re-renders,
-    // so latestRef can still hold the pre-delete document.
+    // Read Redux directly — requestProjectFlush may fire before this hook re-renders.
     const force = Boolean(opts?.force);
     const ed = store.getState().editor as {
       dirty: boolean;
@@ -443,9 +508,9 @@ export function useProjectCloudSync() {
       dispatch(persistCurrent({ keepDirty: true }));
       const pushedDoc = (store.getState().editor as { document: unknown }).document;
       const name = String(tpl.name || 'Untitled');
-      const contentHash = hashDocument(pushedDoc);
 
       // 1) Local persistenceKey draft first (durable before cloud).
+      // putProjectDraft hashes once — reuse draft.contentHash (do not stringify again).
       const draft = await putProjectDraft({
         projectId: id,
         name,
@@ -455,6 +520,7 @@ export function useProjectCloudSync() {
         keepCloudRevision: true,
         keepBaseDocument: true,
       });
+      const contentHash = draft?.contentHash || hashDocument(pushedDoc);
 
       // Skip cloud when content + name already ACKed — unless leave-force.
       if (
@@ -468,51 +534,29 @@ export function useProjectCloudSync() {
         return;
       }
 
-      // Data changed → rebuild cover, then persist (local / thumb-only / full).
-      let thumb: ThumbUpload = {};
-      try {
-        const tiles = await buildProjectCoverTiles(pushedDoc);
-        thumb = thumbPayloadFromTiles(tiles);
-        const localPreview =
-          tiles.urls?.length
-            ? tiles.urls
-            : tiles.dataUrls?.length
-              ? tiles.dataUrls
-              : null;
-        if (import.meta.env.DEV) {
-          console.info('[project-sync] cover tiles', {
-            id,
-            urls: tiles.urls?.length || 0,
-            dataUrls: tiles.dataUrls?.length || 0,
-          });
-        }
-        if (localPreview) {
-          dispatch(
-            setTemplateThumbnail({
-              id,
-              thumbnail: localPreview.length === 1 ? localPreview[0] : localPreview,
-              custom: false,
-            })
-          );
-        }
-      } catch (err) {
-        if (import.meta.env.DEV) console.warn('[project-sync] cover tiles failed', err);
-        /* thumb is best-effort — still upload the document */
-      }
+      // Cover: reuse stored thumbnailUrl on normal debounce; rebuild ≤4 only on force / first save.
+      const thumb = await resolveSyncCoverThumb({
+        force,
+        document: pushedDoc,
+        template: tpl,
+        dispatch,
+        projectId: id,
+      });
 
-      // Logged out: local draft + in-memory cover is enough.
+      // Logged out: local draft (+ optional in-memory cover on first/force) is enough.
       if (!getToken()) {
         const after = store.getState().editor as { document: unknown };
         if (after.document === pushedDoc) dispatch(clearEditorDirty());
         return;
       }
 
-      // Live Yjs owns document writes — still push cover (thumbnail-only PATCH).
-      if (isCollabActive() && !force) {
-        const baseRevision =
-          draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
-            ? Number(draft.cloudRevision)
-            : null;
+      const baseRevision =
+        draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
+          ? Number(draft.cloudRevision)
+          : null;
+
+      // Y room owns cloud document writes only after seed + edit role.
+      if (isCollabCloudPersistOwned() && !force) {
         if (baseRevision != null && (thumb.thumbnailDataUrls || thumb.thumbnailDataUrl || thumb.thumbnailUrls)) {
           try {
             const acked = await patchProjectToCloud({
@@ -543,10 +587,6 @@ export function useProjectCloudSync() {
         return;
       }
 
-      const baseRevision =
-        draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
-          ? Number(draft.cloudRevision)
-          : null;
       const baseDoc = draft?.baseDocument ?? null;
       const delta =
         baseDoc && baseRevision != null
@@ -558,7 +598,6 @@ export function useProjectCloudSync() {
           | { revision: number; thumbnailUrl?: string | string[] | null }
           | undefined;
         if (delta && !delta.preferFull && baseRevision != null) {
-          // 2a) Incremental node PATCH when the delta is small enough.
           try {
             acked = await patchProjectToCloud({
               id,
@@ -568,7 +607,6 @@ export function useProjectCloudSync() {
               thumb,
             });
           } catch (err) {
-            // Revision conflict must surface; any other patch failure → full PUT.
             if (err instanceof ProjectRevisionConflictError) throw err;
             acked = await pushProjectToCloud({
               id,
@@ -579,7 +617,6 @@ export function useProjectCloudSync() {
             });
           }
         } else {
-          // 2b) Full-document PUT (create, large delta, missing base, or untracked fields).
           acked = await pushProjectToCloud({
             id,
             name,
@@ -589,7 +626,6 @@ export function useProjectCloudSync() {
           });
         }
         const nextThumb = ackThumbnail(acked?.thumbnailUrl, acked?.revision ?? Date.now());
-        // Always mirror server cover URL into the card (source of truth after ACK).
         if (nextThumb) {
           dispatch(
             setTemplateThumbnail({
@@ -600,15 +636,12 @@ export function useProjectCloudSync() {
           );
         }
         await markProjectDraftSynced(id, contentHash, acked?.revision ?? null);
-        // Another edit landed while uploading — leave dirty so the next flush runs.
         const after = store.getState().editor as { document: unknown };
         if (after.document === pushedDoc) {
           dispatch(clearEditorDirty());
         }
       } catch (err) {
         if (err instanceof ProjectRevisionConflictError) {
-          // If our unsynced local draft is newer than the conflicting cloud row,
-          // force a full PUT (no If-Match) instead of adopting and wiping edits.
           const local = await getProjectDraft(id).catch(() => null);
           const localNewer =
             Boolean(local?.document) &&
@@ -662,7 +695,6 @@ export function useProjectCloudSync() {
     }
   }, [dispatch, scheduleFlush]);
 
-  flushRef.current = flush;
   flushRunner = flush;
 
   useEffect(() => {
@@ -675,18 +707,17 @@ export function useProjectCloudSync() {
     };
   }, [dirty, document, currentId, template, scheduleFlush]);
 
-  // Immediate flush after delete / other structural edits.
+  // Clear debounce timers only — requestProjectFlush owns the single flush enqueue.
   useEffect(() => {
     const onFlushNow = () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
       if (manualSaveTimerRef.current) clearTimeout(manualSaveTimerRef.current);
       manualSaveTimerRef.current = null;
-      void flushCurrentProjectNow();
     };
     window.addEventListener(FLUSH_NOW_EVENT, onFlushNow);
     return () => window.removeEventListener(FLUSH_NOW_EVENT, onFlushNow);
-  }, [flush]);
+  }, []);
 
   // Ctrl/⌘+S — manual save (debounced so key-repeat / rapid presses don't spam).
   useEffect(() => {
@@ -713,7 +744,7 @@ export function useProjectCloudSync() {
   // Flush when tab hides (if dirty); unmount always force-saves doc + cover.
   useEffect(() => {
     const onHide = () => {
-      if (!latestRef.current.dirty) return;
+      if (!dirtyRef.current) return;
       void flushCurrentProjectNow();
     };
     const onVisibility = () => {
@@ -726,5 +757,5 @@ export function useProjectCloudSync() {
       window.document.removeEventListener('visibilitychange', onVisibility);
       void flushCurrentProjectNow({ force: true });
     };
-  }, [flush]);
+  }, []);
 }
