@@ -694,6 +694,7 @@ const en = {
     agentRouteVision: 'Multimodal',
     agentRouteImage: 'Image model',
     agentRouteFollowPlatform: 'Follow platform',
+    agentRouteLaneEmpty: 'Select a model',
     agentRouteCostNote:
       'Models are not all called at once; platform caps retries. Costlier models only run for matching lanes or vision steps.',
     agentRoutePlatformNote: 'Using Standard routes (domestic Seed / DeepSeek / Seedream preferred).',

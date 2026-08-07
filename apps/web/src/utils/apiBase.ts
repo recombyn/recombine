@@ -36,6 +36,11 @@ export function getDesktopMode(): DesktopMode | null {
   return null;
 }
 
+/** Local desktop: OS auto-login + SQLite — no cloud plans / redeem / billing UI. */
+export function isDesktopLocal(): boolean {
+  return getDesktopMode() === 'local';
+}
+
 /** Origin for API calls; empty string → same-origin relative paths. */
 export function getApiBaseUrl(): string {
   const explicit = (

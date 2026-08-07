@@ -75,6 +75,11 @@ def _reserve_design_hold(user_id: str, hold: int, *, mode: str) -> tuple[int, bo
     Spend ``hold`` credits, or reserve the free daily run when balance is short.
     Returns (hold_to_settle, free_daily). free_daily ⇒ hold 0 and force Auto.
     """
+    from app.core.config import settings
+
+    # Local desktop (BYOK): no cloud wallet.
+    if bool(getattr(settings, "desktop_local_auto_login", False)):
+        return 0, False
     need = max(0, int(hold or 0))
     if need <= 0:
         return 0, False
@@ -214,15 +219,18 @@ async def run_design_job(
 
     # —— Agent / single_model: permission → ReAct controller ——
     if mode in ("agent", "single_model"):
+        from app.core.config import settings
+
+        desktop_local = bool(getattr(settings, "desktop_local_auto_login", False))
         hold_need = AGENT_HOLD if mode == "agent" else SINGLE_HOLD
         bal = int(get_user_tokens(user_id) or 0)
         free_left = int(free_daily_remaining(user_id) or 0)
-        can = bal >= hold_need or free_left > 0
+        can = desktop_local or bal >= hold_need or free_left > 0
         yield {
             "type": "permission",
             "can_call_llm": bool(can),
             "balance": bal,
-            "need": hold_need,
+            "need": 0 if desktop_local else hold_need,
             "free_daily": free_left > 0,
         }
         if not can:
