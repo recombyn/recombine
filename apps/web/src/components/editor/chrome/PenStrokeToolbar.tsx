@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineCheck, HiOutlineTrash } from 'react-icons/hi2';
+import { HiOutlineArrowDownTray, HiOutlineCheck, HiOutlinePlus, HiOutlineTrash } from 'react-icons/hi2';
 import { LuEraser } from 'react-icons/lu';
 import { ColorPanelPopover } from '@/components/base/colorPanel';
 import { DropdownPanel } from '@/components/base';
@@ -10,16 +10,21 @@ import Tooltip from '@/components/base/tooltip';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
 import {
   brushPreviewPath,
+  buildStampDabs,
   findPencilBrush,
+  isBrushPackFileName,
   listPencilBrushes,
   makeCustomStampBrush,
+  parseBrushPackJson,
+  PENCIL_BRUSHES,
+  serializeBrushPack,
   setCustomPencilBrushes,
   setOfficialPencilBrushes,
   type PencilBrushDef,
   type PencilBrushId,
 } from '@/components/rcb/tools/pencilBrushes';
 import { fetchDesignBrushes } from '@/apis/design';
-import { getTintedStampSrc, preloadStampSrc } from '@/components/rcb/tools/stampTint';
+import { getTintedStampSrc, preloadStampSrc, STAMP_TINT_READY_EVENT } from '@/components/rcb/tools/stampTint';
 import {
   setActiveTool,
   setPenStrokeColor,
@@ -27,21 +32,24 @@ import {
   setPenStrokeWidth,
   setPencilBrushId,
   setPencilEraseMode,
+  setPencilHardness,
   setPencilPressureEnabled,
 } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
-import { HiOutlinePlus } from 'react-icons/hi2';
 
-const CUSTOM_BRUSH_STORAGE_KEY = 'recombine-custom-pencil-brushes-v1';
-const MAX_CUSTOM_BRUSHES = 24;
-const MAX_BRUSH_FILE_BYTES = 1.5 * 1024 * 1024;
+const CUSTOM_BRUSH_STORAGE_KEY = 'recombine-custom-pencil-brushes-v2';
+const MAX_CUSTOM_BRUSHES = 48;
+const MAX_BRUSH_FILE_BYTES = 2.5 * 1024 * 1024;
 
 type StoredBrush = {
   id: string;
   label: string;
-  stampSrc: string;
+  kind?: 'freehand' | 'stamp';
+  stampSrc?: string;
   sizeFactor?: number;
   spacingFactor?: number;
+  simulatePressure?: boolean;
+  options?: PencilBrushDef['options'];
   createdAt?: number;
 };
 
@@ -50,24 +58,64 @@ function parseStoredBrushes(raw: string | null): StoredBrush[] {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (b) => b && typeof b.id === 'string' && typeof b.stampSrc === 'string' && b.stampSrc.startsWith('data:')
-    );
+    return parsed.filter((b) => {
+      if (!b || typeof b.id !== 'string') return false;
+      if (b.kind === 'freehand') return true;
+      return typeof b.stampSrc === 'string' && String(b.stampSrc).startsWith('data:');
+    });
   } catch {
     return [];
   }
 }
 
 function brushesToDefs(list: StoredBrush[]): PencilBrushDef[] {
-  return list.map((b) =>
-    makeCustomStampBrush({
+  return list.map((b) => {
+    if (b.kind === 'freehand' || (!b.stampSrc && b.options)) {
+      return {
+        id: b.id,
+        label: b.label || 'Brush',
+        custom: true,
+        kind: 'freehand' as const,
+        sizeFactor: b.sizeFactor ?? 1,
+        simulatePressure: Boolean(b.simulatePressure),
+        options: {
+          thinning: Number(b.options?.thinning ?? 0.05),
+          smoothing: Number(b.options?.smoothing ?? 0.45),
+          streamline: Number(b.options?.streamline ?? 0.35),
+          easing: (t: number) => t,
+          start: {
+            taper: Number((b.options?.start as any)?.taper ?? 0),
+            cap: (b.options?.start as any)?.cap !== false,
+          },
+          end: {
+            taper: Number((b.options?.end as any)?.taper ?? 0),
+            cap: (b.options?.end as any)?.cap !== false,
+          },
+        },
+      };
+    }
+    return makeCustomStampBrush({
       id: b.id,
       label: b.label || 'Brush',
-      stampSrc: b.stampSrc,
+      stampSrc: String(b.stampSrc || ''),
       sizeFactor: b.sizeFactor,
       spacingFactor: b.spacingFactor,
-    })
-  );
+    });
+  });
+}
+
+function defToStored(b: PencilBrushDef): StoredBrush {
+  return {
+    id: b.id,
+    label: b.label,
+    kind: b.kind === 'stamp' ? 'stamp' : 'freehand',
+    stampSrc: b.stampSrc,
+    sizeFactor: b.sizeFactor,
+    spacingFactor: b.spacingFactor,
+    simulatePressure: b.simulatePressure,
+    options: b.options,
+    createdAt: Date.now(),
+  };
 }
 
 function persistCustomBrushes(list: StoredBrush[]) {
@@ -81,27 +129,29 @@ function persistCustomBrushes(list: StoredBrush[]) {
 }
 
 function hydrateCustomPencilBrushes(): PencilBrushDef[] {
-  return persistCustomBrushes(parseStoredBrushes(localStorage.getItem(CUSTOM_BRUSH_STORAGE_KEY)));
+  // Migrate v1 tip-only store if present.
+  const v2 = localStorage.getItem(CUSTOM_BRUSH_STORAGE_KEY);
+  if (!v2) {
+    const v1 = localStorage.getItem('recombine-custom-pencil-brushes-v1');
+    if (v1) {
+      return persistCustomBrushes(parseStoredBrushes(v1));
+    }
+  }
+  return persistCustomBrushes(parseStoredBrushes(v2));
 }
 
 function listStoredCustomBrushes(): StoredBrush[] {
   return parseStoredBrushes(localStorage.getItem(CUSTOM_BRUSH_STORAGE_KEY));
 }
 
-function addCustomPencilBrush(brush: PencilBrushDef): PencilBrushDef[] {
-  const prev = listStoredCustomBrushes().filter((b) => b.id !== brush.id);
-  const next: StoredBrush[] = [
-    {
-      id: brush.id,
-      label: brush.label,
-      stampSrc: String(brush.stampSrc || ''),
-      sizeFactor: brush.sizeFactor,
-      spacingFactor: brush.spacingFactor,
-      createdAt: Date.now(),
-    },
-    ...prev,
-  ].slice(0, MAX_CUSTOM_BRUSHES);
+function addCustomPencilBrushes(incoming: PencilBrushDef[]): PencilBrushDef[] {
+  const prev = listStoredCustomBrushes().filter((b) => !incoming.some((n) => n.id === b.id));
+  const next: StoredBrush[] = [...incoming.map(defToStored), ...prev].slice(0, MAX_CUSTOM_BRUSHES);
   return persistCustomBrushes(next);
+}
+
+function addCustomPencilBrush(brush: PencilBrushDef): PencilBrushDef[] {
+  return addCustomPencilBrushes([brush]);
 }
 
 function removeCustomPencilBrush(id: string): PencilBrushDef[] {
@@ -133,48 +183,98 @@ function readBrushImageFile(file: File): Promise<{ dataUrl: string; name: string
   });
 }
 
+function readTextFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (file.size > MAX_BRUSH_FILE_BYTES) {
+      reject(new Error('too-large'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('read-failed'));
+    reader.readAsText(file);
+  });
+}
+
+
+const BRUSH_LIST_PREVIEW_PATH: { x: number; y: number; pressure?: number }[] = (() => {
+  const path: { x: number; y: number; pressure?: number }[] = [];
+  for (let i = 0; i <= 40; i += 1) {
+    const t = i / 40;
+    path.push({
+      x: 10 + t * 100,
+      y: 14 + Math.sin(t * Math.PI * 2) * 6,
+      pressure: 0.55 + 0.45 * Math.sin(t * Math.PI),
+    });
+  }
+  return path;
+})();
+
 function BrushStrokePreview({
   brushId,
   color,
+  hardness = 80,
   className,
 }: {
   brushId: string;
   color: string;
+  hardness?: number;
   className?: string;
 }) {
   const brush = findPencilBrush(brushId);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (brush.kind !== 'stamp' || !brush.stampSrc) return;
+    preloadStampSrc(brush.stampSrc);
+    getTintedStampSrc(brush.stampSrc, color, hardness);
+    const onReady = () => setTick((n) => n + 1);
+    window.addEventListener(STAMP_TINT_READY_EVENT, onReady);
+    return () => window.removeEventListener(STAMP_TINT_READY_EVENT, onReady);
+  }, [brush.kind, brush.stampSrc, brushId, color, hardness]);
+
   if (brush.kind === 'stamp' && brush.stampSrc) {
-    const tip = getTintedStampSrc(brush.stampSrc, color);
-    const samples = [18, 38, 58, 78, 98].map((x, i) => ({
-      x,
-      y: 14 + Math.sin((i / 4) * Math.PI * 2) * 6,
-    }));
+    const tip = getTintedStampSrc(brush.stampSrc, color, hardness);
+    const dabs = buildStampDabs(BRUSH_LIST_PREVIEW_PATH, brush, 10, {
+      hardness,
+      pressureEnabled: true,
+      maxDabs: 160,
+    });
     return (
       <svg
         className={className}
         viewBox="0 0 120 28"
+        width="100%"
+        height="100%"
         preserveAspectRatio="none"
         aria-hidden
       >
-        {samples.map((p, i) => (
-          <image
-            key={i}
-            href={tip}
-            x={p.x - 7}
-            y={p.y - 7}
-            width={14}
-            height={14}
-            preserveAspectRatio="xMidYMid meet"
-          />
-        ))}
+        {dabs.map((p, i) => {
+          const size = Math.min(16, Math.max(2, p.size));
+          return (
+            <image
+              key={i}
+              href={tip}
+              x={p.x - size / 2}
+              y={p.y - size / 2}
+              width={size}
+              height={size}
+              opacity={Math.max(0.2, Math.min(1, p.opacity))}
+              preserveAspectRatio="none"
+            />
+          );
+        })}
       </svg>
     );
   }
+
   const d = brushPreviewPath(brush, 9);
   return (
     <svg
       className={className}
       viewBox="0 0 120 28"
+      width="100%"
+      height="100%"
       preserveAspectRatio="none"
       aria-hidden
     >
@@ -221,6 +321,15 @@ function PenStrokeToolbar({
   ) as PencilBrushId;
   const eraseMode = useSelector((s: any) => Boolean(s.editor.pencilEraseMode));
   const pressureEnabled = useSelector((s: any) => s.editor.pencilPressureEnabled !== false);
+  const hardness = useSelector((s: any) => {
+    const n = Number(s.editor.pencilHardness);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 80;
+  });
+  /** Local while dragging so list previews don't re-tint every pointer move. */
+  const [hardnessDraft, setHardnessDraft] = useState(hardness);
+  useEffect(() => {
+    setHardnessDraft(hardness);
+  }, [hardness]);
   const opacity = useSelector((s: any) => {
     const n = Number(s.editor.penStrokeOpacity);
     return Number.isFinite(n) ? Math.max(1, Math.min(100, n)) : 100;
@@ -241,24 +350,40 @@ function PenStrokeToolbar({
     void fetchDesignBrushes().then((res) => {
       const items = Array.isArray(res?.items) ? res.items : [];
       if (cancelled || !items.length) return;
-      const mapped: PencilBrushDef[] = items.map((b) => ({
-        id: b.id,
-        label: b.label || b.id,
-        sizeFactor: Number(b.sizeFactor) || 1,
-        simulatePressure: Boolean(b.simulatePressure),
-        kind: (b.kind === 'stamp' ? 'stamp' : 'freehand') as PencilBrushDef['kind'],
-        stampSrc: b.stampSrc || undefined,
-        spacingFactor: b.spacingFactor != null ? Number(b.spacingFactor) : undefined,
-        options: {
-          thinning: Number(b.options?.thinning ?? 0.05),
-          smoothing: Number(b.options?.smoothing ?? 0.45),
-          streamline: Number(b.options?.streamline ?? 0.35),
-          easing: (x: number) => x,
-          start: { taper: 0, cap: true },
-          end: { taper: 0, cap: true },
-        },
-      }));
-      setOfficialPencilBrushes(mapped);
+      const builtinById = new Map(PENCIL_BRUSHES.map((b) => [b.id, b]));
+      const mapped: PencilBrushDef[] = items.map((b) => {
+        const builtin = builtinById.get(b.id);
+        const apiStamp =
+          typeof b.stampSrc === 'string' && b.stampSrc ? b.stampSrc : undefined;
+        const stampSrc = apiStamp || builtin?.stampSrc || undefined;
+        const kind: PencilBrushDef['kind'] =
+          b.kind === 'stamp' || stampSrc ? 'stamp' : 'freehand';
+        return {
+          id: b.id,
+          label: b.label || builtin?.label || b.id,
+          sizeFactor: Number(b.sizeFactor) || builtin?.sizeFactor || 1,
+          simulatePressure: Boolean(b.simulatePressure),
+          kind,
+          stampSrc,
+          spacingFactor:
+            b.spacingFactor != null
+              ? Number(b.spacingFactor)
+              : builtin?.spacingFactor,
+          options: {
+            thinning: Number(b.options?.thinning ?? 0.05),
+            smoothing: Number(b.options?.smoothing ?? 0.45),
+            streamline: Number(b.options?.streamline ?? 0.35),
+            easing: (x: number) => x,
+            start: { taper: 0, cap: true },
+            end: { taper: 0, cap: true },
+          },
+        };
+      });
+      // Library freehand-only rows must not replace tip builtins.
+      const libraryHasTips = items.some(
+        (b) => b.kind === 'stamp' || (typeof b.stampSrc === 'string' && b.stampSrc)
+      );
+      setOfficialPencilBrushes(libraryHasTips ? mapped : null);
       setBrushRev((n) => n + 1);
     }).catch(() => undefined);
     return () => {
@@ -310,6 +435,21 @@ function PenStrokeToolbar({
   const onAddCustomBrush = async (file: File | null) => {
     if (!file) return;
     try {
+      if (isBrushPackFileName(file.name) || file.type === 'application/json') {
+        const text = await readTextFile(file);
+        const pack = parseBrushPackJson(text);
+        const defs = pack.brushes.map((b, i) => ({
+          ...b,
+          id: b.custom ? b.id : `pack_${Date.now().toString(36)}_${i}_${b.id}`,
+          custom: true,
+          label: b.label || pack.name,
+        }));
+        addCustomPencilBrushes(defs);
+        setBrushRev((n) => n + 1);
+        if (defs[0]) dispatch(setPencilBrushId(defs[0].id));
+        setBrushOpen(false);
+        return;
+      }
       const { dataUrl, name } = await readBrushImageFile(file);
       const id = `custom_${Date.now().toString(36)}`;
       const def = makeCustomStampBrush({ id, label: name, stampSrc: dataUrl });
@@ -320,6 +460,20 @@ function PenStrokeToolbar({
     } catch {
       /* ignore invalid file */
     }
+  };
+
+  const onExportCustomPack = () => {
+    const customs = listPencilBrushes().filter((b) => b.custom);
+    if (!customs.length) return;
+    const blob = new Blob([serializeBrushPack(customs, 'My brushes')], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'brushes.brushpack.json';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const menuPos = docked
@@ -395,7 +549,7 @@ function PenStrokeToolbar({
                   setBrushOpen((v) => !v);
                 }}
                 className={cn(
-                  'inline-flex h-6 w-[120px] items-center justify-center rounded-md px-1.5 transition-colors',
+                  'inline-flex h-6 w-[7.5rem] shrink-0 items-center justify-center overflow-hidden rounded-md px-1.5 transition-colors',
                   brushOpen ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]',
                   eraseMode && 'cursor-not-allowed opacity-40'
                 )}
@@ -403,7 +557,8 @@ function PenStrokeToolbar({
                 <BrushStrokePreview
                   brushId={brush.id}
                   color={color}
-                  className="h-3.5 w-full min-w-0"
+                  hardness={hardnessDraft}
+                  className="pointer-events-none block h-3.5 w-full"
                 />
               </button>
             </Tooltip>
@@ -419,21 +574,31 @@ function PenStrokeToolbar({
                   key={brushRev}
                   className="flex max-h-[320px] w-full flex-col gap-0.5 overflow-y-auto overflow-x-hidden p-1"
                 >
-                  <li className="w-full">
-                    <Tooltip tip={'\u4e0a\u4f20\u81ea\u5b9a\u4e49\u7b14\u5237'} placement="right">
+                  <li className="flex w-full items-center gap-0.5">
+                    <Tooltip tip="导入 tip 图 / 笔刷包 (.brushpack.json)" placement="right">
                       <button
                         type="button"
-                        aria-label={'\u4e0a\u4f20\u81ea\u5b9a\u4e49\u7b14\u5237'}
-                        className="inline-flex h-8 w-full items-center justify-center rounded-lg text-[var(--ink)] transition hover:bg-[var(--accent-soft)]"
+                        aria-label="导入画笔"
+                        className="inline-flex h-8 flex-1 items-center justify-center rounded-lg text-[var(--ink)] transition hover:bg-[var(--accent-soft)]"
                         onClick={() => customFileRef.current?.click()}
                       >
                         <HiOutlinePlus className="h-4 w-4" />
                       </button>
                     </Tooltip>
+                    <Tooltip tip="导出自定义笔刷包" placement="right">
+                      <button
+                        type="button"
+                        aria-label="导出画笔包"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+                        onClick={onExportCustomPack}
+                      >
+                        <HiOutlineArrowDownTray className="h-3.5 w-3.5" />
+                      </button>
+                    </Tooltip>
                     <input
                       ref={customFileRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                      accept="image/png,image/jpeg,image/webp,image/svg+xml,.json,.brushpack,application/json"
                       className="hidden"
                       onChange={(e) => {
                         const f = e.target.files?.[0] || null;
@@ -452,7 +617,7 @@ function PenStrokeToolbar({
                             aria-label={b.label}
                             aria-pressed={active}
                             className={cn(
-                              'relative flex h-9 w-full items-center rounded-lg px-1.5 transition-colors',
+                              'relative flex h-9 w-full shrink-0 items-center overflow-hidden rounded-lg px-1.5 transition-colors',
                               active
                                 ? 'bg-[var(--accent-soft)]'
                                 : 'hover:bg-[var(--accent-soft)]',
@@ -466,7 +631,8 @@ function PenStrokeToolbar({
                             <BrushStrokePreview
                               brushId={b.id}
                               color={color}
-                              className="h-7 w-full min-w-0"
+                              hardness={hardnessDraft}
+                              className="pointer-events-none block h-7 w-full"
                             />
                           </button>
                         </Tooltip>
@@ -496,9 +662,9 @@ function PenStrokeToolbar({
 
         {isPencil ? <span className="mx-0.5 h-3.5 w-px bg-[var(--line)]" aria-hidden /> : null}
 
-        {/* Width: number input, no upper cap */}
+        {/* Width */}
         <label
-          className="inline-flex h-6 items-center gap-1 rounded-[4px] bg-[var(--accent-soft)] px-1.5"
+          className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[4px] bg-[var(--accent-soft)] px-1.5"
           onPointerDown={(e) => e.stopPropagation()}
           title={eraseMode ? '橡皮尺寸' : '粗细'}
         >
@@ -506,17 +672,46 @@ function PenStrokeToolbar({
           <input
             type="number"
             min={1}
+            max={200}
             value={width}
             onChange={(e) =>
-              dispatch(setPenStrokeWidth(Math.max(1, Math.round(Number(e.target.value) || 1))))
+              dispatch(
+                setPenStrokeWidth(
+                  Math.max(1, Math.min(200, Math.round(Number(e.target.value) || 1)))
+                )
+              )
             }
-            className="w-10 min-w-0 bg-transparent text-[11px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            className="h-full w-10 min-w-0 bg-transparent text-[11px] leading-none tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
           <span className="shrink-0 text-[10px] text-[var(--muted)]">Px</span>
         </label>
 
         {isPencil ? (
           <>
+            <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
+            {/* Hardness — tip edge softness; also drives dab spacing. */}
+            <label
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[4px] bg-[var(--accent-soft)] px-1.5"
+              onPointerDown={(e) => e.stopPropagation()}
+              title="硬度（笔尖边缘软硬）"
+            >
+              <span className="shrink-0 text-[10px] text-[var(--muted)]">硬</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={hardnessDraft}
+                disabled={eraseMode}
+                onChange={(e) => setHardnessDraft(Math.round(Number(e.target.value) || 0))}
+                onPointerUp={() => dispatch(setPencilHardness(hardnessDraft))}
+                onBlur={() => dispatch(setPencilHardness(hardnessDraft))}
+                className="h-1 w-14 cursor-pointer accent-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="硬度"
+              />
+              <span className="w-6 shrink-0 text-right text-[10px] tabular-nums text-[var(--muted)]">
+                {hardnessDraft}
+              </span>
+            </label>
             <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
             <Tooltip
               tip={pressureEnabled ? '\u538b\u611f\uff1a\u5f00' : '\u538b\u611f\uff1a\u5173'}

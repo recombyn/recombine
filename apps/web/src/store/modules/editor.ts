@@ -150,6 +150,8 @@ const initialState = {
   pencilEraseMode: false,
   /** When true, pencil uses stylus/touch pressure (+ brush speed sim). */
   pencilPressureEnabled: true,
+  /** Tip hardness 0–100. Soft = feathered edge + denser dabs. */
+  pencilHardness: 80,
   /** Design = edit; Dev = inspect spacing / margins. */
   workspaceMode: 'design' as 'design' | 'dev',
   /** Dev-mode node under pointer (inspect panel + spacing overlay). */
@@ -1837,7 +1839,7 @@ const editorSlice = createSlice({
     setPenStrokeWidth(state, action) {
       const n = Number(action.payload);
       if (!Number.isFinite(n)) return;
-      state.penStrokeWidth = Math.max(1, Math.round(n));
+      state.penStrokeWidth = Math.max(1, Math.min(200, Math.round(n)));
     },
     setPenStrokeOpacity(state, action) {
       const n = Number(action.payload);
@@ -1867,6 +1869,11 @@ const editorSlice = createSlice({
     },
     setPencilPressureEnabled(state, action) {
       state.pencilPressureEnabled = Boolean(action.payload);
+    },
+    setPencilHardness(state, action) {
+      const n = Number(action.payload);
+      if (!Number.isFinite(n)) return;
+      state.pencilHardness = Math.max(0, Math.min(100, Math.round(n)));
     },
     setWorkspaceMode(state, action) {
       const mode = action.payload;
@@ -1999,6 +2006,7 @@ export const {
   setPencilBrushId,
   setPencilEraseMode,
   setPencilPressureEnabled,
+  setPencilHardness,
   setWorkspaceMode,
   setDevHoverNodeId,
   setAgentBusy,
