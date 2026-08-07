@@ -469,10 +469,17 @@ export function createShapeNode({
   const strokeAlignDefault = 'center';
   // Quantize to 0.5px so odd center strokes can sit outer edges on integer grid
   // (geom = visual ± sw/2). Full integers when sw is even / inside.
-  const ix = Math.round((Number(x) || 0) * 2) / 2;
-  const iy = Math.round((Number(y) || 0) * 2) / 2;
-  const iw = Math.max(1, Math.round((Number(width) || 1) * 2) / 2);
-  const ih = Math.max(1, Math.round((Number(height) || 1) * 2) / 2);
+  // Pencil/pen keep exact placement: path points are relative to the padded origin;
+  // half-pixel snapping the node would shift freehand ink off the stored centerline.
+  const rawX = Number(x) || 0;
+  const rawY = Number(y) || 0;
+  const rawW = Math.max(1, Number(width) || 1);
+  const rawH = Math.max(1, Number(height) || 1);
+  const keepExactOrigin = shapeType === 'pencil' || shapeType === 'pen';
+  const ix = keepExactOrigin ? rawX : Math.round(rawX * 2) / 2;
+  const iy = keepExactOrigin ? rawY : Math.round(rawY * 2) / 2;
+  const iw = keepExactOrigin ? rawW : Math.max(1, Math.round(rawW * 2) / 2);
+  const ih = keepExactOrigin ? rawH : Math.max(1, Math.round(rawH * 2) / 2);
   if (shapeType === 'line' || shapeType === 'arrow') {
     return {
       id,
@@ -870,9 +877,14 @@ export function isVideoGeneratorNode(node: any): boolean {
   return Boolean(node) && node.key === 'video' && attrFlagTrue(node.attrs?.videoGenerator);
 }
 
-/** Image / video generator plates — not real scene content (no hide / lock / export). */
+/** Canvas Lottie-generator plate (empty lottie + composer until promote). */
+export function isLottieGeneratorNode(node: any): boolean {
+  return Boolean(node) && node.key === 'lottie' && attrFlagTrue(node.attrs?.lottieGenerator);
+}
+
+/** Image / video / Lottie generator plates — not real scene content (no hide / lock / export). */
 export function isGeneratorNode(node: any): boolean {
-  return isImageGeneratorNode(node) || isVideoGeneratorNode(node);
+  return isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node);
 }
 
 export function isVideoNode(node: any): boolean {
@@ -948,7 +960,7 @@ export function canAttachNodeToChat(
   if (!node) return false;
   if (isGeneratorNode(node)) return false;
   if (isImageProcessRunning(node)) return false;
-  if (opts?.imagesOnly && node.key === 'video') return false;
+  if (opts?.imagesOnly && (node.key === 'video' || node.key === 'lottie')) return false;
   return true;
 }
 
@@ -1422,6 +1434,290 @@ export function createSvgNode({
   };
 }
 
+/** Minimal looping pulse — FE smoke / tool-strip spawn until Agent emits JSON. */
+export const SAMPLE_LOTTIE_ANIMATION: Record<string, unknown> = {
+  v: '5.7.4',
+  fr: 60,
+  ip: 0,
+  op: 120,
+  w: 200,
+  h: 200,
+  nm: 'Sample',
+  ddd: 0,
+  assets: [],
+  layers: [
+    {
+      ddd: 0,
+      ind: 1,
+      ty: 4,
+      nm: 'Dot',
+      sr: 1,
+      ks: {
+        o: { a: 0, k: 100 },
+        r: { a: 0, k: 0 },
+        p: { a: 0, k: [100, 100, 0] },
+        a: { a: 0, k: [0, 0, 0] },
+        s: {
+          a: 1,
+          k: [
+            {
+              i: { x: [0.667], y: [1] },
+              o: { x: [0.333], y: [0] },
+              t: 0,
+              s: [55, 55, 100],
+            },
+            {
+              i: { x: [0.667], y: [1] },
+              o: { x: [0.333], y: [0] },
+              t: 60,
+              s: [100, 100, 100],
+            },
+            { t: 120, s: [55, 55, 100] },
+          ],
+        },
+      },
+      ao: 0,
+      shapes: [
+        {
+          ty: 'el',
+          p: { a: 0, k: [0, 0] },
+          s: { a: 0, k: [88, 88] },
+          nm: 'Ellipse',
+          hd: false,
+        },
+        {
+          ty: 'fl',
+          c: { a: 0, k: [0.2, 0.45, 1, 1] },
+          o: { a: 0, k: 100 },
+          r: 1,
+          bm: 0,
+          nm: 'Fill',
+          hd: false,
+        },
+        {
+          ty: 'tr',
+          p: { a: 0, k: [0, 0] },
+          a: { a: 0, k: [0, 0] },
+          s: { a: 0, k: [100, 100] },
+          r: { a: 0, k: 0 },
+          o: { a: 0, k: 100 },
+          sk: { a: 0, k: 0 },
+          sa: { a: 0, k: 0 },
+          nm: 'Transform',
+        },
+      ],
+      ip: 0,
+      op: 120,
+      st: 0,
+      bm: 0,
+    },
+  ],
+};
+
+/** Parse Agent / attrs Lottie payload (object or JSON string). */
+export function parseLottieAnimationData(raw: unknown): Record<string, unknown> | null {
+  let obj: unknown = raw;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return null;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      return null;
+    }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const o = obj as Record<string, unknown>;
+  if (!Array.isArray(o.layers)) return null;
+  return o;
+}
+
+export function serializeLottieAnimationData(data: unknown): string | null {
+  const parsed = parseLottieAnimationData(data);
+  if (!parsed) return null;
+  try {
+    return JSON.stringify(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/** Finished Lottie plate (not a generator composer). */
+export function isLottieNode(node: any): boolean {
+  return Boolean(node) && node.key === 'lottie' && !isLottieGeneratorNode(node);
+}
+
+/**
+ * Spawn a Lottie Generator plate. Same `lottie` key so hit-test / select
+ * keep working; `attrs.lottieGenerator` flips on the HTML composer overlay.
+ * After generate, call `promoteLottieGeneratorToLottie` to become a normal Lottie.
+ */
+export function createLottieGeneratorNode({
+  x = 40,
+  y = 40,
+  width = 200,
+  height = 200,
+  name = 'Lottie Generator',
+}: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+} = {}) {
+  const id = nanoid(10);
+  const iw = Math.max(1, Math.round(Number(width) || 200));
+  const ih = Math.max(1, Math.round(Number(height) || 200));
+  const ix = Math.round(Number(x) || 0);
+  const iy = Math.round(Number(y) || 0);
+  return {
+    id,
+    node: {
+      id,
+      key: 'lottie',
+      x: ix,
+      y: iy,
+      z: 0,
+      width: iw,
+      height: ih,
+      attrs: {
+        animationData: '',
+        name: name || 'Lottie Generator',
+        assetKind: 'lottie',
+        lottieGenerator: true,
+        lottieGenAspect: '1:1',
+        lottieGenModel: 'auto',
+        mode: 'FIT',
+        lockAspect: 'true',
+        'fill-color': '#FFFFFF',
+        radiusTL: 0,
+        radiusTR: 0,
+        radiusBR: 0,
+        radiusBL: 0,
+        radiusLinked: 'true',
+        opacity: 1,
+        angle: 0,
+      } as Record<string, unknown>,
+      children: [],
+    },
+  };
+}
+
+/**
+ * Lottie animation plate — `attrs.animationData` is JSON string (Bodymovin).
+ * HTML overlay plays via lottie-web; SVG is hit-target / export underlay.
+ */
+export function createLottieNode({
+  x = 40,
+  y = 40,
+  width,
+  height,
+  animationData,
+  name = 'Lottie',
+}: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  animationData?: unknown;
+  name?: string;
+} = {}) {
+  const id = nanoid(10);
+  const parsed =
+    parseLottieAnimationData(animationData) ||
+    (animationData == null ? SAMPLE_LOTTIE_ANIMATION : null);
+  const json = serializeLottieAnimationData(parsed);
+  if (!json) {
+    throw new Error('createLottieNode: invalid animationData');
+  }
+  const natW = Math.max(1, Math.round(Number(parsed?.w) || 200));
+  const natH = Math.max(1, Math.round(Number(parsed?.h) || 200));
+  const iw = Math.max(1, Math.round(Number(width) || natW));
+  const ih = Math.max(1, Math.round(Number(height) || natH));
+  const ix = Math.round(Number(x) || 0);
+  const iy = Math.round(Number(y) || 0);
+  return {
+    id,
+    node: {
+      id,
+      key: 'lottie',
+      x: ix,
+      y: iy,
+      z: 0,
+      width: iw,
+      height: ih,
+      attrs: {
+        animationData: json,
+        name: name || 'Lottie',
+        assetKind: 'lottie',
+        mode: 'FIT',
+        lockAspect: 'true',
+        // Plate fill so empty / transparent Lottie still reads as a card.
+        'fill-color': '#FFFFFF',
+        radiusTL: 0,
+        radiusTR: 0,
+        radiusBR: 0,
+        radiusBL: 0,
+        radiusLinked: 'true',
+        opacity: 1,
+        angle: 0,
+      } as Record<string, unknown>,
+      children: [],
+    },
+  };
+}
+
+/** Turn a Lottie-generator plate into a normal Lottie node (same id / selection). */
+export function promoteLottieGeneratorToLottie(
+  doc: any,
+  nodeId: string,
+  {
+    animationData,
+    width,
+    height,
+    x,
+    y,
+    name,
+    genPrompt,
+  }: {
+    animationData: unknown;
+    width?: number;
+    height?: number;
+    x?: number;
+    y?: number;
+    name?: string;
+    genPrompt?: string;
+  }
+) {
+  if (!doc || !nodeId) return doc;
+  const json = serializeLottieAnimationData(animationData);
+  if (!json) return doc;
+  const next = normalizeDocument(doc);
+  const node = next.deltaSetLike?.[nodeId];
+  if (!node || node.key !== 'lottie') return doc;
+  const attrs = { ...(node.attrs || {}) };
+  delete attrs.lottieGenerator;
+  delete attrs.processStatus;
+  delete attrs.processKind;
+  delete attrs.processLabel;
+  delete attrs.processSourceId;
+  delete attrs.processTargetWidth;
+  delete attrs.processTargetHeight;
+  delete attrs.processMeta;
+  attrs.animationData = json;
+  attrs.assetKind = 'lottie';
+  if (name) attrs.name = name;
+  const prompt = String(genPrompt || '').trim();
+  if (prompt) attrs.genPrompt = prompt;
+  else delete attrs.genPrompt;
+  node.attrs = attrs;
+  if (width != null) node.width = Math.max(1, Math.round(width));
+  if (height != null) node.height = Math.max(1, Math.round(height));
+  if (x != null) node.x = Math.round(x);
+  if (y != null) node.y = Math.round(y);
+  return next;
+}
+
 function looksLikeSvgSrc(src: string) {
   const s = String(src || '').trim();
   if (!s) return false;
@@ -1506,6 +1802,25 @@ export function spawnImportPlaceholderNode(
 }
 
 /**
+ * Prefer explicit coords; else center in the active frame; else center on the doc.
+ * Keeps upload placeholders visible instead of parking off to the right.
+ */
+function centerInFrameOrDocument(opts: {
+  explicit: number | undefined | null;
+  size: number;
+  frameOrigin: number;
+  frameSpan: number;
+  hasFrame: boolean;
+  documentSpan: number;
+}): number {
+  if (opts.explicit != null) return opts.explicit;
+  if (opts.hasFrame) {
+    return Math.round(opts.frameOrigin + (opts.frameSpan - opts.size) / 2);
+  }
+  return Math.round((opts.documentSpan - opts.size) / 2);
+}
+
+/**
  * Image upload placeholder — shows local base64 preview at natural aspect while COS upload runs.
  */
 export function spawnImageUploadPlaceholderNode(
@@ -1526,19 +1841,22 @@ export function spawnImageUploadPlaceholderNode(
     frames.find((f: any) => f.id === doc.activeFrameId) || frames[0] || null;
   const width = Math.max(1, Math.round(opts.width) || 1);
   const height = Math.max(1, Math.round(opts.height) || 1);
-  // Prefer frame / canvas center so the placeholder is visible (not parked off to the right).
-  const x =
-    opts.x != null
-      ? opts.x
-      : active
-        ? Math.round(Number(active.x) + (Number(active.width) - width) / 2)
-        : Math.round(((Number(doc.width) || 800) - width) / 2);
-  const y =
-    opts.y != null
-      ? opts.y
-      : active
-        ? Math.round(Number(active.y) + (Number(active.height) - height) / 2)
-        : Math.round(((Number(doc.height) || 600) - height) / 2);
+  const x = centerInFrameOrDocument({
+    explicit: opts.x,
+    size: width,
+    hasFrame: Boolean(active),
+    frameOrigin: Number(active?.x) || 0,
+    frameSpan: Number(active?.width) || 0,
+    documentSpan: Number(doc.width) || 800,
+  });
+  const y = centerInFrameOrDocument({
+    explicit: opts.y,
+    size: height,
+    hasFrame: Boolean(active),
+    frameOrigin: Number(active?.y) || 0,
+    frameSpan: Number(active?.height) || 0,
+    documentSpan: Number(doc.height) || 600,
+  });
   const { id, node } = createImageNode({
     x,
     y,
@@ -1962,7 +2280,14 @@ export function supportsShapeSides(node: any) {
  */
 export function supportsAspectPresets(node: any) {
   if (!node) return false;
-  if (node.key === 'image' || node.key === 'video' || node.key === 'frame' || node.key === 'svg') return true;
+  if (
+    node.key === 'image' ||
+    node.key === 'video' ||
+    node.key === 'lottie' ||
+    node.key === 'frame' ||
+    node.key === 'svg'
+  )
+    return true;
   if (node.key === 'rect' || node.key === 'ellipse') return true;
   if (node.key !== 'shape' && node.key !== 'path') return false;
   const t = String(node.attrs?.shapeType || (node.key === 'path' ? 'path' : 'rect'));
@@ -1978,7 +2303,15 @@ export function supportsAspectPresets(node: any) {
  */
 export function supportsFill(node: any) {
   if (!node) return false;
-  if (node.key === 'rect' || node.key === 'ellipse' || node.key === 'image' || node.key === 'video' || node.key === 'svg') return true;
+  if (
+    node.key === 'rect' ||
+    node.key === 'ellipse' ||
+    node.key === 'image' ||
+    node.key === 'video' ||
+    node.key === 'lottie' ||
+    node.key === 'svg'
+  )
+    return true;
   if (node.key === 'path') {
     const d = String(node.attrs?.path || node.attrs?.d || '');
     if (node.attrs?.closed === false || node.attrs?.closed === 'false') return false;
@@ -2008,7 +2341,15 @@ export function supportsFill(node: any) {
  */
 export function supportsStroke(node: any) {
   if (!node) return false;
-  if (node.key === 'image' || node.key === 'video' || node.key === 'text' || node.key === 'frame' || node.key === 'svg') return false;
+  if (
+    node.key === 'image' ||
+    node.key === 'video' ||
+    node.key === 'lottie' ||
+    node.key === 'text' ||
+    node.key === 'frame' ||
+    node.key === 'svg'
+  )
+    return false;
   if (node.key === 'rect' || node.key === 'ellipse' || node.key === 'path') return true;
   return node.key === 'shape';
 }

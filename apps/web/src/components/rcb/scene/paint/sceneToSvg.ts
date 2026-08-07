@@ -33,7 +33,7 @@ import {
 } from '../document/sceneEffects';
 import type { StrokeAlign, StrokeLinecap, StrokeLinejoin } from '../document/sceneEffects';
 import { isTransparentFill, resolveDocumentBackground, resolveFill } from '../document/sceneFill';
-import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isNodeHidden, isVideoGeneratorNode } from '../document/sceneDocument';
+import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isLottieGeneratorNode, isLottieNode, isNodeHidden, isVideoGeneratorNode } from '../document/sceneDocument';
 import { generatorEmptyIconSize } from '../../core/layout';
 import {
   clampCornerRadii,
@@ -52,7 +52,9 @@ import {
   brushSize,
   findPencilBrush,
   isStampBrush,
+  parsePathPressures,
   parseSimplePathPoints,
+  pencilInkPathFromPoints,
   samplePolyline,
   stampSizeForBrush,
   stampSpacingForBrush,
@@ -844,25 +846,34 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
         return g;
       }
 
-      // Same as pen: centerline path + SVG stroke (selection chrome shares data-baseline).
-      const inkW = brushSize(brush, strokeWidth);
-      const path = appendChild(parent, svgEl('path', { d: String(d) }));
-      setAttrs(path, { 'data-baseline': '1', 'pointer-events': 'stroke' });
-      setFill(path, 'none');
-      applyElementStroke(
-        root,
-        path,
-        {
-          ...strokeOpen,
-          color: ink,
-          width: inkW,
-        },
-        { hasOpaqueFill: false }
-      );
-      tagNode(path, nodeId, 'shape', shapeType, left, top, width, height);
-      applyMeta(path, left, top, meta, width, height);
-      applyNodeShadow(root, path, node);
-      return path;
+      // Variable-width freehand silhouette (pressure + brush thinning / taper).
+      // Outline is built around `pts` in place — do not translate relative to the path.
+      // Keep an invisible centerline baseline for selection chrome hit-testing.
+      const pressures = parsePathPressures(node.attrs?.pathPressure, pts.length);
+      const outlineD = pencilInkPathFromPoints(pts, strokeWidth, brushId, {
+        linecap: strokeOpen.linecap,
+        dasharray: strokeFull.dasharray,
+        pressures,
+        pressureEnabled: true,
+      });
+      const g = appendChild(parent, svgEl('g'));
+      if (outlineD) {
+        const inkPath = appendChild(g, svgEl('path', { d: outlineD }));
+        setFill(inkPath, ink);
+        setStroke(inkPath, 'none');
+        setAttrs(inkPath, { 'pointer-events': 'none' });
+      }
+      const hit = appendChild(g, svgEl('path', { d: String(d) }));
+      setFill(hit, 'none');
+      setStroke(hit, {
+        color: 'transparent',
+        width: Math.max(brushSize(brush, strokeWidth), strokeWidth),
+      });
+      setAttrs(hit, { 'pointer-events': 'stroke', 'data-baseline': '1' });
+      tagNode(g, nodeId, 'shape', shapeType, left, top, width, height);
+      applyMeta(g, left, top, meta, width, height);
+      applyNodeShadow(root, g, node);
+      return g;
     }
 
     const fillPaint =
@@ -1325,6 +1336,95 @@ export async function nodeToSvgElement(
         shadowFilter && shadowFilter !== 'none' ? `${cssFilter} ${shadowFilter}` : cssFilter;
       setStyles(g, { filter: combined });
     }
+    return g;
+  }
+
+  if (node.key === 'lottie' || isLottieNode(node) || isLottieGeneratorNode(node)) {
+    const isGen = isLottieGeneratorNode(node);
+    const hasData = Boolean(String(node.attrs?.animationData || '').trim());
+    const { left, top } = nodeLeftTop(document, node);
+    const boxW = Math.max(1, Number(node.width) || 100);
+    const boxH = Math.max(1, Number(node.height) || 100);
+    const meta = objectMeta(node);
+    const cornerR = isGen
+      ? { tl: 0, tr: 0, br: 0, bl: 0 }
+      : radiiFromAttrs(node.attrs);
+    const clipD = roundedRectPath(boxW, boxH, cornerR);
+    const g = appendChild(parent, svgEl('g'));
+    const svgOwnsPixels = videoSvgOwnsPixels(root);
+    const plateFill =
+      String(node.attrs?.['fill-color'] || node.attrs?.fill || '').trim() || '#FFFFFF';
+
+    if (isGen || !hasData) {
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, isGen ? 'var(--gen-empty)' : '#E5E7EB');
+      if (isGen) {
+        setStroke(plate, 'none');
+        const sw = editorChromeStrokeSceneWidth(1);
+        const inset = sw / 2;
+        const border = appendChild(
+          g,
+          svgEl('path', {
+            d: roundedRectPath(Math.max(1, boxW - sw), Math.max(1, boxH - sw), cornerR),
+            transform: `translate(${inset},${inset})`,
+            'pointer-events': 'none',
+          })
+        );
+        setFill(border, 'none');
+        setStroke(border, { color: 'var(--line)', width: sw });
+        // Soft clapper / play mark — matches video-gen empty plate language.
+        const iconSize = generatorEmptyIconSize(boxW, boxH);
+        if (iconSize >= 4) {
+          const ix = (boxW - iconSize) / 2;
+          const iy = (boxH - iconSize) / 2;
+          const s = iconSize / 24;
+          const icon = appendChild(
+            g,
+            svgEl('g', {
+              transform: `translate(${ix},${iy}) scale(${s})`,
+              'pointer-events': 'none',
+            })
+          );
+          const play = appendChild(
+            icon,
+            svgEl('path', {
+              d: 'M9 7.2 L9 16.8 L17.4 12 Z',
+              'stroke-linejoin': 'round',
+              'stroke-linecap': 'round',
+            })
+          );
+          setFill(play, 'var(--muted)');
+          setStroke(play, { color: 'var(--muted)', width: 2.75 });
+        }
+      } else {
+        setStroke(plate, {
+          color: '#9CA3AF',
+          width: editorChromeStrokeSceneWidth(1.5),
+          dasharray: '6 4',
+        });
+      }
+      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
+      (g as any).__sceneCornerRadii = { ...cornerR };
+      tagNode(g, nodeId, 'lottie', undefined, left, top, boxW, boxH);
+      if (isGen) setAttrs(g, { 'data-export-ignore': '1' });
+      applyMeta(g, left, top, meta, boxW, boxH);
+      return g;
+    }
+
+    // Always paint a plate fill — Lottie ink is HTML overlay; without this the
+    // selection looks like an empty hole on the canvas.
+    const plate = appendChild(g, svgEl('path', { d: clipD }));
+    setFill(plate, plateFill);
+    setStroke(plate, 'none');
+    setAttrs(plate, {
+      'data-radius-body': '1',
+      'data-baseline': '1',
+      ...(!svgOwnsPixels ? { 'data-rcb-lottie-html-hit': '1' } : {}),
+    });
+    (g as any).__sceneCornerRadii = { ...cornerR };
+    tagNode(g, nodeId, 'lottie', undefined, left, top, boxW, boxH);
+    applyMeta(g, left, top, meta, boxW, boxH);
+    applyNodeShadow(root, g, node);
     return g;
   }
 

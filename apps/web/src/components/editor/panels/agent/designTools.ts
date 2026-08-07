@@ -22,6 +22,9 @@ import {
   createImageNode,
   createShapeNode,
   createSvgNode,
+  createLottieNode,
+  isLottieGeneratorNode,
+  promoteLottieGeneratorToLottie,
   createTextNode,
   groupNodesInDocument,
   removeNodesFromDocument,
@@ -281,6 +284,7 @@ export const FE_ACTION_EXECUTOR_KEYS = [
   'outline_text',
   'create_image',
   'create_svg',
+  'create_lottie',
   'create_icon',
   'create_frame',
   'delete_nodes',
@@ -311,6 +315,7 @@ export const DESIGN_TOOL_NAMES = [
   'outline_text',
   'create_image',
   'create_svg',
+  'create_lottie',
   'create_icon',
   'update_node',
   'align_nodes',
@@ -2274,6 +2279,97 @@ function execCreateSvg(
   
 }
 
+function execCreateLottie(
+  args: Record<string, unknown>,
+  ctx: DesignToolContext,
+  doc: any,
+  pushHistory: () => void
+): AgentToolResult {
+  const raw =
+    args.animationData ?? args.lottie ?? args.json ?? args.animation ?? args.content;
+  if (raw == null || (typeof raw === 'string' && !String(raw).trim())) {
+    return {
+      status: 'error',
+      summary: 'create_lottie requires args.animationData (Bodymovin JSON object or string).',
+      next_actions: ['Pass animationData with v/fr/ip/op/w/h/layers'],
+    };
+  }
+
+  const replaceId = String(args.replaceNodeId || args.targetNodeId || '').trim();
+  if (replaceId && isLottieGeneratorNode(doc?.deltaSetLike?.[replaceId])) {
+    const plate = doc.deltaSetLike[replaceId];
+    const width =
+      args.width != null
+        ? Math.max(8, num(args.width, Number(plate.width) || 200))
+        : Math.max(8, Number(plate.width) || 200);
+    const height =
+      args.height != null
+        ? Math.max(8, num(args.height, Number(plate.height) || 200))
+        : Math.max(8, Number(plate.height) || 200);
+    pushHistory();
+    const next = promoteLottieGeneratorToLottie(ctx.getDocument(), replaceId, {
+      animationData: raw,
+      width,
+      height,
+      x: Number(plate.x) || 0,
+      y: Number(plate.y) || 0,
+      name: String(args.name || 'Lottie'),
+      genPrompt: String(args.genPrompt || args.prompt || '').trim() || undefined,
+    });
+    if (next === ctx.getDocument()) {
+      return {
+        status: 'error',
+        summary: 'create_lottie: invalid Lottie JSON (need layers + canvas size).',
+        next_actions: ['Fix animationData schema', 'Retry create_lottie'],
+      };
+    }
+    ctx.dispatch(setDocument(next));
+    return {
+      status: 'success',
+      summary: `Filled lottie generator ${replaceId}`,
+      artifacts: { nodeId: replaceId, shapeType: 'lottie' },
+      next_actions: ['Continue layout'],
+    };
+  }
+
+  const missXY = requireCreateXY('create_lottie', args);
+  if (missXY) return missXY;
+  let draft;
+  try {
+    draft = createLottieNode({
+      animationData: raw,
+      name: String(args.name || 'Lottie'),
+      width: args.width != null ? num(args.width, 0) || undefined : undefined,
+      height: args.height != null ? num(args.height, 0) || undefined : undefined,
+    });
+  } catch {
+    return {
+      status: 'error',
+      summary: 'create_lottie: invalid Lottie JSON (need layers + canvas size).',
+      next_actions: ['Fix animationData schema', 'Retry create_lottie'],
+    };
+  }
+  const width = Math.max(8, num(args.width, draft.node.width));
+  const height = Math.max(8, num(args.height, draft.node.height));
+  const target = ctx.targetFrameId ? frameById(doc, ctx.targetFrameId) : null;
+  const origin = resolveCreateXY(args, target, width, height);
+  const placed = fitIntoFrame(target, origin.x, origin.y, width, height);
+  const placeErr = placementRewriteError('create_lottie', args, placed);
+  if (placeErr) return placeErr;
+  draft.node.x = placed.x;
+  draft.node.y = placed.y;
+  draft.node.width = placed.width;
+  draft.node.height = placed.height;
+  pushHistory();
+  ctx.dispatch(setDocument(addNodeToDocument(ctx.getDocument(), draft.id, draft.node)));
+  return {
+    status: 'success',
+    summary: `Created lottie ${draft.id}`,
+    artifacts: { nodeId: draft.id, shapeType: 'lottie' },
+    next_actions: ['Continue layout'],
+  };
+}
+
 function execCreateImage(
   args: Record<string, unknown>,
   ctx: DesignToolContext,
@@ -2969,6 +3065,7 @@ export function executeDesignTool(
         name === 'create_text' ||
         name === 'create_image' ||
         name === 'create_svg' ||
+        name === 'create_lottie' ||
         name === 'create_icon')
     ) {
       const target = frameById(doc, ctx.targetFrameId);
@@ -3006,6 +3103,8 @@ export function executeDesignTool(
         return execFinish(args, ctx, doc, pushHistory);
       case 'create_svg':
         return execCreateSvg(args, ctx, doc, pushHistory);
+      case 'create_lottie':
+        return execCreateLottie(args, ctx, doc, pushHistory);
       case 'create_icon':
         return execCreateSvg(args, ctx, doc, pushHistory);
       case 'create_shape':

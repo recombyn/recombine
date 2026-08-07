@@ -53,6 +53,7 @@ import {
 import {
   expandSelectionWithGroups,
   isImageGeneratorNode,
+  isLottieGeneratorNode,
   isVideoGeneratorNode,
   isNodeHidden,
   isNodeLocked,
@@ -104,7 +105,53 @@ function textResizeModeForHandle(handle: ResizeHandle): TextResizeMode {
  * - Image/video default locked; other nodes free unless `lockAspect` is set.
  */
 function nodeAspectLockDefault(key: string | undefined): boolean {
-  return key === 'image' || key === 'video';
+  return key === 'image' || key === 'video' || key === 'lottie';
+}
+
+type MediaTitleIcon = 'image' | 'image-generator' | 'video' | 'video-generator';
+
+function mediaTitleChrome(opts: {
+  key: string | undefined;
+  name?: unknown;
+  isImageGen: boolean;
+  isVideoGen: boolean;
+  isLottieGen: boolean;
+  isVideo: boolean;
+}): { name: string; icon: MediaTitleIcon; renameAriaLabel: string } {
+  const key = String(opts.key || '');
+  if (opts.isVideoGen) {
+    return {
+      name: String(opts.name || 'Video'),
+      icon: 'video-generator',
+      renameAriaLabel: 'Video name',
+    };
+  }
+  if (opts.isLottieGen || key === 'lottie') {
+    return {
+      name: String(opts.name || (opts.isLottieGen ? 'Lottie Generator' : 'Lottie')),
+      icon: 'video',
+      renameAriaLabel: 'Lottie name',
+    };
+  }
+  if (opts.isVideo || key === 'video') {
+    return {
+      name: String(opts.name || 'Video'),
+      icon: 'video',
+      renameAriaLabel: 'Video name',
+    };
+  }
+  if (opts.isImageGen) {
+    return {
+      name: String(opts.name || 'Image'),
+      icon: 'image-generator',
+      renameAriaLabel: 'Image name',
+    };
+  }
+  return {
+    name: String(opts.name || 'Image'),
+    icon: 'image',
+    renameAriaLabel: 'Image name',
+  };
 }
 
 function readNodeAspectLocked(node: any): boolean {
@@ -142,7 +189,8 @@ function resolveLockAspect(
     return raw === false || raw === 'false' || raw === 0 || raw === '0';
   });
   const allLocked =
-    !hasExplicitUnlock && nodes.some((n) => n.key === 'image' || n.key === 'video')
+    !hasExplicitUnlock &&
+    nodes.some((n) => n.key === 'image' || n.key === 'video' || n.key === 'lottie')
       ? true
       : nodes.length > 0 && nodes.every((n) => readNodeAspectLocked(n));
   return combineAspectLock(allLocked, shiftKey);
@@ -1224,6 +1272,7 @@ function buildShapeOutlines(opts: {
   chromeAngle: number;
   selectedIsImageGen: boolean;
   selectedIsVideoGen: boolean;
+  selectedIsLottieGen?: boolean;
   liveOrigins: Array<{ nodeId: string; box: SceneBox }> | null | undefined;
   getNodeBox: (id: string) => SceneBox | null;
 }): ShapeOutlineItem[] {
@@ -1331,7 +1380,8 @@ function buildShapeOutlines(opts: {
     const shaftEndpoints = shapeType === 'line' || shapeType === 'arrow';
     const withHandles = handleIds.has(id);
     const nodeKey = String(node.key || '');
-    const isGen = isImageGeneratorNode(node) || isVideoGeneratorNode(node);
+    const isGen =
+      isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node);
     const edgeHandles: 'all' | 'horizontal' | 'none' = isGen
       ? 'none'
       : nodeKey === 'video'
@@ -1360,6 +1410,7 @@ function buildShapeOutlines(opts: {
         !isGen &&
         !opts.selectedIsImageGen &&
         !opts.selectedIsVideoGen &&
+        !opts.selectedIsLottieGen &&
         edgeHandles === 'all',
     });
   }
@@ -1501,7 +1552,9 @@ function resolveHoverImageReplaceId(opts: {
   }
   const node = opts.document?.deltaSetLike?.[opts.hoverNodeId];
   if (node?.key !== 'image') return null;
-  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return null;
+  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node)) {
+    return null;
+  }
   if (String(node?.attrs?.processStatus || '') === 'running') return null;
   return opts.hoverNodeId;
 }
@@ -1536,11 +1589,12 @@ function resolveHoverVideoReplaceId(opts: {
 function resolveSelectionEdgeHandles(opts: {
   selectedIsImageGen: boolean;
   selectedIsVideoGen: boolean;
+  selectedIsLottieGen: boolean;
   selectedIsVideo: boolean;
   lineChrome: boolean;
   nodeKey: string | undefined;
 }): 'all' | 'horizontal' | 'none' {
-  if (opts.selectedIsImageGen || opts.selectedIsVideoGen) return 'none';
+  if (opts.selectedIsImageGen || opts.selectedIsVideoGen || opts.selectedIsLottieGen) return 'none';
   // Video scrubber on bottom — keep L/R only so S handle does not steal events.
   if (opts.selectedIsVideo) return 'horizontal';
   if (!opts.lineChrome && opts.nodeKey === 'text') return 'horizontal';
@@ -2885,7 +2939,9 @@ function SelectionFeature({
   const singleNodeData = singleId ? document?.deltaSetLike?.[singleId] : null;
   const selectedIsImageGen = Boolean(singleNodeData && isImageGeneratorNode(singleNodeData));
   const selectedIsVideoGen = Boolean(singleNodeData && isVideoGeneratorNode(singleNodeData));
+  const selectedIsLottieGen = Boolean(singleNodeData && isLottieGeneratorNode(singleNodeData));
   const selectedIsVideo = Boolean(singleNodeData && singleNodeData.key === 'video' && !selectedIsVideoGen);
+  const selectedIsMediaGen = selectedIsImageGen || selectedIsVideoGen || selectedIsLottieGen;
   const singleShapeType = singleNodeData
     ? String(singleNodeData?.attrs?.shapeType || '')
     : '';
@@ -2956,6 +3012,7 @@ function SelectionFeature({
     chromeAngle,
     selectedIsImageGen,
     selectedIsVideoGen,
+    selectedIsLottieGen,
     liveOrigins,
     getNodeBox,
   });
@@ -2976,6 +3033,7 @@ function SelectionFeature({
   const edgeHandles = resolveSelectionEdgeHandles({
     selectedIsImageGen,
     selectedIsVideoGen,
+    selectedIsLottieGen,
     selectedIsVideo,
     lineChrome,
     nodeKey: singleNodeData?.key,
@@ -3061,7 +3119,7 @@ function SelectionFeature({
         <SelectionChrome
           box={chromeUnion}
           angle={chromeAngle}
-          showHandles={!inspectDev && !readOnly && !selectedIsImageGen && !selectedIsVideoGen}
+          showHandles={!inspectDev && !readOnly && !selectedIsMediaGen}
           cornerHandlesOnly={!single}
           variant={lineChrome ? 'line' : 'box'}
           showRotate={
@@ -3069,8 +3127,7 @@ function SelectionFeature({
             !readOnly &&
             !lineChrome &&
             singleNode &&
-            !selectedIsImageGen &&
-            !selectedIsVideoGen
+            !selectedIsMediaGen
           }
           showBoxStroke={!lineChrome}
           interactiveBox={selectedFrameIds.length > 0}
@@ -3187,25 +3244,34 @@ function SelectionFeature({
       singleId &&
       !transforming &&
       !suppressToolbars &&
-      (singleNodeData?.key === 'image' || singleNodeData?.key === 'video') ? (
+      (singleNodeData?.key === 'image' ||
+        singleNodeData?.key === 'video' ||
+        singleNodeData?.key === 'lottie') ? (
         <NodeTitleLabel
           box={chromeUnion}
           angle={chromeAngle}
-          name={String(
-            singleNodeData?.attrs?.name ||
-              (singleNodeData?.key === 'video' ? 'Video' : 'Image')
-          )}
+          name={
+            mediaTitleChrome({
+              key: singleNodeData?.key,
+              name: singleNodeData?.attrs?.name,
+              isImageGen: selectedIsImageGen,
+              isVideoGen: selectedIsVideoGen,
+              isLottieGen: selectedIsLottieGen,
+              isVideo: selectedIsVideo,
+            }).name
+          }
           sizeWidth={chromeUnion.width}
           sizeHeight={chromeUnion.height}
           dataAttr="image-label"
           icon={
-            selectedIsVideoGen
-              ? 'video-generator'
-              : selectedIsVideo
-                ? 'video'
-                : selectedIsImageGen
-                  ? 'image-generator'
-                  : 'image'
+            mediaTitleChrome({
+              key: singleNodeData?.key,
+              name: singleNodeData?.attrs?.name,
+              isImageGen: selectedIsImageGen,
+              isVideoGen: selectedIsVideoGen,
+              isLottieGen: selectedIsLottieGen,
+              isVideo: selectedIsVideo,
+            }).icon
           }
           dataProps={{ 'data-scene-node-id': singleId }}
           onRename={(name) =>
@@ -3216,7 +3282,16 @@ function SelectionFeature({
               })
             )
           }
-          renameAriaLabel={singleNodeData?.key === 'video' ? 'Video name' : 'Image name'}
+          renameAriaLabel={
+            mediaTitleChrome({
+              key: singleNodeData?.key,
+              name: singleNodeData?.attrs?.name,
+              isImageGen: selectedIsImageGen,
+              isVideoGen: selectedIsVideoGen,
+              isLottieGen: selectedIsLottieGen,
+              isVideo: selectedIsVideo,
+            }).renameAriaLabel
+          }
         />
       ) : null}
 

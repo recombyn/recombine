@@ -40,6 +40,8 @@ import {
   normalizeDocument,
   isExportableSceneNode,
   isVideoNode,
+  isLottieNode,
+  parseLottieAnimationData,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { downloadVideoNodeAsset } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
@@ -47,10 +49,15 @@ import { cn } from '@/utils/classnames';
 import { SEL_ICON_BTN } from '@/components/rcb/selection/chrome/ToolbarValueSlider';
 
 type VideoExportFormat = 'mp4' | 'mp3';
+type LottieExportFormat = 'json';
 
 const VIDEO_FORMAT_OPTIONS: { value: VideoExportFormat; label: string }[] = [
   { value: 'mp4', label: 'MP4' },
   { value: 'mp3', label: 'MP3' },
+];
+
+const LOTTIE_FORMAT_OPTIONS: { value: LottieExportFormat; label: string }[] = [
+  { value: 'json', label: 'JSON' },
 ];
 
 function videoNodesForExport(document: any, ids: string[]) {
@@ -59,10 +66,44 @@ function videoNodesForExport(document: any, ids: string[]) {
     .filter((node: any) => isVideoNode(node) && String(node?.attrs?.src || '').trim());
 }
 
+function lottieNodesForExport(document: any, ids: string[]) {
+  return ids
+    .map((id) => document?.deltaSetLike?.[id])
+    .filter(
+      (node: any) =>
+        isLottieNode(node) && Boolean(parseLottieAnimationData(node?.attrs?.animationData))
+    );
+}
+
 function isVideoOnlyExport(document: any, ids: string[], hasCrop: boolean): boolean {
   if (hasCrop || ids.length === 0) return false;
   const videos = videoNodesForExport(document, ids);
   return videos.length === ids.length && videos.length > 0;
+}
+
+function isLottieOnlyExport(document: any, ids: string[], hasCrop: boolean): boolean {
+  if (hasCrop || ids.length === 0) return false;
+  const nodes = lottieNodesForExport(document, ids);
+  return nodes.length === ids.length && nodes.length > 0;
+}
+
+function downloadLottieJson(node: any, fallbackName: string) {
+  const data = parseLottieAnimationData(node?.attrs?.animationData);
+  if (!data) throw new Error('invalid lottie');
+  const raw = JSON.stringify(data);
+  const blob = new Blob([raw], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const base = String(node?.attrs?.name || node?.name || fallbackName || 'lottie')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .trim() || 'lottie';
+  a.href = url;
+  a.download = base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function videoExportMode(format: VideoExportFormat): 'audio' | 'video' {
@@ -307,6 +348,7 @@ function ExportSelectionPanel({
   const inline = variant === 'inline';
   const canExport = cropList.length > 0 || ids.length > 0;
   const videoOnly = isVideoOnlyExport(document, ids, cropList.length > 0);
+  const lottieOnly = isLottieOnlyExport(document, ids, cropList.length > 0);
   const isSvg = slot.format === 'svg';
   const isJpeg = slot.format === 'jpeg';
   const format = slot.format;
@@ -384,6 +426,33 @@ function ExportSelectionPanel({
     }
   };
 
+  const runLottieExport = async () => {
+    const nodes = lottieNodesForExport(document, ids);
+    if (!nodes.length) {
+      message.warning(t('editor.noSelectionExport'));
+      return;
+    }
+    setBusy(true);
+    const hideLoading = message.loading(
+      t('editor.exportingLottie', { defaultValue: '正在导出 Lottie…' }),
+      0
+    );
+    try {
+      for (const node of nodes) {
+        downloadLottieJson(node, name);
+      }
+      hideLoading();
+      message.success(t('editor.exportedLottie', { defaultValue: '已导出 Lottie JSON' }));
+      onClose?.();
+    } catch (err) {
+      hideLoading();
+      console.warn('[export-lottie]', err);
+      message.error(t('editor.exportFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const runExport = async () => {
     if (!canExport) {
       message.warning(t('editor.noSelectionExport'));
@@ -391,6 +460,10 @@ function ExportSelectionPanel({
     }
     if (videoOnly) {
       await runVideoExport();
+      return;
+    }
+    if (lottieOnly) {
+      await runLottieExport();
       return;
     }
     if (!isSvg && !isExportScaleSafe(sourceSize.width, sourceSize.height, slot.scale)) {
@@ -469,6 +542,15 @@ function ExportSelectionPanel({
           className={selectFieldClass}
           placement="bottom-start"
         />
+      ) : lottieOnly ? (
+        <Select
+          size="small"
+          type="filled"
+          value="json"
+          options={LOTTIE_FORMAT_OPTIONS}
+          className={selectFieldClass}
+          placement="bottom-start"
+        />
       ) : (
         <>
           <div className={cn('grid grid-cols-3 gap-1.5', inline && 'gap-2')}>
@@ -537,7 +619,7 @@ function ExportSelectionPanel({
 
       <button
         type="button"
-        disabled={busy || !canExport || (!videoOnly && !scaleSafe)}
+        disabled={busy || !canExport || (!videoOnly && !lottieOnly && !scaleSafe)}
         onClick={() => void runExport()}
         className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--ink)] text-[12px] font-medium text-[var(--surface)] disabled:opacity-40"
       >
