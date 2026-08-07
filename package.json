@@ -12,9 +12,11 @@
   "scripts": {
     "dev": "npm run dev --workspace=apps/web",
     "dev:web": "npm run dev --workspace=apps/web",
+    "dev:desktop": "node scripts/dev-desktop.mjs",
     "dev:docs": "npm run dev --workspace=apps/docs",
     "dev:collab": "npm run dev --workspace=apps/collab",
     "build:docs": "npm run build --workspace=apps/docs",
+    "build:desktop": "node scripts/dev-desktop.mjs build",
     "dev:api": "node scripts/dev-api.mjs",
     "build": "npm run build --workspace=apps/web",
     "test": "npm run test:web && npm run test:api",

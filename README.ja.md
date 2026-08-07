@@ -77,22 +77,33 @@ npm run dev:web
 
 Canvas Live / WSS: **[docs/self-hosting.md § Canvas multiplayer](docs/self-hosting.md#canvas-multiplayer-yjs--wss)** · [apps/collab/README.md](apps/collab/README.md)
 
+### デスクトップアプリ（Tauri）
+
+同じ `apps/web` UI をネイティブウィンドウで起動します（カスタムタイトルバー、外部リンクはシステムブラウザ）。**Rust** と各 OS のビルドツールが必要です — **[docs/desktop.md](docs/desktop.md)**。
+
+```bash
+npm run dev:api          # 推奨
+npm run dev:desktop      # Vite :3000 + Tauri
+npm run build:desktop    # インストーラは apps/web/src-tauri/target/release/bundle/
+```
+
 ## リポジトリ構成
 
 ```
 apps/web/          React キャンバス + Agent UI + Yjs クライアント
+  src-tauri/       Tauri v2 デスクトップシェル（Recombyn）
 apps/api/          FastAPI — Scene, Agent, plaza, wallet, collab tokens
 apps/collab/       Yjs WebSocket サーバー（y-websocket）
 apps/docs/         ヘルプ / 法務サイト
 packages/          共有ビルダー & スキーマ
-docs/              アーキテクチャ + セルフホスト
+docs/              アーキテクチャ + セルフホスト + デスクトップ
 deploy/            Dockerfile / Nginx
 e2e/               Playwright
 ```
 
 ## ドキュメント / コミュニティ
 
-- [セルフホスト](docs/self-hosting.md) · [PostgreSQL 切り替え](docs/postgres-switch.md) · [コントリビュート](CONTRIBUTING.md) · [セキュリティ](SECURITY.md) · [行動規範](CODE_OF_CONDUCT.md)
+- [セルフホスト](docs/self-hosting.md) · [デスクトップ (Tauri)](docs/desktop.md) · [PostgreSQL 切り替え](docs/postgres-switch.md) · [コントリビュート](CONTRIBUTING.md) · [セキュリティ](SECURITY.md) · [行動規範](CODE_OF_CONDUCT.md)
 - Issue / PR テンプレートは `.github/`
 
 ## ライセンス

@@ -402,7 +402,7 @@ function HomePage() {
         onCreate={handleCreate}
       />
       {/*
-        Rail is position:fixed (does not take flow width). Reserve the same 64px on md+
+        Rail is position:absolute (does not take flow width). Reserve the same 64px on md+
         so hero/composer center in the remaining column — otherwise left gap looks tighter
         than the right by exactly the rail width.
       */}

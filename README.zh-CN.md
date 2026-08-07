@@ -76,22 +76,33 @@ npm run dev:web
 
 画布 Live / WSS：**[docs/self-hosting.md § Canvas multiplayer](docs/self-hosting.md#canvas-multiplayer-yjs--wss)** · [apps/collab/README.md](apps/collab/README.md)
 
+### 桌面端（Tauri）
+
+与 Web 共用 `apps/web`，原生窗口壳（自定义标题栏、外链走系统浏览器）。需安装 **Rust** 与平台编译工具链，详见 **[docs/desktop.md](docs/desktop.md)**。
+
+```bash
+npm run dev:api          # 建议一并启动 API
+npm run dev:desktop      # Vite :3000 + Tauri 窗口
+npm run build:desktop    # 安装包输出在 apps/web/src-tauri/target/release/bundle/
+```
+
 ## 仓库结构
 
 ```
 apps/web/          React 画布 + Agent UI + Yjs 客户端
+  src-tauri/       Tauri v2 桌面壳（Recombyn）
 apps/api/          FastAPI（含 collab room-token）
 apps/collab/       Yjs WebSocket 服务（y-websocket）
 apps/docs/         帮助 / 法律站
 packages/          共享协议
-docs/              架构与自托管（含 Postgres 切换）
+docs/              架构、自托管、桌面端（含 Postgres 切换）
 deploy/            Dockerfile / Nginx
 e2e/               Playwright
 ```
 
 ## 文档与社区
 
-- [自托管](docs/self-hosting.md) · [PostgreSQL 切换](docs/postgres-switch.md) · [贡献指南](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
+- [自托管](docs/self-hosting.md) · [桌面端 Tauri](docs/desktop.md) · [PostgreSQL 切换](docs/postgres-switch.md) · [贡献指南](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
 - Issue / PR 模板见 `.github/`
 ## 协议
 

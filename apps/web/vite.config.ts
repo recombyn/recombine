@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { createSvgIconsPlugin } from 'vite-plugin-svg-icons';
 
+const isTauri = Boolean(process.env.TAURI_ENV_PLATFORM);
+
 export default defineConfig(({ mode }) => {
   // Prefer repo-root / apps/web env; support both GOOGLE_CLIENT_ID and VITE_GOOGLE_CLIENT_ID
   const envWeb = loadEnv(mode, path.resolve(__dirname), '');
@@ -20,6 +22,8 @@ export default defineConfig(({ mode }) => {
   ).replace(/\/$/, '');
 
   return {
+    // Keep Rust compiler output visible when `tauri dev` runs Vite.
+    clearScreen: false,
     plugins: [
       react(),
       createSvgIconsPlugin({
@@ -48,6 +52,7 @@ export default defineConfig(({ mode }) => {
       __GOOGLE_CLIENT_ID__: JSON.stringify(googleClientId),
       __DOCS_URL__: JSON.stringify(docsUrl),
     },
+    envPrefix: ['VITE_', 'TAURI_ENV_*'],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'),
@@ -66,9 +71,14 @@ export default defineConfig(({ mode }) => {
     assetsInclude: ['**/*.wasm'],
     server: {
       port: 3000,
-      open: true,
+      strictPort: true,
+      // Browser auto-open only for plain `npm run dev`, not under Tauri.
+      open: !isTauri,
       fs: {
         allow: [path.resolve(__dirname), path.resolve(__dirname, '../..')],
+      },
+      watch: {
+        ignored: ['**/src-tauri/**'],
       },
       proxy: {
         '/api': {
@@ -82,7 +92,14 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist',
-      sourcemap: true,
+      sourcemap: isTauri ? Boolean(process.env.TAURI_ENV_DEBUG) : true,
+      // Windows WebView2 ≈ Chromium; macOS/Linux use WebKit.
+      ...(isTauri
+        ? {
+            target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+            minify: process.env.TAURI_ENV_DEBUG ? false : 'esbuild',
+          }
+        : {}),
     },
   };
 });
