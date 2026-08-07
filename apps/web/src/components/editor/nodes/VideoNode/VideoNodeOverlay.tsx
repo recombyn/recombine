@@ -52,10 +52,10 @@ function VideoZoomSync({ onZoom }: { onZoom: (zoom: number) => void }) {
 }
 
 /**
- * Idle = freeze-frame still; playing = stable HTML <video>.
- * Selection must not remount plates (key=nodeId + memo).
- * During move/resize/rotate, `geometryOverrides` keeps plates glued to the chrome
- * (Redux document only commits at gesture end).
+ * Idle = freeze-frame / HTML <video> over SVG poster underlay.
+ * During move/resize/rotate, parent sets `hidden` so only the SVG underlay
+ * paints — same previewSvgNodeGeometry path as images (no HTML ghost).
+ * `geometryOverrides` keeps HTML glued when visible again after commit.
  */
 function VideoNodeOverlay({
   document,

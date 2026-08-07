@@ -28,6 +28,48 @@ def format_op_error(code: str, *, fix: str = "", detail: str = "") -> str:
     return "; ".join(parts)
 
 
+_CSS_GRADIENT_RE = re.compile(
+    r"^(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(",
+    re.IGNORECASE,
+)
+_ALLOWED_FILL_TYPES = frozenset(
+    {"solid", "linear", "radial", "angular", "diffuse", "image"}
+)
+
+
+def _looks_like_css_gradient(raw: object) -> bool:
+    return bool(_CSS_GRADIENT_RE.match(str(raw or "").strip()))
+
+
+def _validate_shape_fill_args(name: str, args: dict[str, Any]) -> str | None:
+    """Reject CSS gradient strings; require native fillType + fill/fillEnd."""
+    fill_keys = ("fill", "fillColor", "backgroundColor", "color")
+    for key in fill_keys:
+        if key not in args or args.get(key) is None:
+            continue
+        val = args.get(key)
+        if _looks_like_css_gradient(val):
+            return format_op_error(
+                f"{name}_css_gradient_fill",
+                fix=(
+                    "do not put CSS linear-gradient()/radial-gradient() in fill; "
+                    "use fillType=linear|radial|angular|diffuse with fill + fillEnd "
+                    "(+ gradientAngle?)"
+                ),
+                detail=f"{key}={str(val)[:96]}",
+            )
+    fill_type_raw = args.get("fillType")
+    if fill_type_raw is not None and str(fill_type_raw).strip():
+        ft = str(fill_type_raw).strip().lower()
+        if ft not in _ALLOWED_FILL_TYPES:
+            return format_op_error(
+                f"{name}_invalid_fillType",
+                fix="fillType must be solid|linear|radial|angular|diffuse|image",
+                detail=f"fillType={ft}",
+            )
+    return None
+
+
 def _tools_from_seed(*, enabled_only: bool = True) -> list[dict[str, Any]]:
     """Cold-start / unit-test fallback when design_canvas_tool is empty."""
     try:
@@ -421,6 +463,9 @@ def _validate_single_op(
                 fix="pick nodeId from SCENE_NODES",
                 detail=f"nodeId={nid}",
             )
+        fill_err = _validate_shape_fill_args(name, args)
+        if fill_err:
+            return fill_err
         return None
     if name == "delete_nodes":
         args = _normalize_node_id_list_args(args)
@@ -488,6 +533,14 @@ def _validate_single_op(
                     fix="fix svg markup or omit svg",
                     detail=svg_err,
                 )
+        fill_err = _validate_shape_fill_args(name, args)
+        if fill_err:
+            return fill_err
+        return None
+    if name == "set_canvas_background":
+        fill_err = _validate_shape_fill_args(name, args)
+        if fill_err:
+            return fill_err
         return None
     if name == "create_text":
         if args.get("text") is None and args.get("content") is None:
@@ -505,6 +558,28 @@ def _validate_single_op(
             return format_op_error(
                 "create_image_missing_source",
                 fix="re-emit create_image with src, attachmentIndex, or genPrompt",
+            )
+        return None
+    if name == "create_lottie":
+        has_gen = bool(str(args.get("genPrompt") or args.get("prompt") or "").strip())
+        raw = (
+            args.get("animationData")
+            if args.get("animationData") is not None
+            else args.get("lottie")
+            if args.get("lottie") is not None
+            else args.get("json")
+            if args.get("json") is not None
+            else args.get("animation")
+        )
+        has_data = False
+        if isinstance(raw, dict) and raw.get("layers"):
+            has_data = True
+        elif isinstance(raw, str) and raw.strip():
+            has_data = True
+        if not has_gen and not has_data:
+            return format_op_error(
+                "create_lottie_missing_source",
+                fix="re-emit create_lottie with genPrompt or animationData",
             )
         return None
     return None
@@ -637,7 +712,11 @@ def _reject_create_text_as_edit(
     ops: list[dict[str, Any]],
     scene_nodes: list[dict[str, Any]] | None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Detect create_text that matches SCENE_NODES — do not rewrite to update_node."""
+    """Detect create_text that matches SCENE_NODES — do not rewrite to update_node.
+
+    Edit turns only. New design create must be allowed to add similar labels
+    (e.g. another「登录」) onto a fresh plate without rewriting ambient boards.
+    """
     existing_texts = [
         n
         for n in (scene_nodes or [])
@@ -676,12 +755,159 @@ def _reject_create_text_as_edit(
     return kept, errors
 
 
+_CREATE_CONTENT_OPS = frozenset(
+    {
+        "create_shape",
+        "create_text",
+        "create_image",
+        "create_svg",
+        "create_lottie",
+        "create_icon",
+    }
+)
+
+
+def _reject_ambient_mutates_on_new_design(
+    ops: list[dict[str, Any]],
+    scene_nodes: list[dict[str, Any]] | None,
+    scene_frames: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """New design create must not update/delete pre-existing scene nodes.
+
+    User asked for a new deliverable — leave sibling boards/nodes alone unless
+    they explicitly requested an edit.
+    """
+    scene_ids = {
+        str(n.get("id") or "").strip()
+        for n in (scene_nodes or [])
+        if isinstance(n, dict) and str(n.get("id") or "").strip()
+    }
+    frame_ids = {
+        str(f.get("id") or "").strip()
+        for f in (scene_frames or [])
+        if isinstance(f, dict) and str(f.get("id") or "").strip()
+    }
+    if not scene_ids and not frame_ids:
+        return ops, []
+    kept: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for raw in ops:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
+        if name == "update_node":
+            nid = str(args.get("nodeId") or args.get("id") or "").strip()
+            if nid and nid in scene_ids:
+                errors.append(
+                    format_op_error(
+                        "new_design_leave_ambient",
+                        fix=(
+                            "new design: create_* onto HOST_ARTBOARD / FOCUS only; "
+                            f"do not update_node ambient id={nid}"
+                        ),
+                        detail="create lane must not rewrite existing scene nodes",
+                    )
+                )
+                continue
+        if name in _CREATE_CONTENT_OPS:
+            fid = str(args.get("frameId") or args.get("frame_id") or "").strip()
+            if fid and fid in frame_ids:
+                errors.append(
+                    format_op_error(
+                        "new_design_leave_ambient",
+                        fix=(
+                            "new design: create_* onto HOST_ARTBOARD / FOCUS only; "
+                            f"do not pass ambient frameId={fid}"
+                        ),
+                        detail="create lane must not parent content under existing boards",
+                    )
+                )
+                continue
+        if name == "delete_nodes":
+            ids = args.get("nodeIds") or args.get("ids") or []
+            if not isinstance(ids, list):
+                ids = [ids] if ids else []
+            hit = [str(x).strip() for x in ids if str(x).strip() in scene_ids]
+            if hit:
+                errors.append(
+                    format_op_error(
+                        "new_design_leave_ambient",
+                        fix=(
+                            "new design: do not delete_nodes ambient ids; "
+                            "create a new plate instead "
+                            f"(hit={','.join(hit[:4])})"
+                        ),
+                        detail="create lane must not wipe existing scene nodes",
+                    )
+                )
+                continue
+        if name == "delete_frame":
+            fid = str(
+                args.get("frameId") or args.get("id") or args.get("frame_id") or ""
+            ).strip()
+            if fid and fid in frame_ids:
+                errors.append(
+                    format_op_error(
+                        "new_design_leave_ambient",
+                        fix=(
+                            "new design: do not delete_frame existing boards; "
+                            "open/create a sibling plate"
+                        ),
+                        detail=f"delete_frame ambient id={fid}",
+                    )
+                )
+                continue
+        kept.append(raw)
+    return kept, errors
+
+
+def _require_create_frame_for_auto_new_design(
+    ops: list[dict[str, Any]],
+    *,
+    canvas_size: str | None,
+    host_plate_ready: bool,
+) -> list[str]:
+    """Smart/auto new design: size (create_frame) before content.
+
+    Host opens+binds from that WxH, then content paints into FOCUS. Locked
+    composer WxH already early-opens a plate — skip.
+    """
+    from app.services.design.readpath.canvas_scene import explicit_canvas_size
+
+    if host_plate_ready or explicit_canvas_size(canvas_size):
+        return []
+    has_frame = any(
+        isinstance(o, dict) and str(o.get("name") or "").strip() == "create_frame"
+        for o in (ops or [])
+    )
+    has_content = any(
+        isinstance(o, dict) and str(o.get("name") or "").strip() in _CREATE_CONTENT_OPS
+        for o in (ops or [])
+    )
+    if has_content and not has_frame:
+        return [
+            format_op_error(
+                "auto_size_create_frame_first",
+                fix=(
+                    "CANVAS_SIZE is auto: emit create_frame FIRST with width×height "
+                    "(infer from USER_PROMPT / deliverable), then create_* inside it. "
+                    "Host will open+bind that plate before paint."
+                ),
+                detail="Smart size must resolve via create_frame before content ops",
+            )
+        ]
+    return []
+
+
 def normalize_agent_tool_ops(
     raw_ops: list[dict[str, Any]],
     *,
     scene_nodes: list[dict[str, Any]] | None = None,
     scene_frames: list[dict[str, Any]] | None = None,
     rules: dict[str, str] | None = None,
+    paint_lane: str | None = None,
+    classified_intent: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Allowlist + alias normalize + per-op validation + op_id + dedupe.
@@ -691,6 +917,11 @@ def normalize_agent_tool_ops(
     Returns (ops, errors). ops empty with errors → orchestrator should retry/fail.
     FE must execute these ops as-is (no client rewrite).
     """
+    from app.services.design.runtime.models_route import (
+        normalize_paint_lane,
+        normalize_user_intent,
+    )
+
     errors: list[str] = []
     scene_ids: set[str] | None = None
     if scene_nodes:
@@ -700,6 +931,11 @@ def normalize_agent_tool_ops(
         scene_frame_ids = {
             str(f["id"]) for f in scene_frames if isinstance(f, dict) and f.get("id")
         }
+
+    intent = normalize_user_intent(classified_intent)
+    lane = normalize_paint_lane(paint_lane, intent=intent or "chat")
+    # Full design create next to existing work — never force-edit ambient nodes.
+    new_design_create = intent == "design" and lane == "create"
 
     max_ops = _max_ops_per_step(rules)
     if len(raw_ops) > max_ops:
@@ -733,6 +969,7 @@ def normalize_agent_tool_ops(
                 )
             )
             continue
+        # Alias normalize (shape type / text content) — keep below in original loop body
         if name == "create_shape":
             if args.get("shapeType") is None and args.get("type") is not None:
                 args["shapeType"] = args.get("type")
@@ -758,8 +995,14 @@ def normalize_agent_tool_ops(
     # Validate intent — reject, do not rewrite into a "fixed" op.
     working, morph_errs = _reject_shape_morph_ops(working)
     errors.extend(morph_errs)
-    working, text_errs = _reject_create_text_as_edit(working, scene_nodes)
-    errors.extend(text_errs)
+    if new_design_create:
+        working, ambient_errs = _reject_ambient_mutates_on_new_design(
+            working, scene_nodes, scene_frames
+        )
+        errors.extend(ambient_errs)
+    else:
+        working, text_errs = _reject_create_text_as_edit(working, scene_nodes)
+        errors.extend(text_errs)
 
     normalized: list[dict[str, Any]] = []
     for idx, item in enumerate(working):
@@ -819,10 +1062,17 @@ def extract_and_validate_tool_ops(
     scene_nodes: list[dict[str, Any]] | None = None,
     scene_frames: list[dict[str, Any]] | None = None,
     rules: dict[str, str] | None = None,
+    paint_lane: str | None = None,
+    classified_intent: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     raw = _parse_raw_ops(content)
     return normalize_agent_tool_ops(
-        raw, scene_nodes=scene_nodes, scene_frames=scene_frames, rules=rules
+        raw,
+        scene_nodes=scene_nodes,
+        scene_frames=scene_frames,
+        rules=rules,
+        paint_lane=paint_lane,
+        classified_intent=classified_intent,
     )
 
 
@@ -921,7 +1171,14 @@ def tool_ops_activity_counts(ops: list[dict[str, Any]]) -> tuple[int, int, int]:
     created = updated = deleted = 0
     for op in ops:
         name = str(op.get("name") or "")
-        if name in ("create_shape", "create_text", "create_image", "create_svg"):
+        if name in (
+            "create_shape",
+            "create_text",
+            "create_image",
+            "create_svg",
+            "create_lottie",
+            "create_icon",
+        ):
             created += 1
         elif name == "update_node":
             updated += 1
@@ -949,6 +1206,10 @@ def tool_ops_batch_detail(batch: list[dict[str, Any]], *, limit: int = 10) -> st
             parts.append("+image")
         elif name == "create_svg":
             parts.append("+svg")
+        elif name == "create_lottie":
+            parts.append("+lottie")
+        elif name == "create_icon":
+            parts.append("+icon")
         elif name == "create_frame":
             parts.append("+frame")
         elif name == "update_node":

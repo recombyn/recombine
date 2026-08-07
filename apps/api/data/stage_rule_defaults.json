@@ -19,7 +19,7 @@
     "precheck.user_preset.quality": "fast->or-gemini-3-flash-preview;standard->or-gemini-3-5-flash;reasoning->or-gpt-5-6-sol;vision->or-gemini-3-5-flash;image->or-gpt-image-2",
     "agent.attach.max_images": "4",
     "agent.attach.max_data_url_chars": "2500000",
-    "agent.attach.place_hint": "User attached {n} image(s) (indices 0..{max_index}). Finished poster/design with baked-in text → STYLE only: do NOT create_image(attachmentIndex) full-bleed (double text). Prefer create_image genPrompt for clean bg/subject, then create_text; brush/calligraphy titles → genPrompt + letteringText (transparent bg). attachmentIndex only for raw photo/product cutouts."
+    "agent.attach.place_hint": "User attached {n} image(s) (indices 0..{max_index}). Finished poster/design with baked-in text → STYLE only: do NOT create_image(attachmentIndex) full-bleed (double text). Prefer create_image genPrompt for clean bg/subject. Hero/main title: use create_text+fontFamily only if Available fonts ~≥90% match the ref lettering; else genPrompt + letteringText (transparent bg). Do not map 书法感→catalog calligraphy font. attachmentIndex only for raw photo/product cutouts."
   },
   "descriptions": {
     "legacy.agent_zero_v3": "Legacy wipe marker v3: rules/skills/flows removed",

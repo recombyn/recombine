@@ -105,6 +105,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
         _hydrate_tool_ops_images,
         _image_model_from_rules,
     )
+    from app.services.design.ops.lottie_hydrate import hydrate_tool_ops_lottie
 
     # Size / shimmer before hydrate so the plate is visible while images generate.
     if _ops_have_create_frame(step_ops):
@@ -112,10 +113,17 @@ async def _node_apply_confirm(state: GraphState) -> Command:
     step_ops, n_img = await _hydrate_tool_ops_images(
         step_ops, limit=6, policy="auto", rules=rt.rules
     )
+    step_ops, n_lottie = await hydrate_tool_ops_lottie(step_ops, limit=4)
     img_mid = _image_model_from_rules(rt.rules) if n_img else ""
     if n_img and img_mid:
         st.note_images(img_mid, int(n_img))
         st.push_log(**_hydrate_log_kwargs(step_ops, img_mid=img_mid, n_img=n_img))
+    if n_lottie:
+        st.push_log(
+            phase="hydrate",
+            summary=f"Lottie hydrate ×{int(n_lottie)}",
+            ops_count=int(n_lottie),
+        )
     paint_ops = list(step_ops)
     if _ops_have_create_frame(step_ops):
         paint_ops = _paint_ops_for_host(step_ops)
@@ -294,6 +302,7 @@ async def _node_action(state: GraphState) -> Command:
         _hydrate_tool_ops_images,
         _image_model_from_rules,
     )
+    from app.services.design.ops.lottie_hydrate import hydrate_tool_ops_lottie
 
     # Safety net: size/shimmer before hydrate (paint_ops usually already did this).
     if _ops_have_create_frame(step_ops):
@@ -301,11 +310,18 @@ async def _node_action(state: GraphState) -> Command:
     step_ops, n_img = await _hydrate_tool_ops_images(
         step_ops, limit=6, policy="auto", rules=rt.rules
     )
+    step_ops, n_lottie = await hydrate_tool_ops_lottie(step_ops, limit=4)
     rt.step_ops = step_ops
     img_mid = _image_model_from_rules(rt.rules) if n_img else ""
     if n_img and img_mid:
         st.note_images(img_mid, int(n_img))
         st.push_log(**_hydrate_log_kwargs(step_ops, img_mid=img_mid, n_img=n_img))
+    if n_lottie:
+        st.push_log(
+            phase="hydrate",
+            summary=f"Lottie hydrate ×{int(n_lottie)}",
+            ops_count=int(n_lottie),
+        )
     paint_ops = list(step_ops)
     if _ops_have_create_frame(step_ops):
         paint_ops = _paint_ops_for_host(step_ops)

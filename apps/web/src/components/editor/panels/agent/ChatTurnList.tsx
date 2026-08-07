@@ -7,6 +7,7 @@ import {
   HiOutlineCheckCircle,
   HiOutlineChevronRight,
   HiOutlineComputerDesktop,
+  HiOutlinePlay,
   HiOutlineQuestionMarkCircle,
 } from 'react-icons/hi2';
 import ChatMarkdown from '@/components/editor/panels/ChatMarkdown';
@@ -802,10 +803,14 @@ function ProcessStepRow({
 }): ReactNode {
   const { t } = useTranslation();
   const variant = stepVariant(step);
+  const summaryDistinct =
+    Boolean(step.summary?.trim()) &&
+    step.summary!.trim() !== step.name.trim() &&
+    step.summary!.trim() !== (step.body || '').trim();
   const expandable = Boolean(
     (step.items && step.items.length) ||
       step.body?.trim() ||
-      (step.summary?.trim() && step.summary.trim() !== step.name.trim())
+      summaryDistinct
   );
   // Live turn: expand. Finished turn: collapse (click to re-open).
   const [open, setOpen] = useState(() => turnActive);
@@ -851,7 +856,7 @@ function ProcessStepRow({
               <span className="block whitespace-pre-wrap break-words leading-snug">
                 {it.name}
               </span>
-              {it.summary?.trim() ? (
+              {it.summary?.trim() && it.summary.trim() !== String(it.name || '').trim() ? (
                 <span className="mt-0.5 block whitespace-pre-wrap break-words text-[11px] leading-snug opacity-80">
                   {it.summary}
                 </span>
@@ -859,21 +864,24 @@ function ProcessStepRow({
             </div>
           </div>
         ))}
-        {step.summary?.trim() && step.summary.trim() !== step.name.trim() ? (
+        {summaryDistinct ? (
           <span className="w-full whitespace-pre-wrap break-words leading-snug">{step.summary}</span>
         ) : null}
         {step.body?.trim() ? (
-          <div className="w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--ink)]/80">
-            <ChatMarkdown content={step.body} />
+          <div className="w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--muted)]">
+            <ChatMarkdown
+              content={step.body}
+              className="!text-[12px] !leading-relaxed !text-[var(--muted)]"
+            />
           </div>
         ) : null}
       </div>
     ) : null;
 
+  // Activity chrome stays muted (same as running rows) — never jump to pure ink.
   const rowClass = cn(
     'flex w-full items-center gap-1.5 text-left text-[12px] leading-none text-[var(--muted)] transition-colors',
-    step.status === 'error' && 'text-[var(--ink)]',
-    (step.status === 'done' || variant === 'success') && 'text-[var(--ink)]/70'
+    step.status === 'error' && 'text-[var(--ink)]'
   );
 
   const leadingIcon =
@@ -1032,20 +1040,20 @@ function AssistantTurn({
       ) : null}
 
       {!streaming && assistant.canResume && assistant.designTaskId && onResume ? (
-        <div className="flex w-full items-center gap-2">
+        <div className="flex items-center gap-1 px-0.5">
           <button
             type="button"
             disabled={sending}
             onClick={() => onResume(assistant.id)}
             className={cn(
-              'inline-flex h-8 items-center rounded-lg px-3 text-[12px] font-medium',
-              'bg-[var(--home-cta)] text-white transition-opacity hover:opacity-90',
+              'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[12px] text-[var(--muted)]',
+              'hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]',
               'disabled:cursor-not-allowed disabled:opacity-40'
             )}
           >
+            <HiOutlinePlay className="h-3.5 w-3.5" aria-hidden />
             {t('agent.resume')}
           </button>
-          <span className="text-[11px] text-[var(--muted)]">{t('agent.pausedHint')}</span>
         </div>
       ) : null}
     </div>

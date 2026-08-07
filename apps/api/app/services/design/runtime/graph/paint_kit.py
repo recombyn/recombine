@@ -199,6 +199,8 @@ def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
     - Always: create_shape + create_text.
     - create_frame: design-grade create on empty / no artboard — not canvas_op adds.
     - create_image: attachments **or** create/design turns (genPrompt hero / lettering).
+    - create_lottie: create/design turns (motion / looping UI icons) — must be in TOOL_DETAILS
+      or the model silently falls back to create_image.
     - update/delete when paint_lane=edit and scene has nodes.
     - Plus any tools already requested via need_tools.
     """
@@ -224,6 +226,9 @@ def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
     # and falls back to shape-only "programmer art".
     if has_images or want == "create":
         keys.append("create_image")
+    # Motion / Lottie must be visible on create (and edit) or paint substitutes create_image.
+    if want in ("create", "edit"):
+        keys.append("create_lottie")
     if want == "edit" and nodes:
         for k in ("update_node", "delete_nodes"):
             if k not in keys:
@@ -233,7 +238,7 @@ def _paint_tool_keys_for_turn(rt: Any) -> list[str]:
         k = str(raw or "").strip()
         if k and k not in keys:
             keys.append(k)
-    return keys[:8]
+    return keys[:10]
 
 def _ensure_paint_tool_details(rt: Any) -> None:
     """Guarantee TOOL_DETAILS before the paint stage (no narrate-only escape)."""

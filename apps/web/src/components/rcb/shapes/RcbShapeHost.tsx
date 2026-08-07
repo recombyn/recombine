@@ -22,6 +22,7 @@ import {
   getSharedNodeEls,
   registerShapeHost,
   subscribeShapeHosts,
+  syncSharedMountPaintOrder,
   unregisterShapeHost,
   updateShapeHostElement,
 } from '@/components/rcb/shapes/shapeHostRegistry';
@@ -158,6 +159,7 @@ function RcbShapeHost({
     });
     layerRef.current = layer;
     layer.setAttribute('data-rcb-shape-id', nodeId);
+    layer.setAttribute('data-z', String(zIndex));
     layer.style.opacity = forceHiddenRef.current ? '0' : String(layerOpacity);
     if (blendCss) layer.style.mixBlendMode = blendCss;
     else layer.style.removeProperty('mix-blend-mode');
@@ -282,18 +284,15 @@ function RcbShapeHost({
     else layer.style.removeProperty('mix-blend-mode');
   }, [blendCss, paintToken]);
 
-  // Keep SVG paint order ≈ document z when sharing one scene root.
+  // Keep SVG paint order ≈ document z (shapes + artboard plates interleaved).
   useEffect(() => {
     const layer = layerRef.current;
     const mount = getSceneShapesMount();
-    if (!layer || !mount || layer.parentElement !== mount) return;
+    if (!layer) return;
     layer.setAttribute('data-z', String(zIndex));
-    const siblings = [...mount.querySelectorAll(':scope > g[data-rcb-shape-layer]')];
-    siblings.sort(
-      (a, b) => (Number(a.getAttribute('data-z')) || 0) - (Number(b.getAttribute('data-z')) || 0)
-    );
-    for (const g of siblings) mount.appendChild(g);
-  }, [zIndex, paintToken]);
+    if (!mount || layer.parentNode !== mount) return;
+    syncSharedMountPaintOrder(mount);
+  }, [zIndex, paintToken, worldEpoch]);
 
   return (
     <div

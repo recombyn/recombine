@@ -2,6 +2,7 @@ import { createSlice, nanoid, type PayloadAction } from '@reduxjs/toolkit';
 import {
   createEmptyDocument,
   normalizeDocument,
+  reconcileStackOrder,
   setDocumentCanvasMeta,
   setDocumentSize,
   updateNodeInDocument,
@@ -670,7 +671,16 @@ const editorSlice = createSlice({
       next.frames = frames;
       const key = `frame:${frame.id}`;
       const order = Array.isArray(next.stackOrder) ? next.stackOrder.map(String) : [];
-      if (!order.includes(key)) next.stackOrder = [...order, key];
+      if (!order.includes(key)) {
+        // Keep new plates with other frames (under existing nodes). Appending on
+        // top makes a remounted white/black plate cover sibling content until sync.
+        let insertAt = 0;
+        for (let i = 0; i < order.length; i += 1) {
+          if (order[i].startsWith('frame:')) insertAt = i + 1;
+        }
+        next.stackOrder = [...order.slice(0, insertAt), key, ...order.slice(insertAt)];
+      }
+      reconcileStackOrder(next);
       if (activate !== false) {
         next.activeFrameId = frame.id;
         state.selectedFrameIds = [frame.id];

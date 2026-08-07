@@ -936,6 +936,7 @@ const ja = {
       lottieGenUploadHint: '画像または Lottie JSON をアップロードしてください',
       lottieGenRefImage: '参照画像',
       lottieGenNeedPrompt: '先にアニメの説明を入力してください',
+      lottieGenNeedVisionModel: '画像添付には画像対応のマルチモーダルモデルが必要です',
       lottieGenInvalidJson: '無効な Lottie JSON',
       lottieGenerating: 'Lottie 生成中',
       lottieGenFail: 'Lottie 生成に失敗しました',

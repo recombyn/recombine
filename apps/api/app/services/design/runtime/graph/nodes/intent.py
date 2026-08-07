@@ -18,7 +18,9 @@ from app.services.design.runtime.graph.support import (
 from app.services.design.runtime.models_route import (
     classify_user_intent,
     normalize_intent_decision,
+    normalize_paint_lane,
     normalize_proposal_action,
+    normalize_user_intent,
     paint_ops_intent,
 )
 
@@ -28,6 +30,32 @@ def _pending_proposal_flag(rt: AgentRuntime) -> dict[str, Any] | None:
     if not isinstance(raw, dict) or not raw.get("ops") or not raw.get("id"):
         return None
     return raw
+
+
+def _release_ambient_focus_for_new_design(rt: AgentRuntime) -> None:
+    """Drop ambient/memory FOCUS so Host can open a shimmer sibling and bind it.
+
+    Flow (no user @): clear old focus → early-open reserves ``ab_*`` → that id
+    becomes FOCUS_FRAME_ID / HOST_ARTBOARD for the model. Do not leave the
+    previous Design board as focus or paint rewrites it.
+    """
+    from app.services.design.runtime.decision_log import probe_has_target_chip
+
+    intent = normalize_user_intent(getattr(rt, "classified_intent", None))
+    if intent != "design":
+        return
+    lane = normalize_paint_lane(
+        getattr(rt, "classified_paint_lane", None),
+        intent=intent,
+    )
+    if paint_ops_intent(intent, lane) != "create":
+        return
+    if probe_has_target_chip(rt.prompt or ""):
+        return
+    rt.focus_id = ""
+    rt.flags.pop("artboard_frame_id", None)
+    rt.flags.pop("artboard_opened", None)
+    rt.flags.pop("artboard_size", None)
 
 
 def _clear_ask_proposal_meta(proposal_task_id: str) -> None:
@@ -147,6 +175,10 @@ async def _node_intent_classify(state: GraphState) -> Command:
             st.reply = reply
             _emit({"type": "token", "text": reply})
         return _goto_cmd(rt, frm="intent_classify", to="__settle__")
+
+    # New design create without @ must not inherit memory/ambient FOCUS —
+    # otherwise early-open / paint rewrites the previous plate.
+    _release_ambient_focus_for_new_design(rt)
 
     _emit_design_loading_artboard(rt)
     if intent == "canvas_op":

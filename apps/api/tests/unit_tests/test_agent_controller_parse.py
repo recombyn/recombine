@@ -353,8 +353,8 @@ def test_paint_tool_keys_structural_not_shape_specific():
     )
     assert _is_lean_paint_turn(rt) is True
     keys = _paint_tool_keys_for_turn(rt)
-    # create_image is exposed on create turns for genPrompt heroes (no attachment required)
-    assert keys == ["create_shape", "create_text", "create_image"]
+    # create_image / create_lottie exposed on create turns (no attachment required)
+    assert keys == ["create_shape", "create_text", "create_image", "create_lottie"]
     assert "create_frame" not in keys
     assert "update_node" not in keys
 
@@ -383,6 +383,7 @@ def test_paint_tool_keys_basic_edit_has_update():
     keys = _paint_tool_keys_for_turn(rt)
     assert "update_node" in keys
     assert "delete_nodes" in keys
+    assert "create_lottie" in keys
     assert "create_frame" not in keys
 
 
@@ -408,6 +409,7 @@ def test_paint_tool_keys_empty_canvas_includes_frame():
     assert keys[0] == "create_frame"
     assert "create_shape" in keys
     assert "create_text" in keys
+    assert "create_lottie" in keys
 
 
 def test_paint_tool_keys_design_create_includes_frame_when_focus_exists():

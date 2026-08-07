@@ -1682,25 +1682,12 @@ export async function nodeToSvgElement(
     }
 
     const g = appendChild(parent, svgEl('g'));
-    // Infinite editor: HTML <video> paints. SVG hit/baseline only.
-    // Export boards (`data-rcb-export-surface`) still paint the poster.
+    // Infinite editor: SVG poster/underlay moves via previewSvgNodeGeometry (same as
+    // images). HTML <video> covers it while idle; hide HTML during geometry
+    // transforms so only this underlay is visible — no dual-layer ghost.
+    // Export boards also use this poster path (videoSvgOwnsPixels / export surface).
     const svgOwnsPixels = videoSvgOwnsPixels(root);
     const crop = readNodeCropNorm(node);
-    if (src && !processing && !svgOwnsPixels) {
-      const plate = appendChild(g, svgEl('path', { d: clipD }));
-      setFill(plate, 'transparent');
-      setStroke(plate, 'none');
-      setAttrs(plate, {
-        'data-radius-body': '1',
-        'data-baseline': '1',
-        'data-rcb-video-html-hit': '1',
-      });
-      (g as any).__sceneCornerRadii = { ...cornerR };
-      tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
-      if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
-      applyMeta(g, left, top, meta, boxW, boxH);
-      return g;
-    }
     if (poster) {
       const imgW = crop ? boxW / crop.w : boxW;
       const imgH = crop ? boxH / crop.h : boxH;
@@ -1725,19 +1712,6 @@ export async function nodeToSvgElement(
       defs.appendChild(clip);
       setAttrs(img, { 'clip-path': urlRef(clipId) });
       setAttrs(g, { 'data-radius-clip-id': clipId });
-    } else {
-      const plate = appendChild(g, svgEl('path', { d: clipD }));
-      setFill(plate, '#111827');
-      setStroke(plate, 'none');
-      setAttrs(plate, {
-        'data-radius-body': '1',
-        'data-baseline': '1',
-        'data-rcb-video-svg-underlay': '1',
-      });
-    }
-    void src;
-    (g as any).__sceneCornerRadii = { ...cornerR };
-    if (poster) {
       appendChild(
         g,
         svgEl('path', {
@@ -1746,9 +1720,22 @@ export async function nodeToSvgElement(
           stroke: 'none',
           'pointer-events': 'none',
           'data-baseline': '1',
+          ...(!svgOwnsPixels ? { 'data-rcb-video-html-hit': '1' } : {}),
         })
       );
+    } else {
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, '#111827');
+      setStroke(plate, 'none');
+      setAttrs(plate, {
+        'data-radius-body': '1',
+        'data-baseline': '1',
+        'data-rcb-video-svg-underlay': '1',
+        ...(!svgOwnsPixels ? { 'data-rcb-video-html-hit': '1' } : {}),
+      });
     }
+    void src;
+    (g as any).__sceneCornerRadii = { ...cornerR };
     tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
     if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
     applyMeta(g, left, top, meta, boxW, boxH);
@@ -1789,10 +1776,10 @@ function isInfiniteSvgRoot(root: SVGSVGElement) {
 }
 
 /**
- * Whether the SVG board should paint video poster pixels.
- * Infinite editor hosts also mount HTML `<video>` (VideoNodeOverlay) — painting
- * a poster there creates a second visible layer (ghost on move). Export boards
- * mark `data-rcb-export-surface` and keep the poster.
+ * Whether SVG alone owns the visible video pixels (no HTML plate on top).
+ * Infinite editor paints an SVG poster underlay AND mounts HTML `<video>` —
+ * hide the HTML while transforming so drag uses the same previewSvgNodeGeometry
+ * path as images (no dual-layer ghost). Export surfaces keep SVG-only pixels.
  */
 export function videoSvgOwnsPixels(root: SVGSVGElement): boolean {
   if (!isInfiniteSvgRoot(root)) return true;

@@ -113,6 +113,90 @@ def test_create_text_matching_scene_rejected_prefer_update():
     assert any("t1" in e for e in errs)
 
 
+def test_design_create_allows_create_text_matching_ambient():
+    """New design may recreate similar labels; do not force-edit the old board."""
+    raw_ops = [
+        {
+            "name": "create_text",
+            "args": {"text": "登录", "x": 24, "y": 400, "fontSize": 16},
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "t1", "type": "text", "text": "登录"}],
+        paint_lane="create",
+        classified_intent="design",
+    )
+    assert len(ops) == 1
+    assert ops[0]["name"] == "create_text"
+    assert not any("prefer_update_node" in e for e in errs)
+
+
+def test_design_create_rejects_update_ambient_nodes():
+    ops, errs = normalize_agent_tool_ops(
+        [{"name": "update_node", "args": {"nodeId": "t1", "text": "Bloom"}}],
+        scene_nodes=[{"id": "t1", "type": "text", "text": "欢迎回来"}],
+        paint_lane="create",
+        classified_intent="design",
+    )
+    assert not ops
+    assert any("code=new_design_leave_ambient" in e for e in errs)
+
+
+def test_design_create_rejects_create_onto_ambient_frame():
+    ops, errs = normalize_agent_tool_ops(
+        [
+            {
+                "name": "create_image",
+                "args": {
+                    "frameId": "ab_old",
+                    "x": 0,
+                    "y": 0,
+                    "width": 100,
+                    "height": 100,
+                    "genPrompt": "hero",
+                },
+            }
+        ],
+        scene_frames=[{"id": "ab_old", "w": 1080, "h": 1920}],
+        paint_lane="create",
+        classified_intent="design",
+    )
+    assert not ops
+    assert any("code=new_design_leave_ambient" in e for e in errs)
+
+
+def test_auto_size_requires_create_frame_before_content():
+    from app.services.design.ops.tool_ops_contract import (
+        _require_create_frame_for_auto_new_design,
+    )
+
+    errs = _require_create_frame_for_auto_new_design(
+        [
+            {
+                "name": "create_image",
+                "args": {"x": 0, "y": 0, "width": 100, "height": 100, "genPrompt": "x"},
+            }
+        ],
+        canvas_size="auto",
+        host_plate_ready=False,
+    )
+    assert any("code=auto_size_create_frame_first" in e for e in errs)
+
+    ok = _require_create_frame_for_auto_new_design(
+        [
+            {"name": "create_frame", "args": {"width": 1080, "height": 1920}},
+            {
+                "name": "create_image",
+                "args": {"x": 0, "y": 0, "width": 100, "height": 100, "genPrompt": "x"},
+            },
+        ],
+        canvas_size="auto",
+        host_plate_ready=False,
+    )
+    assert ok == []
+
+
 def test_update_node_missing_nodeId_not_invented():
     """Do not bind fill-only update_node onto the largest plate."""
     raw_ops = [
@@ -230,3 +314,66 @@ def test_create_shape_stays_create_even_if_similar_to_existing_plate():
     assert len(ops) == 1
     assert ops[0]["name"] == "create_shape"
     assert ops[0]["args"]["fill"] == "#ff0000"
+
+
+def test_rejects_css_linear_gradient_fill_on_create_shape():
+    raw_ops = [
+        {
+            "name": "create_shape",
+            "args": {
+                "shapeType": "rect",
+                "x": 0,
+                "y": 0,
+                "width": 1080,
+                "height": 1920,
+                "fill": "linear-gradient(180deg, rgba(0,0,0,0) 40%, rgba(0,0,0,0.35) 100%)",
+                "name": "vignette",
+            },
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(raw_ops)
+    assert not ops
+    assert any("create_shape_css_gradient_fill" in e for e in errs)
+    assert any("fillType=linear" in e for e in errs)
+
+
+def test_accepts_native_linear_fillType_on_create_shape():
+    raw_ops = [
+        {
+            "name": "create_shape",
+            "args": {
+                "shapeType": "rect",
+                "x": 0,
+                "y": 0,
+                "width": 1080,
+                "height": 1920,
+                "fillType": "linear",
+                "fill": "rgba(0,0,0,0)",
+                "fillEnd": "rgba(0,0,0,0.35)",
+                "gradientAngle": 90,
+                "name": "vignette",
+            },
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(raw_ops)
+    assert not errs
+    assert len(ops) == 1
+    assert ops[0]["args"]["fillType"] == "linear"
+
+
+def test_rejects_css_gradient_fill_on_update_node():
+    raw_ops = [
+        {
+            "name": "update_node",
+            "args": {
+                "nodeId": "n1",
+                "fill": "radial-gradient(circle, #000 0%, transparent 70%)",
+            },
+        },
+    ]
+    ops, errs = normalize_agent_tool_ops(
+        raw_ops,
+        scene_nodes=[{"id": "n1", "type": "rect"}],
+    )
+    assert not ops
+    assert any("update_node_css_gradient_fill" in e for e in errs)
