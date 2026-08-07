@@ -81,7 +81,14 @@ export function getShapeBaseline(
   const key = String(node.key || '');
   const shapeType = resolveShapeType(node);
 
-  if (shapeType === 'text' || shapeType === 'image' || key === 'text' || key === 'image' || key === 'video') {
+  if (
+    shapeType === 'text' ||
+    shapeType === 'image' ||
+    key === 'text' ||
+    key === 'image' ||
+    key === 'video' ||
+    key === 'lottie'
+  ) {
     // Match sceneToSvg plate / clip path (generators are always sharp).
     const gen =
       (key === 'image' &&
@@ -93,7 +100,12 @@ export function getShapeBaseline(
         (node.attrs?.videoGenerator === true ||
           node.attrs?.videoGenerator === 'true' ||
           node.attrs?.videoGenerator === 1 ||
-          node.attrs?.videoGenerator === '1'));
+          node.attrs?.videoGenerator === '1')) ||
+      (key === 'lottie' &&
+        (node.attrs?.lottieGenerator === true ||
+          node.attrs?.lottieGenerator === 'true' ||
+          node.attrs?.lottieGenerator === 1 ||
+          node.attrs?.lottieGenerator === '1'));
     const r = gen
       ? { tl: 0, tr: 0, br: 0, bl: 0 }
       : key === 'text'
