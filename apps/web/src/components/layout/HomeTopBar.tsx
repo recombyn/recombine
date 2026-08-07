@@ -12,26 +12,39 @@ import { LuUserRound } from 'react-icons/lu';
 import { Dropdown } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import AuthHeader from '@/components/layout/AuthHeader';
+import { useIsDesktopShell } from '@/components/layout/DesktopTitlebar';
 import { buildLoginUrl } from '@/utils/authReturnTo';
+import { cn } from '@/utils/classnames';
 import { getToken } from '@/utils/token';
 
 type Props = {
   setNav: (id: string) => void;
 };
 
+type HomeNavKey = 'home' | 'mine' | 'account' | 'skills';
+
+function isHomeNavKey(key: string): key is HomeNavKey {
+  return key === 'home' || key === 'mine' || key === 'account' || key === 'skills';
+}
+
 /** Floating top-right — account chip; mobile also has nav menu after avatar. */
 function HomeTopBar({ setNav }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const desktop = useIsDesktopShell();
   const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
   const authed = Boolean(userId && getToken());
 
-  const goNav = (id: 'home' | 'mine' | 'account' | 'skills') => {
+  const goNav = (id: HomeNavKey) => {
     if ((id === 'mine' || id === 'account' || id === 'skills') && !authed) {
       navigate(buildLoginUrl('/home'));
       return;
     }
     setNav(id);
+  };
+
+  const onMobileNavClick = (key: string) => {
+    if (isHomeNavKey(key)) goNav(key);
   };
 
   const mobileNavItems: MenuItemType[] = useMemo(
@@ -76,8 +89,17 @@ function HomeTopBar({ setNav }: Props) {
     [t]
   );
 
+  // Web mobile: fixed to viewport. Tauri: never fixed — content sits under the custom
+  // titlebar, so fixed top-0 would park the avatar on the chrome controls.
   return (
-    <div className="pointer-events-none fixed right-0 top-0 z-40 flex h-14 items-center justify-end px-4 md:absolute md:z-10 md:h-auto md:p-5">
+    <div
+      className={cn(
+        'pointer-events-none z-40 flex items-center justify-end',
+        desktop
+          ? 'absolute right-0 top-0 h-auto p-4 md:p-5'
+          : 'fixed right-0 top-0 h-14 px-4 md:absolute md:z-10 md:h-auto md:p-5'
+      )}
+    >
       <div className="pointer-events-auto flex items-center gap-1.5">
         <AuthHeader />
         <Dropdown
@@ -86,11 +108,7 @@ function HomeTopBar({ setNav }: Props) {
           strategy="fixed"
           offset={8}
           items={mobileNavItems}
-          onClick={(key) => {
-            if (key === 'home' || key === 'mine' || key === 'account' || key === 'skills') {
-              goNav(key);
-            }
-          }}
+          onClick={onMobileNavClick}
           floatingClassName="z-[600]"
           popupClassName="min-w-[10rem] rounded-xl !bg-[var(--surface)] p-1.5 shadow-[0_8px_28px_rgba(15,23,42,0.14)] ring-1 ring-[var(--line)]"
         >

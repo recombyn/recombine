@@ -32,8 +32,9 @@ import {
 } from '@/store/modules/editor';
 import { isOwnedTemplate } from '@/utils/templatesStorage';
 import { getToken } from '@/utils/token';
-import { docsUrl } from '@/utils/docsUrl';
+import { docsUrl, openExternalUrl } from '@/utils/docsUrl';
 import { buildLoginUrl } from '@/utils/authReturnTo';
+import { useIsDesktopShell } from '@/components/layout/DesktopTitlebar';
 import { cn } from '@/utils/classnames';
 
 const PROJECT_PAGE_SIZE = 20;
@@ -61,6 +62,18 @@ const RAIL_ICON_SM = 'h-5 w-5';
 
 const RAIL_HELP_WIKI =
   'https://my.feishu.cn/wiki/EuoxwPk4OighdZkmAVMc7Gisn8b?from=from_copylink';
+
+function handleRailHelpClick(key: string) {
+  if (key === 'guide') {
+    void openExternalUrl(docsUrl('/guide/getting-started'));
+    return;
+  }
+  if (key === 'contact') {
+    void openExternalUrl('mailto:702680355@qq.com');
+    return;
+  }
+  void openExternalUrl(RAIL_HELP_WIKI);
+}
 
 function RailGlyph({ children }: { children: ReactNode }) {
   return <span className={RAIL_ICON_BOX}>{children}</span>;
@@ -157,17 +170,7 @@ function RailHelpMenu() {
       offset={12}
       floatingClassName="z-[600]"
       items={items}
-      onClick={(key) => {
-        if (key === 'guide') {
-          window.open(docsUrl('/guide/getting-started'), '_blank', 'noopener,noreferrer');
-          return;
-        }
-        if (key === 'contact') {
-          window.location.href = 'mailto:702680355@qq.com';
-          return;
-        }
-        window.open(RAIL_HELP_WIKI, '_blank', 'noopener,noreferrer');
-      }}
+      onClick={handleRailHelpClick}
     >
       <button
         type="button"
@@ -194,6 +197,7 @@ function HomeSidebar({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const desktop = useIsDesktopShell();
   const userId = useSelector((state: any) => state.auth?.user?.id) as string | undefined;
   const authed = Boolean(userId && getToken());
 
@@ -207,28 +211,35 @@ function HomeSidebar({
 
   return (
     <>
-      {/* Mobile top bar — brand only; nav menu lives after avatar in HomeTopBar. */}
-      <div className="pointer-events-none fixed inset-x-0 top-0 z-30 flex h-20 items-start bg-gradient-to-b from-[var(--surface)] from-60% to-transparent pt-4 px-4 md:hidden">
-        <div className="pointer-events-auto inline-flex min-w-0 items-center gap-2 leading-none">
-          <AppLogo size={22} />
-          <span
-            className="-translate-y-px truncate text-[15px] font-medium leading-none tracking-tight text-[var(--ink)] [font-family:var(--font-hero)]"
-            aria-hidden
-          >
-            {t('app.name')}
-          </span>
+      {/* Web mobile brand only — Tauri already shows mark + name in the titlebar. */}
+      {!desktop ? (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-20 items-start bg-gradient-to-b from-[var(--surface)] from-60% to-transparent pt-4 px-4 md:hidden">
+          <div className="pointer-events-auto inline-flex min-w-0 items-center gap-2 leading-none">
+            <AppLogo size={22} />
+            <span
+              className="-translate-y-px truncate text-[15px] font-medium leading-none tracking-tight text-[var(--ink)] [font-family:var(--font-hero)]"
+              aria-hidden
+            >
+              {t('app.name')}
+            </span>
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      {/* Desktop rail — top-packed icons; ? help pinned to bottom. */}
+      {/* Desktop rail — top-packed icons; ? help pinned to bottom.
+          On Tauri the brand mark lives in the custom titlebar (same --rail). */}
       <aside
-        className="pointer-events-none fixed inset-y-0 left-0 z-30 hidden w-[64px] flex-col overflow-visible border-r border-[var(--line)] md:flex"
+        className="pointer-events-none absolute inset-y-0 left-0 z-30 hidden w-[64px] flex-col overflow-visible border-r border-[var(--line)] md:flex"
         aria-label={t('app.name')}
       >
         <div className="pointer-events-auto flex h-full flex-col items-stretch overflow-visible bg-[var(--rail)] px-2 pb-5 pt-4">
-          <div className="flex shrink-0 justify-center pb-4">
-            <RailLogo />
-          </div>
+          {!desktop ? (
+            <div className="flex shrink-0 justify-center pb-4">
+              <RailLogo />
+            </div>
+          ) : (
+            <div className="shrink-0 pb-2" aria-hidden />
+          )}
           <nav
             className="flex min-h-0 flex-1 flex-col items-stretch gap-1.5"
             aria-label={t('app.name')}

@@ -5,6 +5,7 @@ import { store } from '@/store';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import {
   openEditorWindowWithBoot,
+  saveHomeAgentBoot,
   type HomeAgentBoot,
 } from '@/utils/homeAgentBoot';
 
@@ -21,6 +22,15 @@ export type GoEditorOpts = {
    */
   homeAgentBoot?: HomeAgentBoot;
 };
+
+/** Tauri / embedded webview — `window.open(_blank)` often no-ops with no fallback. */
+function canOpenEditorInNewWindow(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  if (w.__TAURI_INTERNALS__ || w.__TAURI__) return false;
+  if (import.meta.env.TAURI_ENV_PLATFORM) return false;
+  return true;
+}
 
 /** Build editor path (intent stays in the URL, including after login ?from=). */
 export function buildEditorIntentPath(opts?: GoEditorOpts): string {
@@ -54,15 +64,17 @@ export function useGoEditor() {
     (opts?: GoEditorOpts) => {
       const path = buildEditorIntentPath(opts);
       const dest = user ? path : buildLoginUrl(path);
-      if (opts?.newWindow) {
+      if (opts?.newWindow && canOpenEditorInNewWindow()) {
         if (opts.homeAgentBoot) {
           const opened = openEditorWindowWithBoot(dest, opts.homeAgentBoot);
           if (!opened) navigate(dest);
           return;
         }
-        window.open(dest, '_blank', 'noopener,noreferrer');
+        const win = window.open(dest, '_blank', 'noopener,noreferrer');
+        if (!win) navigate(dest);
         return;
       }
+      if (opts?.homeAgentBoot) saveHomeAgentBoot(opts.homeAgentBoot);
       navigate(dest);
     },
     [user, navigate]

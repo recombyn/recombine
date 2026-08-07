@@ -6,7 +6,7 @@ Please read the [Code of Conduct](./CODE_OF_CONDUCT.md). Security issues: [SECUR
 
 ## Setup
 
-See [README.md](./README.md) and [docs/self-hosting.md](./docs/self-hosting.md).
+See [README.md](./README.md), [docs/self-hosting.md](./docs/self-hosting.md), and [docs/desktop.md](./docs/desktop.md) for the Tauri shell.
 
 ```bash
 docker compose up -d redis
@@ -15,6 +15,8 @@ npm install
 npm run install:api                      # Python API deps
 npm run dev:api                          # http://127.0.0.1:8000
 npm run dev:web                          # http://localhost:3000
+# optional desktop (Rust + platform toolchain required):
+# npm run dev:desktop
 ```
 
 Useful scripts:
@@ -22,6 +24,7 @@ Useful scripts:
 | Command | Purpose |
 |---------|---------|
 | `npm run dev:web` / `dev:api` / `dev:docs` | Local servers |
+| `npm run dev:desktop` / `build:desktop` | Tauri window / installers ([docs/desktop.md](./docs/desktop.md)) |
 | `npm run test` | Web + API tests |
 | `npm run test:web` / `test:api` | Scoped tests |
 | `npm run test:e2e` | Playwright (under `e2e/`) |
