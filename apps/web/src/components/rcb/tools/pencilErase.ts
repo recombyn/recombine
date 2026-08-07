@@ -45,9 +45,8 @@ export function distToEraseStroke(px: number, py: number, erase: ErasePt[]) {
 }
 
 /**
- * Bake perfect-freehand velocity pressure onto original points (1:1).
- * Same recurrence as perfect-freehand's simulatePressure — locks thickness so
- * later spacing changes cannot re-thicken the ink.
+ * Bake simulated velocity pressure onto original points (1:1).
+ * Locks thickness so later spacing changes cannot re-thicken the ink.
  */
 function bakeSimulatedPressures(
   pts: ErasePt[],
@@ -59,7 +58,6 @@ function bakeSimulatedPressures(
   }
   const brush = findPencilBrush(brushId || 'solid');
   const size = Math.max(1, brushSize(brush, strokeWidth));
-  // Match perfect-freehand DEFAULT_FIRST_PRESSURE / RATE_OF_PRESSURE_CHANGE.
   const RATE = 0.275;
   let prev = 0.25;
   const out: ErasePt[] = [{ ...pts[0], pressure: prev }];

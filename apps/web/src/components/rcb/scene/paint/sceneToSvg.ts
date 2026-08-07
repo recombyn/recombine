@@ -52,15 +52,16 @@ import {
   brushSize,
   findPencilBrush,
   isStampBrush,
+  paintStampDabs,
   parsePathPressures,
   parseSimplePathPoints,
   pencilInkPathFromPoints,
-  samplePolyline,
-  stampSizeForBrush,
-  stampSpacingForBrush,
+  buildStampDabs,
+  STAMP_MAX_DABS,
+  type StampDab,
 } from '@/components/rcb/tools/pencilBrushes';
 import { applyFrameContentClip, detachSceneNodeEl } from '@/components/rcb/frames/frameContentClip';
-import { getTintedStampSrc } from '@/components/rcb/tools/stampTint';
+import { getTintedStampSrc, STAMP_TINT_READY_EVENT } from '@/components/rcb/tools/stampTint';
 import { strokeDashForStyle } from '../document/sceneStrokeStyle';
 import type { RcbCamera } from '@/components/rcb/core/types';
 import {
@@ -212,6 +213,104 @@ function strokeOptsFromNode(node: any, color: string, width: number): ShapeStrok
 function setSvgImageHref(img: SVGImageElement, href: string) {
   img.setAttributeNS(XLINK_NS, 'href', href);
   img.setAttribute('href', href);
+}
+
+const stampTipImageCache = new Map<string, HTMLImageElement>();
+
+function tipImageReady(src: string): HTMLImageElement | null {
+  if (!src || typeof Image === 'undefined') return null;
+  let img = stampTipImageCache.get(src);
+  if (!img) {
+    img = new Image();
+    img.decoding = 'async';
+    img.src = src;
+    stampTipImageCache.set(src, img);
+  }
+  if (img.complete && (img.naturalWidth || img.width)) return img;
+  // Upgrade multi-dab fallback → single bake once the tip finishes decoding.
+  if (!(img as HTMLImageElement & { __stampLoadNotify?: boolean }).__stampLoadNotify) {
+    (img as HTMLImageElement & { __stampLoadNotify?: boolean }).__stampLoadNotify = true;
+    img.addEventListener(
+      'load',
+      () => {
+        if (typeof window === 'undefined') return;
+        window.dispatchEvent(new CustomEvent(STAMP_TINT_READY_EVENT));
+      },
+      { once: true }
+    );
+  }
+  return null;
+}
+
+/**
+ * Bake tip stamps into one PNG for the stroke host (keeps tip texture, 1 DOM image).
+ * Supersamples to current screen density (DPR × zoom) so zoom-in stays sharp longer.
+ */
+function rasterizeStampStrokeImage(
+  samples: StampDab[],
+  tipSrc: string,
+  strokeOpacity: number
+): { href: string; x: number; y: number; width: number; height: number } | null {
+  if (typeof document === 'undefined' || !samples.length || !tipSrc) return null;
+  const tip = tipImageReady(tipSrc);
+  if (!tip) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const d of samples) {
+    const r = d.size / 2;
+    minX = Math.min(minX, d.x - r);
+    minY = Math.min(minY, d.y - r);
+    maxX = Math.max(maxX, d.x + r);
+    maxY = Math.max(maxY, d.y + r);
+  }
+  if (!Number.isFinite(minX)) return null;
+
+  const pad = 2;
+  const width = Math.max(1, Math.ceil(maxX - minX + pad * 2));
+  const height = Math.max(1, Math.ceil(maxY - minY + pad * 2));
+  const zoom = paintCamera ? Math.max(0.25, rcbCameraCssZoom(paintCamera)) : 1;
+  const dpr = Math.max(1, paintDpr || 1);
+  // Screen px per scene unit, plus headroom for one zoom step before rebake.
+  const want = Math.min(8, Math.max(2.5, dpr * zoom * 1.35));
+  const maxSide = 8192;
+  const scale = Math.min(want, maxSide / Math.max(width, height));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(width * scale));
+  canvas.height = Math.max(1, Math.ceil(height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.setTransform(scale, 0, 0, scale, (-minX + pad) * scale, (-minY + pad) * scale);
+  paintStampDabs(ctx, samples, tip, strokeOpacity);
+  try {
+    return {
+      href: canvas.toDataURL('image/png'),
+      x: minX - pad,
+      y: minY - pad,
+      width,
+      height,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Zoom LOD bucket for tip-stroke rebake (1, 2, 4, 8…). */
+export function stampStrokeBakeZoomBucket(zoom?: number): number {
+  const z = Math.max(
+    0.25,
+    typeof zoom === 'number' && zoom > 0
+      ? zoom
+      : paintCamera
+        ? rcbCameraCssZoom(paintCamera)
+        : 1
+  );
+  return Math.pow(2, Math.max(0, Math.round(Math.log2(z))));
 }
 
 /**
@@ -695,8 +794,9 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
   const shapeType = node.attrs?.shapeType || 'rect';
   const paint = resolveFill(node, '#FFFFFF');
   const { stroke, strokeWidth: resolvedSw } = resolveStroke(node, '#333333');
-  const swFallback =
-    shapeType === 'pencil' ? 1.5 : shapeType === 'pen' || shapeType === 'line' || shapeType === 'arrow' ? 2 : 1;
+  let swFallback = 1;
+  if (shapeType === 'pencil') swFallback = 1.5;
+  else if (shapeType === 'pen' || shapeType === 'line' || shapeType === 'arrow') swFallback = 2;
   const strokeWidth = Number.isFinite(resolvedSw) ? resolvedSw : swFallback;
   const { left, top } = nodeLeftTop(document, node);
   const width = Math.max(node.width || 100, 1);
@@ -705,19 +805,15 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
   const strokeFull = strokeOptsFromNode(node, stroke, strokeWidth);
   const hasCapAttr = node.attrs?.strokeLinecap != null || node.attrs?.['stroke-linecap'] != null;
   const hasJoinAttr = node.attrs?.strokeLinejoin != null || node.attrs?.['stroke-linejoin'] != null;
+  let linecap = strokeFull.linecap;
+  let linejoin = strokeFull.linejoin;
+  if (!hasCapAttr && shapeType === 'pencil') linecap = 'round';
+  if (!hasJoinAttr && shapeType === 'pencil') linejoin = 'round';
   const strokeOpen: ShapeStrokeOpts = {
     ...strokeFull,
     align: 'center',
-    linecap: hasCapAttr
-      ? strokeFull.linecap
-      : shapeType === 'pencil'
-        ? 'round'
-        : strokeFull.linecap,
-    linejoin: hasJoinAttr
-      ? strokeFull.linejoin
-      : shapeType === 'pencil'
-        ? 'round'
-        : strokeFull.linejoin,
+    linecap,
+    linejoin,
   };
 
   if (shapeType === 'line') {
@@ -818,27 +914,63 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
 
       if (useStamp && pts.length >= 2) {
         const src = stampSrcAttr || brush.stampSrc || '';
-        const size = stampSizeForBrush(brush, strokeWidth);
-        const spacing = stampSpacingForBrush(brush, strokeWidth);
-        const samples = samplePolyline(pts, spacing);
-        const tinted = src ? getTintedStampSrc(src, ink) : '';
+        const hardnessRaw = Number(node.attrs?.brushHardness);
+        const hardness = Number.isFinite(hardnessRaw)
+          ? Math.max(0, Math.min(100, hardnessRaw))
+          : 80;
+        const pressures = parsePathPressures(node.attrs?.pathPressure, pts.length);
+        const ptsWithP =
+          pressures && pressures.length === pts.length
+            ? pts.map((p, i) => ({ ...p, pressure: pressures[i] }))
+            : pts;
+        const pressureOn = boolEffectAttr(node.attrs?.pressureEnabled, true);
+        const samples = buildStampDabs(ptsWithP, brush, strokeWidth, {
+          hardness,
+          pressureEnabled: pressureOn,
+          maxDabs: STAMP_MAX_DABS,
+        });
+        const tinted = src ? getTintedStampSrc(src, ink, hardness) : '';
         const g = appendChild(parent, svgEl('g'));
-        for (const p of samples) {
-          if (!tinted) continue;
+        const strokeOp =
+          typeof node.attrs?.opacity === 'number'
+            ? Math.max(0, Math.min(1, Number(node.attrs.opacity)))
+            : 1;
+        const baked = tinted
+          ? rasterizeStampStrokeImage(samples, tinted, strokeOp)
+          : null;
+        if (baked) {
           const img = appendChild(
             g,
             svgEl('image', {
-              width: size,
-              height: size,
-              x: p.x - size / 2,
-              y: p.y - size / 2,
+              width: baked.width,
+              height: baked.height,
+              x: baked.x,
+              y: baked.y,
+              preserveAspectRatio: 'none',
             })
           );
-          setSvgImageHref(img, tinted);
+          setSvgImageHref(img, baked.href);
+        } else if (tinted) {
+          // Tip still decoding — temporary dense SVG tips until tint/load ready.
+          for (const p of samples) {
+            const img = appendChild(
+              g,
+              svgEl('image', {
+                width: p.size,
+                height: p.size,
+                x: p.x - p.size / 2,
+                y: p.y - p.size / 2,
+                opacity: String(Math.max(0.08, Math.min(1, p.opacity * strokeOp))),
+                preserveAspectRatio: 'none',
+              })
+            );
+            setSvgImageHref(img, tinted);
+          }
         }
+        const hitSize = brushSize(brush, strokeWidth);
         const hit = appendChild(g, svgEl('path', { d: String(d) }));
         setFill(hit, 'none');
-        setStroke(hit, { color: 'transparent', width: Math.max(size, strokeWidth) });
+        setStroke(hit, { color: 'transparent', width: Math.max(hitSize, strokeWidth) });
         setAttrs(hit, { 'pointer-events': 'stroke', 'data-baseline': '1' });
         tagNode(g, nodeId, 'shape', shapeType, left, top, width, height);
         applyMeta(g, left, top, meta, width, height);
@@ -1342,6 +1474,7 @@ export async function nodeToSvgElement(
   if (node.key === 'lottie' || isLottieNode(node) || isLottieGeneratorNode(node)) {
     const isGen = isLottieGeneratorNode(node);
     const hasData = Boolean(String(node.attrs?.animationData || '').trim());
+    const processing = String(node.attrs?.processStatus || '') === 'running';
     const { left, top } = nodeLeftTop(document, node);
     const boxW = Math.max(1, Number(node.width) || 100);
     const boxH = Math.max(1, Number(node.height) || 100);
@@ -1354,6 +1487,20 @@ export async function nodeToSvgElement(
     const svgOwnsPixels = videoSvgOwnsPixels(root);
     const plateFill =
       String(node.attrs?.['fill-color'] || node.attrs?.fill || '').trim() || '#FFFFFF';
+
+    // Same process plate as image/video — shimmer chrome overlays this node.
+    if (processing) {
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, '#B9CBDA');
+      setStroke(plate, { color: '#A8C5E4', width: editorChromeStrokeSceneWidth(1.5) });
+      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
+      (g as any).__sceneCornerRadii = { ...cornerR };
+      tagNode(g, nodeId, 'lottie', undefined, left, top, boxW, boxH);
+      setAttrs(g, { 'data-export-ignore': '1' });
+      applyMeta(g, left, top, meta, boxW, boxH);
+      applyNodeShadow(root, g, node);
+      return g;
+    }
 
     if (isGen || !hasData) {
       const plate = appendChild(g, svgEl('path', { d: clipD }));
@@ -1406,7 +1553,7 @@ export async function nodeToSvgElement(
       setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
       (g as any).__sceneCornerRadii = { ...cornerR };
       tagNode(g, nodeId, 'lottie', undefined, left, top, boxW, boxH);
-      if (isGen) setAttrs(g, { 'data-export-ignore': '1' });
+      if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
       applyMeta(g, left, top, meta, boxW, boxH);
       return g;
     }
