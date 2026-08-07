@@ -97,22 +97,58 @@ def _structure_verify_issues(
         issues.append(f"most nodes have invalid size ({zero_box}/{len(clean_nodes)})")
     return issues
 
+# Multi-screen / multi-poster sets in one paint batch (login + home + …).
+_MAX_CREATE_FRAMES_PER_BATCH = 8
+
+
+def _op_tool_name(o: dict[str, Any]) -> str:
+    return str(o.get("name") or o.get("op_key") or "").strip()
+
+
 def _ops_have_create_frame(ops: list[dict[str, Any]]) -> bool:
+    return _count_create_frame_ops(ops) > 0
+
+
+def _count_create_frame_ops(ops: list[dict[str, Any]]) -> int:
+    n = 0
+    for o in ops or []:
+        if isinstance(o, dict) and _op_tool_name(o) == "create_frame":
+            n += 1
+    return n
+
+
+def _is_multi_artboard_batch(ops: list[dict[str, Any]]) -> bool:
+    """Two+ create_frame → FE applies each plate; host must not collapse to one."""
+    return _count_create_frame_ops(ops) >= 2
+
+
+def _cap_create_frame_ops(
+    ops: list[dict[str, Any]],
+    *,
+    limit: int = _MAX_CREATE_FRAMES_PER_BATCH,
+) -> list[dict[str, Any]]:
+    """Keep at most ``limit`` create_frame ops; content after a dropped frame still applies."""
+    if limit <= 0:
+        return [o for o in (ops or []) if isinstance(o, dict)]
+    out: list[dict[str, Any]] = []
+    kept = 0
     for o in ops or []:
         if not isinstance(o, dict):
             continue
-        name = str(o.get("name") or o.get("op_key") or "").strip()
-        if name == "create_frame":
-            return True
-    return False
+        if _op_tool_name(o) == "create_frame":
+            if kept >= limit:
+                continue
+            kept += 1
+        out.append(o)
+    return out
+
 
 def _wh_from_create_frame_ops(ops: list[dict[str, Any]]) -> tuple[int, int]:
     """First create_frame width/height in a validated op batch."""
     for o in ops or []:
         if not isinstance(o, dict):
             continue
-        name = str(o.get("name") or o.get("op_key") or "").strip()
-        if name != "create_frame":
+        if _op_tool_name(o) != "create_frame":
             continue
         args = o.get("args") if isinstance(o.get("args"), dict) else {}
         try:
@@ -124,17 +160,27 @@ def _wh_from_create_frame_ops(ops: list[dict[str, Any]]) -> tuple[int, int]:
             return fw, fh
     return 0, 0
 
+
 def _strip_create_frame_ops(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Host opens the artboard; drop model create_frame to avoid a second plate."""
     out: list[dict[str, Any]] = []
     for o in ops or []:
         if not isinstance(o, dict):
             continue
-        name = str(o.get("name") or o.get("op_key") or "").strip()
-        if name == "create_frame":
+        if _op_tool_name(o) == "create_frame":
             continue
         out.append(o)
     return out
+
+
+def _paint_ops_for_host(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Single create_frame → host owns the plate (strip). Multi → keep create_frame ops."""
+    capped = _cap_create_frame_ops(ops)
+    if _is_multi_artboard_batch(capped):
+        return capped
+    if _ops_have_create_frame(capped):
+        return _strip_create_frame_ops(capped)
+    return capped
 
 def _prompt_compact_len(prompt: str | None) -> int:
     return len(re.sub(r"\s+", "", str(prompt or "")))
@@ -311,8 +357,12 @@ __all__ = [
     '_ops_patch_too_broad',
     '_structure_verify_issues',
     '_ops_have_create_frame',
+    '_count_create_frame_ops',
+    '_is_multi_artboard_batch',
+    '_cap_create_frame_ops',
     '_wh_from_create_frame_ops',
     '_strip_create_frame_ops',
+    '_paint_ops_for_host',
     '_prompt_compact_len',
     '_is_lean_paint_turn',
     '_paint_tool_keys_for_turn',

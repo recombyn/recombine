@@ -85,7 +85,8 @@ class Settings(BaseSettings):
     # Per LLM/IO node; 0 disables node TimeoutPolicy.
     design_graph_node_timeout_sec: float = 180.0
     # Per paint_ops LLM attempt (in-node); fail fast so empty-ops retries can run.
-    design_paint_attempt_timeout_sec: float = 75.0
+    # Pencil/pathPressure illustration batches often need >75s on slow reasoners.
+    design_paint_attempt_timeout_sec: float = 180.0
     # Verbose [exec]/llm_step] stage timers to stdout (off by default).
     design_exec_trace: bool = False
     # Whole run_agent_graph wall clock; 0 disables.
@@ -188,6 +189,9 @@ class Settings(BaseSettings):
 
     # Local-only admin OTP (apps/api/.env). Empty = disabled. Never set in production.
     super_admin_test_code: str = ""
+    # Self-host only: when SES is unset, print login OTP to API logs (never on Cloud).
+    # docker-compose sets true; leave false/unset for hosted production.
+    auth_console_login_code: bool = False
 
     # Token wallet — card-key redeem (no WeChat/Alipay membership)
     # HMAC-SHA256(plaintext, CARD_KEY_SALT); never store plaintext in DB.

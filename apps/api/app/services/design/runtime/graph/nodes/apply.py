@@ -35,7 +35,7 @@ from app.services.design.runtime.graph.support import (
     _ops_have_create_frame,
     _persist_progress,
     _prompt_text,
-    _strip_create_frame_ops,
+    _paint_ops_for_host,
     _validate_ops_payload,
 )
 
@@ -118,7 +118,7 @@ async def _node_apply_confirm(state: GraphState) -> Command:
         st.push_log(**_hydrate_log_kwargs(step_ops, img_mid=img_mid, n_img=n_img))
     paint_ops = list(step_ops)
     if _ops_have_create_frame(step_ops):
-        paint_ops = _strip_create_frame_ops(step_ops)
+        paint_ops = _paint_ops_for_host(step_ops)
     paint_ops = _filter_unemitted_ops(st, paint_ops)
     rt.paint_ops = paint_ops
     rt.step_ops = step_ops
@@ -308,7 +308,7 @@ async def _node_action(state: GraphState) -> Command:
         st.push_log(**_hydrate_log_kwargs(step_ops, img_mid=img_mid, n_img=n_img))
     paint_ops = list(step_ops)
     if _ops_have_create_frame(step_ops):
-        paint_ops = _strip_create_frame_ops(step_ops)
+        paint_ops = _paint_ops_for_host(step_ops)
     paint_ops = _filter_unemitted_ops(st, paint_ops)
     rt.paint_ops = paint_ops
     ops_sent = bool(paint_ops)

@@ -6,7 +6,7 @@
 # Intents (exactly one)
 - chat: greeting / identity / no canvas work
 - canvas_op: the request can be fulfilled by one or a few ops from the 画布工具目录 (e.g. create_*/update_*/delete_*). Prefer canvas_op whenever catalog tools are sufficient.
-- design: creative composition that is NOT just applying catalog tools — new page/poster/layout system, multi-section IA, redesign from reference that needs design judgment beyond a single property/tool call
+- design: creative composition that is NOT just applying catalog tools — new page/poster/layout system, multi-section IA, multi-screen UI set (login+home+profile), multiple distinct posters/artboards, redesign from reference that needs design judgment beyond a single property/tool call
 
 # paint_lane (required when intent is canvas_op or design; empty for chat)
 - create: primarily adding new nodes (create_* tools)
