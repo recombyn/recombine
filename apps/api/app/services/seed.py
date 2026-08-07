@@ -1,4 +1,4 @@
-"""Seed fonts from apps/api/data/public|private; heal existing plaza rows."""
+"""Seed fonts from apps/api/data; heal existing plaza rows."""
 
 from __future__ import annotations
 

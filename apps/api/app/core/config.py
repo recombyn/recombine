@@ -147,9 +147,6 @@ class Settings(BaseSettings):
     # Design skills: poll seed JSON + .agents/skills + data/design_skills for hot reload.
     design_skills_hot_reload: bool = True
     design_skills_hot_reload_interval_sec: float = 2.0
-    # Private seed overlay (gitignored). Empty → apps/api/data/private
-    # (wins over data/public). Relative → apps/api; absolute used as-is.
-    design_data_private_dir: str = ""
 
     # Phase 5: table cells + SAM/LaMa models
     expand_table_cells: bool = True
@@ -220,36 +217,15 @@ settings = Settings()
 
 
 def api_data_dir() -> Path:
-    """Seed root: apps/api/data (contains public/ + private/)."""
+    """Seed root: apps/api/data (prompt packs, skills, knowledge, …)."""
     return _API_ROOT / "data"
 
 
-def public_data_dir() -> Path:
-    """Tracked / OSS-safe seeds: apps/api/data/public."""
-    return api_data_dir() / "public"
-
-
-def private_data_dir() -> Path:
-    """Local/SaaS seed overlay (not committed). Prefer over public when present."""
-    raw = (settings.design_data_private_dir or "").strip()
-    if raw:
-        p = Path(raw)
-        return p if p.is_absolute() else (_API_ROOT / p)
-    return api_data_dir() / "private"
-
-
 def resolve_data_file(*parts: str) -> Path:
-    """Resolve a seed file: private overlay first, then data/public/."""
-    rel = Path(*parts)
-    priv = private_data_dir() / rel
-    if priv.is_file():
-        return priv
-    return public_data_dir() / rel
+    """Resolve a seed file under apps/api/data/."""
+    return api_data_dir().joinpath(*parts)
 
 
 def resolve_data_dir(*parts: str) -> Path:
-    """Resolve a seed directory: private dir if it exists, else data/public/."""
-    priv = private_data_dir().joinpath(*parts)
-    if priv.is_dir():
-        return priv
-    return public_data_dir().joinpath(*parts)
+    """Resolve a seed directory under apps/api/data/."""
+    return api_data_dir().joinpath(*parts)

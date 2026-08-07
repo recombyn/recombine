@@ -17,7 +17,7 @@ _KNOWLEDGE_LOCK = threading.RLock()
 
 
 def _load_knowledge_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
-    """Load kind labels + seed rows (private overlay → public data/)."""
+    """Load kind labels + seed rows from apps/api/data/."""
     from app.core.config import resolve_data_file
 
     path = resolve_data_file("design_knowledge_seed.json")

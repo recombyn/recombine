@@ -217,22 +217,21 @@ def _agents_skills_dir() -> Path:
 
 
 def _file_skills_dir() -> Path:
-    """Primary design_skills dir (private overlay if present, else public)."""
+    """Primary design_skills dir under apps/api/data/."""
     from app.core.config import resolve_data_dir
 
     return resolve_data_dir("design_skills")
 
 
 def _file_skills_dirs() -> list[Path]:
-    """``.agents/skills`` + public design_skills, then private overlay (later wins)."""
-    from app.core.config import private_data_dir, public_data_dir
+    """``.agents/skills`` + ``apps/api/data/design_skills``."""
+    from app.core.config import api_data_dir
 
     dirs: list[Path] = []
     seen: set[str] = set()
     for root in (
         _agents_skills_dir(),
-        public_data_dir() / "design_skills",
-        private_data_dir() / "design_skills",
+        api_data_dir() / "design_skills",
     ):
         try:
             resolved = root.resolve()
@@ -2006,6 +2005,46 @@ _SEED_SKILL_BODY_PREV: dict[str, tuple[str, ...]] = {
         "7. Node ids must come from SCENE\n"
         "8. Before done: self-check — no clipped titles, contrast OK, no junk SVG/emoji tofu, "
         "copy language match\n",
+        "# Design methodology\n\n"
+        "Process (think → act): brief → structure → place → self-check.\n"
+        "This skill is the **step skeleton only** — not typography/aesthetic encyclopedia.\n"
+        "Visual craft (type mood, contrast, overflow, decoration): `need_skills` entries from the "
+        "**Skills catalog** whose when_to_use matches (enabled skills only; never invent skill keys).\n"
+        "Layout/op cheat-sheets: same — pick from catalog if present.\n"
+        "Numeric details (palette, banner px, …) → need_knowledge (Knowledge catalog).\n\n"
+        "## Brief (one line in thought)\n"
+        "Name deliverable, audience/job, and size. Ask if missing; never invent price/phone.\n\n"
+        "## Deliverables (one line each)\n"
+        "- **website / landing**: nav → hero → benefits → CTA → footer\n"
+        "- **mobile / H5**: single column; primary CTA in the thumb zone\n"
+        "- **ecommerce hero**: ~1:1; subject largest; no nav, no forms\n"
+        "- **ecommerce detail**: hero → title/price → benefits → specs → rich text\n"
+        "- **Banner**: copy in the middle safe band\n"
+        "- **poster / roll-up**: **create_image genPrompt hero** + info group; tall top/mid/bottom — "
+        "do not fake the hero with shape piles\n"
+        "- **image**: subject graphic; no page chrome\n\n"
+        "## Steps\n"
+        "1. Confirm deliverable, size, required copy; ask if missing; never invent price/phone\n"
+        "2. Fixed size → create_frame first, then place layers inside\n"
+        "3. Before heavy place: `need_skills` any enabled catalog skills for type/layout/aesthetics "
+        "that match the job\n"
+        "4. Poster / festive / illustrated jobs: first full-bleed (or near) `create_image` hero, "
+        "then text layers\n"
+        "5. Hierarchy: one signature focus; keep surroundings quiet (avoid generic AI template looks)\n"
+        "6. User attached images → need_skills includes vision_extract; product workflows "
+        "add matching user.* from the catalog\n"
+        "7. Type: if style exists in Available fonts → create_text + fontFamily; if not "
+        "(brush/3D/effect lettering) or font mood mismatches the art → create_image + letteringText\n"
+        "8. Node ids must come from SCENE\n"
+        "9. Before done: self-check — hero image present for posters, no clipped titles, contrast OK, "
+        "no junk SVG/emoji tofu, copy language match\n",
+    ),
+    "canvas_edit": (
+        "# Canvas edit\n\n"
+        "Add shape / recolor / rewrite via tool_ops; use sensible defaults for missing size/color.\n"
+        "Change type with update_node; keep id.\n"
+        "Node ids only from SCENE.\n"
+        "Hero: keep subject and whitespace; PDP: keep module order; Banner: keep copy in the safe band.\n",
     ),
     "vision_extract": (
         "# Vision extract\n\n"

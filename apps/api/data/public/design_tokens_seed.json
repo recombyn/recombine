@@ -1,9 +1,0 @@
-{
-  "schemaVersion": "oss-stub",
-  "defaultTokens": {
-    "schemaVersion": "oss-stub",
-    "grid": 8
-  },
-  "packs": [],
-  "_comment": "OSS stub. Put full tokens in data/private/design_tokens_seed.json"
-}

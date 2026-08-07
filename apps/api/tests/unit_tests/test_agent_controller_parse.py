@@ -79,6 +79,24 @@ def test_parse_choice_ui_actions():
     assert t["apply_choice"] == "就这样添加"
 
 
+def test_parse_flattened_top_level_mode_options():
+    """Models often emit mode/options at JSON root instead of nested choice_ui."""
+    t = _parse_agent_turn(
+        """
+        {"intent":"ask","reply":"请问行业？","tool_ops":[],"done":false,
+         "mode":"single","options":[
+           {"label":"科技/SaaS","action":"reply"},
+           {"label":"电商/零售","action":"reply"}
+         ]}
+        """
+    )
+    ui = t["choice_ui"]
+    assert ui is not None
+    assert ui["mode"] == "single"
+    assert [o["label"] for o in ui["options"]] == ["科技/SaaS", "电商/零售"]
+    assert all(o["action"] == "reply" for o in ui["options"])
+
+
 def test_legacy_choices_map_apply_choice():
     ui = _normalize_choice_ui(
         None,

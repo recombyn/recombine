@@ -105,9 +105,6 @@ apps/web/public/ffmpeg/
 # Local infra not published with OSS (keep on disk only)
 infra/langfuse/
 
-# SaaS / private design seeds — whole dir local-only (create yourself)
-apps/api/data/private/
-
 # local sqlite sidecars
 apps/api/storage/*.db-shm
 apps/api/storage/*.db-wal

@@ -1,12 +1,13 @@
-"""Prompt packs — single local seed ``design_prompt_packs_seed.json`` (need_* + system keys)."""
+"""Prompt packs — seed under ``data/design_prompt_packs/`` (``_index.json`` + ``*.md``)."""
 from __future__ import annotations
 
 import json
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
-from app.core.config import resolve_data_file
+from app.core.config import resolve_data_dir, resolve_data_file
 from app import crud
 from app.core.db import engine
 from app.services.design.readpath.catalog import ensure_design_catalog
@@ -16,14 +17,14 @@ _PACKS_READY = False
 _PACKS_LOCK = threading.RLock()
 
 
-def _load_prompt_packs_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
-    path = resolve_data_file("design_prompt_packs_seed.json")
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}, []
-    if not isinstance(parsed, dict):
-        return {}, []
+def _safe_pack_kind(kind: str) -> str | None:
+    k = str(kind or "").strip()
+    if not k or "/" in k or "\\" in k or ".." in k:
+        return None
+    return k
+
+
+def _parse_pack_index(parsed: dict[str, Any]) -> tuple[dict[str, str], list[dict[str, Any]]]:
     labels_raw = parsed.get("kindLabels") or {}
     labels = (
         {str(k): str(v) for k, v in labels_raw.items()}
@@ -37,6 +38,51 @@ def _load_prompt_packs_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
         else []
     )
     return labels, items
+
+
+def _attach_bodies_from_dir(
+    root: Path, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in items:
+        kind = _safe_pack_kind(item.get("kind"))
+        if not kind:
+            continue
+        body_path = root / f"{kind}.md"
+        body = ""
+        if body_path.is_file():
+            try:
+                body = body_path.read_text(encoding="utf-8")
+            except Exception:
+                body = ""
+        merged = dict(item)
+        merged["kind"] = kind
+        merged["body"] = body
+        out.append(merged)
+    return out
+
+
+def _load_prompt_packs_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """Prefer ``design_prompt_packs/_index.json`` + ``*.md``; legacy monolith JSON fallback."""
+    root = resolve_data_dir("design_prompt_packs")
+    index_path = root / "_index.json"
+    if index_path.is_file():
+        try:
+            parsed = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            labels, items = _parse_pack_index(parsed)
+            return labels, _attach_bodies_from_dir(root, items)
+
+    legacy = resolve_data_file("design_prompt_packs_seed.json")
+    try:
+        parsed = json.loads(legacy.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, []
+    if not isinstance(parsed, dict):
+        return {}, []
+    return _parse_pack_index(parsed)
 
 
 KIND_LABELS, _SEED = _load_prompt_packs_seed()
@@ -516,7 +562,7 @@ def _sync_system_prompts_into_packs(session: Session, *, now: float) -> None:
 
 
 def ensure_design_prompt_packs() -> None:
-    """Seed missing packs from design_prompt_packs_seed.json; prune junk; migrate legacy.
+    """Seed missing packs from ``data/design_prompt_packs/``; prune junk; migrate legacy.
 
     After first insert, Admin-edited ``body`` / ``used_by`` are preserved (no FORCE sync).
     """

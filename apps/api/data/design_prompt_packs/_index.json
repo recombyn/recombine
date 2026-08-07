@@ -1,0 +1,1397 @@
+{
+  "_comment": "Prompt pack index — bodies live in sibling *.md (filename = kind).",
+  "kindLabels": {
+    "agent.prompt.need_tools_overlay": "按需资源协议（共用）",
+    "agent.prompt.paint_system": "落层 Paint 系统提示",
+    "agent.prompt.ask_system": "Ask 追问规则",
+    "agent.prompt.agent_system": "Agent 自动执行规则",
+    "agent.prompt.paint_retry": "落层 Paint 重试提示",
+    "agent.prompt.ask_propose_situation": "Ask 提案确认情境",
+    "agent.prompt.ux_reply_system": "短文案 UX 系统提示",
+    "agent.prompt.intent_classify": "意图识别",
+    "agent.prompt.lc_tools_overlay": "LangChain 工具叠层",
+    "agent.prompt.react_system": "主思考系统提示",
+    "agent.prompt.chat_agent_system": "工具聊天提示",
+    "agent.prompt.partial_system": "局部改层提示",
+    "agent.prompt.chat_fallback": "闲聊回复模板",
+    "agent.prompt.size_auto": "Auto 尺寸说明",
+    "agent.prompt.ask_canvas_size": "追问画布尺寸",
+    "agent.prompt.unsafe_ops_ask": "不安全操作追问",
+    "agent.prompt.ask_blocked_edit": "Ask 确认暂存",
+    "agent.prompt.pending_tools": "工具详情回注",
+    "agent.prompt.pending_knowledge": "知识详情回注",
+    "agent.prompt.pending_skills": "Skill 详情回注",
+    "agent.prompt.pending_aesthetics": "美学样本回注",
+    "agent.prompt.default_assistant_name": "默认助手称呼",
+    "agent.prompt.tools_loaded_fallback": "已申请工具兜底名",
+    "agent.prompt.recover_edit_retry": "资源注入后强制落层",
+    "agent.prompt.tools_registry_header": "画布工具完整注册表头",
+    "agent.prompt.tools_registry_empty": "画布工具未配置",
+    "agent.prompt.tools_catalog_header": "画布工具目录头",
+    "agent.prompt.tools_catalog_empty": "画布工具目录未配置",
+    "agent.prompt.tool_details_header": "工具详情块标题",
+    "agent.prompt.tool_details_hint_line": "工具详情 · 说明行",
+    "agent.prompt.tool_details_args_line": "工具详情 · 参数行",
+    "agent.prompt.tool_details_unknown": "工具详情 · 未知工具",
+    "agent.prompt.skill_catalog_header": "Skill 目录标题",
+    "agent.prompt.skill_catalog_empty": "Skill 目录空",
+    "agent.prompt.skill_details_header": "Skill 详情块标题",
+    "agent.prompt.skill_details_truncated": "Skill 详情截断提示",
+    "agent.prompt.knowledge_catalog_header": "知识目录标题",
+    "agent.prompt.knowledge_catalog_empty": "知识目录空",
+    "agent.prompt.knowledge_details_header": "知识详情块标题",
+    "agent.prompt.knowledge_when_line": "知识 · 适用行",
+    "agent.prompt.focus_frame_authority": "FOCUS 画板权威说明",
+    "agent.prompt.focus_empty_frame": "空画板背景提示",
+    "agent.prompt.scene_frames_header": "SCENE_FRAMES 块标题",
+    "agent.prompt.bg_candidate_hint": "底色候选节点提示",
+    "agent.prompt.prompt_pack_inject_header": "流程图提示词注入头",
+    "agent.prompt.prompt_packs_retired_catalog": "提示词包已迁移说明",
+    "agent.prompt.aesthetic_refs_user": "美学回注 · 用户附图",
+    "agent.prompt.aesthetic_refs_corpus": "美学回注 · 语料样本",
+    "agent.prompt.aesthetic_refs_clip_fallback": "美学回注 · CLIP 不可用",
+    "agent.prompt.aesthetic_refs_section_good": "美学回注 · 优秀段标题",
+    "agent.prompt.aesthetic_refs_section_ok": "美学回注 · 可用段标题",
+    "agent.prompt.aesthetic_refs_section_bad": "美学回注 · 反例段标题",
+    "agent.prompt.aesthetic_refs_empty_ok": "美学回注 · 无可用样本",
+    "agent.prompt.aesthetic_refs_empty_bad": "美学回注 · 无反例样本",
+    "agent.prompt.aesthetic_refs_empty_bad_user": "美学回注 · 用户路径无反例",
+    "agent.prompt.aesthetic_refs_footer": "美学回注 · 收尾指令",
+    "agent.prompt.aesthetic_refs_vision_hint": "美学回注 · 有图提示",
+    "agent.prompt.aesthetic_refs_no_image_hint": "美学回注 · 无图提示",
+    "agent.prompt.aesthetic_refs_bad_item": "美学回注 · 反例条目",
+    "agent.prompt.aesthetic_refs_verb_imitate": "美学回注 · 动词·模仿",
+    "agent.prompt.aesthetic_refs_verb_surpass": "美学回注 · 动词·超越",
+    "agent.prompt.aesthetic_refs_verb_avoid": "美学回注 · 动词·避开",
+    "agent.prompt.aesthetic_catalog": "美学样本库目录",
+    "agent.prompt.aesthetic_gap_ref": "美学门禁 · 样本引用",
+    "agent.prompt.aesthetic_gap_ref_comment": "美学门禁 · 样本引用含短评",
+    "agent.prompt.aesthetic_gap_layout_detail": "美学门禁 · 布局 detail",
+    "agent.prompt.aesthetic_gap_layout_hint": "美学门禁 · 布局 hint",
+    "agent.prompt.aesthetic_gap_color_detail": "美学门禁 · 配色 detail",
+    "agent.prompt.aesthetic_gap_color_hint": "美学门禁 · 配色 hint",
+    "agent.prompt.aesthetic_gap_aesthetic_detail": "美学门禁 · 整体 detail",
+    "agent.prompt.aesthetic_gap_aesthetic_hint": "美学门禁 · 整体 hint",
+    "agent.prompt.aesthetic_gap_score_detail": "美学门禁 · 总分 detail",
+    "agent.prompt.aesthetic_gap_score_hint": "美学门禁 · 总分 hint",
+    "agent.prompt.aesthetic_tokens_header": "美学令牌块标题",
+    "agent.prompt.aesthetic_tokens_priority_user": "美学令牌 · 用户优先说明",
+    "agent.prompt.aesthetic_tokens_priority_corpus": "美学令牌 · 语料优先级说明",
+    "agent.prompt.aesthetic_tokens_section_user": "美学令牌 · 用户段标题",
+    "agent.prompt.aesthetic_tokens_section_good_secondary": "美学令牌 · 优秀次要段",
+    "agent.prompt.aesthetic_tokens_section_good": "美学令牌 · 优秀段",
+    "agent.prompt.aesthetic_tokens_section_ok": "美学令牌 · 可用段",
+    "agent.prompt.aesthetic_tokens_section_bad": "美学令牌 · 反例段",
+    "agent.prompt.aesthetic_tokens_comment": "美学令牌 · 备注行",
+    "agent.prompt.aesthetic_tokens_extract_fail": "美学令牌 · 抽取失败",
+    "agent.prompt.aesthetic_tokens_primary_override": "美学令牌 · 主覆盖行",
+    "agent.prompt.aesthetic_tokens_src_user": "美学令牌 · 来源·用户",
+    "agent.prompt.aesthetic_tokens_src_good": "美学令牌 · 来源·优秀",
+    "agent.prompt.aesthetic_tokens_verb_user": "美学令牌 · 动词·用户",
+    "agent.prompt.aesthetic_tokens_verb_secondary": "美学令牌 · 动词·次要",
+    "agent.prompt.plan_system": "短计划提示",
+    "agent.prompt.official_agent_system": "官方工具 Agent",
+    "agent.persona.auto": "人设 · Auto",
+    "agent.persona.locked": "人设 · 锁定模型",
+    "aesthetics.prompt.vision_structure": "看图结构说明",
+    "aesthetics.vision.structure_schema": "看图字段契约",
+    "precheck.router_system": "路由分类器"
+  },
+  "items": [
+    {
+      "kind": "aesthetics.prompt.vision_structure",
+      "title": "看图结构说明",
+      "scenes": "all",
+      "sort_order": 10,
+      "when_to_use": "看图说明（样本 / 用户参考图共用）",
+      "selectable": true,
+      "group": "aesthetics",
+      "type": "system",
+      "usedBy": [
+        "aesthetics"
+      ]
+    },
+    {
+      "kind": "aesthetics.vision.structure_schema",
+      "title": "看图字段契约",
+      "scenes": "all",
+      "sort_order": 20,
+      "when_to_use": "看图契约参数（必填/可选，同画布能力）",
+      "selectable": true,
+      "group": "aesthetics",
+      "type": "system",
+      "usedBy": [
+        "aesthetics"
+      ]
+    },
+    {
+      "kind": "agent.persona.auto",
+      "title": "人设 · Auto",
+      "scenes": "all",
+      "sort_order": 10,
+      "when_to_use": "人设 · Auto",
+      "selectable": true,
+      "group": "agent_persona",
+      "type": "system",
+      "usedBy": [
+        "persona"
+      ]
+    },
+    {
+      "kind": "agent.persona.locked",
+      "title": "人设 · 锁定模型",
+      "scenes": "all",
+      "sort_order": 20,
+      "when_to_use": "人设 · 锁定模型",
+      "selectable": true,
+      "group": "agent_persona",
+      "type": "system",
+      "usedBy": [
+        "persona"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_catalog",
+      "title": "美学样本库目录",
+      "scenes": "all",
+      "sort_order": 280,
+      "when_to_use": "format_aesthetics_catalog（占位 {scene} {good} {ok} {bad}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_aesthetic_detail",
+      "title": "美学门禁 · 整体 detail",
+      "scenes": "all",
+      "sort_order": 271,
+      "when_to_use": "aesthetic 未过门禁（占位 {aesthetic_sim} {tower_thresh}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_aesthetic_hint",
+      "title": "美学门禁 · 整体 hint",
+      "scenes": "all",
+      "sort_order": 272,
+      "when_to_use": "aesthetic 未过门禁（占位 {ref}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_color_detail",
+      "title": "美学门禁 · 配色 detail",
+      "scenes": "all",
+      "sort_order": 269,
+      "when_to_use": "color 未过门禁（占位 {color_sim} {tower_thresh}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_color_hint",
+      "title": "美学门禁 · 配色 hint",
+      "scenes": "all",
+      "sort_order": 270,
+      "when_to_use": "color 未过门禁（占位 {ref}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_layout_detail",
+      "title": "美学门禁 · 布局 detail",
+      "scenes": "all",
+      "sort_order": 267,
+      "when_to_use": "layout 未过门禁（占位 {layout_sim} {tower_thresh}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_layout_hint",
+      "title": "Aesthetic gap layout hint",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 670,
+      "when_to_use": "layout 未过门禁（占位 {ref}）"
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_ref",
+      "title": "Aesthetic gap ref",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 640,
+      "when_to_use": "gap 引用样本名（占位 {name}）"
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_ref_comment",
+      "title": "美学门禁 · 样本引用含短评",
+      "scenes": "all",
+      "sort_order": 266,
+      "when_to_use": "gap 引用+短评（占位 {name} {comment}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_score_detail",
+      "title": "美学门禁 · 总分 detail",
+      "scenes": "all",
+      "sort_order": 273,
+      "when_to_use": "总分未过且无分项 gap（占位 {score} {threshold}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_gap_score_hint",
+      "title": "美学门禁 · 总分 hint",
+      "scenes": "all",
+      "sort_order": 274,
+      "when_to_use": "总分未过（占位 {ref}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_bad_item",
+      "title": "美学回注 · 反例条目",
+      "scenes": "all",
+      "sort_order": 261,
+      "when_to_use": "用户路径 bad 条目（占位 {i} {name}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_clip_fallback",
+      "title": "Aesthetic refs — clip",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 490,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_corpus",
+      "title": "美学回注 · 语料样本",
+      "scenes": "all",
+      "sort_order": 250,
+      "when_to_use": "无用户附件时的 AESTHETIC_REFS 头（多行）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_empty_bad",
+      "title": "美学回注 · 无反例样本",
+      "scenes": "all",
+      "sort_order": 256,
+      "when_to_use": "语料路径无 bad 样本时",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_empty_bad_user",
+      "title": "Aesthetic empty bad user",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 550,
+      "when_to_use": "用户附图路径无 bad 样本时"
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_empty_ok",
+      "title": "美学回注 · 无可用样本",
+      "scenes": "all",
+      "sort_order": 255,
+      "when_to_use": "无 ok 样本时",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_footer",
+      "title": "美学回注 · 收尾指令",
+      "scenes": "all",
+      "sort_order": 258,
+      "when_to_use": "AESTHETIC_REFS 块末行",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_no_image_hint",
+      "title": "Aesthetic no image",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 580,
+      "when_to_use": "样本无图（占位 {verb}）"
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_section_bad",
+      "title": "美学回注 · 反例段标题",
+      "scenes": "all",
+      "sort_order": 254,
+      "when_to_use": "语料 bad 段标题",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_section_good",
+      "title": "美学回注 · 优秀段标题",
+      "scenes": "all",
+      "sort_order": 252,
+      "when_to_use": "语料 good 段标题",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_section_ok",
+      "title": "美学回注 · 可用段标题",
+      "scenes": "all",
+      "sort_order": 253,
+      "when_to_use": "语料 ok 段标题",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_user",
+      "title": "美学回注 · 用户附图",
+      "scenes": "all",
+      "sort_order": 240,
+      "when_to_use": "有用户附件时的 AESTHETIC_REFS 头（多行）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_verb_avoid",
+      "title": "Aesthetic verb avoid",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 620,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_verb_imitate",
+      "title": "Aesthetic verb imitate",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 600,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_verb_surpass",
+      "title": "Aesthetic verb surpass",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 610,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.aesthetic_refs_vision_hint",
+      "title": "Aesthetic vision hint",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 570,
+      "when_to_use": "样本有 imageUrl（占位 {verb}）"
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_comment",
+      "title": "美学令牌 · 备注行",
+      "scenes": "all",
+      "sort_order": 2793,
+      "when_to_use": "占位 {comment}",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_extract_fail",
+      "title": "美学令牌 · 抽取失败",
+      "scenes": "all",
+      "sort_order": 2794,
+      "when_to_use": "无法抽取色板/布局",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_header",
+      "title": "美学令牌块标题",
+      "scenes": "all",
+      "sort_order": 270,
+      "when_to_use": "AESTHETIC_DESIGN_TOKENS 块首段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_primary_override",
+      "title": "美学令牌 · 主覆盖行",
+      "scenes": "all",
+      "sort_order": 2795,
+      "when_to_use": "占位 {src} {parts}",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_priority_corpus",
+      "title": "美学令牌 · 语料优先级说明",
+      "scenes": "all",
+      "sort_order": 276,
+      "when_to_use": "无用户附件时",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_priority_user",
+      "title": "美学令牌 · 用户优先说明",
+      "scenes": "all",
+      "sort_order": 275,
+      "when_to_use": "有用户附件时",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_section_bad",
+      "title": "美学令牌 · 反例段",
+      "scenes": "all",
+      "sort_order": 2792,
+      "when_to_use": "语料反例段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_section_good",
+      "title": "美学令牌 · 优秀段",
+      "scenes": "all",
+      "sort_order": 279,
+      "when_to_use": "语料优秀段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_section_good_secondary",
+      "title": "美学令牌 · 优秀次要段",
+      "scenes": "all",
+      "sort_order": 278,
+      "when_to_use": "用户路径下语料优秀",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_section_ok",
+      "title": "美学令牌 · 可用段",
+      "scenes": "all",
+      "sort_order": 2791,
+      "when_to_use": "语料可用段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_section_user",
+      "title": "美学令牌 · 用户段标题",
+      "scenes": "all",
+      "sort_order": 277,
+      "when_to_use": "用户参考令牌段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_src_good",
+      "title": "美学令牌 · 来源·优秀",
+      "scenes": "all",
+      "sort_order": 2797,
+      "when_to_use": "主覆盖来源",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "aesthetics",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_src_user",
+      "title": "Tokens src user",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 850,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_verb_secondary",
+      "title": "Tokens verb secondary",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 880,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.aesthetic_tokens_verb_user",
+      "title": "Tokens verb user",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "aesthetics"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 870,
+      "when_to_use": "format_sample_token_lines verb"
+    },
+    {
+      "kind": "agent.prompt.agent_system",
+      "title": "Agent mode rules (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide",
+        "paint"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 40,
+      "when_to_use": "Agent 模式叠层（禁止追问）"
+    },
+    {
+      "kind": "agent.prompt.ask_blocked_edit",
+      "title": "Ask confirm hold (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 170,
+      "when_to_use": "Ask 有方案但 reply 为空"
+    },
+    {
+      "kind": "agent.prompt.ask_canvas_size",
+      "title": "Ask canvas size (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 150,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.ask_propose_situation",
+      "title": "Ask confirm prompt (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "apply"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 60,
+      "when_to_use": "Ask propose 时传给 _llm_ux_reply 的 situation"
+    },
+    {
+      "kind": "agent.prompt.ask_system",
+      "title": "Ask mode rules (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide",
+        "apply"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 30,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.bg_candidate_hint",
+      "title": "底色候选节点提示",
+      "scenes": "all",
+      "sort_order": 300,
+      "when_to_use": "BG_CANDIDATE_NODE_ID 行尾指令",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "paint"
+      ]
+    },
+    {
+      "kind": "agent.prompt.chat_agent_system",
+      "title": "工具聊天提示",
+      "scenes": "all",
+      "sort_order": 50,
+      "when_to_use": "工具调用聊天 system",
+      "selectable": true,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "legacy"
+      ]
+    },
+    {
+      "kind": "agent.prompt.chat_fallback",
+      "title": "Chat fallback template (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 130,
+      "when_to_use": "闲聊 reply 示例（仅提示词；运行时不代写）"
+    },
+    {
+      "kind": "agent.prompt.default_assistant_name",
+      "title": "Default assistant name (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 220,
+      "when_to_use": "chat_fallback persona 空时"
+    },
+    {
+      "kind": "agent.prompt.focus_empty_frame",
+      "title": "空画板背景提示",
+      "scenes": "all",
+      "sort_order": 290,
+      "when_to_use": "FOCUS 画板无节点时的 SCENE digest（占位 {focus}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "paint",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.focus_frame_authority",
+      "title": "FOCUS 画板权威说明",
+      "scenes": "all",
+      "sort_order": 291,
+      "when_to_use": "FOCUS_FRAME_ID 后追加（占位 {focus}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "paint",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.intent_classify",
+      "title": "意图识别",
+      "scenes": "all",
+      "sort_order": 15,
+      "when_to_use": "意图识别（小模型）：chat | canvas_op | design；对照画布工具目录判断",
+      "selectable": true,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "intent"
+      ]
+    },
+    {
+      "kind": "agent.prompt.knowledge_catalog_empty",
+      "title": "Knowledge catalog empty (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "resources",
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 380,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.knowledge_catalog_header",
+      "title": "知识目录标题",
+      "scenes": "all",
+      "sort_order": 220,
+      "when_to_use": "format_knowledge_catalog 块首行",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.knowledge_details_header",
+      "title": "知识详情块标题",
+      "scenes": "all",
+      "sort_order": 210,
+      "when_to_use": "format_knowledge_block 块首段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.knowledge_when_line",
+      "title": "Knowledge when line (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "resources",
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 400,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.lc_tools_overlay",
+      "title": "结构化 JSON 叠层",
+      "scenes": "all",
+      "sort_order": 70,
+      "when_to_use": "LangChain structured output 叠层",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.need_tools_overlay",
+      "title": "Decide — resource protocol (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 10,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.official_agent_system",
+      "title": "官方工具 Agent",
+      "scenes": "all",
+      "sort_order": 80,
+      "when_to_use": "官方服务端工具 Agent system",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "legacy"
+      ]
+    },
+    {
+      "kind": "agent.prompt.paint_retry",
+      "scenes": "all",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "title": "落层 Paint 重试提示",
+      "when_to_use": "paint_ops attempt>0 时追加到 user",
+      "sort_order": 311,
+      "usedBy": [
+        "paint"
+      ]
+    },
+    {
+      "kind": "agent.prompt.paint_system",
+      "title": "Paint system (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "paint"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 20,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.partial_system",
+      "title": "局部改层提示",
+      "scenes": "all",
+      "sort_order": 40,
+      "when_to_use": "局部改层 system",
+      "selectable": true,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "orchestrator"
+      ]
+    },
+    {
+      "kind": "agent.prompt.pending_aesthetics",
+      "title": "美学样本回注",
+      "scenes": "all",
+      "sort_order": 170,
+      "when_to_use": "AESTHETIC_REFS 注入后的主思考回注指令",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "decide",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.pending_knowledge",
+      "title": "知识详情回注",
+      "scenes": "all",
+      "sort_order": 150,
+      "when_to_use": "KNOWLEDGE_DETAILS 注入后的主思考回注指令",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "decide",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.pending_skills",
+      "title": "Skill 详情回注",
+      "scenes": "all",
+      "sort_order": 160,
+      "when_to_use": "SKILL_DETAILS 注入后的主思考回注指令",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "decide",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.pending_tools",
+      "title": "工具详情回注",
+      "scenes": "all",
+      "sort_order": 140,
+      "when_to_use": "TOOL_DETAILS 注入后的主思考回注指令",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "decide",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.plan_system",
+      "title": "短计划提示",
+      "scenes": "all",
+      "sort_order": 20,
+      "when_to_use": "短 Plan 系统提示",
+      "selectable": true,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "legacy"
+      ]
+    },
+    {
+      "kind": "agent.prompt.prompt_pack_inject_header",
+      "title": "流程图提示词注入头",
+      "scenes": "all",
+      "sort_order": 280,
+      "when_to_use": "format_prompt_pack_block 块首段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.prompt_packs_retired_catalog",
+      "title": "提示词包已迁移说明",
+      "scenes": "all",
+      "sort_order": 293,
+      "when_to_use": "format_prompt_packs_catalog",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.react_system",
+      "title": "主思考系统提示",
+      "scenes": "all",
+      "sort_order": 10,
+      "when_to_use": "主思考系统提示",
+      "selectable": true,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "legacy"
+      ]
+    },
+    {
+      "kind": "agent.prompt.recover_edit_retry",
+      "title": "资源注入后强制落层",
+      "scenes": "all",
+      "sort_order": 230,
+      "when_to_use": "资源已注入但模型落到 chat/ask 时的 ERROR 回注（占位 {tools_hint} {prior_intent}）",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "paint",
+        "resources"
+      ]
+    },
+    {
+      "kind": "agent.prompt.scene_frames_header",
+      "title": "SCENE_FRAMES 块标题",
+      "scenes": "all",
+      "sort_order": 292,
+      "when_to_use": "SCENE_FRAMES JSON 前",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "paint",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.size_auto",
+      "title": "Auto size hint (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "bootstrap",
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 140,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.skill_catalog_empty",
+      "title": "Skill 目录空",
+      "scenes": "all",
+      "sort_order": 201,
+      "when_to_use": "无 runtime skill",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.skill_catalog_header",
+      "title": "Skill 目录标题",
+      "scenes": "all",
+      "sort_order": 200,
+      "when_to_use": "format_skills_catalog 块首行",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.skill_details_header",
+      "title": "Skill 详情块标题",
+      "scenes": "all",
+      "sort_order": 190,
+      "when_to_use": "format_skills_block 块首段",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.skill_details_truncated",
+      "title": "Skill 详情截断提示",
+      "scenes": "all",
+      "sort_order": 202,
+      "when_to_use": "上下文预算截断",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.tool_details_args_line",
+      "title": "Tool details args (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "resources",
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 310,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.tool_details_header",
+      "title": "工具详情块标题",
+      "scenes": "all",
+      "sort_order": 180,
+      "when_to_use": "format_canvas_tools_details 块首行",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.tool_details_hint_line",
+      "title": "Tool details hint (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "resources",
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 300,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.tool_details_unknown",
+      "title": "工具详情 · 未知工具",
+      "scenes": "all",
+      "sort_order": 187,
+      "when_to_use": "占位 {keys}",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.tools_catalog_empty",
+      "title": "Tools catalog empty (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "resources",
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 280,
+      "when_to_use": "OSS baseline."
+    },
+    {
+      "kind": "agent.prompt.tools_catalog_header",
+      "title": "Tools catalog header (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "resources",
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 270,
+      "when_to_use": "format_canvas_tools_catalog 块首行"
+    },
+    {
+      "kind": "agent.prompt.tools_loaded_fallback",
+      "title": "Tools loaded fallback (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "resources"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 230,
+      "when_to_use": "recover_edit tools_hint 空"
+    },
+    {
+      "kind": "agent.prompt.tools_registry_empty",
+      "title": "画布工具未配置",
+      "scenes": "all",
+      "sort_order": 182,
+      "when_to_use": "design_canvas_tool 无启用项",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.tools_registry_header",
+      "title": "画布工具完整注册表头",
+      "scenes": "all",
+      "sort_order": 181,
+      "when_to_use": "format_canvas_tools_for_model 块首行",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "usedBy": [
+        "resources",
+        "decide"
+      ]
+    },
+    {
+      "kind": "agent.prompt.unsafe_ops_ask",
+      "title": "Unsafe ops ask (OSS)",
+      "type": "system",
+      "group": "oss_baseline",
+      "usedBy": [
+        "decide"
+      ],
+      "scenes": "all",
+      "selectable": false,
+      "sort_order": 160,
+      "when_to_use": "tool_ops 无法安全执行"
+    },
+    {
+      "kind": "agent.prompt.ux_reply_system",
+      "scenes": "all",
+      "selectable": false,
+      "group": "agent_prompt",
+      "type": "system",
+      "title": "短文案 UX 系统提示",
+      "when_to_use": "_llm_ux_reply 短助手文案 system",
+      "sort_order": 312,
+      "usedBy": [
+        "apply",
+        "observe",
+        "paint",
+        "decide"
+      ]
+    },
+    {
+      "kind": "precheck.router_system",
+      "title": "路由分类器",
+      "scenes": "all",
+      "sort_order": 10,
+      "when_to_use": "模型路由节点「系统提示词」：选 fast/standard/reasoning/vision 车道",
+      "selectable": false,
+      "group": "precheck",
+      "type": "system",
+      "usedBy": [
+        "precheck"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Describe visual structure briefly.

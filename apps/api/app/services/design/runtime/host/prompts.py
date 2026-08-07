@@ -21,7 +21,7 @@ def require_prompt_pack(rules: dict[str, str] | None, key: str, **variables: Any
     if not text:
         raise RuntimeError(
             f"missing prompt pack: {key} "
-            "(Admin → prompt packs / design_prompt_packs_seed)"
+            "(Admin → prompt packs / design_prompt_packs)"
         )
     return text
 

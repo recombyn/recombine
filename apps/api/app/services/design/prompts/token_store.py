@@ -15,7 +15,7 @@ from app import crud
 from app.core.db import engine
 from app.services.design.readpath.catalog import ensure_design_catalog
 
-# Seed: data/public|private/design_tokens_seed.json (bump schemaVersion to upgrade rows).
+# Seed: data/design_tokens_seed.json (bump schemaVersion to upgrade rows).
 
 
 def _load_tokens_seed() -> tuple[str, dict[str, Any], list[dict[str, Any]]]:

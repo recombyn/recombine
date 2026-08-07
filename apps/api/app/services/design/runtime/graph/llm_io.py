@@ -332,7 +332,7 @@ async def _llm_ux_reply(
     if not system:
         raise RuntimeError(
             "missing prompt pack: agent.prompt.ux_reply_system "
-            "(Admin → 提示词包 / design_prompt_packs_seed)"
+            "(Admin → 提示词包 / design_prompt_packs)"
         )
     user = (
         f"Situation: {situation}\n"

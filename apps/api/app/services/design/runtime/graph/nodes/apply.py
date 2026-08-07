@@ -241,7 +241,7 @@ async def _node_propose(state: GraphState) -> Command:
     if not propose_situation:
         raise RuntimeError(
             "missing prompt pack: agent.prompt.ask_propose_situation "
-            "(Admin → 提示词包 / design_prompt_packs_seed)"
+            "(Admin → 提示词包 / design_prompt_packs)"
         )
     text = await _llm_ux_reply(
         rt,
