@@ -1328,7 +1328,7 @@ function EditorPage() {
     <CollabRoomProvider stageEl={stageEl} camera={camera} onCameraChange={setCamera}>
       <div
         className={cn(
-          'relative flex h-screen flex-col overflow-hidden',
+          'relative flex h-full flex-col overflow-hidden',
           followThemeCanvas && 'bg-[var(--canvas)]'
         )}
         style={stageBackground ? { background: stageBackground } : undefined}

@@ -2,8 +2,9 @@
  * External docs site (help guides + standalone legal). Not served by the main app.
  *
  * - Production: https://docs.recombyn.com (or VITE_DOCS_URL)
- * - Local app (localhost / 127.0.0.1): local docs on :5175 unless VITE_DOCS_URL
+ * - Local web (localhost / 127.0.0.1): local docs on :5175 unless VITE_DOCS_URL
  *   already points at a local origin (custom port).
+ * - Tauri desktop: always prefer hosted docs (local :5175 is a web-dev convenience).
  */
 
 declare const __DOCS_URL__: string;
@@ -28,8 +29,20 @@ function isLocalOrigin(origin: string): boolean {
   }
 }
 
+function isTauriShell(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__ || import.meta.env.TAURI_ENV_PLATFORM);
+}
+
 export function docsOrigin(): string {
   const baked = bakedOrigin();
+
+  // Desktop: don't send users to :5175 (docs server usually not running).
+  if (isTauriShell()) {
+    if (baked && !isLocalOrigin(baked)) return baked;
+    return PROD_DOCS;
+  }
 
   if (typeof window !== 'undefined' && isLocalHost(window.location.hostname)) {
     // Explicit local override (e.g. http://127.0.0.1:5180) wins.
@@ -46,4 +59,28 @@ export const DOCS_ORIGIN = bakedOrigin() || PROD_DOCS;
 export function docsUrl(path: string): string {
   const p = path.startsWith('/') ? path : `/${path}`;
   return `${docsOrigin()}${p}`;
+}
+
+/**
+ * Open http(s)/mailto in the system browser (Tauri) or a new tab (web).
+ * WebView `window.open` often no-ops on desktop.
+ */
+export async function openExternalUrl(url: string): Promise<void> {
+  const href = String(url || '').trim();
+  if (!href) return;
+
+  if (isTauriShell()) {
+    try {
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      await openUrl(href);
+      return;
+    } catch {
+      /* fall through to window.open */
+    }
+  }
+
+  const win = window.open(href, '_blank', 'noopener,noreferrer');
+  if (!win && href.startsWith('mailto:')) {
+    window.location.href = href;
+  }
 }

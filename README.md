@@ -77,15 +77,26 @@ npm run dev:web
 
 Canvas Live / WSS setup: **[docs/self-hosting.md § Canvas multiplayer](docs/self-hosting.md#canvas-multiplayer-yjs--wss)** · [apps/collab/README.md](apps/collab/README.md)
 
+### Desktop app (Tauri)
+
+Same `apps/web` UI in a native window (custom titlebar, system browser for external links). Needs **Rust** + platform C++/WebView toolchain — see **[docs/desktop.md](docs/desktop.md)**.
+
+```bash
+npm run dev:api          # optional but recommended
+npm run dev:desktop      # Vite :3000 + Tauri window
+npm run build:desktop    # installers under apps/web/src-tauri/target/release/bundle/
+```
+
 ## Repository layout
 
 ```
 apps/web/          React canvas + Agent UI + Yjs client
+  src-tauri/       Tauri v2 desktop shell (Recombyn)
 apps/api/          FastAPI — Scene, Agent, plaza, wallet, collab tokens
 apps/collab/       Yjs WebSocket server (y-websocket)
 apps/docs/         Help / legal site
 packages/          Shared builders & schemas
-docs/              Architecture + self-hosting
+docs/              Architecture + self-hosting + desktop
 deploy/            Dockerfiles / Nginx
 e2e/               Playwright
 ```
@@ -95,6 +106,7 @@ e2e/               Playwright
 | Doc | Link |
 |-----|------|
 | Self-hosting | [docs/self-hosting.md](docs/self-hosting.md) |
+| Desktop (Tauri) | [docs/desktop.md](docs/desktop.md) |
 | PostgreSQL switch | [docs/postgres-switch.md](docs/postgres-switch.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Security | [SECURITY.md](SECURITY.md) |

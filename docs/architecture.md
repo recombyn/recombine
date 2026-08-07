@@ -5,13 +5,14 @@
 | Path | Role |
 |------|------|
 | `apps/web` | React editor, home, Agent chat, Yjs collab client |
+| `apps/web/src-tauri` | Tauri v2 desktop shell (same UI; custom titlebar) |
 | `apps/api` | FastAPI: import, projects/plaza, Design Agent, collab room tokens |
 | `apps/collab` | Yjs WebSocket server (`y-websocket`); proxied as `/collab/` |
 | `apps/docs` | User help and legal docs site |
 | `packages/scene-schema` | Scene JSON protocol |
 | `packages/scene-builder-py` | Parse blocks → Scene JSON |
 
-Backend details: [apps/api/README.md](../apps/api/README.md). Collab: [apps/collab/README.md](../apps/collab/README.md) · [self-hosting § multiplayer](./self-hosting.md#canvas-multiplayer-yjs--wss).
+Backend details: [apps/api/README.md](../apps/api/README.md). Collab: [apps/collab/README.md](../apps/collab/README.md) · [self-hosting § multiplayer](./self-hosting.md#canvas-multiplayer-yjs--wss). Desktop: [desktop.md](./desktop.md).
 
 ## Web canvas
 
@@ -64,7 +65,12 @@ Async jobs: Redis + Celery (`POST /api/v1/import/jobs`, `source_type=image`; req
 
 Auth status codes: [api-backend-refactor.md](./api-backend-refactor.md) — missing Bearer → 401; bad token → 403. `/import/*` requires login.
 
+## Desktop shell
+
+Tauri 2 embeds the web app (`devUrl` / `frontendDist`). `AppShell` mounts a custom titlebar when `useIsDesktopShell()` is true; external URLs use `plugin-opener`. Details and toolchain: [desktop.md](./desktop.md).
+
 ## Deploy
 
 Dev: `npm run dev:web` + `npm run dev:api` + `npm run dev:collab` (+ Redis / Worker as needed)  
+Desktop: `npm run dev:desktop` / `npm run build:desktop` (see [desktop.md](./desktop.md))  
 Prod: Docker Compose (web + api + worker + redis + **collab**); public HTTPS needs `wss://` and shared `COLLAB_TOKEN_SECRET`

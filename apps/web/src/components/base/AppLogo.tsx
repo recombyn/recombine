@@ -1,4 +1,4 @@
-import { useEffect, useState, memo } from 'react';
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/utils/classnames';
 
@@ -9,51 +9,27 @@ type Props = {
   size?: number;
   className?: string;
   bordered?: boolean;
-  /** Force dark/light mark; default follows `data-theme`. */
+  /**
+   * Kept for call-site compat. Mark asset is the dark-plate PNG (readable on light and dark rails).
+   * @deprecated Prefer omitting — both themes use `/logo-mark.png`.
+   */
   scheme?: LogoScheme | 'auto';
 };
 
-function readResolvedScheme(): LogoScheme {
-  if (typeof document === 'undefined') return 'dark';
-  // Light UI → dark (black) badge; dark UI → light (white) badge.
-  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-}
-
 /**
- * Brand mark — raster PNG via `<img src>` (`/logo-mark.png`, `/logo-mark-light.png`).
+ * Brand mark — `/logo-mark.png` (white feather on dark plate).
  * Used by: HomeBody, LoginDialog, EditorBootOverlay.
  */
 function AppLogo({
   size = 36,
   className,
   bordered = false,
-  scheme = 'auto',
 }: Props) {
   const { t } = useTranslation();
-  const [resolved, setResolved] = useState<LogoScheme>(() =>
-    scheme === 'auto' ? readResolvedScheme() : scheme
-  );
-
-  useEffect(() => {
-    if (scheme !== 'auto') {
-      setResolved(scheme);
-      return;
-    }
-    const sync = () => setResolved(readResolvedScheme());
-    sync();
-    const obs = new MutationObserver(sync);
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme', 'class'],
-    });
-    return () => obs.disconnect();
-  }, [scheme]);
-
-  const src = resolved === 'light' ? '/logo-mark-light.png' : '/logo-mark.png';
 
   return (
     <img
-      src={src}
+      src="/logo-mark.png"
       alt={t('app.name')}
       width={size}
       height={size}

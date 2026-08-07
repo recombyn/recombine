@@ -18,26 +18,46 @@ export function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+function isTauriShell(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__ || import.meta.env.TAURI_ENV_PLATFORM);
+}
+
+/** Match Windows/macOS title-bar chrome to the app theme (Tauri only). */
+function syncDesktopWindowTheme(resolved: 'light' | 'dark') {
+  if (!isTauriShell()) return;
+  void import('@tauri-apps/api/window')
+    .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(resolved))
+    .catch(() => undefined);
+}
+
 /** Apply resolved theme via data-theme (CSS files own the tokens). */
 export function applyThemeColors(resolved: 'light' | 'dark') {
   const root = document.documentElement;
   const next = resolved;
   const prev = root.getAttribute('data-theme');
-  if (prev === next && root.classList.contains('dark') === (next === 'dark')) {
-    return;
+  const already =
+    prev === next && root.classList.contains('dark') === (next === 'dark');
+
+  if (!already) {
+    // Suppress background/color transitions so CSS variable swaps don't interpolate/flash.
+    root.classList.add('rcb-theme-switching');
+    root.setAttribute('data-theme', next);
+    root.classList.toggle('dark', next === 'dark');
+    // Force style flush while transitions are disabled.
+    void root.offsetHeight;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        root.classList.remove('rcb-theme-switching');
+      });
+    });
   }
 
-  // Suppress background/color transitions so CSS variable swaps don't interpolate/flash.
-  root.classList.add('rcb-theme-switching');
-  root.setAttribute('data-theme', next);
-  root.classList.toggle('dark', next === 'dark');
-  // Force style flush while transitions are disabled.
-  void root.offsetHeight;
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      root.classList.remove('rcb-theme-switching');
-    });
-  });
+  // Native scrollbars / form controls follow the app theme (esp. WebView / Tauri).
+  root.style.colorScheme = next;
+  // Desktop title bar stays OS-default unless we push the window theme.
+  syncDesktopWindowTheme(next);
 }
 
 let mediaListener: ((e: MediaQueryListEvent) => void) | null = null;
