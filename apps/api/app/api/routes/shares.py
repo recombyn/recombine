@@ -85,7 +85,7 @@ def shares_get(
     current_user: OptionalUser,
     share_id: str,
 ) -> dict[str, Any]:
-    share = get_share(share_id, actor_user_id=current_user.id if user else None)
+    share = get_share(share_id, actor_user_id=current_user.id if current_user else None)
     if not share:
         raise HTTPException(status_code=404, detail="Not found")
     return {"share": share}
@@ -123,7 +123,7 @@ def shares_update_document(
         share = update_share_document(
             share_id,
             body.document,
-            actor_user_id=current_user.id if user else None,
+            actor_user_id=current_user.id if current_user else None,
         )
     except ShareError as err:
         raise _share_http(err) from err

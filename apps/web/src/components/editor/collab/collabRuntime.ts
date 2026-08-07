@@ -6,6 +6,8 @@
 import type * as Y from 'yjs';
 
 let active = false;
+/** True when Y room is seeded and this client may debounce-PUT the project doc. */
+let cloudPersistOwned = false;
 let viewOnly = false;
 let undoManager: Y.UndoManager | null = null;
 let undoEpoch = 0;
@@ -38,6 +40,7 @@ function bumpUndoListeners() {
 export function setCollabActive(next: boolean) {
   active = Boolean(next);
   if (!active) {
+    cloudPersistOwned = false;
     bindCollabUndoManager(null);
     setCollabViewOnly(false);
   }
@@ -45,6 +48,19 @@ export function setCollabActive(next: boolean) {
 
 export function isCollabActive() {
   return active;
+}
+
+/**
+ * When true, CollabRoomProvider owns cloud document writes — useProjectCloudSync
+ * must not also PATCH/PUT the scene (cover-only is still ok).
+ * False while connecting / seed pending / view-only / connect failed.
+ */
+export function setCollabCloudPersistOwned(next: boolean) {
+  cloudPersistOwned = Boolean(next) && active;
+}
+
+export function isCollabCloudPersistOwned() {
+  return Boolean(active && cloudPersistOwned);
 }
 
 export function setCollabViewOnly(next: boolean) {

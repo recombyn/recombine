@@ -12,7 +12,12 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useRcbCamera } from '@/components/rcb/camera/context';
 import { CHROME_STROKE_PX } from '../SelectionChrome';
-import { SMART_GUIDE_COLOR, type SmartGuideGap, type SmartGuideLine } from '../alignGuides';
+import {
+  SMART_GUIDE_COLOR,
+  type SceneBox,
+  type SmartGuideGap,
+  type SmartGuideLine,
+} from '../alignGuides';
 import {
   getSceneSmartGuidesMount,
   getSceneWorldEpoch,
@@ -20,6 +25,7 @@ import {
 } from '../../shapes/shapeHostRegistry';
 
 const GUIDE_STROKE = SMART_GUIDE_COLOR;
+const SIZE_BADGE_FILL = '#3388ff';
 
 function isGapGuide(g: SmartGuideLine): g is SmartGuideGap {
   return g.kind === 'gap';
@@ -31,12 +37,14 @@ function GuideBadge({
   y,
   inv,
   anchor,
+  fill = GUIDE_STROKE,
 }: {
   text: string;
   x: number;
   y: number;
   inv: number;
   anchor: 'below' | 'right';
+  fill?: string;
 }) {
   const fontSize = 11 * inv;
   const padX = 5.5 * inv;
@@ -58,7 +66,7 @@ function GuideBadge({
         height={h}
         rx={radius}
         ry={radius}
-        fill={GUIDE_STROKE}
+        fill={fill}
       />
       <text
         x={cx}
@@ -81,13 +89,22 @@ function GuideMarkDot({ x, y, r }: { x: number; y: number; r: number }) {
   return <circle cx={x} cy={y} r={r} fill={GUIDE_STROKE} stroke="none" />;
 }
 
+function formatSizeBadge(box: SceneBox): string {
+  const w = Math.max(0, Math.round(box.width));
+  const h = Math.max(0, Math.round(box.height));
+  return `${w} × ${h}`;
+}
+
 export default function SmartGuidesOverlay({
   guides,
   mirrorNodeId: _mirrorNodeId = null,
+  sizeBox = null,
 }: {
   guides: SmartGuideLine[];
   /** Kept for call-site compat. */
   mirrorNodeId?: string | null;
+  /** Idle or inspect: blue WxH badge under the selected box. */
+  sizeBox?: SceneBox | null;
 }) {
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
@@ -96,6 +113,7 @@ export default function SmartGuidesOverlay({
   const stroke = Math.max(1 / z, CHROME_STROKE_PX / z);
   const tip = 5 * inv;
   const markR = Math.max(stroke * 2, 3.5 * inv);
+  const dash = `${5 * inv} ${4 * inv}`;
 
   // Remount when shared world SVG appears / is replaced.
   const [, setWorldEpoch] = useState(() => getSceneWorldEpoch());
@@ -112,7 +130,7 @@ export default function SmartGuidesOverlay({
   const guidesMount = getSceneSmartGuidesMount();
 
   const nodes = useMemo(() => {
-    if (!guides.length) return null;
+    if (!guides.length && !sizeBox) return null;
     const out: ReactNode[] = [];
     guides.forEach((g, i) => {
       if (isGapGuide(g)) {
@@ -124,6 +142,20 @@ export default function SmartGuidesOverlay({
         const midY = g.axis === 'y' ? (g.from + g.to) / 2 : g.at;
         out.push(
           <g key={`gap-${i}`}>
+            {g.rails?.map((rail, ri) => (
+              <line
+                key={`rail-${ri}`}
+                x1={g.axis === 'y' ? Math.min(rail.from, rail.to) : rail.at}
+                y1={g.axis === 'y' ? rail.at : Math.min(rail.from, rail.to)}
+                x2={g.axis === 'y' ? Math.max(rail.from, rail.to) : rail.at}
+                y2={g.axis === 'y' ? rail.at : Math.max(rail.from, rail.to)}
+                stroke={GUIDE_STROKE}
+                strokeWidth={stroke}
+                strokeDasharray={dash}
+                strokeLinecap="butt"
+                shapeRendering="geometricPrecision"
+              />
+            ))}
             <line
               x1={g.axis === 'x' ? x0 : g.at}
               y1={g.axis === 'x' ? g.at : y0}
@@ -179,8 +211,21 @@ export default function SmartGuidesOverlay({
         </g>
       );
     });
+    if (sizeBox && sizeBox.width > 0 && sizeBox.height > 0) {
+      out.push(
+        <GuideBadge
+          key="size-badge"
+          text={formatSizeBadge(sizeBox)}
+          x={sizeBox.left + sizeBox.width / 2}
+          y={sizeBox.top + sizeBox.height}
+          inv={inv}
+          anchor="below"
+          fill={SIZE_BADGE_FILL}
+        />
+      );
+    }
     return out;
-  }, [guides, inv, stroke, tip, markR]);
+  }, [guides, sizeBox, inv, stroke, tip, markR, dash]);
 
   if (!nodes || !guidesMount) return null;
 
