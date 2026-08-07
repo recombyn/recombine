@@ -78,13 +78,20 @@ npm run dev:web
 
 ### 桌面端（Tauri）
 
-与 Web 共用 `apps/web`，原生窗口壳（自定义标题栏、外链走系统浏览器）。需安装 **Rust** 与平台编译工具链，详见 **[docs/desktop.md](docs/desktop.md)**。
+详见 **[docs/desktop.md](docs/desktop.md)**。需 **Rust** 与平台工具链。
 
 ```bash
-npm run dev:api          # 建议一并启动 API
-npm run dev:desktop      # Vite :3000 + Tauri 窗口
-npm run build:desktop    # 安装包输出在 apps/web/src-tauri/target/release/bundle/
+# 单机 — 内嵌 API sidecar + SQLite
+npm run dev:desktop
+npm run build:desktop:sidecar
+npm run build:desktop
+
+# 云端 — https://recombyn.com（可用 VITE_API_BASE_URL 覆盖）
+npm run dev:desktop:cloud
+npm run build:desktop:cloud
 ```
+
+打包产物：`apps/web/src-tauri/target/release/bundle/`（安装包）；主程序 `…/target/release/recombyn.exe`。
 
 ## 仓库结构
 

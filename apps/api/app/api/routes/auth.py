@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import getpass
 import hmac
 import logging
+import re
 import time
 from typing import Any
 
@@ -77,6 +79,26 @@ def _super_admin_test_code() -> str:
 def _console_login_code_enabled() -> bool:
     """Opt-in self-host path — Cloud / prod must keep AUTH_CONSOLE_LOGIN_CODE off."""
     return bool(getattr(settings, "auth_console_login_code", False))
+
+
+def _desktop_local_auto_login_enabled() -> bool:
+    return bool(getattr(settings, "desktop_local_auto_login", False))
+
+
+def _is_loopback_client(request: Request) -> bool:
+    host = (request.client.host if request.client else "") or ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def _sanitize_desktop_username(raw: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", (raw or "").strip()).strip("-._")
+    return (safe[:64] or "user").lower()
+
+
+class DesktopLocalLoginIn(BaseModel):
+    """Optional hint; server prefers the process OS user when empty."""
+
+    username: str | None = Field(default=None, max_length=80)
 
 
 def _issue_console_login_code(email: str) -> dict[str, Any]:
@@ -321,6 +343,47 @@ def email_activate(body: EmailActivateIn, request: Request) -> dict[str, Any]:
         id=user.id,
         email=user.email,
         name=user.name,
+        avatar=user.avatar,
+        provider="email",
+        role=getattr(user, "role", None) or "user",
+        status=getattr(user, "status", None) or "active",
+    )
+    session, token = create_session(session)
+    return {"user": _user_payload(session), "token": token}
+
+
+@router.post("/desktop-local", response_model=AuthSessionOut)
+def desktop_local_login(
+    request: Request,
+    body: DesktopLocalLoginIn = DesktopLocalLoginIn(),
+) -> dict[str, Any]:
+    """
+    Desktop-local auto login — provision a user from the OS account name.
+    Enabled only when DESKTOP_LOCAL_AUTO_LOGIN=true and caller is loopback.
+    """
+    if not _desktop_local_auto_login_enabled():
+        raise HTTPException(status_code=404, detail="Desktop local login is disabled")
+    if not _is_loopback_client(request):
+        raise HTTPException(status_code=403, detail="Desktop local login is loopback-only")
+
+    hint = body.username or ""
+    try:
+        os_user = getpass.getuser()
+    except Exception:
+        os_user = ""
+    display = (hint.strip() or os_user.strip() or "Local User")[:80]
+    local_part = _sanitize_desktop_username(display)
+    email = f"{local_part}@local.desktop"
+
+    user = ensure_email_user(email=email)
+    try:
+        update_profile(user_id=user.id, name=display)
+    except Exception:
+        logger.debug("desktop-local name sync skipped", exc_info=True)
+    session = SessionUser(
+        id=user.id,
+        email=user.email,
+        name=display,
         avatar=user.avatar,
         provider="email",
         role=getattr(user, "role", None) or "user",

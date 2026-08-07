@@ -3,6 +3,7 @@
  * Call sites parse `ev.data`; this only opens the stream and forwards frames.
  */
 
+import { resolveApiUrl } from '@/utils/apiBase';
 import { getToken } from '@/utils/token';
 
 export type SseConfig = {
@@ -27,7 +28,7 @@ export async function sse(config: SseConfig): Promise<void> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  let url = config.url;
+  let url = resolveApiUrl(config.url);
   if (config.params) {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(config.params)) {
