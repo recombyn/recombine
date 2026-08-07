@@ -422,11 +422,21 @@ def _append_pending_reinject(
 
 def _thought_prompt_variables(rt: Any) -> dict[str, str]:
     """Variables for LangChain ChatPromptTemplate (thought turn)."""
+    from app.services.design.readpath.canvas_scene import explicit_canvas_size
     from app.services.design.runtime.graph.llm_io import _prompt_text
     from app.services.design.runtime.graph.scene_log import _scene_digest
     st = rt.run
     if rt.w > 0 and rt.h > 0:
         canvas_size = f"{rt.w}x{rt.h}"
+        if explicit_canvas_size(getattr(rt, "canvas_size", None)):
+            # Composer chip WxH wins over any size written in USER_PROMPT.
+            canvas_size = (
+                f"{rt.w}x{rt.h}\n"
+                "CLIENT_SIZE_LOCK: composer size chip is authoritative. "
+                "Ignore conflicting WxH in USER_PROMPT; layout ONLY inside "
+                f"{rt.w}x{rt.h} (frame-local 0..w, 0..h). Do not emit create_frame "
+                "with a different size."
+            )
     elif _as_text(rt.canvas_size).strip().lower() in ("", "auto"):
         hint = (rt.size_auto_hint or _prompt_text(rt.rules, "agent.prompt.size_auto")).strip()
         canvas_size = ("auto\n" + hint) if hint else "auto"
@@ -502,13 +512,22 @@ def _thought_prompt_variables(rt: Any) -> dict[str, str]:
             scene_nodes=rt.scene_nodes,
         )
 
+    try:
+        fw = int(rt.w or 0)
+        fh = int(rt.h or 0)
+    except (TypeError, ValueError):
+        fw, fh = 0, 0
     return {
         "system": str(rt.system or ""),
         "prompt": str(rt.prompt or ""),
         "canvas_size": canvas_size,
         "scene": str(rt.scene_key or "-"),
         "scene_digest": _scene_digest(
-            rt.scene_nodes, rt.scene_frames, focus_id=rt.focus_id
+            rt.scene_nodes,
+            rt.scene_frames,
+            focus_id=rt.focus_id,
+            focus_w=fw,
+            focus_h=fh,
         ),
         "pending_blocks": pending_blocks,
         "plan_block": plan_block,

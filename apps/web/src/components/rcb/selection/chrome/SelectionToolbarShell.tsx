@@ -146,7 +146,7 @@ export function toolbarAboveScreenGapPx(
  * World-layer HTML chrome under camera `scale(zoom)`.
  *
  * Why DevTools shows a “phantom” strip on the box while the pill sits above:
- * anchor is at the selection edge; `translate(-50%,-100%)` only moves paint.
+ * anchor is at the selection edge; `translate` only moves paint.
  * If the wrapper keeps the toolbar’s layout size + `pointer-events:auto`, that
  * untransformed box covers the top edge / NE resize knob. Same fix as
  * SelectionFeature overlays: outer `0×0` shell, absolute pe:auto content.
@@ -155,6 +155,7 @@ export function WorldScreenChromeRoot({
   left,
   top,
   anchor = 'bottom',
+  hAlign = 'center',
   className,
   style,
   children,
@@ -163,12 +164,16 @@ export function WorldScreenChromeRoot({
   left: number;
   top: number;
   anchor?: 'bottom' | 'top';
+  /** Horizontal dock: center (default) or top-right of the selection. */
+  hAlign?: 'center' | 'right';
   className?: string;
   style?: CSSProperties;
   children: ReactNode;
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'children'>) {
   const camera = useRcbCamera();
   const inv = 1 / rcbCameraCssZoom(camera);
+  const yShift = anchor === 'bottom' ? '-100%' : '0';
+  const xShift = hAlign === 'right' ? '-100%' : '-50%';
   return (
     <div
       className={cn('pointer-events-none absolute overflow-visible', className)}
@@ -188,8 +193,7 @@ export function WorldScreenChromeRoot({
       <div
         className="pointer-events-auto absolute left-0 top-0"
         style={{
-          transform:
-            anchor === 'bottom' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+          transform: `translate(${xShift}, ${yShift})`,
           width: 'max-content',
         }}
         {...rest}
@@ -203,6 +207,7 @@ export function WorldScreenChromeRoot({
 /**
  * World-space placement for selection / frame floating toolbars.
  * With `anchor: 'bottom'`, `top` is the toolbar bottom edge.
+ * Horizontally centered on the selection (pill stays above mid-box).
  */
 export function useSelectionToolbarPlacement(opts: {
   box: SelectionToolbarBox | null | undefined;
@@ -277,6 +282,7 @@ function SelectionToolbarShell({
       left={left}
       top={top}
       anchor={anchor}
+      hAlign="center"
       data-sel-toolbar
       {...(isFrameToolbar ? { 'data-frame-toolbar': true } : {})}
       className={zIndexClassName}

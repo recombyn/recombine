@@ -44,6 +44,60 @@ def _load_knowledge_seed() -> tuple[dict[str, str], list[dict[str, Any]]]:
 
 KIND_LABELS, _SEED = _load_knowledge_seed()
 
+# Short phrases that must appear in the current seed body for each (kind, title).
+# Rows missing any listed marker (that exists in seed) get replaced once.
+# Do not hardcode prior full bodies here.
+_SEED_KNOWLEDGE_BODY_MARKERS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("icon", "图标设计基础"): (
+        "boolean_op",
+        "构造优先",
+    ),
+    ("ui", "UI/Web/后台组件"): (
+        "boolean_op",
+        "create_lottie",
+    ),
+    ("type", "字体与字号层级"): (
+        "~90% 相似门槛",
+        "letteringText",
+    ),
+}
+
+
+def _norm_knowledge_body(text: str) -> str:
+    return str(text or "").replace("\r\n", "\n").strip()
+
+
+def _bump_unchanged_seed_knowledge_bodies(session: Session, *, now: float) -> None:
+    """Replace seed knowledge bodies when DB lags seed markers (not Admin forks)."""
+    seed_by_key = {
+        (str(it.get("kind") or "").strip(), str(it.get("title") or "").strip()): it
+        for it in _SEED
+        if isinstance(it, dict)
+    }
+    for key, markers_all in _SEED_KNOWLEDGE_BODY_MARKERS.items():
+        seed_item = seed_by_key.get(key) or {}
+        new_body = _norm_knowledge_body(str(seed_item.get("body") or ""))
+        if not new_body:
+            continue
+        markers = tuple(m for m in markers_all if m in new_body)
+        if not markers:
+            continue
+        kind, title = key
+        rows = crud.list_design_knowledge(session=session, kind=kind, enabled=None)
+        for row in rows:
+            if str(row.title or "").strip() != title:
+                continue
+            cur = _norm_knowledge_body(str(row.body or ""))
+            if cur == new_body:
+                continue
+            if all(m in cur for m in markers):
+                continue
+            row.body = str(seed_item.get("body") or "")
+            if seed_item.get("when_to_use") is not None:
+                row.when_to_use = str(seed_item.get("when_to_use") or "")
+            row.updated_at = now
+            session.add(row)
+
 
 def _csv_has(csv: str, token: str) -> bool:
     parts = {p.strip().lower() for p in str(csv or "").split(",") if p.strip()}
@@ -135,6 +189,7 @@ def ensure_design_knowledge() -> None:
                     created_at=now,
                 )
                 existing_keys.add((kind, title))
+            _bump_unchanged_seed_knowledge_bodies(session, now=now)
             session.commit()
         _KNOWLEDGE_READY = True
 

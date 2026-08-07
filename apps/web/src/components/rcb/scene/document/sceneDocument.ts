@@ -42,7 +42,8 @@ function listRootNodeIds(doc: any): string[] {
 
 /**
  * Keep `doc.stackOrder` in sync with frames + root nodes.
- * Empty → migrate legacy paint (frames under nodes). Missing entries append on top.
+ * Empty → migrate legacy paint (frames under nodes).
+ * Missing frames insert under content; missing nodes append on top.
  */
 export function reconcileStackOrder(doc: any): string[] {
   if (!doc || typeof doc !== 'object') return [];
@@ -74,10 +75,17 @@ export function reconcileStackOrder(doc: any): string[] {
     seen.add(key);
     kept.push(key);
   }
+  // Missing frames belong under content (after last kept frame, else at front).
+  // Appending them on top paints the white plate over existing nodes.
+  let frameInsertAt = 0;
+  for (let i = 0; i < kept.length; i += 1) {
+    if (parseStackKey(kept[i])?.kind === 'frame') frameInsertAt = i + 1;
+  }
   for (const id of frameIds) {
     const key = stackFrameKey(id);
     if (seen.has(key)) continue;
-    kept.push(key);
+    kept.splice(frameInsertAt, 0, key);
+    frameInsertAt += 1;
     seen.add(key);
   }
   for (const id of nodeIds) {
@@ -1533,6 +1541,110 @@ export const SAMPLE_LOTTIE_ANIMATION: Record<string, unknown> = {
   ],
 };
 
+/**
+ * On-plate Lottie generator result (FE) — pulse ellipse sized/timed to the plate.
+ * Backend Lottie gen can replace this with a real model response later.
+ */
+export function buildGeneratedLottieAnimation(opts: {
+  width: number;
+  height: number;
+  durationSec?: number;
+  name?: string;
+  /** 0–1 RGB fill; defaults to brand blue. */
+  fillRgb?: [number, number, number];
+}): Record<string, unknown> {
+  const w = Math.max(32, Math.round(Number(opts.width) || 200));
+  const h = Math.max(32, Math.round(Number(opts.height) || 200));
+  const fr = 30;
+  const sec = Math.max(0.5, Number(opts.durationSec) || 3);
+  const op = Math.max(2, Math.round(sec * fr));
+  const mid = Math.max(1, Math.round(op / 2));
+  const cx = w / 2;
+  const cy = h / 2;
+  const diam = Math.max(24, Math.min(w, h) * 0.44);
+  const rgb = opts.fillRgb || [0.2, 0.45, 1];
+  const nm = String(opts.name || 'Lottie').trim().slice(0, 80) || 'Lottie';
+  return {
+    v: '5.7.4',
+    fr,
+    ip: 0,
+    op,
+    w,
+    h,
+    nm,
+    ddd: 0,
+    assets: [],
+    layers: [
+      {
+        ddd: 0,
+        ind: 1,
+        ty: 4,
+        nm: 'Pulse',
+        sr: 1,
+        ks: {
+          o: { a: 0, k: 100 },
+          r: { a: 0, k: 0 },
+          p: { a: 0, k: [cx, cy, 0] },
+          a: { a: 0, k: [0, 0, 0] },
+          s: {
+            a: 1,
+            k: [
+              {
+                i: { x: [0.667], y: [1] },
+                o: { x: [0.333], y: [0] },
+                t: 0,
+                s: [55, 55, 100],
+              },
+              {
+                i: { x: [0.667], y: [1] },
+                o: { x: [0.333], y: [0] },
+                t: mid,
+                s: [100, 100, 100],
+              },
+              { t: op, s: [55, 55, 100] },
+            ],
+          },
+        },
+        ao: 0,
+        shapes: [
+          {
+            ty: 'el',
+            p: { a: 0, k: [0, 0] },
+            s: { a: 0, k: [diam, diam] },
+            nm: 'Ellipse',
+            hd: false,
+          },
+          {
+            ty: 'fl',
+            c: { a: 0, k: [...rgb, 1] },
+            o: { a: 0, k: 100 },
+            r: 1,
+            bm: 0,
+            nm: 'Fill',
+            hd: false,
+          },
+          {
+            ty: 'tr',
+            p: { a: 0, k: [0, 0] },
+            a: { a: 0, k: [0, 0] },
+            s: { a: 0, k: [100, 100] },
+            r: { a: 0, k: 0 },
+            o: { a: 0, k: 100 },
+            sk: { a: 0, k: 0 },
+            sa: { a: 0, k: 0 },
+            nm: 'Transform',
+          },
+        ],
+        ip: 0,
+        op,
+        st: 0,
+        bm: 0,
+      },
+    ],
+  };
+}
+
+
 /** Parse Agent / attrs Lottie payload (object or JSON string). */
 export function parseLottieAnimationData(raw: unknown): Record<string, unknown> | null {
   let obj: unknown = raw;
@@ -1605,6 +1717,7 @@ export function createLottieGeneratorNode({
         assetKind: 'lottie',
         lottieGenerator: true,
         lottieGenAspect: '1:1',
+        lottieGenDuration: 3,
         lottieGenModel: 'auto',
         mode: 'FIT',
         lockAspect: 'true',

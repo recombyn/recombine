@@ -65,6 +65,12 @@ export function registerShapeHost(handle: ShapeHostHandle) {
   if (sharedNodeEls && handle.el) {
     sharedNodeEls.set(handle.nodeId, handle.el);
   }
+  // createSvgBoard appends at mount end — re-sort immediately so a remounted
+  // frame plate cannot paint over existing shape layers (click-through still works
+  // because the world SVG is pointer-events: none).
+  if (handle.layer && sceneShapesMount && handle.layer.parentNode === sceneShapesMount) {
+    syncSharedMountPaintOrder(sceneShapesMount);
+  }
   bumpHostEpoch();
 }
 
@@ -126,6 +132,35 @@ export function getSceneWorldRoot() {
 
 export function getSceneShapesMount() {
   return sceneShapesMount;
+}
+
+const SHARED_MOUNT_LAYER_SEL =
+  ':scope > g[data-rcb-shape-layer], :scope > g[data-rcb-frame-layer]';
+
+/** SVG paint order must follow data-z (stackOrder). New layers append at mount end. */
+export function syncSharedMountPaintOrder(mount?: SVGGElement | null) {
+  const root = mount ?? sceneShapesMount;
+  if (!root) return;
+  const siblings = [...root.querySelectorAll(SHARED_MOUNT_LAYER_SEL)];
+  if (siblings.length < 2) return;
+  siblings.sort((a, b) => {
+    const aHas = a.hasAttribute('data-z');
+    const bHas = b.hasAttribute('data-z');
+    const za = aHas ? Number(a.getAttribute('data-z')) || 0 : null;
+    const zb = bHas ? Number(b.getAttribute('data-z')) || 0 : null;
+    // Missing data-z used to sort as 0, which put frame plates (z≥1) above all
+    // shapes and looked like "artboard covers content" while clicks still worked.
+    if (za == null || zb == null) {
+      const aFrame = a.hasAttribute('data-rcb-frame-layer');
+      const bFrame = b.hasAttribute('data-rcb-frame-layer');
+      if (aFrame !== bFrame) return aFrame ? -1 : 1;
+      if (za == null && zb == null) return 0;
+      if (za == null) return aFrame ? -1 : 1;
+      return bFrame ? 1 : -1;
+    }
+    return za - zb;
+  });
+  for (const g of siblings) root.appendChild(g);
 }
 
 export function getSceneDrawPreviewMount() {

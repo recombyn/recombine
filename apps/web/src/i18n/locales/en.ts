@@ -957,6 +957,7 @@ const en = {
       lottieGenUploadHint: 'Upload an image or Lottie JSON',
       lottieGenRefImage: 'Reference image',
       lottieGenNeedPrompt: 'Describe the animation first',
+      lottieGenNeedVisionModel: 'Image attachments need a multimodal model that can see images',
       lottieGenInvalidJson: 'Invalid Lottie JSON',
       lottieGenerating: 'Generating Lottie',
       lottieGenFail: 'Lottie generation failed',

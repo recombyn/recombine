@@ -28,7 +28,7 @@ function ReplaceTextToolPanel({
   }, [originalText, newText]);
 
   const fieldClass =
-    'mt-1 w-full resize-none rounded-lg border border-[var(--line)] bg-[var(--canvas)] px-2.5 py-1.5 text-[12px] text-[var(--ink)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--ink)]';
+    'mt-1 w-full resize-none rounded-lg border border-[var(--line)] bg-[var(--canvas)] px-2.5 py-1.5 text-[12px] text-[var(--ink)] outline-none ring-0 placeholder:text-[var(--muted)] focus:border-[var(--line)] focus:outline-none focus:ring-0 focus-visible:outline-none';
 
   return (
     <ImageToolPanelShell

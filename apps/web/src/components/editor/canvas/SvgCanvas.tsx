@@ -323,7 +323,12 @@ function SvgCanvas({
   const shapeStylePanel = useSelector((s: any) => s.editor.shapeStylePanel as null | { kind: string });
   const shapeStylePanelOpen = Boolean(shapeStylePanel);
   const cropExpandOpen = imageToolPanelKind === 'crop' || imageToolPanelKind === 'expand';
-  const eraserOpen = imageToolPanelKind === 'eraser';
+  // Side panels (Eraser / Replace text / …) — hide selection toolbar like Eraser.
+  const imageToolSidePanelOpen =
+    imageToolPanelKind === 'eraser' ||
+    imageToolPanelKind === 'replaceText' ||
+    imageToolPanelKind === 'multiAngle' ||
+    imageToolPanelKind === 'adjust';
   const videoToolPanelKind = useSelector(
     (s: any) => s.editor.videoToolPanel?.kind as string | undefined
   );
@@ -2902,16 +2907,19 @@ function SvgCanvas({
             spatialIndex={nodeSpatialIndex}
           />
         ) : null}
-        {/* Stable HTML <video> plates; SVG poster is underlay / export only. */}
+        {/* HTML <video>/Lottie covers SVG underlay while idle; hide during
+            transform so move uses the same previewSvgNodeGeometry path as images. */}
         {infinite ? (
           <VideoNodeOverlay
             document={document}
+            hidden={geometryTransforming}
             geometryOverrides={videoLiveGeom}
           />
         ) : null}
         {infinite ? (
           <LottieNodeOverlay
             document={document}
+            hidden={geometryTransforming}
             geometryOverrides={videoLiveGeom as Record<string, LottieGeomOverride> | null}
           />
         ) : null}
@@ -2961,7 +2969,7 @@ function SvgCanvas({
               Boolean(editingTextId) ||
               Boolean(editingPenId) ||
               cropExpandOpen ||
-              eraserOpen ||
+              imageToolSidePanelOpen ||
               videoToolOpen ||
               // Keep chrome while editing radius so the outline can follow rounded corners.
               (shapeStylePanelOpen && shapeStylePanel?.kind !== 'radius')

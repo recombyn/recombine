@@ -1,5 +1,14 @@
 /** Artboard: SVG plate + world-layer title / process chrome. */
-import { useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode, memo } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  memo,
+} from 'react';
 import { useRcbCamera, useRcbDevicePixelRatio } from '../camera/context';
 import { rcbCameraCssZoom } from '../core/math';
 import {
@@ -10,8 +19,11 @@ import {
 import { append, setAttrs, setFill, setStroke, svgEl } from '@/components/rcb/scene/paint/svgDom';
 import {
   getSceneShapesMount,
+  getSceneWorldEpoch,
   getSceneWorldRoot,
   registerShapeHost,
+  subscribeShapeHosts,
+  syncSharedMountPaintOrder,
   unregisterShapeHost,
   updateShapeHostElement,
 } from '@/components/rcb/shapes/shapeHostRegistry';
@@ -127,6 +139,19 @@ function HtmlArtboardFrame({
   const layerRef = useRef<SVGGElement | null>(null);
   const generating = String(frame.processStatus || '') === 'running';
   const processLabel = String(frame.processLabel || 'Preparing…');
+  // Remount into shared world SVG when it appears (same as RcbShapeHost).
+  // Private fallback SVGs stack via HTML z-index and cover shared shape paint.
+  const [worldEpoch, setWorldEpoch] = useState(() => getSceneWorldEpoch());
+  useEffect(
+    () =>
+      subscribeShapeHosts(() => {
+        setWorldEpoch((prev) => {
+          const next = getSceneWorldEpoch();
+          return prev === next ? prev : next;
+        });
+      }),
+    []
+  );
 
   // World-layer process chrome (same lattice as the plate / control box).
   const processOverlayStyle = useMemo(
@@ -151,7 +176,9 @@ function HtmlArtboardFrame({
     [frame.x, frame.y, frame.width, frame.height, inv]
   );
 
-  // Zoom in paintKey so idle hairline stays ~1 CSS px after camera scale.
+  // Remount only when plate geometry/fill changes. Do NOT remount on select /
+  // zoom / zIndex — createSvgBoard appends at mount end, so a remount paints the
+  // white plate over siblings (stuck when stackOrder is equal or sync races).
   const paintKey = [
     frame.id,
     frame.x,
@@ -160,9 +187,7 @@ function HtmlArtboardFrame({
     frame.height,
     frame.backgroundColor,
     frame.processStatus,
-    selected ? 1 : 0,
     generating ? 1 : 0,
-    z.toFixed(4),
   ].join('|');
 
   useLayoutEffect(() => {
@@ -182,6 +207,9 @@ function HtmlArtboardFrame({
       sharedMount: shapesMount,
     });
     layerRef.current = sceneLayer;
+    // createSvgBoard tags shared layers as shape; frames must not share that attr
+    // or shape-only reorder / hit paths treat the plate as a node layer.
+    sceneLayer.removeAttribute('data-rcb-shape-layer');
     sceneLayer.setAttribute('data-rcb-frame-layer', frame.id);
     sceneLayer.setAttribute('data-z', String(zIndex));
     if (!shared) {
@@ -193,13 +221,8 @@ function HtmlArtboardFrame({
     registerShapeHost({ nodeId: frame.id, root, layer: sceneLayer, el, kind: 'svg' });
     updateShapeHostElement(frame.id, el);
 
-    // Keep frame plate paint order with shapes on the shared mount.
-    if (shared && shapesMount && sceneLayer.parentElement === shapesMount) {
-      const siblings = [...shapesMount.querySelectorAll(':scope > g[data-rcb-shape-layer], :scope > g[data-rcb-frame-layer]')];
-      siblings.sort(
-        (a, b) => (Number(a.getAttribute('data-z')) || 0) - (Number(b.getAttribute('data-z')) || 0)
-      );
-      for (const g of siblings) shapesMount.appendChild(g);
+    if (shared && shapesMount && sceneLayer.parentNode === shapesMount) {
+      syncSharedMountPaintOrder(shapesMount);
     }
 
     return () => {
@@ -214,8 +237,26 @@ function HtmlArtboardFrame({
       layerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layer, paintKey, zIndex]);
+  }, [layer, paintKey, worldEpoch]);
 
+  // Selection / zoom hairline: repaint plate in place (do not remount the layer g).
+  useLayoutEffect(() => {
+    if (layer !== 'body') return;
+    const sceneLayer = layerRef.current;
+    if (!sceneLayer) return;
+    const el = paintFramePlate(sceneLayer, frame, selected, generating, z);
+    updateShapeHostElement(frame.id, el);
+  }, [layer, selected, generating, z, paintKey, frame]);
+
+  // Same as RcbShapeHost: update data-z + reorder without remounting the plate.
+  useLayoutEffect(() => {
+    if (layer !== 'body') return;
+    const sceneLayer = layerRef.current;
+    const shapesMount = getSceneShapesMount();
+    if (!sceneLayer || !shapesMount || sceneLayer.parentNode !== shapesMount) return;
+    sceneLayer.setAttribute('data-z', String(zIndex));
+    syncSharedMountPaintOrder(shapesMount);
+  }, [layer, zIndex]);
   if (layer === 'label') {
     return (
       <>
@@ -250,7 +291,10 @@ function HtmlArtboardFrame({
     <>
       <div
         className="pointer-events-none absolute left-0 top-0 overflow-visible"
-        style={{ zIndex }}
+        // Plate paints in the shared world SVG via data-z. Do not mirror stack z on
+        // this HTML anchor — a private-SVG fallback with high CSS z covers shapes
+        // while still letting clicks through (world SVG is pointer-events: none).
+        style={{ zIndex: 0 }}
         data-rcb-frame={frame.id}
         data-frame-id={frame.id}
       >
