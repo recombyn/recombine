@@ -140,6 +140,28 @@ def _normalize_choice_option(raw: Any) -> dict[str, str] | None:
         return None
     return {"label": label, "action": action}
 
+def _choice_ui_raw_from_turn(obj: dict[str, Any]) -> Any:
+    """Prefer nested choice_ui; lift top-level mode+options when models flatten it."""
+    nested = obj.get("choice_ui") or obj.get("choiceUi") or obj.get("ask_ui")
+    if nested:
+        return nested
+    mode = _as_text(obj.get("mode") or obj.get("type") or "").strip().lower()
+    options = obj.get("options") or obj.get("items")
+    if mode in ("freeform", "free_text", "input", "textarea"):
+        mode = "text"
+    if mode in _ASK_CHOICE_MODES and (isinstance(options, list) or mode == "text"):
+        lifted: dict[str, Any] = {"mode": mode}
+        if isinstance(options, list):
+            lifted["options"] = options
+        placeholder = _as_text(
+            obj.get("placeholder") or obj.get("hint") or obj.get("prompt")
+        ).strip()
+        if placeholder:
+            lifted["placeholder"] = placeholder[:120]
+        return lifted
+    return None
+
+
 def _normalize_choice_ui(
     raw: Any,
     *,
@@ -226,7 +248,7 @@ def _absorb_ask_choices(st: AgentRunState, turn: dict[str, Any]) -> None:
     """Persist Ask choice_ui from the model turn (create|edit propose included)."""
     legacy_choices = list(turn.get("choices") or [])[:6]
     legacy_apply = _as_text(turn.get("apply_choice")).strip()
-    raw_ui = turn.get("choice_ui")
+    raw_ui = turn.get("choice_ui") or _choice_ui_raw_from_turn(turn)
     ui = _normalize_choice_ui(
         raw_ui,
         legacy_choices=legacy_choices,
@@ -301,7 +323,7 @@ def _normalize_agent_turn_obj(obj: dict[str, Any] | None) -> dict[str, Any]:
                 break
     apply_choice = _as_text(obj.get("apply_choice") or obj.get("applyChoice")).strip()[:48]
     choice_ui = _normalize_choice_ui(
-        obj.get("choice_ui") or obj.get("choiceUi") or obj.get("ask_ui"),
+        _choice_ui_raw_from_turn(obj),
         legacy_choices=choices,
         legacy_apply=apply_choice,
     )

@@ -1,0 +1,11 @@
+# 指令 · 结构化 JSON（LangChain structured output）
+- 运行时强制输出 AgentTurn 结构，不是自由 tool calling。
+- reply：给用户看的中文，前端单独展示；不能代替画布操作。
+- thought：短进度文案。
+- intent：chat|ask|done|edit|create。
+- tool_ops：画布操作数组；「添加矩形/文字、改颜色」等 edit/create 必须非空（除非先 need_tools / need_skills）。
+- need_tools / need_skills / need_aesthetics：缺 schema 或作业手册时先申请，本回合 tool_ops=[]。
+- 简单增改直接 tool_ops；复杂创作用 need_skills。
+- 禁止只写 reply「准备添加…」而 tool_ops 为空。
+- 不要发明工具名或 skill_key；用目录中的 name/op_key / skill_key。
+- 勿输出 markdown 代码块；reply 由前端单独展示。

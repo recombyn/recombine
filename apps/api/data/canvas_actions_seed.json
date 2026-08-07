@@ -82,6 +82,18 @@
       }
     },
     {
+      "op_key": "outline_text",
+      "kind": "mutate",
+      "label": "Outline text",
+      "sort_order": 35,
+      "model_hint": "Convert text node(s) to editable path letterforms (fontkit). Args: nodeId|id or nodeIds[]. Target must be text with content. After outline: style with update_node fill/stroke; combine letterforms with boolean_op. Prefer create_text + fontFamily from Available fonts when the style exists there; use outline_text when you need path geometry (boolean, warp, stroke-only glyphs). FE runs this async — do not expect sync create_shape path as a substitute unless fonts cannot outline.",
+      "args_schema": {
+        "nodeId": "string?",
+        "id": "string?",
+        "nodeIds": "string[]?"
+      }
+    },
+    {
       "op_key": "create_image",
       "kind": "create",
       "label": "Create image",
@@ -371,6 +383,13 @@
         "moveObject",
         "vector",
         "replaceText"
+      ],
+      "stale_if_contains": []
+    },
+    "outline_text": {
+      "must_contain": [
+        "nodeId",
+        "nodeIds"
       ],
       "stale_if_contains": []
     },

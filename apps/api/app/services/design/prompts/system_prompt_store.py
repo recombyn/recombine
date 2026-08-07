@@ -1,7 +1,6 @@
 """System prompts (agent / aesthetics / persona) — dedicated table, not dict+KV split."""
 from __future__ import annotations
 
-import json
 import threading
 import time
 from typing import Any
@@ -36,19 +35,10 @@ def is_system_prompt_key(key: str) -> bool:
 
 
 def _load_seed_items() -> list[dict[str, Any]]:
-    """Metadata + bodies from the single design_prompt_packs_seed.json (system-key kinds)."""
-    from app.core.config import resolve_data_file
+    """Metadata + bodies from ``data/design_prompt_packs/`` (system-key kinds only)."""
+    from app.services.design.prompts.prompt_pack_store import _load_prompt_packs_seed
 
-    path = resolve_data_file("design_prompt_packs_seed.json")
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    if not isinstance(parsed, dict):
-        return []
-    raw = parsed.get("items") or []
-    if not isinstance(raw, list):
-        return []
+    _labels, raw = _load_prompt_packs_seed()
     out: list[dict[str, Any]] = []
     for x in raw:
         if not isinstance(x, dict):
