@@ -1,4 +1,5 @@
 import axios, { type AxiosRequestConfig, type AxiosInstance } from 'axios';
+import { getApiBaseUrl } from '@/utils/apiBase';
 import { getToken, setToken } from '@/utils/token';
 
 export interface CustomAxiosRequestConfig extends AxiosRequestConfig {
@@ -9,10 +10,13 @@ export interface CustomAxiosRequestConfig extends AxiosRequestConfig {
 
 /**
  * Shared axios client.
- * Call sites pass full `/api/v1/...` paths; Vite proxy / nginx handles host.
+ * Call sites pass full `/api/v1/...` paths.
+ * Browser / local-desktop-dev: relative (Vite proxy / nginx).
+ * Desktop prod local / desktop cloud: absolute base from `getApiBaseUrl()`.
  */
 const http: AxiosInstance = axios.create({
   timeout: 180000,
+  baseURL: getApiBaseUrl() || undefined,
 });
 
 http.interceptors.request.use(

@@ -6,9 +6,7 @@ from pathlib import Path
 
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.core.config import settings
-
-_API_ROOT = Path(__file__).resolve().parents[2]
+from app.core.config import _API_ROOT, settings
 
 
 def sqlalchemy_database_uri() -> str:

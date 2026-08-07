@@ -24,7 +24,8 @@ Useful scripts:
 | Command | Purpose |
 |---------|---------|
 | `npm run dev:web` / `dev:api` / `dev:docs` | Local servers |
-| `npm run dev:desktop` / `build:desktop` | Tauri window / installers ([docs/desktop.md](./docs/desktop.md)) |
+| `npm run dev:desktop` / `build:desktop` | Tauri **local** (SQLite API sidecar) |
+| `npm run dev:desktop:cloud` / `build:desktop:cloud` | Tauri **cloud** UI ([docs/desktop.md](./docs/desktop.md)) |
 | `npm run test` | Web + API tests |
 | `npm run test:web` / `test:api` | Scoped tests |
 | `npm run test:e2e` | Playwright (under `e2e/`) |

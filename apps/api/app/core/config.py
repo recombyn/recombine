@@ -1,13 +1,33 @@
+from __future__ import annotations
+
+import os
+import sys
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_API_ROOT = Path(__file__).resolve().parents[2]  # apps/api
+
+def resolve_api_root() -> Path:
+    """apps/api root — source tree, RECOMBYN_API_ROOT, or PyInstaller bundle."""
+    raw = (os.environ.get("RECOMBYN_API_ROOT") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+_API_ROOT = resolve_api_root()
+
+_ENV_FILE = _API_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_API_ROOT / ".env"),
+        env_file=str(_ENV_FILE) if _ENV_FILE.is_file() else None,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -20,9 +40,18 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = [
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        # Tauri 2 WebView origins (desktop flavors calling absolute API base).
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
     ]
+    # Allow any localhost / tauri.dev origin in addition to the explicit list.
+    cors_origin_regex: str | None = (
+        r"^https?://(localhost|127\.0\.0\.1|tauri\.localhost)(:\d+)?$|^tauri://localhost$"
+    )
     libreoffice_path: str = "soffice"
     upload_dir: str = "storage/uploads"
     result_dir: str = "storage/results"
@@ -192,6 +221,9 @@ class Settings(BaseSettings):
     # Self-host only: when SES is unset, print login OTP to API logs (never on Cloud).
     # docker-compose sets true; leave false/unset for hosted production.
     auth_console_login_code: bool = False
+    # Desktop-local only: POST /auth/desktop-local auto-provisions OS user (loopback).
+    # Tauri local sidecar sets true; keep false on Cloud / public API.
+    desktop_local_auto_login: bool = False
 
     # Token wallet — card-key redeem (no WeChat/Alipay membership)
     # HMAC-SHA256(plaintext, CARD_KEY_SALT); never store plaintext in DB.
