@@ -163,11 +163,11 @@ def test_namespace_split_and_qualify(monkeypatch):
     assert qualify_skill_key(NS_CORE, "design_methodology") == "design_methodology"
     assert qualify_skill_key(NS_USER, "my_brand") == "user.my_brand"
     assert resolve_storage_skill_key("core.design_methodology") == "design_methodology"
-    # Stub one ext row so ns.ext resolve stays covered when monkeypatched.
-    from app.services.design.prompts import skill_store as skill_mod
+    # Patch the runtime module binding (resolve_storage_skill_key calls it in-file).
+    from app.services.design.prompts.skill_store import runtime as skill_runtime
 
     monkeypatch.setattr(
-        skill_mod,
+        skill_runtime,
         "list_runtime_skills",
         lambda **_kwargs: [
             {
@@ -235,9 +235,13 @@ def test_hot_reload_signature_stable():
     assert reload_skills_if_disk_changed() is False
 
 
-def test_seed_sync_does_not_overwrite_existing_rows():
-    """Community seed is cold-start only: never updates existing rows."""
+def test_seed_sync_preserves_custom_body_when_markers_present():
+    """Seed upsert is cold-start only; marker bump only replaces stale bodies."""
     from app.services.db import connect
+    from app.services.design.prompts.skill_store.ensure import _SEED_SKILL_BODY_MARKERS
+
+    markers = _SEED_SKILL_BODY_MARKERS.get("design_methodology") or ()
+    assert markers, "expected design_methodology seed markers"
 
     with connect() as conn:
         row = conn.execute(
@@ -247,9 +251,11 @@ def test_seed_sync_does_not_overwrite_existing_rows():
         assert row is not None
         before = str(row["prompt_positive"] or "")
         assert str(row["source"] or "") == SOURCE_SEED
+        # Keep required markers so the body is treated as non-stale customization.
+        custom = "OPS_CUSTOM_BODY\n" + "\n".join(markers)
         conn.execute(
             "UPDATE design_skill SET prompt_positive = ? WHERE skill_key = ?",
-            ("OPS_CUSTOM_BODY", "design_methodology"),
+            (custom, "design_methodology"),
         )
         conn.commit()
 
@@ -262,7 +268,7 @@ def test_seed_sync_does_not_overwrite_existing_rows():
             ("design_methodology",),
         ).fetchone()
         assert str(row["source"] or "") == SOURCE_SEED
-        assert str(row["prompt_positive"] or "") == "OPS_CUSTOM_BODY"
+        assert str(row["prompt_positive"] or "") == custom
         conn.execute(
             "UPDATE design_skill SET prompt_positive = ? WHERE skill_key = ?",
             (before, "design_methodology"),

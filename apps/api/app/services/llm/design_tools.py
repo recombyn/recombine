@@ -155,6 +155,9 @@ def pydantic_model_from_args_schema(
     required = set(parameters.get("required") or [])
     field_defs: dict[str, Any] = {}
     for key, meta in props.items():
+        # Seed meta like ``_rev`` is not a model arg (Pydantic forbids leading ``_``).
+        if not str(key).strip() or str(key).startswith("_"):
+            continue
         meta = meta if isinstance(meta, dict) else {}
         typ = _python_type_from_json_prop(meta)
         desc_f = str(meta.get("description") or key)

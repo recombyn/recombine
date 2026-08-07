@@ -1,20 +1,65 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { createShapeNode } from '@/components/rcb/scene/document/sceneDocument';
 import { findPencilBrush } from '@/components/rcb/tools/pencilBrushes';
 
-function loadPencilOps() {
-  const p = resolve(process.cwd(), '../api/tmp/agent_pencil_tip_fixture.json');
-  return JSON.parse(readFileSync(p, 'utf-8')) as Array<{
-    name: string;
-    args: Record<string, unknown>;
-  }>;
-}
+/** Inline agent create_shape pencil ops — do not read apps/api/tmp fixtures. */
+const TIP_PENCIL_OPS: Array<{ name: string; args: Record<string, unknown> }> = [
+  {
+    name: 'create_shape',
+    args: {
+      shapeType: 'pencil',
+      x: 40,
+      y: 40,
+      width: 120,
+      height: 80,
+      stroke: '#333333',
+      borderWidth: 2,
+      path: 'M 0 40 L 40 10 L 80 50 L 120 20',
+      brushStyle: 'calligraphy',
+      brushHardness: 72,
+      pathPressure: '0.4,0.8,0.55,0.9',
+      pressureEnabled: true,
+    },
+  },
+  {
+    name: 'create_shape',
+    args: {
+      shapeType: 'pencil',
+      x: 40,
+      y: 140,
+      width: 120,
+      height: 80,
+      stroke: '#222222',
+      borderWidth: 2,
+      path: 'M 0 20 L 30 60 L 70 15 L 120 45',
+      brushStyle: 'pencil-hb',
+      brushHardness: 88,
+      pathPressure: '0.3,0.7,0.5,0.85',
+      pressureEnabled: true,
+    },
+  },
+  {
+    name: 'create_shape',
+    args: {
+      shapeType: 'pencil',
+      x: 40,
+      y: 240,
+      width: 120,
+      height: 80,
+      stroke: '#111111',
+      borderWidth: 3,
+      path: 'M 10 40 L 50 10 L 90 55 L 110 25',
+      brushStyle: 'soft',
+      brushHardness: 45,
+      pathPressure: '0.5,0.9,0.35,0.75',
+      pressureEnabled: true,
+    },
+  },
+];
 
 describe('agent tip pencil ops → FE attrs', () => {
   it('maps tip brushStyle / hardness / pressure onto nodes', () => {
-    const ops = loadPencilOps();
+    const ops = TIP_PENCIL_OPS;
     expect(ops.length).toBeGreaterThanOrEqual(3);
 
     const created: any[] = [];
