@@ -4,6 +4,7 @@ import {
   brushSize,
   findPencilBrush,
   isStampBrush,
+  outlinePathFromPoints,
   pencilSampleMinStep,
   polylinePathD,
   samplePolyline,
@@ -46,11 +47,10 @@ type PencilPreview =
     }
   | {
       box: SceneBox;
-      mode: 'stroke';
+      mode: 'ink';
       pathD: string;
       color: string;
       opacity: number;
-      lineWidth: number;
     }
   | {
       box: SceneBox;
@@ -361,14 +361,20 @@ function PencilDrawFeature({
       return;
     }
 
-    const inkW = brushSize(brush, widthRef.current);
+    const pressures = points.map((p) => p.pressure);
+    const hasPressure = pressures.some((p) => typeof p === 'number' && p > 0);
+    const d = outlinePathFromPoints(points, widthRef.current, brush.id, {
+      pressureEnabled: pressureRef.current,
+      pressures: hasPressure
+        ? pressures.map((p) => (typeof p === 'number' && p > 0 ? p : 0.5))
+        : undefined,
+    });
     setPreview({
       box,
-      mode: 'stroke',
-      pathD: polylinePathD(points),
+      mode: 'ink',
+      pathD: d,
       color: colorRef.current,
       opacity: opacityRef.current,
-      lineWidth: inkW,
     });
   };
 
@@ -687,15 +693,12 @@ function PencilDrawFeature({
           ) : null}
         </>
       ) : null}
-      {preview.mode === 'stroke' ? (
+      {preview.mode === 'ink' ? (
         <path
           d={preview.pathD}
-          fill="none"
-          stroke={preview.color}
-          strokeOpacity={preview.opacity}
-          strokeWidth={preview.lineWidth}
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          fill={preview.color}
+          fillOpacity={preview.opacity}
+          stroke="none"
         />
       ) : null}
       {preview.mode === 'stamp'

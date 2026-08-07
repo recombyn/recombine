@@ -126,6 +126,26 @@ const en = {
         'draw a cat in profile with light-to-heavy pressure',
         'calligraphic stroke for 春 with a plum blossom branch',
       ],
+      poster: [
+        'design a bold event poster with clear hierarchy',
+        'make a commerce promo poster with price and CTA',
+        'design a minimal brand image poster',
+      ],
+      mobile: [
+        'design a clean office collaboration app home',
+        'build a high-conversion landing page with a clear CTA',
+        'design a modern login screen',
+      ],
+      image: [
+        'generate a clean ecommerce product hero shot',
+        'draw a matching set of stylized characters',
+        'make an avatar-ready character illustration',
+      ],
+      video: [
+        'outline a product promo storyboard',
+        'plan a 15s brand concept clip',
+        'design ecommerce short-video storyboard beats',
+      ],
     },
     composerModelsLoading: 'Loading models…',
     chips: {
@@ -313,6 +333,7 @@ const en = {
     resendIn: 'Resend in {{seconds}}s',
     resent: 'Code resent',
     codeSent: 'Verification code sent — check your email',
+    codeSentConsole: 'Email not configured — check the API logs for your code',
     linkInvalid: 'Login link is invalid or expired',
     activating: 'Signing you in…',
     checkEmailTitle: 'Check your email',
@@ -388,6 +409,7 @@ const en = {
     cancel: 'Cancel',
     confirm: 'Confirm',
     save: 'Save',
+    close: 'Close',
     loading: 'Loading…',
     discord: 'Discord',
     help: 'Help',

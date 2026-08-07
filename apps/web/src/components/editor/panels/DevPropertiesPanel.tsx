@@ -20,8 +20,7 @@ import { isExportableSceneNode, isVideoNode } from '@/components/rcb/scene/docum
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 
 function formatPx(n: number) {
-  const r = Math.round(n * 100) / 100;
-  return Number.isInteger(r) ? String(r) : String(r);
+  return String(Math.round(n));
 }
 
 type Rgba = { r: number; g: number; b: number; a: number };

@@ -6,12 +6,16 @@ import { Button, Checkbox, Input, message, Dialog, Icon } from '@/components/bas
 import AppLogo from '@/components/base/AppLogo';
 import {
   createSliderCaptcha,
+  getMe,
   sendEmailCode,
   verifyEmailCode,
   verifySliderCaptcha,
   type SliderCaptchaChallenge,
 } from '@/apis/auth';
+import { fetchWallet } from '@/apis/wallet';
 import { setSession } from '@/store/modules/auth';
+import { syncFromServer } from '@/store/modules/wallet';
+import type { LedgerEntry } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
 import { isLoginOpen, readReturnToParam } from '@/utils/authReturnTo';
 import { docsUrl } from '@/utils/docsUrl';
@@ -481,6 +485,27 @@ function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
         token,
       })
     );
+    // Sync balance immediately — login payload has no tokens; chip otherwise stays 0.
+    void getMe()
+      .then((res) => {
+        if (typeof res.tokens === 'number') {
+          dispatch(syncFromServer({ tokens: res.tokens, planId: (res as any).planId }));
+        }
+      })
+      .catch(() => undefined);
+    void fetchWallet()
+      .then((res) => {
+        dispatch(
+          syncFromServer({
+            tokens: res.tokens,
+            planId: res.planId,
+            planExpiresAt: res.planExpiresAt ?? null,
+            planLocked: Boolean(res.planLocked),
+            ledger: (res.ledger || []) as LedgerEntry[],
+          })
+        );
+      })
+      .catch(() => undefined);
     message.success(t('auth.success'));
     onSuccess?.(returnTo);
     onClose();
@@ -496,14 +521,18 @@ function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
     const trimmed = email.trim().toLowerCase();
     const body: { email: string; captchaToken?: string } = { email: trimmed };
     if (captchaToken) body.captchaToken = captchaToken;
-    await sendEmailCode(body);
+    const res = await sendEmailCode(body);
     setPendingCaptchaToken(null);
     setShowCaptcha(false);
     setCaptchaResume(null);
     setEmail(trimmed);
     setCodeSent(true);
     startResendCooldown();
-    message.success(t('auth.codeSent'));
+    message.success(
+      res?.mode === 'console'
+        ? t('auth.codeSentConsole')
+        : t('auth.codeSent')
+    );
   };
 
   const onGoogleContinue = () => {

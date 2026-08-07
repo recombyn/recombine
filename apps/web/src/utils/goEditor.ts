@@ -4,6 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { store } from '@/store';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import {
+  basenameToI18nLang,
+  getLocaleBasename,
+  withLocalePrefix,
+} from '@/i18n/localePath';
+import {
   openEditorWindowWithBoot,
   type HomeAgentBoot,
 } from '@/utils/homeAgentBoot';
@@ -21,6 +26,18 @@ export type GoEditorOpts = {
    */
   homeAgentBoot?: HomeAgentBoot;
 };
+
+/** Router paths are basename-relative; `window.open` needs the locale prefix. */
+export function toBrowserAppPath(routerPath: string): string {
+  const raw = String(routerPath || '').trim() || '/';
+  const qIdx = raw.indexOf('?');
+  const pathname = qIdx >= 0 ? raw.slice(0, qIdx) : raw;
+  const search = qIdx >= 0 ? raw.slice(qIdx) : '';
+  const basename = getLocaleBasename();
+  if (!basename) return raw.startsWith('/') ? raw : `/${raw}`;
+  const lang = basenameToI18nLang(basename);
+  return `${withLocalePrefix(pathname || '/', lang)}${search}`;
+}
 
 /** Build editor path (intent stays in the URL, including after login ?from=). */
 export function buildEditorIntentPath(opts?: GoEditorOpts): string {
@@ -55,12 +72,13 @@ export function useGoEditor() {
       const path = buildEditorIntentPath(opts);
       const dest = user ? path : buildLoginUrl(path);
       if (opts?.newWindow) {
+        const browserDest = toBrowserAppPath(dest);
         if (opts.homeAgentBoot) {
-          const opened = openEditorWindowWithBoot(dest, opts.homeAgentBoot);
+          const opened = openEditorWindowWithBoot(browserDest, opts.homeAgentBoot);
           if (!opened) navigate(dest);
           return;
         }
-        window.open(dest, '_blank', 'noopener,noreferrer');
+        window.open(browserDest, '_blank', 'noopener,noreferrer');
         return;
       }
       navigate(dest);

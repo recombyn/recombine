@@ -1114,12 +1114,11 @@ function resolveChromeAngle(opts: {
   return fromDoc;
 }
 
-/** Share / Dev inspect spacing pair: live hover first, then sticky prior selection. */
+/** Share / Dev inspect spacing pair: only while hovering another element. */
 function resolveMeasurePairNodeId(opts: {
   inspectDev: boolean;
   transforming: boolean;
   hoverNodeId: string | null;
-  inspectPairNodeId: string | null;
   inspectPrimaryId: string | null;
   selectedNodeIds: string[];
 }): string | null {
@@ -1131,13 +1130,6 @@ function resolveMeasurePairNodeId(opts: {
     !opts.selectedNodeIds.includes(opts.hoverNodeId)
   ) {
     return opts.hoverNodeId;
-  }
-  if (
-    opts.inspectPairNodeId &&
-    opts.inspectPairNodeId !== opts.inspectPrimaryId &&
-    !opts.selectedNodeIds.includes(opts.inspectPairNodeId)
-  ) {
-    return opts.inspectPairNodeId;
   }
   return null;
 }
@@ -1219,7 +1211,6 @@ function buildShapeOutlines(opts: {
   inspectDev: boolean;
   transforming: boolean;
   inspectPrimaryId: string | null;
-  inspectPairNodeId: string | null;
   singleId: string | null;
   chromeAngle: number;
   selectedIsImageGen: boolean;
@@ -1248,7 +1239,6 @@ function buildShapeOutlines(opts: {
     inspectDev: opts.inspectDev,
     transforming: opts.transforming,
     hoverNodeId: opts.hoverNodeId,
-    inspectPairNodeId: opts.inspectPairNodeId,
     inspectPrimaryId: opts.inspectPrimaryId,
     selectedNodeIds: opts.selectedNodeIds,
   });
@@ -1667,9 +1657,6 @@ function SelectionFeature({
   /** Dev inspect: node under pointer (annotations follow mouse). */
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
   const hoverNodeIdRef = useRef<string | null>(null);
-  /** Preview / Dev: previous single selection ??click A then B shows A?B spacing. */
-  const [inspectPairNodeId, setInspectPairNodeId] = useState<string | null>(null);
-  const prevInspectSelRef = useRef<string | null>(null);
 
   const setTransformingNotify = (next: boolean) => {
     setTransforming(next);
@@ -1756,18 +1743,6 @@ function SelectionFeature({
       setLiveAngle(0);
     }
   }, [baseOrigins, document, idsKey, frameIdsKey, selectionUnion]);
-
-  // Inspect: keep prior selection as pair target when clicking another element.
-  useEffect(() => {
-    const next = resolveInspectPrimaryId(selectedNodeIds, selectedFrameIds);
-    const prev = prevInspectSelRef.current;
-    if (next && prev && prev !== next) {
-      setInspectPairNodeId(prev);
-    } else if (!next) {
-      setInspectPairNodeId(null);
-    }
-    prevInspectSelRef.current = next;
-  }, [selectedNodeIds, selectedFrameIds]);
 
   useEffect(() => {
     if (!enabled || !hitEl) return undefined;
@@ -2910,7 +2885,6 @@ function SelectionFeature({
     inspectDev,
     transforming,
     hoverNodeId,
-    inspectPairNodeId,
     inspectPrimaryId,
     selectedNodeIds,
   });
@@ -2951,7 +2925,6 @@ function SelectionFeature({
     inspectDev,
     transforming,
     inspectPrimaryId,
-    inspectPairNodeId,
     singleId,
     chromeAngle,
     selectedIsImageGen,
