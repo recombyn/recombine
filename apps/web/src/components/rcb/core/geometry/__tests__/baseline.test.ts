@@ -138,6 +138,18 @@ describe('getShapeBaseline', () => {
     expect(b?.d).toContain('C ');
   });
 
+  it('lottie generator uses sharp box baseline like image/video generators', () => {
+    const b = getShapeBaseline({
+      key: 'lottie',
+      width: 80,
+      height: 80,
+      attrs: { lottieGenerator: true },
+    });
+    expect(b?.closed).toBe(true);
+    expect(b?.kind).toBe('box');
+    expect(b?.d).toMatch(/^M 0 0/);
+  });
+
   it('scales path baseline on live resize', () => {
     const b = getShapeBaseline(
       {

@@ -148,4 +148,35 @@ describe('move snap stickiness + grid integrity', () => {
     // Without sticky this chatters 100↔104; with sticky it should hold one side.
     expect(seen.size).toBe(1);
   });
+
+  it('after first sticky flush, intentional move to competing guide re-aligns (not stuck)', () => {
+    // Repro: first horizontal snap locks sticky; hunting the neighbor magnet
+    // felt "卡住" until a vertical nudge left the band. Sticky may break ties /
+    // ±jitter, but must not keep a guide that is clearly farther than another.
+    const left = { left: 0, top: 0, width: 100, height: 80 };
+    const rightAnchor = { left: 204, top: 0, width: 100, height: 80 };
+    const targets = [left, rightAnchor];
+    let stickyAt: { x?: number; y?: number } = {};
+
+    const first = productionMoveSettle({
+      box: { left: 100.4, top: 0, width: 100, height: 80 },
+      targets,
+      zoom: 1,
+      stickyAt,
+    });
+    expect(first.box.left).toBe(100);
+    stickyAt = first.stickyAt;
+    expect(stickyAt.x).toBe(100);
+
+    // Pointer clearly prefers the competing flush (104): ~1.2px closer raw.
+    // Old hysteresis=2 kept score(sticky)=0.8 < 1.2 → stuck at 100.
+    const second = productionMoveSettle({
+      box: { left: 102.8, top: 0, width: 100, height: 80 },
+      targets,
+      zoom: 1,
+      stickyAt,
+    });
+    expect(second.box.left).toBe(104);
+    assertBoxOnGrid(second.box, 1);
+  });
 });

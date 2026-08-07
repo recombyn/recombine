@@ -38,6 +38,21 @@ function videoNode(box: { x: number; y: number; width: number; height: number })
   };
 }
 
+function lottieGenNode(box: { x: number; y: number; width: number; height: number }) {
+  return {
+    key: 'lottie',
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height,
+    attrs: {
+      animationData: '',
+      lottieGenerator: true,
+      assetKind: 'lottie',
+    },
+  };
+}
+
 const box = { x: 10, y: 20, width: 28, height: 38 };
 const doc = { x: 0, y: 0, deltaSetLike: {} };
 
@@ -154,5 +169,25 @@ describe('video move preview geom == HTML plate override', () => {
       width: htmlOverride.width,
       height: htmlOverride.height,
     });
+  });
+
+  it('lottie generator move keeps SVG geom on the same lattice as image/video', async () => {
+    const { root, layer } = svgRoot({
+      'data-rcb-infinite': '1',
+      'data-rcb-world-surface': '1',
+    });
+    const node = lottieGenNode(box);
+    const el = await nodeToSvgElement(root, layer, doc, node, 'lottie-gen-move');
+    expect(el).toBeTruthy();
+    const nodeEls = new Map<string, SVGElement>([['lottie-gen-move', el!]]);
+    const moved = { left: 50, top: 60, width: 28, height: 38 };
+    expect(previewSvgNodeGeometry(nodeEls, 'lottie-gen-move', moved)).toBe(true);
+    const anyEl = el as any;
+    expect({
+      left: Number(anyEl.__sceneLeft),
+      top: Number(anyEl.__sceneTop),
+      width: Number(anyEl.sceneWidth),
+      height: Number(anyEl.sceneHeight),
+    }).toEqual(moved);
   });
 });
