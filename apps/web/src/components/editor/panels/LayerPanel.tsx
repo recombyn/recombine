@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type PointerE
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuFrame, LuPanelLeft, LuPencil, LuFilm } from 'react-icons/lu';
+import { LuFrame, LuPanelLeft, LuPencil, LuFilm, LuClapperboard } from 'react-icons/lu';
 import { RiVideoAiLine } from 'react-icons/ri';
 import { RxText } from 'react-icons/rx';
 import {
@@ -23,6 +23,7 @@ import { VirtualList, type VirtualListHandle } from '@/components/base/VirtualLi
 import {
   isGeneratorNode,
   isImageGeneratorNode,
+  isLottieGeneratorNode,
   isVideoGeneratorNode,
   isNodeHidden,
   isNodeLocked,
@@ -197,6 +198,14 @@ function LayerIcon({
     );
   }
 
+  if (isLottieGeneratorNode(node) || node.key === 'lottie') {
+    return (
+      <LayerGlyphFallback>
+        <LuClapperboard className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+      </LayerGlyphFallback>
+    );
+  }
+
   if (node.key === 'video') {
     const thumb = <LayerMediaThumb kind="video" src={src} poster={poster} />;
     if (thumb) return thumb;
@@ -240,13 +249,25 @@ function LayerIcon({
 }
 
 function layerLabel(
-  node: { key: string; attrs?: { shapeType?: string; imageGenerator?: unknown; videoGenerator?: unknown; name?: unknown } },
+  node: {
+    key: string;
+    attrs?: {
+      shapeType?: string;
+      imageGenerator?: unknown;
+      videoGenerator?: unknown;
+      lottieGenerator?: unknown;
+      name?: unknown;
+    };
+  },
   imageGeneratorLabel: string,
-  videoGeneratorLabel?: string
+  videoGeneratorLabel?: string,
+  lottieGeneratorLabel?: string
 ) {
   if (isImageGeneratorNode(node)) return imageGeneratorLabel;
   if (isVideoGeneratorNode(node)) return videoGeneratorLabel || 'Video Generator';
+  if (isLottieGeneratorNode(node)) return lottieGeneratorLabel || 'Lottie Generator';
   if (node.key === 'video') return String(node.attrs?.name || 'Video');
+  if (node.key === 'lottie') return String(node.attrs?.name || 'Lottie');
   const kind = resolveLayerIconKind(node);
   const map: Record<string, string> = {
     text: '文字',
@@ -262,6 +283,7 @@ function layerLabel(
     pencil: '画笔',
     path: '路径',
     svg: 'SVG',
+    lottie: 'Lottie',
   };
   return map[kind] || kind;
 }
@@ -420,7 +442,8 @@ function LayerStackRowView({
           {layerLabel(
             node,
             t('editor.tools.imageGenerator'),
-            t('editor.tools.videoGenerator')
+            t('editor.tools.videoGenerator'),
+            t('editor.tools.lottieGenerator')
           )}
         </span>
       </button>

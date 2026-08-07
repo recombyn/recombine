@@ -78,7 +78,7 @@ function strokePaintMeta(node: any): { align: StrokeAlign; strokeWidth: number }
   if (shapeType === 'line' || shapeType === 'arrow' || shapeType === 'pencil' || shapeType === 'pen')
     return null;
   if (key === 'text' || key === 'frame') return null;
-  if (key === 'image' || key === 'video') return null;
+  if (key === 'image' || key === 'video' || key === 'lottie') return null;
 
   // Same color fallback as sceneToSvg — a missing border-color still paints #333.
   const { stroke, strokeWidth } = resolveStroke(node, '#333333');
@@ -238,7 +238,7 @@ export function geometryPatchForStrokeVisibilityToggle(
   ) {
     return null;
   }
-  if (node.key === 'text' || node.key === 'frame' || node.key === 'image' || node.key === 'video') {
+  if (node.key === 'text' || node.key === 'frame' || node.key === 'image' || node.key === 'video' || node.key === 'lottie') {
     return null;
   }
   // Boolean / pasted outlines keep absolute local `path` — resizing the box alone

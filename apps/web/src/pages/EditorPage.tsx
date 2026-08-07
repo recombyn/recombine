@@ -16,6 +16,10 @@ import { CollabRoomProvider } from '@/components/editor/collab/CollabRoomProvide
 import { isCollabActive } from '@/components/editor/collab/collabRuntime';
 import type { ComposerContext } from '@/components/editor/panels/AgentComposerInput';
 import AgentDock from '@/components/editor/panels/AgentDock';
+import {
+  RESUME_AGENT_DRAFT_EVENT,
+  type ResumeAgentDraftDetail,
+} from '@/components/editor/nodes/LottieGeneratorNode/LottieGeneratorCard';
 import DevPropertiesPanel from '@/components/editor/panels/DevPropertiesPanel';
 import ShareDialog from '@/components/editor/panels/ShareDialog';
 import { fetchShareApi, updateShareDocumentApi } from '@/apis/shares';
@@ -921,6 +925,27 @@ function EditorPage() {
     setAgentDraftImageAspect(boot!.imageAspectRatio ?? null);
     setAgentDraftScene(boot!.scene ?? null);
   }, [location.search, location.pathname, navigate]);
+
+  /** Canvas Lottie/image generators → open Agent dock with draft + auto-submit. */
+  useEffect(() => {
+    const onDraft = (ev: Event) => {
+      if (workspaceMode === 'dev') return;
+      const detail = (ev as CustomEvent<ResumeAgentDraftDetail>).detail;
+      const prompt = String(detail?.prompt || '').trim();
+      if (!prompt) return;
+      setAgentOpen(true);
+      setAgentDraft(prompt);
+      setAgentAutoSubmit(Boolean(detail.autoSubmit));
+      setAgentDraftAttachments(Array.isArray(detail.attachments) ? detail.attachments : []);
+      setAgentDraftContexts([]);
+      setAgentDraftModelId(detail.modelId ?? null);
+      setAgentDraftInteractionMode(detail.interactionMode || 'agent');
+      setAgentDraftImageAspect(null);
+      setAgentDraftScene(null);
+    };
+    window.addEventListener(RESUME_AGENT_DRAFT_EVENT, onDraft as EventListener);
+    return () => window.removeEventListener(RESUME_AGENT_DRAFT_EVENT, onDraft as EventListener);
+  }, [workspaceMode]);
 
   // Keep /editor/:projectId in sync so refresh can reload the same project.
   useEffect(() => {

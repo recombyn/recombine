@@ -30,6 +30,8 @@ import {
 } from '@/store/modules/editor';
 import FlipRotateToolbar from '@/components/editor/nodes/ImageNode/FlipRotateToolbar';
 import ImageQuickEditComposer from '@/components/editor/nodes/ImageNode/ImageQuickEditComposer';
+import LottieQuickEditComposer from '@/components/editor/nodes/LottieNode/LottieQuickEditComposer';
+import LottieToolbarEditTools from '@/components/editor/nodes/LottieNode/LottieToolbarEditTools';
 import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelectionPanel';
 import { ImageToolSep, imageToolBtn } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
 import {
@@ -46,7 +48,13 @@ import {
   toggleTextDecoration,
 } from '@/components/rcb/scene/document/sceneText';
 import { markdownToPlain } from '@/components/rcb/scene/document/sceneMarkdown';
-import { isIconImageNode, isImageGeneratorNode, isVideoGeneratorNode, type ImageProcessKind } from '@/components/rcb/scene/document/sceneDocument';
+import {
+  isIconImageNode,
+  isImageGeneratorNode,
+  isLottieGeneratorNode,
+  isVideoGeneratorNode,
+  type ImageProcessKind,
+} from '@/components/rcb/scene/document/sceneDocument';
 import ToolbarMenuSelect from './ToolbarMenuSelect';
 import BlendModeControl from './BlendModeControl';
 import {
@@ -118,7 +126,7 @@ function resolveImageAspectLocked(node: any, kind: string): boolean {
   const raw = node?.attrs?.lockAspect;
   if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
   if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
-  return kind === 'image' || kind === 'video';
+  return kind === 'image' || kind === 'video' || kind === 'lottie';
 }
 
 /** Solid MD glyphs — outline bars-3 reads too light next to B/I/U. */
@@ -166,6 +174,10 @@ function SelectionContextToolbar(props: Props): ReactNode {
     kind === 'image' &&
     imageToolPanel?.kind === 'quickEdit' &&
     imageToolPanel?.nodeId === nodeId;
+  const lottieEditOpen =
+    kind === 'lottie' &&
+    imageToolPanel?.kind === 'lottieEdit' &&
+    imageToolPanel?.nodeId === nodeId;
   const [mdOpen, setMdOpen] = useState(false);
   const [fontCatalogTick, setFontCatalogTick] = useState(0);
   const style = useMemo(
@@ -204,7 +216,9 @@ function SelectionContextToolbar(props: Props): ReactNode {
 
   if (!node || !box) return null;
   // Generator plate uses its own composer overlay — hide photo AI selection chrome.
-  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node)) return null;
+  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node)) {
+    return null;
+  }
 
   const patchTextStyle = (partial: Record<string, unknown>) => {
     const next = buildTextAttrsPreservingMarkdown(node.attrs || {}, {
@@ -264,13 +278,16 @@ function SelectionContextToolbar(props: Props): ReactNode {
   if (quickEditOpen) {
     return <ImageQuickEditComposer document={document} nodeId={nodeId} box={box} />;
   }
+  if (lottieEditOpen) {
+    return <LottieQuickEditComposer document={document} nodeId={nodeId} box={box} />;
+  }
 
   return (
     <>
       <SelectionToolbarShell
         box={box}
         edgePadScene={edgePadScene}
-        hasTitleLabel={kind === 'image' || kind === 'video'}
+        hasTitleLabel={kind === 'image' || kind === 'video' || kind === 'lottie'}
         bare={kind === 'image' && isIconImageNode(node)}
       >
           {/* Order: Style/Edit → Geometry → Blend/Opacity → Actions */}
@@ -766,6 +783,21 @@ function SelectionContextToolbar(props: Props): ReactNode {
                 }
               />
             )
+          ) : null}
+
+          {kind === 'lottie' ? (
+            <LottieToolbarEditTools
+              nodeId={nodeId}
+              animationData={node?.attrs?.animationData}
+              name={String(node?.attrs?.name || 'Lottie')}
+              loop={!(
+                node?.attrs?.lottieLoop === false ||
+                node?.attrs?.lottieLoop === 'false' ||
+                node?.attrs?.lottieLoop === 0 ||
+                node?.attrs?.lottieLoop === '0'
+              )}
+              speed={Math.max(0.25, Number(node?.attrs?.lottieSpeed) || 1)}
+            />
           ) : null}
 
           {kind === 'shape' || kind === 'rect' || kind === 'ellipse' || kind === 'path' ? (
