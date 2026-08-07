@@ -16,7 +16,7 @@ REFERENCE_TYPES = ('text', 'vision', 'image', 'video')
 
 
 def _load_catalog_seed() -> dict[str, Any]:
-    """Load llm_models_seed.json (private overlay → public; models + presets + tombstones)."""
+    """Load llm_models_seed.json (models + presets + tombstones)."""
     try:
         parsed = json.loads(resolve_data_file("llm_models_seed.json").read_text(encoding="utf-8"))
         return parsed if isinstance(parsed, dict) else {}
@@ -46,7 +46,7 @@ def _load_model_seed() -> list[dict[str, Any]]:
 
 
 # Official Ark / OpenRouter image size contracts + model rows:
-# apps/api/data/public|private/llm_models_seed.json
+# apps/api/data/llm_models_seed.json
 IMAGE_LIMIT_PRESETS: dict[str, dict[str, Any]] = _load_image_limit_presets()
 _SEED: list[dict[str, Any]] = _load_model_seed()
 

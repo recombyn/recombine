@@ -119,6 +119,6 @@ def test_oss_ask_system_seed_documents_choice_ui():
     body = str((_SEED_BY_KIND.get("agent.prompt.ask_system") or {}).get("body") or "")
     assert "choice_ui" in body
     assert "apply" in body and "dismiss" in body
-    assert "提案确认" in body or "Propose / confirm" in body
+    assert "提案确认" in body or "Propose / confirm" in body or "Propose canvas work" in body
     assert "问法策略" in body or "Ask strategy" in body
     assert "每轮只问" in body or "One blocking question" in body

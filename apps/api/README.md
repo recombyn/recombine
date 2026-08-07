@@ -49,7 +49,7 @@ apps/api/                     # ≈ 官方模板 backend/
 | `design_skills_seed.json` | Agent 核心 Skill（`source=seed` / namespace=`core`） |
 | `design_skills/` | 文件包扩展 Skill（`_meta.json` + `SKILL.md`，namespace=`ext`） |
 
-Skill 命名空间、ACL、版本 pin、热加载说明见 [data/public/design_skills/README.md](./data/public/design_skills/README.md)。
+Skill 命名空间、ACL、版本 pin、热加载说明见 [data/design_skills/README.md](./data/design_skills/README.md)。
 
 修改种子后：新环境会自动 seed；已有库需按业务决定是否手工同步或 bump dict `rev`。
 

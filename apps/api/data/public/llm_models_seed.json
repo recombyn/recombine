@@ -1,8 +1,0 @@
-{
-  "imageLimitPresets": {},
-  "models": [],
-  "droppedSeedModelIds": [],
-  "staleSeedDescriptions": [],
-  "retiredDirectDeepseekIds": [],
-  "_comment": "OSS stub. Put full catalog in data/private/llm_models_seed.json"
-}
