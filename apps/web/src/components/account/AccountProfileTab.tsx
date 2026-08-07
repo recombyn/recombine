@@ -8,6 +8,7 @@ import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import { setUser, type AuthUser } from '@/store/modules/auth';
 import { formatTokens } from '@/utils/wallet';
 import { docsUrl } from '@/utils/docsUrl';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { cn } from '@/utils/classnames';
 
 const NAME_RE = /^[\p{L}\p{N}\s.'\-_]{1,40}$/u;
@@ -246,6 +247,7 @@ function AccountProfileTab({
         </dl>
       </section>
 
+      {!isDesktopLocal() ? (
       <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">
         <h2 className="mb-5 text-[15px] font-semibold text-[var(--ink)]">
           {t('account.billingSection')}
@@ -289,6 +291,7 @@ function AccountProfileTab({
           </button>
         </div>
       </section>
+      ) : null}
 
       <p className="pt-1 text-[12px] text-[var(--muted)]">
         <a

@@ -39,6 +39,7 @@ import { docsUrl, openExternalUrl } from '@/utils/docsUrl';
 import { SUPPORTED_LANGS } from '@/i18n';
 import { buildLocaleSwitchUrl, normalizeI18nLang } from '@/i18n/localePath';
 import { applyTheme, getStoredThemeMode, type ThemeMode } from '@/theme';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { cn } from '@/utils/classnames';
 
 const NARROW_MQ = '(max-width: 767px)';
@@ -247,8 +248,11 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
   const planId = useSelector((state: any) => state.wallet?.planId ?? 'free') as PlanId;
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const desktopLocal = isDesktopLocal();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<AccountSettingsTab>('billing');
+  const [settingsTab, setSettingsTab] = useState<AccountSettingsTab>(
+    desktopLocal ? 'profile' : 'billing'
+  );
   const [plansOpen, setPlansOpen] = useState(false);
   const [flyout, setFlyout] = useState<FlyoutKind>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
@@ -361,13 +365,18 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
     close();
   };
 
-  const openSettings = (tab: AccountSettingsTab = 'billing') => {
+  const openSettings = (tab: AccountSettingsTab = desktopLocal ? 'profile' : 'billing') => {
     close();
-    setSettingsTab(tab);
+    setSettingsTab(
+      desktopLocal && (tab === 'billing' || tab === 'plans' || tab === 'redeem')
+        ? 'profile'
+        : tab
+    );
     setSettingsOpen(true);
   };
 
   const openPlans = () => {
+    if (desktopLocal) return;
     close();
     setPlansOpen(true);
   };
@@ -412,8 +421,8 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
                 </div>
               </div>
 
-              {/* Plan + upgrade — hide while drilling into lang/theme */}
-              {!flyout ? (
+              {/* Plan + upgrade — cloud / web only; hide while drilling into lang/theme */}
+              {!flyout && !desktopLocal ? (
                 <div className="border-t border-[var(--line)] px-3.5 py-3">
                   <button
                     type="button"

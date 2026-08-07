@@ -7,6 +7,7 @@ import { redeemCardKey } from '@/apis/wallet';
 import { normalizePlanId, type LedgerEntry, type PlanId } from '@/utils/wallet';
 import { syncFromServer } from '@/store/modules/wallet';
 import { buildLoginUrl } from '@/utils/authReturnTo';
+import { isDesktopLocal } from '@/utils/apiBase';
 
 type RedeemPanelProps = {
   active?: boolean;
@@ -135,6 +136,7 @@ type DialogProps = {
 /** Standalone redeem dialog (legacy callers). Prefer AccountSettingsDialog. */
 function RedeemDialog({ open, onClose, onRedeemed }: DialogProps) {
   const { t } = useTranslation();
+  if (isDesktopLocal()) return null;
   const dismiss = () => {
     // Blur before hide — cancel/redeem call parent setState and skip Dialog.onClose blur.
     const active = document.activeElement;

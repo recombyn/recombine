@@ -11,6 +11,10 @@ UI still calls `/api/v1/...` on **`127.0.0.1:8000`**. Projects, skills, uploads,
 
 **Login:** Local desktop auto-signs in as the OS user (`DESKTOP_LOCAL_AUTO_LOGIN`, loopback-only `POST /auth/desktop-local`). No email OTP. Cloud desktop / browser still use normal login.
 
+**Billing UI:** Local flavor hides plans / redeem / upgrade (no cloud account switch in-app — use the Cloud desktop build for that).
+
+**Models:** Local does **not** expose the platform LLM catalog (no Seedream / OpenRouter entries for end users). Add your own OpenAI-compatible providers + API keys under Agent settings (BYOK). Wallet holds are skipped.
+
 ## Prerequisites
 
 1. **Node.js** + repo `npm install`
@@ -77,9 +81,10 @@ Cloud desktop
 | Symptom | What to try |
 |---------|-------------|
 | Skills / projects “Request failed” | Re-login — old cloud JWT won’t match a fresh local SQLite DB |
+| Still shows email/OTP login | Auto-login failed — often stale SQLite schema; pull latest, restart `dev:desktop`, or delete `apps/api/storage/recombyn.db` |
 | Sidecar build fails | `cd apps/api && .venv\Scripts\activate && pip install -e ".[desktop]"` |
 | Release app won’t start API | Confirm `sidecars/recombyn-api/recombyn-api.exe` exists before/after build |
-| Port 8000 in use | Quit other API / previous desktop; or reuse the existing listener |
+| Port 8000 in use | Quit other API / previous desktop; `ensure-desktop-api` refuses a listener without working auto-login |
 | Want cloud MySQL in desktop | Use **cloud** flavor, not local |
 
 ## Related

@@ -12,10 +12,13 @@ import { fetchDesignCatalog } from '@/apis/design';
 import { Dropdown, SegmentedControl, Select, Tooltip } from '@/components/base';
 import AccountSettingsDialog from '@/components/layout/AccountSettingsDialog';
 import { cn } from '@/utils/classnames';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { planAllowsCustomModels, type PlanId } from '@/utils/wallet';
 import {
   createCustomLlmProviderId,
+  customProvidersAsModels,
   hydrateCustomLlmProviders,
+  isCustomModelId,
   persistCustomLlmProvider,
   removeCustomLlmProvider,
   type CustomLlmProvider,
@@ -197,9 +200,53 @@ function resolveNamedPreset(
   };
 }
 
+function emptyCustomRoutePrefs(): AgentRoutePrefs {
+  return {
+    preset: 'custom',
+    fast: '',
+    standard: '',
+    reasoning: '',
+    vision: '',
+    image: '',
+  };
+}
+
+/** Seed values when switching into the custom lane from another preset. */
+function seedCustomLaneFromPrefs(prefs: AgentRoutePrefs): AgentRoutePrefs {
+  if (prefs.preset === 'balanced' || prefs.preset === 'quality') {
+    return resolveNamedPreset(prefs.preset);
+  }
+  if (prefs.preset === 'custom') return prefs;
+  return resolveNamedPreset('balanced');
+}
+
 export function loadAgentRoutePrefs(
   rules?: Record<string, string> | null
 ): AgentRoutePrefs {
+  // Local desktop: no platform catalog — only custom/BYOK lane picks.
+  if (isDesktopLocal()) {
+    try {
+      const raw =
+        localStorage.getItem(ROUTE_PREFS_KEY) ||
+        localStorage.getItem(ROUTE_PREFS_KEY_LEGACY);
+      if (!raw) return emptyCustomRoutePrefs();
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object') return emptyCustomRoutePrefs();
+      const migrated = migrateLegacyRouteKeys(parsed);
+      const keep = (id: string | undefined) =>
+        isCustomModelId(String(id || '').trim()) ? String(id).trim() : '';
+      return {
+        preset: 'custom',
+        fast: keep(migrated.fast),
+        standard: keep(migrated.standard),
+        reasoning: keep(migrated.reasoning),
+        vision: keep(migrated.vision),
+        image: keep(migrated.image),
+      };
+    } catch {
+      return emptyCustomRoutePrefs();
+    }
+  }
   try {
     const raw =
       localStorage.getItem(ROUTE_PREFS_KEY) ||
@@ -316,6 +363,81 @@ function parseCustomModelKind(value: string): CustomModelKind {
   return 'text';
 }
 
+type RouteLaneT = (key: string, opts?: Record<string, unknown>) => string;
+
+function renderRouteLaneSelectLabel(opts: {
+  model: LlmModel | null;
+  label: string;
+  muted: boolean;
+}): ReactNode {
+  const { model, label, muted } = opts;
+  return (
+    <span className="flex min-w-0 items-center gap-2 pr-4">
+      {model ? <ModelBrandIcon model={model} size={18} className="shrink-0" /> : null}
+      <span className={cn('truncate', muted ? 'text-[var(--muted)]' : '')}>{label}</span>
+    </span>
+  );
+}
+
+function renderRouteLaneOptionMeta(
+  full: LlmModel | null,
+  t: RouteLaneT
+): ReactNode {
+  if (!full) return null;
+  if (isUserCustomModel(full)) {
+    return <ModelMetaBadge label={t('agent.modelBadgeCustom')} />;
+  }
+  const priceTag = modelPriceTagInfo(full, t);
+  if (!priceTag) return null;
+  return <ModelPriceTag level={priceTag.level} label={priceTag.label} />;
+}
+
+function renderRouteLaneSelectOption(
+  opt: { value: string | number; label: ReactNode },
+  catalogPool: LlmModel[],
+  t: RouteLaneT
+): ReactNode {
+  const full = catalogPool.find((x) => x.id === opt.value) || null;
+  const desc = full ? modelDescription(full, t) : undefined;
+  return (
+    <span className="flex w-full min-w-0 items-start gap-2.5">
+      {full ? <ModelBrandIcon model={full} size={18} className="mt-0.5 shrink-0" /> : null}
+      <span className="min-w-0 flex-1 overflow-hidden">
+        <span className="flex min-w-0 items-start justify-between gap-2">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-[var(--ink)]">
+            {opt.label}
+          </span>
+          {renderRouteLaneOptionMeta(full, t)}
+        </span>
+        {desc ? (
+          <span className="mt-0.5 block min-w-0 max-w-full truncate text-[11px] leading-[1.35] text-[var(--muted)]">
+            {desc}
+          </span>
+        ) : null}
+      </span>
+    </span>
+  );
+}
+
+/** Select `value` — only named presets; everything else maps to platform. */
+function selectValueForRoutePreset(preset: AgentRoutePreset): AgentRoutePreset {
+  if (preset === 'balanced' || preset === 'quality' || preset === 'custom') return preset;
+  return 'platform';
+}
+
+function routePresetNoteText(preset: AgentRoutePreset, t: RouteLaneT): string {
+  switch (preset) {
+    case 'balanced':
+      return t('account.agentRouteBalancedNote');
+    case 'quality':
+      return t('account.agentRouteQualityNote');
+    case 'custom':
+      return t('account.agentRouteCard.custom.desc');
+    default:
+      return t('account.agentRoutePlatformNote');
+  }
+}
+
 function customModelKindLabelKey(
   kind: CustomModelKind
 ): 'agent.providerModelKindText' | 'agent.providerModelKindVision' {
@@ -404,7 +526,10 @@ function AgentRoutePrefsEditor({
   onChanged,
 }: AgentRoutePrefsEditorProps): ReactNode {
   const { t } = useTranslation();
-  const [routePrefs, setRoutePrefs] = useState<AgentRoutePrefs>({ preset: 'platform' });
+  const desktopLocal = isDesktopLocal();
+  const [routePrefs, setRoutePrefs] = useState<AgentRoutePrefs>(() =>
+    desktopLocal ? emptyCustomRoutePrefs() : { preset: 'platform' }
+  );
   const [routeSaved, setRouteSaved] = useState(false);
   const [textModels, setTextModels] = useState<LlmModel[]>([]);
   const [imageModels, setImageModels] = useState<LlmModel[]>([]);
@@ -438,8 +563,17 @@ function AgentRoutePrefsEditor({
         const orOk = res?.openrouterAvailable !== false;
         cachedOpenrouterAvailable = orOk;
         setOpenrouterAvailable(orOk);
-        setTextModels(res?.models || []);
-        setImageModels(res?.imageModels || []);
+        const platformText = res?.models || [];
+        const platformImage = res?.imageModels || [];
+        // Local: API returns empty platform catalog — fill lanes from BYOK only.
+        if (isDesktopLocal()) {
+          const byok = customProvidersAsModels();
+          setTextModels(byok);
+          setImageModels([]);
+        } else {
+          setTextModels(platformText);
+          setImageModels(platformImage);
+        }
         setRoutePrefs(loadAgentRoutePrefs(cachedPresetRules));
       })
       .catch(() => undefined);
@@ -448,9 +582,22 @@ function AgentRoutePrefsEditor({
     };
   }, []);
 
+  // Refresh BYOK lane options when providers change (local desktop).
+  useEffect(() => {
+    if (!desktopLocal) return;
+    let cancelled = false;
+    void hydrateCustomLlmProviders().then(() => {
+      if (cancelled) return;
+      setTextModels(customProvidersAsModels());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopLocal]);
+
   const commit = (next: AgentRoutePrefs) => {
     setRoutePrefs(next);
-    if (next.preset === 'custom') {
+    if (desktopLocal || next.preset === 'custom') {
       saveAgentRoutePrefs({
         preset: 'custom',
         fast: next.fast,
@@ -469,13 +616,12 @@ function AgentRoutePrefsEditor({
   };
 
   const applyPreset = (preset: AgentRoutePreset) => {
+    if (desktopLocal) {
+      commit({ ...routePrefs, preset: 'custom' });
+      return;
+    }
     if (preset === 'custom') {
-      const seed =
-        routePrefs.preset === 'balanced' || routePrefs.preset === 'quality'
-          ? resolveNamedPreset(routePrefs.preset)
-          : routePrefs.preset === 'custom'
-            ? routePrefs
-            : resolveNamedPreset('balanced');
+      const seed = seedCustomLaneFromPrefs(routePrefs);
       commit({
         preset: 'custom',
         fast: routePrefs.fast || seed.fast,
@@ -519,12 +665,14 @@ function AgentRoutePrefsEditor({
   const reasoningOpts = modelOptions(catalogPool, 'reasoning');
   const visionOpts = modelOptions(catalogPool, 'vision');
   const imageOpts = modelOptions(catalogPool, 'image');
-  const presetOptions = [
-    { value: 'platform', label: t('account.agentRoutePresetPlatform') },
-    { value: 'balanced', label: t('account.agentRoutePresetBalanced') },
-    { value: 'quality', label: t('account.agentRoutePresetQuality') },
-    { value: 'custom', label: t('account.agentRoutePresetCustom') },
-  ];
+  const presetOptions = desktopLocal
+    ? [{ value: 'custom', label: t('account.agentRoutePresetCustom') }]
+    : [
+        { value: 'platform', label: t('account.agentRoutePresetPlatform') },
+        { value: 'balanced', label: t('account.agentRoutePresetBalanced') },
+        { value: 'quality', label: t('account.agentRoutePresetQuality') },
+        { value: 'custom', label: t('account.agentRoutePresetCustom') },
+      ];
 
   const presetShortLabel = routePresetShortLabel(routePrefs.preset, t);
 
@@ -536,16 +684,19 @@ function AgentRoutePrefsEditor({
     { key: 'image' as const, label: t('account.agentRouteImage'), opts: imageOpts },
   ];
 
+  const laneEmptyLabel = t('account.agentRouteLaneEmpty');
+
   const modelLabelOf = (id: string | undefined, opts: { id: string; label: string }[]) => {
     const v = String(id || '').trim();
-    if (!v) return opts[0]?.label || '—';
+    if (!v) return opts[0]?.label || laneEmptyLabel;
     return opts.find((o) => o.id === v)?.label || v;
   };
 
+  /** Only return a catalog hit — never invent a stub (stub still draws a brand icon). */
   const modelRefOf = (id: string | undefined, opts: { id: string; label: string }[]) => {
     const v = String(id || '').trim() || opts[0]?.id || '';
     if (!v) return null;
-    return catalogPool.find((m) => m.id === v) || { id: v, label: opts.find((o) => o.id === v)?.label || v };
+    return catalogPool.find((m) => m.id === v) || null;
   };
 
   const headerTitle = modeLabel || t('agent.interactionAgent');
@@ -553,7 +704,9 @@ function AgentRoutePrefsEditor({
   const multimodalAuto = routePrefs.preset !== 'custom';
 
   if (compact) {
-    const presetOrder = ['platform', 'balanced', 'quality'] as const;
+    const presetOrder = (
+      desktopLocal ? (['custom'] as const) : (['platform', 'balanced', 'quality'] as const)
+    );
 
     let submenuTitle = '';
     let submenuOptions: Array<{ id: string; label: string; desc?: string; model?: LlmModel | null }> =
@@ -830,6 +983,7 @@ function AgentRoutePrefsEditor({
             <div className="mt-1 px-0.5">
               {fieldRows.map((row) => {
                 const active = submenu?.kind === 'field' && submenu.key === row.key;
+                const laneModel = modelRefOf(routePrefs[row.key], row.opts);
                 return (
                   <div key={row.key}>
                     {routeSideDropdown({
@@ -856,10 +1010,7 @@ function AgentRoutePrefsEditor({
                             {row.label}
                           </span>
                           <span className="inline-flex w-[6.75rem] shrink-0 items-center justify-start gap-1 text-[12px] text-[var(--muted)]">
-                            <ModelBrandIcon
-                              model={modelRefOf(routePrefs[row.key], row.opts)}
-                              size={14}
-                            />
+                            {laneModel ? <ModelBrandIcon model={laneModel} size={14} /> : null}
                             <span className="min-w-0 flex-1 truncate text-left">
                               {modelLabelOf(routePrefs[row.key], row.opts)}
                             </span>
@@ -895,13 +1046,7 @@ function AgentRoutePrefsEditor({
         <Select
           size="large"
           className={selectCls}
-          value={
-            routePrefs.preset === 'balanced' ||
-            routePrefs.preset === 'quality' ||
-            routePrefs.preset === 'custom'
-              ? routePrefs.preset
-              : 'platform'
-          }
+          value={selectValueForRoutePreset(routePrefs.preset)}
           options={presetOptions}
           onChange={(v) => applyPreset(String(v) as AgentRoutePreset)}
         />
@@ -913,13 +1058,7 @@ function AgentRoutePrefsEditor({
         </p>
       ) : (
         <p className="text-[12px] leading-relaxed text-[var(--muted)]">
-          {routePrefs.preset === 'balanced'
-            ? t('account.agentRouteBalancedNote')
-            : routePrefs.preset === 'quality'
-              ? t('account.agentRouteQualityNote')
-              : routePrefs.preset === 'custom'
-                ? t('account.agentRouteCard.custom.desc')
-                : t('account.agentRoutePlatformNote')}
+          {routePresetNoteText(routePrefs.preset, t)}
         </p>
       )}
 
@@ -929,60 +1068,25 @@ function AgentRoutePrefsEditor({
             const currentId =
               String(routePrefs[row.key] || '').trim() || row.opts[0]?.id || '';
             const currentModel = modelRefOf(routePrefs[row.key], row.opts);
+            const emptyLane = !currentId;
             return (
               <label key={row.key} className="block">
                 <span className={labelCls}>{row.label}</span>
                 <Select
                   size="large"
                   className={selectCls}
-                  value={currentId}
+                  value={currentId || undefined}
+                  placeholder={laneEmptyLabel}
                   options={row.opts.map((m) => ({ value: m.id, label: m.label }))}
                   onChange={(v) => patchRouteField(row.key, String(v))}
-                  labelRender={() => (
-                    <span className="flex min-w-0 items-center gap-2 pr-4">
-                      <ModelBrandIcon model={currentModel} size={18} className="shrink-0" />
-                      <span className="truncate">
-                        {modelLabelOf(routePrefs[row.key], row.opts)}
-                      </span>
-                    </span>
-                  )}
-                  optionRender={(opt) => {
-                    const full = catalogPool.find((x) => x.id === opt.value) || null;
-                    const custom = full ? isUserCustomModel(full) : false;
-                    const priceTag = full && !custom ? modelPriceTagInfo(full, t) : null;
-                    const desc = full ? modelDescription(full, t) : undefined;
-                    return (
-                      <span className="flex w-full min-w-0 items-start gap-2.5">
-                        {full ? (
-                          <ModelBrandIcon model={full} size={18} className="mt-0.5 shrink-0" />
-                        ) : (
-                          <span
-                            className="mt-0.5 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-[var(--line)]/40 text-[10px] font-semibold text-[var(--muted)]"
-                            aria-hidden
-                          >
-                            A
-                          </span>
-                        )}
-                        <span className="min-w-0 flex-1 overflow-hidden">
-                          <span className="flex min-w-0 items-start justify-between gap-2">
-                            <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-[var(--ink)]">
-                              {opt.label}
-                            </span>
-                            {custom ? (
-                              <ModelMetaBadge label={t('agent.modelBadgeCustom')} />
-                            ) : priceTag ? (
-                              <ModelPriceTag level={priceTag.level} label={priceTag.label} />
-                            ) : null}
-                          </span>
-                          {desc ? (
-                            <span className="mt-0.5 block min-w-0 max-w-full truncate text-[11px] leading-[1.35] text-[var(--muted)]">
-                              {desc}
-                            </span>
-                          ) : null}
-                        </span>
-                      </span>
-                    );
-                  }}
+                  labelRender={() =>
+                    renderRouteLaneSelectLabel({
+                      model: currentModel,
+                      label: modelLabelOf(routePrefs[row.key], row.opts),
+                      muted: emptyLane || !currentModel,
+                    })
+                  }
+                  optionRender={(opt) => renderRouteLaneSelectOption(opt, catalogPool, t)}
                 />
               </label>
             );
@@ -1002,7 +1106,8 @@ function AgentModelsPanel({
 }: Props): ReactNode {
   const { t } = useTranslation();
   const planId = useSelector((state: any) => (state.wallet?.planId as PlanId) || 'free');
-  const canCustom = planAllowsCustomModels(planId);
+  // Local desktop: BYOK is always allowed (no cloud membership).
+  const canCustom = isDesktopLocal() || planAllowsCustomModels(planId);
   const [providers, setProviders] = useState<CustomLlmProvider[]>([]);
   const [name, setName] = useState('');
   const [website, setWebsite] = useState('');
@@ -1014,6 +1119,7 @@ function AgentModelsPanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const askUpgrade = () => {
+    if (isDesktopLocal()) return;
     if (onRequestUpgrade) onRequestUpgrade();
     else setSettingsOpen(true);
   };
