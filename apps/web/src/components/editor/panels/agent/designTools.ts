@@ -399,8 +399,11 @@ function resolveCreateShapeBorderWidth(opts: {
   return 0;
 }
 
-/** Tip brush ids Agent may emit (matches FE PENCIL_BRUSHES). */
+/** Tip + vector brush ids Agent may emit (matches FE PENCIL_BRUSHES). */
 const PENCIL_TIP_BRUSH_IDS = new Set([
+  'vector-ink',
+  'vector-even',
+  'vector-calligraphy',
   'solid',
   'pencil-hb',
   'soft',
@@ -418,7 +421,7 @@ const PENCIL_TIP_BRUSH_IDS = new Set([
   'bold',
 ]);
 
-/** Legacy freehand / seed ids → tip brush (keep in sync with pencilBrushes LEGACY_FREEHAND_ALIAS). */
+/** Legacy freehand / seed ids → tip / vector brush (keep in sync with pencilBrushes). */
 const PENCIL_BRUSH_LEGACY_ALIAS: Record<string, string> = {
   crayon: 'chalk',
   dry: 'bristle',
@@ -428,6 +431,14 @@ const PENCIL_BRUSH_LEGACY_ALIAS: Record<string, string> = {
   'tip-hard': 'solid',
   'tip-chalk': 'chalk',
   'tip-bristle': 'bristle',
+  freehand: 'vector-ink',
+  vector: 'vector-ink',
+  blob: 'vector-ink',
+  even: 'vector-even',
+  'vector-uniform': 'vector-even',
+  'vector-marker': 'vector-even',
+  'vector-brush': 'vector-calligraphy',
+  'vector-script': 'vector-calligraphy',
 };
 
 function resolvePencilBrushStyle(

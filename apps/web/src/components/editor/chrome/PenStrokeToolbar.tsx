@@ -37,9 +37,13 @@ import {
 } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
 
-const CUSTOM_BRUSH_STORAGE_KEY = 'recombine-custom-pencil-brushes-v2';
+const CUSTOM_BRUSH_STORAGE_KEY = 'recombine-custom-pencil-brushes-v3';
 const MAX_CUSTOM_BRUSHES = 48;
 const MAX_BRUSH_FILE_BYTES = 2.5 * 1024 * 1024;
+const LEGACY_CUSTOM_BRUSH_KEYS = [
+  'recombine-custom-pencil-brushes-v1',
+  'recombine-custom-pencil-brushes-v2',
+];
 
 type StoredBrush = {
   id: string;
@@ -129,15 +133,15 @@ function persistCustomBrushes(list: StoredBrush[]) {
 }
 
 function hydrateCustomPencilBrushes(): PencilBrushDef[] {
-  // Migrate v1 tip-only store if present.
-  const v2 = localStorage.getItem(CUSTOM_BRUSH_STORAGE_KEY);
-  if (!v2) {
-    const v1 = localStorage.getItem('recombine-custom-pencil-brushes-v1');
-    if (v1) {
-      return persistCustomBrushes(parseStoredBrushes(v1));
+  // Drop legacy custom stores — old tip/freehand leftovers were cluttering the wheel.
+  try {
+    for (const key of LEGACY_CUSTOM_BRUSH_KEYS) {
+      localStorage.removeItem(key);
     }
+  } catch {
+    /* ignore */
   }
-  return persistCustomBrushes(parseStoredBrushes(v2));
+  return persistCustomBrushes(parseStoredBrushes(localStorage.getItem(CUSTOM_BRUSH_STORAGE_KEY)));
 }
 
 function listStoredCustomBrushes(): StoredBrush[] {
@@ -268,7 +272,7 @@ function BrushStrokePreview({
     );
   }
 
-  const d = brushPreviewPath(brush, 9);
+  const d = brushPreviewPath(brush, 9, hardness);
   return (
     <svg
       className={className}
@@ -689,11 +693,15 @@ function PenStrokeToolbar({
         {isPencil ? (
           <>
             <span className="mx-0.5 h-4 w-px bg-[var(--line)]" aria-hidden />
-            {/* Hardness — tip edge softness; also drives dab spacing. */}
+            {/* Hardness: tip edge for stamps; pressure width / taper for vector ink. */}
             <label
               className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[4px] bg-[var(--accent-soft)] px-1.5"
               onPointerDown={(e) => e.stopPropagation()}
-              title="硬度（笔尖边缘软硬）"
+              title={
+                brush.kind === 'stamp'
+                  ? '硬度（笔尖边缘软硬）'
+                  : '硬度（软=压感粗细更明显，硬=更均匀）'
+              }
             >
               <span className="shrink-0 text-[10px] text-[var(--muted)]">硬</span>
               <input

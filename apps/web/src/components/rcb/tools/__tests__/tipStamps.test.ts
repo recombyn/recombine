@@ -8,6 +8,7 @@ import {
   findPencilBrush,
   isStampBrush,
   listPencilBrushes,
+  outlinePathFromPoints,
   paintStampDabs,
   setCustomPencilBrushes,
   setOfficialPencilBrushes,
@@ -18,18 +19,70 @@ import {
 const TIPS_DIR = resolve(__dirname, '../../../../../public/brushes/tips');
 
 describe('pencil tip stamps', () => {
-  it('every builtin brush is a tip stamp with a public tip file', () => {
+  it('builtin tip stamps have public tip files; vector brushes are freehand', () => {
     setOfficialPencilBrushes(null);
     setCustomPencilBrushes([]);
     const list = listPencilBrushes();
     expect(list.length).toBeGreaterThan(5);
-    for (const b of list) {
-      expect(b.kind).toBe('stamp');
+    const vectors = list.filter((b) => b.kind === 'freehand');
+    expect(vectors.map((b) => b.id)).toEqual([
+      'vector-ink',
+      'vector-even',
+      'vector-calligraphy',
+    ]);
+    for (const v of vectors) {
+      expect(isStampBrush(v.id)).toBe(false);
+    }
+    for (const b of list.filter((x) => x.kind === 'stamp')) {
       expect(b.stampSrc).toMatch(/^\/brushes\/tips\/.+\.png$/);
       expect(isStampBrush(b.id, b.stampSrc)).toBe(true);
       const file = String(b.stampSrc).replace('/brushes/tips/', '');
       expect(existsSync(resolve(TIPS_DIR, file)), `missing tip ${file}`).toBe(true);
     }
+  });
+
+  it('vector brushes build filled freehand outlines (not stamp)', () => {
+    setOfficialPencilBrushes(null);
+    setCustomPencilBrushes([]);
+    for (const id of ['vector-ink', 'vector-even', 'vector-calligraphy'] as const) {
+      const brush = findPencilBrush(id);
+      expect(brush.kind).toBe('freehand');
+      expect(isStampBrush(brush.id, brush.stampSrc)).toBe(false);
+      const d = outlinePathFromPoints(
+        [
+          { x: 0, y: 10, pressure: 0.4 },
+          { x: 20, y: 8, pressure: 0.8 },
+          { x: 40, y: 12, pressure: 0.5 },
+          { x: 60, y: 9, pressure: 0.7 },
+        ],
+        8,
+        id,
+        { pressureEnabled: true }
+      );
+      expect(d.length).toBeGreaterThan(20);
+      expect(d.startsWith('M') || d.startsWith('m')).toBe(true);
+    }
+  });
+
+  it('vector hardness soft vs hard changes outline (pressure width)', () => {
+    setOfficialPencilBrushes(null);
+    setCustomPencilBrushes([]);
+    const pts = [
+      { x: 0, y: 10, pressure: 0.2 },
+      { x: 30, y: 10, pressure: 0.95 },
+      { x: 60, y: 10, pressure: 0.25 },
+    ];
+    const soft = outlinePathFromPoints(pts, 10, 'vector-ink', {
+      pressureEnabled: true,
+      hardness: 5,
+    });
+    const hard = outlinePathFromPoints(pts, 10, 'vector-ink', {
+      pressureEnabled: true,
+      hardness: 95,
+    });
+    expect(soft).not.toBe(hard);
+    expect(soft.length).toBeGreaterThan(20);
+    expect(hard.length).toBeGreaterThan(20);
   });
 
   it('buildStampDabs places overlapping tips (not sparse dots)', () => {
