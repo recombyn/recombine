@@ -56,12 +56,14 @@ function liveShapeGeomBox(nodeId: string): SceneBox | null {
   return { left, top, width, height };
 }
 
-/** Shape / image / video / path on SVG host (not text / frame). */
+/** Shape / image / video / lottie / path on SVG host (not text / frame). */
 function nodeUsesPathChrome(node: any): boolean {
   if (!node) return false;
   const key = String(node.key || '');
   if (key === 'text' || key === 'frame') return false;
-  if (key === 'image' || key === 'video') return true;
+  // Media plates share the host lattice so chrome tracks SVG `__sceneLeft` —
+  // world SelectionChrome from Redux alone drifts after sticky re-align.
+  if (key === 'image' || key === 'video' || key === 'lottie') return true;
   if (key === 'shape' || key === 'path' || key === 'rect' || key === 'ellipse') return true;
   return Boolean(node.attrs?.shapeType);
 }
