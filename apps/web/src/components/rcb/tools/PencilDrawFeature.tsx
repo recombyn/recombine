@@ -3,18 +3,24 @@ import {
   brushPad,
   brushSize,
   findPencilBrush,
+  interpolateStrokeGaps,
   isStampBrush,
   outlinePathFromPoints,
+  paintStampDabs,
   pencilSampleMinStep,
   polylinePathD,
-  samplePolyline,
   serializePathPressures,
-  stampSizeForBrush,
-  stampSpacingForBrush,
+  STAMP_MAX_DABS_LIVE,
+  STROKE_GAP_INTERP,
   streamlinePencilPoints,
+  emptyStampLiveWalk,
+  extendStampLiveWalk,
+  normalizeStampPressures,
   type PencilBrushId,
+  type StampDab,
+  type StampLiveWalk,
 } from './pencilBrushes';
-import { getTintedStampSrc } from './stampTint';
+import { getTintedStampSrc, preloadStampSrc, STAMP_TINT_READY_EVENT } from './stampTint';
 import {
   rcbCameraCssZoom,
   rcbCameraScreenOffset,
@@ -55,9 +61,6 @@ type PencilPreview =
   | {
       box: SceneBox;
       mode: 'stamp';
-      samples: Array<{ x: number; y: number }>;
-      size: number;
-      src: string;
       opacity: number;
     };
 
@@ -71,7 +74,75 @@ export const PENCIL_CURSOR = `url("${pencilCursorUrl}") 2 13, crosshair`;
 export const ERASER_CURSOR = `url("${eraserCursorUrl}") 3 15, crosshair`;
 /** Pen nib is at viewBox (2,2) on 24→18 CSS: hotspot ≈ (1.5,1.5) → use 2 2 was ~0.5px late; 1 1 tracks the tip. */
 export const PEN_CURSOR = `url("${penCursorUrl}") 1 1, crosshair`;
-export const BUCKET_CURSOR = `url("${bucketCursorUrl}") 15 18, cell`;
+export const BUCKET_CURSOR = `url("${bucketCursorUrl}") 15 18, fill`;
+
+const STAMP_PREVIEW_MAX_PX = 1536;
+const tipImageCache = new Map<string, HTMLImageElement>();
+
+function tipImageForSrc(src: string): HTMLImageElement | null {
+  if (!src) return null;
+  let img = tipImageCache.get(src);
+  if (!img) {
+    img = new Image();
+    img.decoding = 'async';
+    img.src = src;
+    tipImageCache.set(src, img);
+  }
+  if (img.complete && (img.naturalWidth || img.width)) return img;
+  return null;
+}
+
+type StampLiveBlit = {
+  boxKey: string;
+  scale: number;
+  painted: number;
+  tipKey: string;
+};
+
+/**
+ * Paint tip stamps onto the live canvas — no toDataURL (that was the draw lag).
+ * Incremental when the view box / tip stay the same.
+ */
+function blitStampLivePreview(
+  canvas: HTMLCanvasElement,
+  box: SceneBox,
+  dabs: StampDab[],
+  tip: HTMLImageElement,
+  strokeOpacity: number,
+  tipKey: string,
+  state: StampLiveBlit
+): StampLiveBlit {
+  const scale = Math.min(1, STAMP_PREVIEW_MAX_PX / Math.max(box.width, box.height));
+  const cw = Math.max(1, Math.ceil(box.width * scale));
+  const ch = Math.max(1, Math.ceil(box.height * scale));
+  const boxKey = `${box.left}|${box.top}|${box.width}|${box.height}|${cw}x${ch}`;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return state;
+
+  const sameSurface =
+    state.boxKey === boxKey &&
+    state.tipKey === tipKey &&
+    state.scale === scale &&
+    canvas.width === cw &&
+    canvas.height === ch;
+
+  if (!sameSurface) {
+    if (canvas.width !== cw) canvas.width = cw;
+    if (canvas.height !== ch) canvas.height = ch;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.setTransform(scale, 0, 0, scale, -box.left * scale, -box.top * scale);
+    paintStampDabs(ctx, dabs, tip, strokeOpacity, 0);
+    return { boxKey, scale, painted: dabs.length, tipKey };
+  }
+
+  if (dabs.length <= state.painted) {
+    return state;
+  }
+  ctx.setTransform(scale, 0, 0, scale, -box.left * scale, -box.top * scale);
+  paintStampDabs(ctx, dabs, tip, strokeOpacity, state.painted);
+  return { boxKey, scale, painted: dabs.length, tipKey };
+}
 
 function clientToPaperScene(
   paperEl: HTMLElement | null,
@@ -164,24 +235,26 @@ type PencilDrawFeatureProps = {
   brushId?: PencilBrushId | string;
   /** Use stylus/touch pressure and brush speed simulation. */
   pressureEnabled?: boolean;
+  /** Tip hardness 0–100. */
+  hardness?: number;
   /** Erase ink under the brush instead of drawing. */
   eraseMode?: boolean;
   eraseTargets?: PencilEraseTarget[];
   onCommit: (
     pathD: string,
     box: { left: number; top: number; width: number; height: number },
-    meta?: { pathPressure?: string }
+    meta?: { pathPressure?: string; brushHardness?: number; brushStampSrc?: string }
   ) => void;
   onErase?: (stroke: PencilEraseStroke) => void;
 };
 
 function pointerPressure(e: PointerEvent): number | undefined {
-  // Mouse often reports 0 or 0.5 — only trust real pen/touch pressure.
-  if (e.pointerType === 'pen' || e.pointerType === 'touch') {
-    const p = Number(e.pressure);
-    if (Number.isFinite(p) && p > 0) return Math.min(1, Math.max(0.05, p));
-  }
-  return undefined;
+  // Real hardware pressure only (pen / touch). Mouse always undefined → constant width.
+  // Allow 0 (lightest) — do not invent speed-based pressure.
+  if (e.pointerType !== 'pen' && e.pointerType !== 'touch') return undefined;
+  const p = Number(e.pressure);
+  if (!Number.isFinite(p)) return undefined;
+  return Math.min(1, Math.max(0, p));
 }
 
 function eraseTargetsNearStroke(
@@ -215,6 +288,7 @@ function PencilDrawFeature({
   strokeOpacity = 1,
   brushId = 'solid',
   pressureEnabled = true,
+  hardness = 80,
   eraseMode = false,
   eraseTargets = [],
   onCommit,
@@ -230,6 +304,16 @@ function PencilDrawFeature({
   const drawing = useRef(false);
   /** Locked overlay viewport for the active stroke — stops per-point shell resize jitter. */
   const strokeViewBoxRef = useRef<SceneBox | null>(null);
+  const stampCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stampBlitRef = useRef<StampLiveBlit>({
+    boxKey: '',
+    scale: 1,
+    painted: 0,
+    tipKey: '',
+  });
+  const stampWalkRef = useRef<StampLiveWalk>(emptyStampLiveWalk());
+  const redrawRafRef = useRef(0);
+  const redrawOverlayRef = useRef<() => void>(() => {});
   const [preview, setPreview] = useState<PencilPreview | null>(null);
   const lastTipPosRef = useRef<{ x: number; y: number } | null>(null);
   const brushRef = useRef(brushId);
@@ -237,6 +321,7 @@ function PencilDrawFeature({
   const colorRef = useRef(strokeColor);
   const opacityRef = useRef(strokeOpacity);
   const pressureRef = useRef(pressureEnabled);
+  const hardnessRef = useRef(hardness);
   const eraseModeRef = useRef(eraseMode);
   const eraseTargetsRef = useRef(eraseTargets);
   const onEraseRef = useRef(onErase);
@@ -245,6 +330,7 @@ function PencilDrawFeature({
   colorRef.current = strokeColor;
   opacityRef.current = Math.min(1, Math.max(0, strokeOpacity));
   pressureRef.current = pressureEnabled;
+  hardnessRef.current = hardness;
   eraseModeRef.current = eraseMode;
   eraseTargetsRef.current = eraseTargets;
   onEraseRef.current = onErase;
@@ -291,7 +377,6 @@ function PencilDrawFeature({
     const pad = Math.max(
       eraseTipDiameter(),
       brushSize(findPencilBrush(brushRef.current), widthRef.current),
-      stampSizeForBrush(findPencilBrush(brushRef.current), widthRef.current),
       8
     );
     const all: Array<{ x: number; y: number }> = [...points];
@@ -346,27 +431,66 @@ function PencilDrawFeature({
       return;
     }
     const brush = findPencilBrush(brushRef.current);
+    // Tip brushes: paint onto a live <canvas> (no per-frame PNG encode).
     if (isStampBrush(brush.id, brush.stampSrc) && brush.stampSrc) {
-      const size = stampSizeForBrush(brush, widthRef.current);
-      const spacing = stampSpacingForBrush(brush, widthRef.current);
-      const samples = samplePolyline(points, spacing);
-      setPreview({
-        box,
-        mode: 'stamp',
-        samples,
-        size,
-        src: getTintedStampSrc(brush.stampSrc, colorRef.current),
-        opacity: opacityRef.current,
+      const tinted = getTintedStampSrc(
+        brush.stampSrc,
+        colorRef.current,
+        hardnessRef.current
+      );
+      const tipImg = tipImageForSrc(tinted);
+      if (!tipImg) {
+        const pending = tipImageCache.get(tinted);
+        pending?.addEventListener('load', () => redrawOverlayRef.current(), { once: true });
+        return;
+      }
+      // Incremental dab walk — avoid rebuilding thousands of tips every frame.
+      stampWalkRef.current = extendStampLiveWalk(
+        stampWalkRef.current,
+        points,
+        brush,
+        widthRef.current,
+        {
+          hardness: hardnessRef.current,
+          pressureEnabled: pressureRef.current,
+          maxDabs: STAMP_MAX_DABS_LIVE,
+        }
+      );
+      const samples = stampWalkRef.current.dabs;
+      if (!samples.length) return;
+      const canvas = stampCanvasRef.current;
+      if (canvas) {
+        stampBlitRef.current = blitStampLivePreview(
+          canvas,
+          box,
+          samples,
+          tipImg,
+          opacityRef.current,
+          tinted,
+          stampBlitRef.current
+        );
+      }
+      setPreview((prev) => {
+        if (
+          prev?.mode === 'stamp' &&
+          prev.box.left === box.left &&
+          prev.box.top === box.top &&
+          prev.box.width === box.width &&
+          prev.box.height === box.height
+        ) {
+          return prev;
+        }
+        return { box, mode: 'stamp', opacity: 1 };
       });
       return;
     }
 
     const pressures = points.map((p) => p.pressure);
-    const hasPressure = pressures.some((p) => typeof p === 'number' && p > 0);
+    const hasPressure = pressures.some((p) => typeof p === 'number' && Number.isFinite(p));
     const d = outlinePathFromPoints(points, widthRef.current, brush.id, {
       pressureEnabled: pressureRef.current,
       pressures: hasPressure
-        ? pressures.map((p) => (typeof p === 'number' && p > 0 ? p : 0.5))
+        ? pressures.map((p) => (typeof p === 'number' && Number.isFinite(p) ? p : 0.5))
         : undefined,
     });
     setPreview({
@@ -377,16 +501,11 @@ function PencilDrawFeature({
       opacity: opacityRef.current,
     });
   };
+  redrawOverlayRef.current = redrawOverlay;
 
   const paintTipCursor = (p: { x: number; y: number } | null) => {
-    if (!eraseModeRef.current || !p) {
+    if (!eraseModeRef.current) {
       if (!p) lastTipPosRef.current = null;
-      if (!eraseModeRef.current) {
-        // Draw mode: no tip ring.
-        redrawOverlay();
-        return;
-      }
-      lastTipPosRef.current = null;
       redrawOverlay();
       return;
     }
@@ -396,7 +515,11 @@ function PencilDrawFeature({
 
   const paintPreview = (points: { x: number; y: number; pressure?: number }[]) => {
     pts.current = points;
-    redrawOverlay();
+    if (redrawRafRef.current) return;
+    redrawRafRef.current = window.requestAnimationFrame(() => {
+      redrawRafRef.current = 0;
+      redrawOverlay();
+    });
   };
 
   const paintEraseTrail = (points: { x: number; y: number }[]) => {
@@ -422,6 +545,8 @@ function PencilDrawFeature({
       const pressure = pressureRef.current ? pointerPressure(e) : undefined;
       drawing.current = true;
       strokeViewBoxRef.current = null;
+      stampBlitRef.current = { boxKey: '', scale: 1, painted: 0, tipKey: '' };
+      stampWalkRef.current = emptyStampLiveWalk();
       lastClientRef.current = { x: e.clientX, y: e.clientY };
       pts.current = [pressure != null ? { ...p, pressure } : p];
       if (eraseModeRef.current) {
@@ -467,19 +592,31 @@ function PencilDrawFeature({
         return false;
       }
       const streamline = Number(brush.options?.streamline) || 0;
+      let next = raw;
       if (last && streamline > 0) {
         const a = Math.min(0.92, Math.max(0, streamline));
-        const smoothed = {
+        next = {
           x: last.x + (raw.x - last.x) * (1 - a),
           y: last.y + (raw.y - last.y) * (1 - a),
-          ...(raw.pressure != null ? { pressure: raw.pressure } : {}),
+          ...(raw.pressure != null
+            ? {
+                pressure:
+                  last.pressure != null
+                    ? last.pressure + (raw.pressure - last.pressure) * (1 - a)
+                    : raw.pressure,
+              }
+            : {}),
         };
-        if (Math.hypot(smoothed.x - last.x, smoothed.y - last.y) < minStep * 0.5) {
+        if (Math.hypot(next.x - last.x, next.y - last.y) < minStep * 0.5) {
           return false;
         }
-        pts.current.push(smoothed);
+      }
+      // Gap fill so sparse tablet events still stamp continuously.
+      if (last && Math.hypot(next.x - last.x, next.y - last.y) > STROKE_GAP_INTERP) {
+        const filled = interpolateStrokeGaps([last, next], STROKE_GAP_INTERP);
+        for (let i = 1; i < filled.length; i += 1) pts.current.push(filled[i]);
       } else {
-        pts.current.push(raw);
+        pts.current.push(next);
       }
       return true;
     };
@@ -532,12 +669,24 @@ function PencilDrawFeature({
       drawing.current = false;
       strokeViewBoxRef.current = null;
       lastClientRef.current = null;
+      if (redrawRafRef.current) {
+        window.cancelAnimationFrame(redrawRafRef.current);
+        redrawRafRef.current = 0;
+      }
+      stampBlitRef.current = { boxKey: '', scale: 1, painted: 0, tipKey: '' };
+      stampWalkRef.current = emptyStampLiveWalk();
       try {
         hitEl.releasePointerCapture?.(e.pointerId);
       } catch {
         /* ignore */
       }
       setPreview(null);
+      const stampEl = stampCanvasRef.current;
+      if (stampEl) {
+        const sctx = stampEl.getContext('2d');
+        sctx?.setTransform(1, 0, 0, 1, 0, 0);
+        sctx?.clearRect(0, 0, stampEl.width, stampEl.height);
+      }
       const wasErase = eraseModeRef.current;
       // Pin the last sample to the real tip, then optional full-path polish.
       if (!wasErase && pts.current.length >= 1) {
@@ -594,12 +743,15 @@ function PencilDrawFeature({
       const pad = brushPad(brush, widthRef.current);
       const originX = minX - pad;
       const originY = minY - pad;
-      const local = points.map((pt) => ({
+      let local = points.map((pt) => ({
         x: pt.x - originX,
         y: pt.y - originY,
         ...(pt.pressure != null ? { pressure: pt.pressure } : {}),
       }));
-      // Store baseline centerline (+ optional pressure); sceneToSvg builds freehand ink.
+      if (pressureRef.current && isStampBrush(brush.id, brush.stampSrc)) {
+        local = normalizeStampPressures(local);
+      }
+      // Store baseline centerline (+ optional pressure); sceneToSvg stamps / freehand ink.
       const d = polylinePathD(local);
       const pathPressure = pressureRef.current ? serializePathPressures(local) : undefined;
       onCommit(
@@ -610,7 +762,13 @@ function PencilDrawFeature({
           width: Math.max(1, maxX - minX + pad * 2),
           height: Math.max(1, maxY - minY + pad * 2),
         },
-        pathPressure ? { pathPressure } : undefined
+        {
+          ...(pathPressure ? { pathPressure } : {}),
+          brushHardness: hardnessRef.current,
+          ...(isStampBrush(brush.id, brush.stampSrc) && brush.stampSrc
+            ? { brushStampSrc: brush.stampSrc }
+            : {}),
+        }
       );
     };
 
@@ -646,6 +804,28 @@ function PencilDrawFeature({
     }
   }, [eraseMode]);
 
+  // Tip tint finished loading — refresh live stamp bitmap.
+  useEffect(() => {
+    const onReady = () => {
+      if (!drawing.current || pts.current.length < 2) return;
+      // New tinted tip — rebuild walk + full blit.
+      stampWalkRef.current = emptyStampLiveWalk();
+      stampBlitRef.current = { boxKey: '', scale: 1, painted: 0, tipKey: '' };
+      redrawOverlayRef.current();
+    };
+    window.addEventListener(STAMP_TINT_READY_EVENT, onReady);
+    return () => window.removeEventListener(STAMP_TINT_READY_EVENT, onReady);
+  }, []);
+
+  // Warm tip decode so the first stroke isn't waiting on Image.load.
+  useEffect(() => {
+    const brush = findPencilBrush(brushId);
+    if (!brush.stampSrc) return;
+    preloadStampSrc(brush.stampSrc);
+    const tinted = getTintedStampSrc(brush.stampSrc, strokeColor, hardness);
+    tipImageForSrc(tinted);
+  }, [brushId, strokeColor, hardness]);
+
   // Refresh tip radius / trail width when slider changes (even if pointer is idle).
   useEffect(() => {
     if (!eraseMode) return;
@@ -654,68 +834,74 @@ function PencilDrawFeature({
 
   if (!enabled) return null;
 
-  if (!preview) return null;
-  const surf = sceneSurfaceSvgProps(preview.box, camera);
+  const stampSurf =
+    preview?.mode === 'stamp' ? sceneSurfaceSvgProps(preview.box, camera) : null;
+  const svgPreview =
+    preview && preview.mode !== 'stamp' ? preview : null;
+  const svgSurf = svgPreview ? sceneSurfaceSvgProps(svgPreview.box, camera) : null;
+
   return (
-    <svg
-      data-pencil-draw-preview
-      data-rcb-infinite="1"
-      className="pointer-events-none absolute z-20 overflow-visible"
-      width={surf.width}
-      height={surf.height}
-      viewBox={surf.viewBox}
-      preserveAspectRatio="none"
-      style={surf.style}
-      aria-hidden
-    >
-      {preview.mode === 'erase' ? (
-        <>
-          {preview.trailD ? (
+    <>
+      {svgPreview && svgSurf ? (
+        <svg
+          data-pencil-draw-preview
+          data-rcb-infinite="1"
+          className="pointer-events-none absolute z-20 overflow-visible"
+          width={svgSurf.width}
+          height={svgSurf.height}
+          viewBox={svgSurf.viewBox}
+          preserveAspectRatio="none"
+          style={svgSurf.style}
+          aria-hidden
+        >
+          {svgPreview.mode === 'erase' ? (
+            <>
+              {svgPreview.trailD ? (
+                <path
+                  d={svgPreview.trailD}
+                  fill="none"
+                  stroke="rgba(20,20,20,0.28)"
+                  strokeWidth={svgPreview.trailW}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ) : null}
+              {svgPreview.tip ? (
+                <circle
+                  cx={svgPreview.tip.x}
+                  cy={svgPreview.tip.y}
+                  r={svgPreview.tipR}
+                  fill="rgba(20,20,20,0.12)"
+                  stroke="rgba(20,20,20,0.85)"
+                  strokeWidth={svgPreview.tipStroke}
+                  strokeDasharray={svgPreview.tipDash}
+                />
+              ) : null}
+            </>
+          ) : null}
+          {svgPreview.mode === 'ink' ? (
             <path
-              d={preview.trailD}
-              fill="none"
-              stroke="rgba(20,20,20,0.28)"
-              strokeWidth={preview.trailW}
-              strokeLinecap="round"
-              strokeLinejoin="round"
+              d={svgPreview.pathD}
+              fill={svgPreview.color}
+              fillOpacity={svgPreview.opacity}
+              stroke="none"
             />
           ) : null}
-          {preview.tip ? (
-            <circle
-              cx={preview.tip.x}
-              cy={preview.tip.y}
-              r={preview.tipR}
-              fill="rgba(20,20,20,0.12)"
-              stroke="rgba(20,20,20,0.85)"
-              strokeWidth={preview.tipStroke}
-              strokeDasharray={preview.tipDash}
-            />
-          ) : null}
-        </>
+        </svg>
       ) : null}
-      {preview.mode === 'ink' ? (
-        <path
-          d={preview.pathD}
-          fill={preview.color}
-          fillOpacity={preview.opacity}
-          stroke="none"
-        />
-      ) : null}
-      {preview.mode === 'stamp'
-        ? preview.samples.map((pt, i) => (
-            <image
-              key={i}
-              href={preview.src}
-              x={pt.x - preview.size / 2}
-              y={pt.y - preview.size / 2}
-              width={preview.size}
-              height={preview.size}
-              opacity={preview.opacity}
-              preserveAspectRatio="xMidYMid meet"
-            />
-          ))
-        : null}
-    </svg>
+      <canvas
+        ref={stampCanvasRef}
+        data-pencil-stamp-preview
+        data-rcb-infinite="1"
+        className="pointer-events-none absolute z-20"
+        aria-hidden
+        style={{
+          ...(stampSurf?.style || { left: 0, top: 0, width: 0, height: 0 }),
+          display: preview?.mode === 'stamp' ? 'block' : 'none',
+          opacity: preview?.mode === 'stamp' ? preview.opacity : 0,
+        }}
+      />
+    </>
   );
 }
 

@@ -35,6 +35,7 @@ import {
   previewSvgNodeAngle,
   previewSvgNodeGeometry,
   purgeOrphanSceneNodes,
+  stampStrokeBakeZoomBucket,
 } from '@/components/rcb/scene/paint/sceneToSvg';
 import { patchNodesGeometry, sceneToDocumentCoords } from '@/components/rcb/scene/paint/svgToScene';
 import { strokeCenterlineToFilledOutline } from '@/components/rcb/scene/paint/outlineToPath';
@@ -273,6 +274,10 @@ function SvgCanvas({
   const pencilPressureEnabled = useSelector((s: any) =>
     s.editor.pencilPressureEnabled !== false
   );
+  const pencilHardness = useSelector((s: any) => {
+    const n = Number(s.editor.pencilHardness);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 80;
+  });
   const penStrokeOpacity = useSelector((s: any) => {
     const n = Number(s.editor.penStrokeOpacity);
     return Number.isFinite(n) ? Math.max(1, Math.min(100, n)) : 100;
@@ -533,6 +538,32 @@ function SvgCanvas({
       void replaceShapePaint(doc, board.nodeEls, id, board.root ? board : null);
     });
   }, [stampTintEpoch]);
+
+  // Tip strokes are raster baked — rebake at higher zoom so they don't go soft.
+  const stampBakeZoomRef = useRef(0);
+  useEffect(() => {
+    const bucket = stampStrokeBakeZoomBucket(camera.zoom);
+    if (stampBakeZoomRef.current === 0) {
+      stampBakeZoomRef.current = bucket;
+      return;
+    }
+    if (bucket <= stampBakeZoomRef.current) return;
+    stampBakeZoomRef.current = bucket;
+    const t = window.setTimeout(() => {
+      const board = boardRef.current;
+      const doc = documentRef.current;
+      if (!board || !doc) return;
+      listSceneNodes(doc).forEach(({ id, node }) => {
+        if (node?.key !== 'shape') return;
+        if (String(node.attrs?.shapeType || '') !== 'pencil') return;
+        const stamp =
+          node.attrs?.brushStampSrc || findPencilBrush(node.attrs?.brushStyle).stampSrc;
+        if (!stamp) return;
+        void replaceShapePaint(doc, board.nodeEls, id, board.root ? board : null);
+      });
+    }, 140);
+    return () => window.clearTimeout(t);
+  }, [camera.zoom]);
 
   const listNodeIds = useCallback(() => {
     const doc = documentRef.current;
@@ -1751,12 +1782,15 @@ function SvgCanvas({
     (
       pathD: string,
       box: { left: number; top: number; width: number; height: number },
-      meta?: { pathPressure?: string }
+      meta?: { pathPressure?: string; brushHardness?: number; brushStampSrc?: string }
     ) => {
       const doc = documentRef.current;
       if (!doc || readOnly) return;
       const origin = sceneToDocumentCoords(doc, box.left, box.top);
       const brush = findPencilBrush(pencilBrushId || 'solid');
+      const stampSrc =
+        meta?.brushStampSrc ||
+        (brush.kind === 'stamp' ? brush.stampSrc : undefined);
       const { id, node } = createShapeNode({
         x: origin.x,
         y: origin.y,
@@ -1769,12 +1803,16 @@ function SvgCanvas({
         path: pathD,
         closed: false,
         brushStyle: pencilBrushId || 'solid',
-        brushStampSrc: brush.kind === 'stamp' ? brush.stampSrc : undefined,
+        brushStampSrc: stampSrc,
         opacity: penStrokeOpacity / 100,
       });
       if (meta?.pathPressure) {
         (node.attrs as Record<string, unknown>).pathPressure = meta.pathPressure;
       }
+      if (meta?.brushHardness != null && Number.isFinite(meta.brushHardness)) {
+        (node.attrs as Record<string, unknown>).brushHardness = meta.brushHardness;
+      }
+      (node.attrs as Record<string, unknown>).pressureEnabled = pencilPressureEnabled;
       const next = addNodeToDocument(doc, id, node);
       documentRef.current = next;
       dispatch(pushEditorHistory());
@@ -1783,7 +1821,7 @@ function SvgCanvas({
       dispatch(setSelectedNodeIds([]));
       dispatch(setSelectedNodeId(null));
     },
-    [dispatch, readOnly, penStrokeColor, penStrokeWidth, pencilBrushId, penStrokeOpacity]
+    [dispatch, readOnly, penStrokeColor, penStrokeWidth, pencilBrushId, penStrokeOpacity, pencilPressureEnabled]
   );
 
   const onBucketFill = useCallback(
@@ -2992,6 +3030,7 @@ function SvgCanvas({
             strokeOpacity={penStrokeOpacity / 100}
             brushId={pencilBrushId}
             pressureEnabled={pencilPressureEnabled}
+            hardness={pencilHardness}
             eraseMode={pencilEraseMode}
             eraseTargets={pencilEraseTargets}
             onCommit={onPencilCommit}

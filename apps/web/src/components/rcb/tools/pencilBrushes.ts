@@ -1,5 +1,6 @@
 /**
- * Freehand pencil brushes (perfect-freehand) + optional stamp / custom tip brushes.
+ * Pencil brushes — tip stamps along the path (PNG tips in /brushes/tips).
+ * Outline / freehand pack entries use the freehand stroke helper as fallback.
  */
 
 import getStroke, { type StrokeOptions } from 'perfect-freehand';
@@ -18,7 +19,7 @@ export type PencilBrushDef = {
   kind?: 'freehand' | 'stamp';
   /** Data-URL / URL for stamp tip (custom upload or builtin stamp). */
   stampSrc?: string;
-  /** Stamp spacing as a fraction of brush size (default 0.45). */
+  /** Stamp spacing as a fraction of brush size (default 0.12). Lower = more continuous. */
   spacingFactor?: number;
   /** User-uploaded brush. */
   custom?: boolean;
@@ -43,247 +44,86 @@ const FREEHAND_DEFAULTS: Omit<StrokeOptions, 'size'> = {
   end: { taper: 0, cap: true },
 };
 
-export const PENCIL_BRUSHES: PencilBrushDef[] = [
-  {
-    id: 'solid',
-    label: '硬笔',
-    sizeFactor: 1,
+/** Builtin tip PNGs under apps/web/public/brushes/tips. */
+const TIP_BASE = '/brushes/tips';
+
+function tipUrl(file: string) {
+  return `${TIP_BASE}/${file}`;
+}
+
+function tipBrush(
+  id: string,
+  label: string,
+  tipFile: string,
+  opts?: {
+    sizeFactor?: number;
+    /** Optional pack override; when omitted, spacing follows tool Hardness. */
+    spacingFactor?: number;
+    simulatePressure?: boolean;
+  }
+): PencilBrushDef {
+  return {
+    id,
+    label,
+    kind: 'stamp',
+    sizeFactor: opts?.sizeFactor ?? 1.2,
+    ...(opts?.spacingFactor != null ? { spacingFactor: opts.spacingFactor } : {}),
+    simulatePressure: opts?.simulatePressure,
+    stampSrc: tipUrl(tipFile),
     options: { ...FREEHAND_DEFAULTS },
-  },
-  {
-    id: 'calligraphy',
-    label: '毛笔',
-    sizeFactor: 1.35,
-    simulatePressure: true,
-    options: {
-      thinning: 0.72,
-      smoothing: 0.55,
-      streamline: 0.42,
-      easing: (t) => t * (2 - t),
-      start: { taper: 28, cap: true },
-      end: { taper: 72, cap: true },
-    },
-  },
-  {
-    id: 'marker',
-    label: '马克笔',
-    sizeFactor: 1.6,
-    options: {
-      thinning: 0.08,
-      smoothing: 0.35,
-      streamline: 0.25,
-      easing: (t) => t,
-      start: { taper: 0, cap: true },
-      end: { taper: 0, cap: true },
-    },
-  },
-  {
-    id: 'soft',
-    label: '软笔',
-    sizeFactor: 1.25,
-    simulatePressure: true,
-    options: {
-      thinning: 0.45,
-      smoothing: 0.7,
-      streamline: 0.65,
-      easing: (t) => Math.sin((t * Math.PI) / 2),
-      start: { taper: 16, cap: true },
-      end: { taper: 40, cap: true },
-    },
-  },
-  {
-    id: 'fountain',
-    label: '钢笔',
-    sizeFactor: 0.95,
-    simulatePressure: true,
-    options: {
-      thinning: 0.55,
-      smoothing: 0.5,
-      streamline: 0.4,
-      easing: (t) => t,
-      start: { taper: 8, cap: true },
-      end: { taper: 56, cap: true },
-    },
-  },
-  {
-    id: 'brushpen',
-    label: '签字笔',
-    sizeFactor: 1.15,
-    simulatePressure: true,
-    options: {
-      thinning: 0.58,
-      smoothing: 0.48,
-      streamline: 0.38,
-      easing: (t) => t * t * (3 - 2 * t),
-      start: { taper: 12, cap: true },
-      end: { taper: 48, cap: true },
-    },
-  },
-  {
-    id: 'pencil-hb',
-    label: '素描',
-    sizeFactor: 0.85,
-    simulatePressure: true,
-    options: {
-      thinning: 0.35,
-      smoothing: 0.4,
-      streamline: 0.3,
-      easing: (t) => t,
-      start: { taper: 4, cap: true },
-      end: { taper: 20, cap: true },
-    },
-  },
-  {
-    id: 'chalk',
-    label: '粉笔',
-    sizeFactor: 1.45,
-    simulatePressure: true,
-    options: {
-      thinning: 0.22,
-      smoothing: 0.25,
-      streamline: 0.2,
-      easing: (t) => t,
-      start: { taper: 6, cap: true },
-      end: { taper: 14, cap: true },
-    },
-  },
-  {
-    id: 'charcoal',
-    label: '炭笔',
-    sizeFactor: 1.5,
-    simulatePressure: true,
-    options: {
-      thinning: 0.4,
-      smoothing: 0.3,
-      streamline: 0.22,
-      easing: (t) => Math.sqrt(t),
-      start: { taper: 10, cap: true },
-      end: { taper: 28, cap: true },
-    },
-  },
-  {
-    id: 'crayon',
-    label: '蜡笔',
-    sizeFactor: 1.55,
-    options: {
-      thinning: 0.12,
-      smoothing: 0.28,
-      streamline: 0.18,
-      easing: (t) => t,
-      start: { taper: 2, cap: true },
-      end: { taper: 8, cap: true },
-    },
-  },
-  {
-    id: 'highlighter',
-    label: '荧光笔',
-    sizeFactor: 2.2,
-    options: {
-      thinning: 0.02,
-      smoothing: 0.55,
-      streamline: 0.45,
-      easing: (t) => t,
-      start: { taper: 0, cap: true },
-      end: { taper: 0, cap: true },
-    },
-  },
-  {
-    id: 'ink',
-    label: '墨水',
-    sizeFactor: 1.2,
-    simulatePressure: true,
-    options: {
-      thinning: 0.68,
-      smoothing: 0.62,
-      streamline: 0.5,
-      easing: (t) => t * (2 - t),
-      start: { taper: 20, cap: true },
-      end: { taper: 90, cap: true },
-    },
-  },
-  {
-    id: 'watercolor',
-    label: '水彩',
-    sizeFactor: 1.8,
-    simulatePressure: true,
-    options: {
-      thinning: 0.5,
-      smoothing: 0.78,
-      streamline: 0.7,
-      easing: (t) => Math.sin((t * Math.PI) / 2),
-      start: { taper: 24, cap: true },
-      end: { taper: 60, cap: true },
-    },
-  },
-  {
-    id: 'dry',
-    label: '枯笔',
-    sizeFactor: 1.3,
-    simulatePressure: true,
-    options: {
-      thinning: 0.85,
-      smoothing: 0.2,
-      streamline: 0.15,
-      easing: (t) => t * t,
-      start: { taper: 40, cap: true },
-      end: { taper: 100, cap: true },
-    },
-  },
-  {
-    id: 'sketch',
-    label: '速写',
-    sizeFactor: 0.9,
-    simulatePressure: true,
-    options: {
-      thinning: 0.48,
-      smoothing: 0.32,
-      streamline: 0.28,
-      easing: (t) => t,
-      start: { taper: 6, cap: true },
-      end: { taper: 36, cap: true },
-    },
-  },
-  {
-    id: 'needle',
-    label: '细针',
-    sizeFactor: 0.55,
-    options: {
-      thinning: 0.1,
-      smoothing: 0.55,
-      streamline: 0.4,
-      easing: (t) => t,
-      start: { taper: 0, cap: true },
-      end: { taper: 0, cap: true },
-    },
-  },
-  {
-    id: 'bold',
-    label: '粗体',
-    sizeFactor: 2.4,
-    options: {
-      thinning: 0.04,
-      smoothing: 0.5,
-      streamline: 0.4,
-      easing: (t) => t,
-      start: { taper: 0, cap: true },
-      end: { taper: 0, cap: true },
-    },
-  },
-  {
-    id: 'airbrush',
-    label: '喷枪',
-    sizeFactor: 2.0,
-    simulatePressure: true,
-    options: {
-      thinning: 0.3,
-      smoothing: 0.85,
-      streamline: 0.75,
-      easing: (t) => 1 - (1 - t) * (1 - t),
-      start: { taper: 30, cap: true },
-      end: { taper: 50, cap: true },
-    },
-  },
+  };
+}
+
+/**
+ * Builtin wheel — tip stamps only.
+ * Spacing/hardness are tool params (like PS), not hard-coded per tip — uploads share the same path.
+ */
+export const PENCIL_BRUSHES: PencilBrushDef[] = [
+  tipBrush('solid', '硬笔', 'hard-round.png', { sizeFactor: 1 }),
+  tipBrush('pencil-hb', '铅笔', 'pencil.png', { sizeFactor: 0.95 }),
+  tipBrush('soft', '软笔', 'soft-round.png', { sizeFactor: 1.35 }),
+  tipBrush('fountain', '钢笔', 'needle.png', { sizeFactor: 0.7 }),
+  tipBrush('calligraphy', '毛笔', 'calligraphy.png', { sizeFactor: 1.45 }),
+  tipBrush('brushpen', '签字笔', 'hard-round.png', { sizeFactor: 1.1 }),
+  tipBrush('marker', '马克笔', 'marker.png', { sizeFactor: 1.65 }),
+  tipBrush('highlighter', '荧光笔', 'marker.png', { sizeFactor: 2.2 }),
+  tipBrush('chalk', '粉笔', 'chalk.png', { sizeFactor: 1.45 }),
+  tipBrush('charcoal', '炭笔', 'charcoal.png', { sizeFactor: 1.55 }),
+  tipBrush('bristle', '鬃毛', 'bristle.png', { sizeFactor: 1.55 }),
+  tipBrush('airbrush', '喷枪', 'airbrush.png', { sizeFactor: 2.0 }),
+  tipBrush('watercolor', '水彩', 'watercolor.png', { sizeFactor: 1.7 }),
+  tipBrush('needle', '细针', 'needle.png', { sizeFactor: 0.5 }),
+  tipBrush('bold', '粗头', 'bold.png', { sizeFactor: 2.3 }),
 ];
+
+/** Alias for tip subset (same as builtins). */
+export const TIP_STAMP_BRUSHES = PENCIL_BRUSHES;
+
+/** Open portable pack (JSON + tip data-URLs). Not Photoshop .abr. */
+export const BRUSH_PACK_FORMAT = 'recombyn-brushpack' as const;
+export const BRUSH_PACK_VERSION = 1 as const;
+
+export type BrushPackV1 = {
+  format: typeof BRUSH_PACK_FORMAT;
+  version: typeof BRUSH_PACK_VERSION;
+  name?: string;
+  brushes: Array<{
+    id: string;
+    label: string;
+    kind?: 'freehand' | 'stamp';
+    sizeFactor?: number;
+    spacingFactor?: number;
+    simulatePressure?: boolean;
+    stampSrc?: string;
+    options?: {
+      thinning?: number;
+      smoothing?: number;
+      streamline?: number;
+      start?: { taper?: number; cap?: boolean };
+      end?: { taper?: number; cap?: boolean };
+    };
+  }>;
+};
 
 /** Official brushes from design library (admin brush wheel). */
 let officialBrushes: PencilBrushDef[] | null = null;
@@ -296,7 +136,9 @@ export function getCustomPencilBrushes(): PencilBrushDef[] {
 }
 
 export function setCustomPencilBrushes(list: PencilBrushDef[]) {
-  customBrushes = Array.isArray(list) ? list.filter((b) => b?.id && b.stampSrc) : [];
+  customBrushes = Array.isArray(list)
+    ? list.filter((b) => b?.id && (b.kind !== 'stamp' || Boolean(b.stampSrc)))
+    : [];
 }
 
 export function setOfficialPencilBrushes(list: PencilBrushDef[] | null) {
@@ -307,6 +149,18 @@ export function setOfficialPencilBrushes(list: PencilBrushDef[] | null) {
   officialBrushes = list.filter((b) => b?.id);
 }
 
+/** Legacy ids → nearest builtin tip. */
+const LEGACY_FREEHAND_ALIAS: Record<string, string> = {
+  crayon: 'chalk',
+  dry: 'bristle',
+  ink: 'calligraphy',
+  sketch: 'pencil-hb',
+  'tip-soft': 'soft',
+  'tip-hard': 'solid',
+  'tip-chalk': 'chalk',
+  'tip-bristle': 'bristle',
+};
+
 export function listPencilBrushes(): PencilBrushDef[] {
   const base = officialBrushes?.length ? officialBrushes : PENCIL_BRUSHES;
   return [...base, ...customBrushes];
@@ -315,11 +169,12 @@ export function listPencilBrushes(): PencilBrushDef[] {
 export function findPencilBrush(id: string | undefined | null): PencilBrushDef {
   const fallback = (officialBrushes && officialBrushes[0]) || PENCIL_BRUSHES[0];
   if (!id || LEGACY_STAMP_IDS.has(id)) return fallback;
-  const custom = customBrushes.find((b) => b.id === id);
+  const resolved = LEGACY_FREEHAND_ALIAS[id] || id;
+  const custom = customBrushes.find((b) => b.id === id || b.id === resolved);
   if (custom) return custom;
-  const official = officialBrushes?.find((b) => b.id === id);
+  const official = officialBrushes?.find((b) => b.id === resolved || b.id === id);
   if (official) return official;
-  return PENCIL_BRUSHES.find((b) => b.id === id) || fallback;
+  return PENCIL_BRUSHES.find((b) => b.id === resolved) || fallback;
 }
 
 export function isStampBrush(id: string | undefined | null, stampSrc?: string | null) {
@@ -334,45 +189,580 @@ export function brushSize(brush: PencilBrushDef, strokeWidth: number) {
   return Math.max(1, (Number(strokeWidth) || 1) * brush.sizeFactor);
 }
 
-export function stampSpacing(brush: PencilBrushDef, strokeWidth: number) {
+/**
+ * Dab spacing from tip size + tool Hardness.
+ * Optional `brush.spacingFactor` is a pack override (uploads / .brushpack).
+ *
+ * Keep spacing well below tip size so stamps overlap into a continuous stroke.
+ */
+export function stampSpacing(
+  brush: PencilBrushDef,
+  strokeWidth: number,
+  hardness: number = 80
+) {
   const size = brushSize(brush, strokeWidth);
-  const factor = Number(brush.spacingFactor);
-  const f = Number.isFinite(factor) && factor > 0 ? factor : 0.45;
-  // Scene units — never floor at 2 (that left huge gaps under 1px grid / high zoom,
-  // so stamp strokes looked like disconnected sausages).
-  return Math.max(size * 0.12, size * f);
+  const f = stampSpacingFrac(brush, hardness);
+  return Math.max(size * 0.04, size * f);
 }
 
-/** Convert input points to perfect-freehand input (real pressure or speed simulation). */
+/**
+ * Soft stop for buildStampDabs — never sparsify spacing into dots.
+ * SVG tip commits stay under this; live canvas preview uses STAMP_MAX_DABS_LIVE.
+ */
+export const STAMP_MAX_DABS = 4000;
+/** Live canvas preview budget — keep high so ink tracks the tip on long strokes. */
+export const STAMP_MAX_DABS_LIVE = 3000;
+
+export function polylineLength(points: Pt[]): number {
+  let len = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    len += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return len;
+}
+
+/** Fixed tip spacing — never enlarge for dab budget. */
+export function stampSpacingForPath(
+  brush: PencilBrushDef,
+  strokeWidth: number,
+  hardness: number,
+  _points?: Pt[],
+  _maxDabs?: number
+): number {
+  void _points;
+  void _maxDabs;
+  return stampSpacing(brush, strokeWidth, hardness);
+}
+
+/** Heavy press grows tip up to this × slider size. */
+const STAMP_PRESSURE_SIZE_RANGE = 3;
+/** Max gap (scene px) before input interpolation. */
+export const STROKE_GAP_INTERP = 4;
+/** Tip lag along stroke before stamping (legacy bezier path; unused by buildStampDabs). */
+const STAMP_LAG_DISTANCE = 5;
+/** Reference spacing for flow compensation. */
+const FLOW_SPACING_REF = 0.06;
+
+export type StampDab = {
+  x: number;
+  y: number;
+  size: number;
+  /** Per-dab flow alpha (0-1), before stroke opacity. */
+  opacity: number;
+  /** Degrees — tip follows path tangent. */
+  angle: number;
+};
+
+export function pointHasPressure(p: Pt): boolean {
+  return typeof p.pressure === 'number' && Number.isFinite(p.pressure);
+}
+
+/** Cubic-bezier pressure curve LUT (default linear). */
+type PressureCurveCp = { x: number; y: number };
+let pressureCurveCp1: PressureCurveCp = { x: 0.25, y: 0.25 };
+let pressureCurveCp2: PressureCurveCp = { x: 0.75, y: 0.75 };
+let pressureCurveLut: number[] = [];
+
+function bezierComp(t: number, p0: number, p1: number, p2: number, p3: number) {
+  const mt = 1 - t;
+  return mt * mt * mt * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t * p3;
+}
+
+function rebuildPressureCurveLut() {
+  const samples = 512;
+  const pts: PressureCurveCp[] = [];
+  for (let i = 0; i <= samples; i += 1) {
+    const t = i / samples;
+    pts.push({
+      x: bezierComp(t, 0, pressureCurveCp1.x, pressureCurveCp2.x, 1),
+      y: bezierComp(t, 0, pressureCurveCp1.y, pressureCurveCp2.y, 1),
+    });
+  }
+  const lut: number[] = [];
+  let pi = 0;
+  const n = 256;
+  for (let i = 0; i < n; i += 1) {
+    const targetX = i / (n - 1);
+    while (pi < pts.length - 1 && pts[pi + 1].x < targetX) pi += 1;
+    if (pi >= pts.length - 1) {
+      lut.push(pts[pts.length - 1].y);
+      continue;
+    }
+    const a = pts[pi];
+    const b = pts[pi + 1];
+    const dx = b.x - a.x;
+    const frac = dx === 0 ? 0 : (targetX - a.x) / dx;
+    lut.push(a.y + (b.y - a.y) * frac);
+  }
+  pressureCurveLut = lut;
+}
+rebuildPressureCurveLut();
+
+export function setStampPressureCurve(cp1: PressureCurveCp, cp2: PressureCurveCp) {
+  pressureCurveCp1 = {
+    x: Math.min(1, Math.max(0, cp1.x)),
+    y: Math.min(1, Math.max(0, cp1.y)),
+  };
+  pressureCurveCp2 = {
+    x: Math.min(1, Math.max(0, cp2.x)),
+    y: Math.min(1, Math.max(0, cp2.y)),
+  };
+  rebuildPressureCurveLut();
+}
+
+export function resetStampPressureCurve() {
+  setStampPressureCurve({ x: 0.25, y: 0.25 }, { x: 0.75, y: 0.75 });
+}
+
+function evaluatePressureCurve(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  if (!pressureCurveLut.length) return t;
+  const idx = t * (pressureCurveLut.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.min(lo + 1, pressureCurveLut.length - 1);
+  const frac = idx - lo;
+  return pressureCurveLut[lo] * (1 - frac) + pressureCurveLut[hi] * frac;
+}
+
+function stampPressureOrNull(pressure?: number): number | null {
+  if (typeof pressure !== 'number' || !Number.isFinite(pressure)) return null;
+  return evaluatePressureCurve(Math.min(1, Math.max(0, pressure)));
+}
+
+/** Spacing as a fraction of tip size — keep well under ink diameter so soft tips merge. */
+export function stampSpacingFrac(brush: PencilBrushDef, hardness: number = 80): number {
+  const h = Math.max(0, Math.min(1, (Number(hardness) || 80) / 100));
+  const override = Number(brush.spacingFactor);
+  // Clamp pack overrides — large factors leave visible gaps between soft tips.
+  if (Number.isFinite(override) && override > 0) {
+    return Math.min(0.12, Math.max(0.03, override));
+  }
+  // Soft denser, hard slightly sparser — soft tips need ~5% to hide feather gaps.
+  return 0.04 + h * 0.04; // 4% … 8%
+}
+
+export function stampDabSize(
+  brush: PencilBrushDef,
+  strokeWidth: number,
+  pressure?: number,
+  pressureEnabled = true
+) {
+  const base = brushSize(brush, strokeWidth);
+  if (!pressureEnabled) return base;
+  const p = stampPressureOrNull(pressure);
+  if (p == null) return base;
+  const maxSize = base * STAMP_PRESSURE_SIZE_RANGE;
+  return Math.max(1, base + p * (maxSize - base));
+}
+
+export function stampDabFlow(
+  pressure: number | undefined,
+  pressureEnabled: boolean,
+  spacingFrac: number
+): number {
+  let flow = 1;
+  if (pressureEnabled) {
+    const p = stampPressureOrNull(pressure);
+    flow = p == null ? 1 : Math.max(0.08, p);
+  }
+  const spacingMul = Math.min(2.5, Math.max(0.35, spacingFrac / FLOW_SPACING_REF));
+  return Math.min(1, Math.max(0.05, flow * spacingMul));
+}
+
+export function normalizeStampPressures(points: Pt[]): Pt[] {
+  if (points.length < 1) return [];
+  if (!points.some(pointHasPressure)) return points.map((p) => ({ x: p.x, y: p.y }));
+
+  let ema =
+    typeof points[0].pressure === 'number' && Number.isFinite(points[0].pressure)
+      ? Math.min(1, Math.max(0, points[0].pressure))
+      : null;
+  return points.map((p, i) => {
+    if (!pointHasPressure(p)) {
+      return ema == null ? { x: p.x, y: p.y } : { x: p.x, y: p.y, pressure: ema };
+    }
+    const raw = Math.min(1, Math.max(0, p.pressure as number));
+    ema = i === 0 || ema == null ? raw : ema * 0.25 + raw * 0.75;
+    return { x: p.x, y: p.y, pressure: ema };
+  });
+}
+
+function pressureAtSegment(a: Pt, b: Pt, t: number): number | undefined {
+  const ha = pointHasPressure(a);
+  const hb = pointHasPressure(b);
+  if (!ha && !hb) return undefined;
+  const pa = ha ? Math.min(1, Math.max(0, a.pressure as number)) : 0;
+  const pb = hb ? Math.min(1, Math.max(0, b.pressure as number)) : pa;
+  if (!ha) return pb;
+  if (!hb) return pa;
+  return pa + (pb - pa) * t;
+}
+
+export function interpolateStrokeGaps(points: Pt[], maxGap: number = STROKE_GAP_INTERP): Pt[] {
+  if (points.length < 2 || maxGap <= 0) return points.map((p) => ({ ...p }));
+  const out: Pt[] = [{ ...points[0] }];
+  for (let i = 1; i < points.length; i += 1) {
+    const a = out[out.length - 1];
+    const b = points[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxGap) {
+      const steps = Math.ceil(dist / maxGap);
+      for (let s = 1; s < steps; s += 1) {
+        const t = s / steps;
+        const pr = pressureAtSegment(a, b, t);
+        out.push({
+          x: a.x + dx * t,
+          y: a.y + dy * t,
+          ...(pr != null ? { pressure: pr } : {}),
+        });
+      }
+    }
+    out.push({ ...b });
+  }
+  return out;
+}
+
+function stampControlPoint(p1: Pt, p2: Pt, p3: Pt): { x: number; y: number } {
+  return {
+    x: p2.x + (p2.x - p1.x) * 0.15 + (p3.x - p2.x) * 0.15,
+    y: p2.y + (p2.y - p1.y) * 0.15 + (p3.y - p2.y) * 0.15,
+  };
+}
+
+function quadBezierPoint(
+  t: number,
+  a: Pt,
+  c: { x: number; y: number },
+  b: Pt
+): { x: number; y: number } {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * a.x + 2 * mt * t * c.x + t * t * b.x,
+    y: mt * mt * a.y + 2 * mt * t * c.y + t * t * b.y,
+  };
+}
+
+export function smoothStrokeBezierLag(
+  points: Pt[],
+  spacing: number,
+  lagDistance: number = STAMP_LAG_DISTANCE
+): Pt[] {
+  if (points.length < 2) return points.map((p) => ({ ...p }));
+  const space = Math.max(0.5, spacing);
+  const lag = Math.max(0, lagDistance);
+  const out: Pt[] = [{ ...points[0] }];
+
+  const emitSegment = (from: Pt, to: Pt, via?: Pt) => {
+    let dist = Math.hypot(to.x - from.x, to.y - from.y);
+    if (dist <= 1e-6) return;
+    let end = to;
+    if (dist > lag + space) {
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      end = {
+        x: from.x + Math.cos(angle) * (dist - lag),
+        y: from.y + Math.sin(angle) * (dist - lag),
+        ...(pointHasPressure(to) ? { pressure: to.pressure } : {}),
+      };
+      dist -= lag;
+    }
+    const control = via
+      ? stampControlPoint(via, from, end)
+      : { x: (from.x + end.x) / 2, y: (from.y + end.y) / 2 };
+    const steps = Math.max(1, Math.ceil(dist / space));
+    for (let s = 1; s <= steps; s += 1) {
+      const t = s / steps;
+      const pt = quadBezierPoint(t, from, control, end);
+      const pr = pressureAtSegment(from, end, t);
+      out.push({
+        x: pt.x,
+        y: pt.y,
+        ...(pr != null ? { pressure: pr } : {}),
+      });
+    }
+  };
+
+  if (points.length === 2) {
+    emitSegment(points[0], points[1]);
+  } else {
+    for (let i = 1; i < points.length; i += 1) {
+      emitSegment(points[i - 1], points[i], i >= 2 ? points[i - 2] : undefined);
+    }
+  }
+
+  const last = points[points.length - 1];
+  const tip = out[out.length - 1];
+  if (!tip || Math.hypot(last.x - tip.x, last.y - tip.y) > 0.5) out.push({ ...last });
+  else out[out.length - 1] = { ...last };
+  return out;
+}
+
+function materializeDab(
+  p: Pt,
+  brush: PencilBrushDef,
+  strokeWidth: number,
+  pressureOn: boolean,
+  spacingFrac: number,
+  taper: number
+): StampDab {
+  // No tip rotation — rotating soft tips leaves visible gaps.
+  const sized = stampDabSize(brush, strokeWidth, p.pressure, pressureOn) * taper;
+  const flow = stampDabFlow(p.pressure, pressureOn, spacingFrac) * (0.55 + 0.45 * taper);
+  return {
+    x: p.x,
+    y: p.y,
+    size: Math.max(1, sized),
+    opacity: Math.min(1, Math.max(0.05, flow)),
+    angle: 0,
+  };
+}
+
+function stampEndpointTaperMul(
+  distFromStart: number,
+  distFromEnd: number,
+  tipSize: number
+): number {
+  const taper = Math.max(tipSize * 0.9, 2);
+  const edge = Math.min(distFromStart, distFromEnd);
+  if (edge >= taper) return 1;
+  const t = Math.max(0, Math.min(1, edge / taper));
+  return 0.28 + 0.72 * (t * t * (3 - 2 * t));
+}
+
+/**
+ * Prepare points: pressure smooth + gap fill only.
+ * Do not Bezier/lag-resample here — that thins stamps into dots.
+ */
+function prepareStampPoints(
+  points: Pt[],
+  pressureOn: boolean
+): Pt[] {
+  let pts = pressureOn ? normalizeStampPressures(points) : points.map((p) => ({ x: p.x, y: p.y }));
+  return interpolateStrokeGaps(pts, STROKE_GAP_INTERP);
+}
+
+/**
+ * Stamp pipeline: walk by arc length, step = size × spacing, no tip rotation.
+ * Uses an accumulator so short input segments still get dense overlapping tips.
+ */
+export function buildStampDabs(
+  points: Pt[],
+  brush: PencilBrushDef,
+  strokeWidth: number,
+  opts: {
+    hardness?: number;
+    pressureEnabled?: boolean;
+    maxDabs?: number;
+    /** Skip endpoint taper rematerialize (live preview — keeps ink snappy). */
+    skipTaper?: boolean;
+  } = {}
+): StampDab[] {
+  const pressureOn = opts.pressureEnabled !== false;
+  const hardness = opts.hardness ?? 80;
+  const maxDabs = opts.maxDabs ?? STAMP_MAX_DABS;
+  const spacingFrac = stampSpacingFrac(brush, hardness);
+  const pts = prepareStampPoints(points, pressureOn);
+  if (pts.length < 1) return [];
+
+  const out: StampDab[] = [];
+  out.push(materializeDab(pts[0], brush, strokeWidth, pressureOn, spacingFrac, 1));
+  if (pts.length < 2) return out;
+
+  let carry = 0; // distance already covered toward the next dab
+  for (let i = 1; i < pts.length; i += 1) {
+    if (out.length >= maxDabs) break;
+    const prev = pts[i - 1];
+    const curr = pts[i];
+    const dx = curr.x - prev.x;
+    const dy = curr.y - prev.y;
+    const segLen = Math.hypot(dx, dy);
+    if (segLen < 1e-6) continue;
+
+    const sizeA = stampDabSize(brush, strokeWidth, prev.pressure, pressureOn);
+    const sizeB = stampDabSize(brush, strokeWidth, curr.pressure, pressureOn);
+    // Step from the smaller tip so pressure spikes don't open gaps.
+    const step = Math.max(0.25, Math.min(sizeA, sizeB) * spacingFrac);
+
+    let consumed = 0;
+    while (out.length < maxDabs) {
+      const need = step - carry;
+      if (consumed + need > segLen + 1e-9) {
+        carry += segLen - consumed;
+        break;
+      }
+      consumed += need;
+      carry = 0;
+      const t = consumed / segLen;
+      const pr = pressureAtSegment(prev, curr, t);
+      const sample: Pt = {
+        x: prev.x + dx * t,
+        y: prev.y + dy * t,
+        ...(pr != null ? { pressure: pr } : {}),
+      };
+      out.push(materializeDab(sample, brush, strokeWidth, pressureOn, spacingFrac, 1));
+    }
+  }
+
+  if (opts.skipTaper || out.length < 2) return out;
+
+  const base = brushSize(brush, strokeWidth);
+  const segLens: number[] = [0];
+  for (let i = 1; i < out.length; i += 1) {
+    segLens.push(
+      segLens[i - 1] + Math.hypot(out[i].x - out[i - 1].x, out[i].y - out[i - 1].y)
+    );
+  }
+  const total = segLens[segLens.length - 1] || 0;
+  for (let i = 0; i < out.length; i += 1) {
+    const tMul = stampEndpointTaperMul(segLens[i], total - segLens[i], base);
+    const idx = Math.min(
+      pts.length - 1,
+      Math.max(0, Math.round((segLens[i] / Math.max(total, 1e-6)) * (pts.length - 1)))
+    );
+    out[i] = materializeDab(
+      { x: out[i].x, y: out[i].y, pressure: pts[idx]?.pressure },
+      brush,
+      strokeWidth,
+      pressureOn,
+      spacingFrac,
+      tMul
+    );
+  }
+  return out;
+}
+
+/** Incremental live-preview stamp walk — only extends when new input points arrive. */
+export type StampLiveWalk = {
+  dabs: StampDab[];
+  carry: number;
+  /** Number of input points already walked (segment ends at walkedPts - 1). */
+  walkedPts: number;
+};
+
+export function emptyStampLiveWalk(): StampLiveWalk {
+  return { dabs: [], carry: 0, walkedPts: 0 };
+}
+
+/**
+ * Extend live stamp dabs from new pointer samples.
+ * Assumes `points` are already gap-filled (capture path); skips endpoint taper.
+ */
+export function extendStampLiveWalk(
+  walk: StampLiveWalk,
+  points: Pt[],
+  brush: PencilBrushDef,
+  strokeWidth: number,
+  opts: {
+    hardness?: number;
+    pressureEnabled?: boolean;
+    maxDabs?: number;
+  } = {}
+): StampLiveWalk {
+  const pressureOn = opts.pressureEnabled !== false;
+  const hardness = opts.hardness ?? 80;
+  const maxDabs = opts.maxDabs ?? STAMP_MAX_DABS_LIVE;
+  const spacingFrac = stampSpacingFrac(brush, hardness);
+
+  // Points replaced/shrunk (streamline on commit shouldn't hit this mid-draw).
+  if (points.length < walk.walkedPts || walk.walkedPts === 0) {
+    walk = emptyStampLiveWalk();
+  }
+  if (points.length < 1) return walk;
+
+  const dabs = walk.dabs;
+  let carry = walk.carry;
+  let walkedPts = walk.walkedPts;
+
+  if (walkedPts === 0) {
+    dabs.push(materializeDab(points[0], brush, strokeWidth, pressureOn, spacingFrac, 1));
+    walkedPts = 1;
+    carry = 0;
+  }
+
+  for (let i = Math.max(1, walkedPts); i < points.length; i += 1) {
+    if (dabs.length >= maxDabs) {
+      return { dabs, carry, walkedPts: points.length };
+    }
+    const prev = points[i - 1];
+    const curr = points[i];
+    const dx = curr.x - prev.x;
+    const dy = curr.y - prev.y;
+    const segLen = Math.hypot(dx, dy);
+    if (segLen < 1e-6) {
+      walkedPts = i + 1;
+      continue;
+    }
+
+    const sizeA = stampDabSize(brush, strokeWidth, prev.pressure, pressureOn);
+    const sizeB = stampDabSize(brush, strokeWidth, curr.pressure, pressureOn);
+    const step = Math.max(0.25, Math.min(sizeA, sizeB) * spacingFrac);
+
+    let consumed = 0;
+    while (dabs.length < maxDabs) {
+      const need = step - carry;
+      if (consumed + need > segLen + 1e-9) {
+        carry += segLen - consumed;
+        break;
+      }
+      consumed += need;
+      carry = 0;
+      const t = consumed / segLen;
+      const pr = pressureAtSegment(prev, curr, t);
+      const sample: Pt = {
+        x: prev.x + dx * t,
+        y: prev.y + dy * t,
+        ...(pr != null ? { pressure: pr } : {}),
+      };
+      dabs.push(materializeDab(sample, brush, strokeWidth, pressureOn, spacingFrac, 1));
+    }
+    walkedPts = i + 1;
+  }
+
+  return { dabs, carry, walkedPts };
+}
+
+/** Draw stamp dabs onto a 2D context (live preview + brush list). */
+export function paintStampDabs(
+  ctx: CanvasRenderingContext2D,
+  dabs: StampDab[],
+  tip: CanvasImageSource,
+  strokeOpacity = 1,
+  fromIndex = 0
+) {
+  ctx.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in ctx) {
+    (ctx as CanvasRenderingContext2D).imageSmoothingQuality = 'high';
+  }
+  const start = Math.max(0, Math.min(dabs.length, fromIndex | 0));
+  for (let i = start; i < dabs.length; i += 1) {
+    const dab = dabs[i];
+    const size = Math.max(1, dab.size);
+    const alpha = strokeOpacity * Math.max(0.08, Math.min(1, dab.opacity));
+    if (alpha <= 0.01) continue;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(tip, dab.x - size / 2, dab.y - size / 2, size, size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/** Convert input points for outline freehand (real pressure only; else constant). */
 export function toStrokeInput(
   points: Pt[],
   brush: PencilBrushDef
 ): Array<[number, number, number]> {
-  const hasReal = points.some(
-    (p) => typeof p.pressure === 'number' && Number.isFinite(p.pressure) && p.pressure > 0
-  );
+  const hasReal = points.some(pointHasPressure);
   if (hasReal) {
     return points.map((p) => [
       p.x,
       p.y,
-      Math.min(1, Math.max(0.05, Number(p.pressure) || 0.5)),
+      pointHasPressure(p) ? Math.min(1, Math.max(0, p.pressure as number)) : 0.5,
     ]);
   }
-  if (!brush.simulatePressure) {
-    return points.map((p) => [p.x, p.y, 0.5]);
-  }
-  const out: Array<[number, number, number]> = [];
-  for (let i = 0; i < points.length; i += 1) {
-    let pressure = 0.55;
-    if (i > 0) {
-      const a = points[i - 1];
-      const b = points[i];
-      const dist = Math.hypot(b.x - a.x, b.y - a.y);
-      pressure = Math.min(0.95, Math.max(0.12, 1 - dist / 36));
-    }
-    out.push([points[i].x, points[i].y, pressure]);
-  }
-  return out;
+  // No hardware pressure — constant width (do not invent velocity pressure).
+  void brush;
+  return points.map((p) => [p.x, p.y, 0.5]);
 }
 
 /** Outline polygon → SVG path `d` (quadratic midpoints, closed). */
@@ -391,7 +781,7 @@ export function getSvgPathFromStroke(stroke: number[][]): string {
 }
 
 export type PencilStrokeDrawOpts = {
-  /** Maps stroke-linecap onto perfect-freehand start/end caps. */
+  /** Maps stroke-linecap onto freehand start/end caps. */
   linecap?: 'butt' | 'round' | 'square';
   /** Per-point pressure 0–1 (same length as points). Overrides speed simulation when set. */
   pressures?: number[];
@@ -449,27 +839,23 @@ export function outlinePathFromPoints(
     options.end = { ...(options.end as object), cap: true };
   }
   const pressureOn = strokeOpts?.pressureEnabled !== false;
-  const brushForInput: PencilBrushDef =
-    brush.kind === 'stamp'
-      ? { ...brush, simulatePressure: false, options: FREEHAND_DEFAULTS }
-      : pressureOn
-        ? { ...brush, options }
-        : { ...brush, simulatePressure: false, options };
   if (!pressureOn) {
     pts = pts.map((p) => ({ x: p.x, y: p.y, pressure: 0.5 }));
   }
   const hasRealPressure =
     pressureOn &&
-    (pts.some((p) => typeof p.pressure === 'number' && Number.isFinite(p.pressure) && p.pressure > 0) ||
-      Boolean(strokeOpts?.pressures?.some((p) => typeof p === 'number' && p > 0)));
-  const input = toStrokeInput(pts, brushForInput);
-  // perfect-freehand defaults simulatePressure=true and IGNORES point pressures.
-  // After erase we store pathPressure — must disable re-simulation or ink thickens
-  // whenever point spacing changes.
+    (pts.some(pointHasPressure) ||
+      Boolean(strokeOpts?.pressures?.some((p) => typeof p === 'number' && Number.isFinite(p))));
+  const input = toStrokeInput(
+    pts,
+    { ...brush, simulatePressure: false, options }
+  );
+  // Real pressure only — never invent velocity pressure.
   const outline = getStroke(input, {
     size,
     ...options,
-    simulatePressure: hasRealPressure ? false : true,
+    thinning: hasRealPressure ? 1 : 0,
+    simulatePressure: false,
     last: true,
   });
   return getSvgPathFromStroke(outline);
@@ -579,12 +965,12 @@ export function parseSimplePathPoints(d: string): Pt[] {
 
 /** Serialize / parse per-point pressure stored on pencil nodes. */
 export function serializePathPressures(points: Pt[]): string | undefined {
-  if (!points.some((p) => typeof p.pressure === 'number' && p.pressure > 0)) return undefined;
+  if (!points.some(pointHasPressure)) return undefined;
   return points
     .map((p) =>
-      typeof p.pressure === 'number' && Number.isFinite(p.pressure)
-        ? Math.min(1, Math.max(0.05, p.pressure)).toFixed(3)
-        : '0.5'
+      pointHasPressure(p)
+        ? Math.min(1, Math.max(0, p.pressure as number)).toFixed(3)
+        : '0'
     )
     .join(',');
 }
@@ -595,7 +981,7 @@ export function parsePathPressures(raw: unknown, pointCount: number): number[] |
     .split(/[\s,]+/)
     .map(Number);
   if (parts.length !== pointCount) return undefined;
-  return parts.map((p) => (Number.isFinite(p) ? Math.min(1, Math.max(0.05, p)) : 0.5));
+  return parts.map((p) => (Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0));
 }
 
 /** Sample S-curve for brush list previews (viewBox 0 0 120 28). */
@@ -625,7 +1011,25 @@ export function samplePolyline(points: Pt[], spacing: number): Pt[] {
   if (points.length === 0) return [];
   if (points.length === 1) return [points[0]];
   if (spacing <= 0) return [points[0], points[points.length - 1]];
-  const out: Pt[] = [points[0]];
+
+  const pressureAt = (a: Pt, b: Pt, t: number) => {
+    const ha = pointHasPressure(a);
+    const hb = pointHasPressure(b);
+    if (!ha && !hb) return undefined;
+    const pa = ha ? Math.min(1, Math.max(0, a.pressure as number)) : 0;
+    const pb = hb ? Math.min(1, Math.max(0, b.pressure as number)) : pa;
+    if (!ha) return pb;
+    if (!hb) return pa;
+    return pa + (pb - pa) * t;
+  };
+
+  const out: Pt[] = [
+    {
+      x: points[0].x,
+      y: points[0].y,
+      ...(pointHasPressure(points[0]) ? { pressure: points[0].pressure } : {}),
+    },
+  ];
   let acc = 0;
   let next = spacing;
   for (let i = 1; i < points.length; i += 1) {
@@ -635,17 +1039,27 @@ export function samplePolyline(points: Pt[], spacing: number): Pt[] {
     if (seg < 1e-6) continue;
     while (acc + seg >= next) {
       const t = (next - acc) / seg;
-      out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      const pr = pressureAt(a, b, t);
+      out.push({
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+        ...(pr != null ? { pressure: pr } : {}),
+      });
       next += spacing;
     }
     acc += seg;
   }
   const last = points[points.length - 1];
   const prev = out[out.length - 1];
+  const lastPt: Pt = {
+    x: last.x,
+    y: last.y,
+    ...(typeof last.pressure === 'number' ? { pressure: last.pressure } : {}),
+  };
   if (!prev || Math.hypot(last.x - prev.x, last.y - prev.y) > spacing * 0.2) {
-    out.push(last);
+    out.push(lastPt);
   } else {
-    out[out.length - 1] = last;
+    out[out.length - 1] = lastPt;
   }
   return out;
 }
@@ -690,8 +1104,17 @@ export function stampSizeForBrush(brush: PencilBrushDef, strokeWidth: number) {
   return brushSize(brush, strokeWidth);
 }
 
-export function stampSpacingForBrush(brush: PencilBrushDef, strokeWidth: number) {
-  return stampSpacing(brush, strokeWidth);
+export function stampSpacingForBrush(
+  brush: PencilBrushDef,
+  strokeWidth: number,
+  hardness: number = 80,
+  points?: Pt[],
+  maxDabs: number = STAMP_MAX_DABS
+) {
+  if (points?.length) {
+    return stampSpacingForPath(brush, strokeWidth, hardness, points, maxDabs);
+  }
+  return stampSpacing(brush, strokeWidth, hardness);
 }
 
 /** Build a custom stamp brush def from an uploaded tip image. */
@@ -709,10 +1132,106 @@ export function makeCustomStampBrush(opts: {
     id,
     label: opts.label || '自定义画笔',
     sizeFactor: opts.sizeFactor ?? 1.4,
-    spacingFactor: opts.spacingFactor ?? 0.4,
+    spacingFactor: opts.spacingFactor ?? 0.15,
     kind: 'stamp',
     stampSrc: opts.stampSrc,
     custom: true,
     options: { ...FREEHAND_DEFAULTS },
   };
 }
+
+function packBrushFromJson(raw: BrushPackV1['brushes'][number]): PencilBrushDef | null {
+  const id = String(raw?.id || '').trim();
+  if (!id) return null;
+  const label = String(raw.label || id).slice(0, 48);
+  const stampSrc = typeof raw.stampSrc === 'string' ? raw.stampSrc.trim() : '';
+  const kind = raw.kind === 'stamp' || stampSrc ? 'stamp' : 'freehand';
+  if (kind === 'stamp') {
+    if (!stampSrc.startsWith('data:image/') && !/^https?:\/\//i.test(stampSrc)) return null;
+    return makeCustomStampBrush({
+      id,
+      label,
+      stampSrc,
+      sizeFactor: Number(raw.sizeFactor) || 1.4,
+      spacingFactor: Number(raw.spacingFactor) || 0.15,
+    });
+  }
+  const o = raw.options || {};
+  return {
+    id,
+    label,
+    custom: true,
+    kind: 'freehand',
+    sizeFactor: Number(raw.sizeFactor) || 1,
+    simulatePressure: Boolean(raw.simulatePressure),
+    options: {
+      thinning: Number(o.thinning ?? 0.05),
+      smoothing: Number(o.smoothing ?? 0.45),
+      streamline: Number(o.streamline ?? 0.35),
+      easing: (t) => t,
+      start: {
+        taper: Number(o.start?.taper ?? 0),
+        cap: o.start?.cap !== false,
+      },
+      end: {
+        taper: Number(o.end?.taper ?? 0),
+        cap: o.end?.cap !== false,
+      },
+    },
+  };
+}
+
+/** Parse open brush-pack JSON (recombyn-brushpack v1). */
+export function parseBrushPackJson(text: string): { name: string; brushes: PencilBrushDef[] } {
+  const parsed = JSON.parse(String(text || ''));
+  if (!parsed || typeof parsed !== 'object') throw new Error('invalid-pack');
+  const format = String((parsed as BrushPackV1).format || '');
+  if (format !== BRUSH_PACK_FORMAT) throw new Error('bad-format');
+  const version = Number((parsed as BrushPackV1).version);
+  if (version !== BRUSH_PACK_VERSION) throw new Error('bad-version');
+  const list = Array.isArray((parsed as BrushPackV1).brushes) ? (parsed as BrushPackV1).brushes : [];
+  const brushes = list.map(packBrushFromJson).filter(Boolean) as PencilBrushDef[];
+  if (!brushes.length) throw new Error('empty-pack');
+  return {
+    name: String((parsed as BrushPackV1).name || 'Brush pack').slice(0, 64),
+    brushes,
+  };
+}
+
+/** Serialize brushes to portable pack JSON (easing is dropped — restored as identity). */
+export function serializeBrushPack(brushes: PencilBrushDef[], name = 'Custom brushes'): string {
+  const pack: BrushPackV1 = {
+    format: BRUSH_PACK_FORMAT,
+    version: BRUSH_PACK_VERSION,
+    name,
+    brushes: brushes.map((b) => ({
+      id: b.id,
+      label: b.label,
+      kind: b.kind === 'stamp' ? 'stamp' : 'freehand',
+      sizeFactor: b.sizeFactor,
+      spacingFactor: b.spacingFactor,
+      simulatePressure: b.simulatePressure,
+      stampSrc: b.stampSrc,
+      options: {
+        thinning: b.options.thinning,
+        smoothing: b.options.smoothing,
+        streamline: b.options.streamline,
+        start: {
+          taper: typeof b.options.start === 'object' ? Number((b.options.start as any).taper) || 0 : 0,
+          cap: typeof b.options.start === 'object' ? (b.options.start as any).cap !== false : true,
+        },
+        end: {
+          taper: typeof b.options.end === 'object' ? Number((b.options.end as any).taper) || 0 : 0,
+          cap: typeof b.options.end === 'object' ? (b.options.end as any).cap !== false : true,
+        },
+      },
+    })),
+  };
+  return `${JSON.stringify(pack, null, 2)}\n`;
+}
+
+export function isBrushPackFileName(name: string): boolean {
+  const n = String(name || '').toLowerCase();
+  return n.endsWith('.brushpack') || n.endsWith('.brush.json') || n.endsWith('.json');
+}
+

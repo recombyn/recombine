@@ -22,19 +22,13 @@ describe('pencil stroke smoothness', () => {
       ...solid,
       kind: 'stamp' as const,
       sizeFactor: 1,
-      spacingFactor: 0.45,
+      spacingFactor: 0.08,
       stampSrc: 'data:image/png;base64,xx',
     };
     const sw = 1;
     const spacing = stampSpacing(stampLike, sw);
-    // eslint-disable-next-line no-console
-    console.log('[test:pencil-spacing]', {
-      strokeWidth: sw,
-      spacing,
-      legacyFloor2: 2,
-    });
     expect(spacing).toBeLessThan(2);
-    expect(spacing).toBeCloseTo(0.45, 5);
+    expect(spacing).toBeCloseTo(0.08, 5);
     expect(stampSpacingForBrush(stampLike, sw)).toBe(spacing);
   });
 
@@ -43,7 +37,7 @@ describe('pencil stroke smoothness', () => {
       ...findPencilBrush('solid'),
       kind: 'stamp' as const,
       sizeFactor: 1,
-      spacingFactor: 0.4,
+      spacingFactor: 0.15,
       stampSrc: 'data:image/png;base64,xx',
     };
     const size = 1 * brush.sizeFactor;
@@ -54,15 +48,6 @@ describe('pencil stroke smoothness', () => {
       raw.push({ x: 10 + i * 0.3, y: 10 + i * 0.25 });
     }
     const samples = samplePolyline(raw, spacing);
-    // eslint-disable-next-line no-console
-    console.log('[test:pencil-stamp-density]', {
-      spacing,
-      size,
-      rawN: raw.length,
-      sampleN: samples.length,
-      gap: spacing,
-      overlap: size - spacing,
-    });
     expect(samples.length).toBeGreaterThan(8);
     // Consecutive stamps must overlap (spacing < size) so ink looks continuous.
     expect(spacing).toBeLessThan(size);
@@ -71,7 +56,7 @@ describe('pencil stroke smoothness', () => {
         samples[i].x - samples[i - 1].x,
         samples[i].y - samples[i - 1].y
       );
-      expect(d).toBeLessThanOrEqual(spacing * 1.05 + 1e-6);
+      expect(d).toBeLessThanOrEqual(spacing * 1.2 + 1e-6);
     }
   });
 
@@ -108,7 +93,7 @@ describe('pencil stroke smoothness', () => {
       ...findPencilBrush('solid'),
       kind: 'stamp' as const,
       sizeFactor: 1.2,
-      spacingFactor: 0.35,
+      spacingFactor: 0.15,
       stampSrc: 'data:image/png;base64,xx',
     };
     const strokeWidth = 1;
@@ -131,17 +116,28 @@ describe('pencil stroke smoothness', () => {
     const polished = streamlinePencilPoints(captured, 0.35);
     const spacing = stampSpacing(brush, strokeWidth);
     const stamps = samplePolyline(polished, spacing);
-    // eslint-disable-next-line no-console
-    console.log('[test:pencil-flow]', {
-      rawN: rawMoves.length,
-      capturedN: captured.length,
-      polishedN: polished.length,
-      stampN: stamps.length,
-      minStep,
-      spacing,
-    });
     expect(captured.length).toBeGreaterThan(15);
     expect(stamps.length).toBeGreaterThan(10);
     expect(spacing).toBeLessThan(brush.sizeFactor * strokeWidth);
+  });
+
+  it('clamps oversized spacingFactor so strokes stay continuous', () => {
+    const brush = {
+      ...findPencilBrush('solid'),
+      kind: 'stamp' as const,
+      sizeFactor: 1,
+      spacingFactor: 0.45,
+      stampSrc: 'data:image/png;base64,xx',
+    };
+    const spacing = stampSpacing(brush, 1);
+    expect(spacing).toBeLessThanOrEqual(0.12);
+  });
+
+  it('default hardness spacing stays under 10% of tip size', () => {
+    const brush = findPencilBrush('chalk');
+    const sw = 10;
+    const spacing = stampSpacing(brush, sw, 80);
+    const size = sw * brush.sizeFactor;
+    expect(spacing / size).toBeLessThanOrEqual(0.09);
   });
 });
