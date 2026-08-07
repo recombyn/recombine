@@ -177,40 +177,6 @@ async function rasterizeElementTile(
   return null;
 }
 
-/** @deprecated Prefer saved element-snapshot thumbs; kept for rare live fallbacks. */
-export function collectProjectImageSrcs(document: unknown): string[] {
-  if (!document || typeof document !== 'object') return [];
-  const dsl = (document as { deltaSetLike?: unknown }).deltaSetLike;
-  if (!dsl || typeof dsl !== 'object') return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const [key, raw] of Object.entries(dsl as Record<string, unknown>)) {
-    if (key === 'ROOT' || !raw || typeof raw !== 'object') continue;
-    const node = raw as Record<string, unknown>;
-    if (!isExportableSceneNode(node)) continue;
-    if (String(node.key || '') !== 'image') continue;
-    const attrs = (node.attrs && typeof node.attrs === 'object'
-      ? node.attrs
-      : {}) as Record<string, unknown>;
-    const src = String(attrs.src || '').trim();
-    if (!src || seen.has(src)) continue;
-    if (
-      !(
-        src.startsWith('http://') ||
-        src.startsWith('https://') ||
-        src.startsWith('data:image/') ||
-        src.startsWith('/')
-      )
-    ) {
-      continue;
-    }
-    seen.add(src);
-    out.push(src);
-    if (out.length >= MAX_TILES) break;
-  }
-  return out;
-}
-
 export type ProjectCoverTiles = {
   /** Already-hosted image URLs — rare passthrough. */
   urls?: string[];
@@ -243,9 +209,10 @@ function resolveCoverTileRasterOpts(opts?: ProjectCoverTileOptions) {
 }
 
 /**
- * Up to 4 cover tiles for 最近打开 / 我的项目 / Publish.
- * Prefer one snapshot per artboard when there are 2+ boards (matches Share collage);
+ * Up to 4 cover tiles for list collage / Publish / cloud sync.
+ * Prefer one snapshot per artboard when there are 2+ boards;
  * else per-element crops; else one full-board cover.
+ * Tile rasters run in parallel so sync sends all four in one request.
  */
 export async function buildProjectCoverTiles(
   document: unknown,
@@ -257,34 +224,47 @@ export async function buildProjectCoverTiles(
 
   const frames = listArtboardFrames(document).slice(0, MAX_TILES);
   if (frames.length >= 2) {
-    const dataUrls: string[] = [];
-    for (const frame of frames) {
-      const slice = extractFrameDocument(document, frame, { contentFit: true });
-      if (!slice) continue;
-      const data = await renderDocumentThumbnail(slice, {
-        allowEmpty: true,
-        format: thumbFormat,
-        maxEdge: tileMax,
-      });
-      if (data) dataUrls.push(data);
-    }
+    const slices = frames
+      .map((frame) => extractFrameDocument(document, frame, { contentFit: true }))
+      .filter(Boolean);
+    const rendered = await Promise.all(
+      slices.map((slice) =>
+        renderDocumentThumbnail(slice, {
+          allowEmpty: true,
+          format: thumbFormat,
+          maxEdge: tileMax,
+        })
+      )
+    );
+    const dataUrls = rendered.filter((u): u is string => Boolean(u));
     if (dataUrls.length) return { dataUrls };
   }
 
   const ids = pickCoverElementIds(document);
   if (ids.length) {
-    const dataUrls: string[] = [];
-    for (const id of ids) {
-      const data = await rasterizeElementTile(document, id, {
-        maxEdge: opts?.maxEdge,
-        format: opts?.format,
-        compress: opts?.compress,
-      });
-      if (data) dataUrls.push(data);
-    }
+    const rendered = await Promise.all(
+      ids.map((id) =>
+        rasterizeElementTile(document, id, {
+          maxEdge: opts?.maxEdge,
+          format: opts?.format,
+          compress: opts?.compress,
+        })
+      )
+    );
+    const dataUrls = rendered.filter((u): u is string => Boolean(u));
     if (dataUrls.length) return { dataUrls };
   }
 
+  return buildProjectCoverSingle(document, opts);
+}
+
+/** Fallback: one full-board cover when collage tiles are unavailable. */
+export async function buildProjectCoverSingle(
+  document: unknown,
+  opts?: ProjectCoverTileOptions
+): Promise<ProjectCoverTiles> {
+  if (!document || typeof document !== 'object') return {};
+  const { format: thumbFormat, fullMax } = resolveCoverTileRasterOpts(opts);
   const one = await renderDocumentThumbnail(
     extractPlazaCoverDocument(document, { contentFit: true }) || document,
     {

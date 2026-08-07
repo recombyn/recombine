@@ -26,6 +26,9 @@ import {
   snapResizeToSmartGuides,
   smartSnapThreshold,
   collectSmartGuidesAt,
+  collectPairSpacingGuides,
+  GUIDE_COINCIDE_EPS,
+  SMART_GUIDE_COLOR,
   type SceneBox,
   type SmartGuideLine,
 } from './alignGuides';
@@ -539,6 +542,8 @@ type DragState = {
   currentClientX: number;
   currentClientY: number;
   currentShift?: boolean;
+  /** Last move-snap guide `at` values — hysteresis across pointer frames. */
+  stickySnapAt?: { x?: number; y?: number };
 };
 
 /** Shared seed for blank / pointing_canvas / move / resize / rotate drags. */
@@ -745,6 +750,7 @@ type MoveSnapContext = {
   gridSize: number;
   targets: SceneBox[];
   threshold: number;
+  stickyAt?: { x?: number; y?: number } | null;
 };
 
 /**
@@ -779,6 +785,7 @@ function computeMovedUnion(ctx: MoveSnapContext): {
   sdx: number;
   sdy: number;
   guides: SmartGuideLine[];
+  stickyAt: { x?: number; y?: number };
 } {
   // Snap **painted outer ink** in 1px steps, then apply the same delta to path.
   // Never fall back to path/chrome as "visual" — that reintroduces half-cell drift.
@@ -794,6 +801,7 @@ function computeMovedUnion(ctx: MoveSnapContext): {
       sdx: ctx.dx,
       sdy: ctx.dy,
       guides: [],
+      stickyAt: {},
     };
   }
   let nextVisual = {
@@ -802,28 +810,29 @@ function computeMovedUnion(ctx: MoveSnapContext): {
     top: visualUnion.top + ctx.dy,
   };
   let guides: SmartGuideLine[] = [];
+  let stickyAt: { x?: number; y?: number } = {};
   if (!ctx.disableSnap) {
-    // Smart align (capped screen feel) then pin ink to the pixel grid.
-    // Old "guides display-only" path hid align lines whenever near-snap would
-    // have moved the box — low zoom only showed gap numbers, no orange lines.
+    // Grid first so smart only chooses among lattice positions, then pin again.
+    if (ctx.gridSize > 0) {
+      nextVisual = snapBoxToGrid(nextVisual, ctx.gridSize);
+    }
     if (ctx.threshold > 0 && ctx.targets.length) {
       const smart = snapMoveToSmartGuides({
         box: nextVisual,
         targets: ctx.targets,
         threshold: ctx.threshold,
         gridSize: ctx.gridSize > 0 ? ctx.gridSize : 0,
+        stickyAt: ctx.stickyAt,
       });
       nextVisual = smart.box;
+      stickyAt = smart.stickyAt;
     }
     if (ctx.gridSize > 0) {
       nextVisual = snapBoxToGrid(nextVisual, ctx.gridSize);
     }
-    // Paint from the settled box: gaps always; align strokes when edges match.
-    guides = collectSmartGuidesAt(
-      nextVisual,
-      ctx.targets,
-      Math.max(0.51, ctx.threshold)
-    );
+    // Paint only when edges truly coincide — never use snap threshold as paint
+    // eps (at 31% zoom that painted "aligned" across ~25 scene cells and felt blocked).
+    guides = collectSmartGuidesAt(nextVisual, ctx.targets, GUIDE_COINCIDE_EPS);
   }
   const sdx = nextVisual.left - visualUnion.left;
   const sdy = nextVisual.top - visualUnion.top;
@@ -853,6 +862,7 @@ function computeMovedUnion(ctx: MoveSnapContext): {
     sdx,
     sdy,
     guides,
+    stickyAt,
   };
 }
 
@@ -915,7 +925,7 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
         width: Math.max(1, visualNext.width - outset * 2),
         height: Math.max(1, visualNext.height - outset * 2),
       };
-      guides = collectSmartGuidesAt(visualNext, ctx.targets, Math.max(0.51, ctx.threshold));
+      guides = collectSmartGuidesAt(visualNext, ctx.targets, GUIDE_COINCIDE_EPS);
       next = inflateSelectionBox(pathNext, singleNode);
     } else {
       if (ctx.threshold > 0 && ctx.targets.length) {
@@ -934,7 +944,7 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
           aspectRatio: ctx.drag.aspectRatio,
         });
       }
-      guides = collectSmartGuidesAt(next, ctx.targets, Math.max(0.51, ctx.threshold));
+      guides = collectSmartGuidesAt(next, ctx.targets, GUIDE_COINCIDE_EPS);
     }
   }
   next = {
@@ -1104,8 +1114,8 @@ function resolveChromeAngle(opts: {
   return fromDoc;
 }
 
-/** Inspect spacing pair: hover first, then sticky pair node. */
-function resolveInspectPairNodeId(opts: {
+/** Share / Dev inspect spacing pair: live hover first, then sticky prior selection. */
+function resolveMeasurePairNodeId(opts: {
   inspectDev: boolean;
   transforming: boolean;
   hoverNodeId: string | null;
@@ -1113,24 +1123,44 @@ function resolveInspectPairNodeId(opts: {
   inspectPrimaryId: string | null;
   selectedNodeIds: string[];
 }): string | null {
-  if (!opts.inspectDev || opts.transforming) return null;
+  // Design edit: no preview-style select↔hover measure / orange pair chrome.
+  if (!opts.inspectDev || opts.transforming || !opts.inspectPrimaryId) return null;
   if (
     opts.hoverNodeId &&
     opts.hoverNodeId !== opts.inspectPrimaryId &&
-    !opts.selectedNodeIds.includes(opts.hoverNodeId) &&
-    !parseFrameSelId(opts.hoverNodeId)
+    !opts.selectedNodeIds.includes(opts.hoverNodeId)
   ) {
     return opts.hoverNodeId;
   }
   if (
     opts.inspectPairNodeId &&
     opts.inspectPairNodeId !== opts.inspectPrimaryId &&
-    !opts.selectedNodeIds.includes(opts.inspectPairNodeId) &&
-    !parseFrameSelId(opts.inspectPairNodeId)
+    !opts.selectedNodeIds.includes(opts.inspectPairNodeId)
   ) {
     return opts.inspectPairNodeId;
   }
   return null;
+}
+
+/** Resolve node or `__frame__:` synthetic id to a scene AABB. */
+function resolveMeasureBox(
+  selId: string | null | undefined,
+  document: any,
+  getNodeBox: (id: string) => SceneBox | null
+): SceneBox | null {
+  if (!selId) return null;
+  const frameId = parseFrameSelId(selId);
+  if (frameId) {
+    const frames = Array.isArray(document?.frames) ? document.frames : [];
+    const frame = frames.find((f: any) => f && String(f.id) === String(frameId));
+    if (!frame) return null;
+    const left = Number(frame.x) || 0;
+    const top = Number(frame.y) || 0;
+    const width = Math.max(1, Number(frame.width) || 1);
+    const height = Math.max(1, Number(frame.height) || 1);
+    return { left, top, width, height };
+  }
+  return getNodeBox(selId);
 }
 
 function deflateChromeBox(chrome: SceneBox | null | undefined, node: any): SceneBox | null {
@@ -1214,7 +1244,7 @@ function buildShapeOutlines(opts: {
     ids.push(id);
   };
 
-  const inspectPairId = resolveInspectPairNodeId({
+  const measurePairId = resolveMeasurePairNodeId({
     inspectDev: opts.inspectDev,
     transforming: opts.transforming,
     hoverNodeId: opts.hoverNodeId,
@@ -1223,17 +1253,20 @@ function buildShapeOutlines(opts: {
     selectedNodeIds: opts.selectedNodeIds,
   });
 
-  // Hover path silhouette — edit + inspect (same algorithm).
-  if (!opts.transforming && opts.hoverNodeId && !opts.selectedNodeIds.includes(opts.hoverNodeId)) {
+  // Inspect measure-pair silhouette (orange + spacing).
+  if (!opts.transforming && measurePairId) {
+    pushId(measurePairId);
+  } else if (
+    // Edit: light blue hover outline only — no spacing pair chrome.
+    !opts.inspectDev &&
+    !opts.transforming &&
+    opts.hoverNodeId &&
+    !opts.selectedNodeIds.includes(opts.hoverNodeId)
+  ) {
     pushId(opts.hoverNodeId);
   }
 
-  // Inspect click-pair silhouette when not hovering.
-  if (opts.inspectDev && !opts.transforming && inspectPairId) {
-    pushId(inspectPairId);
-  }
-
-  // Inspect select: path silhouette only (spacing/size badges removed — reimplement later).
+  // Inspect select: path silhouette only (spacing drawn via SmartGuidesOverlay).
   if (
     opts.inspectDev &&
     !opts.transforming &&
@@ -1304,12 +1337,14 @@ function buildShapeOutlines(opts: {
       : nodeKey === 'video'
         ? 'horizontal'
         : 'all';
+    const isMeasurePair =
+      Boolean(measurePairId) && id === measurePairId && !opts.selectedNodeIds.includes(id);
     out.push({
       id,
       pathD,
       box: geomBox,
       angle,
-      color: '#3388ff',
+      color: isMeasurePair ? SMART_GUIDE_COLOR : '#3388ff',
       withHandles,
       // Selected with handles: control box only (no blue path silhouette).
       // Hover / inspect / generator (box via handles+edge none) still show path when no knobs path.
@@ -1562,7 +1597,7 @@ function SelectionFeature({
   );
   /** Radius panel keeps chrome (rounded outline) but hides floating toolbars. */
   const suppressToolbars = suppressChrome || shapeStylePanel?.kind === 'radius';
-  /** Share preview / Dev: no edit chrome (spacing annotations removed). */
+  /** Share preview / Dev: select↔hover spacing + orange pair chrome. */
   const inspectDev = workspaceMode === 'dev' || readOnly;
   const dragRef = useRef<DragState | null>(null);
   const liveUnionRef = useRef<SceneBox | null>(null);
@@ -2301,7 +2336,7 @@ function SelectionFeature({
         // Ignore pointer jitter until the pointer actually moves (protects dblclick).
         if (screenDistSq <= DRAG_DISTANCE_SQUARED) return;
         const exclude = new Set(drag.origins.map((o) => o.nodeId));
-        const { nextUnion, sdx, sdy, guides } = computeMovedUnion({
+        const { nextUnion, sdx, sdy, guides, stickyAt } = computeMovedUnion({
           union: drag.union,
           origins: drag.origins,
           document: sceneDoc,
@@ -2311,7 +2346,9 @@ function SelectionFeature({
           gridSize,
           targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
           threshold: smartSnapThreshold(zoom),
+          stickyAt: drag.stickySnapAt,
         });
+        drag.stickySnapAt = stickyAt;
         const nextOrigins = drag.origins.map((o) => ({
           nodeId: o.nodeId,
           box: { ...o.box, left: o.box.left + sdx, top: o.box.top + sdy },
@@ -2606,6 +2643,7 @@ function SelectionFeature({
           gridSize,
           targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
           threshold: smartSnapThreshold(zoom),
+          stickyAt: drag.stickySnapAt,
         });
         const patches = drag.origins.map((o) => ({
           nodeId: o.nodeId,
@@ -2865,8 +2903,42 @@ function SelectionFeature({
     liveAngle,
   });
 
-  /** Single node or single frame — both get size badge + hover spacing. */
+  /** Single node or single frame — inspect size badge + hover spacing. */
   const inspectPrimaryId = resolveInspectPrimaryId(selectedNodeIds, selectedFrameIds);
+
+  const measurePairId = resolveMeasurePairNodeId({
+    inspectDev,
+    transforming,
+    hoverNodeId,
+    inspectPairNodeId,
+    inspectPrimaryId,
+    selectedNodeIds,
+  });
+
+  const measurePrimaryBox = useMemo(
+    () => resolveMeasureBox(inspectPrimaryId, document, getNodeBox),
+    [inspectPrimaryId, document, getNodeBox]
+  );
+  const measurePairBox = useMemo(
+    () => resolveMeasureBox(measurePairId, document, getNodeBox),
+    [measurePairId, document, getNodeBox]
+  );
+
+  const idleMeasureGuides = useMemo(() => {
+    if (!inspectDev || transforming || !measurePrimaryBox || !measurePairBox) {
+      return [] as SmartGuideLine[];
+    }
+    return collectPairSpacingGuides(measurePrimaryBox, measurePairBox);
+  }, [inspectDev, transforming, measurePrimaryBox, measurePairBox]);
+
+  const displayGuides = transforming ? smartGuides : idleMeasureGuides;
+  // WxH under the box: inspect/preview only — edit already has the title size label.
+  const measureSizeBox =
+    inspectDev && inspectPrimaryId && !suppressChrome
+      ? transforming && liveUnion
+        ? liveUnion
+        : measurePrimaryBox
+      : null;
 
   const shapeOutlines = buildShapeOutlines({
     enabled,
@@ -2975,8 +3047,9 @@ function SelectionFeature({
       <ShapeOutlineSvg outlines={shapeOutlines} />
       <BrushOverlay box={marquee} />
       <SmartGuidesOverlay
-        guides={smartGuides}
+        guides={displayGuides}
         mirrorNodeId={liveOrigins?.[0]?.nodeId ?? selectedNodeIds[0] ?? null}
+        sizeBox={measureSizeBox}
       />
 
       {/* World SelectionChrome when idle — path single/multi use host-mirrored chrome. */}
