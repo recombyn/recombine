@@ -383,6 +383,7 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
 
   const changeLang = (code: string) => {
     setFlyout(null);
+    close();
     if (normalizeI18nLang(code) === currentLang) return;
     // Remount Router with new basename (`/zh/home` ↔ `/home`).
     window.location.assign(buildLocaleSwitchUrl(code));
@@ -392,6 +393,7 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
     applyTheme(next);
     setThemeMode(next);
     setFlyout(null);
+    close();
   };
 
   const openSettings = (tab: AccountSettingsTab = 'billing') => {
