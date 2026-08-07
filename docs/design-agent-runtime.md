@@ -186,7 +186,7 @@ The outer graph is the **engine**. Day-to-day design quality usually means conte
 
 - Decide/resource stages expose a **catalog**; model loads bodies via `need_skills` (lazy).  
 - User can hard-pin with `skill_refs` (`/` chips).  
-- Namespaces / ACL / versioning: [design_skills/README.md](../apps/api/data/public/design_skills/README.md).
+- Namespaces / ACL / versioning: [design_skills/README.md](../apps/api/data/design_skills/README.md).
 
 ### Aesthetics corpus (“语料”)
 
@@ -261,7 +261,7 @@ Split vs runtime: prompts = store and assemble; runtime = execute and SSE.
 
 Aesthetics samples live under `app/services/design/admin/quality_sample_store.py` + `app/services/design/aesthetics/`.
 
-Seeds: `apps/api/data/public/design_prompt_packs_seed.json`, `design_skills_seed.json`, `design_skills/`, etc.
+Seeds: `apps/api/data/design_prompt_packs/`, `design_skills_seed.json`, `design_skills/`, etc.
 
 Prompt pack `usedBy` stages: `intent` / `decide` / `paint` / `apply` / `observe` / `resources` / `aesthetics` / `persona` / `precheck` / `orchestrator` / `legacy`, etc.
 
@@ -290,5 +290,5 @@ Prompt pack `usedBy` stages: `intent` / `decide` / `paint` / `apply` / `observe`
 - Backend layout and seeds: [apps/api/README.md](../apps/api/README.md)
 - LangGraph checkpointer: [postgres-switch.md](./postgres-switch.md#langgraph-checkpointer-design-agent--create_agent)
 - Architecture: [architecture.md](./architecture.md)
-- Skill namespaces: [design_skills/README.md](../apps/api/data/public/design_skills/README.md)
+- Skill namespaces: [design_skills/README.md](../apps/api/data/design_skills/README.md)
 - User-facing Agent guide: [apps/docs · guide/agent](../apps/docs/content/zh-CN/guide/agent.md)

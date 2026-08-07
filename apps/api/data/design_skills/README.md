@@ -4,9 +4,9 @@ Open-source ships **5 core skills** in `design_skills_seed.json` so self-host Ag
 
 This directory holds optional **extension packs** (`source=file`, namespace `ext`). OSS ships **one sample pack** (`example_ext/`) so you can copy the layout.
 
-Official MIT encyclopedias ship under repo-root [`.agents/skills/`](../../../../../.agents/skills/) (`ui_ux_pro_max`, `garden_style`, `awesome_design_md`, `shadcn_ui`) and load into the same Skill toolbox.
+Official MIT encyclopedias ship under repo-root [`.agents/skills/`](../../../../.agents/skills/) (`ui_ux_pro_max`, `garden_style`, `awesome_design_md`, `shadcn_ui`) and load into the same Skill toolbox.
 
-**Runtime / lifecycle / when to add a Skill vs corpus vs prompt pack:** see repo [docs/design-agent-runtime.md](../../../../../docs/design-agent-runtime.md#what-to-extend-content-not-graph).
+**Runtime / lifecycle / when to add a Skill vs corpus vs prompt pack:** see repo [docs/design-agent-runtime.md](../../../../docs/design-agent-runtime.md#what-to-extend-content-not-graph).
 
 ## Namespaces
 
@@ -80,7 +80,7 @@ Frontmatter is stripped from the runtime prompt body. Product `_meta.json` wins 
 
 | Layer | Owns |
 |-------|------|
-| Prompt packs (`design_prompt_packs_seed.json`) | Protocol only: JSON shape, intent, when to `need_*` |
+| Prompt packs (`design_prompt_packs/`) | Protocol only: JSON shape, intent, when to `need_*` |
 | Core skills (seed JSON) | Engine playbooks: create steps, vision, edit, image boundary |
 | Ext packs (this folder) | Optional server extension playbooks |
 | Admin skills (`user.*`) | Product workflows + optional layout/op playbooks (catalog; enable to load) |

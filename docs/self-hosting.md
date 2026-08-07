@@ -9,7 +9,7 @@ Run the full product on your own machine or server with Docker Compose (or local
 | Web editor | http://localhost:3000 |
 | API | http://localhost:8000 (`/docs`) |
 | Collab (Yjs WS) | compose `collab` · browser via `ws://localhost:3000/collab/…` (prod: `wss://`) |
-| Agent seeds | prompt packs + **5 core skills** from `apps/api/data/public/` |
+| Agent seeds | prompt packs + **5 core skills** from `apps/api/data/` |
 | **MySQL 8** | compose service + volume `mysql_data` |
 | Redis | Celery / queues |
 
@@ -21,16 +21,18 @@ Host tools can reach MySQL at `127.0.0.1:3306` (same user/password). Change via 
 
 **Dev without Docker MySQL:** leave `DATABASE_URL` empty → SQLite at `storage/recombyn.db`.
 
-Default config loads from seed JSON under `apps/api/data/public/` on first API start.
+Default config loads from seed JSON under `apps/api/data/` on first API start.
 
-| Seed | Public (git) | Notes |
-|------|--------------|--------|
-| Prompt packs | Minimal English baseline | Enough to avoid `missing prompt pack` on Agent |
-| Skills (core) | 5 core playbooks | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` — Agent can create & edit out of the box |
-| Knowledge / tokens / models | Often stub or infra-only | Expand via Admin / DB after install |
-| Canvas actions, fonts, dicts, stages | Shipped in public | |
+| Seed | Shipped in `apps/api/data/` | Notes |
+|------|------------------------------|--------|
+| Prompt packs | Full product set (~95 kinds) in `data/design_prompt_packs/` | Ask / paint / decide / aesthetics — `_index.json` + per-kind `.md` |
+| Skills (core) | 5 core playbooks | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` |
+| Skills (ext) | Optional packs + repo `.agents/skills/` | e.g. `ui_ux_pro_max`, `garden_style` — add more via Admin / zip / folders |
+| Knowledge / tokens / models | Shipped | Expand further via Admin after install |
+| Canvas actions, fonts, dicts, stages | Shipped | |
+| Aesthetics corpus | **Not** in seed | Upload quality samples in Admin for CLIP RAG; thin corpus → fail-open |
 
-See [data/README.md](../apps/api/data/README.md) and [design_skills/README.md](../apps/api/data/public/design_skills/README.md) (namespaces `core` / `ext` / `user`, ACL, hot reload).
+See [data/README.md](../apps/api/data/README.md) and [design_skills/README.md](../apps/api/data/design_skills/README.md) (namespaces `core` / `ext` / `user`, ACL, hot reload).
 
 ## Database options
 
@@ -171,4 +173,4 @@ Third-party images you may run alongside (Redis, MySQL, …) keep **their own** 
 - [API README](../apps/api/README.md)
 - [Architecture](./architecture.md)
 - [PostgreSQL switch](./postgres-switch.md)
-- [Design skills packs](../apps/api/data/public/design_skills/README.md)
+- [Design skills packs](../apps/api/data/design_skills/README.md)

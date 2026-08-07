@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parents[1] / "data/public/design_prompt_packs_seed.json"
+OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "design_prompt_packs"
 
 # Short protocol bodies — enough for cold-start Agent; not product-tuned copy.
 BODIES: dict[str, tuple[str, list[str], str]] = {
@@ -370,16 +370,18 @@ _AESTHETIC_GLUE = {
 
 
 def main() -> None:
-    items = []
+    items: list[dict] = []
     sort_i = 0
     merged = {**BODIES, **_AESTHETIC_GLUE}
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     for kind, (title, used_by, body) in merged.items():
         sort_i += 10
+        text = body.strip() + "\n"
+        (OUT_DIR / f"{kind}.md").write_text(text, encoding="utf-8")
         items.append(
             {
                 "kind": kind,
                 "title": title,
-                "body": body.strip() + "\n",
                 "type": "system",
                 "group": "oss_baseline",
                 "usedBy": used_by,
@@ -390,12 +392,17 @@ def main() -> None:
             }
         )
     payload = {
-        "_comment": "OSS runnable baseline (English, minimal) for Agent cold start.",
+        "_comment": (
+            "OSS runnable baseline (English, minimal) for Agent cold start. "
+            "Bodies live in sibling *.md (filename = kind)."
+        ),
         "kindLabels": {k: t for k, (t, _, __) in merged.items()},
         "items": items,
     }
-    OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {OUT} items={len(items)}")
+    (OUT_DIR / "_index.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"wrote {OUT_DIR} items={len(items)}")
 
 
 if __name__ == "__main__":

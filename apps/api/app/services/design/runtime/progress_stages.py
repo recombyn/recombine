@@ -4,7 +4,7 @@ Emits `explored` parent + nested `item` lines for:
 prepare → scene → prompt → model → lookup → validate → ops →
 scene_check → critic → refine → done
 
-Labels / event map: apps/api/data/public/progress_stages.json
+Labels / event map: apps/api/data/progress_stages.json
 """
 
 from __future__ import annotations

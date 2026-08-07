@@ -3,7 +3,7 @@
 Each action has type + hint/schema for the model; apply runs on the client.
 This module seeds missing rows into design_canvas_tool (never overwrites non-empty Admin hints).
 
-Seed source: apps/api/data/public/canvas_actions_seed.json (private overlay wins)
+Seed source: apps/api/data/canvas_actions_seed.json
 """
 
 from __future__ import annotations

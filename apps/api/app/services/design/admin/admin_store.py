@@ -525,7 +525,7 @@ _AGENT_FLOW_NODE_TEMPLATES_KEY = "agent.flow.node_templates_json"
 _AGENT_FLOW_ACTION_CONTRACTS_KEY = "agent.flow.action_contracts_json"
 
 def _load_json_seed(name: str, default: Any) -> Any:
-    """Load seed JSON (private overlay → public data/)."""
+    """Load seed JSON from apps/api/data/."""
     from app.core.config import resolve_data_file
 
     path = resolve_data_file(name)
