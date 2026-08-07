@@ -469,10 +469,17 @@ export function createShapeNode({
   const strokeAlignDefault = 'center';
   // Quantize to 0.5px so odd center strokes can sit outer edges on integer grid
   // (geom = visual ± sw/2). Full integers when sw is even / inside.
-  const ix = Math.round((Number(x) || 0) * 2) / 2;
-  const iy = Math.round((Number(y) || 0) * 2) / 2;
-  const iw = Math.max(1, Math.round((Number(width) || 1) * 2) / 2);
-  const ih = Math.max(1, Math.round((Number(height) || 1) * 2) / 2);
+  // Pencil/pen keep exact placement: path points are relative to the padded origin;
+  // half-pixel snapping the node would shift freehand ink off the stored centerline.
+  const rawX = Number(x) || 0;
+  const rawY = Number(y) || 0;
+  const rawW = Math.max(1, Number(width) || 1);
+  const rawH = Math.max(1, Number(height) || 1);
+  const keepExactOrigin = shapeType === 'pencil' || shapeType === 'pen';
+  const ix = keepExactOrigin ? rawX : Math.round(rawX * 2) / 2;
+  const iy = keepExactOrigin ? rawY : Math.round(rawY * 2) / 2;
+  const iw = keepExactOrigin ? rawW : Math.max(1, Math.round(rawW * 2) / 2);
+  const ih = keepExactOrigin ? rawH : Math.max(1, Math.round(rawH * 2) / 2);
   if (shapeType === 'line' || shapeType === 'arrow') {
     return {
       id,

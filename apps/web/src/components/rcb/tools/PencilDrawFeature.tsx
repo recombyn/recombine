@@ -204,7 +204,7 @@ function eraseTargetsNearStroke(
   return false;
 }
 
-/** Freehand pencil → baseline centerline; ink is SVG stroke along that path. */
+/** Freehand pencil → store baseline centerline; paint filled ink centered on that path. */
 function PencilDrawFeature({
   enabled,
   artboard,
