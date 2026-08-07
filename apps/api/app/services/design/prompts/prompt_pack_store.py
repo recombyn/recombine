@@ -526,6 +526,50 @@ def _prune_prompt_packs_to_seed(session: Session, *, now: float) -> None:
                 session.add(row)
 
 
+# Distinctive phrases that must appear in the current paint_system seed.
+# DB rows that still look like OSS paint_system but miss any of these get replaced.
+# Do not hardcode prior full bodies here — add a short marker when the seed contract changes.
+_PAINT_SYSTEM_SEED_MARKERS = (
+    "boolean_op",
+    "brushHardness",
+    "Fixed-size deliverable",
+    "MUST emit create_frame",
+    "HOST_ARTBOARD",
+    "New design create",
+    "CLIENT_SIZE_LOCK",
+    "create_image with genPrompt for the hero",
+    "不要画板",
+    "fillType=linear|radial|angular|diffuse",
+    "~≥90% match",
+)
+
+
+def _bump_stale_paint_system_body(session: Session, *, now: float) -> None:
+    """Replace OSS paint_system packs that lag the seed contract (marker check)."""
+    kind = "agent.prompt.paint_system"
+    seed_item = _SEED_BY_KIND.get(kind) or {}
+    new_body = str(seed_item.get("body") or "").replace("\r\n", "\n").strip()
+    if not new_body:
+        return
+    markers = tuple(m for m in _PAINT_SYSTEM_SEED_MARKERS if m in new_body)
+    if not markers:
+        return
+    prefix = "You are the canvas PAINT stage"
+    seed_raw = str(seed_item.get("body") or "")
+    for pack in crud.list_design_prompt_packs_by_kind(session=session, kind=kind):
+        cur = str(pack.body or "").replace("\r\n", "\n").strip()
+        if cur == new_body:
+            continue
+        # Only touch the OSS paint_system lineage — leave unrelated admin forks alone.
+        if not cur.startswith(prefix):
+            continue
+        if all(m in cur for m in markers):
+            continue
+        pack.body = seed_raw
+        pack.updated_at = now
+        session.add(pack)
+
+
 def _sync_system_prompts_into_packs(session: Session, *, now: float) -> None:
     """One-way migrate design_system_prompt → packs (kind = prompt_key). Skip existing kinds."""
     from app.models import DesignPromptPack
@@ -606,6 +650,8 @@ def ensure_design_prompt_packs() -> None:
                 existing_kinds.add(kind)
             # Admin bodies are source of truth after first insert.
             # Seed only fills missing kinds above; do NOT force-overwrite pack/system bodies.
+            # One-shot replace when DB paint_system lags seed markers (not admin forks).
+            _bump_stale_paint_system_body(session, now=now)
             # Backfill empty used_by from seed (Admin-set stages are preserved).
             for kind, item in _SEED_BY_KIND.items():
                 csv = used_by_csv(item.get("usedBy") or item.get("used_by"))

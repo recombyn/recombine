@@ -950,6 +950,7 @@ const zhCN = {
       lottieGenUploadHint: '请上传图片或 Lottie JSON',
       lottieGenRefImage: '参考图',
       lottieGenNeedPrompt: '请先描述要生成的动画',
+      lottieGenNeedVisionModel: '附图需要支持看图的多模态模型',
       lottieGenInvalidJson: '无效的 Lottie JSON',
       lottieGenerating: 'Lottie 生成中',
       lottieGenFail: 'Lottie 生成失败',

@@ -108,7 +108,7 @@ function ProcessNodeChrome({
 }
 
 /**
- * World-layer shimmer + status pills for image process jobs.
+ * World-layer shimmer + status pills for image / video / lottie process jobs.
  * Same positioning contract as selection chrome — no unscaled overlay portal.
  */
 function ImageProcessOverlay({
@@ -123,7 +123,9 @@ function ImageProcessOverlay({
     const children: string[] = document?.deltaSetLike?.ROOT?.children || [];
     return children.filter((id) => {
       const node = document?.deltaSetLike?.[id];
-      if (node?.key !== 'image' && node?.key !== 'video') return false;
+      if (node?.key !== 'image' && node?.key !== 'video' && node?.key !== 'lottie') {
+        return false;
+      }
       // Include generator plates while generating (same sweep as process jobs).
       return String(node.attrs?.processStatus || '') === 'running';
     });

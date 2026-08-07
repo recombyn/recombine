@@ -1094,6 +1094,8 @@ async def ainvoke_structured(
             )
 
     # Fallback: create_agent + response_format.
+    import uuid
+
     from langgraph.checkpoint.memory import InMemorySaver
 
     agent = build_official_agent(
@@ -1106,7 +1108,14 @@ async def ainvoke_structured(
         summarize=False,
         with_long_term_store=False,
     )
-    result = await agent.ainvoke({"messages": lc_messages}, config=cfg)
+    # InMemorySaver still requires configurable.thread_id.
+    agent_cfg = merge_tracing_config(
+        agent_thread_config(f"structured:{uuid.uuid4().hex[:16]}"),
+        run_name=run_name or f"structured:{source}",
+        metadata=metadata,
+        tags=tags or [source, "structured"],
+    )
+    result = await agent.ainvoke({"messages": lc_messages}, config=agent_cfg)
     structured = None
     out_msgs: list[Any] = []
     if isinstance(result, dict):

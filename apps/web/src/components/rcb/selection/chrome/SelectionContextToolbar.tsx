@@ -178,6 +178,13 @@ function SelectionContextToolbar(props: Props): ReactNode {
     kind === 'lottie' &&
     imageToolPanel?.kind === 'lottieEdit' &&
     imageToolPanel?.nodeId === nodeId;
+  // Side panels (Eraser / Replace text / …) own the chrome — hide the selection pill.
+  const imageSidePanelOpen =
+    Boolean(imageToolPanel?.nodeId) &&
+    (imageToolPanel?.kind === 'eraser' ||
+      imageToolPanel?.kind === 'replaceText' ||
+      imageToolPanel?.kind === 'multiAngle' ||
+      imageToolPanel?.kind === 'adjust');
   const [mdOpen, setMdOpen] = useState(false);
   const [fontCatalogTick, setFontCatalogTick] = useState(0);
   const style = useMemo(
@@ -219,6 +226,7 @@ function SelectionContextToolbar(props: Props): ReactNode {
   if (isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node)) {
     return null;
   }
+  if (imageSidePanelOpen) return null;
 
   const patchTextStyle = (partial: Record<string, unknown>) => {
     const next = buildTextAttrsPreservingMarkdown(node.attrs || {}, {

@@ -38,10 +38,8 @@ import MentionAttachPanel, {
   type MentionAttachItem,
 } from '@/components/editor/panels/agent/MentionAttachPanel';
 import { AspectRatioGlyph } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
-import {
-  AGENT_POPOVER_PANEL,
+import ModelPickerPanel, {
   ModelBrandIcon,
-  modelDescription,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
 import { applyCanvasPickToImageComposer } from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorCard';
 import {
@@ -178,75 +176,6 @@ function attachSelectionToVideoComposer(opts: {
     imagesOnly: false,
   });
   return true;
-}
-
-/** Model list — mirrors ModelPickerPanel's row layout, scoped to video models only. */
-function VideoModelPickerPanel({
-  models,
-  selectedId,
-  status,
-  onPick,
-}: {
-  models: LlmModel[];
-  selectedId: string;
-  status: 'idle' | 'loading' | 'ready' | 'error';
-  onPick: (id: string) => void;
-}): ReactNode {
-  const { t } = useTranslation();
-  const pool: LlmModel[] =
-    !models.length && status === 'loading'
-      ? [{ id: '_loading', label: 'Loading...', provider: '', kind: 'video' }]
-      : models;
-
-  return (
-    <div className={cn(AGENT_POPOVER_PANEL, 'flex flex-col')}>
-      <div className="max-h-[min(360px,calc(100vh-160px))] min-w-0 overflow-y-auto px-1.5 pb-1.5 pt-1.5">
-        {status === 'error' && models.length === 0 ? (
-          <div className="px-2 py-4 text-center text-[12px] text-[var(--muted)]">
-            <p>{t('agent.apiDown')}</p>
-            <p className="mt-1">{t('agent.apiDownHint')}</p>
-          </div>
-        ) : null}
-
-        {!pool.length && status !== 'loading' ? (
-          <div className="px-2 py-6 text-center text-[12px] text-[var(--muted)]">
-            {t('agent.emptyModels')}
-          </div>
-        ) : (
-          pool.map((m) => {
-            const selected = m.id === selectedId;
-            const loading = m.id === '_loading';
-            return (
-              <button
-                key={m.id}
-                type="button"
-                disabled={loading}
-                className={cn(
-                  'flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-colors',
-                  selected ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--accent-soft)]',
-                  loading && 'cursor-not-allowed'
-                )}
-                onClick={() => {
-                  if (loading) return;
-                  onPick(m.id);
-                }}
-              >
-                <ModelBrandIcon model={m} size={20} className="mt-0.5" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-semibold leading-5 text-[var(--ink)]">
-                    {m.label || m.id}
-                  </span>
-                  <span className="mt-0.5 block truncate whitespace-nowrap text-[11px] leading-[1.35] text-[var(--muted)]">
-                    {loading ? '...' : modelDescription(m, t)}
-                  </span>
-                </span>
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
 }
 
 /** Pill track shared by the resolution / duration rows. */
@@ -1050,10 +979,13 @@ function VideoGeneratorCard({
                 referenceClassName="inline-flex"
                 popupRender={() => (
                   <div onPointerDown={(e) => e.stopPropagation()}>
-                    <VideoModelPickerPanel
+                    <ModelPickerPanel
+                      tab="video"
                       models={models}
                       selectedId={modelId}
                       status={modelsStatus}
+                      hideAuto
+                      useModelsAsIs
                       onPick={(id) => {
                         setModelId(id);
                         persistGenSettings({ model: id });

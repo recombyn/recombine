@@ -216,11 +216,13 @@ _DEFAULT_PAINT_CREATE_TOOLS = (
     "create_shape",
     "create_text",
     "create_image",
+    "create_lottie",
 )
 _DEFAULT_PAINT_EDIT_TOOLS = (
     "create_shape",
     "create_text",
     "create_image",
+    "create_lottie",
     "update_node",
     "delete_nodes",
 )
