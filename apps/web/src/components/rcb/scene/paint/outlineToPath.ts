@@ -26,12 +26,12 @@ import {
   textVisualLines,
 } from '@/components/rcb/scene/document/sceneText';
 import {
-  brushSize,
   findPencilBrush,
   isStampBrush,
   outlinePathFromPoints,
+  parsePathPressures,
   parseSimplePathPoints,
-  polylinePathD,
+  pencilInkPathFromPoints,
 } from '@/components/rcb/tools/pencilBrushes';
 import { getShapeBaselineD, PathBuilder } from '@/components/rcb/core/geometry';
 import { computeShapeBoolean, type ShapeBox } from '@/components/rcb/selection/shapeBoolean';
@@ -1200,39 +1200,25 @@ function outlinePencilLocal(node: any): OutlineResult | null {
   const brush = findPencilBrush(brushId);
   const stampSrc = node.attrs?.brushStampSrc != null ? String(node.attrs.brushStampSrc) : '';
   const ink = nodeStrokeInk(node);
-  const inkW = brushSize(brush, sw);
+  const linecap = readStrokeLinecap(node.attrs, 'pencil');
+  const pts = parseSimplePathPoints(raw);
+  if (pts.length < 2) return null;
 
-  // Stamp brushes have no single SVG stroke — fall back to freehand silhouette.
-  if (isStampBrush(brushId, stampSrc || brush.stampSrc)) {
-    const pts = parseSimplePathPoints(raw);
-    if (pts.length < 2) return null;
-    const outlineD = outlinePathFromPoints(pts, sw, brushId, {
-      linecap: readStrokeLinecap(node.attrs, 'pencil'),
-    });
-    if (!outlineD.trim()) return null;
-    return withBakedNodeAngle(node, {
-      pathD: normalizePathDForEdit(outlineD) || outlineD,
-      closed: true,
-      fillColor: ink,
-    });
-  }
-
-  // Match sceneToSvg: centerline + SVG stroke → one raster silhouette (shared with pen/line).
-  const rawPts = parseSimplePathPoints(raw);
-  const centerline =
-    rawPts.length >= 2
-      ? polylinePathD(rawPts)
-      : raw;
-  return withBakedNodeAngle(
-    node,
-    outlineFromSvgStroke({
-      pathD: centerline,
-      strokeWidth: inkW,
-      linecap: readStrokeLinecap(node.attrs, 'pencil'),
-      linejoin: readStrokeLinejoin(node.attrs, 'pencil'),
-      fillColor: ink,
-    })
-  );
+  // Match sceneToSvg freehand ink (pressure + brush taper), including stamp fallback.
+  const pressures = parsePathPressures(node.attrs?.pathPressure, pts.length);
+  const outlineD = isStampBrush(brushId, stampSrc || brush.stampSrc)
+    ? outlinePathFromPoints(pts, sw, brushId, { linecap })
+    : pencilInkPathFromPoints(pts, sw, brushId, {
+        linecap,
+        pressures,
+        pressureEnabled: true,
+      });
+  if (!outlineD.trim()) return null;
+  return withBakedNodeAngle(node, {
+    pathD: normalizePathDForEdit(outlineD) || outlineD,
+    closed: true,
+    fillColor: ink,
+  });
 }
 
 function outlinePenLocal(node: any): OutlineResult | null {

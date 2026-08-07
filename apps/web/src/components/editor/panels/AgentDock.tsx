@@ -4329,7 +4329,12 @@ function AgentDock({
 
   useEffect(() => {
     if (enabledInteractionModes.includes(interactionMode)) return;
-    applyInteractionMode(enabledInteractionModes[enabledInteractionModes.length - 1] || 'image');
+    const prefer: ComposerInteractionMode[] = ['agent', 'ask', 'image', 'video'];
+    const next =
+      prefer.find((m) => enabledInteractionModes.includes(m)) ||
+      enabledInteractionModes[0] ||
+      'agent';
+    applyInteractionMode(next);
   }, [enabledInteractionModes, interactionMode]);
 
   useEffect(() => {
