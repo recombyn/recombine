@@ -77,15 +77,22 @@ npm run dev:web
 
 Canvas Live / WSS: **[docs/self-hosting.md § Canvas multiplayer](docs/self-hosting.md#canvas-multiplayer-yjs--wss)** · [apps/collab/README.md](apps/collab/README.md)
 
-### デスクトップアプリ（Tauri）
+### デスクトップ（Tauri）
 
-同じ `apps/web` UI をネイティブウィンドウで起動します（カスタムタイトルバー、外部リンクはシステムブラウザ）。**Rust** と各 OS のビルドツールが必要です — **[docs/desktop.md](docs/desktop.md)**。
+**[docs/desktop.md](docs/desktop.md)** を参照。**Rust** と OS ビルドツールが必要です。
 
 ```bash
-npm run dev:api          # 推奨
-npm run dev:desktop      # Vite :3000 + Tauri
-npm run build:desktop    # インストーラは apps/web/src-tauri/target/release/bundle/
+# ローカル — API sidecar + SQLite 同梱
+npm run dev:desktop
+npm run build:desktop:sidecar
+npm run build:desktop
+
+# クラウド — https://recombyn.com（VITE_API_BASE_URL で上書き可）
+npm run dev:desktop:cloud
+npm run build:desktop:cloud
 ```
+
+成果物: `apps/web/src-tauri/target/release/bundle/`（インストーラ）；本体 `…/target/release/recombyn.exe`。
 
 ## リポジトリ構成
 

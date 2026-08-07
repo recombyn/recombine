@@ -77,15 +77,22 @@ npm run dev:web
 
 Canvas Live / WSS setup: **[docs/self-hosting.md § Canvas multiplayer](docs/self-hosting.md#canvas-multiplayer-yjs--wss)** · [apps/collab/README.md](apps/collab/README.md)
 
-### Desktop app (Tauri)
+### Desktop (Tauri)
 
-Same `apps/web` UI in a native window (custom titlebar, system browser for external links). Needs **Rust** + platform C++/WebView toolchain — see **[docs/desktop.md](docs/desktop.md)**.
+See **[docs/desktop.md](docs/desktop.md)**. Needs **Rust** + platform toolchain.
 
 ```bash
-npm run dev:api          # optional but recommended
-npm run dev:desktop      # Vite :3000 + Tauri window
-npm run build:desktop    # installers under apps/web/src-tauri/target/release/bundle/
+# Local — bundled API sidecar + SQLite
+npm run dev:desktop
+npm run build:desktop:sidecar
+npm run build:desktop
+
+# Cloud — https://recombyn.com (override with VITE_API_BASE_URL)
+npm run dev:desktop:cloud
+npm run build:desktop:cloud
 ```
+
+Build output: `apps/web/src-tauri/target/release/bundle/` (installers); main binary `…/target/release/recombyn.exe`.
 
 ## Repository layout
 

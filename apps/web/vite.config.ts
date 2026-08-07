@@ -20,6 +20,23 @@ export default defineConfig(({ mode }) => {
     envRoot.VITE_DOCS_URL ||
     (mode === 'development' ? 'http://localhost:5175' : 'https://docs.recombyn.com')
   ).replace(/\/$/, '');
+  // Desktop flavors: local (sidecar SQLite API) | cloud (remote API). Browser builds leave empty.
+  const desktopMode = (
+    process.env.VITE_DESKTOP_MODE ||
+    envWeb.VITE_DESKTOP_MODE ||
+    envRoot.VITE_DESKTOP_MODE ||
+    ''
+  )
+    .trim()
+    .toLowerCase();
+  const apiBaseUrl = (
+    process.env.VITE_API_BASE_URL ||
+    envWeb.VITE_API_BASE_URL ||
+    envRoot.VITE_API_BASE_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/$/, '');
 
   return {
     // Keep Rust compiler output visible when `tauri dev` runs Vite.
@@ -51,6 +68,8 @@ export default defineConfig(({ mode }) => {
     define: {
       __GOOGLE_CLIENT_ID__: JSON.stringify(googleClientId),
       __DOCS_URL__: JSON.stringify(docsUrl),
+      __DESKTOP_MODE__: JSON.stringify(desktopMode),
+      __API_BASE_URL__: JSON.stringify(apiBaseUrl),
     },
     envPrefix: ['VITE_', 'TAURI_ENV_*'],
     resolve: {

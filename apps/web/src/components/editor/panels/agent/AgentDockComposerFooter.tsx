@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineChevronRight } from 'react-icons/hi2';
+import { resolveApiUrl } from '@/utils/apiBase';
 import { getToken } from '@/utils/token';
 
 type LongSuggestion = { kind: string; text: string };
@@ -88,7 +89,7 @@ function AgentDockComposerFooter({
                     type="button"
                     className="rounded bg-[var(--accent)] px-1.5 py-0.5 text-[11px] font-medium text-white hover:opacity-90"
                     onClick={() => {
-                      fetch('/api/v1/design/memory/long', {
+                      fetch(resolveApiUrl('/api/v1/design/memory/long'), {
                         method: 'POST',
                         headers: {
                           'Content-Type': 'application/json',

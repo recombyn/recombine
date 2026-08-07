@@ -67,10 +67,15 @@ Auth status codes: [api-backend-refactor.md](./api-backend-refactor.md) — miss
 
 ## Desktop shell
 
-Tauri 2 embeds the web app (`devUrl` / `frontendDist`). `AppShell` mounts a custom titlebar when `useIsDesktopShell()` is true; external URLs use `plugin-opener`. Details and toolchain: [desktop.md](./desktop.md).
+Tauri 2 (`devUrl` / `frontendDist`):
+
+- **Local** — FastAPI + SQLite sidecar (`VITE_DESKTOP_MODE=local`)
+- **Cloud** — remote API (`VITE_DESKTOP_MODE=cloud` + `VITE_API_BASE_URL`)
+
+Custom titlebar via `useIsDesktopShell()`; API host via `apiBase.ts`; external URLs via `plugin-opener`. Details: [desktop.md](./desktop.md).
 
 ## Deploy
 
 Dev: `npm run dev:web` + `npm run dev:api` + `npm run dev:collab` (+ Redis / Worker as needed)  
-Desktop: `npm run dev:desktop` / `npm run build:desktop` (see [desktop.md](./desktop.md))  
+Desktop: `npm run dev:desktop` / `dev:desktop:cloud` / `build:desktop` / `build:desktop:cloud` (see [desktop.md](./desktop.md))  
 Prod: Docker Compose (web + api + worker + redis + **collab**); public HTTPS needs `wss://` and shared `COLLAB_TOKEN_SECRET`
