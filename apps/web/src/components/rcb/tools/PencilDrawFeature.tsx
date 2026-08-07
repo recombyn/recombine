@@ -37,6 +37,7 @@ import {
   type RcbCamera as CanvasCamera,
 } from '../core/types';
 import { sceneSurfaceSvgProps } from '@/components/rcb/scene/paint/sceneToSvg';
+import { readDevicePixelRatio } from '@/components/rcb/core/dpr';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
 
@@ -76,7 +77,9 @@ export const ERASER_CURSOR = `url("${eraserCursorUrl}") 3 15, crosshair`;
 export const PEN_CURSOR = `url("${penCursorUrl}") 1 1, crosshair`;
 export const BUCKET_CURSOR = `url("${bucketCursorUrl}") 15 18, fill`;
 
-const STAMP_PREVIEW_MAX_PX = 1536;
+/** Cap live tip bitmap edge (device px). Full-viewport @2× needs ~3–4k. */
+const STAMP_PREVIEW_MAX_PX = 4096;
+
 const tipImageCache = new Map<string, HTMLImageElement>();
 
 function tipImageForSrc(src: string): HTMLImageElement | null {
@@ -94,6 +97,7 @@ function tipImageForSrc(src: string): HTMLImageElement | null {
 
 type StampLiveBlit = {
   boxKey: string;
+  /** Device pixels per scene unit used for the bitmap. */
   scale: number;
   painted: number;
   tipKey: string;
@@ -101,7 +105,7 @@ type StampLiveBlit = {
 
 /**
  * Paint tip stamps onto the live canvas — no toDataURL (that was the draw lag).
- * Incremental when the view box / tip stay the same.
+ * Bitmap density tracks camera zoom × DPR so preview isn't soft while drawing.
  */
 function blitStampLivePreview(
   canvas: HTMLCanvasElement,
@@ -110,9 +114,15 @@ function blitStampLivePreview(
   tip: HTMLImageElement,
   strokeOpacity: number,
   tipKey: string,
-  state: StampLiveBlit
+  state: StampLiveBlit,
+  cameraZoom: number
 ): StampLiveBlit {
-  const scale = Math.min(1, STAMP_PREVIEW_MAX_PX / Math.max(box.width, box.height));
+  const dpr = Math.max(1, readDevicePixelRatio());
+  const zoom = Math.max(0.05, cameraZoom || 1);
+  // Match on-screen density (scene → CSS zoom → device px).
+  const want = dpr * zoom;
+  const maxSide = STAMP_PREVIEW_MAX_PX;
+  const scale = Math.min(want, maxSide / Math.max(box.width, box.height, 1));
   const cw = Math.max(1, Math.ceil(box.width * scale));
   const ch = Math.max(1, Math.ceil(box.height * scale));
   const boxKey = `${box.left}|${box.top}|${box.width}|${box.height}|${cw}x${ch}`;
@@ -131,6 +141,8 @@ function blitStampLivePreview(
     if (canvas.height !== ch) canvas.height = ch;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, cw, ch);
+    ctx.imageSmoothingEnabled = true;
+    if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
     ctx.setTransform(scale, 0, 0, scale, -box.left * scale, -box.top * scale);
     paintStampDabs(ctx, dabs, tip, strokeOpacity, 0);
     return { boxKey, scale, painted: dabs.length, tipKey };
@@ -467,7 +479,8 @@ function PencilDrawFeature({
           tipImg,
           opacityRef.current,
           tinted,
-          stampBlitRef.current
+          stampBlitRef.current,
+          zoom
         );
       }
       setPreview((prev) => {
@@ -489,6 +502,7 @@ function PencilDrawFeature({
     const hasPressure = pressures.some((p) => typeof p === 'number' && Number.isFinite(p));
     const d = outlinePathFromPoints(points, widthRef.current, brush.id, {
       pressureEnabled: pressureRef.current,
+      hardness: hardnessRef.current,
       pressures: hasPressure
         ? pressures.map((p) => (typeof p === 'number' && Number.isFinite(p) ? p : 0.5))
         : undefined,

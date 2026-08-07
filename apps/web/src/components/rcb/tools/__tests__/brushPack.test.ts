@@ -33,15 +33,22 @@ describe('recombyn brush pack', () => {
     expect(JSON.parse(json).format).toBe(BRUSH_PACK_FORMAT);
   });
 
-  it('builtin wheel is tip stamps including pencil', () => {
+  it('builtin wheel starts with vector brushes then tip stamps', () => {
     setOfficialPencilBrushes(null);
     setCustomPencilBrushes([]);
     const list = listPencilBrushes();
-    expect(list.every((b) => b.kind === 'stamp' && Boolean(b.stampSrc))).toBe(true);
+    expect(list.slice(0, 3).map((b) => b.id)).toEqual([
+      'vector-ink',
+      'vector-even',
+      'vector-calligraphy',
+    ]);
+    expect(list.slice(0, 3).every((b) => b.kind === 'freehand')).toBe(true);
     expect(list.map((b) => b.id)).toEqual(PENCIL_BRUSHES.map((b) => b.id));
     expect(findPencilBrush('pencil-hb').stampSrc).toMatch(/\/brushes\/tips\/pencil\.png$/);
     expect(findPencilBrush('solid').kind).toBe('stamp');
-    expect(TIP_STAMP_BRUSHES).toBe(PENCIL_BRUSHES);
+    expect(findPencilBrush('vector-even').kind).toBe('freehand');
+    expect(findPencilBrush('vector-calligraphy').options.thinning).toBeGreaterThan(0.5);
+    expect(TIP_STAMP_BRUSHES.every((b) => b.kind === 'stamp')).toBe(true);
   });
 
   it('keeps fixed tip spacing (does not sparsify into dots)', () => {
