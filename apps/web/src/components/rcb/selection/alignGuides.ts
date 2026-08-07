@@ -524,9 +524,11 @@ export function snapMoveToSmartGuides(opts: {
   let bestY: Cand | null = null;
 
   const roleRank = (r: AxisMark['role']) => (r === 'mid' ? 1 : 0);
-  // Small scene sticky only — do NOT scale with snap threshold or low zoom
-  // holds the wrong guide across dozens of cells and blocks the real magnet.
-  const hysteresis = Math.max(gridSize > 0 ? gridSize : 1, 2);
+  // Tie-break / anti-chatter only (±jitter around a midpoint). Do NOT use a
+  // large bonus: hysteresis=2 kept the first flush when the competing guide was
+  // already ~1px closer ("first snap OK, later stuck until I nudge Y").
+  // Do NOT scale with snap threshold / low zoom either.
+  const hysteresis = Math.max(gridSize > 0 ? gridSize : 1, 1);
 
   const mx = boxXMarks(box);
   const my = boxYMarks(box);

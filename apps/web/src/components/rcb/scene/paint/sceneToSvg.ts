@@ -2338,8 +2338,8 @@ function previewResizeImage(
 ): boolean {
   const anyEl = el as any;
   const key = String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '');
-  // Video plates use the same poster/<image> (or path) group layout as images.
-  if (key !== 'image' && key !== 'video') {
+  // Video / lottie plates use the same poster/<image> (or path) group layout as images.
+  if (key !== 'image' && key !== 'video' && key !== 'lottie') {
     return false;
   }
 
@@ -2581,7 +2581,7 @@ export function previewSvgNodeGeometry(
   const anyEl = el as any;
   const nodeKey = String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '');
 
-  if (nodeKey === 'image' || nodeKey === 'video') {
+  if (nodeKey === 'image' || nodeKey === 'video' || nodeKey === 'lottie') {
     return previewResizeImage(el, box);
   }
   if (nodeKey === 'svg') {

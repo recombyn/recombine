@@ -2947,6 +2947,12 @@ function SvgCanvas({
                 document={document}
                 hidden={geometryTransforming}
                 readOnly={readOnly}
+                geometryOverrides={
+                  videoLiveGeom as Record<
+                    string,
+                    { left: number; top: number; width: number; height: number }
+                  > | null
+                }
               />
             </>
           ) : null}
