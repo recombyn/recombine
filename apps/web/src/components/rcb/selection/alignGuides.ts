@@ -7,13 +7,7 @@ export type { ResizeHandle, SceneBox };
 export const DEFAULT_GRID_SIZE = 1;
 
 /** Screen-px threshold for object-to-object smart guides. */
-export const SMART_SNAP_PX = 5;
-/**
- * Cap scene-space snap for every zoom. Uncapped `SMART_SNAP_PX/zoom` stays
- * screen-constant, but at low zoom that is dozens of document cells and feels
- * like a distant magnet. High zoom is unchanged (5/zoom already &lt; this cap).
- */
-export const SMART_SNAP_SCENE_MAX = 8;
+export const SMART_SNAP_PX = 8;
 
 /** Alignment + spacing guide color. */
 export const SMART_GUIDE_COLOR = '#FF6B35';
@@ -38,16 +32,19 @@ export type SmartGuideGap = {
   to: number;
   at: number;
   dist: number;
+  /** Dashed extension rails (perpendicular to the measure), usually one per box edge. */
+  rails?: Array<{ from: number; to: number; at: number }>;
 };
 
 export type SmartGuideLine = SmartGuideAlign | SmartGuideGap;
 
 /**
- * Scene snap radius for guides — `min(screenPx/zoom, sceneCap)` at every zoom.
+ * Scene snap radius — screen pixels converted by zoom so magnet feel
+ * stays constant (8 CSS px at every zoom, including 5%).
  */
 export function smartSnapThreshold(zoom: number): number {
   const z = Math.max(0.05, Number(zoom) || 1);
-  return Math.min(SMART_SNAP_PX / z, SMART_SNAP_SCENE_MAX);
+  return SMART_SNAP_PX / z;
 }
 
 type AxisMark = { value: number; role: 'min' | 'mid' | 'max' };
@@ -220,6 +217,129 @@ function collectAlignGuides(box: SceneBox, targets: SceneBox[], epsilon: number)
 }
 
 /**
+ * Idle select↔hover spacing — clear gaps, plus edge offsets when neighbors
+ * share a cross-axis overlap (top/bottom for side-by-side, L/R when stacked).
+ *
+ * Measure line sits in the gap between boxes; dashed rails run on both edges
+ * being compared out to that measure line (not a short stub on one side only).
+ */
+export function collectPairSpacingGuides(a: SceneBox, b: SceneBox): SmartGuideLine[] {
+  if (!(a.width > 0) || !(a.height > 0) || !(b.width > 0) || !(b.height > 0)) return [];
+  const gaps = collectGapGuides(a, [b]);
+  const out: SmartGuideLine[] = [...gaps];
+  const aR = a.left + a.width;
+  const aB = a.top + a.height;
+  const bR = b.left + b.width;
+  const bB = b.top + b.height;
+  const yOv = rangeOverlap(a.top, aB, b.top, bB);
+  const xOv = rangeOverlap(a.left, aR, b.left, bR);
+  const sideBySide = yOv > 0 && (aR <= b.left + 1e-6 || bR <= a.left + 1e-6);
+  const stacked = xOv > 0 && (aB <= b.top + 1e-6 || bB <= a.top + 1e-6);
+
+  const pushOffset = (
+    axis: 'x' | 'y',
+    edgeA: number,
+    edgeB: number,
+    at: number,
+    rails: Array<{ from: number; to: number; at: number }>
+  ) => {
+    const dist = Math.abs(edgeB - edgeA);
+    if (dist <= 0.5) return;
+    out.push({
+      kind: 'gap',
+      axis,
+      from: Math.min(edgeA, edgeB),
+      to: Math.max(edgeA, edgeB),
+      at,
+      dist: Math.round(dist),
+      rails: rails.filter((r) => Math.abs(r.to - r.from) > 0.5),
+    });
+  };
+
+  /** Dashed stub from a box edge to the measure line (skip if measure cuts the box). */
+  const railFromBoxToAt = (
+    boxMin: number,
+    boxMax: number,
+    at: number,
+    edgeAt: number
+  ): { from: number; to: number; at: number } | null => {
+    if (at < boxMin - 1e-6) return { from: at, to: boxMin, at: edgeAt };
+    if (at > boxMax + 1e-6) return { from: boxMax, to: at, at: edgeAt };
+    return null;
+  };
+
+  if (sideBySide) {
+    // Vertical measure in the horizontal gap; rails on both tops (and bottoms if needed).
+    const aFacing = aR <= b.left + 1e-6 ? aR : a.left;
+    const bFacing = aR <= b.left + 1e-6 ? b.left : bR;
+    const atX = (aFacing + bFacing) / 2;
+    const topRails = [
+      railFromBoxToAt(a.left, aR, atX, a.top),
+      railFromBoxToAt(b.left, bR, atX, b.top),
+    ].filter(Boolean) as Array<{ from: number; to: number; at: number }>;
+    pushOffset('y', a.top, b.top, atX, topRails);
+    // Bottom offset only when tops already match — otherwise top delta is enough
+    // and a second rail pair reads as a stray "lower dashed" measure.
+    if (Math.abs(a.top - b.top) <= 0.5) {
+      const botRails = [
+        railFromBoxToAt(a.left, aR, atX, aB),
+        railFromBoxToAt(b.left, bR, atX, bB),
+      ].filter(Boolean) as Array<{ from: number; to: number; at: number }>;
+      pushOffset('y', aB, bB, atX, botRails);
+    }
+  } else if (stacked) {
+    const aFacing = aB <= b.top + 1e-6 ? aB : a.top;
+    const bFacing = aB <= b.top + 1e-6 ? b.top : bB;
+    const atY = (aFacing + bFacing) / 2;
+    const leftRails = [
+      railFromBoxToAt(a.top, aB, atY, a.left),
+      railFromBoxToAt(b.top, bB, atY, b.left),
+    ].filter(Boolean) as Array<{ from: number; to: number; at: number }>;
+    pushOffset('x', a.left, b.left, atY, leftRails);
+    if (Math.abs(a.left - b.left) <= 0.5) {
+      const rightRails = [
+        railFromBoxToAt(a.top, aB, atY, aR),
+        railFromBoxToAt(b.top, bB, atY, bR),
+      ].filter(Boolean) as Array<{ from: number; to: number; at: number }>;
+      pushOffset('x', aR, bR, atY, rightRails);
+    }
+  } else if (!gaps.length) {
+    // Diagonal (no x/y overlap): still show both clearances — preview inspect
+    // often picks a poster and a rect that sit corner-to-corner.
+    const aLeftOfB = aR <= b.left + 1e-6;
+    const bLeftOfA = bR <= a.left + 1e-6;
+    if (aLeftOfB || bLeftOfA) {
+      const leftBox = aLeftOfB ? a : b;
+      const rightBox = aLeftOfB ? b : a;
+      const from = leftBox.left + leftBox.width;
+      const to = rightBox.left;
+      const atY = Math.min(leftBox.top + leftBox.height, rightBox.top + rightBox.height);
+      const hRails = [
+        railFromBoxToAt(leftBox.top, leftBox.top + leftBox.height, atY, from),
+        railFromBoxToAt(rightBox.top, rightBox.top + rightBox.height, atY, to),
+      ].filter(Boolean) as Array<{ from: number; to: number; at: number }>;
+      pushOffset('x', from, to, atY, hRails);
+    }
+    const aAboveB = aB <= b.top + 1e-6;
+    const bAboveA = bB <= a.top + 1e-6;
+    if (aAboveB || bAboveA) {
+      const topBox = aAboveB ? a : b;
+      const botBox = aAboveB ? b : a;
+      const from = topBox.top + topBox.height;
+      const to = botBox.top;
+      const atX = Math.min(topBox.left + topBox.width, botBox.left + botBox.width);
+      const vRails = [
+        railFromBoxToAt(topBox.left, topBox.left + topBox.width, atX, from),
+        railFromBoxToAt(botBox.left, botBox.left + botBox.width, atX, to),
+      ].filter(Boolean) as Array<{ from: number; to: number; at: number }>;
+      pushOffset('y', from, to, atX, vRails);
+    }
+  }
+
+  return out;
+}
+
+/**
  * Nearest clear gap per cardinal direction when ranges overlap on the cross axis.
  * Does not require edge snap — spacing chrome appears while dragging beside a sibling.
  */
@@ -299,7 +419,7 @@ function collectGapGuides(box: SceneBox, targets: SceneBox[]): SmartGuideGap[] {
 }
 
 /** Scene epsilon: path marks must nearly coincide (do not scale with zoom snap threshold). */
-const GUIDE_COINCIDE_EPS = 0.51;
+export const GUIDE_COINCIDE_EPS = 0.51;
 
 function isOnGrid(value: number, gridSize: number): boolean {
   if (!(gridSize > 0) || !Number.isFinite(value)) return true;
@@ -378,13 +498,22 @@ export function snapMoveToSmartGuides(opts: {
   threshold: number;
   /** Skip snaps that leave the box origin off the document grid. */
   gridSize?: number;
-}): { box: SceneBox; guides: SmartGuideLine[] } {
+  /**
+   * Prior frame guide positions (`at`). Prefer staying on the same guides so
+   * nearby candidates (e.g. flush vs gap-4) do not flip-flop while dragging.
+   */
+  stickyAt?: { x?: number; y?: number } | null;
+}): { box: SceneBox; guides: SmartGuideLine[]; stickyAt: { x?: number; y?: number } } {
   const { box, targets, threshold } = opts;
   const gridSize = opts.gridSize ?? 0;
-  if (!(threshold > 0) || !targets.length) return { box, guides: [] };
+  const stickyAt = opts.stickyAt || null;
+  if (!(threshold > 0) || !targets.length) {
+    return { box, guides: [], stickyAt: {} };
+  }
 
   type Cand = {
     abs: number;
+    score: number;
     delta: number;
     at: number;
     from: number;
@@ -395,6 +524,9 @@ export function snapMoveToSmartGuides(opts: {
   let bestY: Cand | null = null;
 
   const roleRank = (r: AxisMark['role']) => (r === 'mid' ? 1 : 0);
+  // Small scene sticky only — do NOT scale with snap threshold or low zoom
+  // holds the wrong guide across dozens of cells and blocks the real magnet.
+  const hysteresis = Math.max(gridSize > 0 ? gridSize : 1, 2);
 
   const mx = boxXMarks(box);
   const my = boxYMarks(box);
@@ -411,16 +543,28 @@ export function snapMoveToSmartGuides(opts: {
         const nextLeft = box.left + delta;
         // Path control box / visual outer must stay on grid — reject snaps that leave it.
         if (gridSize > 0 && !isOnGrid(nextLeft, gridSize)) continue;
-        if (bestX && abs > bestX.abs + 1e-9) continue;
+        let score = abs;
+        if (stickyAt?.x != null && Math.abs(tm.value - stickyAt.x) <= 1e-6) {
+          score = Math.max(0, score - hysteresis);
+        }
+        if (bestX && score > bestX.score + 1e-9) continue;
         if (
           bestX &&
-          Math.abs(abs - bestX.abs) <= 1e-9 &&
+          Math.abs(score - bestX.score) <= 1e-9 &&
           roleRank(tm.role) > roleRank(bestX.role)
         ) {
           continue;
         }
+        if (
+          bestX &&
+          Math.abs(score - bestX.score) <= 1e-9 &&
+          roleRank(tm.role) === roleRank(bestX.role) &&
+          abs > bestX.abs + 1e-9
+        ) {
+          continue;
+        }
         const ext = mergeGuideExtent(box.top, box.top + box.height, t.top, t.top + t.height);
-        bestX = { abs, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
+        bestX = { abs, score, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
       }
     }
     for (const m of my) {
@@ -430,16 +574,28 @@ export function snapMoveToSmartGuides(opts: {
         if (abs > threshold) continue;
         const nextTop = box.top + delta;
         if (gridSize > 0 && !isOnGrid(nextTop, gridSize)) continue;
-        if (bestY && abs > bestY.abs + 1e-9) continue;
+        let score = abs;
+        if (stickyAt?.y != null && Math.abs(tm.value - stickyAt.y) <= 1e-6) {
+          score = Math.max(0, score - hysteresis);
+        }
+        if (bestY && score > bestY.score + 1e-9) continue;
         if (
           bestY &&
-          Math.abs(abs - bestY.abs) <= 1e-9 &&
+          Math.abs(score - bestY.score) <= 1e-9 &&
           roleRank(tm.role) > roleRank(bestY.role)
         ) {
           continue;
         }
+        if (
+          bestY &&
+          Math.abs(score - bestY.score) <= 1e-9 &&
+          roleRank(tm.role) === roleRank(bestY.role) &&
+          abs > bestY.abs + 1e-9
+        ) {
+          continue;
+        }
         const ext = mergeGuideExtent(box.left, box.left + box.width, t.left, t.left + t.width);
-        bestY = { abs, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
+        bestY = { abs, score, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
       }
     }
   }
@@ -473,6 +629,10 @@ export function snapMoveToSmartGuides(opts: {
           }
         : undefined,
     }),
+    stickyAt: {
+      x: bestX?.at,
+      y: bestY?.at,
+    },
   };
 }
 
