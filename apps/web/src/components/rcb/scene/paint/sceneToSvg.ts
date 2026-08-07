@@ -982,11 +982,16 @@ function createShape(ctx: DrawCtx, document: any, node: any, nodeId: string) {
       // Outline is built around `pts` in place — do not translate relative to the path.
       // Keep an invisible centerline baseline for selection chrome hit-testing.
       const pressures = parsePathPressures(node.attrs?.pathPressure, pts.length);
+      const hardnessRaw = Number(node.attrs?.brushHardness);
+      const freehandHardness = Number.isFinite(hardnessRaw)
+        ? Math.max(0, Math.min(100, hardnessRaw))
+        : 80;
       const outlineD = pencilInkPathFromPoints(pts, strokeWidth, brushId, {
         linecap: strokeOpen.linecap,
         dasharray: strokeFull.dasharray,
         pressures,
-        pressureEnabled: true,
+        pressureEnabled: boolEffectAttr(node.attrs?.pressureEnabled, true),
+        hardness: freehandHardness,
       });
       const g = appendChild(parent, svgEl('g'));
       if (outlineD) {

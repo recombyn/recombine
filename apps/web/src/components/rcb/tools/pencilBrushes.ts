@@ -74,11 +74,75 @@ function tipBrush(
   };
 }
 
+function vectorBrush(
+  id: string,
+  label: string,
+  opts: {
+    sizeFactor?: number;
+    thinning?: number;
+    smoothing?: number;
+    streamline?: number;
+    startTaper?: number;
+    endTaper?: number;
+  }
+): PencilBrushDef {
+  return {
+    id,
+    label,
+    kind: 'freehand',
+    sizeFactor: opts.sizeFactor ?? 1,
+    options: {
+      thinning: opts.thinning ?? 0.4,
+      smoothing: opts.smoothing ?? 0.5,
+      streamline: opts.streamline ?? 0.4,
+      easing: (t) => t,
+      start: { taper: opts.startTaper ?? 0, cap: true },
+      end: { taper: opts.endTaper ?? 0, cap: true },
+    },
+  };
+}
+
 /**
- * Builtin wheel — tip stamps only.
- * Spacing/hardness are tool params (like PS), not hard-coded per tip — uploads share the same path.
+ * Illustrator-style Blob Brushes: filled SVG outlines (no tip texture).
+ * Stay sharp at any zoom — not raster tip stamps.
  */
-export const PENCIL_BRUSHES: PencilBrushDef[] = [
+export const VECTOR_INK_BRUSHES: PencilBrushDef[] = [
+  // Balanced pressure ink (default vector).
+  vectorBrush('vector-ink', '矢量墨线', {
+    thinning: 0.4,
+    smoothing: 0.5,
+    streamline: 0.4,
+    startTaper: 12,
+    endTaper: 18,
+  }),
+  // Near-constant width — like a marker / pen stroke.
+  vectorBrush('vector-even', '矢量匀线', {
+    sizeFactor: 1,
+    thinning: 0.05,
+    smoothing: 0.55,
+    streamline: 0.45,
+    startTaper: 0,
+    endTaper: 0,
+  }),
+  // Strong pressure + taper — calligraphy feel.
+  vectorBrush('vector-calligraphy', '矢量书法', {
+    sizeFactor: 1.15,
+    thinning: 0.72,
+    smoothing: 0.42,
+    streamline: 0.35,
+    startTaper: 28,
+    endTaper: 42,
+  }),
+];
+
+/** @deprecated Prefer VECTOR_INK_BRUSHES[0]; kept for older imports. */
+export const VECTOR_INK_BRUSH = VECTOR_INK_BRUSHES[0];
+
+/**
+ * Builtin tip stamps (PS-like tip texture along the path).
+ * Spacing/hardness are tool params; uploads share the same stamp path.
+ */
+export const TIP_STAMP_BRUSHES: PencilBrushDef[] = [
   tipBrush('solid', '硬笔', 'hard-round.png', { sizeFactor: 1 }),
   tipBrush('pencil-hb', '铅笔', 'pencil.png', { sizeFactor: 0.95 }),
   tipBrush('soft', '软笔', 'soft-round.png', { sizeFactor: 1.35 }),
@@ -96,8 +160,8 @@ export const PENCIL_BRUSHES: PencilBrushDef[] = [
   tipBrush('bold', '粗头', 'bold.png', { sizeFactor: 2.3 }),
 ];
 
-/** Alias for tip subset (same as builtins). */
-export const TIP_STAMP_BRUSHES = PENCIL_BRUSHES;
+/** Builtin wheel — vector brushes first, then tip stamps. */
+export const PENCIL_BRUSHES: PencilBrushDef[] = [...VECTOR_INK_BRUSHES, ...TIP_STAMP_BRUSHES];
 
 /** Open portable pack (JSON + tip data-URLs). Not Photoshop .abr. */
 export const BRUSH_PACK_FORMAT = 'recombyn-brushpack' as const;
@@ -149,7 +213,7 @@ export function setOfficialPencilBrushes(list: PencilBrushDef[] | null) {
   officialBrushes = list.filter((b) => b?.id);
 }
 
-/** Legacy ids → nearest builtin tip. */
+/** Legacy ids → nearest builtin tip / vector. */
 const LEGACY_FREEHAND_ALIAS: Record<string, string> = {
   crayon: 'chalk',
   dry: 'bristle',
@@ -159,19 +223,34 @@ const LEGACY_FREEHAND_ALIAS: Record<string, string> = {
   'tip-hard': 'solid',
   'tip-chalk': 'chalk',
   'tip-bristle': 'bristle',
+  /** Older freehand-only seeds → vector family. */
+  freehand: 'vector-ink',
+  vector: 'vector-ink',
+  blob: 'vector-ink',
+  even: 'vector-even',
+  'vector-uniform': 'vector-even',
+  'vector-marker': 'vector-even',
+  'vector-brush': 'vector-calligraphy',
+  'vector-script': 'vector-calligraphy',
 };
 
 export function listPencilBrushes(): PencilBrushDef[] {
   const base = officialBrushes?.length ? officialBrushes : PENCIL_BRUSHES;
-  return [...base, ...customBrushes];
+  // Official API list may omit vector brushes — keep the full vector set up front.
+  const missingVectors = VECTOR_INK_BRUSHES.filter((v) => !base.some((b) => b.id === v.id));
+  return [...missingVectors, ...base, ...customBrushes];
 }
 
 export function findPencilBrush(id: string | undefined | null): PencilBrushDef {
-  const fallback = (officialBrushes && officialBrushes[0]) || PENCIL_BRUSHES[0];
+  // Prefer solid tip as fallback (not vector-ink) so unknown ids stay textured.
+  const fallback =
+    (officialBrushes && officialBrushes[0]) || TIP_STAMP_BRUSHES[0] || PENCIL_BRUSHES[0];
   if (!id || LEGACY_STAMP_IDS.has(id)) return fallback;
   const resolved = LEGACY_FREEHAND_ALIAS[id] || id;
   const custom = customBrushes.find((b) => b.id === id || b.id === resolved);
   if (custom) return custom;
+  const vector = VECTOR_INK_BRUSHES.find((b) => b.id === resolved);
+  if (vector) return vector;
   const official = officialBrushes?.find((b) => b.id === resolved || b.id === id);
   if (official) return official;
   return PENCIL_BRUSHES.find((b) => b.id === resolved) || fallback;
@@ -787,7 +866,43 @@ export type PencilStrokeDrawOpts = {
   pressures?: number[];
   /** When false, force constant pressure (ignore brush simulatePressure + real pressure). */
   pressureEnabled?: boolean;
+  /**
+   * Tip / freehand hardness 0–100.
+   * Stamp: tip edge + dab spacing. Freehand: soft → more pressure width + taper; hard → flatter.
+   */
+  hardness?: number;
 };
+
+function clampStrokeHardness(hardness?: number | null): number {
+  const n = Number(hardness);
+  if (!Number.isFinite(n)) return 80;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+/** Soft (0) → more taper; hard (100) → flatter ends. */
+function applyFreehandHardness(
+  options: Omit<StrokeOptions, 'size'>,
+  hardness0to100: number
+): Omit<StrokeOptions, 'size'> {
+  const h = clampStrokeHardness(hardness0to100) / 100;
+  const taperMul = 1.55 - h * 1.3; // soft≈1.55, hard≈0.25
+  const start = (options.start || {}) as { taper?: number; cap?: boolean };
+  const end = (options.end || {}) as { taper?: number; cap?: boolean };
+  return {
+    ...options,
+    smoothing: Math.min(0.85, Number(options.smoothing ?? 0.5) + (1 - h) * 0.1),
+    start: {
+      ...start,
+      taper: Math.max(0, Number(start.taper ?? 0) * taperMul),
+      cap: start.cap !== false,
+    },
+    end: {
+      ...end,
+      taper: Math.max(0, Number(end.taper ?? 0) * taperMul),
+      cap: end.cap !== false,
+    },
+  };
+}
 
 function extendPolylineEnds(points: Pt[], pad: number): Pt[] {
   if (points.length < 2 || pad <= 0) return points;
@@ -823,9 +938,13 @@ export function outlinePathFromPoints(
     const pr = strokeOpts?.pressures?.[i];
     return pr != null && Number.isFinite(pr) ? { ...p, pressure: pr } : { ...p };
   });
-  const options: Omit<StrokeOptions, 'size'> = {
-    ...(brush.kind === 'stamp' ? FREEHAND_DEFAULTS : brush.options),
-  };
+  const options: Omit<StrokeOptions, 'size'> = applyFreehandHardness(
+    {
+      ...(brush.kind === 'stamp' ? FREEHAND_DEFAULTS : brush.options),
+    },
+    strokeOpts?.hardness ?? 80
+  );
+  const hard01 = clampStrokeHardness(strokeOpts?.hardness) / 100;
   const cap = strokeOpts?.linecap;
   if (cap === 'butt') {
     options.start = { ...(options.start as object), taper: 0, cap: false };
@@ -850,11 +969,12 @@ export function outlinePathFromPoints(
     pts,
     { ...brush, simulatePressure: false, options }
   );
-  // Real pressure only — never invent velocity pressure.
+  // Soft → full pressure thinning; hard → nearly constant width.
+  const thinning = hasRealPressure ? Math.max(0.08, 1 - hard01 * 0.88) : 0;
   const outline = getStroke(input, {
     size,
     ...options,
-    thinning: hasRealPressure ? 1 : 0,
+    thinning,
     simulatePressure: false,
     last: true,
   });
@@ -1000,9 +1120,14 @@ function buildBrushPreviewPoints(): Pt[] {
 
 export const BRUSH_PREVIEW_POINTS: Pt[] = buildBrushPreviewPoints();
 
-export function brushPreviewPath(brush: PencilBrushDef, previewWidth = 10): string {
+export function brushPreviewPath(
+  brush: PencilBrushDef,
+  previewWidth = 10,
+  hardness = 80
+): string {
   return outlinePathFromPoints(BRUSH_PREVIEW_POINTS, previewWidth, brush.id, {
     pressureEnabled: true,
+    hardness,
   });
 }
 
