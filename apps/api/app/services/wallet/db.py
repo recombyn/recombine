@@ -139,9 +139,9 @@ def is_wallet_billing_enabled() -> bool:
     - Desktop local auto-login → always off (BYOK / no cloud wallet)
     - Cloud / SaaS → set ``WALLET_BILLING_ENABLED=true``
     """
-    from app.core.config import settings
+    from app.core.config import is_desktop_local, settings
 
-    if bool(getattr(settings, "desktop_local_auto_login", False)):
+    if is_desktop_local():
         return False
     return bool(getattr(settings, "wallet_billing_enabled", False))
 

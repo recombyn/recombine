@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, SessionDep, TokenDep
-from app.core.config import settings
+from app.core.config import is_desktop_local, settings
 from app.models import AuthConfigOut, AuthMeOut, AuthSessionOut, Message
 from app.services.auth import SessionUser, create_session, revoke_session
 from app.services.auth.admin import (
@@ -82,7 +82,7 @@ def _console_login_code_enabled() -> bool:
 
 
 def _desktop_local_auto_login_enabled() -> bool:
-    return bool(getattr(settings, "desktop_local_auto_login", False))
+    return is_desktop_local()
 
 
 def _is_loopback_client(request: Request) -> bool:

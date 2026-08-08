@@ -13,12 +13,16 @@ from pydantic import BaseModel, Field
 
 from app.services.llm import (
     get_llm_endpoint,
+    is_byok_model_ref,
     list_image_models,
     list_llm_models,
     list_video_models,
     reset_byok_user_id,
     set_byok_user_id,
+    user_byok_platforms,
+    uses_user_platform_byok,
 )
+from app.core.config import is_desktop_local
 from app.services.llm.agent import stream_agent_turn, stream_official_agent
 from app.services.llm.chat import stream_chat
 from app.services.llm.design_tools import design_tool_definitions
@@ -43,62 +47,10 @@ logger = logging.getLogger(__name__)
 # Unified 积分 (flat per call; 10× display scale).
 _AGENT_TOKEN_COST = 10
 _MESSAGE_TOKEN_COST = 10
-# Free plan: image gen locked to Seedream 4.0 (shares daily free run with Auto design).
-_FREE_IMAGE_MODEL = "doubao-seedream-4-0"
+# Free plan: image gen locked to Seedream 5.0 Lite (same as FE FREE_IMAGE_MODEL_ID;
+# shares daily free run with Auto design).
+_FREE_IMAGE_MODEL = "doubao-seedream-5-0-lite"
 
-
-def _desktop_local() -> bool:
-    """Tauri local flavor — BYOK only, no platform catalog / wallet billing."""
-    from app.core.config import settings
-
-    return bool(getattr(settings, "desktop_local_auto_login", False))
-
-
-def _is_byok_model(model: str | None) -> bool:
-    """True for user custom providers (``custom:<id>`` / ``byok:<id>``)."""
-    low = str(model or "").strip().lower()
-    return low.startswith("custom:") or low.startswith("byok:")
-
-
-def _user_byok_platforms(user_id: str | None) -> set[str]:
-    if not user_id:
-        return set()
-    try:
-        from app.services.security import list_user_platform_byok
-
-        return list_user_platform_byok(user_id)
-    except Exception:
-        return set()
-
-
-def _model_provider(model: str | None) -> str | None:
-    """Catalog provider for a model id (doubao / openrouter / …)."""
-    mid = (model or "").strip()
-    if not mid or _is_byok_model(mid):
-        return None
-    try:
-        from app.services.llm.catalog_store import list_catalog
-
-        for kind in ("text", "image", "video", "audio"):
-            for m in list_catalog(kind=kind, enabled_only=False):
-                if m.get("id") == mid:
-                    return str(m.get("provider") or "") or None
-    except Exception:
-        pass
-    for bucket in (list_llm_models(), list_image_models(), list_video_models()):
-        for m in bucket:
-            if m.get("id") == mid:
-                return str(m.get("provider") or "") or None
-    return None
-
-def _uses_user_platform_byok(user_id: str, model: str | None) -> bool:
-    """True when this request will hit the user's own aggregator key."""
-    if _is_byok_model(model):
-        return True
-    provider = _model_provider(model)
-    if not provider:
-        return False
-    return provider in _user_byok_platforms(user_id)
 
 class ChatMessageIn(BaseModel):
     message: str = Field(..., min_length=1)
@@ -174,10 +126,10 @@ def _charge_image(
 ) -> tuple[str, int]:
     """
     Charge image gen from 积分 balance (厂商按张 / 按分辨率估算).
-    Free plan: force Seedream 4.0; use 积分 or today's free daily run.
+    Free plan: force Seedream 5.0 Lite; use 积分 or today's free daily run.
     Returns (model id to call, credits actually charged).
     """
-    if _desktop_local() or _is_byok_model(requested_model) or _uses_user_platform_byok(
+    if is_desktop_local() or is_byok_model_ref(requested_model) or uses_user_platform_byok(
         user_id, requested_model
     ):
         # BYOK / platform key uses the user's own quota — never platform credits.
@@ -218,18 +170,19 @@ def get_models(
     from app.services.llm.byok_presets import list_byok_platforms
 
     uid = str(getattr(current_user, "id", "") or "").strip() or None
-    platforms = _user_byok_platforms(uid)
+    platforms = user_byok_platforms(uid)
     platforms_payload = list_byok_platforms()
 
-    # Local desktop: only catalog models for platforms the user unlocked (or env keys).
-    if _desktop_local():
+    # Local desktop: no platform catalog (even if machine .env has provider keys).
+    # End users add OpenAI-compatible BYOK in Agent settings; FE merges vault models.
+    if is_desktop_local():
         return {
-            "models": list_llm_models(byok_platforms=platforms, strict=True),
+            "models": [],
             "available": True,
-            "imageModels": list_image_models(byok_platforms=platforms, strict=True),
-            "videoModels": list_video_models(byok_platforms=platforms, strict=True),
+            "imageModels": [],
+            "videoModels": [],
             "clientRegion": "local",
-            "openrouterAvailable": "openrouter" in platforms,
+            "openrouterAvailable": False,
             "byokPlatforms": platforms_payload,
             "byokPresets": platforms_payload,
         }
@@ -287,7 +240,7 @@ async def post_message(
     msg_cost = (
         0
         if (not is_wallet_billing_enabled())
-        or _uses_user_platform_byok(current_user.id, body.model)
+        or uses_user_platform_byok(current_user.id, body.model)
         else _MESSAGE_TOKEN_COST
     )
 
@@ -355,7 +308,7 @@ async def post_agent_turn(
     agent_cost = (
         0
         if (not is_wallet_billing_enabled())
-        or _uses_user_platform_byok(current_user.id, body.model)
+        or uses_user_platform_byok(current_user.id, body.model)
         else _AGENT_TOKEN_COST
     )
 
@@ -482,7 +435,7 @@ async def post_video(
 
     requested = (body.model or "").strip() or None
     # Flat video charge from 积分 (reuse image-credit balance for now).
-    if _desktop_local() or _uses_user_platform_byok(current_user.id, requested):
+    if is_desktop_local() or uses_user_platform_byok(current_user.id, requested):
         model_id = requested
         credits_charged = 0
     else:

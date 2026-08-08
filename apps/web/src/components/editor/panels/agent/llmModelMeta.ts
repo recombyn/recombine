@@ -3,6 +3,130 @@
  */
 
 import type { LlmModel, ModelReferenceType } from '@/apis/chat';
+import { isDesktopLocal } from '@/utils/apiBase';
+import { FREE_IMAGE_MODEL_ID } from '@/utils/wallet';
+
+/** Cloud default Seedance id (empty on local via `cloudVideoFallbackId`). */
+export const DEFAULT_CLOUD_VIDEO_MODEL_ID = 'or-seedance-2-0-fast';
+
+export function isImageKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): boolean {
+  if (!m) return false;
+  if (m.kind === 'image') return true;
+  return Boolean(m.id && /seedream|image|i2i|t2i/i.test(m.id));
+}
+
+export function isVideoKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): boolean {
+  if (!m) return false;
+  if (m.kind === 'video') return true;
+  return Boolean(m.id && /seedance|kling|runway|luma|minimax.*video|sora/i.test(m.id));
+}
+
+export function dedupeModelsById(models: LlmModel[]): LlmModel[] {
+  const seen = new Set<string>();
+  return models.filter((m) => {
+    if (!m?.id || seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
+}
+
+/**
+ * Local desktop → BYOK vault only; cloud → catalog buckets + BYOK, then filter.
+ */
+export function buildByokAwareModelList(opts: {
+  byok: LlmModel[];
+  catalogs?: Array<LlmModel[] | null | undefined>;
+  filter: (m: LlmModel) => boolean;
+}): LlmModel[] {
+  const pool = isDesktopLocal()
+    ? opts.byok
+    : [...(opts.catalogs || []).flatMap((c) => c || []), ...opts.byok];
+  return dedupeModelsById(pool.filter(opts.filter));
+}
+
+/** Cloud catalog id, or empty string on local desktop (BYOK-only). */
+export function cloudOnlyModelId(cloudId: string): string {
+  return isDesktopLocal() ? '' : cloudId;
+}
+
+/** Cloud free-tier Seedream id; empty on local desktop (BYOK-only). */
+export function cloudImageFallbackId(): string {
+  return cloudOnlyModelId(FREE_IMAGE_MODEL_ID);
+}
+
+/** Cloud default Seedance id; empty on local desktop. */
+export function cloudVideoFallbackId(): string {
+  return cloudOnlyModelId(DEFAULT_CLOUD_VIDEO_MODEL_ID);
+}
+
+export function pickPreferredImageModelId(models: LlmModel[], currentId?: string): string {
+  const images = models.filter((m) => isImageKind(m));
+  if (currentId && images.some((m) => m.id === currentId)) return currentId;
+  if (!isDesktopLocal()) {
+    const free = images.find((m) => m.id === FREE_IMAGE_MODEL_ID);
+    if (free) return free.id;
+    const seedream = images.find((m) => /seedream/i.test(m.id));
+    if (seedream) return seedream.id;
+  }
+  return images[0]?.id || '';
+}
+
+export function pickPreferredVideoModelId(models: LlmModel[], currentId?: string): string {
+  const videos = models.filter((m) => isVideoKind(m));
+  if (currentId && videos.some((m) => m.id === currentId)) return currentId;
+  if (!isDesktopLocal()) {
+    const def = videos.find((m) => m.id === DEFAULT_CLOUD_VIDEO_MODEL_ID);
+    if (def) return def.id;
+  }
+  return videos[0]?.id || '';
+}
+
+/**
+ * Merge catalog + image/video buckets + BYOK; normalize kind.
+ * Local desktop → BYOK vault only (no platform Seedream / OpenRouter catalog).
+ */
+export function mergeSelectableModels(opts: {
+  models?: LlmModel[] | null;
+  imageModels?: LlmModel[] | null;
+  videoModels?: LlmModel[] | null;
+  customModels: LlmModel[];
+  withMaxAttachments?: boolean;
+}): LlmModel[] {
+  const mapKind = (m: LlmModel): LlmModel => {
+    const base = opts.withMaxAttachments
+      ? { ...m, maxAttachments: maxAttachmentsFor(m) }
+      : m;
+    if (isVideoKind(m)) return { ...base, kind: 'video' as const };
+    if (isImageKind(m)) return { ...base, kind: 'image' as const };
+    if (m.kind === 'svg') return { ...base, kind: 'text' as const };
+    return { ...base, kind: (m.kind || 'text') as LlmModel['kind'] };
+  };
+
+  if (isDesktopLocal()) {
+    return opts.customModels.map(mapKind);
+  }
+
+  const byId = new Map<string, LlmModel>();
+  for (const m of opts.models || []) {
+    if (!m?.id) continue;
+    byId.set(m.id, m);
+  }
+  for (const m of opts.imageModels || []) {
+    if (!m?.id) continue;
+    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
+  }
+  for (const m of opts.videoModels || []) {
+    if (!m?.id) continue;
+    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'video' });
+  }
+  for (const m of opts.customModels) {
+    if (!m?.id) continue;
+    byId.set(m.id, m);
+  }
+  return [...byId.values()]
+    .filter((m) => m.provider === 'custom' || isVolcanoCatalogModel(m))
+    .map(mapKind);
+}
 
 export function modelReferenceTypes(
   model?: Pick<
@@ -76,7 +200,7 @@ export function agentAttachmentLimit(opts: {
     isImageMode,
     rules,
     routedImageId,
-    freeImageId = 'doubao-seedream-5-0-lite',
+    freeImageId = '',
     autoModel = null,
   } = opts;
   const images = models.filter(
@@ -84,8 +208,8 @@ export function agentAttachmentLimit(opts: {
   );
   const pickImage = () =>
     images.find((m) => m.id === modelId) ||
-    images.find((m) => m.id === freeImageId) ||
-    images.find((m) => /seedream/i.test(m.id)) ||
+    (freeImageId ? images.find((m) => m.id === freeImageId) : undefined) ||
+    (freeImageId ? images.find((m) => /seedream/i.test(m.id)) : undefined) ||
     images[0];
 
   if (isImageMode) return maxAttachmentsFor(pickImage());
@@ -95,7 +219,7 @@ export function agentAttachmentLimit(opts: {
     String(rules?.['assets.image_default_model'] || '').trim() ||
     freeImageId;
   const routed =
-    images.find((m) => m.id === want) || pickImage();
+    (want ? images.find((m) => m.id === want) : undefined) || pickImage();
   const imageLimit = maxAttachmentsFor(routed);
   if (modelId === 'auto' || !modelId) return imageLimit;
   const chat = models.find((m) => m.id === modelId) || autoModel;

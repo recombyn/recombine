@@ -257,6 +257,11 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+def is_desktop_local() -> bool:
+    """Tauri local sidecar — BYOK only, no platform catalog / wallet billing."""
+    return bool(getattr(settings, "desktop_local_auto_login", False))
+
+
 def api_data_dir() -> Path:
     """Seed root: apps/api/data (prompt packs, skills, knowledge, …)."""
     return _API_ROOT / "data"

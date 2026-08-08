@@ -64,8 +64,11 @@ import {
   setDocumentFromCanvas,
 } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { estimateAudioCredits } from '@/utils/imageCredits';
 import { readFileAsDataUrl, uploadComposerAttachment } from '@/utils/uploadImage';
+import { buildByokAwareModelList, cloudOnlyModelId } from '@/components/editor/panels/agent/llmModelMeta';
+import { customProvidersAsModels } from '@/components/editor/panels/agent/customLlmProviders';
 import store from '@/store';
 
 type Props = {
@@ -81,6 +84,27 @@ function modelIsAudioGenerator(model?: Pick<LlmModel, 'kind' | 'id'> | null): bo
   if (!model) return false;
   if (model.kind === 'audio') return true;
   return /tts|kokoro|fish-audio|speech|audio/i.test(model.id || '');
+}
+
+/** Local desktop: BYOK only. Cloud/web: platform audio catalog + BYOK. */
+function buildAudioGeneratorModelList(res?: {
+  models?: LlmModel[] | null;
+  audioModels?: LlmModel[] | null;
+} | null): LlmModel[] {
+  return buildByokAwareModelList({
+    byok: customProvidersAsModels(),
+    catalogs: [res?.models, res?.audioModels],
+    filter: (m) => modelIsAudioGenerator(m),
+  });
+}
+
+function nextAudioModelId(models: LlmModel[], currentId: string): string | null {
+  if (!models.length || models.some((m) => m.id === currentId)) return null;
+  if (!isDesktopLocal()) {
+    const preferred = models.find((m) => m.id === DEFAULT_AUDIO_MODEL_ID);
+    if (preferred) return preferred.id;
+  }
+  return models[0]?.id ?? null;
 }
 
 function probeAudioDuration(src: string): Promise<number | null> {
@@ -132,7 +156,7 @@ function AudioGeneratorCard({
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     'idle'
   );
-  const [modelId, setModelId] = useState(DEFAULT_AUDIO_MODEL_ID);
+  const [modelId, setModelId] = useState(() => cloudOnlyModelId(DEFAULT_AUDIO_MODEL_ID));
   const [modelOpen, setModelOpen] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -173,22 +197,11 @@ function AudioGeneratorCard({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const pool = [...(res?.models || []), ...(res?.audioModels || [])].filter((m) =>
-          modelIsAudioGenerator(m)
-        );
-        const seen = new Set<string>();
-        const unique = pool.filter((m) => {
-          if (!m?.id || seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        });
+        const unique = buildAudioGeneratorModelList(res);
         setModels(unique);
         setModelsStatus('ready');
-        if (unique.length && !unique.some((m) => m.id === modelId)) {
-          const preferred =
-            unique.find((m) => m.id === DEFAULT_AUDIO_MODEL_ID) || unique[0];
-          if (preferred) setModelId(preferred.id);
-        }
+        const nextId = nextAudioModelId(unique, modelId);
+        if (nextId) setModelId(nextId);
       })
       .catch(() => {
         if (!cancelled) setModelsStatus('error');
