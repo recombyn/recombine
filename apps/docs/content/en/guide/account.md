@@ -22,7 +22,7 @@ One wallet currency: **credits**.
 - **Chat / Agent**: usage from the provider is converted to credits and deducted.
 - **Image generation / some image tools**: per image or per run (often shown next to the button).
 - Membership grants a monthly pool shared by chat, Agent, and images.
-- **Bring-your-own-key** chat models do **not** spend platform credits (platform image features still may). See [Agent · Third-party models](/guide/agent#third-party-models-bring-your-own-key).
+- **Bring-your-own-key** chat models do **not** spend platform credits (platform image features still may). See [Custom & third-party models](/guide/custom-models).
 
 When balance is too low, send / generate is blocked until you upgrade, redeem a key, or wait for free-tier daily reset.
 
@@ -77,7 +77,12 @@ Same local config as the editor Auto popover.
 
 ### Third-party models
 
-Add provider name, API key, compatible base URL, and type (Chat / Multimodal). Keys stay in the browser. Requires a qualifying plan.
+1. **Platform catalog** (e.g. OpenRouter, Volcengine Ark): mainly an API key; optional “Add model” for extra IDs.
+2. **Manual entry**: provider name, model ID, base URL, kind (text / vision / image / video).
+
+Keys stay on-device; your quota, not platform credits (except platform image tools). Web needs Plus+. Local desktop: [Desktop app](/guide/desktop).
+
+Details: [Custom & third-party models](/guide/custom-models).
 
 ## Profile
 
@@ -99,6 +104,8 @@ Mark all as read. Billing or entitlement changes are also announced here when po
 ## Related
 
 - [Using Agent](/guide/agent)
+- [Custom & third-party models](/guide/custom-models)
+- [Desktop app](/guide/desktop)
 - [Image generation](/guide/image-generation)
 - [Image tools](/guide/image-tools)
 - [Export & share](/features/export-share)

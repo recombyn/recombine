@@ -23,6 +23,12 @@ On success, the node becomes a normal image node; if multiple images were genera
 
 Credit cost appears beside the send button (lightning icon + number), based on model and count.
 
+### Platform vs BYOK
+
+- **Web / Cloud**: Seedream, GPT Image, etc. are platform models and spend **platform credits**.
+- **Third-party image kind**: add via [Custom & third-party models](/guide/custom-models) (catalog or manual). Uses your quota.
+- **Local desktop**: no platform image catalog — configure BYOK. See [Desktop app](/guide/desktop).
+
 ## Agent **Image** mode
 
 Switch among three modes at the bottom of the right chat:

@@ -35,7 +35,7 @@
 3. 先上传或粘贴图片，再用 `@` 引用当前对话中的附件；模型通过模型按钮选择 **Auto** 或手动指定。
 4. 生成过程中可随时停止；结果落在画板上后仍可手改，或用 [图片编辑工具](/guide/image-tools) 抠图、扩图、多角度等。
 
-账户里可将 Auto 偏好设为 **标准版 / Pro / Max / 自定义车道**；会员还可添加第三方模型（自有 Key）。详见 [Agent 用法](/guide/agent) 与 [账户与积分](/guide/account)。
+账户里可将 Auto 偏好设为 **标准版 / Pro / Max / 自定义车道**；还可添加第三方模型（自有 Key，见 [自定义与第三方模型](/guide/custom-models)）。桌面安装与打包路径见 [桌面端](/guide/desktop)。更多：[Agent 用法](/guide/agent)、[账户与积分](/guide/account)。
 
 ## 第五步：导出与分享
 

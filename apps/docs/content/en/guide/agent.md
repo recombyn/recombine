@@ -45,9 +45,9 @@ Open the **model button** under the input. Common sections: **Design** / **Image
 |--------|----------|
 | **Auto** | System picks a **lane** for this turn, then maps it to a model (below) |
 | **A platform model** | Locks that model for the turn (and until you switch back); Auto lane map is overridden to the same model |
-| **Third-party custom model** | Uses your own API key and endpoint; **does not** spend platform credits (see [Third-party models](#third-party-models-bring-your-own-key)) |
+| **Third-party custom model** | Uses your own API key and endpoint; **does not** spend platform credits (see [Custom & third-party models](/guide/custom-models)) |
 
-Free tier usually allows **Auto** only; paid plans can pick platform models. See the in-product **Plans** page.
+Free tier usually allows **Auto** only; paid plans can pick platform models. See the in-product **Plans** page. **Local desktop** has no platform catalog — configure BYOK in [Desktop app](/guide/desktop).
 
 Image models include Doubao Seedream, GPT Image, Nano Banana Pro / Nano Banana 2, etc. (list in product). Details: [Image generation](/guide/image-generation).
 
@@ -100,25 +100,14 @@ When you lock a model: fast / standard / reasoning / multimodal all pin to that 
 
 ## Third-party models (bring your own key)
 
-Some plans (e.g. Standard and up) can add **OpenAI / Claude–compatible** providers under **Account → Agent → third-party models**.
+Under **Account → Agent → Third-party models** you can:
 
-### How to add
+- Use a **platform catalog** (e.g. OpenRouter, Volcengine Ark) — often only an API key is required.
+- Or **manual entry** (provider name, model ID, base URL; kinds: text / vision / image / video).
 
-1. Open Account → **Agent**.
-2. Fill in:
-   - **Model type**: **Chat** (conversation / edits) or **Multimodal** (vision). For image generation, keep using platform image models (platform credits).
-   - Provider **name**, optional website
-   - **API key** (stored in this browser only)
-   - **Base URL** (compatible endpoint, no trailing `/`)
-3. After save, the model appears in the chat model list.
+Web and Cloud desktop usually need Plus+. **Local desktop** has no platform catalog — add your own keys.
 
-### Billing notes
-
-- BYOK chat calls use **your** provider quota — **no platform credits**.
-- Platform image gen / image tools in the same session still bill platform credits.
-- Clearing site data removes local keys; add them again if needed.
-
-Without a qualifying plan, the UI prompts you to upgrade.
+Full field guide and billing split: **[Custom & third-party models](/guide/custom-models)**. Installers and output paths: **[Desktop app](/guide/desktop)**.
 
 ## Full design flow (Home / kickoff)
 
