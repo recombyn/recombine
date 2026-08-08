@@ -21,8 +21,11 @@ export type WalletDto = {
   planExpiresAt?: number | null;
   /** True while a paid plan is still within its term. */
   planLocked?: boolean;
+  /** Platform credit billing (WALLET_BILLING_ENABLED); false on self-host / local. */
+  billingEnabled?: boolean;
   ledger: WalletLedgerDto[];
 };
+
 
 export type RedeemResultDto = {
   kind?: 'token' | 'plan' | string;

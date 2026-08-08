@@ -1,7 +1,11 @@
 import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { HiOutlineBookOpen } from 'react-icons/hi2';
 import type { LlmModel } from '@/apis/chat';
 import {
+  dedupeModelsById,
+  isImageKind,
+  isVideoKind,
   modelIsImageGenerator,
   modelSupportsVisionInput,
 } from '@/components/editor/panels/agent/llmModelMeta';
@@ -24,20 +28,8 @@ import sora from '@/assets/model/sora.png';
 import minimax from '@/assets/model/minimax_music.png';
 import elevenlabs from '@/assets/model/elevenlabs_turbo.png';
 import syncLipsync from '@/assets/model/sync_lipsync.png';
-import meta from '@/assets/model/meta.svg';
-import perplexity from '@/assets/model/perplexity.svg';
-import huggingface from '@/assets/model/huggingface.svg';
-import ollama from '@/assets/model/ollama.svg';
-import nvidia from '@/assets/model/nvidia.svg';
-import alibaba from '@/assets/model/alibaba.svg';
-import baidu from '@/assets/model/baidu.svg';
-import tencent from '@/assets/model/tencent.svg';
-import bytedance from '@/assets/model/bytedance.svg';
-import xai from '@/assets/model/x.svg';
-import replicate from '@/assets/model/replicate.svg';
-import vercel from '@/assets/model/vercel.svg';
-import github from '@/assets/model/github.svg';
 
+export { isImageKind, isVideoKind };
 type ModelIconRef = {
   id?: string | null;
   provider?: string | null;
@@ -67,19 +59,6 @@ const MODEL_ICON_RULES: Array<{ test: (s: string) => boolean; src: string }> = [
   { test: (s) => s.includes('eleven'), src: elevenlabs },
   { test: (s) => s.includes('lipsync') || s.includes('sync'), src: syncLipsync },
   { test: (s) => s.includes('moonshot') || s.includes('kimi'), src: kimi },
-  { test: (s) => s.includes('llama') || s.includes('meta'), src: meta },
-  { test: (s) => s.includes('perplexity'), src: perplexity },
-  { test: (s) => s.includes('hugging') || s.includes('hf.co'), src: huggingface },
-  { test: (s) => s.includes('ollama'), src: ollama },
-  { test: (s) => s.includes('nvidia') || s.includes('nemotron'), src: nvidia },
-  { test: (s) => s.includes('grok') || s.includes('xai'), src: xai },
-  { test: (s) => s.includes('baidu') || s.includes('ernie') || s.includes('文心'), src: baidu },
-  { test: (s) => s.includes('tencent') || s.includes('hunyuan') || s.includes('混元'), src: tencent },
-  { test: (s) => s.includes('bytedance') || s.includes('seed'), src: bytedance },
-  { test: (s) => s.includes('replicate'), src: replicate },
-  { test: (s) => s.includes('vercel') || s.includes('v0'), src: vercel },
-  { test: (s) => s.includes('github') || s.includes('copilot'), src: github },
-  { test: (s) => s.includes('alibaba') || s.includes('aliyun'), src: alibaba },
 ];
 
 const MODEL_ICON_BY_PROVIDER: Record<string, string> = {
@@ -95,21 +74,6 @@ const MODEL_ICON_BY_PROVIDER: Record<string, string> = {
   openai: gptImage,
   openrouter: gptImage,
   moonshot: kimi,
-  meta,
-  llama: meta,
-  perplexity,
-  huggingface,
-  ollama,
-  nvidia,
-  xai,
-  grok: xai,
-  baidu,
-  tencent,
-  bytedance,
-  replicate,
-  vercel,
-  github,
-  alibaba,
 };
 
 const MODEL_ICON_BY_KEY: Record<string, string> = {
@@ -134,30 +98,12 @@ const MODEL_ICON_BY_KEY: Record<string, string> = {
   minimax,
   elevenlabs,
   lipsync: syncLipsync,
-  meta,
-  llama: meta,
-  perplexity,
-  huggingface,
-  hf: huggingface,
-  ollama,
-  nvidia,
-  xai,
-  grok: xai,
-  baidu,
-  ernie: baidu,
-  tencent,
-  hunyuan: tencent,
-  bytedance,
-  replicate,
-  vercel,
-  github,
-  alibaba,
   openrouter: gptImage,
 };
 
-/** Preset brand icons for BYOK / custom model forms. */
+/** Preset icons for BYOK / custom model forms — catalog model brands only. */
 export const CUSTOM_MODEL_ICON_OPTIONS: { key: string; label: string }[] = [
-  { key: 'openai', label: 'OpenAI' },
+  { key: 'openai', label: 'GPT' },
   { key: 'claude', label: 'Claude' },
   { key: 'gemini', label: 'Gemini' },
   { key: 'deepseek', label: 'DeepSeek' },
@@ -165,28 +111,15 @@ export const CUSTOM_MODEL_ICON_OPTIONS: { key: string; label: string }[] = [
   { key: 'qwen', label: 'Qwen' },
   { key: 'kimi', label: 'Kimi' },
   { key: 'glm', label: 'GLM' },
-  { key: 'meta', label: 'Meta / Llama' },
-  { key: 'xai', label: 'xAI / Grok' },
-  { key: 'perplexity', label: 'Perplexity' },
-  { key: 'ollama', label: 'Ollama' },
-  { key: 'huggingface', label: 'Hugging Face' },
-  { key: 'nvidia', label: 'NVIDIA' },
-  { key: 'alibaba', label: 'Alibaba' },
-  { key: 'baidu', label: 'Baidu' },
-  { key: 'tencent', label: 'Tencent' },
-  { key: 'bytedance', label: 'ByteDance' },
-  { key: 'openrouter', label: 'OpenRouter' },
   { key: 'flux', label: 'Flux' },
   { key: 'ideogram', label: 'Ideogram' },
   { key: 'kling', label: 'Kling' },
   { key: 'sora', label: 'Sora' },
   { key: 'dreamina', label: 'Dreamina' },
+  { key: 'seedream', label: 'Seedream' },
   { key: 'minimax', label: 'MiniMax' },
   { key: 'elevenlabs', label: 'ElevenLabs' },
   { key: 'lipsync', label: 'Lipsync' },
-  { key: 'replicate', label: 'Replicate' },
-  { key: 'vercel', label: 'Vercel' },
-  { key: 'github', label: 'GitHub' },
 ];
 
 /** Synthetic Auto row — same shape as API models. */
@@ -202,17 +135,18 @@ function resolveModelIconSrc(model?: ModelIconRef | null): string | null {
   if (remote) return remote;
   const key = String(model?.iconKey || model?.icon_key || '').toLowerCase().trim();
   if (key && MODEL_ICON_BY_KEY[key]) return MODEL_ICON_BY_KEY[key];
-  const id = String(model?.id || '').toLowerCase();
-  const provider = String(model?.provider || '').toLowerCase();
-  const label = String(model?.label || '').toLowerCase();
+  const id = String(model?.id || '').toLowerCase().trim();
+  const provider = String(model?.provider || '').toLowerCase().trim();
+  const label = String(model?.label || '').toLowerCase().trim();
+  // Empty / Auto / no brand → no invent DeepSeek/Doubao art.
+  if (!id && !provider && !label) return null;
   if (id === 'auto' || provider === 'system' || label === 'auto') return null;
   const blob = `${id} ${provider} ${label}`;
   for (const rule of MODEL_ICON_RULES) {
     if (rule.test(blob)) return rule.src;
   }
   if (provider && MODEL_ICON_BY_PROVIDER[provider]) return MODEL_ICON_BY_PROVIDER[provider];
-  if (model?.kind === 'image') return doubao;
-  return deepseek;
+  return null;
 }
 
 function ModelBrandIcon({
@@ -227,22 +161,11 @@ function ModelBrandIcon({
   const src = resolveModelIconSrc(model);
   if (!src) {
     return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 16 16"
-        fill="none"
-        className={cn('shrink-0 text-[var(--ink)]', className)}
+      <HiOutlineBookOpen
+        size={size}
+        className={cn('shrink-0 text-[var(--muted)]', className)}
         aria-hidden
-      >
-        <path
-          d="M8 1.5l1.2 3.6L13 6.3l-3.8 1.2L8 11.1 6.8 7.5 3 6.3l3.8-1.2L8 1.5z"
-          fill="currentColor"
-          opacity="0.9"
-        />
-        <circle cx="12.5" cy="3" r="1.1" fill="currentColor" opacity="0.55" />
-        <circle cx="3.5" cy="11.5" r="1" fill="currentColor" opacity="0.45" />
-      </svg>
+      />
     );
   }
   return (
@@ -363,18 +286,6 @@ export function modelPriceTagInfo(
   return { level, label: t('agent.priceCostly') };
 }
 
-export function isImageKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): boolean {
-  if (!m) return false;
-  if (m.kind === 'image') return true;
-  return Boolean(m.id && /seedream|image|i2i|t2i/i.test(m.id));
-}
-
-export function isVideoKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): boolean {
-  if (!m) return false;
-  if (m.kind === 'video') return true;
-  return Boolean(m.id && /seedance|kling|runway|luma|minimax.*video|sora/i.test(m.id));
-}
-
 export function modelTabOf(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): ModelPickerTab {
   if (isVideoKind(m)) return 'video';
   return isImageKind(m) ? 'image' : 'design';
@@ -433,15 +344,6 @@ function loadingKindForTab(tab: ModelPickerTab): LlmModel['kind'] {
   if (tab === 'image') return 'image';
   if (tab === 'video') return 'video';
   return 'text';
-}
-
-function dedupeModelsById(list: LlmModel[]): LlmModel[] {
-  const seen = new Set<string>();
-  return list.filter((m) => {
-    if (!m?.id || seen.has(m.id)) return false;
-    seen.add(m.id);
-    return true;
-  });
 }
 
 function filterPickerModels(opts: {

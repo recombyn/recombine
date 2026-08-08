@@ -11,8 +11,9 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
-import { HiOutlineBolt, HiOutlineChevronDown, HiOutlinePlus, HiOutlineViewfinderCircle } from 'react-icons/hi2';
+import { HiArrowUp, HiOutlineBolt, HiOutlineChevronDown, HiOutlinePlus, HiOutlineViewfinderCircle } from 'react-icons/hi2';
 import { generateVideo, listModels, type LlmModel } from '@/apis/chat';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { Dropdown, DropdownPanel, message, Tooltip } from '@/components/base';
 import {
   rcbScreenPxToScene,
@@ -62,8 +63,11 @@ import {
   EMPTY_ID_LIST,
 } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { estimateVideoCredits } from '@/utils/imageCredits';
 import { uploadComposerAttachment, readFileAsDataUrl } from '@/utils/uploadImage';
+import { buildByokAwareModelList, DEFAULT_CLOUD_VIDEO_MODEL_ID, cloudVideoFallbackId } from '@/components/editor/panels/agent/llmModelMeta';
+import { customProvidersAsModels } from '@/components/editor/panels/agent/customLlmProviders';
 import store from '@/store';
 
 type Props = {
@@ -84,7 +88,32 @@ const DEFAULT_VIDEO_RESOLUTION: string = '720p';
 const VIDEO_DURATIONS = [4, 5, 6, 7, 8, 10, 12, 15] as const;
 const DEFAULT_VIDEO_DURATION = 5;
 
-const DEFAULT_VIDEO_MODEL_ID = 'or-seedance-2-0-fast';
+function modelIsVideoGenerator(model?: Pick<LlmModel, 'kind' | 'id'> | null): boolean {
+  if (!model) return false;
+  if (model.kind === 'video') return true;
+  return /seedance/i.test(model.id || '');
+}
+
+/** Local desktop: BYOK only. Cloud/web: platform video catalog + BYOK. */
+function buildVideoGeneratorModelList(res?: {
+  models?: LlmModel[] | null;
+  videoModels?: LlmModel[] | null;
+} | null): LlmModel[] {
+  return buildByokAwareModelList({
+    byok: customProvidersAsModels(),
+    catalogs: [res?.models, res?.videoModels],
+    filter: (m) => modelIsVideoGenerator(m),
+  });
+}
+
+function nextVideoModelId(models: LlmModel[], currentId: string): string | null {
+  if (!models.length || models.some((m) => m.id === currentId)) return null;
+  if (!isDesktopLocal()) {
+    const preferred = models.find((m) => m.id === DEFAULT_CLOUD_VIDEO_MODEL_ID);
+    if (preferred) return preferred.id;
+  }
+  return models[0]?.id ?? null;
+}
 
 function readGenAttrString(attrs: Record<string, unknown> | null | undefined, key: string) {
   const raw = attrs?.[key];
@@ -96,12 +125,6 @@ function readGenAttrDuration(attrs: Record<string, unknown> | null | undefined) 
   const n = typeof raw === 'number' ? raw : Number(raw);
   if (!Number.isFinite(n)) return null;
   return Math.max(4, Math.min(15, Math.round(n)));
-}
-
-function modelIsVideoGenerator(model?: Pick<LlmModel, 'kind' | 'id'> | null): boolean {
-  if (!model) return false;
-  if (model.kind === 'video') return true;
-  return /seedance/i.test(model.id || '');
 }
 
 /** Keep plate area; apply new aspect ratio; return size centered on current box. */
@@ -367,7 +390,7 @@ function VideoGeneratorCard({
     'idle' | 'loading' | 'ready' | 'error'
   >('idle');
   const [modelId, setModelId] = useState(() => {
-    return readGenAttrString(genAttrs, 'videoGenModel') || DEFAULT_VIDEO_MODEL_ID;
+    return readGenAttrString(genAttrs, 'videoGenModel') || cloudVideoFallbackId();
   });
   const [contexts, setContexts] = useState<ComposerContext[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -425,21 +448,11 @@ function VideoGeneratorCard({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const pool = [...(res?.models || []), ...(res?.videoModels || [])].filter((m) =>
-          modelIsVideoGenerator(m)
-        );
-        const seen = new Set<string>();
-        const unique = pool.filter((m) => {
-          if (!m?.id || seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        });
+        const unique = buildVideoGeneratorModelList(res);
         setModels(unique);
         setModelsStatus('ready');
-        if (unique.length && !unique.some((m) => m.id === modelId)) {
-          const preferred = unique.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID) || unique[0];
-          if (preferred) setModelId(preferred.id);
-        }
+        const nextId = nextVideoModelId(unique, modelId);
+        if (nextId) setModelId(nextId);
       })
       .catch(() => {
         if (!cancelled) setModelsStatus('error');
@@ -462,6 +475,7 @@ function VideoGeneratorCard({
     [contexts]
   );
   const selectedModel = models.find((m) => m.id === modelId);
+  const billingEnabled = useSelector(selectBillingEnabled);
   const creditCost = estimateVideoCredits(selectedModel);
   const settingsSummary = `${resolution} · ${aspectRatio} · ${duration}s`;
 
@@ -1020,7 +1034,14 @@ function VideoGeneratorCard({
                 </Tooltip>
               </Dropdown>
 
-              <Tooltip tip={t('wallet.creditCostTip', { count: creditCost })} placement="top">
+              <Tooltip
+                tip={
+                  billingEnabled
+                    ? t('wallet.creditCostTip', { count: creditCost })
+                    : t('agent.send')
+                }
+                placement="top"
+              >
                 <button
                   type="button"
                   disabled={disabled || sending || attachmentsUploading || !prompt.trim()}
@@ -1028,11 +1049,20 @@ function VideoGeneratorCard({
                   onClick={() => void onGenerate()}
                   className={cn(
                     'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition',
-                    'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40'
+                    'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40',
+                    !billingEnabled && 'h-7 w-7 justify-center px-0'
                   )}
                 >
-                  <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                  {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                  {billingEnabled ? (
+                    <>
+                      <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
+                      {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                    </>
+                  ) : sending ? (
+                    '…'
+                  ) : (
+                    <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  )}
                 </button>
               </Tooltip>
             </div>

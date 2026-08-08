@@ -234,7 +234,8 @@ function CircleShapeHandlesOverlay({
       if (d.mode === 'inner') {
         const dist = Math.hypot(local.x - cx, local.y - cy);
         const next = snapEllipseInnerRatio(
-          clampEllipseInnerRatio(dist / Math.max(1e-3, outerR), d.startRatio)
+          clampEllipseInnerRatio(dist / Math.max(1e-3, outerR), d.startRatio),
+          { sceneDist: dist, zoom: z }
         );
         d.current = next;
         setDragValue(Math.round(next * 100));
@@ -319,6 +320,7 @@ function CircleShapeHandlesOverlay({
     cx,
     cy,
     outerR,
+    z,
     baseInner,
     baseArc,
     startDeg,
@@ -382,6 +384,26 @@ function CircleShapeHandlesOverlay({
     setLiveInner(baseInner);
   };
 
+  /** Double-click 内半径 → solid disk (restore after opening a hole). */
+  const resetInnerSolid = (e: ReactPointerEvent<SVGElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = null;
+    setActiveKey(null);
+    setDragValue(null);
+    setLiveInner(null);
+    setLiveArc(null);
+    commitEllipseParams({
+      dispatch,
+      nodeId,
+      innerRatio: 0,
+      arcPercent: baseArc,
+      startDeg,
+    });
+    preview({ inner: 0 });
+  };
+
   const beginArc = (e: ReactPointerEvent<SVGElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -409,6 +431,7 @@ function CircleShapeHandlesOverlay({
     interactive: boolean;
     isActive: boolean;
     onDown?: (e: ReactPointerEvent<SVGElement>) => void;
+    onDoubleClick?: (e: ReactPointerEvent<SVGElement>) => void;
     onEnter?: () => void;
     onLeave?: () => void;
   };
@@ -422,6 +445,7 @@ function CircleShapeHandlesOverlay({
       interactive: true,
       isActive: activeKey === 'inner',
       onDown: beginInner,
+      onDoubleClick: resetInnerSolid,
     },
   ];
 
@@ -476,6 +500,11 @@ function CircleShapeHandlesOverlay({
               }}
               onPointerDown={
                 interactive && knob.interactive && knob.onDown ? knob.onDown : undefined
+              }
+              onDoubleClick={
+                interactive && knob.interactive && knob.onDoubleClick
+                  ? knob.onDoubleClick
+                  : undefined
               }
               onPointerEnter={interactive ? knob.onEnter : undefined}
               onPointerLeave={interactive ? knob.onLeave : undefined}

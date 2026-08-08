@@ -95,7 +95,8 @@ def adjust_tokens(user_id: str, amount: int, detail: str = "") -> dict[str, Any]
     if amt > 0:
         balance = credit_tokens(uid, amt, detail=note)
     else:
-        balance = spend_tokens(uid, abs(amt), detail=note)
+        balance = spend_tokens(uid, abs(amt), detail=note, force=True)
+
     return {"userId": uid, "tokens": balance, "amount": amt}
 
 

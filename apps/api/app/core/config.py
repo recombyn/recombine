@@ -224,6 +224,11 @@ class Settings(BaseSettings):
     # Desktop-local only: POST /auth/desktop-local auto-provisions OS user (loopback).
     # Tauri local sidecar sets true; keep false on Cloud / public API.
     desktop_local_auto_login: bool = False
+    # Master switch for platform 积分 (env: WALLET_BILLING_ENABLED).
+    # Default false (self-host / local). Cloud / SaaS must set true explicitly.
+    # Desktop-local auto-login always skips billing regardless of this flag.
+    wallet_billing_enabled: bool = False
+
 
     # Token wallet — card-key redeem (no WeChat/Alipay membership)
     # HMAC-SHA256(plaintext, CARD_KEY_SALT); never store plaintext in DB.
@@ -250,6 +255,11 @@ class Settings(BaseSettings):
     ses_activate_base_url: str = "https://recombyn.com/activate"
 
 settings = Settings()
+
+
+def is_desktop_local() -> bool:
+    """Tauri local sidecar — BYOK only, no platform catalog / wallet billing."""
+    return bool(getattr(settings, "desktop_local_auto_login", False))
 
 
 def api_data_dir() -> Path:

@@ -14,7 +14,13 @@ import { HiOutlineBookOpen } from 'react-icons/hi2';
 import { listModels, type LlmModel } from '@/apis/chat';
 import {
   agentAttachmentLimit,
-  isVolcanoCatalogModel,
+  cloudImageFallbackId,
+  cloudVideoFallbackId,
+  isImageKind,
+  isVideoKind,
+  mergeSelectableModels,
+  pickPreferredImageModelId,
+  pickPreferredVideoModelId,
 } from '@/components/editor/panels/agent/llmModelMeta';
 import AgentComposerShell, {
   type ComposerInteractionMode,
@@ -38,10 +44,8 @@ import {
   modelImageLimits,
 } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
 import ModelPickerPanel, {
-  isImageKind,
-  isVideoKind,
-  modelTabOf,
   ModelBrandIcon,
+  modelTabOf,
   type ModelPickerTab,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
 import {
@@ -50,9 +54,9 @@ import {
   warmOpenrouterAvailability,
   routeOverridesForApi,
 } from '@/components/editor/panels/agent/AgentModelsPanel';
+import { customProvidersAsModels } from '@/components/editor/panels/agent/customLlmProviders';
 import { cn } from '@/utils/classnames';
-import { FREE_IMAGE_MODEL_ID, planAllowsModelId, planAllowsModelPick, type PlanId } from '@/utils/wallet';
-import { nanoid } from 'nanoid';
+import { FREE_IMAGE_MODEL_ID, planAllowsModelId, planAllowsModelPick, type PlanId } from '@/utils/wallet';import { nanoid } from 'nanoid';
 import {
   deleteUploadedFile,
   readFileAsDataUrl,
@@ -165,46 +169,17 @@ function normalizeModelList(
   imageModels?: LlmModel[] | null,
   videoModels?: LlmModel[] | null
 ): LlmModel[] {
-  const byId = new Map<string, LlmModel>();
-  for (const m of models || []) {
-    if (!m?.id) continue;
-    byId.set(m.id, m);
-  }
-  for (const m of imageModels || []) {
-    if (!m?.id) continue;
-    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
-  }
-  for (const m of videoModels || []) {
-    if (!m?.id) continue;
-    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'video' });
-  }
-  return [...byId.values()]
-    .filter((m) => isVolcanoCatalogModel(m))
-    .map((m) => {
-      if (isVideoKind(m)) {
-        return { ...m, kind: 'video' as const };
-      }
-      if (isImageKind(m)) {
-        return { ...m, kind: 'image' as const };
-      }
-      if (m.kind === 'svg') return { ...m, kind: 'text' as const };
-      return { ...m, kind: (m.kind || 'text') as LlmModel['kind'] };
-    });
+  return mergeSelectableModels({
+    models,
+    imageModels,
+    videoModels,
+    customModels: customProvidersAsModels(),
+  });
 }
 
 const DEFAULT_VIDEO_ASPECT_RATIO = '16:9';
 const DEFAULT_VIDEO_RESOLUTION = '720p';
 const DEFAULT_VIDEO_DURATION = 5;
-const DEFAULT_VIDEO_MODEL_ID = 'or-seedance-2-0-fast';
-
-function pickPreferredVideoModelId(models: LlmModel[]): string {
-  const videos = models.filter((m) => isVideoKind(m));
-  return (
-    videos.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID)?.id ||
-    videos[0]?.id ||
-    DEFAULT_VIDEO_MODEL_ID
-  );
-}
 
 function aspectRatioForCategory(category: HomeAgentCategory): string {
   switch (category) {
@@ -243,16 +218,6 @@ function designSceneCategoryOf(
   return category;
 }
 
-function pickPreferredImageModelId(models: LlmModel[]): string {
-  const images = models.filter((m) => isImageKind(m));
-  return (
-    images.find((m) => m.id === FREE_IMAGE_MODEL_ID)?.id ||
-    images.find((m) => /seedream/i.test(m.id))?.id ||
-    images[0]?.id ||
-    FREE_IMAGE_MODEL_ID
-  );
-}
-
 function hasUploadingAttachment(contexts: ComposerContext[]): boolean {
   return contexts.some((c) => c.kind === 'attachment' && c.uploadStatus === 'uploading');
 }
@@ -263,7 +228,7 @@ function resolveHomeSubmitModelId(opts: {
   modelId: string;
 }): string {
   if (!opts.canPickModel) {
-    return opts.isImageModelSelected ? FREE_IMAGE_MODEL_ID : 'auto';
+    return opts.isImageModelSelected ? cloudImageFallbackId() || 'auto' : 'auto';
   }
   return opts.modelId;
 }
@@ -379,7 +344,9 @@ function HomeAgentComposer({
     setInteractionMode('video');
     setModelTab('video');
     setModelOpen(false);
-    setModelId(canPickModel ? pickPreferredVideoModelId(nextModels) : DEFAULT_VIDEO_MODEL_ID);
+    setModelId(
+      canPickModel ? pickPreferredVideoModelId(nextModels) : cloudVideoFallbackId() || 'auto'
+    );
   };
 
   const leaveVideoMode = () => {
@@ -393,7 +360,9 @@ function HomeAgentComposer({
     setInteractionMode('image');
     setModelTab('image');
     setModelOpen(false);
-    setModelId(canPickModel ? pickPreferredImageModelId(nextModels) : FREE_IMAGE_MODEL_ID);
+    setModelId(
+      canPickModel ? pickPreferredImageModelId(nextModels) : cloudImageFallbackId() || 'auto'
+    );
   };
 
   const leaveImageMode = () => {
@@ -493,9 +462,10 @@ function HomeAgentComposer({
     (isImageInteraction || modelTab === 'image' || modelTabOf(selectedModel) === 'image');
 
   const imageModels = models.filter((m) => isImageKind(m));
+  const imageFallbackId = cloudImageFallbackId();
   const imageModeSelectedModel =
     imageModels.find((m) => m.id === modelId) ||
-    imageModels.find((m) => m.id === FREE_IMAGE_MODEL_ID) ||
+    (imageFallbackId ? imageModels.find((m) => m.id === imageFallbackId) : undefined) ||
     imageModels[0];
 
   const attachmentLimit = agentAttachmentLimit({
@@ -503,7 +473,7 @@ function HomeAgentComposer({
     modelId,
     isImageMode: isImageModelSelected || isVideoModelSelected,
     routedImageId: routeOverridesForApi(loadAgentRoutePrefs())?.image,
-    freeImageId: FREE_IMAGE_MODEL_ID,
+    freeImageId: imageFallbackId || undefined,
   });
   const attachmentCount = contexts.filter((c) => c.kind === 'attachment').length;
   const attachFull = attachmentCount >= attachmentLimit;
@@ -526,11 +496,11 @@ function HomeAgentComposer({
           imageResolution
         ),
         modelLabel: String(
-          imageModeSelectedModel?.label || modelId || FREE_IMAGE_MODEL_ID
+          imageModeSelectedModel?.label || modelId || imageFallbackId || ''
         ),
         modelIcon: (
           <ModelBrandIcon
-            model={imageModeSelectedModel || { id: modelId || FREE_IMAGE_MODEL_ID }}
+            model={imageModeSelectedModel || { id: modelId || imageFallbackId || '' }}
             className="h-3.5 w-3.5 shrink-0"
           />
         ),
@@ -554,9 +524,10 @@ function HomeAgentComposer({
     : null;
 
   const videoModels = models.filter((m) => isVideoKind(m));
+  const videoFallbackId = cloudVideoFallbackId();
   const videoModeSelectedModel =
     videoModels.find((m) => m.id === modelId) ||
-    videoModels.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID) ||
+    (videoFallbackId ? videoModels.find((m) => m.id === videoFallbackId) : undefined) ||
     videoModels[0];
   const videoModeControls: VideoModeComposerControls | null = isVideoInteraction
     ? {
@@ -569,11 +540,11 @@ function HomeAgentComposer({
           setVideoGenDuration(Math.max(1, Math.round(d) || DEFAULT_VIDEO_DURATION)),
         creditCost: estimateVideoCredits(videoModeSelectedModel),
         modelLabel: String(
-          videoModeSelectedModel?.label || modelId || DEFAULT_VIDEO_MODEL_ID
+          videoModeSelectedModel?.label || modelId || videoFallbackId || ''
         ),
         modelIcon: (
           <ModelBrandIcon
-            model={videoModeSelectedModel || { id: modelId || DEFAULT_VIDEO_MODEL_ID }}
+            model={videoModeSelectedModel || { id: modelId || videoFallbackId || '' }}
             className="h-3.5 w-3.5 shrink-0"
           />
         ),

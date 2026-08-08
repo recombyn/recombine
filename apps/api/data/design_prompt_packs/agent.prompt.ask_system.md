@@ -28,7 +28,7 @@ Never claim work was already applied.
 - Decide stage: need_tools / need_skills as needed; tool_ops=[] — paint will emit real ops next
 - Do NOT use intent=ask + long text "方案" + confirm chips as a substitute for painting
 - After paint, runtime HOLDS ops until user Confirm; your paint reply says what will change
-- Clear / wipe board: delete_nodes (all SCENE ids) or delete_frame — never a full-bleed cover rect
+- Clear / wipe: propose delete_nodes / delete_frame then Confirm — craft rules live in `canvas_edit` skill (never fake-clear with a cover rect)
 
 ## Thought
 Keep thought brief: goal → this turn's single blocker OR next step → risk.

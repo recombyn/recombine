@@ -1,13 +1,12 @@
 import { useEffect, memo } from 'react';
 import { useDispatch } from 'react-redux';
-import { getMe, loginDesktopLocal } from '@/apis/auth';
+import { fetchAuthConfig, getMe, loginDesktopLocal } from '@/apis/auth';
 import { fetchWallet } from '@/apis/wallet';
 import AppRouter from '@/router';
 import { logout, setSession, clearSessionCaches } from '@/store/modules/auth';
 import { clearProjectsLibrary } from '@/store/modules/editor';
-import { clearWallet } from '@/store/modules/wallet';
+import { clearWallet, setBillingEnabled, syncFromServer } from '@/store/modules/wallet';
 import type { LedgerEntry } from '@/utils/wallet';
-import { syncFromServer } from '@/store/modules/wallet';
 import { getDesktopMode } from '@/utils/apiBase';
 import { getToken, setToken } from '@/utils/token';
 
@@ -66,6 +65,7 @@ function App() {
         dispatch(
           syncFromServer({
             tokens: res.tokens,
+            billingEnabled: (res as { billingEnabled?: boolean }).billingEnabled,
             planId: res.planId,
             planExpiresAt: res.planExpiresAt ?? null,
             planLocked: Boolean(res.planLocked),
@@ -112,7 +112,20 @@ function App() {
       }
     }
 
+    async function refreshBillingFlag() {
+      try {
+        const cfg = await fetchAuthConfig();
+        if (cancelled) return;
+        dispatch(setBillingEnabled(Boolean(cfg.billingEnabled)));
+      } catch {
+        /* keep default off */
+      }
+    }
+
     async function boot() {
+      // Public flag first so credit UI stays hidden before wallet sync.
+      await refreshBillingFlag();
+      if (cancelled) return;
       await ensureDesktopLocalSession();
       if (cancelled) return;
       if (getDesktopMode() !== 'local') {

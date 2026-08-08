@@ -280,7 +280,9 @@ RETIRED_NEED_PROMPT_KINDS = frozenset({"design_spec", "vision", "aesthetics"})
 
 PACK_TYPE_NEED = "need"
 PACK_TYPE_SYSTEM = "system"
-_PACK_TYPES = frozenset({PACK_TYPE_NEED, PACK_TYPE_SYSTEM})
+# Short UI/injection snippets (headers, empty states) — not stage system prompts.
+PACK_TYPE_TEMPLATE = "template"
+_PACK_TYPES = frozenset({PACK_TYPE_NEED, PACK_TYPE_SYSTEM, PACK_TYPE_TEMPLATE})
 
 # Graph / product stages — Admin filter + seed ``usedBy``.
 PROMPT_PACK_STAGES = (
@@ -530,17 +532,16 @@ def _prune_prompt_packs_to_seed(session: Session, *, now: float) -> None:
 # DB rows that still look like OSS paint_system but miss any of these get replaced.
 # Do not hardcode prior full bodies here — add a short marker when the seed contract changes.
 _PAINT_SYSTEM_SEED_MARKERS = (
-    "boolean_op",
-    "brushHardness",
-    "Fixed-size deliverable",
-    "MUST emit create_frame",
     "HOST_ARTBOARD",
-    "New design create",
     "CLIENT_SIZE_LOCK",
-    "create_image with genPrompt for the hero",
-    "不要画板",
+    "Craft (skills own the playbooks)",
+    "SKILL_DETAILS",
+    "brush_ops",
+    "motion_lottie",
+    "Do not emit choice_ui here",
+    "ambient SCENE",
     "fillType=linear|radial|angular|diffuse",
-    "~≥90% match",
+    "Cap about 8 boards per step",
 )
 
 
@@ -665,15 +666,34 @@ def ensure_design_prompt_packs() -> None:
                     pack.used_by = csv
                     pack.updated_at = now
                     session.add(pack)
-            # Backfill empty pack_type from seed / kind inference (never overwrite Admin-set values).
+            # Sync pack_type + when_to_use from seed. Body / used_by stay Admin-owned.
             for row in crud.list_all_design_prompt_packs(session=session):
-                cur = str(row.pack_type or "").strip().lower()
-                if cur in _PACK_TYPES:
-                    continue
                 kind = str(row.kind or "")
-                seed_item = _SEED_BY_KIND.get(kind) or {}
-                row.pack_type = normalize_pack_type(seed_item.get("type"), kind=kind)
-                session.add(row)
+                seed_item = _SEED_BY_KIND.get(kind)
+                if not seed_item:
+                    continue
+                changed = False
+                raw_type = str(seed_item.get("type") or "").strip()
+                if not raw_type:
+                    if str(row.pack_type or "").strip().lower() not in _PACK_TYPES:
+                        want = normalize_pack_type("", kind=kind)
+                        if str(row.pack_type or "").strip().lower() != want:
+                            row.pack_type = want
+                            changed = True
+                else:
+                    want = normalize_pack_type(raw_type, kind=kind)
+                    if str(row.pack_type or "").strip().lower() != want:
+                        row.pack_type = want
+                        changed = True
+                seed_when = str(seed_item.get("when_to_use") or "").strip()
+                if seed_when and str(row.when_to_use or "").strip() != seed_when:
+                    # Seed owns catalog blurb; Admin can still edit body.
+                    # Skip overwrite only when seed when is empty.
+                    row.when_to_use = seed_when
+                    changed = True
+                if changed:
+                    row.updated_at = now
+                    session.add(row)
             session.commit()
         _PACKS_READY = True
 
@@ -702,7 +722,7 @@ def list_prompt_packs(
     enabled: bool | None = True,
     ensure: bool = True,
 ) -> list[dict[str, Any]]:
-    """Prefer flow 提示词节点; else DB table. ``pack_type`` filters by code (need|system)."""
+    """Prefer flow 提示词节点; else DB table. ``pack_type`` filters by code (need|system|template)."""
     type_filter = str(pack_type or "").strip().lower() or None
     if type_filter and type_filter not in _PACK_TYPES:
         type_filter = None

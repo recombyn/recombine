@@ -20,12 +20,16 @@ function WalletAccountChip({ className }: Props) {
   const { t } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);
   const tokens = useSelector((state: any) => state.wallet?.tokens ?? 0);
+  const billingEnabled = useSelector(
+    (state: any) => state.wallet?.billingEnabled === true
+  );
   const navigate = useNavigate();
   const [accountOpen, setAccountOpen] = useState(false);
 
   const tip = `${user?.name || user?.email || ''} · ${t('wallet.tokensLeft', {
     count: formatTokens(tokens),
   })}`;
+
 
   const guestMenu: MenuItemType[] = [
     {
@@ -40,21 +44,22 @@ function WalletAccountChip({ className }: Props) {
   ];
 
   if (user) {
-    const local = isDesktopLocal();
+    // Local desktop or WALLET_BILLING_ENABLED=false → no credit chip.
+    const hideCredits = isDesktopLocal() || !billingEnabled;
     return (
       <UserAccountPanel open={accountOpen} onOpenChange={setAccountOpen}>
         <button
           type="button"
           className={cn(
             'pointer-events-auto flex h-8 items-center transition hover:opacity-90',
-            local
+            hideCredits
               ? 'w-8 justify-center rounded-full bg-[var(--accent-soft)]'
               : 'max-w-[12rem] gap-2 rounded-full bg-[var(--accent-soft)] pl-2.5 pr-0.5',
             className
           )}
-          title={local ? user?.name || user?.email || t('home.account') : tip}
+          title={hideCredits ? user?.name || user?.email || t('home.account') : tip}
         >
-          {!local ? (
+          {!hideCredits ? (
             <span className="inline-flex min-w-0 items-center gap-1 text-[var(--ink)]">
               <HiOutlineBolt className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden />
               <span className="min-w-0 truncate text-[12px] font-semibold tabular-nums tracking-tight">
@@ -67,6 +72,7 @@ function WalletAccountChip({ className }: Props) {
       </UserAccountPanel>
     );
   }
+
 
   return (
     <Dropdown

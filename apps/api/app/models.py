@@ -24,6 +24,9 @@ class AuthConfigOut(SQLModel):
     googleEnabled: bool
     googleClientId: str | None = None
     emailEnabled: bool
+    # Platform credit wallet (WALLET_BILLING_ENABLED); default off until Cloud sets true.
+    billingEnabled: bool = False
+
 
 
 class UserPublic(SQLModel):

@@ -27,14 +27,140 @@ Default config loads from seed JSON under `apps/api/data/` on first API start.
 
 | Seed | Shipped in `apps/api/data/` | Notes |
 |------|------------------------------|--------|
-| Prompt packs | Full product set (~95 kinds) in `data/design_prompt_packs/` | Ask / paint / decide / aesthetics — `_index.json` + per-kind `.md` |
-| Skills (core) | 5 core playbooks | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` |
-| Skills (ext) | Optional packs + repo `.agents/skills/` | e.g. `ui_ux_pro_max`, `garden_style` — add more via Admin / zip / folders |
+| Prompt packs | `design_prompt_packs/` (`_index.json` + `*.md`) | `type=system` ≈25 stage protocols; `type=template` ≈70 inject lines |
+| Skills (core) | 5 playbooks in `design_skills_seed.json` | `design_methodology` / `vision_extract` / `aesthetics_align` / `canvas_edit` / `image_gen` |
+| Skills (ext) | `design_skills/<key>/` + repo `.agents/skills/` | e.g. `brush_ops`, `motion_lottie`, `ui_ux_pro_max` — also Admin zip / folders |
 | Knowledge / tokens / models | Shipped | Expand further via Admin after install |
 | Canvas actions, fonts, dicts, stages | Shipped | |
 | Aesthetics corpus | **Not** in seed | Upload quality samples in Admin for CLIP RAG; thin corpus → fail-open |
 
-See [data/README.md](../apps/api/data/README.md) and [design_skills/README.md](../apps/api/data/design_skills/README.md) (namespaces `core` / `ext` / `user`, ACL, hot reload).
+Layout of files under `apps/api/data/`: [data/README.md](../apps/api/data/README.md) (file map only).
+
+## Architecture
+
+### Repository
+
+| Path | Role |
+|------|------|
+| `apps/web` | React editor, home, Agent chat, Yjs collab client |
+| `apps/web/src-tauri` | Tauri v2 desktop shell |
+| `apps/api` | FastAPI: import, projects/plaza, Design Agent, collab tokens |
+| `apps/collab` | Yjs WebSocket (`/collab/`) |
+| `packages/scene-schema` · `packages/scene-builder-py` | Scene JSON protocol / builders |
+
+Desktop flavors: [desktop.md](./desktop.md). Postgres switch: [postgres-switch.md](./postgres-switch.md).
+
+### API layers
+
+```text
+HTTP     app/api/routes/* + deps.py
+Domain   app/services/*          (design / plaza / wallet / …)
+Data     models.py + crud.py     SQLModel Session
+DDL      app/services/db         init_schema / ensure_*
+Seeds    apps/api/data/**        INSERT missing on boot (do not overwrite Admin rows)
+Design   services.design.runtime → design_stream → LangGraph
+         services.design.prompts → Skill / prompt pack / knowledge
+         services.design.ops     → tool_ops contract
+```
+
+```text
+apps/api/app/
+  main.py · api/ · core/ · models.py · crud.py · services/ · schemas/
+  worker/   # Celery
+```
+
+| Auth case | Status |
+|-----------|--------|
+| Missing Bearer | **401** |
+| Bad / revoked token | **403** |
+| Not admin | **403** |
+
+URL prefix: `/api/v1`. `/import/*` requires login.
+
+### Design Agent — call chain
+
+```text
+POST /api/v1/design/run
+  → orchestrator.run_design_job          # auth, hold, BYOK, rules
+      → design_run.design_stream
+          → graph.build.run_agent_graph  # LangGraph driver
+              → bootstrap
+                   ├─ apply_ops? → apply_confirm → observe → settle
+                   └─ memory → intent → decide → paint_ops
+                        ├─ Ask + ops → propose → settle    # Confirm = new run
+                        └─ Agent → action → observe → settle
+                             └─ critique fail → paint_ops (retry)
+```
+
+| HTTP | Role |
+|------|------|
+| `POST /design/run` | SSE main run |
+| `POST /design/run/{taskId}/scene` | FE scene → resume interrupt |
+| `POST …/pause` · `/cancel` · `/resume` | Durable lifecycle |
+| `GET /design/catalog` · `/canvas-tools` | Catalogs |
+
+### LC / LG stack (LangChain + LangGraph)
+
+Two layers — do not mix product routing with model I/O:
+
+| Layer | Library | Owns |
+|-------|---------|------|
+| **Outer graph** | **LangGraph** `StateGraph` | Node order, `Command(goto=…)`, checkpointer, `interrupt` / resume, run lease |
+| **Inside nodes** | **LangChain** (+ optional `create_agent`) | Chat I/O, structured output, tool schemas |
+| **Host** | `runtime/host/` | Assemble packs, validate ops, placement, lazy `need_*` |
+
+```text
+  HTTP / SSE     orchestrator → design_stream → run_agent_graph
+                         │ astream + interrupt bridge
+                         ▼
+               LangGraph outer graph (checkpointer)
+               bootstrap → … → paint → observe → settle
+                         │ per-node
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+   host.prompts/ops   LangChain LLM   scene_feedback
+   (packs, validate)  (+ structured)  + interrupt()
+```
+
+Outer graph (dynamic `Command(goto=…)`):
+
+```text
+START → bootstrap
+          ├─ apply_ops? → apply_confirm → observe → settle
+          └─ memory → intent_classify → design_agent (decide)
+                           ├─ chat / clarify only → settle
+                           └─ needs paint → paint_ops
+                                  ├─ Ask → propose → settle
+                                  └─ Agent → action → observe
+                                         ├─ critique fail → paint_ops
+                                         └─ ok → settle → END
+```
+
+| Node | Role |
+|------|------|
+| `design_agent` | Decide: reply / `need_*` — **no** canvas ops |
+| `paint_ops` | Structured `tool_ops` only |
+| `observe` | Wait FE scene (`interrupt`); critique |
+| `propose` | Ask preview → Confirm as **new** run |
+
+Inside a node: assemble pack → LangChain stream/structured → validate ops → `Command(update, goto)`.  
+`create_agent` is an **inner** helper; durable pause/resume is always the **outer** graph + checkpointer.
+
+Lifecycle: `queued → running ⇄ waiting_client → success` (also `paused` / `error` / `cancelled`).  
+Checkpointer: `thread_id = design:{task_id}` — prod refuses memory; see [postgres-switch.md](./postgres-switch.md#langgraph-checkpointer-design-agent--create_agent).
+
+### Package map (design)
+
+| Path | Role |
+|------|------|
+| `runtime/orchestrator.py` | Gate + `design_stream` |
+| `runtime/graph/build.py` | StateGraph + lease + interrupt driver |
+| `runtime/graph/nodes/` | bootstrap / decide / paint / observe / … |
+| `runtime/host/` | prompts, placement, ops_gate, resources |
+| `prompts/prompt_pack_store.py` · `skill_store/` | Packs + skills |
+| `ops/tool_ops_contract.py` | Canvas tool registry |
+
+Env knobs: `DESIGN_GRAPH_REQUIRE_DURABLE_CHECKPOINT`, `DESIGN_RUN_LEASE_TTL_SEC`, `DESIGN_CRITIQUE_*`, `DESIGN_AESTHETICS_*`.
 
 ## Database options
 
@@ -48,13 +174,55 @@ Periodic backups (default on): SQLite online copy under `DB_BACKUP_DIR` (`storag
 
 LangGraph checkpoints: [postgres-switch.md](./postgres-switch.md#langgraph-checkpointer-design-agent--create_agent).
 
-## Design skills (Agent)
+## Agent content: skills & prompt packs
 
-- **core** — seed skills in `design_skills_seed.json`
-- **ext** — file packs under `data/design_skills/<key>/` (`_meta.json` + `SKILL.md`)
-- **user** — Admin API (`user.<local>` keys; cannot claim core keys)
+**One line:** Prompt packs = engine **protocol**; Skills = job **playbooks**. Same rule in one place — packs **route**, skills **teach**.
+
+LC/LG call chain: [Architecture · Design Agent](#design-agent--call-chain) above.
+
+```text
+User turn
+  → Decide (react_system + need_tools_overlay)
+      · intent / need_skills / need_tools — no long craft text
+  → Lazy-load Skill bodies (SKILL_DETAILS)
+  → Paint (paint_system)
+      · tool_ops + FOCUS / size; craft from loaded skills only
+```
+
+| Layer | Owns | Does not own |
+|-------|------|----------------|
+| `type=system` packs | JSON contract, Ask/Agent gates, FOCUS/size, when to `need_*` | Poster layout, brush args, Lottie playbook |
+| `type=template` packs | One-line inject strings (headers, empty states) | “How to use” / `format_*` / code-path notes |
+| Skills | How a class of work is done | Stage JSON / HITL `choice_ui` |
+| Knowledge | Numeric / encyclopedia detail | Execution protocol |
+
+### Skills namespaces
+
+| Namespace | Source | Notes |
+|-----------|--------|--------|
+| `core` | `design_skills_seed.json` | Bare keys (`design_methodology`); aliases `core.<key>` |
+| `ext` | `data/design_skills/<key>/` (`_meta.json` + `SKILL.md`) | e.g. `brush_ops`, `motion_lottie`; also `.agents/skills/` encyclopedias |
+| `user` | Admin API | Always `user.<local>`; cannot claim core keys |
 
 Env: `DESIGN_SKILLS_HOT_RELOAD` (default true), `DESIGN_SKILLS_HOT_RELOAD_INTERVAL_SEC`. Manual: Admin `POST /api/v1/admin/design/skills/resync`.
+
+Pack layout: `data/design_skills/<key>/_meta.json` + `SKILL.md` (copy `example_ext/` to add one).
+
+### Prompt packs
+
+- Seed: `data/design_prompt_packs/_index.json` + `<kind>.md` (filename = `kind`).
+- `when_to_use` on **skills** → model catalog; on **templates** → Admin short label only (`注入模板 · …`).
+- API start syncs seed `type` + `when_to_use` into DB; **body** / `used_by` stay Admin-owned after first insert (paint_system has a marker bump for stale OSS bodies).
+
+### Where to edit
+
+| Change | Edit |
+|--------|------|
+| Stage must-follow rules | `type=system` pack `.md` (e.g. `ask_system.md`, `paint_system.md`) |
+| How a design job is done | Skill seed or `design_skills/<pack>/SKILL.md` |
+| One inject line | `type=template` `.md` — keep short |
+
+Do not duplicate craft into `paint_system` / `react_system`. Brush / Lottie → ext skills `brush_ops` / `motion_lottie`; core skills only route to them.
 
 ## BYOK / secrets
 
@@ -95,11 +263,22 @@ Bring your own LLM keys (DeepSeek / Doubao / OpenRouter / …). Without keys, Ag
 
 ### Credits & membership (self-host)
 
-The app includes a local credits / plan wallet (default free users get a small daily quota). This is **not** a Recombyn Cloud subscription — you control it on your instance:
+Platform credits are controlled by **`WALLET_BILLING_ENABLED`** (API env; **default off** in app settings and docker-compose):
 
-- Raise or remove limits in code (`FREE_DAILY_LIMIT` in `services/wallet/db.py`)
-- Issue card keys (admin + `CARD_KEY_SALT` / `CARD_KEY_OPS_PASSWORD`) to top up balances
-- Or patch billing gates for an unlimited private deploy
+| Value | Behavior |
+|-------|----------|
+| `false` (default) | No holds/charges. UI hides balance chip, Plans, redeem, Usage & billing, and send-button credit chips. Bring your own LLM keys. |
+| `true` | SaaS-style wallet (plans, card keys, daily free quota, credit estimates in the editor). |
+
+This is **not** a Recombyn Cloud subscription — you own the switch on your instance. Local desktop (`DESKTOP_LOCAL_AUTO_LOGIN`) always skips billing regardless of the env flag.
+
+Cloud / SaaS deploys must set `WALLET_BILLING_ENABLED=true` explicitly.
+
+Optional when billing is on:
+
+- Raise or remove daily free quota (`FREE_DAILY_LIMIT` in `services/wallet/db.py`)
+- Issue card keys (admin + `CARD_KEY_SALT` / `CARD_KEY_OPS_PASSWORD`)
+
 
 ## Dev path (SQLite, no compose MySQL)
 
@@ -172,21 +351,12 @@ Do this **before** exposing port 3000 / 8000 to the internet:
 
 API startup logs **warnings** if admin password, collab secret, default MySQL password, card salt, or BYOK key look like local defaults.
 
-## License & commercial model
+## License
 
-This repository uses the **Recombyn Source Available License v1.0** (see root `LICENSE`).
+**Recombyn Source Available License v1.0** — full terms in root [`LICENSE`](../LICENSE); short notices in [`NOTICE`](../NOTICE).
 
-- **Individuals / private groups**: self-host free under the license.
-- **Internal org deployment**: permitted (employees / contractors of that org).
-- **Hosted / managed service** of Recombyn (or a substantially similar platform) to third parties — paid or free — requires **commercial / enterprise authorization** (`702680355@qq.com`).
-- Hosted **Cloud**, support/SLA, and enterprise add-ons are separate commercial offerings.
+Third-party images you may run alongside (Redis, MySQL, …) keep **their own** licenses. Hosted Cloud / support / enterprise add-ons are separate commercial offerings.
 
-Third-party images you may run alongside (Redis, MySQL, …) keep **their own** licenses.
+## Related
 
-## Related docs
-
-- [Root README](../README.md)
-- [API README](../apps/api/README.md)
-- [Architecture](./architecture.md)
-- [PostgreSQL switch](./postgres-switch.md)
-- [Design skills packs](../apps/api/data/design_skills/README.md)
+- [recombyn.github.io/recombyn](https://recombyn.github.io/recombyn/) · [Desktop](./desktop.md) · [Postgres](./postgres-switch.md)

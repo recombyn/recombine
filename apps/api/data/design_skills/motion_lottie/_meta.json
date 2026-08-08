@@ -1,0 +1,30 @@
+{
+  "skill_key": "motion_lottie",
+  "name": "motion_lottie",
+  "displayName": "Motion / Lottie",
+  "description": "UI loop motion via create_lottie — loading, success, empty-state, heartbeat",
+  "when_to_use": "Lottie / 动效 / UI motion / loading / success / empty-state loop / heartbeat like/favorite — not static icons",
+  "category": "motion",
+  "scenes": "all",
+  "sort_weight": 66,
+  "version": "1.0.0",
+  "preferred_tools": [
+    "create_lottie",
+    "update_node",
+    "create_frame"
+  ],
+  "allowed_resources": ["tools"],
+  "triggers": [],
+  "mutex_group": "",
+  "prompt_negative": "Never substitute create_image, create_svg, or shape piles for requested Lottie/motion. Do not use Lottie for static icons.",
+  "locales": {
+    "zh-CN": {
+      "displayName": "动效 / Lottie",
+      "description": "用 create_lottie 做 UI 循环动效（加载/成功/空状态/心跳）"
+    },
+    "en": {
+      "displayName": "Motion / Lottie",
+      "description": "UI loop motion via create_lottie"
+    }
+  }
+}

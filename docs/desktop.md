@@ -89,5 +89,5 @@ Cloud desktop
 
 ## Related
 
-- [self-hosting.md](./self-hosting.md) · [architecture.md](./architecture.md)
+- [self-hosting.md](./self-hosting.md)（含架构 / LC·LG）
 - `scripts/dev-desktop.mjs` · `scripts/ensure-desktop-api.mjs`

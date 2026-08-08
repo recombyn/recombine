@@ -26,6 +26,7 @@ import {
   useInteractions,
 } from '@floating-ui/react';
 import {
+  HiArrowUp,
   HiOutlineBolt,
   HiOutlineChevronDown,
   HiOutlinePlus,
@@ -33,6 +34,7 @@ import {
 } from 'react-icons/hi2';
 import { listModels, type LlmModel } from '@/apis/chat';
 import { generateLottie } from '@/apis/design';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { Dropdown, DropdownPanel, message, Tooltip } from '@/components/base';
 import {
   rcbScreenPxToScene,
@@ -64,7 +66,7 @@ import { AspectRatioGlyph } from '@/components/editor/panels/agent/ImageAspectRa
 import ModelPickerPanel, {
   ModelBrandIcon,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
-import { modelSupportsVisionInput } from '@/components/editor/panels/agent/llmModelMeta';
+import { buildByokAwareModelList, modelSupportsVisionInput } from '@/components/editor/panels/agent/llmModelMeta';
 import { applyCanvasPickToImageComposer } from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorCard';
 import {
   canAttachNodeToChat,
@@ -82,8 +84,10 @@ import {
   startCanvasAttachPick,
 } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { estimateLottieCredits } from '@/utils/imageCredits';
 import { readFileAsDataUrl } from '@/utils/uploadImage';
+import { customProvidersAsModels } from '@/components/editor/panels/agent/customLlmProviders';
 import store from '@/store';
 
 type Props = {
@@ -110,6 +114,21 @@ function modelIsAgentChat(model?: Pick<LlmModel, 'kind' | 'id'> | null): boolean
   if (model.id === 'auto') return false;
   if (model.kind === 'image' || model.kind === 'video') return false;
   return !/seedance|seedream|t2i|i2i/i.test(model.id);
+}
+
+/** Local desktop: BYOK only. Cloud/web: platform chat catalog + BYOK. */
+function buildLottieChatModelList(res?: { models?: LlmModel[] | null } | null): LlmModel[] {
+  return buildByokAwareModelList({
+    byok: customProvidersAsModels(),
+    catalogs: [res?.models],
+    filter: (m) => modelIsAgentChat(m),
+  });
+}
+
+function nextLottieChatModelId(models: LlmModel[], currentId: string): string | null {
+  if (!models.length) return null;
+  if (currentId && models.some((m) => m.id === currentId)) return null;
+  return models[0]?.id ?? null;
 }
 
 /** First vision-capable chat model; keep preferred if it already supports vision. */
@@ -398,18 +417,11 @@ function LottieGeneratorCard({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const pool = [...(res?.models || [])].filter((m) => modelIsAgentChat(m));
-        const seen = new Set<string>();
-        const unique = pool.filter((m) => {
-          if (!m?.id || seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        });
+        const unique = buildLottieChatModelList(res);
         setModels(unique);
         setModelsStatus('ready');
-        if (unique.length && (!modelId || !unique.some((m) => m.id === modelId))) {
-          setModelId(unique[0]!.id);
-        }
+        const nextId = nextLottieChatModelId(unique, modelId);
+        if (nextId) setModelId(nextId);
       })
       .catch(() => {
         if (!cancelled) setModelsStatus('error');
@@ -448,6 +460,7 @@ function LottieGeneratorCard({
     () => (needsVisionModel ? models.filter((m) => modelSupportsVisionInput(m)) : models),
     [models, needsVisionModel]
   );
+  const billingEnabled = useSelector(selectBillingEnabled);
   const creditCost = estimateLottieCredits(selectedModel, duration);
   const settingsSummary = `${aspectRatio} · ${duration}s`;
 
@@ -920,7 +933,14 @@ function LottieGeneratorCard({
               </Tooltip>
             </Dropdown>
 
-            <Tooltip tip={t('wallet.creditCostTip', { count: creditCost })} placement="top">
+            <Tooltip
+              tip={
+                billingEnabled
+                  ? t('wallet.creditCostTip', { count: creditCost })
+                  : t('agent.send')
+              }
+              placement="top"
+            >
               <button
                 type="button"
                 disabled={disabled || sending || !prompt.trim()}
@@ -928,11 +948,20 @@ function LottieGeneratorCard({
                 onClick={() => void onGenerate()}
                 className={cn(
                   'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition',
-                  'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40'
+                  'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40',
+                  !billingEnabled && 'h-7 w-7 justify-center px-0'
                 )}
               >
-                <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                {billingEnabled ? (
+                  <>
+                    <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
+                    {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                  </>
+                ) : sending ? (
+                  '…'
+                ) : (
+                  <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                )}
               </button>
             </Tooltip>
           </div>

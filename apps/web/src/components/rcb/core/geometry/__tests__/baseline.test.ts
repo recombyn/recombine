@@ -109,7 +109,11 @@ describe('snapEllipseArcPercent / snapEllipseInnerRatio', () => {
     expect(snapEllipseArcPercent(-98)).toBe(-100);
     expect(snapEllipseArcPercent(80)).toBe(80);
     expect(snapEllipseInnerRatio(0.02)).toBe(0);
+    expect(snapEllipseInnerRatio(0.1)).toBe(0);
     expect(snapEllipseInnerRatio(0.4)).toBeCloseTo(0.4);
+    // Near-center in screen px also snaps (zoom=1 → sceneDist ≤ 18).
+    expect(snapEllipseInnerRatio(0.2, { sceneDist: 10, zoom: 1 })).toBe(0);
+    expect(snapEllipseInnerRatio(0.2, { sceneDist: 40, zoom: 1 })).toBeCloseTo(0.2);
   });
 });
 
