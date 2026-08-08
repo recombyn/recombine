@@ -6,7 +6,15 @@ Infinite canvas, multi artboards, vector / bitmap mix; select, shapes, pen, brus
 
 ## Three chat modes
 
-**Agent** / **Ask** / **Image**, with checkpoints, history restore, and pause / resume on long runs. Auto: Standard / Pro / Max / Custom lanes; members can add third-party models. See [Using Agent](/guide/agent).
+**Agent** / **Ask** / **Image**, with checkpoints, history restore, and pause / resume on long runs. Auto: Standard / Pro / Max / Custom lanes. See [Using Agent](/guide/agent).
+
+## Custom & third-party models
+
+Account → Agent: platform catalog (OpenRouter, Volcengine, …) or manual compatible endpoints; kinds include text / vision / image / video. See [Custom & third-party models](/guide/custom-models).
+
+## Desktop
+
+Local (SQLite + API sidecar) and Cloud desktop builds, including packaging output paths. See [Desktop app](/guide/desktop).
 
 ## Image generation & edit
 
