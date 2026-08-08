@@ -5,7 +5,7 @@
 <p align="center">
   <a href="docs/self-hosting.md"><strong>自托管</strong></a> ·
   <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
-  <a href="https://recombyn.github.io/help/"><strong>文档</strong></a>
+  <a href="https://recombyn.github.io/recombyn/"><strong>文档</strong></a>
 </p>
 
 <p align="center">
@@ -106,7 +106,7 @@ deploy/            Dockerfile / Nginx
 e2e/               Playwright
 ```
 
-面向用户的帮助文档在**私有**仓库维护，发布于 [recombyn.github.io/help](https://recombyn.github.io/help/)。
+面向用户的帮助文档**源码**在私有仓维护；CI 只把打包后的静态站推到本仓库 `gh-pages`，见 [recombyn.github.io/recombyn/](https://recombyn.github.io/recombyn/)。
 
 ## 文档与社区
 
@@ -130,7 +130,7 @@ e2e/               Playwright
 - 把 Recombyn（或其实质相同平台）做成面向公众注册的网站 / SaaS（收费或免费都不行）
 - 冒充官方品牌、官网或客服（名称、Logo、域名等）
 
-官方站点：[recombyn.com](https://recombyn.com) · 帮助文档：[docs](https://recombyn.github.io/help/) · 源码仓库：[github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+官方站点：[recombyn.com](https://recombyn.com) · 帮助文档：[docs](https://recombyn.github.io/recombyn/) · 源码仓库：[github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
 
 发现仿冒或违规托管，请发邮件至 `702680355@qq.com`（附链接与截图）。完整条款见 [LICENSE](./LICENSE)。
 
