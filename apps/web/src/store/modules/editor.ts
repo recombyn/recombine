@@ -18,9 +18,14 @@ import {
   createVideoGeneratorNode,
   createLottieNode,
   createLottieGeneratorNode,
+  createAudioNode,
+  createAudioGeneratorNode,
+  createImageNode,
+  createVideoNode,
   promoteImageGeneratorToImage,
   promoteVideoGeneratorToVideo,
   promoteLottieGeneratorToLottie,
+  promoteAudioGeneratorToAudio,
   addNodeToDocument,
   removeNodesFromDocument,
   isEphemeralUploadNode,
@@ -56,6 +61,9 @@ export type ImageToolPanelKind =
 
 /** On-canvas video tool sessions (trim timeline). Spatial crop reuses image crop panel. */
 export type VideoToolPanelKind = 'trim';
+
+/** On-canvas audio tool sessions — 截取 / 变速 only. */
+export type AudioToolPanelKind = 'trim' | 'speed';
 
 function createFrame(partial?: Partial<ArtboardFrame>): ArtboardFrame {
   const hasW = partial?.width != null && Number.isFinite(Number(partial.width));
@@ -129,6 +137,12 @@ const initialState = {
   videoToolPanel: null as null | {
     nodeId: string;
     kind: VideoToolPanelKind;
+    /** Canvas playhead at open — trim preview must not jump to 0. */
+    keepTime?: number;
+  },
+  audioToolPanel: null as null | {
+    nodeId: string;
+    kind: AudioToolPanelKind;
     /** Canvas playhead at open — trim preview must not jump to 0. */
     keepTime?: number;
   },
@@ -369,6 +383,7 @@ function clearSelection(state: typeof initialState) {
   state.selectedFrameIds = [];
   state.imageToolPanel = null;
   state.videoToolPanel = null;
+  state.audioToolPanel = null;
   state.shapeStylePanel = null;
 }
 
@@ -557,6 +572,9 @@ const editorSlice = createSlice({
       if (state.videoToolPanel && gone.has(state.videoToolPanel.nodeId)) {
         state.videoToolPanel = null;
       }
+      if (state.audioToolPanel && gone.has(state.audioToolPanel.nodeId)) {
+        state.audioToolPanel = null;
+      }
       if (
         state.pendingImportPlaceholderId &&
         gone.has(state.pendingImportPlaceholderId)
@@ -629,6 +647,9 @@ const editorSlice = createSlice({
       if (!action.payload || state.videoToolPanel?.nodeId !== action.payload) {
         state.videoToolPanel = null;
       }
+      if (!action.payload || state.audioToolPanel?.nodeId !== action.payload) {
+        state.audioToolPanel = null;
+      }
       if (
         !action.payload ||
         !state.shapeStylePanel?.nodeIds?.length ||
@@ -649,6 +670,9 @@ const editorSlice = createSlice({
       }
       if (!ids[0] || state.videoToolPanel?.nodeId !== ids[0]) {
         state.videoToolPanel = null;
+      }
+      if (!ids[0] || state.audioToolPanel?.nodeId !== ids[0]) {
+        state.audioToolPanel = null;
       }
       const panelIds = state.shapeStylePanel?.nodeIds || [];
       const same =
@@ -748,6 +772,9 @@ const editorSlice = createSlice({
       }
       if (!nodeIds[0] || state.videoToolPanel?.nodeId !== nodeIds[0]) {
         state.videoToolPanel = null;
+      }
+      if (!nodeIds[0] || state.audioToolPanel?.nodeId !== nodeIds[0]) {
+        state.audioToolPanel = null;
       }
       const panelIds = state.shapeStylePanel?.nodeIds || [];
       const same =
@@ -1529,6 +1556,25 @@ const editorSlice = createSlice({
       state.pendingImageSrc = null;
       state.activeTool = 'select';
     },
+    /** Spawn canvas Audio Generator plate at given document coords. */
+    spawnAudioGenerator(state, action) {
+      if (!state.document) return;
+      pushHistory(state);
+      const { id, node } = createAudioGeneratorNode({
+        x: action.payload?.x,
+        y: action.payload?.y,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        name: action.payload?.name,
+      });
+      state.document = addNodeToDocument(state.document, id, node);
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+    },
     /** Spawn finished Lottie plate (sample or Agent JSON) at document coords. */
     spawnLottie(state, action) {
       if (!state.document) return;
@@ -1552,6 +1598,97 @@ const editorSlice = createSlice({
       } catch {
         /* invalid animationData — no-op */
       }
+    },
+    /** Spawn finished audio plate (upload / paste) at document coords. */
+    spawnAudio(state, action) {
+      if (!state.document) return;
+      const src = String(action.payload?.src || '').trim();
+      if (!src) return;
+      pushHistory(state);
+      const { id, node } = createAudioNode({
+        x: action.payload?.x,
+        y: action.payload?.y,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        name: action.payload?.name,
+        src,
+        duration: action.payload?.duration,
+        uploadKey: action.payload?.uploadKey,
+      });
+      state.document = addNodeToDocument(state.document, id, node);
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+    },
+    /**
+     * Place a library / AI asset onto the canvas (image | video | audio).
+     * Used by the Assets dock — source URL already hosted.
+     */
+    placeMediaAsset(state, action) {
+      if (!state.document) return;
+      const kind = String(action.payload?.kind || '').trim().toLowerCase();
+      const src = String(action.payload?.src || '').trim();
+      if (!src) return;
+      if (kind !== 'image' && kind !== 'video' && kind !== 'audio') return;
+      pushHistory(state);
+      const x = Number(action.payload?.x);
+      const y = Number(action.payload?.y);
+      const name = String(action.payload?.name || '').trim() || undefined;
+      const uploadKey = String(action.payload?.uploadKey || '').trim() || undefined;
+      const prompt = String(action.payload?.prompt || '').trim();
+      let id = '';
+      let node: any = null;
+      if (kind === 'image') {
+        const w = Math.max(1, Math.round(Number(action.payload?.width) || 360));
+        const h = Math.max(1, Math.round(Number(action.payload?.height) || 360));
+        ({ id, node } = createImageNode({
+          x: Number.isFinite(x) ? x : 40,
+          y: Number.isFinite(y) ? y : 40,
+          width: w,
+          height: h,
+          src,
+          name: name || 'Image',
+        }));
+        if (uploadKey) node.attrs.uploadKey = uploadKey;
+        if (prompt) node.attrs.genPrompt = prompt;
+      } else if (kind === 'video') {
+        const w = Math.max(1, Math.round(Number(action.payload?.width) || 640));
+        const h = Math.max(1, Math.round(Number(action.payload?.height) || 360));
+        ({ id, node } = createVideoNode({
+          x: Number.isFinite(x) ? x : 40,
+          y: Number.isFinite(y) ? y : 40,
+          width: w,
+          height: h,
+          src,
+          name: name || 'Video',
+          duration: action.payload?.duration,
+        }));
+        if (uploadKey) node.attrs.uploadKey = uploadKey;
+        if (prompt) node.attrs.genPrompt = prompt;
+      } else {
+        ({ id, node } = createAudioNode({
+          x: Number.isFinite(x) ? x : 40,
+          y: Number.isFinite(y) ? y : 40,
+          width: action.payload?.width,
+          height: action.payload?.height,
+          src,
+          name: name || 'Audio',
+          duration: action.payload?.duration,
+          uploadKey,
+        }));
+        if (prompt) node.attrs.genPrompt = prompt;
+      }
+      state.document = addNodeToDocument(state.document, id, node);
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = id;
+      state.selectedNodeIds = [id];
+      state.pendingImageSrc = null;
+      state.activeTool = 'select';
+      syncLibraryOnEdit(state);
     },
     /** Convert Image Generator plate → normal image node (same id). */
     /** Pull one multi-gen variant out into a sibling image node (undoable). */
@@ -1643,6 +1780,30 @@ const editorSlice = createSlice({
         return;
       }
       state.document = next;
+      state.dirty = true;
+      state.sceneReloadToken += 1;
+      state.selectedNodeId = nodeId;
+      state.selectedNodeIds = [nodeId];
+      if (state.pendingImageProcessId === nodeId) state.pendingImageProcessId = null;
+      syncLibraryOnEdit(state);
+    },
+    /** Convert Audio Generator plate → normal audio node (same id). */
+    finishAudioGenerator(state, action) {
+      const nodeId = String(action.payload?.nodeId || '');
+      const src = String(action.payload?.src || '').trim();
+      if (!state.document || !nodeId || !src) return;
+      pushHistory(state);
+      state.document = promoteAudioGeneratorToAudio(state.document, nodeId, {
+        src,
+        width: action.payload?.width,
+        height: action.payload?.height,
+        x: action.payload?.x,
+        y: action.payload?.y,
+        name: action.payload?.name,
+        genPrompt: action.payload?.genPrompt,
+        duration: action.payload?.duration,
+        uploadKey: action.payload?.uploadKey,
+      });
       state.dirty = true;
       state.sceneReloadToken += 1;
       state.selectedNodeId = nodeId;
@@ -1809,6 +1970,7 @@ const editorSlice = createSlice({
       if (!nodeId || !kind) return;
       state.imageToolPanel = { nodeId, kind };
       state.videoToolPanel = null;
+      state.audioToolPanel = null;
       state.shapeStylePanel = null;
     },
     closeImageToolPanel(state) {
@@ -1824,10 +1986,27 @@ const editorSlice = createSlice({
         ...(Number.isFinite(t) && t >= 0 ? { keepTime: t } : null),
       };
       state.imageToolPanel = null;
+      state.audioToolPanel = null;
       state.shapeStylePanel = null;
     },
     closeVideoToolPanel(state) {
       state.videoToolPanel = null;
+    },
+    openAudioToolPanel(state, action) {
+      const { nodeId, kind, keepTime } = action.payload || {};
+      if (!nodeId || (kind !== 'trim' && kind !== 'speed')) return;
+      const t = Number(keepTime);
+      state.audioToolPanel = {
+        nodeId,
+        kind,
+        ...(kind === 'trim' && Number.isFinite(t) && t >= 0 ? { keepTime: t } : null),
+      };
+      state.imageToolPanel = null;
+      state.videoToolPanel = null;
+      state.shapeStylePanel = null;
+    },
+    closeAudioToolPanel(state) {
+      state.audioToolPanel = null;
     },
     openShapeStylePanel(state, action) {
       const kind = action.payload?.kind;
@@ -1838,6 +2017,7 @@ const editorSlice = createSlice({
       state.shapeStylePanel = { kind, nodeIds };
       state.imageToolPanel = null;
       state.videoToolPanel = null;
+      state.audioToolPanel = null;
     },
     closeShapeStylePanel(state) {
       state.shapeStylePanel = null;
@@ -1995,10 +2175,14 @@ export const {
   spawnImageGenerator,
   spawnVideoGenerator,
   spawnLottieGenerator,
+  spawnAudioGenerator,
   spawnLottie,
+  spawnAudio,
+  placeMediaAsset,
   finishImageGenerator,
   finishVideoGenerator,
   finishLottieGenerator,
+  finishAudioGenerator,
   detachImageVariant,
   startImageProcess,
   finishImageProcess,
@@ -2007,6 +2191,8 @@ export const {
   closeImageToolPanel,
   openVideoToolPanel,
   closeVideoToolPanel,
+  openAudioToolPanel,
+  closeAudioToolPanel,
   openShapeStylePanel,
   closeShapeStylePanel,
   setPenStrokeColor,

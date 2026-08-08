@@ -246,6 +246,8 @@ _RUNTIME_SETTING_KEYS = frozenset(
         "precheck.user_preset.balanced",
         "precheck.user_preset.quality",
         "assets.image_default_model",
+        "byok.preset_providers",
+        "byok.preset_platforms",
     }
 )
 

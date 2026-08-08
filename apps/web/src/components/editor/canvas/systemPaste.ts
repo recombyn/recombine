@@ -1,8 +1,13 @@
-import { fitImageSize } from '@/components/rcb/scene/document/sceneDocument';
+import {
+  fitImageSize,
+  parseLottieAnimationData,
+} from '@/components/rcb/scene/document/sceneDocument';
 
 export type SystemPastePayload =
   | { kind: 'image'; file: File }
   | { kind: 'video'; file: File }
+  | { kind: 'audio'; file: File }
+  | { kind: 'lottie'; animationData: Record<string, unknown>; name?: string }
   | { kind: 'svg'; markup: string }
   | { kind: 'text'; text: string };
 
@@ -82,7 +87,38 @@ export function fileLooksLikeSvg(file: File): boolean {
   return /\.svg$/i.test(file.name || '');
 }
 
-/** Prefer image/video → SVG markup → plain text from a ClipboardEvent / ClipboardItem list. */
+export function fileLooksLikeLottie(file: File): boolean {
+  const name = (file.name || '').toLowerCase();
+  const mime = (file.type || '').toLowerCase();
+  if (/\.json$/i.test(name)) return true;
+  return mime === 'application/json' || mime === 'text/json';
+}
+
+function lottieNameFromFile(file: File): string {
+  return String(file.name || '')
+    .replace(/\.json$/i, '')
+    .trim() || 'Lottie';
+}
+
+async function tryReadLottieFile(file: File): Promise<SystemPastePayload | null> {
+  if (!fileLooksLikeLottie(file)) return null;
+  try {
+    const text = await file.text();
+    const animationData = parseLottieAnimationData(text);
+    if (!animationData) return null;
+    return { kind: 'lottie', animationData, name: lottieNameFromFile(file) };
+  } catch {
+    return null;
+  }
+}
+
+function tryParseLottieText(plain: string): SystemPastePayload | null {
+  const animationData = parseLottieAnimationData(plain);
+  if (!animationData) return null;
+  return { kind: 'lottie', animationData, name: 'Lottie' };
+}
+
+/** Prefer image/video/audio → Lottie JSON → SVG markup → plain text. */
 export async function readSystemPastePayload(
   data: DataTransfer | null | undefined
 ): Promise<SystemPastePayload | null> {
@@ -105,9 +141,11 @@ export async function readSystemPastePayload(
         const markup = decodeClipboardSvgText(await file.text());
         if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
       } catch {
-        /* fall through to image upload */
+        /* fall through */
       }
     }
+    const lottie = await tryReadLottieFile(file);
+    if (lottie) return lottie;
     const mime = (file.type || '').toLowerCase();
     if (mime.startsWith('image/')) {
       return { kind: 'image', file };
@@ -115,12 +153,21 @@ export async function readSystemPastePayload(
     if (mime.startsWith('video/')) {
       return { kind: 'video', file };
     }
+    if (mime.startsWith('audio/')) {
+      return { kind: 'audio', file };
+    }
+    // Extension fallback when OS omits mime (common for .mp3 / .m4a).
+    if (/\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name || '')) {
+      return { kind: 'audio', file };
+    }
   }
 
   const plain = String(data.getData('text/plain') || '').trim();
   if (plain) {
     const markup = decodeClipboardSvgText(plain);
     if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
+    const lottie = tryParseLottieText(plain);
+    if (lottie) return lottie;
     return { kind: 'text', text: plain };
   }
 
@@ -137,9 +184,13 @@ export async function readSystemPastePayload(
 
 export function fingerprintSystemPaste(payload: SystemPastePayload | null | undefined): string {
   if (!payload) return '';
-  if (payload.kind === 'image' || payload.kind === 'video') {
+  if (payload.kind === 'image' || payload.kind === 'video' || payload.kind === 'audio') {
     const f = payload.file;
     return `${payload.kind}:${f.type}:${f.size}:${f.name}:${f.lastModified}`;
+  }
+  if (payload.kind === 'lottie') {
+    const raw = JSON.stringify(payload.animationData);
+    return `lottie:${raw.length}:${raw.slice(0, 96)}:${raw.slice(-48)}`;
   }
   if (payload.kind === 'svg') {
     const m = payload.markup;
@@ -184,12 +235,35 @@ export async function readSystemPasteFromNavigator(): Promise<SystemPastePayload
             file: new File([blob], `paste.${ext}`, { type: videoType }),
           };
         }
+        const audioType = types.find((t) => t.startsWith('audio/'));
+        if (audioType) {
+          const blob = await item.getType(audioType);
+          let ext = 'mp3';
+          if (audioType.includes('wav')) ext = 'wav';
+          else if (audioType.includes('ogg')) ext = 'ogg';
+          else if (audioType.includes('mp4') || audioType.includes('m4a')) ext = 'm4a';
+          return {
+            kind: 'audio',
+            file: new File([blob], `paste.${ext}`, { type: audioType }),
+          };
+        }
+        if (types.includes('application/json') || types.includes('text/json')) {
+          const type = types.includes('application/json')
+            ? 'application/json'
+            : 'text/json';
+          const blob = await item.getType(type);
+          const text = String(await blob.text()).trim();
+          const lottie = tryParseLottieText(text);
+          if (lottie) return lottie;
+        }
         if (types.includes('text/plain')) {
           const blob = await item.getType('text/plain');
           const plain = String(await blob.text()).trim();
           if (!plain) continue;
           const markup = decodeClipboardSvgText(plain);
           if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
+          const lottie = tryParseLottieText(plain);
+          if (lottie) return lottie;
           return { kind: 'text', text: plain };
         }
       }
@@ -204,6 +278,8 @@ export async function readSystemPasteFromNavigator(): Promise<SystemPastePayload
       if (!plain) return null;
       const markup = decodeClipboardSvgText(plain);
       if (looksLikeSvgMarkup(markup)) return { kind: 'svg', markup };
+      const lottie = tryParseLottieText(plain);
+      if (lottie) return lottie;
       return { kind: 'text', text: plain };
     } catch {
       return null;

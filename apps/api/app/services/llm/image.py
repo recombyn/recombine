@@ -625,6 +625,111 @@ async def _generate_openrouter_image(
     }
 
 
+# OpenAI gpt-image-1 only accepts a fixed size set; map aspect → nearest.
+_OPENAI_IMAGE_SIZES: dict[str, str] = {
+    "1:1": "1024x1024",
+    "3:2": "1536x1024",
+    "16:9": "1536x1024",
+    "4:3": "1536x1024",
+    "2:3": "1024x1536",
+    "9:16": "1024x1536",
+    "3:4": "1024x1536",
+}
+
+
+def _byok_image_transport(base_url: str) -> str:
+    """Infer the images API size contract from the provider host.
+
+    ``openai_image`` = fixed OpenAI size set (gpt-image-1 / DALL·E compatible).
+    ``ark_image`` = arbitrary WxH (Volcengine Ark / Doubao and most aggregators).
+    """
+    host = (base_url or "").strip().lower()
+    if "api.openai.com" in host or "openai.azure" in host:
+        return "openai_image"
+    return "ark_image"
+
+
+def _openai_image_size(aspect_ratio: str | None) -> str:
+    raw = (aspect_ratio or "1:1").strip()
+    if "x" in raw.lower() and ":" not in raw:
+        return raw
+    return _OPENAI_IMAGE_SIZES.get(raw, "1024x1024")
+
+
+def _byok_ark_limits() -> dict[str, Any]:
+    """Generic arbitrary-WxH limits for BYOK Ark-style image providers."""
+    return {
+        "resolutions": ["1K", "2K", "4K"],
+        "default_resolution": "2K",
+        "size_tables": _RESOLUTION_TABLES,
+        "min_pixels": _SEEDREAM_5_MIN_PIXELS,
+        "max_pixels": _SEEDREAM_MAX_PIXELS,
+        "supports_output_format": False,
+    }
+
+
+async def _generate_byok_image(
+    *,
+    endpoint: LlmEndpoint,
+    prompt: str,
+    aspect_ratio: str | None,
+    quality: str | None,
+    resolution: str | None,
+    images: list[str] | None,
+) -> dict[str, Any]:
+    """Generate via a user's BYOK OpenAI-compatible ``images.generate`` endpoint.
+
+    Uses the user's own key/quota — never platform credits.
+    """
+    transport = _byok_image_transport(endpoint.base_url)
+    api_model = endpoint.model_id
+    client, _ep = build_async_openai_client(endpoint=endpoint)
+
+    kwargs: dict[str, Any] = {
+        "model": api_model,
+        "prompt": prompt,
+        "response_format": "url",
+    }
+    if transport == "openai_image":
+        kwargs["size"] = _openai_image_size(aspect_ratio)
+    else:
+        kwargs["size"] = _size_for_catalog(aspect_ratio, resolution, _byok_ark_limits())
+
+    refs = [u.strip() for u in (images or []) if isinstance(u, str) and u.strip()]
+    if refs:
+        kwargs["extra_body"] = {"image": refs[0] if len(refs) == 1 else refs}
+
+    try:
+        result = await client.images.generate(**kwargs)
+    except Exception as err:
+        # Some endpoints reject response_format — retry without it once.
+        detail = llm_error_detail(err).lower()
+        if "response_format" in detail or "unknown parameter" in detail:
+            kwargs.pop("response_format", None)
+            try:
+                result = await client.images.generate(**kwargs)
+            except Exception as err2:
+                raise RuntimeError(
+                    f"BYOK image failed: {llm_error_detail(err2)}"
+                ) from err2
+        else:
+            raise RuntimeError(f"BYOK image failed: {llm_error_detail(err)}") from err
+
+    data = result.model_dump() if hasattr(result, "model_dump") else {}
+    if not isinstance(data, dict):
+        data = {}
+    out = _extract_images(data)
+    if not out:
+        raise RuntimeError(f"BYOK image returned no images: {str(data)[:400]}")
+    return {
+        "images": out,
+        "text": None,
+        "model": f"byok:{api_model}",
+        "_provider": "byok",
+        "_api_model": api_model,
+    }
+
+
 async def _generate_image_core(
     *,
     prompt: str,
@@ -635,12 +740,27 @@ async def _generate_image_core(
     images: list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    Provider dispatch (Doubao / OpenRouter) — used by LangChain image tool.
+    Provider dispatch (BYOK / Doubao / OpenRouter) — used by LangChain image tool.
 
     Usage is logged only via LangChain tool callbacks on ``image_chain.ainvoke``.
     Private ``_usage`` / ``_response_id`` / ``_provider`` / ``_api_model`` keys
     stay on the dict for the callback, then are stripped by ``generate_image``.
     """
+    from app.services.llm import get_llm_endpoint
+    from app.services.security import parse_byok_model_ref
+
+    if parse_byok_model_ref(model):
+        # Custom provider — resolve the user's endpoint from the BYOK vault.
+        endpoint = get_llm_endpoint(model)
+        return await _generate_byok_image(
+            endpoint=endpoint,
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+            quality=quality,
+            resolution=resolution,
+            images=images,
+        )
+
     catalog_id = resolve_image_model(model)
     api_model = _api_model_id(catalog_id)
     provider = _image_provider(catalog_id)

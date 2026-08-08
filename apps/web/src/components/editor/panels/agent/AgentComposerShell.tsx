@@ -18,6 +18,7 @@ import {
   HiOutlineBolt,
   HiOutlineViewfinderCircle,
   HiOutlineDocument,
+  HiOutlineMusicalNote,
   HiOutlinePhoto,
   HiOutlineFilm,
   HiOutlinePlay,
@@ -385,6 +386,9 @@ function attachmentPreviewKind(a: ComposerContext): 'image' | 'audio' | 'video' 
   }
 
   if (data.startsWith('data:audio/') || thumb.startsWith('data:audio/')) return 'audio';
+  if (/\[Attached audio\]/i.test(payload) || /\[Canvas audio\]/i.test(payload)) return 'audio';
+  if (/\.(mp3|wav|m4a|aac|ogg|flac)(\?|#|$)/i.test(blob)) return 'audio';
+  if (/"key"\s*:\s*"audio"/i.test(payload)) return 'audio';
   if (
     data.startsWith('http://') ||
     data.startsWith('https://') ||
@@ -685,6 +689,14 @@ function ComposerAttachmentChip({
         <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25">
           <HiOutlinePlay className="h-3.5 w-3.5 text-white drop-shadow" />
         </span>
+      </span>
+    ) : previewKind === 'audio' ? (
+      <span className="flex h-full w-full flex-col items-center justify-center gap-0.5 px-0.5 text-[var(--muted)]">
+        <HiOutlineMusicalNote
+          className={cn('h-3.5 w-3.5', uploading && 'opacity-70')}
+          strokeWidth={1.75}
+        />
+        <span className="w-full truncate text-center text-[8px] leading-tight">{a.label}</span>
       </span>
     ) : (
       <span className="flex h-full w-full flex-col items-center justify-center gap-0.5 px-0.5 text-[var(--muted)]">
@@ -1466,7 +1478,7 @@ function AgentComposerShell({
             accept={
               isVideoMode
                 ? 'image/*,video/*,.mp4,.webm,.mov,.m4v'
-                : 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,video/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm,.mov,.m4v'
+                : 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,video/*,audio/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm,.mov,.m4v,.mp3,.wav,.ogg,.m4a,.json,application/json'
             }
             multiple
             className="hidden"

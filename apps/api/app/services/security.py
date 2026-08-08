@@ -334,10 +334,13 @@ def upsert_byok_provider(
     url = str(base_url or "").strip().rstrip("/")
     am = str(api_model or "").strip()[:128]
     kind = str(model_kind or "text").strip().lower()
-    if kind not in ("text", "vision"):
+    if kind not in ("text", "vision", "image", "video", "audio", "platform"):
         kind = "text"
     if not n:
         raise ValueError("name required")
+    # Platform credentials unlock many catalog models — apiModel is a sentinel.
+    if kind == "platform":
+        am = am or "*"
     if not am:
         raise ValueError("apiModel required")
     if not is_public_http_url(url):
@@ -350,6 +353,9 @@ def upsert_byok_provider(
     from app import crud
     from app.core.db import engine
     from app.models import UserByokProvider
+    from app.services.llm.byok_presets import platform_byok_row_id
+
+    parent_platform = parse_platform_model_row_id(pid)
 
     with Session(engine) as session:
         existing = crud.get_byok_provider(
@@ -357,10 +363,24 @@ def upsert_byok_provider(
         )
         key_plain = str(api_key or "").strip() if api_key is not None else None
         if existing is None:
-            if not key_plain:
+            cipher = ""
+            hint = ""
+            if key_plain:
+                cipher = encrypt_secret(key_plain)
+                hint = api_key_hint(key_plain)
+            elif parent_platform:
+                # Inherit the aggregator key — user only adds a model id.
+                parent = crud.get_byok_provider(
+                    session=session,
+                    user_id=uid,
+                    provider_id=platform_byok_row_id(parent_platform),
+                )
+                if not parent or not str(parent.api_key_cipher or "").strip():
+                    raise ValueError("save the platform API key first")
+                cipher = str(parent.api_key_cipher)
+                hint = str(parent.api_key_hint or "")
+            else:
                 raise ValueError("apiKey required")
-            cipher = encrypt_secret(key_plain)
-            hint = api_key_hint(key_plain)
             row = UserByokProvider(
                 id=pid,
                 user_id=uid,
@@ -392,7 +412,6 @@ def upsert_byok_provider(
         row = crud.upsert_byok_provider_row(session=session, row=row)
     return _byok_pub(row)
 
-
 def delete_byok_provider(user_id: str, provider_id: str) -> bool:
     ensure_byok_table()
     uid = str(user_id or "").strip()
@@ -410,23 +429,65 @@ def delete_byok_provider(user_id: str, provider_id: str) -> bool:
         )
 
 
+def parse_byok_model_ref(model_string: str | None) -> str | None:
+    """Return provider id from ``custom:<id>`` / ``byok:<id>``, else None."""
+    raw = str(model_string or "").strip()
+    low = raw.lower()
+    for prefix in ("custom:", "byok:"):
+        if low.startswith(prefix):
+            pid = raw[len(prefix) :].strip()
+            return pid or None
+    return None
+
+
+def parse_platform_model_row_id(provider_id: str | None) -> str | None:
+    """Return catalog provider from ``pm:<provider>:<suffix>`` model rows."""
+    raw = str(provider_id or "").strip()
+    if not raw.lower().startswith("pm:"):
+        return None
+    rest = raw[3:]
+    idx = rest.find(":")
+    if idx <= 0:
+        return None
+    provider = rest[:idx].strip().lower()
+    suffix = rest[idx + 1 :].strip()
+    return provider if provider and suffix else None
+
+
 def get_byok_provider_row(user_id: str, provider_id: str) -> dict[str, Any] | None:
-    """Return public fields + decrypted apiKey for server-side LLM proxy only."""
+    """Return public fields + decrypted apiKey for server-side LLM proxy only.
+
+    Platform-linked model rows (``pm:<provider>:…``) always resolve the API key
+    from the parent ``platform:<provider>`` credential so key updates apply.
+    """
     ensure_byok_table()
     from sqlmodel import Session
 
     from app import crud
     from app.core.db import engine
+    from app.services.llm.byok_presets import platform_byok_row_id
 
+    uid = str(user_id or "").strip()
+    pid = str(provider_id or "").strip()
     with Session(engine) as session:
-        row = crud.get_byok_provider(
-            session=session,
-            user_id=str(user_id or "").strip(),
-            provider_id=str(provider_id or "").strip(),
-        )
+        row = crud.get_byok_provider(session=session, user_id=uid, provider_id=pid)
     if not row:
         return None
-    return _byok_pub(row, include_key=True)
+    pub = _byok_pub(row, include_key=True)
+    parent_provider = parse_platform_model_row_id(pid)
+    if parent_provider:
+        parent_key = get_platform_byok_api_key(uid, parent_provider)
+        if parent_key:
+            pub["apiKey"] = parent_key
+            # Keep base URL aligned with the platform credential when present.
+            parent_row_id = platform_byok_row_id(parent_provider)
+            with Session(engine) as session:
+                parent = crud.get_byok_provider(
+                    session=session, user_id=uid, provider_id=parent_row_id
+                )
+            if parent and str(parent.base_url or "").strip():
+                pub["baseUrl"] = str(parent.base_url).rstrip("/")
+    return pub
 
 
 def get_byok_api_key(user_id: str, provider_id: str) -> str | None:
@@ -438,12 +499,68 @@ def get_byok_api_key(user_id: str, provider_id: str) -> str | None:
     return key or None
 
 
-def parse_byok_model_ref(model_string: str | None) -> str | None:
-    """Return provider id from ``custom:<id>`` / ``byok:<id>``, else None."""
-    raw = str(model_string or "").strip()
-    low = raw.lower()
-    for prefix in ("custom:", "byok:"):
-        if low.startswith(prefix):
-            pid = raw[len(prefix) :].strip()
-            return pid or None
+def list_user_platform_byok(user_id: str) -> set[str]:
+    """Catalog providers the user has a platform-level API key for."""
+    from app.services.llm.byok_presets import parse_platform_byok_id
+
+    out: set[str] = set()
+    for row in list_byok_providers(user_id):
+        pid = str(row.get("id") or "")
+        provider = parse_platform_byok_id(pid)
+        if provider:
+            out.add(provider)
+            continue
+        # Also treat modelKind=platform as a platform credential.
+        if str(row.get("modelKind") or "").lower() == "platform":
+            # Infer from baseUrl when id is not platform:*.
+            base = str(row.get("baseUrl") or "").lower()
+            if "openrouter" in base:
+                out.add("openrouter")
+            elif "volces.com" in base or "volcengine" in base:
+                out.add("doubao")
+    return out
+
+
+def get_platform_byok_api_key(user_id: str, provider: str) -> str | None:
+    """Decrypt the user's platform key for ``openrouter`` / ``doubao`` / …"""
+    from app.services.llm.byok_presets import platform_byok_row_id
+
+    prov = str(provider or "").strip().lower()
+    if not prov or not user_id:
+        return None
+    row_id = platform_byok_row_id(prov)
+    # Read parent cipher directly — avoid recurse through get_byok_provider_row.
+    ensure_byok_table()
+    from sqlmodel import Session
+
+    from app import crud
+    from app.core.db import engine
+
+    with Session(engine) as session:
+        row = crud.get_byok_provider(
+            session=session, user_id=str(user_id).strip(), provider_id=row_id
+        )
+    if row:
+        key = decrypt_secret(str(row.api_key_cipher or ""))
+        if key:
+            return key
+    # Fallback: any platform-kind row whose baseUrl matches this provider.
+    for item in list_byok_providers(user_id):
+        if str(item.get("modelKind") or "").lower() != "platform":
+            continue
+        base = str(item.get("baseUrl") or "").lower()
+        match = (prov == "openrouter" and "openrouter" in base) or (
+            prov == "doubao" and ("volces.com" in base or "volcengine" in base)
+        )
+        if match:
+            with Session(engine) as session:
+                prow = crud.get_byok_provider(
+                    session=session,
+                    user_id=str(user_id).strip(),
+                    provider_id=str(item.get("id") or ""),
+                )
+            if prow:
+                key = decrypt_secret(str(prow.api_key_cipher or ""))
+                if key:
+                    return key
     return None

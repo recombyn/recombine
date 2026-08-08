@@ -11,6 +11,7 @@ import {
   type ReactNode,
   memo,
 } from 'react';
+import { LuAudioLines } from 'react-icons/lu';
 import { useRcbCamera, rcbCameraCssZoom } from '@/components/rcb';
 import {
   NODE_TITLE_LABEL_GAP_PX,
@@ -25,7 +26,13 @@ type NodeTitleLabelBox = {
   height: number;
 };
 
-type NodeTitleIcon = 'frame' | 'image' | 'image-generator' | 'video' | 'video-generator';
+type NodeTitleIcon =
+  | 'frame'
+  | 'image'
+  | 'image-generator'
+  | 'video'
+  | 'video-generator'
+  | 'audio';
 
 type Props = {
   /** Scene-space AABB of the node / frame. */
@@ -136,6 +143,18 @@ export function nodeTitleScreenGapPx(
 
 /** 24×24 stroke icons at fixed screen size. */
 function TitleIcon({ kind }: { kind: NodeTitleIcon }): ReactNode {
+  // Match sibling title glyphs (strokeWidth 2 on 24 viewBox @ TITLE_ICON_PX).
+  if (kind === 'audio') {
+    return (
+      <LuAudioLines
+        size={TITLE_ICON_PX}
+        strokeWidth={2}
+        className="shrink-0"
+        style={{ color: MUTED }}
+        aria-hidden
+      />
+    );
+  }
   const common = {
     fill: 'none' as const,
     stroke: MUTED,

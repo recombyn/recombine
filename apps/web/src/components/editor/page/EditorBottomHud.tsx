@@ -13,6 +13,7 @@ import {
   HiOutlineChevronDown,
   HiOutlineChevronUp,
   HiOutlineMap,
+  HiOutlinePhoto,
   HiOutlineSquare3Stack3D,
 } from 'react-icons/hi2';
 import { LuKeyboard } from 'react-icons/lu';
@@ -177,6 +178,8 @@ type Props = {
   useCompactTooling: boolean;
   layersOpen: boolean;
   setLayersOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
+  assetsOpen: boolean;
+  setAssetsOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
   minimapOpen: boolean;
   setMinimapOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
   shortcutsOpen: boolean;
@@ -212,6 +215,8 @@ function EditorBottomHud({
   useCompactTooling,
   layersOpen,
   setLayersOpen,
+  assetsOpen,
+  setAssetsOpen,
   minimapOpen,
   setMinimapOpen,
   shortcutsOpen,
@@ -383,6 +388,13 @@ function EditorBottomHud({
                         strokeWidth={HUD_ICON_STROKE}
                       />
                     </HudBtn>
+                    <HudBtn
+                      tip={t('editor.assets.title', { defaultValue: '资产' })}
+                      active={assetsOpen}
+                      onClick={() => setAssetsOpen((v) => !v)}
+                    >
+                      <HiOutlinePhoto className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                    </HudBtn>
                     <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
                       <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
                     </HudBtn>
@@ -421,6 +433,13 @@ function EditorBottomHud({
                 />
                 <HudBtn tip={t('editor.layers')} active={layersOpen} onClick={() => setLayersOpen((v) => !v)}>
                   <HiOutlineSquare3Stack3D className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                </HudBtn>
+                <HudBtn
+                  tip={t('editor.assets.title', { defaultValue: '资产' })}
+                  active={assetsOpen}
+                  onClick={() => setAssetsOpen((v) => !v)}
+                >
+                  <HiOutlinePhoto className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
                 </HudBtn>
                 <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
                   <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />

@@ -158,6 +158,9 @@ function AccountSettingsDialog({
     if (desktopLocal && (nextTab === 'billing' || nextTab === 'plans' || nextTab === 'redeem')) {
       nextTab = 'profile';
     }
+    if (desktopLocal && nextTab === 'notices') {
+      nextTab = 'profile';
+    }
     setTab(toContentTab(nextTab));
     setPlansOpen(false);
     setRedeemOpen(false);
@@ -174,8 +177,10 @@ function AccountSettingsDialog({
     { id: 'agent', label: t('wallet.settingsNavAgent') },
     ...(desktopLocal
       ? []
-      : [{ id: 'billing' as const, label: t('wallet.settingsNavBilling') }]),
-    { id: 'notices', label: t('wallet.settingsNavNotices') },
+      : [
+          { id: 'billing' as const, label: t('wallet.settingsNavBilling') },
+          { id: 'notices' as const, label: t('wallet.settingsNavNotices') },
+        ]),
   ];
 
   const tabCopy: Record<ContentTab, { title: string; subtitle: string }> = {
@@ -313,7 +318,7 @@ function AccountSettingsDialog({
                           onRequestRedeem={() => setRedeemOpen(true)}
                         />
                       ) : null}
-                      {tab === 'notices' && <AccountNotificationsPanel />}
+                      {tab === 'notices' && !desktopLocal ? <AccountNotificationsPanel /> : null}
                     </div>
                   </div>
                   </div>

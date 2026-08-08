@@ -33,7 +33,18 @@ import {
 } from '../document/sceneEffects';
 import type { StrokeAlign, StrokeLinecap, StrokeLinejoin } from '../document/sceneEffects';
 import { isTransparentFill, resolveDocumentBackground, resolveFill } from '../document/sceneFill';
-import { isExportableSceneNode, isImageGeneratorNode, isImageProcessRunning, isLottieGeneratorNode, isLottieNode, isNodeHidden, isVideoGeneratorNode } from '../document/sceneDocument';
+import {
+  isAudioGeneratorNode,
+  isAudioNode,
+  resolveThemeSurfaceFill,
+  isExportableSceneNode,
+  isImageGeneratorNode,
+  isImageProcessRunning,
+  isLottieGeneratorNode,
+  isLottieNode,
+  isNodeHidden,
+  isVideoGeneratorNode,
+} from '../document/sceneDocument';
 import { generatorEmptyIconSize } from '../../core/layout';
 import {
   clampCornerRadii,
@@ -1743,6 +1754,162 @@ export async function nodeToSvgElement(
     return g;
   }
 
+  if (node.key === 'audio' || isAudioNode(node) || isAudioGeneratorNode(node)) {
+    const isGen = isAudioGeneratorNode(node);
+    const hasSrc = Boolean(String(node.attrs?.src || '').trim());
+    const processing = String(node.attrs?.processStatus || '') === 'running';
+    const { left, top } = nodeLeftTop(document, node);
+    const boxW = Math.max(1, Number(node.width) || 100);
+    const boxH = Math.max(1, Number(node.height) || 100);
+    const meta = objectMeta(node);
+    const cornerR = isGen
+      ? { tl: 0, tr: 0, br: 0, bl: 0 }
+      : radiiFromAttrs(node.attrs);
+    const clipD = roundedRectPath(boxW, boxH, cornerR);
+    const g = appendChild(parent, svgEl('g'));
+    const svgOwnsPixels = videoSvgOwnsPixels(root);
+    const plateFill = resolveThemeSurfaceFill(
+      node.attrs?.['fill-color'] || node.attrs?.fill
+    );
+
+    if (processing) {
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, '#B9CBDA');
+      setStroke(plate, { color: '#A8C5E4', width: editorChromeStrokeSceneWidth(1.5) });
+      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
+      (g as any).__sceneCornerRadii = { ...cornerR };
+      tagNode(g, nodeId, 'audio', undefined, left, top, boxW, boxH);
+      setAttrs(g, { 'data-export-ignore': '1' });
+      applyMeta(g, left, top, meta, boxW, boxH);
+      applyNodeShadow(root, g, node);
+      return g;
+    }
+
+    if (isGen || !hasSrc) {
+      const plate = appendChild(g, svgEl('path', { d: clipD }));
+      setFill(plate, isGen ? 'var(--gen-empty)' : 'var(--rail)');
+      if (isGen) {
+        setStroke(plate, 'none');
+        const sw = editorChromeStrokeSceneWidth(1);
+        const inset = sw / 2;
+        const border = appendChild(
+          g,
+          svgEl('path', {
+            d: roundedRectPath(Math.max(1, boxW - sw), Math.max(1, boxH - sw), cornerR),
+            transform: `translate(${inset},${inset})`,
+            'pointer-events': 'none',
+          })
+        );
+        setFill(border, 'none');
+        setStroke(border, { color: 'var(--line)', width: sw });
+        const iconSize = generatorEmptyIconSize(boxW, boxH);
+        if (iconSize >= 4) {
+          const ix = (boxW - iconSize) / 2;
+          const iy = (boxH - iconSize) / 2;
+          const s = iconSize / 24;
+          const icon = appendChild(
+            g,
+            svgEl('g', {
+              transform: `translate(${ix},${iy}) scale(${s})`,
+              'pointer-events': 'none',
+            })
+          );
+          // Simple waveform mark for empty audio generator.
+          for (const [x, h] of [
+            [6, 8],
+            [10, 14],
+            [14, 10],
+            [18, 16],
+          ] as const) {
+            const bar = appendChild(
+              icon,
+              svgEl('rect', {
+                x,
+                y: 12 - h / 2,
+                width: 2.2,
+                height: h,
+                rx: 1,
+              })
+            );
+            setFill(bar, 'var(--muted)');
+            setStroke(bar, 'none');
+          }
+        }
+      } else {
+        setStroke(plate, {
+          color: 'var(--line)',
+          width: editorChromeStrokeSceneWidth(1),
+        });
+      }
+      setAttrs(plate, { 'data-radius-body': '1', 'data-baseline': '1' });
+      (g as any).__sceneCornerRadii = { ...cornerR };
+      tagNode(g, nodeId, 'audio', undefined, left, top, boxW, boxH);
+      if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
+      applyMeta(g, left, top, meta, boxW, boxH);
+      return g;
+    }
+
+    // Finished audio: SVG plate + decorative waveform (HTML overlay covers while idle;
+    // geometryOverrides keep HTML glued during drag).
+    const plate = appendChild(g, svgEl('path', { d: clipD }));
+    setFill(plate, plateFill);
+    setStroke(plate, 'none');
+    setAttrs(plate, {
+      'data-radius-body': '1',
+      'data-baseline': '1',
+      'data-rcb-audio-svg-underlay': '1',
+      ...(!svgOwnsPixels ? { 'data-rcb-audio-html-hit': '1' } : {}),
+    });
+    const padX = Math.max(8, boxW * 0.04);
+    const padY = Math.max(8, boxH * 0.12);
+    const railW = Math.max(1, boxW - padX * 2);
+    const railH = Math.max(1, boxH * 0.55);
+    const railX = padX;
+    const railY = Math.max(padY, (boxH - railH) * 0.38);
+    const rail = appendChild(
+      g,
+      svgEl('rect', {
+        x: railX,
+        y: railY,
+        width: railW,
+        height: railH,
+        rx: Math.min(12, railH * 0.18),
+        'pointer-events': 'none',
+      })
+    );
+    setFill(rail, 'var(--rail)');
+    setStroke(rail, 'none');
+    const barCount = Math.max(12, Math.min(48, Math.floor(railW / 6)));
+    const gap = 2;
+    const barW = Math.max(1.5, (railW - gap * (barCount - 1)) / barCount);
+    const midY = railY + railH / 2;
+    for (let i = 0; i < barCount; i++) {
+      const t = i / Math.max(1, barCount - 1);
+      const hump = Math.sin(t * Math.PI) * 0.55 + 0.25;
+      const wobble = 0.35 + 0.65 * Math.abs(Math.sin(i * 2.7 + boxW * 0.01));
+      const h = Math.max(4, railH * 0.72 * hump * wobble);
+      const bar = appendChild(
+        g,
+        svgEl('rect', {
+          x: railX + i * (barW + gap),
+          y: midY - h / 2,
+          width: barW,
+          height: h,
+          rx: Math.min(2, barW / 2),
+          'pointer-events': 'none',
+        })
+      );
+      setFill(bar, 'var(--muted)');
+      setStroke(bar, 'none');
+      setAttrs(bar, { opacity: '0.55' });
+    }
+    (g as any).__sceneCornerRadii = { ...cornerR };
+    tagNode(g, nodeId, 'audio', undefined, left, top, boxW, boxH);
+    applyMeta(g, left, top, meta, boxW, boxH);
+    applyNodeShadow(root, g, node);
+    return g;
+  }
+
   return null;
 }
 
@@ -2477,8 +2644,8 @@ function previewResizeImage(
 ): boolean {
   const anyEl = el as any;
   const key = String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '');
-  // Video / lottie plates use the same poster/<image> (or path) group layout as images.
-  if (key !== 'image' && key !== 'video' && key !== 'lottie') {
+  // Video / lottie / audio plates use the same poster/<image> (or path) group layout as images.
+  if (key !== 'image' && key !== 'video' && key !== 'lottie' && key !== 'audio') {
     return false;
   }
 
@@ -2720,7 +2887,7 @@ export function previewSvgNodeGeometry(
   const anyEl = el as any;
   const nodeKey = String(anyEl.sceneNodeKey || el.getAttribute('data-scene-node-key') || '');
 
-  if (nodeKey === 'image' || nodeKey === 'video' || nodeKey === 'lottie') {
+  if (nodeKey === 'image' || nodeKey === 'video' || nodeKey === 'lottie' || nodeKey === 'audio') {
     return previewResizeImage(el, box);
   }
   if (nodeKey === 'svg') {

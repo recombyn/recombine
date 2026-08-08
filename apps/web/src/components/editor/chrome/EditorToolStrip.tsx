@@ -18,9 +18,7 @@ import {
   LuStar,
   LuTriangle,
   LuType,
-  LuClapperboard,
 } from 'react-icons/lu';
-import { RiVideoAiLine } from 'react-icons/ri';
 import { Dropdown, Tooltip, message } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown/MenuItem';
 import { FloatingToolbar } from '@/components/editor/chrome/FloatingToolbar';
@@ -40,13 +38,16 @@ import {
   startVideoUploadPlaceholder,
   spawnImageGenerator,
   spawnVideoGenerator,
-  spawnLottieGenerator,
+  spawnLottie,
+  spawnAudio,
   finishImageProcess,
   failImageProcess,
+  patchDocumentNode,
 } from '@/store/modules/editor';
 import {
   fitImageSize,
   measureImageNaturalSize,
+  parseLottieAnimationData,
   prepareVideoUploadPreview,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { sceneToDocumentCoords } from '@/components/rcb/scene/paint/svgToScene';
@@ -343,13 +344,18 @@ function EditorToolStrip({
       polygon: t('editor.tools.polygon'),
       star: t('editor.tools.star'),
       uploadImage: t('editor.tools.uploadImage'),
-      uploadMedia: t('editor.tools.uploadMedia', { defaultValue: '上传图片/视频' }),
+      uploadMedia: t('editor.tools.uploadMedia', {
+        defaultValue: '上传文件',
+      }),
       imageGenerator: t('editor.tools.imageGenerator'),
       videoGenerator: t('editor.tools.videoGenerator'),
       lottieGenerator: t('editor.tools.lottieGenerator', { defaultValue: 'Lottie generator' }),
+      audioGenerator: t('editor.tools.audioGenerator', { defaultValue: '音频生成器' }),
       lottie: t('editor.tools.lottie'),
+      audio: t('editor.tools.audio', { defaultValue: '音频' }),
       uploading: t('editor.tools.uploading'),
       uploadFail: t('editor.tools.uploadFail'),
+      lottieInvalid: t('editor.tools.lottieGenInvalidJson'),
     }),
     [t]
   );
@@ -456,39 +462,6 @@ function EditorToolStrip({
     );
   };
 
-  const spawnLottieGeneratorAtView = () => {
-    if (!document) return;
-    let width = 200;
-    let height = 200;
-    let x = 40;
-    let y = 40;
-    if (camera && stageEl) {
-      const view = stageEl.getBoundingClientRect();
-      if (view.width > 0 && view.height > 0) {
-        const laid = layoutGeneratorPlateInView({
-          document,
-          camera,
-          stageEl,
-          natural: { width: 200, height: 200 },
-          fit: { minRatio: 0.18, maxRatio: 0.32 },
-        });
-        width = laid.width;
-        height = laid.height;
-        x = laid.x;
-        y = laid.y;
-      }
-    }
-    dispatch(
-      spawnLottieGenerator({
-        x,
-        y,
-        width,
-        height,
-        name: L.lottieGenerator,
-      })
-    );
-  };
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -496,7 +469,9 @@ function EditorToolStrip({
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         target?.isContentEditable ||
-        target?.closest?.('[contenteditable="true"],[data-agent-composer],[data-image-generator],[data-video-generator],[data-lottie-generator]')
+        target?.closest?.(
+          '[contenteditable="true"],[data-agent-composer],[data-image-generator],[data-video-generator],[data-lottie-generator],[data-audio-generator]'
+        )
       ) {
         return;
       }
@@ -541,7 +516,15 @@ function EditorToolStrip({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // Intentionally stable: always call latest spawn via closure from this render's effect re-run when deps change.
-  }, [camera, dispatch, document, L.imageGenerator, L.videoGenerator, L.lottieGenerator, stageEl, toolsLocked]);
+  }, [
+    camera,
+    dispatch,
+    document,
+    L.imageGenerator,
+    L.videoGenerator,
+    stageEl,
+    toolsLocked,
+  ]);
 
   const placeAtViewportCenter = (
     natural: { width: number; height: number }
@@ -610,11 +593,32 @@ function EditorToolStrip({
     }
   };
 
+  const probeAudioDuration = (src: string): Promise<number | null> =>
+    new Promise((resolve) => {
+      const audio = window.document.createElement('audio');
+      audio.preload = 'metadata';
+      const done = (value: number | null) => {
+        audio.removeAttribute('src');
+        audio.load();
+        resolve(value);
+      };
+      audio.onloadedmetadata = () => {
+        const d = Number(audio.duration);
+        done(Number.isFinite(d) && d > 0 ? d : null);
+      };
+      audio.onerror = () => done(null);
+      audio.src = src;
+      window.setTimeout(() => done(null), 4000);
+    });
+
   const onPickMedia = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    if (file.type.startsWith('video/')) {
+    const mime = (file.type || '').toLowerCase();
+    const name = file.name || '';
+
+    if (mime.startsWith('video/')) {
       try {
         const prepared = await prepareVideoUploadPreview(file);
         const { width, height, x, y } = placeAtViewportCenter({
@@ -655,6 +659,83 @@ function EditorToolStrip({
       }
       return;
     }
+
+    if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(name)) {
+      try {
+        const preview = await readFileAsDataUrl(file);
+        const duration = (await probeAudioDuration(preview)) || undefined;
+        const { width, height, x, y } = placeAtViewportCenter({
+          width: 720,
+          height: 400,
+        });
+        dispatch(
+          spawnAudio({
+            src: preview,
+            width,
+            height,
+            x,
+            y,
+            name: name.replace(/\.[^.]+$/, '') || L.audio,
+            duration,
+          })
+        );
+        const spawnedId = String((store.getState() as any).editor?.selectedNodeId || '');
+        const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
+        try {
+          const uploaded = await uploadImageFile(file, { signal });
+          if (signal?.aborted) return;
+          const url = String(uploaded.url || '').trim();
+          if (!url || !spawnedId) return;
+          dispatch(
+            patchDocumentNode({
+              nodeId: spawnedId,
+              patch: {
+                attrs: {
+                  src: url,
+                  ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
+                  ...(duration ? { duration } : {}),
+                },
+              },
+            })
+          );
+        } finally {
+          finishNodeUpload(spawnedId);
+        }
+      } catch (err: any) {
+        if (isUploadAbortError(err)) return;
+        const detail = err?.response?.data?.detail || err?.message || L.uploadFail;
+        message.error(typeof detail === 'string' ? detail : L.uploadFail);
+      }
+      return;
+    }
+
+    if (mime === 'application/json' || mime === 'text/json' || /\.json$/i.test(name)) {
+      try {
+        const text = await file.text();
+        const animationData = parseLottieAnimationData(text);
+        if (!animationData) throw new Error('invalid lottie');
+        const natW = Math.max(1, Math.round(Number(animationData.w) || 200));
+        const natH = Math.max(1, Math.round(Number(animationData.h) || 200));
+        const { width, height, x, y } = placeAtViewportCenter({
+          width: natW,
+          height: natH,
+        });
+        dispatch(
+          spawnLottie({
+            animationData,
+            width,
+            height,
+            x,
+            y,
+            name: name.replace(/\.json$/i, '') || L.lottie,
+          })
+        );
+      } catch {
+        message.error(L.lottieInvalid);
+      }
+      return;
+    }
+
     // Image (or unknown → treat as image upload path).
     const synthetic = {
       target: { files: [file], value: '' },
@@ -796,6 +877,8 @@ function EditorToolStrip({
         </ToolIcon>
       </ToolBtn>
 
+      <span className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />
+
       {/* 图片/视频上传 */}
       <ToolBtn
         tip={L.uploadMedia}
@@ -808,9 +891,8 @@ function EditorToolStrip({
         </ToolIcon>
       </ToolBtn>
 
-      <span className="mx-0.5 h-4 w-px shrink-0 bg-[var(--line)]" aria-hidden />
-
-      {/* 图像生成器 — places a generator node at viewport center */}
+      {/* 图像生成器 — places a generator node at viewport center.
+          Video / Lottie / Audio generators: context menu 「生成器」 only. */}
       <ToolBtn
         tip={L.imageGenerator}
         disabled={toolsLocked}
@@ -818,19 +900,6 @@ function EditorToolStrip({
       >
         <ToolIcon>
           <LuImagePlus className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
-        </ToolIcon>
-      </ToolBtn>
-
-      {/* Video generator icon — soften fill weight to match stroke tools. */}
-      <ToolBtn tip={L.videoGenerator} disabled={toolsLocked} onClick={spawnVideoGeneratorAtView}>
-        <ToolIcon className="h-[18px] w-[18px]">
-          <RiVideoAiLine className="opacity-[0.72]" />
-        </ToolIcon>
-      </ToolBtn>
-
-      <ToolBtn tip={L.lottieGenerator} disabled={toolsLocked} onClick={spawnLottieGeneratorAtView}>
-        <ToolIcon>
-          <LuClapperboard className={TOOL_ICON_CLASS} strokeWidth={STROKE} />
         </ToolIcon>
       </ToolBtn>
 
@@ -844,7 +913,7 @@ function EditorToolStrip({
       <input
         ref={mediaInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept="image/*,video/*,audio/*,.json,application/json"
         className="hidden"
         onChange={onPickMedia}
       />

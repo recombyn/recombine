@@ -41,7 +41,7 @@ const CANCEL_OPEN_MIN_MS = 400;
 const OPEN_DEBOUNCE_MS = 400;
 
 const CHROME_SKIP_SEL =
-  '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar]';
+  '[data-sel-toolbar],[data-frame-toolbar],[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-text-inline-editor],[data-video-trim-toolbar],[data-video-playback-bar],[data-audio-playback-bar],[data-audio-trim-toolbar],[data-audio-speed-toolbar]';
 const SCENE_COMPOSER_SEL =
   '[data-image-generator],[data-video-generator],[data-image-quick-edit]';
 
