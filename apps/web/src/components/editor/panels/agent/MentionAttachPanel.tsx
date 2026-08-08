@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { HiOutlineMusicalNote, HiOutlinePlay } from 'react-icons/hi2';
 import { listAssets, type AssetKind, type UserAsset } from '@/apis/assets';
 import { cn } from '@/utils/classnames';
 
@@ -8,6 +9,8 @@ export type MentionAttachItem = {
   id: string;
   label: string;
   thumbUrl?: string;
+  /** Drives thumb chrome (video cover + play / audio note). */
+  mediaKind?: 'image' | 'video' | 'audio';
   /** Optional secondary line (skill whenToUse). */
   hint?: string;
   /** Group label for skill picker / attach+asset sections. */
@@ -62,6 +65,87 @@ function assetMentionLabel(asset: UserAsset, t: (key: string, opts?: Record<stri
   return t('me.assetKindImage', { defaultValue: '图片' });
 }
 
+function isLikelyImageThumb(url: string): boolean {
+  const u = url.trim();
+  if (!u) return false;
+  if (u.startsWith('data:image')) return true;
+  if (u.startsWith('data:video')) return false;
+  return /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(u);
+}
+
+function MentionRowThumb({
+  mediaKind,
+  thumbUrl,
+}: {
+  mediaKind?: 'image' | 'video' | 'audio';
+  thumbUrl?: string;
+}): ReactNode {
+  const thumbClass =
+    'relative h-7 w-7 shrink-0 overflow-hidden rounded border border-[var(--line)] bg-[var(--canvas)]';
+
+  if (mediaKind === 'audio') {
+    return (
+      <span
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)]"
+        aria-hidden
+      >
+        <HiOutlineMusicalNote className="h-3.5 w-3.5" strokeWidth={1.75} />
+      </span>
+    );
+  }
+
+  if (mediaKind === 'video' && thumbUrl) {
+    const useImg = isLikelyImageThumb(thumbUrl);
+    return (
+      <span className={thumbClass} aria-hidden>
+        {useImg ? (
+          <img src={thumbUrl} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <video
+            src={thumbUrl}
+            muted
+            playsInline
+            preload="metadata"
+            className="h-full w-full object-cover"
+          />
+        )}
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25">
+          <HiOutlinePlay className="h-3 w-3 translate-x-[0.5px] text-white drop-shadow" strokeWidth={2} />
+        </span>
+      </span>
+    );
+  }
+
+  if (thumbUrl) {
+    return (
+      <img
+        src={thumbUrl}
+        alt=""
+        className="h-7 w-7 shrink-0 rounded border border-[var(--line)] bg-[var(--canvas)] object-cover"
+      />
+    );
+  }
+
+  return (
+    <span
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[var(--line)] bg-[var(--surface)] text-[11px] font-semibold text-[var(--muted)]"
+      aria-hidden
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+      >
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <path d="M9 9h6v6H9z" />
+      </svg>
+    </span>
+  );
+}
+
 /**
  * Composer mention picker — `@` attachments (+ library assets) or `/` skills.
  */
@@ -88,17 +172,18 @@ function MentionAttachPanel({
     setAssetsLoading(true);
     const kindFilter: AssetKind | null =
       assetKinds?.length === 1 ? assetKinds[0]! : null;
-    void listAssets({ page: 1, pageSize: 48, kind: kindFilter })
-      .then((res) => {
+    async function loadLibraryAssets() {
+      try {
+        const res = await listAssets({ page: 1, pageSize: 48, kind: kindFilter });
         if (cancelled) return;
         setLibraryAssets((res.items || []).filter((a) => isAllowedAsset(a, assetKinds)));
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setLibraryAssets([]);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setAssetsLoading(false);
-      });
+      }
+    }
+    void loadLibraryAssets();
     return () => {
       cancelled = true;
     };
@@ -116,18 +201,23 @@ function MentionAttachPanel({
 
   const assetItems: MentionAttachItem[] =
     variant === 'attach' && includeAssets
-      ? libraryAssets.map((a) => ({
-          id: `${MENTION_ASSET_ID_PREFIX}${a.id}`,
-          label: assetMentionLabel(a, t),
-          hint:
-            a.kind === 'video'
-              ? t('me.assetKindVideo', { defaultValue: '视频' })
-              : a.kind === 'audio'
-                ? t('me.assetKindAudio', { defaultValue: '音频' })
-                : t('me.assetKindImage', { defaultValue: '图片' }),
-          group: assetsGroup,
-          ...(a.kind === 'image' && a.url ? { thumbUrl: a.url } : {}),
-        }))
+      ? libraryAssets.map((a) => {
+          const kind = a.kind as 'image' | 'video' | 'audio';
+          const url = String(a.url || '').trim();
+          return {
+            id: `${MENTION_ASSET_ID_PREFIX}${a.id}`,
+            label: assetMentionLabel(a, t),
+            mediaKind: kind,
+            hint:
+              kind === 'video'
+                ? t('me.assetKindVideo', { defaultValue: '视频' })
+                : kind === 'audio'
+                  ? t('me.assetKindAudio', { defaultValue: '音频' })
+                  : t('me.assetKindImage', { defaultValue: '图片' }),
+            group: assetsGroup,
+            ...((kind === 'image' || kind === 'video') && url ? { thumbUrl: url } : {}),
+          };
+        })
       : [];
 
   const merged = [...attachItems, ...assetItems];
@@ -187,29 +277,8 @@ function MentionAttachPanel({
                   className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-[var(--canvas)]"
                   onClick={() => handlePick(it.id)}
                 >
-                  {it.thumbUrl ? (
-                    <img
-                      src={it.thumbUrl}
-                      alt=""
-                      className="h-7 w-7 shrink-0 rounded border border-[var(--line)] bg-[var(--canvas)] object-cover"
-                    />
-                  ) : variant === 'skill' ? null : (
-                    <span
-                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[var(--line)] bg-[var(--surface)] text-[11px] font-semibold text-[var(--muted)]"
-                      aria-hidden
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        width="14"
-                        height="14"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <rect x="4" y="4" width="16" height="16" rx="2" />
-                        <path d="M9 9h6v6H9z" />
-                      </svg>
-                    </span>
+                  {variant === 'skill' && !it.thumbUrl ? null : (
+                    <MentionRowThumb mediaKind={it.mediaKind} thumbUrl={it.thumbUrl} />
                   )}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12px] font-medium text-[var(--ink)]">

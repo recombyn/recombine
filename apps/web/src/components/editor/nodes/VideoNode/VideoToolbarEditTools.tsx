@@ -5,6 +5,7 @@ import {
   HiOutlineCamera,
   HiOutlineChevronDown,
   HiOutlineScissors,
+  HiOutlineSparkles,
 } from 'react-icons/hi2';
 import { LuCrop } from 'react-icons/lu';
 import { MdOutlineFlip } from 'react-icons/md';
@@ -394,10 +395,11 @@ function ExtractFrameMenu({ nodeId }: { nodeId: string }) {
 }
 
 /**
- * Video selection toolbar — trim / crop / flip / extract frame / fullscreen / download.
+ * Video selection toolbar — quick edit / trim / crop / flip / extract frame / fullscreen / download.
  */
 function VideoToolbarEditTools({
   nodeId,
+  onQuickEdit,
   onTrim,
   onCrop,
   onFlipRotate,
@@ -405,6 +407,7 @@ function VideoToolbarEditTools({
   fullscreenSlot,
 }: {
   nodeId: string;
+  onQuickEdit?: () => void;
   onTrim?: () => void;
   onCrop?: () => void;
   onFlipRotate?: () => void;
@@ -415,6 +418,14 @@ function VideoToolbarEditTools({
 
   return (
     <>
+      {onQuickEdit ? (
+        <>
+          <Tool label={t('editor.imageToolbar.chat')} onClick={onQuickEdit}>
+            <HiOutlineSparkles className="h-4 w-4" strokeWidth={2} />
+          </Tool>
+          <VideoToolSep />
+        </>
+      ) : null}
       <Tool label={t('editor.videoToolbar.trim')} onClick={onTrim}>
         <HiOutlineScissors strokeWidth={TOOL_ICON_STROKE} />
       </Tool>

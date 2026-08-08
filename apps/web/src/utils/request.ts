@@ -33,8 +33,21 @@ http.interceptors.request.use(
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    // Stale / missing session — drop token so clients stop hammering 401s.
-    if (error?.response?.status === 401) {
+    // Stale / missing session — drop token so clients stop hammering auth errors.
+    // Backend historically returned 403 for bad tokens; treat that as logout too.
+    const status = error?.response?.status;
+    const detail = error?.response?.data?.detail;
+    const detailText =
+      typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d) => (typeof d === 'string' ? d : d?.msg)).join(' ')
+          : '';
+    const authDead =
+      status === 401 ||
+      (status === 403 &&
+        /could not validate credentials|not authenticated/i.test(detailText));
+    if (authDead) {
       setToken(null);
       try {
         window.dispatchEvent(new CustomEvent('recombine:auth-unauthorized'));
@@ -87,15 +100,15 @@ function request<T = unknown>(config: CustomAxiosRequestConfig): Promise<T> {
     }
     const existing = inflightGets.get(key);
     if (existing) return existing as Promise<T>;
-    const pending = http
-      .request<any, T>(config)
-      .then((data) => {
+    const pending = (async () => {
+      try {
+        const data = await http.request<any, T>(config);
         recentGets.set(key, { expires: Date.now() + RECENT_GET_TTL_MS, value: data });
         return data;
-      })
-      .finally(() => {
+      } finally {
         if (inflightGets.get(key) === pending) inflightGets.delete(key);
-      });
+      }
+    })();
     inflightGets.set(key, pending);
     return pending;
   }

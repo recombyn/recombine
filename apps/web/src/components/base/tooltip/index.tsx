@@ -204,7 +204,9 @@ const Tooltip: FC<TooltipProps> = ({
           >
             <div
               className={cn(
-                'relative flex h-[26px] w-auto items-center justify-center whitespace-nowrap rounded-xl bg-[#2C2C2C] px-2.5 text-[12px] leading-none text-white shadow-[0_2px_8px_rgba(31,35,41,0.16)]',
+                // Modest radius (not pill). Height/nowrap suit short labels;
+                // long content overrides via popupClassName (e.g. asset titles).
+                'relative flex h-[26px] w-auto items-center justify-center whitespace-nowrap rounded-md bg-[#2C2C2C] px-2.5 text-[12px] leading-none text-white shadow-[0_2px_8px_rgba(31,35,41,0.16)]',
                 popupClassName
               )}
             >

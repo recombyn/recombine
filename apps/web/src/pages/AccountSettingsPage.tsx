@@ -89,8 +89,9 @@ function AccountSettingsPage(): ReactNode {
   useEffect(() => {
     if (!getToken()) return;
     let cancelled = false;
-    void getMe()
-      .then((res) => {
+    async function hydrateAccount() {
+      try {
+        const res = await getMe();
         if (cancelled || !getToken()) return;
         dispatch(
           setSession({
@@ -109,10 +110,13 @@ function AccountSettingsPage(): ReactNode {
         if (typeof res.tokens === 'number') {
           dispatch(syncFromServer({ tokens: res.tokens, planId: (res as any).planId }));
         }
-      })
-      .catch(() => undefined);
-    void fetchWallet()
-      .then((res) => {
+      } catch {
+        /* ignore */
+      }
+    }
+    async function hydrateWallet() {
+      try {
+        const res = await fetchWallet();
         if (cancelled || !getToken()) return;
         dispatch(
           syncFromServer({
@@ -124,8 +128,12 @@ function AccountSettingsPage(): ReactNode {
             ledger: (res.ledger || []) as LedgerEntry[],
           })
         );
-      })
-      .catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    }
+    void hydrateAccount();
+    void hydrateWallet();
     return () => {
       cancelled = true;
     };

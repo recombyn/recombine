@@ -81,13 +81,28 @@ export function VideoFullscreenPreview({
   duration,
 }: VideoFullscreenPreviewProps): ReactNode {
   const [scale, setScale] = useState(1);
+  // Intrinsic media size — prefer props, then decoded video (never default to 9:16).
+  const [mediaSize, setMediaSize] = useState<{ width: number; height: number } | null>(
+    () => {
+      const aw = Number(aspectWidth);
+      const ah = Number(aspectHeight);
+      if (aw > 0 && ah > 0) return { width: aw, height: ah };
+      return null;
+    }
+  );
   const url = String(src || '').trim();
   const playSrc = usePlayableVideoSrc(url, uploadKey);
   const crop = readCrop({ cropX, cropY, cropW, cropH });
   const posterUrl = String(poster || '').trim() || undefined;
 
-  const aw = Math.max(1, Number(aspectWidth) || 9);
-  const ah = Math.max(1, Number(aspectHeight) || 16);
+  useEffect(() => {
+    const aw = Number(aspectWidth);
+    const ah = Number(aspectHeight);
+    if (aw > 0 && ah > 0) setMediaSize({ width: aw, height: ah });
+  }, [aspectWidth, aspectHeight]);
+
+  const aw = Math.max(1, mediaSize?.width || 16);
+  const ah = Math.max(1, mediaSize?.height || 9);
 
   const close = useCallback(() => {
     setScale(1);
@@ -167,6 +182,7 @@ export function VideoFullscreenPreview({
                 src={playSrc}
                 poster={posterUrl}
                 layout="fill"
+                objectFit="contain"
                 controlsMode="hover"
                 muted
                 crop={crop}
@@ -179,6 +195,19 @@ export function VideoFullscreenPreview({
                     ? Number(duration)
                     : undefined
                 }
+                onMediaSize={(size) => {
+                  if (!(size.width > 0 && size.height > 0)) return;
+                  setMediaSize((prev) => {
+                    if (
+                      prev &&
+                      Math.abs(prev.width - size.width) < 1 &&
+                      Math.abs(prev.height - size.height) < 1
+                    ) {
+                      return prev;
+                    }
+                    return { width: size.width, height: size.height };
+                  });
+                }}
                 className="absolute inset-0 h-full w-full"
               />
             ) : (

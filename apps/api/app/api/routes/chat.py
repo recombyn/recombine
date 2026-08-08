@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from app.services.llm import (
     get_llm_endpoint,
     is_byok_model_ref,
+    list_audio_models,
     list_image_models,
     list_llm_models,
     list_video_models,
@@ -27,6 +28,7 @@ from app.services.llm.agent import stream_agent_turn, stream_official_agent
 from app.services.llm.chat import stream_chat
 from app.services.llm.design_tools import design_tool_definitions
 from app.services.llm.image import generate_image
+from app.services.llm.audio import generate_audio
 from app.services.llm.video import generate_video
 from app.services.llm.usage_log import bind_usage_context, usage_context
 from app.services.wallet.db import (
@@ -91,6 +93,13 @@ class VideoGenerateIn(BaseModel):
     duration: int | None = None
     images: list[str] | None = None
 
+
+class AudioGenerateIn(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    model: str | None = None
+    voice: str | None = None
+    response_format: str | None = None
+    speed: float | None = None
 
 
 def _charge(user_id: str, amount: int, detail: str) -> None:
@@ -181,6 +190,7 @@ def get_models(
             "available": True,
             "imageModels": [],
             "videoModels": [],
+            "audioModels": [],
             "clientRegion": "local",
             "openrouterAvailable": False,
             "byokPlatforms": platforms_payload,
@@ -204,6 +214,9 @@ def get_models(
     video_models = filter_catalog_models_for_region(
         list_video_models(byok_platforms=platforms), country=country
     )
+    audio_models = filter_catalog_models_for_region(
+        list_audio_models(byok_platforms=platforms), country=country
+    )
     available = True
     try:
         get_llm_endpoint()
@@ -214,6 +227,7 @@ def get_models(
         "available": available,
         "imageModels": image_models,
         "videoModels": video_models,
+        "audioModels": audio_models,
         "clientRegion": country,
         "openrouterAvailable": or_ok,
         "byokPlatforms": platforms_payload,
@@ -471,16 +485,17 @@ async def post_video(
         raise HTTPException(status_code=502, detail=msg) from err
     finally:
         reset_byok_user_id(byok_token)
-    from app.services.assets import create_asset_from_url
+    from app.services.assets import create_asset_from_remote_url, create_asset_from_url
 
     assets_out: list[dict[str, Any]] = []
     for vid_url in result.get("videos") or []:
         if not isinstance(vid_url, str) or not vid_url.strip():
             continue
+        src = vid_url.strip()
         try:
             asset = create_asset_from_url(
                 current_user.id,
-                vid_url.strip(),
+                src,
                 kind="video",
                 source="ai_video",
                 prompt=body.prompt.strip(),
@@ -488,7 +503,97 @@ async def post_video(
             assets_out.append(asset)
         except Exception as err:  # noqa: BLE001
             logger.warning("video rehost failed (%s): %s", type(err).__name__, err)
-            continue
+            try:
+                # Keep the public CDN URL so Assets dock still lists the clip.
+                asset = create_asset_from_remote_url(
+                    current_user.id,
+                    src,
+                    kind="video",
+                    source="ai_video",
+                    prompt=body.prompt.strip(),
+                    mime="video/mp4",
+                )
+                assets_out.append(asset)
+            except Exception as err2:  # noqa: BLE001
+                logger.warning(
+                    "video asset register failed (%s): %s", type(err2).__name__, err2
+                )
+                continue
+    if assets_out:
+        result = {**result, "assets": assets_out}
+    return result
+
+
+@router.post("/audio")
+async def post_audio(
+    current_user: CurrentUser,
+    body: AudioGenerateIn,
+) -> dict[str, Any]:
+    """OpenRouter TTS — persist mp3 into user assets (same dock as image/video/lottie)."""
+    if not body.prompt.strip():
+        raise HTTPException(status_code=400, detail="empty prompt")
+
+    requested = (body.model or "").strip() or None
+    if is_desktop_local() or uses_user_platform_byok(current_user.id, requested):
+        model_id = requested
+        credits_charged = 0
+    else:
+        cost = max(DEFAULT_IMAGE_CREDITS, int(DEFAULT_IMAGE_CREDITS or 1))
+        _charge_image_credits(current_user.id, cost, "AI audio generation")
+        model_id = requested
+        credits_charged = cost
+
+    byok_token = set_byok_user_id(current_user.id)
+    try:
+        with usage_context(
+            user_id=current_user.id,
+            source="audio",
+            credits_charged=credits_charged,
+        ):
+            result = await generate_audio(
+                prompt=body.prompt.strip(),
+                model=model_id,
+                voice=body.voice,
+                response_format=body.response_format,
+                speed=body.speed,
+            )
+    except RuntimeError as err:
+        msg = str(err)
+        if "No LLM API key" in msg or "No OpenRouter" in msg:
+            raise HTTPException(status_code=503, detail=msg) from err
+        raise HTTPException(status_code=502, detail=msg) from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    finally:
+        reset_byok_user_id(byok_token)
+
+    from app.services.assets import create_asset_from_bytes
+
+    assets_out: list[dict[str, Any]] = []
+    raw = result.pop("bytes", None)
+    mime = str(result.get("mime") or "audio/mpeg")
+    if isinstance(raw, (bytes, bytearray)) and raw:
+        try:
+            ext = "mp3"
+            if "wav" in mime:
+                ext = "wav"
+            elif "ogg" in mime:
+                ext = "ogg"
+            asset = create_asset_from_bytes(
+                current_user.id,
+                bytes(raw),
+                kind="audio",
+                mime=mime,
+                source="ai_audio",
+                prompt=body.prompt.strip()[:500] or None,
+                filename_ext=ext,
+            )
+            assets_out.append(asset)
+            # Prefer persisted URL for the client player.
+            if asset.get("url"):
+                result["audios"] = [asset["url"]]
+        except Exception as err:  # noqa: BLE001
+            logger.warning("audio asset persist failed (%s): %s", type(err).__name__, err)
     if assets_out:
         result = {**result, "assets": assets_out}
     return result

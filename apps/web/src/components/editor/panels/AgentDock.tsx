@@ -71,17 +71,37 @@ import {
   buildComposerContext,
   buildAttachRefMentionContext,
   composerAttachmentMediaKind,
-  enrichComposerContextThumb,
-  rasterizeNodesToPngDataUrl,
-  rasterizeNodesToPngFile,
   upsertLibraryAssetAttachment,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
 import { fetchDesignSkills, pauseDesignRun, fetchDesignRunStatus, type DesignSkillCard } from '@/apis/design';
-import AgentDockHeader from '@/components/editor/panels/agent/AgentDockHeader';
+import AgentDockHeader, {
+  type AgentEngineMode,
+  type CodingCliOption,
+} from '@/components/editor/panels/agent/AgentDockHeader';
+import AgentDockFloatingPanels from '@/components/editor/panels/agent/AgentDockFloatingPanels';
+import {
+  applyCanvasAttachPayload,
+  canvasAttachToken,
+} from '@/components/editor/panels/agent/canvasAttach';
+import {
+  buildCodingCliEnrichedPrompt,
+  buildCodingCliWorkspaceFiles,
+  codingCliApplyFooter,
+  listCodingClisDesktop,
+  persistCodingCliId,
+  persistEngineMode,
+  prepareCodingCliWorkspaceDesktop,
+  readStoredCodingCliId,
+  readStoredEngineMode,
+  runCodingCliDesktop,
+} from '@/components/editor/panels/agent/codingCli';
+import { extractToolOpsFromText } from '@/components/editor/panels/agent/toolOpsContract';
+import { useChatSessions } from '@/components/editor/panels/agent/useChatSessions';
 import {
   runDesignAgent,
+  applyAgentToolOps,
   resolveDesignTargetFrame,
   nodeIdsInsideFrame,
   frameIdContainingNode,
@@ -93,9 +113,8 @@ import {
 import {
   canAttachNodeToChat,
   captureVideoPosterFrame,
-  listGroupMemberIds,
-  readNodeGroupId,
-} from '@/components/rcb/scene/document/sceneDocument';import {
+} from '@/components/rcb/scene/document/sceneDocument';
+import {
   applyClientFrameHints,
   applyMemoryPatch,
   buildShortTermFromMessages,
@@ -129,7 +148,7 @@ import { normalizeCanvasSizeChip } from '@/components/editor/chrome/SizePresetPa
 import {
   customProvidersAsModels,
 } from '@/components/editor/panels/agent/customLlmProviders';
-import { isDesktopLocal } from '@/utils/apiBase';
+import { isDesktopLocal, isDesktopShell } from '@/utils/apiBase';
 import {
   routeOverridesForApi,
   warmAgentRoutePresetRules,
@@ -159,6 +178,39 @@ import ModelPickerPanel, {
 import { cn } from '@/utils/classnames';
 import { estimateImageCredits, estimateVideoCredits } from '@/utils/imageCredits';
 import { FREE_IMAGE_MODEL_ID, planAllowsModelId, planAllowsModelPick, type PlanId } from '@/utils/wallet';
+import {
+  buildDesignSceneSnapshot,
+  buildImageGenRequestBody,
+  buildImageModeControls,
+  buildStreamingAssistantSeed,
+  buildVideoAssistantSeed,
+  buildVideoModeControls,
+  canvasSizeFromChip,
+  clampComposerImageCount,
+  clearAskProposalFields,
+  collectSendChipContext,
+  firstGeneratedImageUrl,
+  firstGeneratedVideoUrl,
+  mergeLongSuggestions,
+  resolveAskChoiceSend,
+  resolveImageGenFinishKind,
+  resolveImageGenPlan,
+  resolveSendDisplayText,
+  shouldRunImageGenPath,
+  shouldRunVideoGenPath,
+  splitBubbleContexts,
+  uniqueVisionUrls,
+  askProposalBind,
+  findLastAskMessage,
+  type DesignSendMutable,
+  type ImageGenFinishKind,
+} from '@/components/editor/panels/agent/agentSendPath';
+import {
+  assistantDurationMs,
+  createDesignAgentEventRouter,
+  humanizeDesignError,
+} from '@/components/editor/panels/agent/designAgentEventRouter';
+
 
 type ChatSessionMessage = {
   id: string;
@@ -194,18 +246,6 @@ type ChatSession = {
 
 const MAX_CHAT_SESSIONS = 40;
 
-function resolveSeedLiveNodeIds(opts: {
-  doc: any;
-  editTarget: { id: string } | null;
-  freeCanvasMention: boolean;
-  mentionNodeIds: string[];
-}): string[] {
-  const { doc, editTarget, freeCanvasMention, mentionNodeIds } = opts;
-  if (editTarget && doc) return nodeIdsInsideFrame(doc, editTarget.id);
-  if (freeCanvasMention && doc) return mentionNodeIds;
-  return [];
-}
-
 /** Model id sent to /design/run (plan gate → auto; custom BYOK kept). */
 function resolveAgentSendModel(canPickModel: boolean, model: string): string {
   if (!canPickModel) return 'auto';
@@ -228,15 +268,6 @@ function resolveAgentRouteOverrides(
     reasoning: model,
     vision: model,
   };
-}
-
-function assistantDurationMs(
-  m: ChatUiMessage,
-  patch: Partial<ChatUiMessage>
-): number | undefined {
-  if (typeof patch.durationMs === 'number') return patch.durationMs;
-  if (m.startedAt) return Date.now() - m.startedAt;
-  return m.durationMs;
 }
 
 function resolveUserContentMarked(opts: {
@@ -297,39 +328,6 @@ function resolveComposerPlaceholder(
   return t('agent.placeholderDefault');
 }
 
-function humanizeDesignError(
-  t: (key: string, opts?: Record<string, unknown>) => string,
-  raw: string | undefined | null
-): string {
-  const msg = String(raw || '').trim();
-  if (!msg) return t('agent.requestFailed');
-  // Never surface Python NameErrors / internal helper names to the chat face.
-  if (
-    /name\s+['`]_?\w+['`]\s+is not defined/i.test(msg) ||
-    /^NameError:/i.test(msg) ||
-    /_is_(analysis|summary)_skill/i.test(msg)
-  ) {
-    return t('agent.designExecFailed');
-  }
-  const low = msg.toLowerCase();
-  if (low === 'free_daily_exhausted') return t('agent.freeDailyExhausted');
-  if (low === 'insufficient_credits') return t('agent.insufficientCredits');
-  if (low.includes('missing_tool_ops')) return t('agent.designOpsMissing');
-  if (
-    low.startsWith('skill_failed:') ||
-    low.startsWith('tool_ops_invalid') ||
-    low.startsWith('validate_failed') ||
-    low.startsWith('final_validate')
-  ) {
-    return t('agent.designExecFailed');
-  }
-  // Hide other internal code-ish payloads.
-  if (/^[a-z][a-z0-9_]+:/i.test(msg) && !/\s/.test(msg.slice(0, 40))) {
-    return t('agent.designExecFailed');
-  }
-  return msg;
-}
-
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
 
 const DETAIL_SUMMARY_KINDS = new Set([
@@ -342,583 +340,18 @@ const DETAIL_SUMMARY_KINDS = new Set([
 const SUCCESS_VARIANT_KINDS = new Set(['added', 'updated', 'deleted']);
 const CONFIRM_VARIANT_KINDS = new Set(['thought', 'explored', 'tool']);
 
-function activityRowSummary(opts: {
-  kind: string;
-  label: string;
-  detailText: string;
-  summaryText: string;
-  bodyText?: string;
-}): string | undefined {
-  const { kind, label, detailText, summaryText, bodyText } = opts;
-  const body = (bodyText || '').trim();
-  if (summaryText && summaryText !== label && summaryText !== body) {
-    return summaryText;
-  }
-  if (!DETAIL_SUMMARY_KINDS.has(kind)) return undefined;
-  if (detailText && detailText !== label && detailText !== body) return detailText;
-  return undefined;
-}
-
-function activityRowVariant(
-  status: 'running' | 'done' | 'error',
-  kind: string
-): 'success' | 'confirm' | undefined {
-  if (status === 'error') return undefined;
-  if (SUCCESS_VARIANT_KINDS.has(kind)) return 'success';
-  if (CONFIRM_VARIANT_KINDS.has(kind)) return 'confirm';
-  return undefined;
-}
-
-function activityNestItem(
-  t: TFn,
-  item: { id?: string; name?: string; summary?: string } | undefined
-) {
-  if (!item || !(item.name || item.id)) return null;
-  return localizeExploreItem(t, {
-    id: String(item.id || `item-${Date.now()}`),
-    name: String(item.name || '').trim() || '…',
-    summary: item.summary ? String(item.summary) : undefined,
-  });
-}
-
 type FinishAssistant = (
   m: ChatUiMessage,
   patch?: Partial<ChatUiMessage>
 ) => ChatUiMessage;
 
-function patchChatDoneAssistant(
-  m: ChatUiMessage,
-  opts: {
-    t: TFn;
-    finish: FinishAssistant;
-    choices?: string[];
-    proposedOps?: ChatUiMessage['proposedOps'];
-    proposalId?: string;
-    applyChoice?: string;
-    choiceUi?: ChatUiMessage['choiceUi'];
-  }
-): ChatUiMessage {
-  return opts.finish(m, {
-    content: (m.content || '').trim(),
-    thinking: undefined,
-    pipeline: undefined,
-    drawing: undefined,
-    intent: undefined,
-    choices: opts.choices?.length ? opts.choices : undefined,
-    proposedOps: opts.proposedOps?.length ? opts.proposedOps : undefined,
-    proposalId: opts.proposalId || undefined,
-    applyChoice: opts.applyChoice || undefined,
-    choiceUi: opts.choiceUi,
-    steps: buildChatProcessSteps(opts.t, m),
-  });
-}
-
-function isProgressChatLine(text: string): boolean {
-  const s = String(text || '').trim();
-  if (!s) return false;
-  if (/[…⋯]$/.test(s) || /\.\.\.$/.test(s)) return true;
-  if (/^(正在|创建中|生成中|处理中|working|creating|generating|painting)/i.test(s)) {
-    return true;
-  }
-  return false;
-}
-
-function patchDesignDoneAssistant(
-  m: ChatUiMessage,
-  opts: {
-    t: TFn;
-    finish: FinishAssistant;
-    painted: boolean;
-    designStarted: boolean;
-    summary?: string;
-    choices?: string[];
-    proposedOps?: ChatUiMessage['proposedOps'];
-    proposalId?: string;
-    applyChoice?: string;
-    choiceUi?: ChatUiMessage['choiceUi'];
-  }
-): ChatUiMessage {
-  let result = '';
-  if (opts.proposedOps?.length) {
-    // Keep streamed model wording; Confirm chips carry the ask.
-    result = (opts.summary || '').trim() || (m.content || '').trim();
-  } else if (opts.painted) {
-    const rawProcess = (m.thinking || m.intent || '').trim();
-    const hasIntentAnalysis =
-      Boolean(rawProcess) && !/<svg\b|<\/svg>/i.test(rawProcess);
-    const fromSummary = opts.summary?.trim() || '';
-    // Prefer short done copy — long summary is usually the decide/paint essay
-    // already shown as gray process thought. Progress lines ("正在创建…") are not done copy.
-    const summaryIsShortDone =
-      fromSummary.length > 0 &&
-      fromSummary.length <= 48 &&
-      !isProgressChatLine(fromSummary);
-    if (summaryIsShortDone) result = fromSummary;
-    else if (hasIntentAnalysis) result = opts.t('agent.canvasReadyHint');
-    else result = opts.t('agent.canvasUpdated');
-  } else if (opts.designStarted) {
-    result = opts.t('agent.designEmptyResult');
-  } else {
-    const kept = m.content?.trim() || '';
-    result = kept && !isProgressChatLine(kept) ? kept : opts.t('agent.stopped');
-  }
-  return opts.finish(m, {
-    content: result,
-    thinking: undefined,
-    pipeline: undefined,
-    drawing: undefined,
-    intent: undefined,
-    choices: opts.choices?.length ? opts.choices : undefined,
-    proposedOps: opts.proposedOps?.length ? opts.proposedOps : undefined,
-    proposalId: opts.proposalId || undefined,
-    applyChoice: opts.applyChoice || undefined,
-    choiceUi: opts.choiceUi,
-    steps: (m.steps || []).map((s) => ({
-      ...s,
-      status: s.status === 'error' ? s.status : ('done' as const),
-    })),
-  });
-}
-
-function titleFromMessages(messages: ChatSessionMessage[]): string {
-  const first = messages.find((m) => m.role === 'user' && m.content.trim());
-  if (!first) return '新对话';
-  const t = first.content.trim().replace(/\s+/g, ' ');
-  return t.length > 28 ? `${t.slice(0, 28)}…` : t;
-}
-
-function upsertChatSession(sessions: ChatSession[], next: ChatSession): ChatSession[] {
-  const without = sessions.filter((s) => s.id !== next.id);
-  return [next, ...without]
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-    .slice(0, MAX_CHAT_SESSIONS);
-}
-
-function formatChatTime(ts: number): string {
-  const d = new Date(ts);
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (sameDay) {
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  }
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function chatUid() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-function isChatLoggedIn(): boolean {
-  return Boolean(getToken());
-}
-
-type PendingChatSync = {
-  projectId: string;
-  id: string;
-  title: string;
-  messages: ChatSessionMessage[];
-  taskState?: TaskState | null;
-  payloadJson: string;
-};
-
-function pickAskPersistFields(m: {
-  designTaskId?: string | null;
-  canResume?: boolean | null;
-  proposedOps?: ChatUiMessage['proposedOps'] | null;
-  proposalId?: string | null;
-  choices?: string[] | null;
-  applyChoice?: string | null;
-  choiceUi?: ChatUiMessage['choiceUi'] | null;
-}): Partial<ChatSessionMessage> {
-  return {
-    ...(m.designTaskId ? { designTaskId: m.designTaskId } : {}),
-    ...(m.canResume ? { canResume: true } : {}),
-    ...(m.proposedOps?.length ? { proposedOps: m.proposedOps } : {}),
-    ...(m.proposalId ? { proposalId: m.proposalId } : {}),
-    ...(m.choices?.length ? { choices: m.choices } : {}),
-    ...(m.applyChoice ? { applyChoice: m.applyChoice } : {}),
-    ...(m.choiceUi ? { choiceUi: m.choiceUi } : {}),
-  };
-}
-
-function toUiMessages(session: ChatSession): ChatUiMessage[] {
-  return session.messages.map((m) => ({
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    ...(m.contexts?.length ? { contexts: m.contexts } : {}),
-    ...(m.contentMarked ? { contentMarked: m.contentMarked } : {}),
-    thinking: m.thinking,
-    ...(typeof m.durationMs === 'number' ? { durationMs: m.durationMs } : {}),
-    ...(m.intent ? { intent: m.intent } : {}),
-    ...(m.steps?.length ? { steps: m.steps } : {}),
-    ...(m.images?.length ? { images: m.images } : {}),
-    ...(m.videos?.length ? { videos: m.videos } : {}),
-    ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
-    ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
-    ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
-    ...pickAskPersistFields(m),
-  }));
-}
-
-function dtoToSession(dto: {
-  id: string;
-  title: string;
-  updatedAt: number;
-  taskState?: TaskState | null;
-  messages?: Array<{
-    id?: string;
-    role: string;
-    content: string;
-    contexts?: ChatUiMessage['contexts'] | null;
-    contentMarked?: string | null;
-    thinking?: string | null;
-    durationMs?: number | null;
-    intent?: string | null;
-    steps?: ChatUiMessage['steps'] | null;
-    images?: string[] | null;
-    videos?: string[] | null;
-    imageModelId?: string | null;
-    imageModelLabel?: string | null;
-    imageAspectRatio?: string | null;
-    designTaskId?: string | null;
-    canResume?: boolean | null;
-    proposedOps?: ChatUiMessage['proposedOps'] | null;
-    proposalId?: string | null;
-    choices?: string[] | null;
-    applyChoice?: string | null;
-    choiceUi?: ChatUiMessage['choiceUi'] | null;
-  }>;
-}): ChatSession {
-  return {
-    id: dto.id,
-    title: dto.title || '新对话',
-    updatedAt: dto.updatedAt || Date.now(),
-    taskState: dto.taskState || null,
-    messages: (dto.messages || []).map((m, i) => ({
-      id: m.id || `msg_${i}`,
-      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
-      content: m.content || '',
-      ...(m.contexts?.length ? { contexts: m.contexts } : {}),
-      ...(m.contentMarked ? { contentMarked: m.contentMarked } : {}),
-      ...(m.thinking ? { thinking: m.thinking } : {}),
-      ...(typeof m.durationMs === 'number' ? { durationMs: m.durationMs } : {}),
-      ...(m.intent ? { intent: m.intent } : {}),
-      ...(m.steps?.length ? { steps: m.steps } : {}),
-      ...(m.images?.length ? { images: m.images } : {}),
-      ...(m.videos?.length ? { videos: m.videos } : {}),
-      ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
-      ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
-      ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
-      ...pickAskPersistFields(m),
-    })),
-  };
-}
-
-function messagesToPersisted(messages: ChatUiMessage[]): ChatSessionMessage[] {
-  return messages
-    .filter(
-      (m) =>
-        m.content ||
-        m.thinking ||
-        m.intent ||
-        m.canResume ||
-        m.designTaskId ||
-        (m.proposedOps && m.proposedOps.length) ||
-        m.proposalId ||
-        m.choiceUi ||
-        (m.contexts && m.contexts.length) ||
-        (m.steps && m.steps.length) ||
-        (m.images && m.images.length) ||
-        (m.videos && m.videos.length)
-    )
-    .map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      ...(m.contexts?.length ? { contexts: m.contexts } : {}),
-      ...(m.contentMarked ? { contentMarked: m.contentMarked } : {}),
-      ...(m.thinking ? { thinking: m.thinking } : {}),
-      ...(typeof m.durationMs === 'number' ? { durationMs: m.durationMs } : {}),
-      ...(m.intent ? { intent: m.intent } : {}),
-      ...(m.steps?.length
-        ? {
-            steps: m.steps.map((s) => ({
-              ...s,
-              status: s.status === 'running' ? ('done' as const) : s.status,
-            })),
-          }
-        : {}),
-      ...(m.images?.length ? { images: m.images } : {}),
-      ...(m.videos?.length ? { videos: m.videos } : {}),
-      ...(m.imageModelId ? { imageModelId: m.imageModelId } : {}),
-      ...(m.imageModelLabel ? { imageModelLabel: m.imageModelLabel } : {}),
-      ...(m.imageAspectRatio ? { imageAspectRatio: m.imageAspectRatio } : {}),
-      ...pickAskPersistFields(m),
-    }));
-}
-
-/** Agent chat — in-memory + API when logged in. No localStorage session dumps. */
-function useChatSessions(documentId: string | null | undefined) {
-  const scope = (documentId || '').trim() || '__none__';
-  const [readyScope, setReadyScope] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [sessionId, setSessionId] = useState(() => chatUid());
-  const [messages, setMessages] = useState<ChatUiMessage[]>([]);
-  const [taskState, setTaskState] = useState<TaskState | null>(null);
-  const [pendingLongSuggestions, setPendingLongSuggestions] = useState<
-    Array<{ kind: string; text: string }>
-  >([]);
-  const sessionsRef = useRef<ChatSession[]>([]);
-  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingSyncRef = useRef<PendingChatSync | null>(null);
-  const lastSyncedJson = useRef<string>('');
-  const apiDisabledRef = useRef(false);
-
-  useEffect(() => {
-    sessionsRef.current = sessions;
-  }, [sessions]);
-
-  const flushPendingSync = useCallback(() => {
-    if (syncTimer.current) {
-      clearTimeout(syncTimer.current);
-      syncTimer.current = null;
-    }
-    const pending = pendingSyncRef.current;
-    if (!pending || !isChatLoggedIn() || apiDisabledRef.current) return;
-    if (pending.payloadJson === lastSyncedJson.current) return;
-    pendingSyncRef.current = null;
-    void upsertChatSessionApi({
-      projectId: pending.projectId || '__none__',
-      id: pending.id,
-      title: pending.title,
-      messages: pending.messages,
-      ...(pending.taskState != null ? { taskState: pending.taskState } : {}),
-    })
-      .then(() => {
-        lastSyncedJson.current = pending.payloadJson;
-      })
-      .catch((err: any) => {
-        if (err?.response?.status === 401) apiDisabledRef.current = true;
-        if (!pendingSyncRef.current) pendingSyncRef.current = pending;
-      });
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    flushPendingSync();
-    setReadyScope(null);
-    setSessions([]);
-    setSessionId(chatUid());
-    setMessages([]);
-    setTaskState(null);
-    lastSyncedJson.current = '';
-
-    if (!isChatLoggedIn() || apiDisabledRef.current) {
-      setReadyScope(scope);
-      return;
-    }
-
-    async function loadRemoteSessions() {
-      try {
-        const res = await fetchChatSessions({
-          projectId: scope || '__none__',
-        });
-        if (cancelled) return;
-        const remote = (res.sessions || []).map((s) =>
-          dtoToSession({ ...s, taskState: s.taskState as TaskState | undefined })
-        );
-        setSessions(remote);
-        if (remote[0]) {
-          setSessionId(remote[0].id);
-          setMessages(toUiMessages(remote[0]));
-          setTaskState(remote[0].taskState || null);
-          lastSyncedJson.current = JSON.stringify({
-            id: remote[0].id,
-            title: remote[0].title,
-            messages: remote[0].messages,
-            taskState: remote[0].taskState || null,
-          });
-        } else {
-          setSessionId(chatUid());
-          setMessages([]);
-        }
-      } catch (err: any) {
-        if (err?.response?.status === 401) apiDisabledRef.current = true;
-        if (!cancelled) {
-          setSessionId(chatUid());
-          setMessages([]);
-        }
-      } finally {
-        if (!cancelled) setReadyScope(scope);
-      }
-    }
-    void loadRemoteSessions();
-
-    return () => {
-      cancelled = true;
-      flushPendingSync();
-    };
-  }, [scope, flushPendingSync]);
-
-  useEffect(() => {
-    const onUnauthorized = () => {
-      apiDisabledRef.current = true;
-    };
-    window.addEventListener('recombine:auth-unauthorized', onUnauthorized);
-    return () => window.removeEventListener('recombine:auth-unauthorized', onUnauthorized);
-  }, []);
-
-  useEffect(() => {
-    const onHide = () => flushPendingSync();
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') flushPendingSync();
-    };
-    window.addEventListener('pagehide', onHide);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      window.removeEventListener('pagehide', onHide);
-      document.removeEventListener('visibilitychange', onVisibility);
-      flushPendingSync();
-    };
-  }, [flushPendingSync]);
-
-  useEffect(() => {
-    if (readyScope !== scope) return;
-    if (messages.some((m) => m.streaming)) return;
-
-    const persistedMsgs = messagesToPersisted(messages);
-    if (persistedMsgs.length === 0 && !taskState) return;
-
-    const persisted: ChatSession = {
-      id: sessionId,
-      title: titleFromMessages(persistedMsgs),
-      updatedAt: Date.now(),
-      messages: persistedMsgs,
-      taskState,
-    };
-    setSessions((prev) => upsertChatSession(prev, persisted));
-
-    if (!isChatLoggedIn() || apiDisabledRef.current) return;
-
-    const payloadJson = JSON.stringify({
-      id: persisted.id,
-      title: persisted.title,
-      messages: persisted.messages,
-      taskState: taskState || null,
-    });
-    if (payloadJson === lastSyncedJson.current) return;
-    pendingSyncRef.current = {
-      projectId: scope,
-      id: persisted.id,
-      title: persisted.title,
-      messages: persisted.messages,
-      taskState,
-      payloadJson,
-    };
-    if (syncTimer.current) clearTimeout(syncTimer.current);
-    syncTimer.current = setTimeout(() => {
-      flushPendingSync();
-    }, 600);
-
-    return () => {
-      if (syncTimer.current) {
-        clearTimeout(syncTimer.current);
-        syncTimer.current = null;
-      }
-    };
-  }, [messages, sessionId, scope, readyScope, flushPendingSync, taskState]);
-
-  const startNewChat = useCallback(() => {
-    flushPendingSync();
-    const id = chatUid();
-    setSessionId(id);
-    setMessages([]);
-    setTaskState(null);
-    lastSyncedJson.current = '';
-  }, [flushPendingSync]);
-
-  const openSession = useCallback(
-    (id: string) => {
-      flushPendingSync();
-      const found = sessionsRef.current.find((sess) => sess.id === id);
-      if (!found) return;
-      setSessionId(found.id);
-      setMessages(toUiMessages(found));
-      setTaskState(found.taskState || null);
-      lastSyncedJson.current = JSON.stringify({
-        id: found.id,
-        title: found.title,
-        messages: found.messages,
-        taskState: found.taskState || null,
-      });
-    },
-    [flushPendingSync]
-  );
-
-  const deleteSession = useCallback(
-    (id: string) => {
-      setSessions((prev) => prev.filter((sess) => sess.id !== id));
-      if (isChatLoggedIn()) {
-        deleteChatSessionApi(id).catch(() => {
-          /* ignore */
-        });
-      }
-      if (id === sessionId) {
-        const nid = chatUid();
-        setSessionId(nid);
-        setMessages([]);
-        setTaskState(null);
-        lastSyncedJson.current = '';
-      }
-    },
-    [sessionId]
-  );
-
-  /** Re-fetch session list (history panel open). Keeps the active turn in place. */
-  const refreshSessions = useCallback(async () => {
-    flushPendingSync();
-    if (!isChatLoggedIn() || apiDisabledRef.current) return;
-    try {
-      const res = await fetchChatSessions({
-        projectId: scope || '__none__',
-      });
-      const remote = (res.sessions || []).map((s) =>
-        dtoToSession({ ...s, taskState: s.taskState as TaskState | undefined })
-      );
-      setSessions(remote);
-    } catch (err: any) {
-      if (err?.response?.status === 401) apiDisabledRef.current = true;
-    }
-  }, [flushPendingSync, scope]);
-
-  const chatTitle =
-    messages.length === 0 ? '新对话' : titleFromMessages(messages as ChatSessionMessage[]);
-
-  return {
-    sessions,
-    sessionId,
-    messages,
-    setMessages,
-    chatTitle,
-    startNewChat,
-    openSession,
-    deleteSession,
-    refreshSessions,
-    formatChatTime,
-    newMessageId: chatUid,
-    taskState,
-    setTaskState,
-    pendingLongSuggestions,
-    setPendingLongSuggestions,
-  };
-}
-
 type AgentDockProps = {
   open: boolean;
+  /**
+   * Bump when the user opens the dock (click / shortcut / home boot).
+   * Hydrates catalog+models without `useEffect([open])` refetch on every reopen.
+   */
+  openSignal?: number;
   onClose: () => void;
   className?: string;
   floating?: boolean;
@@ -975,193 +408,6 @@ function normalizeModelList(
  * - multi: videos/images attach as media; remaining shapes → one PNG (not one giant raster of video)
  * - single shape / frame → context chip with thumb
  */
-function canvasAttachToken(payload: string | string[]): string {
-  return Array.isArray(payload) ? `arr:${payload.map(String).join('\0')}` : `one:${payload}`;
-}
-
-/** Full member ids when every selected id shares one groupId; otherwise null. */
-function sharedGroupAttachIds(doc: any, ids: string[]): string[] | null {
-  if (!doc || !ids || ids.length < 2) return null;
-  const first = readNodeGroupId(doc?.deltaSetLike?.[ids[0]]);
-  if (!first) return null;
-  if (!ids.every((id) => readNodeGroupId(doc?.deltaSetLike?.[id]) === first)) return null;
-  const members = listGroupMemberIds(doc, first);
-  return members.length >= 2 ? members : ids;
-}
-
-async function buildCanvasVideoAttachment(
-  doc: any,
-  id: string,
-  existingChips: ComposerContext[]
-): Promise<ComposerContext | null> {
-  const node = doc?.deltaSetLike?.[id];
-  const src = String(node?.attrs?.src || '').trim();
-  if (node?.key !== 'video' || !src) return null;
-  const labeled = buildComposerContext(doc, [id], null, existingChips);
-  let thumb = String(node?.attrs?.poster || '').trim();
-  if (!thumb) {
-    try {
-      thumb = await captureVideoPosterFrame(src);
-    } catch {
-      /* thumb optional */
-    }
-  }
-  return {
-    key: `attach:canvas:${id}:${Date.now()}`,
-    label: labeled?.label || id,
-    kind: 'attachment',
-    payload: `[Canvas video]\nid: ${id}${labeled?.payload ? `\n${labeled.payload}` : ''}`,
-    dataUrl: src,
-    thumbUrl: thumb || undefined,
-    uploadStatus: 'ready',
-  };
-}
-
-export async function applyCanvasAttachPayload(opts: {
-  document: any;
-  payload: string | string[];
-  existingChips: ComposerContext[];
-  onAttachFiles: (files: File[], opts?: { mention?: boolean }) => void | Promise<void>;
-  insertChip: (ctx: ComposerContext) => void;
-  /** Canvas video → strip attachment without re-upload / file-type gates. */
-  pushAttachment?: (att: ComposerContext) => void;
-  /** Image chat mode — reject video nodes (same as image generator pick). */
-  imagesOnly?: boolean;
-}) {
-  const {
-    document: doc,
-    payload,
-    existingChips,
-    onAttachFiles,
-    insertChip,
-    pushAttachment,
-    imagesOnly = false,
-  } = opts;
-  let ids: string[] = [];
-  let frameId: string | null = null;
-  if (Array.isArray(payload)) {
-    ids = payload.map(String).filter(Boolean);
-  } else if (String(payload).startsWith('frame:')) {
-    frameId = String(payload).slice('frame:'.length);
-  } else {
-    ids = [String(payload)];
-  }
-
-  if (frameId) {
-    const base = buildComposerContext(doc, [], frameId, existingChips);
-    const ctx = await enrichComposerContextThumb(doc, base, { frameId });
-    if (ctx) insertChip(ctx);
-    return;
-  }
-
-  const attachable = ids.filter((id) =>
-    canAttachNodeToChat(doc?.deltaSetLike?.[id], { imagesOnly })
-  );
-  if (!attachable.length) return;
-
-  const attachOneVideo = async (id: string) => {
-    const att = await buildCanvasVideoAttachment(doc, id, existingChips);
-    if (!att) return;
-    if (pushAttachment) {
-      pushAttachment(att);
-      return;
-    }
-    const src = String(att.dataUrl || '').trim();
-    if (!src) return;
-    try {
-      await onAttachFiles([await imageSrcToFile(src, `canvas-${id}.mp4`)]);
-    } catch {
-      /* ignore */
-    }
-  };
-
-  // 编组 → one「组」chip in the input (never as image attachment / file).
-  const groupIds = sharedGroupAttachIds(doc, attachable);
-  if (groupIds) {
-    const base = buildComposerContext(doc, groupIds, null, existingChips);
-    let ctx = await enrichComposerContextThumb(doc, base, { nodeIds: groupIds });
-    if (ctx && !String(ctx.dataUrl || '').trim()) {
-      const dataUrl = await rasterizeNodesToPngDataUrl(doc, groupIds);
-      if (dataUrl) {
-        ctx = { ...ctx, dataUrl, thumbUrl: String(ctx.thumbUrl || '').trim() || dataUrl };
-      }
-    }
-    if (ctx) insertChip(ctx);
-    else if (base) insertChip(base);
-    return;
-  }
-
-  // Ad-hoc multi: peel videos/images so we never rasterize video into canvas-group.png.
-  if (attachable.length > 1) {
-    const videos: string[] = [];
-    const images: string[] = [];
-    const others: string[] = [];
-    for (const id of attachable) {
-      const node = doc?.deltaSetLike?.[id];
-      const src = String(node?.attrs?.src || '').trim();
-      if (!imagesOnly && node?.key === 'video' && src) videos.push(id);
-      else if (node?.key === 'image' && src) images.push(id);
-      else others.push(id);
-    }
-
-    for (const id of videos) {
-      await attachOneVideo(id);
-    }
-    const imageFiles: File[] = [];
-    for (const id of images) {
-      const src = String(doc?.deltaSetLike?.[id]?.attrs?.src || '').trim();
-      if (!src) continue;
-      try {
-        imageFiles.push(await imageSrcToFile(src, `canvas-${id}.png`));
-      } catch {
-        /* skip */
-      }
-    }
-    if (imageFiles.length) await onAttachFiles(imageFiles);
-
-    if (others.length > 1) {
-      const file = await rasterizeNodesToPngFile(doc, others);
-      if (file) {
-        await onAttachFiles([file]);
-        return;
-      }
-      const base = buildComposerContext(doc, others, null, existingChips);
-      const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: others });
-      if (ctx) insertChip(ctx);
-      return;
-    }
-    if (others.length === 1) {
-      const oid = others[0]!;
-      const base = buildComposerContext(doc, [oid], null, existingChips);
-      const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: [oid] });
-      if (ctx) insertChip(ctx);
-    }
-    return;
-  }
-
-  const id = attachable[0]!;
-  const node = doc?.deltaSetLike?.[id];
-  if (imagesOnly && node?.key === 'video') return;
-  const src = String(node?.attrs?.src || '').trim();
-  if (node?.key === 'image' && src) {
-    try {
-      await onAttachFiles([await imageSrcToFile(src, `canvas-${id}.png`)]);
-      return;
-    } catch {
-      /* fall through to chip */
-    }
-  }
-
-  if (!imagesOnly && node?.key === 'video' && src) {
-    await attachOneVideo(id);
-    return;
-  }
-
-  const base = buildComposerContext(doc, [id], null, existingChips);
-  const ctx = await enrichComposerContextThumb(doc, base, { nodeIds: [id] });
-  if (ctx) insertChip(ctx);
-}
-
 const AGENT_DOCK_WIDTH_KEY = 'agent-dock-width';
 const AGENT_DOCK_MIN_W = 340;
 const AGENT_DOCK_MAX_W = 560;
@@ -1189,21 +435,6 @@ function readStoredAgentDockWidth(): number {
   } catch {
     return AGENT_DOCK_DEFAULT_W;
   }
-}
-
-function isHttpUrl(s: string): boolean {
-  return s.startsWith('http://') || s.startsWith('https://');
-}
-
-/** Prefer durable https thumb over local data: for chat history bubbles. */
-function preferredChipThumbUrl(c: ComposerContext): string {
-  const dataRef = String(c.dataUrl || '').trim();
-  const thumb = String(c.thumbUrl || '').trim();
-  if (isHttpUrl(dataRef)) return dataRef;
-  if (isHttpUrl(thumb)) return thumb;
-  if (dataRef.startsWith('data:image/')) return dataRef;
-  if (thumb.startsWith('data:image/')) return thumb;
-  return dataRef || thumb;
 }
 
 function mentionAttachKindLabel(
@@ -1234,192 +465,6 @@ function mentionAttachRefPayload(kind: 'image' | 'video' | 'audio', ordinal: num
   if (kind === 'video') return `[Ref: Attached video ${ordinal}]`;
   if (kind === 'audio') return `[Ref: Attached audio ${ordinal}]`;
   return `[Ref: Attached image ${ordinal}]`;
-}
-
-function chipToBubbleContext(c: ComposerContext) {
-  const preferred = preferredChipThumbUrl(c);
-  return {
-    key: chipBaseKey(c.key),
-    label: c.label,
-    kind: c.kind,
-    ...(preferred ? { thumbUrl: preferred } : {}),
-  };
-}
-
-function resolveSendDisplayText(opts: {
-  text: string;
-  hasChips: boolean;
-  hasApplyOps: boolean;
-}): string {
-  if (opts.text) return opts.text;
-  if (opts.hasApplyOps || !opts.hasChips) return 'apply';
-  return '';
-}
-
-function askProposalBind(m: ChatUiMessage | undefined | null): {
-  proposalId?: string;
-  proposalTaskId?: string;
-} {
-  if (!m) return {};
-  return {
-    ...(m.proposalId ? { proposalId: m.proposalId } : {}),
-    ...(m.designTaskId ? { proposalTaskId: m.designTaskId } : {}),
-  };
-}
-
-function clearAskProposalFields(m: ChatUiMessage): ChatUiMessage {
-  if (m.role !== 'assistant') return m;
-  if (
-    !(
-      m.proposedOps?.length ||
-      m.choices?.length ||
-      m.applyChoice ||
-      m.choiceUi ||
-      m.proposalId
-    )
-  ) {
-    return m;
-  }
-  return {
-    ...m,
-    proposedOps: undefined,
-    proposalId: undefined,
-    applyChoice: undefined,
-    choices: undefined,
-    choiceUi: undefined,
-  };
-}
-
-function findLastAskMessage(messages: ChatUiMessage[]): ChatUiMessage | undefined {
-  return [...messages]
-    .reverse()
-    .find(
-      (m) =>
-        m.role === 'assistant' &&
-        Boolean(m.proposedOps?.length || m.choiceUi || m.choices?.length)
-    );
-}
-
-type AskChoiceSend =
-  | { kind: 'noop' }
-  | { kind: 'dismiss'; messageId: string }
-  | {
-      kind: 'apply';
-      messageId: string;
-      text: string;
-      ops: NonNullable<ChatUiMessage['proposedOps']>;
-      proposalId?: string;
-      proposalTaskId?: string;
-    }
-  | { kind: 'reply'; text: string };
-
-/** Map chip click → dismiss / apply proposed ops / plain reply (memory carries context). */
-function resolveAskChoiceSend(
-  messages: ChatUiMessage[],
-  pick: AskChoicePick
-): AskChoiceSend {
-  const lastAsk = findLastAskMessage(messages);
-  if (pick.action === 'dismiss') {
-    return lastAsk ? { kind: 'dismiss', messageId: lastAsk.id } : { kind: 'noop' };
-  }
-  if (pick.action === 'apply' && lastAsk?.proposedOps?.length) {
-    const text = pick.selectedLabels?.length
-      ? `${pick.label}：${pick.selectedLabels.join('、')}`
-      : pick.label;
-    return {
-      kind: 'apply',
-      messageId: lastAsk.id,
-      text,
-      ops: lastAsk.proposedOps,
-      ...askProposalBind(lastAsk),
-    };
-  }
-  const text = pick.selectedLabels?.length
-    ? pick.selectedLabels.join('、')
-    : pick.label;
-  if (!text) return { kind: 'noop' };
-  return { kind: 'reply', text };
-}
-
-function splitBubbleContexts(chips: ComposerContext[]) {
-  const inline = chips.filter((c) => c.kind !== 'attachment').map(chipToBubbleContext);
-  const attachments = chips.filter((c) => c.kind === 'attachment').map(chipToBubbleContext);
-  return {
-    inlineContexts: inline,
-    attachmentContexts: attachments,
-    bubbleContexts: [...attachments, ...inline],
-  };
-}
-
-function shouldRunImageGenPath(opts: {
-  isImageModelSelected: boolean;
-  forceAgent: boolean;
-  hasApplyOps: boolean;
-}): boolean {
-  return opts.isImageModelSelected && !opts.forceAgent && !opts.hasApplyOps;
-}
-
-function shouldRunVideoGenPath(opts: {
-  isVideoModelSelected: boolean;
-  forceAgent: boolean;
-  hasApplyOps: boolean;
-}): boolean {
-  return opts.isVideoModelSelected && !opts.forceAgent && !opts.hasApplyOps;
-}
-
-function firstGeneratedVideoUrl(res: {
-  videos?: unknown[];
-  assets?: Array<{ url?: string } | null> | null;
-}): string {
-  for (const u of res.videos || []) {
-    if (typeof u === 'string' && u.trim()) return u.trim();
-  }
-  for (const a of res.assets || []) {
-    const u = typeof a?.url === 'string' ? a.url.trim() : '';
-    if (u) return u;
-  }
-  return '';
-}
-
-function firstGeneratedImageUrl(res: {
-  images?: unknown[];
-  assets?: Array<{ url?: string } | null> | null;
-}): string {
-  for (const u of res.images || []) {
-    if (typeof u === 'string' && u.trim()) return u.trim();
-  }
-  for (const a of res.assets || []) {
-    const u = typeof a?.url === 'string' ? a.url.trim() : '';
-    if (u) return u;
-  }
-  return '';
-}
-
-function canvasSizeFromChip(chipNorm: string): string | undefined {
-  if (/^\d+x\d+$/.test(chipNorm)) return chipNorm;
-  if (chipNorm === 'auto') return 'auto';
-  if (/^(?:\d+xauto|autox\d+)$/.test(chipNorm)) return chipNorm;
-  return undefined;
-}
-
-function pickModelWithFallback(
-  pool: LlmModel[],
-  selectedId: string,
-  fallbackId: string
-): LlmModel | undefined {
-  if (selectedId) {
-    const selected = pool.find((m) => m.id === selectedId);
-    if (selected) return selected;
-  }
-  if (fallbackId) {
-    const fallback = pool.find((m) => m.id === fallbackId);
-    if (fallback) return fallback;
-  }
-  return pool[0];
-}
-
-function clampComposerImageCount(n: number): 1 | 2 | 3 | 4 {
-  return Math.max(1, Math.min(4, Math.round(n) || 1)) as 1 | 2 | 3 | 4;
 }
 
 function modelButtonTitle(
@@ -1453,762 +498,10 @@ function interactionModeLabel(
   return t('agent.interactionAgent');
 }
 
-function buildImageModeControls(opts: {
-  active: boolean;
-  models: LlmModel[];
-  modelId: string;
-  modelsStatus: 'idle' | 'loading' | 'ready' | 'error';
-  resolution: string;
-  aspectRatio: string;
-  imageCount: 1 | 2 | 3 | 4;
-  modelOpen: boolean;
-  onResolutionChange: (r: string) => void;
-  onAspectRatioChange: (r: string) => void;
-  onImageCountChange: (n: number) => void;
-  onModelOpenChange: (open: boolean) => void;
-  onPickModel: (id: string) => void;
-}): ImageModeComposerControls | null {
-  if (!opts.active) return null;
-  const pool = opts.models.filter((m) => isImageKind(m));
-  const fallbackId = cloudImageFallbackId();
-  const selected =
-    pickModelWithFallback(pool, opts.modelId, fallbackId) ||
-    ({ id: opts.modelId || fallbackId || '' } as LlmModel);
-  return {
-    resolution: opts.resolution,
-    aspectRatio: opts.aspectRatio,
-    imageCount: opts.imageCount,
-    onResolutionChange: opts.onResolutionChange,
-    onAspectRatioChange: opts.onAspectRatioChange,
-    onImageCountChange: (n) => opts.onImageCountChange(clampComposerImageCount(n)),
-    imageLimits: modelImageLimits(selected),
-    creditCost: estimateImageCredits(selected, opts.imageCount, opts.resolution),
-    modelLabel: String(selected.label || opts.modelId || fallbackId || selected.id || ''),
-    modelIcon: (
-      <ModelBrandIcon model={selected} className="h-3.5 w-3.5 shrink-0" />
-    ),
-    modelOpen: opts.modelOpen,
-    onModelOpenChange: opts.onModelOpenChange,
-    modelPanel: (
-      <ModelPickerPanel
-        tab="image"
-        models={opts.models}
-        selectedId={opts.modelId}
-        status={opts.modelsStatus}
-        onPick={opts.onPickModel}
-      />
-    ),
-  };
-}
-
-function buildVideoModeControls(opts: {
-  active: boolean;
-  models: LlmModel[];
-  modelId: string;
-  modelsStatus: 'idle' | 'loading' | 'ready' | 'error';
-  resolution: string;
-  aspectRatio: string;
-  duration: number;
-  modelOpen: boolean;
-  onResolutionChange: (r: string) => void;
-  onAspectRatioChange: (r: string) => void;
-  onDurationChange: (d: number) => void;
-  onModelOpenChange: (open: boolean) => void;
-  onPickModel: (id: string) => void;
-}): VideoModeComposerControls | null {
-  if (!opts.active) return null;
-  const pool = opts.models.filter((m) => isVideoKind(m));
-  const fallbackId = cloudVideoFallbackId();
-  const selected =
-    pickModelWithFallback(pool, opts.modelId, fallbackId) ||
-    ({ id: opts.modelId || fallbackId || '' } as LlmModel);
-  return {
-    resolution: opts.resolution,
-    aspectRatio: opts.aspectRatio,
-    duration: opts.duration,
-    onResolutionChange: opts.onResolutionChange,
-    onAspectRatioChange: opts.onAspectRatioChange,
-    onDurationChange: opts.onDurationChange,
-    creditCost: estimateVideoCredits(selected),
-    modelLabel: String(selected.label || opts.modelId || fallbackId || selected.id || ''),
-    modelIcon: (
-      <ModelBrandIcon model={selected} className="h-3.5 w-3.5 shrink-0" />
-    ),
-    modelOpen: opts.modelOpen,
-    onModelOpenChange: opts.onModelOpenChange,
-    modelPanel: (
-      <ModelPickerPanel
-        tab="video"
-        models={opts.models}
-        selectedId={opts.modelId}
-        status={opts.modelsStatus}
-        onPick={opts.onPickModel}
-      />
-    ),
-  };
-}
-
-function buildImageGenRequestBody(opts: {
-  prompt: string;
-  canPickModel: boolean;
-  model: string;
-  aspect?: string;
-  resolution?: string;
-  isImageInteraction: boolean;
-  attachedImages: string[];
-}): {
-  prompt: string;
-  model?: string;
-  aspect_ratio?: string;
-  quality?: string;
-  resolution?: string;
-  images?: string[];
-} {
-  const body: {
-    prompt: string;
-    model?: string;
-    aspect_ratio?: string;
-    quality?: string;
-    resolution?: string;
-    images?: string[];
-  } = { prompt: opts.prompt };
-  if (!opts.canPickModel) body.model = cloudImageFallbackId() || undefined;
-  else if (opts.model) body.model = opts.model;
-  if (opts.aspect) body.aspect_ratio = opts.aspect;
-  if (opts.resolution) body.resolution = opts.resolution;
-  if (opts.isImageInteraction) body.quality = DEFAULT_IMAGE_QUALITY;
-  if (opts.attachedImages.length) body.images = opts.attachedImages;
-  return body;
-}
-
-function uniqueVisionUrls(urls: Array<string | null | undefined>, max = 4): string[] {
-  return urls
-    .filter((u): u is string => Boolean(u))
-    .filter((u, i, arr) => arr.indexOf(u) === i)
-    .slice(0, max);
-}
-
-function resolveDesignFocusFrameId(opts: {
-  freeCanvasMention: boolean;
-  editTargetId: string | null | undefined;
-  chipFrameId: string | null | undefined;
-}): string | null {
-  if (opts.freeCanvasMention) return null;
-  // Only explicit @ artboard is FOCUS. Do not auto-bind lastAgent/active —
-  // that made every「新设计登录页」rewrite the previous plate.
-  return opts.chipFrameId || null;
-}
-
-type ImageGenFinishKind = 'aborted' | 'failed' | 'success';
-
-function resolveImageGenFinishKind(opts: {
-  aborted: boolean;
-  urls: string[];
-}): ImageGenFinishKind {
-  if (opts.aborted) return 'aborted';
-  if (!opts.urls.length) return 'failed';
-  return 'success';
-}
-
-function mergeLongSuggestions<T extends { text: string }>(
-  prev: T[],
-  incoming: T[] | undefined
-): T[] {
-  if (!incoming?.length) return prev;
-  return [
-    ...prev,
-    ...incoming.filter((s) => !prev.some((p) => p.text === s.text)),
-  ];
-}
-
-type SendChipContext = {
-  frameChip: ComposerContext | undefined;
-  chipFrameId: string | null;
-  mentionNodeIds: string[];
-  attachedImages: string[];
-  mentionImageSrcs: string[];
-  skillRefs: string[];
-};
-
-function collectSendChipContext(chips: ComposerContext[]): SendChipContext {
-  const frameChip = chips.find((c) => c.kind === 'frame');
-  const chipFrameId = frameChip
-    ? chipBaseKey(frameChip.key).replace(/^frame:/, '')
-    : null;
-  const nodeChipIds = [
-    ...new Set(
-      chips
-        .map((c) => chipBaseKey(c.key))
-        .filter((k) => k.startsWith('node:'))
-        .map((k) => k.replace(/^node:/, ''))
-        .filter(Boolean)
-    ),
-  ];
-  const groupChip = chips.find((c) => c.kind === 'group' || c.kind === 'multi');
-  const groupMemberIds = groupChip
-    ? chipBaseKey(groupChip.key)
-        .replace(/^group:/, '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
-  const mentionNodeIds = nodeChipIds.length ? nodeChipIds : groupMemberIds;
-  const attachedImages = chips
-    .filter((c) => c.kind === 'attachment' && c.dataUrl)
-    .map((c) => String(c.dataUrl))
-    .filter((u) => u.startsWith('data:image/') || u.startsWith('http'));
-  const mentionImageSrcs = chips
-    .filter((c) => {
-      if (c.kind === 'attachment') return false;
-      const src = String(c.dataUrl || c.thumbUrl || '').trim();
-      return (
-        c.kind === 'image' ||
-        src.startsWith('data:image/') ||
-        src.startsWith('http') ||
-        src.startsWith('/')
-      );
-    })
-    .map((c) => String(c.dataUrl || c.thumbUrl || '').trim())
-    .filter(Boolean);
-  const skillRefs = [
-    ...new Set(
-      chips
-        .filter((c) => c.kind === 'skill')
-        .map((c) => {
-          const base = chipBaseKey(c.key);
-          if (base.startsWith('skill:')) return base.slice(6);
-          return String(c.payload || base).trim();
-        })
-        .filter(Boolean)
-    ),
-  ];
-  return {
-    frameChip,
-    chipFrameId,
-    mentionNodeIds,
-    attachedImages,
-    mentionImageSrcs,
-    skillRefs,
-  };
-}
-
-function resolveImageGenPlan(opts: {
-  isImageInteraction: boolean;
-  imageGenCountSetting: number;
-  isImageModelSelected: boolean;
-  imageResolution: string;
-  imageGenAspectRatio: string;
-  mentionNodeIds: string[];
-  docForFill: any;
-}): {
-  imageGenCount: number;
-  imageGenAspect?: string;
-  imageGenResolution?: string;
-  imageFillTargets: string[];
-} {
-  const imageGenCount = opts.isImageInteraction
-    ? Math.max(1, Math.min(4, Math.round(opts.imageGenCountSetting) || 1))
-    : opts.isImageModelSelected
-      ? 1
-      : 0;
-  let imageGenAspect: string | undefined;
-  let imageGenResolution: string | undefined;
-  const imageFillTargets: string[] = [];
-  if (!imageGenCount) {
-    return { imageGenCount, imageFillTargets };
-  }
-  if (opts.isImageInteraction) {
-    imageGenResolution = opts.imageResolution;
-    if (String(opts.imageGenAspectRatio).trim() !== 'smart') {
-      imageGenAspect = String(opts.imageGenAspectRatio).trim() || undefined;
-    }
-  }
-  for (const id of opts.mentionNodeIds) {
-    const n = opts.docForFill?.deltaSetLike?.[id];
-    if (!n) continue;
-    const key = String(n.key || '').toLowerCase();
-    if (['text', 'frame', 'artboard', 'group'].includes(key)) continue;
-    const shape = String(n.attrs?.shapeType || key || '').toLowerCase();
-    if (['line', 'arrow', 'pen', 'pencil'].includes(shape)) continue;
-    imageFillTargets.push(id);
-  }
-  if (imageFillTargets[0] && opts.docForFill) {
-    const n = opts.docForFill.deltaSetLike[imageFillTargets[0]];
-    const tw = Math.max(1, Number(n?.width) || 0);
-    const th = Math.max(1, Number(n?.height) || 0);
-    if (tw > 0 && th > 0) {
-      imageGenAspect = `${Math.round(tw)}:${Math.round(th)}`;
-    }
-  }
-  return { imageGenCount, imageGenAspect, imageGenResolution, imageFillTargets };
-}
-
-function buildStreamingAssistantSeed(opts: {
-  imageGenCount: number;
-  imageGenAspect?: string;
-  imageGenAspectRatio: string;
-  canPickModel: boolean;
-  model: string;
-  selectedModel?: LlmModel | null;
-  models: LlmModel[];
-  t: TFn;
-}): Pick<
-  ChatUiMessage,
-  'steps' | 'imagePendingCount' | 'imageAspectRatio' | 'imageModelId' | 'imageModelLabel'
-> {
-  if (opts.imageGenCount) {
-    const fallbackId = cloudImageFallbackId();
-    return {
-      imagePendingCount: opts.imageGenCount,
-      imageAspectRatio: opts.imageGenAspect || opts.imageGenAspectRatio,
-      imageModelId: !opts.canPickModel
-        ? fallbackId
-        : String(opts.model || opts.selectedModel?.id || ''),
-      imageModelLabel: String(
-        (!opts.canPickModel
-          ? opts.models.find((m) => m.id === fallbackId)?.label
-          : opts.selectedModel?.label) ||
-          opts.selectedModel?.id ||
-          opts.model ||
-          fallbackId
-      ),
-      steps: [],
-    };
-  }
-  return {
-    steps: [],
-  };
-}
-
-function buildVideoAssistantSeed(opts: {
-  videoGenAspect?: string;
-  videoGenAspectRatio: string;
-  canPickModel: boolean;
-  model: string;
-  selectedModel?: LlmModel | null;
-}): Pick<
-  ChatUiMessage,
-  'videoPendingCount' | 'imageAspectRatio' | 'imageModelId' | 'imageModelLabel' | 'steps'
-> {
-  const fallbackId = cloudVideoFallbackId();
-  return {
-    videoPendingCount: 1,
-    imageAspectRatio: opts.videoGenAspect || opts.videoGenAspectRatio,
-    imageModelId: !opts.canPickModel
-      ? fallbackId
-      : String(opts.model || opts.selectedModel?.id || fallbackId),
-    imageModelLabel: String(
-      opts.selectedModel?.label || opts.model || fallbackId
-    ),
-    steps: [],
-  };
-}
-
-type DesignSendMutable = {
-  designStarted: boolean;
-  canvasMutated: boolean;
-  nodesPainted: boolean;
-};
-
-function buildDesignSceneSnapshot(opts: {
-  docNow: any;
-  chipFrameId: string | null;
-  frameChip: ComposerContext | undefined;
-  mentionNodeIds: string[];
-  lastAgentFrameId: string | null;
-  taskStateFrameId?: string | null;
-  canvasUi?: CanvasUiBridge | null;
-}) {
-  let chipFrameId = opts.chipFrameId;
-  if (!chipFrameId && opts.mentionNodeIds.length && opts.docNow) {
-    chipFrameId = frameIdContainingNode(opts.docNow, opts.mentionNodeIds[0]);
-  }
-  const freeCanvasMention = Boolean(
-    opts.mentionNodeIds.length && !chipFrameId && !opts.frameChip
-  );
-  // Seed / focus only when user @ a frame — otherwise Host opens a sibling plate.
-  let editTarget: ReturnType<typeof resolveDesignTargetFrame> | null = null;
-  if (opts.docNow && chipFrameId) {
-    editTarget = resolveDesignTargetFrame(opts.docNow, chipFrameId, null);
-  }
-  const targetFrameId = resolveDesignFocusFrameId({
-    freeCanvasMention,
-    editTargetId: editTarget?.id,
-    chipFrameId,
-  });
-  const sceneNodes = opts.docNow
-    ? buildSceneNodesForCanvas(opts.docNow, {
-        focusFrameId: targetFrameId,
-        forceIds: opts.mentionNodeIds,
-      })
-    : [];
-  const sceneFrames = opts.docNow ? buildSceneFramesSnapshot(opts.docNow) : [];
-  const vp = opts.canvasUi?.getViewportSceneBounds?.() || null;
-  const spatialSummary = opts.docNow
-    ? buildSpatialSummary(opts.docNow, {
-        focusFrameId: targetFrameId,
-        viewport: vp
-          ? { x: vp.x, y: vp.y, w: vp.width, h: vp.height }
-          : null,
-      })
-    : null;
-  const seedLiveNodeIds = resolveSeedLiveNodeIds({
-    doc: opts.docNow,
-    editTarget,
-    freeCanvasMention,
-    mentionNodeIds: opts.mentionNodeIds,
-  });
-  return {
-    chipFrameId,
-    targetFrameId,
-    sceneNodes,
-    sceneFrames,
-    spatialSummary,
-    seedLiveNodeIds,
-  };
-}
-
-function createDesignAgentEventRouter(opts: {
-  t: TFn;
-  assistantId: string;
-  userMsg: ChatUiMessage;
-  chipNorm: string;
-  setMessages: (updater: (prev: ChatUiMessage[]) => ChatUiMessage[]) => void;
-  setImageAspectRatio: (next: string) => void;
-  setDesignScene: (scene: DesignScene) => void;
-  designSceneRef: { current: DesignScene | null };
-  lastAgentFrameIdRef: { current: string | null };
-  lastAgentSvgByFrameRef: { current: Map<string, string> };
-  checkpointsRef: { current: Map<string, any> };
-  store: ReturnType<typeof useStore>;
-  finishAssistantPatch: (m: ChatUiMessage, patch?: Partial<ChatUiMessage>) => ChatUiMessage;
-  mutable: DesignSendMutable;
-}) {
-  const handleUiChat = () => {
-    opts.mutable.designStarted = false;
-    opts.setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id !== opts.assistantId) return m;
-        return opts.finishAssistantPatch(m, {
-          content: (m.content || '').trim(),
-          steps: buildChatProcessSteps(opts.t, m),
-          thinking: undefined,
-          pipeline: undefined,
-          drawing: undefined,
-          intent: undefined,
-        });
-      })
-    );
-  };
-
-  const handleUiToken = (ev: Extract<AgentStepEvent, { type: 'token' }>) => {
-    opts.mutable.designStarted = false;
-    opts.setMessages((prev) =>
-      prev.map((m) =>
-        m.id === opts.assistantId
-          ? {
-              ...m,
-              content: (m.content || '') + (ev.text || ''),
-              intent: undefined,
-              thinking: undefined,
-            }
-          : m
-      )
-    );
-  };
-
-  const handleUiThinking = (ev: Extract<AgentStepEvent, { type: 'thinking' }>) => {
-    const piece = String(ev.text);
-    if (!piece) return;
-    opts.setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id !== opts.assistantId) return m;
-        return {
-          ...m,
-          steps: applyThinkingBodyToSteps(
-            m.steps || [],
-            piece,
-            Boolean(ev.replace),
-            opts.t
-          ),
-        };
-      })
-    );
-  };
-
-  const handleUiAnalysisDelta = (ev: Extract<AgentStepEvent, { type: 'analysis_delta' }>) => {
-    let piece = String(ev.text).replace(/^\s*(?:用户)?意图分析\s*[:：]\s*/i, '');
-    piece = piece.replace(/^\s*intent\s*analysis\s*[:：]\s*/i, '');
-    if (!piece.trim()) return;
-    opts.setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id !== opts.assistantId) return m;
-        const next = applyAnalysisDeltaToSteps(m.steps || [], piece);
-        return next ? { ...m, steps: next } : m;
-      })
-    );
-  };
-
-  const handleUiCanvas = (ev: Extract<AgentStepEvent, { type: 'canvas' }>) => {
-    const next = String(ev.size).trim();
-    const sendLocked = /^\d+x\d+$/.test(opts.chipNorm);
-    const keepAutoChip =
-      opts.chipNorm === 'auto' || /^(?:\d+xauto|autox\d+)$/.test(opts.chipNorm);
-    if (!sendLocked && next && !keepAutoChip) opts.setImageAspectRatio(next);
-    if (
-      ev.scene === 'website' ||
-      ev.scene === 'mobile' ||
-      ev.scene === 'image' ||
-      ev.scene === 'poster' ||
-      ev.scene === 'drawing'
-    ) {
-      opts.setDesignScene(ev.scene);
-      opts.designSceneRef.current = ev.scene;
-    }
-  };
-
-  const handleUiActivity = (ev: Extract<AgentStepEvent, { type: 'activity' }>) => {
-    if (ev.kind === 'tool' || ev.kind === 'added' || ev.kind === 'updated') {
-      opts.mutable.designStarted = true;
-    }
-    // Intent confirm / "understanding request" rows — keep off the chat timeline.
-    if (ev.kind === 'thought') return;
-    const actStatus = normalizeActivityStatus(ev.status);
-    const label = formatActivityLabel(opts.t, {
-      kind: ev.kind,
-      status: actStatus,
-      durationSec: ev.durationSec,
-      count: ev.count,
-      skillName: ev.skillName,
-      detail: ev.detail,
-      stage: ev.stage,
-    });
-    if (!label) return;
-    const detailText = (ev.detail || '').trim();
-    const summaryText = String(ev.summary || '').trim();
-    const bodyText = ev.body ? String(ev.body) : '';
-    const summary = activityRowSummary({
-      kind: ev.kind,
-      label,
-      detailText,
-      summaryText,
-      bodyText,
-    });
-    const variant = activityRowVariant(actStatus, ev.kind);
-    const nestItem = activityNestItem(opts.t, ev.item);
-    opts.setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id !== opts.assistantId) return m;
-        const next = applyActivityEventToSteps(m.steps || [], {
-          kind: ev.kind,
-          eventId: ev.id,
-          status: actStatus,
-          label,
-          summary,
-          variant,
-          nestItem,
-          bodyMd: bodyText,
-        });
-        return next ? { ...m, steps: next } : m;
-      })
-    );
-  };
-
-  const handleUiPhase = (ev: Extract<AgentStepEvent, { type: 'phase' }>) => {
-    const labels = ev.progress.labels || [];
-    opts.setMessages((prev) =>
-      prev.map((m) =>
-        m.id === opts.assistantId
-          ? {
-              ...m,
-              pipeline: {
-                category: ev.progress.category,
-                labels,
-                currentIndex: ev.progress.currentIndex,
-                stepConfirm: Boolean(ev.progress.stepConfirm),
-                collabMode:
-                  (ev.progress.collabMode as 'collaborative' | 'milestone' | 'auto' | undefined) ||
-                  'auto',
-              },
-            }
-          : m
-      )
-    );
-  };
-
-  const handleUiSvgDelta = (ev: Extract<AgentStepEvent, { type: 'svg_delta' }>) => {
-    opts.mutable.designStarted = true;
-    if (!ev.svg) return;
-    const fid =
-      opts.lastAgentFrameIdRef.current ||
-      (opts.store.getState() as any).editor.document?.activeFrameId ||
-      null;
-    if (!fid) return;
-    opts.lastAgentSvgByFrameRef.current.set(String(fid), ev.svg);
-    opts.lastAgentFrameIdRef.current = String(fid);
-  };
-
-  const handleUiError = (ev: Extract<AgentStepEvent, { type: 'error' }>) => {
-    const friendly = humanizeDesignError(opts.t, ev.message);
-    message.error(friendly);
-    opts.setMessages((prev) =>
-      prev.map((m) =>
-        m.id === opts.assistantId
-          ? opts.finishAssistantPatch(m, {
-              content: m.content || friendly || opts.t('agent.requestFailed'),
-              thinking: undefined,
-              pipeline: undefined,
-              drawing: undefined,
-              canResume: false,
-            })
-          : m
-      )
-    );
-  };
-
-  const handleUiPaused = (ev: Extract<AgentStepEvent, { type: 'paused' }>) => {
-    const tip = opts.t('agent.pausedHint');
-    opts.setMessages((prev) =>
-      prev.map((m) =>
-        m.id === opts.assistantId
-          ? opts.finishAssistantPatch(m, {
-              content: m.content?.trim() ? m.content : tip,
-              thinking: undefined,
-              pipeline: undefined,
-              drawing: undefined,
-              designTaskId: ev.taskId || m.designTaskId,
-              designResumeToken: ev.resumeToken || m.designResumeToken,
-              canResume: Boolean(ev.taskId || m.designTaskId),
-            })
-          : m
-      )
-    );
-  };
-
-  const handleUiTask = (ev: Extract<AgentStepEvent, { type: 'task' }>) => {
-    opts.setMessages((prev) =>
-      prev.map((m) =>
-        m.id === opts.assistantId
-          ? { ...m, designTaskId: ev.taskId, canResume: false }
-          : m
-      )
-    );
-  };
-
-  const handleUiDone = (ev: Extract<AgentStepEvent, { type: 'done' }>) => {
-    const painted = Boolean(ev.painted);
-    if (painted) {
-      opts.mutable.canvasMutated = true;
-      opts.mutable.nodesPainted = true;
-    }
-    opts.setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id === opts.assistantId) {
-          if (!opts.mutable.designStarted) {
-            return {
-              ...patchChatDoneAssistant(m, {
-                t: opts.t,
-                finish: opts.finishAssistantPatch,
-                choices: ev.choices,
-                proposedOps: ev.proposedOps,
-                proposalId: ev.proposalId,
-                applyChoice: ev.applyChoice,
-                choiceUi: ev.choiceUi,
-              }),
-              ...(ev.taskId ? { designTaskId: ev.taskId } : {}),
-              canResume: false,
-              designResumeToken: undefined,
-            };
-          }
-          return {
-            ...patchDesignDoneAssistant(m, {
-              t: opts.t,
-              finish: opts.finishAssistantPatch,
-              painted,
-              designStarted: opts.mutable.designStarted,
-              summary: ev.summary,
-              choices: ev.choices,
-              proposedOps: ev.proposedOps,
-              proposalId: ev.proposalId,
-              applyChoice: ev.applyChoice,
-              choiceUi: ev.choiceUi,
-            }),
-            ...(ev.taskId ? { designTaskId: ev.taskId } : {}),
-            canResume: false,
-            designResumeToken: undefined,
-          };
-        }
-        if (
-          m.id === opts.userMsg.id &&
-          painted &&
-          opts.checkpointsRef.current.has(opts.userMsg.id)
-        ) {
-          return { ...m, canRestore: true };
-        }
-        return m;
-      })
-    );
-  };
-
-  return (ev: AgentStepEvent) => {
-    switch (ev.type) {
-      case 'permission':
-        return;
-      case 'chat':
-        handleUiChat();
-        return;
-      case 'token':
-        handleUiToken(ev);
-        return;
-      case 'thinking':
-        if (ev.text) handleUiThinking(ev);
-        return;
-      case 'analysis_delta':
-        if (ev.text) handleUiAnalysisDelta(ev);
-        return;
-      case 'canvas':
-        if (ev.size) handleUiCanvas(ev);
-        return;
-      case 'analysis':
-        return;
-      case 'drawing':
-        opts.mutable.designStarted = true;
-        opts.setMessages((prev) =>
-          prev.map((m) =>
-            m.id === opts.assistantId ? { ...m, drawing: Boolean(ev.active) } : m
-          )
-        );
-        return;
-      case 'activity':
-        handleUiActivity(ev);
-        return;
-      case 'phase':
-        handleUiPhase(ev);
-        return;
-      case 'svg_delta':
-        handleUiSvgDelta(ev);
-        return;
-      case 'error':
-        handleUiError(ev);
-        return;
-      case 'paused':
-        handleUiPaused(ev);
-        return;
-      case 'task':
-        handleUiTask(ev);
-        return;
-      case 'done':
-        handleUiDone(ev);
-        return;
-      default:
-        return;
-    }
-  };
-}
-
 /** Agent panel: chat + model picker + Agent input. */
 function AgentDock({
   open,
+  openSignal = 0,
   onClose,
   className,
   floating = false,
@@ -2246,6 +539,14 @@ function AgentDock({
   const [imageAspectRatio, setImageAspectRatio] = useState<string>('auto');
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const desktopShell = isDesktopShell();
+  const [engineMode, setEngineMode] = useState<AgentEngineMode>(() =>
+    desktopShell ? readStoredEngineMode() : 'agent'
+  );
+  const [codingClis, setCodingClis] = useState<CodingCliOption[]>([]);
+  const [codingCliId, setCodingCliId] = useState(() =>
+    desktopShell ? readStoredCodingCliId() : ''
+  );
   /** @ / cube → model panel */
   const [modelPanelOpen, setModelPanelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
@@ -2359,20 +660,125 @@ function AgentDock({
     if (fid) lastAgentFrameIdRef.current = String(fid);
   }, [sessionId, taskState?.canvas?.last_agent_frame_id]);
 
-  useEffect(() => {
-    void fetchDesignCatalog()
-      .then((cat) => {
+  const catalogInflightRef = useRef<Promise<DesignCatalog | null> | null>(null);
+  const modelsInflightRef = useRef<Promise<LlmModel[]> | null>(null);
+  const skillsInflightRef = useRef<Promise<DesignSkillCard[]> | null>(null);
+  const codingClisInflightRef = useRef<Promise<CodingCliOption[]> | null>(null);
+  const lastHydrateSignalRef = useRef(0);
+
+  const ensureDesignCatalogLoaded = async (): Promise<DesignCatalog | null> => {
+    if (designCatalog) return designCatalog;
+    if (catalogInflightRef.current) return catalogInflightRef.current;
+    const pending = (async () => {
+      try {
+        const cat = await fetchDesignCatalog();
         setDesignCatalog(cat);
         void warmAgentRoutePresetRules(cat.global_rules);
         const keys = (cat.canvas_tools || []).map((t) => t.op_key).filter(Boolean);
         if (keys.length) setAllowedCanvasToolKeys(keys);
-        if (styleGroupId == null && cat.style_groups?.[0]) {
-          setStyleGroupId(cat.style_groups[0].id);
+        setStyleGroupId((prev) => prev ?? cat.style_groups?.[0]?.id ?? null);
+        return cat;
+      } catch {
+        return null;
+      } finally {
+        catalogInflightRef.current = null;
+      }
+    })();
+    catalogInflightRef.current = pending;
+    return pending;
+  };
+
+  const ensureModelsLoaded = async (): Promise<LlmModel[]> => {
+    if (modelsStatus === 'ready') return models;
+    if (modelsInflightRef.current) return modelsInflightRef.current;
+    setModelsStatus('loading');
+    const pending = (async () => {
+      try {
+        const res = await listModels();
+        warmOpenrouterAvailability(res?.openrouterAvailable);
+        const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
+        setModels(list);
+        setModelsStatus('ready');
+        setAvailable(Boolean(res?.available));
+        setModel((prev) => {
+          if (!canPickModel) return planAllowsModelId('free', prev) ? prev : 'auto';
+          if (prev === 'auto') return prev;
+          if (prev && list.some((m) => m.id === prev)) return prev;
+          return 'auto';
+        });
+        if (!res?.available) {
+          message.warning(
+            '未配置 API Key。请在 apps/api/.env 中设置 DEEPSEEK_API_KEY 或 LLM_API_KEY。'
+          );
         }
-      })
-      .catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
-  }, []);
+        return list;
+      } catch (err: any) {
+        setModels([]);
+        setModelsStatus('error');
+        setAvailable(false);
+        message.error(
+          err?.message ||
+            '无法加载模型列表。请先启动后端：npm run dev:api（端口 8000）'
+        );
+        return [] as LlmModel[];
+      } finally {
+        modelsInflightRef.current = null;
+      }
+    })();
+    modelsInflightRef.current = pending;
+    return pending;
+  };
+
+  const loadSkillCatalog = async (): Promise<DesignSkillCard[]> => {
+    if (skillsInflightRef.current) return skillsInflightRef.current;
+    const pending = (async () => {
+      try {
+        const res = await fetchDesignSkills();
+        const items = res.items || [];
+        setSkillCatalog(items);
+        return items;
+      } catch {
+        setSkillCatalog([]);
+        return [] as DesignSkillCard[];
+      } finally {
+        skillsInflightRef.current = null;
+      }
+    })();
+    skillsInflightRef.current = pending;
+    return pending;
+  };
+
+  const ensureCodingClisLoaded = async (): Promise<CodingCliOption[]> => {
+    if (!desktopShell) return [];
+    if (codingClis.length) return codingClis;
+    if (codingClisInflightRef.current) return codingClisInflightRef.current;
+    const pending = (async () => {
+      try {
+        const rows = await listCodingClisDesktop();
+        setCodingClis(rows);
+        setCodingCliId((prev) => {
+          if (prev && rows.some((r) => r.id === prev && r.available)) return prev;
+          const next = rows.find((c) => c.available)?.id || '';
+          if (next) persistCodingCliId(next);
+          return next;
+        });
+        return rows;
+      } catch {
+        setCodingClis([]);
+        return [] as CodingCliOption[];
+      } finally {
+        codingClisInflightRef.current = null;
+      }
+    })();
+    codingClisInflightRef.current = pending;
+    return pending;
+  };
+
+  const hydrateDockData = () => {
+    void ensureDesignCatalogLoaded();
+    void ensureModelsLoaded();
+    void ensureCodingClisLoaded();
+  };
 
   useEffect(() => {
     const onWinResize = () => setDockWidth((w) => clampAgentDockWidth(w));
@@ -2435,45 +841,20 @@ function AgentDock({
     });
   };
 
+  // UI-only when dock hides — do not fetch here.
   useEffect(() => {
-    if (!open) return;
+    if (!open) setModelPanelOpen(false);
+  }, [open]);
+
+  // openSignal bumped by EditorPage on first enter + each open click / shortcut.
+  useEffect(() => {
+    if (!open || openSignal < 1) return;
+    if (lastHydrateSignalRef.current === openSignal) return;
+    lastHydrateSignalRef.current = openSignal;
     setModelPanelOpen(false);
-    let cancelled = false;
-    setModelsStatus('loading');
-    listModels()
-      .then((res) => {
-        if (cancelled) return;
-        warmOpenrouterAvailability(res?.openrouterAvailable);
-        const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
-        setModels(list);
-        setModelsStatus('ready');
-        setAvailable(Boolean(res?.available));
-        setModel((prev) => {
-          if (!canPickModel) return planAllowsModelId('free', prev) ? prev : 'auto';
-          if (prev === 'auto') return prev;
-          if (prev && list.some((m) => m.id === prev)) return prev;
-          return 'auto';
-        });
-        if (!res?.available) {
-          message.warning(
-            '未配置 API Key。请在 apps/api/.env 中设置 DEEPSEEK_API_KEY 或 LLM_API_KEY。'
-          );
-        }
-      })
-      .catch((err: any) => {
-        if (cancelled) return;
-        setModels([]);
-        setModelsStatus('error');
-        setAvailable(false);
-        message.error(
-          err?.message ||
-            '无法加载模型列表。请先启动后端：npm run dev:api（端口 8000）'
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, canPickModel]);
+    hydrateDockData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- signal-driven hydrate; loaders short-circuit when ready
+  }, [open, openSignal]);
 
   useEffect(() => {
     if (canPickModel) return;
@@ -2868,7 +1249,13 @@ function AgentDock({
     if (opts?.purgeUploads) {
       for (const c of contextChips) {
         if (c.kind === 'attachment' && c.uploadKey) {
-          void deleteUploadedFile(c.uploadKey).catch(() => {});
+          void (async () => {
+            try {
+              await deleteUploadedFile(c.uploadKey);
+            } catch {
+              /* ignore */
+            }
+          })();
         }
       }
     }
@@ -2884,7 +1271,13 @@ function AgentDock({
       pinnedContextKeysRef.current.delete(c.key);
       contextDismissedKeyRef.current = c.key;
       if (c.kind === 'attachment' && c.uploadKey) {
-        void deleteUploadedFile(c.uploadKey).catch(() => {});
+        void (async () => {
+          try {
+            await deleteUploadedFile(c.uploadKey);
+          } catch {
+            /* ignore */
+          }
+        })();
       }
     }
     setContextChips(next);
@@ -3028,7 +1421,13 @@ function AgentDock({
           setContextChips((prev) => {
             if (!prev.some((c) => c.key === key)) {
               if (uploaded.uploadKey) {
-                void deleteUploadedFile(uploaded.uploadKey).catch(() => {});
+                void (async () => {
+                  try {
+                    await deleteUploadedFile(uploaded.uploadKey);
+                  } catch {
+                    /* ignore */
+                  }
+                })();
               }
               return prev;
             }
@@ -3272,9 +1671,25 @@ function AgentDock({
     const tid = liveDesignTaskRef.current;
     pauseRequestedRef.current = true;
     if (tid) {
-      void pauseDesignRun(tid).catch(() => undefined);
+      void (async () => {
+        try {
+          await pauseDesignRun(tid);
+        } catch {
+          /* ignore */
+        }
+      })();
     }
     abortRef.current?.abort();
+    if (desktopShell && engineMode === 'cli') {
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('kill_coding_cli');
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
     dispatch(setAgentBusy(false));
     setSending(false);
     setMessages((prev) =>
@@ -3484,7 +1899,12 @@ function AgentDock({
       message.warning(t('agent.attachWaitUpload'));
       return;
     }
-    if (available === false) {
+    const useCodingCli =
+      desktopShell &&
+      engineMode === 'cli' &&
+      !forceAgent &&
+      !options.applyOps?.length;
+    if (available === false && !useCodingCli) {
       message.warning(
         '未配置 API Key。请在 apps/api/.env 中设置 DEEPSEEK_API_KEY 或 LLM_API_KEY。'
       );
@@ -3553,11 +1973,13 @@ function AgentDock({
       mentionNodeIds,
       docForFill,
     });
-    const runVideoGen = shouldRunVideoGenPath({
-      isVideoModelSelected,
-      forceAgent,
-      hasApplyOps: Boolean(options.applyOps?.length),
-    });
+    const runVideoGen =
+      !useCodingCli &&
+      shouldRunVideoGenPath({
+        isVideoModelSelected,
+        forceAgent,
+        hasApplyOps: Boolean(options.applyOps?.length),
+      });
     const videoGenAspect =
       String(videoGenAspectRatio).trim() !== 'smart'
         ? String(videoGenAspectRatio).trim() || undefined
@@ -3666,6 +2088,137 @@ function AgentDock({
               videoPendingCount: undefined,
               steps: [],
             })
+        );
+      } finally {
+        dispatch(setAgentBusy(false));
+        setSending(false);
+      }
+      return;
+    }
+
+    // Local coding CLI — mutually exclusive with Design Agent (LangGraph untouched).
+    if (useCodingCli) {
+      dispatch(setAgentBusy(true));
+      const cliId = codingCliId || codingClis.find((c) => c.available)?.id || '';
+      let streamed = '';
+      const appendToken = (chunk: string) => {
+        if (!chunk) return;
+        streamed += chunk;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: `${m.content || ''}${chunk}` }
+              : m
+          )
+        );
+      };
+      try {
+        if (!cliId) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? finishAssistantPatch(m, { content: t('agent.engineCliMissing') })
+                : m
+            )
+          );
+          return;
+        }
+        const docNow = (store.getState() as any).editor?.document;
+        const {
+          chipFrameId,
+          targetFrameId,
+          sceneNodes,
+          sceneFrames,
+          spatialSummary,
+        } = buildDesignSceneSnapshot({
+          docNow,
+          chipFrameId: chipFrameIdFromContext,
+          frameChip,
+          mentionNodeIds,
+          lastAgentFrameId: lastAgentFrameIdRef.current,
+          taskStateFrameId: taskState?.canvas?.last_agent_frame_id || null,
+          canvasUi,
+        });
+        if (docNow) {
+          try {
+            checkpointsRef.current.set(userMsg.id, JSON.parse(JSON.stringify(docNow)));
+          } catch {
+            /* ignore snapshot failure */
+          }
+        }
+        const cwd = await prepareCodingCliWorkspaceDesktop({
+          projectId: chatScopeId || '__none__',
+          files: buildCodingCliWorkspaceFiles({
+            userPrompt: userMessageForApi,
+            skillRefs,
+            scene: {
+              focusFrameId: chipFrameId || targetFrameId,
+              frames: sceneFrames,
+              nodes: sceneNodes,
+              spatial: spatialSummary,
+            },
+          }),
+        });
+        appendToken(`${t('agent.engineCliRunning')}\n\n`);
+        await runCodingCliDesktop({
+          cliId,
+          cwd,
+          prompt: buildCodingCliEnrichedPrompt({
+            userPrompt: userMessageForApi,
+            cwd,
+            skillRefs,
+          }),
+          signal: ac.signal,
+          onChunk: appendToken,
+        });
+        if (ac.signal.aborted) return;
+        const ops = extractToolOpsFromText(streamed);
+        let applied = { created: 0, updated: 0, deleted: 0 };
+        if (ops.length) {
+          const paint = await applyAgentToolOps({
+            ops,
+            dispatch,
+            getDocument: () => (store.getState() as any).editor?.document,
+            frameId: targetFrameId,
+            signal: ac.signal,
+            sceneNodes,
+            canvasUi,
+          });
+          applied = {
+            created: paint.created,
+            updated: paint.updated,
+            deleted: paint.deleted,
+          };
+          if (paint.frameId) lastAgentFrameIdRef.current = paint.frameId;
+        }
+        const footer = codingCliApplyFooter({ t, ops, applied });
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? finishAssistantPatch(m, {
+                  content: m.content?.trim()
+                    ? `${m.content.trim()}\n\n_${footer}_`
+                    : footer,
+                })
+              : m
+          )
+        );
+      } catch (err) {
+        if (ac.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+          return;
+        }
+        const msg =
+          err instanceof Error && err.message ? err.message : t('agent.requestFailed');
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? finishAssistantPatch(m, {
+                  content: m.content?.trim()
+                    ? `${m.content.trim()}\n\n${msg}`
+                    : msg,
+                })
+              : m
+          )
         );
       } finally {
         dispatch(setAgentBusy(false));
@@ -4177,6 +2730,44 @@ function AgentDock({
     setSkillQuery('');
   };
 
+  const handleToggleHistory = () => {
+    closePopovers();
+    setHistoryOpen((v) => {
+      const next = !v;
+      if (next) void refreshSessions();
+      return next;
+    });
+  };
+
+  const handleHeaderClose = () => {
+    abortRef.current?.abort();
+    if (desktopShell && engineMode === 'cli') {
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('kill_coding_cli');
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
+    dispatch(setAgentBusy(false));
+    setSending(false);
+    closePopovers();
+    setHistoryOpen(false);
+    onClose();
+  };
+
+  const handleEngineModeChange = (mode: AgentEngineMode) => {
+    setEngineMode(mode);
+    persistEngineMode(mode);
+  };
+
+  const handleCodingCliChange = (id: string) => {
+    setCodingCliId(id);
+    persistCodingCliId(id);
+  };
+
   const slashTriggerIndex = (value: string): number => {
     for (let i = value.length - 1; i >= 0; i -= 1) {
       if (value[i] !== '/') continue;
@@ -4207,6 +2798,7 @@ function AgentDock({
       setMentionQuery('');
       setSkillQuery(slash.query);
       setSkillPanelOpen(true);
+      void loadSkillCatalog();
       return;
     }
     if (at.open) {
@@ -4247,21 +2839,6 @@ function AgentDock({
       ...(s.logo ? { thumbUrl: s.logo } : {}),
     }));
   }, [skillCatalog, t]);
-
-  useEffect(() => {
-    if (!skillPanelOpen) return;
-    let cancelled = false;
-    void fetchDesignSkills()
-      .then((res) => {
-        if (!cancelled) setSkillCatalog(res.items || []);
-      })
-      .catch(() => {
-        if (!cancelled) setSkillCatalog([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [skillPanelOpen]);
 
   const insertMentionAttachChip = (att: ComposerContext, ordinal: number) => {
     const kind = composerAttachmentMediaKind(att);
@@ -4402,6 +2979,7 @@ function AgentDock({
     onOpenChange: (open) => {
       setSkillPanelOpen(open);
       if (!open) setSkillQuery('');
+      else void loadSkillCatalog();
     },
     placement: 'bottom-start',
     strategy: 'fixed',
@@ -4532,11 +3110,14 @@ function AgentDock({
       }
       setModelPanelOpen(next);
     },
-    panel: (
+    // Dropdown keeps portal mounted when closed — only mount prefs (catalog/models) when open.
+    panel: modelPanelOpen ? (
       <AgentRoutePrefsEditor
         compact
         modeLabel={interactionModeLabel(interactionMode, t)}
       />
+    ) : (
+      <span className="hidden" aria-hidden />
     ),
     icon: <HiOutlineBookOpen className="h-4 w-4 shrink-0" strokeWidth={1.75} />,
   };
@@ -4567,7 +3148,12 @@ function AgentDock({
         onStop={stopGeneration}
         disabled={false}
         placeholder={composerPlaceholder}
-        canSend={!sending && !!editDraft.trim() && available !== false && !attachmentsUploading}
+        canSend={
+          !sending &&
+          !!editDraft.trim() &&
+          (available !== false || (desktopShell && engineMode === 'cli')) &&
+          !attachmentsUploading
+        }
         sendVariant="circle"
         sendTone="ink"
         {...attachProps}
@@ -4605,22 +3191,13 @@ function AgentDock({
         showNewChatTip={!onlyImageInteraction && newChatTip}
         showClose={!floating}
         onNewChat={startNewChat}
-        onToggleHistory={() => {
-          closePopovers();
-          setHistoryOpen((v) => {
-            const next = !v;
-            if (next) void refreshSessions();
-            return next;
-          });
-        }}
-        onClose={() => {
-          abortRef.current?.abort();
-          dispatch(setAgentBusy(false));
-          setSending(false);
-          closePopovers();
-          setHistoryOpen(false);
-          onClose();
-        }}
+        onToggleHistory={handleToggleHistory}
+        onClose={handleHeaderClose}
+        engineMode={desktopShell ? engineMode : undefined}
+        onEngineModeChange={desktopShell ? handleEngineModeChange : undefined}
+        codingClis={desktopShell ? codingClis : undefined}
+        codingCliId={desktopShell ? codingCliId : undefined}
+        onCodingCliChange={desktopShell ? handleCodingCliChange : undefined}
       />
 
       <AgentMessageList
@@ -4675,7 +3252,7 @@ function AgentDock({
               canSend={
                 !sending &&
                 (!!input.trim() || contextChips.length > 0) &&
-                available !== false &&
+                (available !== false || (desktopShell && engineMode === 'cli')) &&
                 !attachmentsUploading
               }
               sendVariant="circle"
@@ -4693,43 +3270,22 @@ function AgentDock({
         />
       )}
 
-      {!historyOpen && mentionPanelOpen ? (
-        <FloatingPortal>
-          <div
-            ref={mentionFloating.refs.setFloating}
-            style={mentionFloating.floatingStyles as CSSProperties}
-            className="z-[80]"
-            {...mentionIx.getFloatingProps()}
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <MentionAttachPanel
-              items={mentionItems}
-              query={mentionQuery}
-              onPick={pickMentionAttach}
-              onPickLibraryAsset={pickMentionLibraryAsset}
-            />
-          </div>
-        </FloatingPortal>
-      ) : null}
-
-      {!historyOpen && skillPanelOpen ? (
-        <FloatingPortal>
-          <div
-            ref={skillFloating.refs.setFloating}
-            style={skillFloating.floatingStyles as CSSProperties}
-            className="z-[80]"
-            {...skillIx.getFloatingProps()}
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <MentionAttachPanel
-              variant="skill"
-              items={skillMentionItems}
-              query={skillQuery}
-              onPick={pickSkillMention}
-            />
-          </div>
-        </FloatingPortal>
-      ) : null}
+      <AgentDockFloatingPanels
+        historyOpen={historyOpen}
+        mentionPanelOpen={mentionPanelOpen}
+        skillPanelOpen={skillPanelOpen}
+        mentionFloating={mentionFloating}
+        mentionIx={mentionIx}
+        mentionItems={mentionItems}
+        mentionQuery={mentionQuery}
+        onPickMention={pickMentionAttach}
+        onPickMentionLibraryAsset={pickMentionLibraryAsset}
+        skillFloating={skillFloating}
+        skillIx={skillIx}
+        skillMentionItems={skillMentionItems}
+        skillQuery={skillQuery}
+        onPickSkillMention={pickSkillMention}
+      />
     </aside>
   );
 }

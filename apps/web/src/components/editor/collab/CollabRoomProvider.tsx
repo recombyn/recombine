@@ -110,7 +110,12 @@ async function persistCloudSnapshot(opts: {
   scene: unknown;
 }): Promise<void> {
   const { id, name, scene } = opts;
-  const draft = await getProjectDraft(id).catch(() => null);
+  let draft: Awaited<ReturnType<typeof getProjectDraft>> | null = null;
+  try {
+    draft = await getProjectDraft(id);
+  } catch {
+    draft = null;
+  }
   const baseRevision =
     draft?.cloudRevision != null && Number(draft.cloudRevision) >= 1
       ? Number(draft.cloudRevision)
@@ -644,7 +649,13 @@ export function CollabRoomProvider({
         const scene = sceneFromYDoc(ydoc);
         if (!id || !scene) return;
         if (id.startsWith('share_')) {
-          void updateShareDocumentApi(id, scene).catch(() => undefined);
+          void (async () => {
+            try {
+              await updateShareDocumentApi(id, scene);
+            } catch {
+              /* ignore */
+            }
+          })();
           return;
         }
         const ed = store.getState().editor as {

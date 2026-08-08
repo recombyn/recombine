@@ -7,32 +7,25 @@ import {
 } from '../alignGuides';
 import { inflateBoxByVisualOutset } from '../../scene/document/sceneEffects';
 
-/** Same settle order as computeMovedUnion (grid → smart → grid). */
+/** Same settle order as computeMovedUnion (smart → grid lattice pin). */
 function productionMoveSettle(opts: {
   box: { left: number; top: number; width: number; height: number };
   targets: Array<{ left: number; top: number; width: number; height: number }>;
   zoom: number;
   gridSize?: number;
-  stickyAt?: { x?: number; y?: number } | null;
 }) {
   const gridSize = opts.gridSize ?? 1;
   const threshold = smartSnapThreshold(opts.zoom);
   let next = { ...opts.box };
-  let stickyAt = opts.stickyAt || {};
-  if (gridSize > 0) next = snapBoxToGrid(next, gridSize);
   if (threshold > 0 && opts.targets.length) {
-    const smart = snapMoveToSmartGuides({
+    next = snapMoveToSmartGuides({
       box: next,
       targets: opts.targets,
       threshold,
-      gridSize,
-      stickyAt,
-    });
-    next = smart.box;
-    stickyAt = smart.stickyAt;
+    }).box;
   }
   if (gridSize > 0) next = snapBoxToGrid(next, gridSize);
-  return { box: next, threshold, stickyAt };
+  return { box: next, threshold };
 }
 
 function assertBoxOnGrid(
@@ -43,7 +36,7 @@ function assertBoxOnGrid(
   expect(box.top).toBe(snapCoordToGrid(box.top, gridSize));
 }
 
-describe('move snap stickiness + grid integrity', () => {
+describe('move snap grid integrity (magnets + lattice pin)', () => {
   const sibling = { left: 0, top: 0, width: 135, height: 292 };
 
   it('oscillating near a sibling never leaves the grid at any zoom', () => {
@@ -124,59 +117,26 @@ describe('move snap stickiness + grid integrity', () => {
     }
   });
 
-  it('sticky hysteresis stops flush↔gap-4 flip-flop while pointer jitters', () => {
-    const left = { left: 0, top: 0, width: 100, height: 80 };
-    // Two competing X snaps ~4 apart: flush at 100, and right-edge align at 104
-    // (same-size sibling would use centers; here use a second target).
-    const rightAnchor = { left: 204, top: 0, width: 100, height: 80 };
-    const targets = [left, rightAnchor];
-    // Flush to left → box.left=100; flush to rightAnchor left → box.left=104.
-    let stickyAt: { x?: number; y?: number } = {};
-    const seen = new Set<number>();
-    for (let i = 0; i < 20; i += 1) {
-      const intended = 102 + (i % 2 === 0 ? -0.2 : 0.2);
-      const settled = productionMoveSettle({
-        box: { left: intended, top: 0, width: 100, height: 80 },
-        targets,
-        zoom: 1,
-        stickyAt,
-      });
-      stickyAt = settled.stickyAt;
-      seen.add(settled.box.left);
-      assertBoxOnGrid(settled.box, 1);
-    }
-    // Without sticky this chatters 100↔104; with sticky it should hold one side.
-    expect(seen.size).toBe(1);
-  });
-
-  it('after first sticky flush, intentional move to competing guide re-aligns (not stuck)', () => {
-    // Repro: first horizontal snap locks sticky; hunting the neighbor magnet
-    // felt "卡住" until a vertical nudge left the band. Sticky may break ties /
-    // ±jitter, but must not keep a guide that is clearly farther than another.
+  it('closest offset wins each frame — no sticky hold', () => {
     const left = { left: 0, top: 0, width: 100, height: 80 };
     const rightAnchor = { left: 204, top: 0, width: 100, height: 80 };
     const targets = [left, rightAnchor];
-    let stickyAt: { x?: number; y?: number } = {};
 
     const first = productionMoveSettle({
       box: { left: 100.4, top: 0, width: 100, height: 80 },
       targets,
       zoom: 1,
-      stickyAt,
+      gridSize: 0,
     });
     expect(first.box.left).toBe(100);
-    stickyAt = first.stickyAt;
-    expect(stickyAt.x).toBe(100);
 
-    // Pointer clearly prefers the competing flush (104): ~1.2px closer raw.
-    // Old hysteresis=2 kept score(sticky)=0.8 < 1.2 → stuck at 100.
+    // Pointer clearly prefers the competing flush (104).
     const second = productionMoveSettle({
       box: { left: 102.8, top: 0, width: 100, height: 80 },
       targets,
       zoom: 1,
-      stickyAt,
+      gridSize: 0,
     });
-    expect(second.box.left).toBe(104);
-    assertBoxOnGrid(second.box, 1);
+    expect(second.box.left).toBeCloseTo(104, 9);
   });
 });

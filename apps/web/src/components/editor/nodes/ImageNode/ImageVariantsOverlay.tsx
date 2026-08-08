@@ -12,8 +12,6 @@ import {
 } from '@/components/rcb/scene/document/sceneDocument';
 import { detachImageVariant, patchDocumentNode } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
-import ImageReplaceUploadControl from './ImageReplaceUploadControl';
-
 const EDGE_PAD = 10;
 const EXPAND_GAP = 12;
 const CORNER_BTN = 20;
@@ -63,7 +61,7 @@ function expandedAltLayout(
 }
 
 /**
- * Multi-gen stack: one top-right corner bar (replace + “N张图”) + expand tiles.
+ * Multi-gen stack: top-right “N张图” count + expand tiles.
  * Positioned from the same scene box as selection chrome so controls never overlap.
  */
 function ImageVariantsOverlay({
@@ -77,7 +75,7 @@ function ImageVariantsOverlay({
 }: {
   document: any;
   nodeId: string;
-  /** Scene-space image box (same as SelectionFeature / replace button). */
+  /** Scene-space image box (same as SelectionFeature chrome). */
   box: SceneBox;
   angle?: number;
   imageHovered?: boolean;
@@ -89,7 +87,6 @@ function ImageVariantsOverlay({
   const camera = useRcbCamera();
   const [expanded, setExpanded] = useState(false);
   const [barHovered, setBarHovered] = useState(false);
-  const [replaceLoading, setReplaceLoading] = useState(false);
 
   const node = nodeId ? document?.deltaSetLike?.[nodeId] : null;
   const urls = useMemo(() => (node ? listImageVariantUrls(node) : []), [node]);
@@ -142,7 +139,7 @@ function ImageVariantsOverlay({
   };
   const count = urls.length;
   const altLayout = expandedAltLayout(stageBox, alts.length);
-  const visible = replaceLoading || imageHovered || barHovered || expanded;
+  const visible = imageHovered || barHovered || expanded;
 
   const frameStyle: CSSProperties = {
     position: 'absolute',
@@ -184,10 +181,10 @@ function ImageVariantsOverlay({
         data-scene-node-id={nodeId}
         className="pointer-events-none"
       >
-        {/* One corner bar: replace + count — shared position, hover-visible */}
+        {/* Corner count — hover-visible; replace lives in the context menu */}
         <div className="pointer-events-none absolute z-[36]" style={frameStyle}>
           <div
-            data-image-replace
+            data-image-variants-bar
             data-image-node-id={nodeId}
             className={cn(
               'absolute flex items-center gap-1 transition-opacity duration-150',
@@ -200,11 +197,6 @@ function ImageVariantsOverlay({
             onPointerEnter={() => setBarHovered(true)}
             onPointerLeave={() => setBarHovered(false)}
           >
-            <ImageReplaceUploadControl
-              nodeId={nodeId}
-              sceneBox={box}
-              onLoadingChange={setReplaceLoading}
-            />
             <button
               type="button"
               aria-expanded={expanded}

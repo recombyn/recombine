@@ -5,7 +5,7 @@ export const CHAT_IMAGE_DRAG_MIME = 'application/x-recombyn-chat-image';
 export const MEDIA_ASSET_DRAG_MIME = 'application/x-recombyn-media-asset';
 
 export type MediaAssetDragPayload = {
-  kind: 'image' | 'video' | 'audio';
+  kind: 'image' | 'video' | 'audio' | 'lottie';
   src: string;
   uploadKey?: string | null;
   width?: number | null;
@@ -14,6 +14,13 @@ export type MediaAssetDragPayload = {
   name?: string | null;
   duration?: number | null;
 };
+
+/**
+ * In-memory drag payload — DataTransfer cannot hold large ``data:`` URLs
+ * (browser silently drops custom MIME / truncates), which made Assets→canvas
+ * drags fall through to the stage as a click.
+ */
+let pendingMediaAssetDrag: MediaAssetDragPayload | null = null;
 
 function dataTransferHasType(dt: DataTransfer, mime: string): boolean {
   if (dt.types?.includes?.(mime)) return true;
@@ -28,19 +35,38 @@ function dataTransferHasType(dt: DataTransfer, mime: string): boolean {
   return false;
 }
 
+/** Slim src for DataTransfer — never embed multi-MB base64. */
+function slimDragSrc(payload: MediaAssetDragPayload): string {
+  const src = String(payload.src || '').trim();
+  const key = String(payload.uploadKey || '').trim();
+  if (src.startsWith('data:') || src.startsWith('blob:')) {
+    return key ? `/api/v1/uploads/files/${key}` : '';
+  }
+  return src;
+}
+
 export function setChatImageDragData(dt: DataTransfer, src: string): void {
   const url = String(src || '').trim();
   if (!url) return;
   dt.setData(CHAT_IMAGE_DRAG_MIME, url);
-  dt.setData('text/uri-list', url);
-  dt.setData('text/plain', url);
+  if (!url.startsWith('data:') && !url.startsWith('blob:')) {
+    dt.setData('text/uri-list', url);
+    dt.setData('text/plain', url);
+  } else {
+    // Huge data URLs blow DataTransfer limits — MIME marker is enough for same-tab drop
+    // if a caller also keeps an in-memory URL; otherwise plain marker.
+    dt.setData('text/plain', 'image');
+  }
   dt.effectAllowed = 'copy';
 }
 
 export function readChatImageDragUrl(dt: DataTransfer | null | undefined): string | null {
   if (!dt) return null;
   const fromMime = String(dt.getData(CHAT_IMAGE_DRAG_MIME) || '').trim();
-  if (fromMime) return fromMime;
+  if (fromMime && fromMime !== 'image' && !fromMime.startsWith('data:')) return fromMime;
+  if (fromMime.startsWith('data:') || fromMime.startsWith('blob:') || fromMime.startsWith('http')) {
+    return fromMime;
+  }
   const uri = String(dt.getData('text/uri-list') || '')
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -66,28 +92,57 @@ export function setMediaAssetDragData(
 ): void {
   const src = String(payload.src || '').trim();
   const kind = payload.kind;
-  if (!src || (kind !== 'image' && kind !== 'video' && kind !== 'audio')) return;
+  if (
+    !src ||
+    (kind !== 'image' && kind !== 'video' && kind !== 'audio' && kind !== 'lottie')
+  ) {
+    return;
+  }
+
+  pendingMediaAssetDrag = {
+    kind,
+    src,
+    uploadKey: payload.uploadKey || undefined,
+    width: payload.width || undefined,
+    height: payload.height || undefined,
+    prompt: payload.prompt || undefined,
+    name: payload.name || undefined,
+    duration: payload.duration || undefined,
+  };
+
+  const slimSrc = slimDragSrc(pendingMediaAssetDrag);
   dt.setData(
     MEDIA_ASSET_DRAG_MIME,
     JSON.stringify({
       kind,
-      src,
-      uploadKey: payload.uploadKey || undefined,
-      width: payload.width || undefined,
-      height: payload.height || undefined,
-      prompt: payload.prompt || undefined,
-      name: payload.name || undefined,
-      duration: payload.duration || undefined,
+      src: slimSrc || 'pending',
+      uploadKey: pendingMediaAssetDrag.uploadKey,
+      width: pendingMediaAssetDrag.width,
+      height: pendingMediaAssetDrag.height,
+      prompt: pendingMediaAssetDrag.prompt,
+      name: pendingMediaAssetDrag.name,
+      duration: pendingMediaAssetDrag.duration,
     })
   );
-  dt.setData('text/uri-list', src);
-  dt.setData('text/plain', src);
+  if (slimSrc && !slimSrc.startsWith('data:')) {
+    dt.setData('text/uri-list', slimSrc);
+    dt.setData('text/plain', slimSrc);
+  } else {
+    dt.setData('text/plain', kind);
+  }
   dt.effectAllowed = 'copy';
+}
+
+export function clearMediaAssetDragData(): void {
+  pendingMediaAssetDrag = null;
 }
 
 export function readMediaAssetDragPayload(
   dt: DataTransfer | null | undefined
 ): MediaAssetDragPayload | null {
+  if (pendingMediaAssetDrag) {
+    return pendingMediaAssetDrag;
+  }
   if (!dt) return null;
   const raw = String(dt.getData(MEDIA_ASSET_DRAG_MIME) || '').trim();
   if (!raw) return null;
@@ -95,7 +150,13 @@ export function readMediaAssetDragPayload(
     const parsed = JSON.parse(raw) as MediaAssetDragPayload;
     const src = String(parsed?.src || '').trim();
     const kind = String(parsed?.kind || '').trim();
-    if (!src || (kind !== 'image' && kind !== 'video' && kind !== 'audio')) return null;
+    if (
+      !src ||
+      src === 'pending' ||
+      (kind !== 'image' && kind !== 'video' && kind !== 'audio' && kind !== 'lottie')
+    ) {
+      return null;
+    }
     return {
       kind,
       src,
@@ -113,5 +174,6 @@ export function readMediaAssetDragPayload(
 
 export function dataTransferHasMediaAsset(dt: DataTransfer | null | undefined): boolean {
   if (!dt) return false;
+  if (pendingMediaAssetDrag) return true;
   return dataTransferHasType(dt, MEDIA_ASSET_DRAG_MIME);
 }

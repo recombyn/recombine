@@ -377,10 +377,10 @@ function HomeAgentComposer({
     // Hero Image / Video tabs ↔ composer interaction chrome.
     if (category === 'image') {
       leaveVideoMode();
-      enterImageMode();
+      void enterImageModeWithModels();
     } else if (category === 'video') {
       leaveImageMode();
-      enterVideoMode();
+      void enterVideoModeWithModels();
     } else {
       leaveImageMode();
       leaveVideoMode();
@@ -425,28 +425,43 @@ function HomeAgentComposer({
     ? `${placeholderPrefix}${typedPrompt}${caretOn ? '|' : ' '}`
     : '';
 
-  useEffect(() => {
-    let cancelled = false;
+  const modelsInflightRef = useRef<Promise<LlmModel[]> | null>(null);
+
+  /** Models catalog — only when Image/Video mode or opening a model picker (not on home mount). */
+  const ensureModelsLoaded = async (): Promise<LlmModel[]> => {
+    if (modelsStatus === 'ready') return models;
+    if (modelsInflightRef.current) return modelsInflightRef.current;
     setModelsStatus('loading');
-    listModels()
-      .then((res) => {
-        if (cancelled) return;
+    const pending = (async () => {
+      try {
+        const res = await listModels();
         warmOpenrouterAvailability(res?.openrouterAvailable);
         const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
         setModels(list);
         setModelsStatus('ready');
         setModelId((prev) => resolveModelIdAfterCatalogLoad(prev, list, canPickModel));
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setModels([]);
-          setModelsStatus('error');
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canPickModel]);
+        return list;
+      } catch {
+        setModels([]);
+        setModelsStatus('error');
+        return [] as LlmModel[];
+      } finally {
+        modelsInflightRef.current = null;
+      }
+    })();
+    modelsInflightRef.current = pending;
+    return pending;
+  };
+
+  const enterImageModeWithModels = async () => {
+    const list = await ensureModelsLoaded();
+    enterImageMode(list);
+  };
+
+  const enterVideoModeWithModels = async () => {
+    const list = await ensureModelsLoaded();
+    enterVideoMode(list);
+  };
 
   const canSend = value.trim().length > 0 && !hasUploadingAttachment(contexts);
   const selectedModel =
@@ -505,7 +520,10 @@ function HomeAgentComposer({
           />
         ),
         modelOpen: imageModelPanelOpen,
-        onModelOpenChange: setImageModelPanelOpen,
+        onModelOpenChange: (next) => {
+          if (next) void ensureModelsLoaded();
+          setImageModelPanelOpen(next);
+        },
         modelPanel: (
           <ModelPickerPanel
             tab="image"
@@ -549,7 +567,10 @@ function HomeAgentComposer({
           />
         ),
         modelOpen: videoModelPanelOpen,
-        onModelOpenChange: setVideoModelPanelOpen,
+        onModelOpenChange: (next) => {
+          if (next) void ensureModelsLoaded();
+          setVideoModelPanelOpen(next);
+        },
         modelPanel: (
           <ModelPickerPanel
             tab="video"
@@ -581,7 +602,7 @@ function HomeAgentComposer({
       // Do not force default WxH here — SizePresetPanel already applied the picked size
       // (resetting to 1080×1920 etc. made A0 / custom poster picks look like a no-op).
       if (scene === 'image') {
-        enterImageMode();
+        void enterImageModeWithModels();
         return;
       }
       leaveImageMode();
@@ -764,7 +785,13 @@ function HomeAgentComposer({
           setContexts((prev) => {
             if (!prev.some((c) => c.key === key)) {
               if (uploaded.uploadKey) {
-                void deleteUploadedFile(uploaded.uploadKey).catch(() => {});
+                void (async () => {
+                  try {
+                    await deleteUploadedFile(uploaded.uploadKey!);
+                  } catch {
+                    /* ignore */
+                  }
+                })();
               }
               return prev;
             }
@@ -792,7 +819,13 @@ function HomeAgentComposer({
     const removed = contexts.filter((c) => !next.some((n) => n.key === c.key));
     for (const c of removed) {
       if (c.kind === 'attachment' && c.uploadKey) {
-        void deleteUploadedFile(c.uploadKey).catch(() => {});
+        void (async () => {
+          try {
+            await deleteUploadedFile(c.uploadKey!);
+          } catch {
+            /* ignore */
+          }
+        })();
       }
     }
     setContexts(next);
@@ -904,19 +937,20 @@ function HomeAgentComposer({
             ? t('agent.attachMaxReached', { count: attachmentLimit })
             : t('agent.uploadImage')
         }
-        sendVariant="square"
+        sendVariant="circle"
+        sendTone="ink"
         showInteractionModePicker={false}
         leadingActions={homeExampleActions}
         interactionMode={interactionMode}
         onInteractionModeChange={(mode) => {
           if (mode === 'image') {
             onCategoryChange?.('image');
-            enterImageMode();
+            void enterImageModeWithModels();
             return;
           }
           if (mode === 'video') {
             onCategoryChange?.('video');
-            enterVideoMode();
+            void enterVideoModeWithModels();
             return;
           }
           if (category === 'image' || category === 'video') {
@@ -948,8 +982,11 @@ function HomeAgentComposer({
             }
             setModelOpen(next);
           },
-          panel: (
+          // Dropdown keeps portal mounted when closed — only mount prefs (catalog/models) when open.
+          panel: modelOpen ? (
             <AgentRoutePrefsEditor compact modeLabel={t('agent.interactionAgent')} />
+          ) : (
+            <span className="hidden" aria-hidden />
           ),
           icon: <HiOutlineBookOpen className="h-4 w-4 shrink-0" strokeWidth={1.75} />,
         }}

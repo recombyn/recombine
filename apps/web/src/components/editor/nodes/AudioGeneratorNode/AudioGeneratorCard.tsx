@@ -194,18 +194,20 @@ function AudioGeneratorCard({
   useEffect(() => {
     let cancelled = false;
     setModelsStatus('loading');
-    listModels()
-      .then((res) => {
+    async function loadModels() {
+      try {
+        const res = await listModels();
         if (cancelled) return;
         const unique = buildAudioGeneratorModelList(res);
         setModels(unique);
         setModelsStatus('ready');
         const nextId = nextAudioModelId(unique, modelId);
         if (nextId) setModelId(nextId);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setModelsStatus('error');
-      });
+      }
+    }
+    void loadModels();
     return () => {
       cancelled = true;
       abortRef.current?.abort();
@@ -318,6 +320,7 @@ function AudioGeneratorCard({
     return attachments.map((c, i) => ({
       id: c.key,
       label: t('agent.mentionAttachAudioN', { n: i + 1 }),
+      mediaKind: 'audio' as const,
     }));
   }, [attachments, t]);
 

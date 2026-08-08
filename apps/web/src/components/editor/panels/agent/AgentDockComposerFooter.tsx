@@ -89,16 +89,20 @@ function AgentDockComposerFooter({
                     type="button"
                     className="rounded bg-[var(--accent)] px-1.5 py-0.5 text-[11px] font-medium text-white hover:opacity-90"
                     onClick={() => {
-                      fetch(resolveApiUrl('/api/v1/design/memory/long'), {
-                        method: 'POST',
-                        headers: {
-                          'Content-Type': 'application/json',
-                          Authorization: `Bearer ${getToken()}`,
-                        },
-                        body: JSON.stringify({ kind: s.kind, text: s.text }),
-                      }).catch(() => {
-                        /* silently ignore */
-                      });
+                      void (async () => {
+                        try {
+                          await fetch(resolveApiUrl('/api/v1/design/memory/long'), {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              Authorization: `Bearer ${getToken()}`,
+                            },
+                            body: JSON.stringify({ kind: s.kind, text: s.text }),
+                          });
+                        } catch {
+                          /* silently ignore */
+                        }
+                      })();
                       onSavedLongSuggestion?.(i);
                     }}
                   >

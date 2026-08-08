@@ -383,26 +383,29 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
       restoreKeepTime();
     }
 
-    void extractFilmstrip(src, total, uploadKey, {
-      knownDuration: known || undefined,
-      isCancelled: () => cancelled,
-      onDuration: (d) => {
-        if (!cancelled && saneDuration(d)) applyDurationAndAttrs(d);
-      },
-      onFrame: (index, dataUrl, n) => {
-        if (cancelled) return;
-        setFrames((prev) => {
-          const next =
-            prev.length === n ? [...prev] : Array.from({ length: n }, (_, i) => prev[i] || '');
-          next[index] = dataUrl;
-          return next;
+    void (async () => {
+      try {
+        await extractFilmstrip(src, total, uploadKey, {
+          knownDuration: known || undefined,
+          isCancelled: () => cancelled,
+          onDuration: (d) => {
+            if (!cancelled && saneDuration(d)) applyDurationAndAttrs(d);
+          },
+          onFrame: (index, dataUrl, n) => {
+            if (cancelled) return;
+            setFrames((prev) => {
+              const next =
+                prev.length === n ? [...prev] : Array.from({ length: n }, (_, i) => prev[i] || '');
+              next[index] = dataUrl;
+              return next;
+            });
+          },
         });
-      },
-    })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[video trim filmstrip]', err);
         if (!cancelled) setFrames(Array.from({ length: total }, () => ''));
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;

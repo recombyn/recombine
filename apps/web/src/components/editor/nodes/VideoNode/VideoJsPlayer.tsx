@@ -8,7 +8,7 @@ import {
   memo,
 } from 'react';
 import { cn } from '@/utils/classnames';
-import { imageSrcToFile, isOurStoredImageUrl } from '@/utils/uploadImage';
+import { imageSrcToFile, isOurStoredImageUrl, mediaSrcNeedsAuthFetch } from '@/utils/uploadImage';
 import VideoPlaybackBar, {
   videoChromeLayout,
   videoMediaFromElement,
@@ -17,11 +17,13 @@ import VideoPlaybackBar, {
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import './VideoJsPlayer.css';
 
-/** Local `/api/v1/uploads/…` needs Bearer — `<video src>` cannot send it. */
-function videoSrcNeedsAuthFetch(src: string): boolean {
+/** Upload files are public-read — use plain <video src>. */
+function videoSrcNeedsAuthFetch(src: string, uploadKey?: string | null): boolean {
   const s = String(src || '').trim();
   if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
-  return isOurStoredImageUrl(s);
+  if (mediaSrcNeedsAuthFetch(s) || isOurStoredImageUrl(s)) return true;
+  // Bare key stored as src while object key is on the node.
+  return Boolean(uploadKey) && !/^https?:\/\//i.test(s);
 }
 
 function resolveAbsoluteHref(href: string): string {
@@ -50,7 +52,7 @@ function resolveVideoElementAbsSrc(el: HTMLVideoElement): string {
  */
 export function usePlayableVideoSrc(src: string, uploadKey?: string | null): string {
   const [playSrc, setPlaySrc] = useState(() =>
-    videoSrcNeedsAuthFetch(src) ? '' : String(src || '').trim()
+    videoSrcNeedsAuthFetch(src, uploadKey) ? '' : String(src || '').trim()
   );
   const blobRef = useRef<string | null>(null);
   const cacheKeyRef = useRef<string>('');
@@ -66,7 +68,7 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
       setPlaySrc('');
       return;
     }
-    if (!videoSrcNeedsAuthFetch(s)) {
+    if (!videoSrcNeedsAuthFetch(s, uploadKey)) {
       if (blobRef.current) {
         URL.revokeObjectURL(blobRef.current);
         blobRef.current = null;
@@ -81,18 +83,20 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
       return;
     }
     let cancelled = false;
-    void imageSrcToFile(s, 'play.mp4', { uploadKey })
-      .then((file) => {
+    async function resolvePlaySrc() {
+      try {
+        const file = await imageSrcToFile(s, 'play.mp4', { uploadKey });
         if (cancelled) return;
         const next = URL.createObjectURL(file);
         if (blobRef.current) URL.revokeObjectURL(blobRef.current);
         blobRef.current = next;
         cacheKeyRef.current = cacheKey;
         setPlaySrc(next);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[video] auth src resolve failed', err);
-      });
+      }
+    }
+    void resolvePlaySrc();
     return () => {
       cancelled = true;
     };
@@ -318,7 +322,14 @@ function VideoJsPlayer({
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !autoplay) return;
-    void el.play()?.catch(() => undefined);
+    async function tryAutoplay() {
+      try {
+        await el.play();
+      } catch {
+        /* ignore autoplay rejection */
+      }
+    }
+    void tryAutoplay();
   }, [autoplay, playable]);
 
   useEffect(() => {

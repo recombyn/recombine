@@ -30,6 +30,8 @@ import { cn } from '@/utils/classnames';
 
 /** Shared optical size for bottom-left HUD glyphs. */
 const HUD_ICON = 'h-[15px] w-[15px] shrink-0';
+/** LuImages reads optically larger than Heroicons at the same box — nudge down 2px. */
+const HUD_ICON_ASSETS = 'h-[13px] w-[13px] shrink-0';
 const HUD_ICON_STROKE = 1.75;
 /** Min gap between left HUD (at left-4) and centered toolstrip before stacking. */
 const BOTTOM_HUD_TOOLS_GAP_PX = 12;
@@ -392,7 +394,7 @@ function EditorBottomHud({
                       active={assetsOpen}
                       onClick={() => setAssetsOpen((v) => !v)}
                     >
-                      <LuImages className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                      <LuImages className={HUD_ICON_ASSETS} strokeWidth={HUD_ICON_STROKE} />
                     </HudBtn>
                     <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
                       <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
@@ -438,7 +440,7 @@ function EditorBottomHud({
                   active={assetsOpen}
                   onClick={() => setAssetsOpen((v) => !v)}
                 >
-                  <LuImages className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                  <LuImages className={HUD_ICON_ASSETS} strokeWidth={HUD_ICON_STROKE} />
                 </HudBtn>
                 <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
                   <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />

@@ -715,6 +715,55 @@ function appendChild<T extends SVGElement>(parent: SVGElement, child: T): T {
   return child;
 }
 
+/** Portal target for HTML lottie / video / audio inside the shared SVG stack. */
+export const HTML_MEDIA_MOUNT_ATTR = 'data-rcb-html-media-mount';
+
+const XHTML_NS = 'http://www.w3.org/1999/xhtml';
+
+/**
+ * Mount HTML media into the node’s SVG layer so paint order follows `data-z`
+ * (same stack as images / generators). Overlays portal into this div.
+ */
+function appendHtmlMediaMount(
+  g: SVGGElement,
+  opts: { nodeId: string; width: number; height: number; kind: 'lottie' | 'video' | 'audio' }
+): void {
+  const w = Math.max(1, opts.width);
+  const h = Math.max(1, opts.height);
+  const fo = appendChild(
+    g,
+    svgEl('foreignObject', {
+      x: 0,
+      y: 0,
+      width: w,
+      height: h,
+      'data-rcb-html-media-fo': opts.kind,
+      // Parent SVG is pointer-events:none; keep FO none so canvas hits pass
+      // through. Controls set pointer-events:auto on themselves (same as before).
+      'pointer-events': 'none',
+    })
+  );
+  const div = document.createElementNS(XHTML_NS, 'div');
+  div.setAttribute(HTML_MEDIA_MOUNT_ATTR, opts.nodeId);
+  div.setAttribute('data-rcb-html-media-kind', opts.kind);
+  div.style.cssText =
+    'width:100%;height:100%;overflow:hidden;pointer-events:none;position:relative;';
+  fo.appendChild(div);
+}
+
+/** Resolve the HTML media portal mount for a painted scene node. */
+export function findHtmlMediaMount(nodeId: string): HTMLElement | null {
+  const id = String(nodeId || '');
+  if (!id) return null;
+  const sel = `[${HTML_MEDIA_MOUNT_ATTR}="${id.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+  try {
+    const hit = document.querySelector(sel);
+    return hit instanceof HTMLElement ? hit : null;
+  } catch {
+    return null;
+  }
+}
+
 function createRectLike(
   ctx: DrawCtx,
   document: any,
@@ -1501,8 +1550,11 @@ export async function nodeToSvgElement(
     const clipD = roundedRectPath(boxW, boxH, cornerR);
     const g = appendChild(parent, svgEl('g'));
     const svgOwnsPixels = videoSvgOwnsPixels(root);
-    const plateFill =
-      String(node.attrs?.['fill-color'] || node.attrs?.fill || '').trim() || '#FFFFFF';
+    const rawLottieFill = String(node.attrs?.['fill-color'] || node.attrs?.fill || '').trim();
+    // Default surface plate — map empty/transparent to theme surface (not black).
+    const plateFill = resolveThemeSurfaceFill(
+      !rawLottieFill || rawLottieFill === 'transparent' ? '' : rawLottieFill
+    );
 
     // Same process plate as image/video — shimmer chrome overlays this node.
     if (processing) {
@@ -1535,7 +1587,7 @@ export async function nodeToSvgElement(
         );
         setFill(border, 'none');
         setStroke(border, { color: 'var(--line)', width: sw });
-        // Soft clapper / play mark — matches video-gen empty plate language.
+        // Soft play mark — same empty-plate language as video generator (title keeps clapperboard).
         const iconSize = generatorEmptyIconSize(boxW, boxH);
         if (iconSize >= 4) {
           const ix = (boxW - iconSize) / 2;
@@ -1574,8 +1626,7 @@ export async function nodeToSvgElement(
       return g;
     }
 
-    // Always paint a plate fill — Lottie ink is HTML overlay; without this the
-    // selection looks like an empty hole on the canvas.
+    // Plate fill under HTML ink (foreignObject). Export keeps SVG-only pixels.
     const plate = appendChild(g, svgEl('path', { d: clipD }));
     setFill(plate, plateFill);
     setStroke(plate, 'none');
@@ -1584,6 +1635,9 @@ export async function nodeToSvgElement(
       'data-baseline': '1',
       ...(!svgOwnsPixels ? { 'data-rcb-lottie-html-hit': '1' } : {}),
     });
+    if (!svgOwnsPixels) {
+      appendHtmlMediaMount(g, { nodeId, width: boxW, height: boxH, kind: 'lottie' });
+    }
     (g as any).__sceneCornerRadii = { ...cornerR };
     tagNode(g, nodeId, 'lottie', undefined, left, top, boxW, boxH);
     applyMeta(g, left, top, meta, boxW, boxH);
@@ -1693,10 +1747,11 @@ export async function nodeToSvgElement(
     }
 
     const g = appendChild(parent, svgEl('g'));
-    // Infinite editor: SVG poster/underlay moves via previewSvgNodeGeometry (same as
-    // images). HTML <video> covers it while idle; hide HTML during geometry
-    // transforms so only this underlay is visible — no dual-layer ghost.
-    // Export boards also use this poster path (videoSvgOwnsPixels / export surface).
+    // Infinite editor: SVG poster/underlay + HTML <video> in foreignObject.
+    // Both ride the same group transform during drag (previewSvgNodeGeometry).
+    // Do not hide HTML globally while transforming — freeze frames live only in
+    // HTML; blanking it left a dark underlay and blanked unrelated videos on
+    // any geometry gesture. Export boards still use SVG-only pixels.
     const svgOwnsPixels = videoSvgOwnsPixels(root);
     const crop = readNodeCropNorm(node);
     if (poster) {
@@ -1746,6 +1801,9 @@ export async function nodeToSvgElement(
       });
     }
     void src;
+    if (!svgOwnsPixels && src) {
+      appendHtmlMediaMount(g, { nodeId, width: boxW, height: boxH, kind: 'video' });
+    }
     (g as any).__sceneCornerRadii = { ...cornerR };
     tagNode(g, nodeId, 'video', undefined, left, top, boxW, boxH);
     if (isGen || isImageProcessRunning(node)) setAttrs(g, { 'data-export-ignore': '1' });
@@ -1903,6 +1961,9 @@ export async function nodeToSvgElement(
       setStroke(bar, 'none');
       setAttrs(bar, { opacity: '0.55' });
     }
+    if (!svgOwnsPixels && hasSrc) {
+      appendHtmlMediaMount(g, { nodeId, width: boxW, height: boxH, kind: 'audio' });
+    }
     (g as any).__sceneCornerRadii = { ...cornerR };
     tagNode(g, nodeId, 'audio', undefined, left, top, boxW, boxH);
     applyMeta(g, left, top, meta, boxW, boxH);
@@ -1944,9 +2005,9 @@ function isInfiniteSvgRoot(root: SVGSVGElement) {
 
 /**
  * Whether SVG alone owns the visible video pixels (no HTML plate on top).
- * Infinite editor paints an SVG poster underlay AND mounts HTML `<video>` —
- * hide the HTML while transforming so drag uses the same previewSvgNodeGeometry
- * path as images (no dual-layer ghost). Export surfaces keep SVG-only pixels.
+ * Infinite editor paints an SVG poster underlay AND mounts HTML `<video>` in
+ * foreignObject — both move with the node group. Export surfaces keep SVG-only
+ * pixels (no FO mount).
  */
 export function videoSvgOwnsPixels(root: SVGSVGElement): boolean {
   if (!isInfiniteSvgRoot(root)) return true;

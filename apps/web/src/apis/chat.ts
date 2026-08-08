@@ -139,19 +139,20 @@ export function invalidateChatModelsCache() {
 export const listModels = (opts?: { force?: boolean }) => {
   if (!opts?.force && _chatModels) return Promise.resolve(_chatModels);
   if (!opts?.force && _chatModelsInflight) return _chatModelsInflight;
-  const run = request<ChatModelsResponse>({
-    url: '/api/v1/chat/models',
-    method: 'get',
-  })
-    .then((data) => {
+  const pending = (async () => {
+    try {
+      const data = await request<ChatModelsResponse>({
+        url: '/api/v1/chat/models',
+        method: 'get',
+      });
       _chatModels = data;
       return data;
-    })
-    .finally(() => {
-      if (_chatModelsInflight === run) _chatModelsInflight = null;
-    });
-  _chatModelsInflight = run;
-  return run;
+    } finally {
+      if (_chatModelsInflight === pending) _chatModelsInflight = null;
+    }
+  })();
+  _chatModelsInflight = pending;
+  return pending;
 };
 
 /** POST /api/v1/chat/image */

@@ -13,17 +13,18 @@ import {
   type ReactNode,
   memo,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { HiOutlinePlay, HiOutlinePause } from 'react-icons/hi2';
 import { useRcbCamera } from '@/components/rcb';
 import {
   isAudioNode,
   isNodeHidden,
   resolveThemeSurfaceFill,
-  stackZIndex,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
-import { imageSrcToFile, isOurStoredImageUrl } from '@/utils/uploadImage';
+import { useHtmlMediaMount } from '@/components/editor/nodes/useHtmlMediaMount';
+import { imageSrcToFile, isOurStoredImageUrl, mediaSrcNeedsAuthFetch } from '@/utils/uploadImage';
 import AudioWaveform, { type AudioWaveformHandle } from './AudioWaveform';
 
 export type AudioGeomOverride = {
@@ -122,10 +123,11 @@ function formatClock(seconds: number, opts?: { round?: boolean }): string {
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
-function audioSrcNeedsAuthFetch(src: string): boolean {
+function audioSrcNeedsAuthFetch(src: string, uploadKey?: string | null): boolean {
   const s = String(src || '').trim();
   if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
-  return isOurStoredImageUrl(s);
+  if (mediaSrcNeedsAuthFetch(s) || isOurStoredImageUrl(s)) return true;
+  return Boolean(uploadKey) && !/^https?:\/\//i.test(s);
 }
 
 function revokeBlobUrl(ref: { current: string | null }) {
@@ -137,7 +139,7 @@ function revokeBlobUrl(ref: { current: string | null }) {
 /** Auth-gated uploads → blob URL with audio/* mime (never image/png fallback). */
 function usePlayableAudioSrc(src: string, uploadKey?: string | null): string {
   const [playSrc, setPlaySrc] = useState(() => {
-    if (audioSrcNeedsAuthFetch(src)) return '';
+    if (audioSrcNeedsAuthFetch(src, uploadKey)) return '';
     return String(src || '').trim();
   });
   const blobRef = useRef<string | null>(null);
@@ -151,7 +153,7 @@ function usePlayableAudioSrc(src: string, uploadKey?: string | null): string {
       setPlaySrc('');
       return;
     }
-    if (!audioSrcNeedsAuthFetch(s)) {
+    if (!audioSrcNeedsAuthFetch(s, uploadKey)) {
       revokeBlobUrl(blobRef);
       cacheKeyRef.current = '';
       setPlaySrc(s);
@@ -163,11 +165,12 @@ function usePlayableAudioSrc(src: string, uploadKey?: string | null): string {
       return;
     }
     let cancelled = false;
-    void imageSrcToFile(s, 'play.mp3', {
-      uploadKey,
-      fallbackMime: 'audio/mpeg',
-    })
-      .then((file) => {
+    async function resolvePlaySrc() {
+      try {
+        const file = await imageSrcToFile(s, 'play.mp3', {
+          uploadKey,
+          fallbackMime: 'audio/mpeg',
+        });
         if (cancelled) return;
         let playable = file;
         if (!String(file.type || '').startsWith('audio/')) {
@@ -178,10 +181,11 @@ function usePlayableAudioSrc(src: string, uploadKey?: string | null): string {
         blobRef.current = next;
         cacheKeyRef.current = cacheKey;
         setPlaySrc(next);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[audio] auth src resolve failed', err);
-      });
+      }
+    }
+    void resolvePlaySrc();
     return () => {
       cancelled = true;
     };
@@ -237,7 +241,7 @@ function AudioPlate({
   nodeId,
   scenePlate,
   zoom,
-  stackZ,
+  svgMount,
   src,
   uploadKey,
   plateFill,
@@ -250,7 +254,7 @@ function AudioPlate({
   nodeId: string;
   scenePlate: CSSProperties & { left: number; top: number; width: number; height: number };
   zoom: number;
-  stackZ: number;
+  svgMount: HTMLElement;
   src: string;
   uploadKey?: string | null;
   plateFill: string;
@@ -283,9 +287,24 @@ function AudioPlate({
   const mediaPos = Math.max(0, current - mediaOrigin);
   const wallPos = mediaPos / rate;
   const wallLen = mediaLen > 0 ? mediaLen / rate : 0;
+  const plateH = Math.max(1, scenePlate.height * z);
+  const plateW = Math.max(1, scenePlate.width * z);
+  // Design chrome at a reference plate size, then scale wave + time + play as one unit
+  // (same idea as video playback bar fit) — transport must not steal wave height.
+  const AUDIO_REF_W = 360;
+  const AUDIO_REF_H = 180;
+  const uiFit = Math.max(
+    0.35,
+    Math.min(1, plateW / AUDIO_REF_W, plateH / AUDIO_REF_H)
+  );
+  const layoutW = plateW / uiFit;
+  const layoutH = plateH / uiFit;
+  const padY = 10;
+  const padX = 12;
+  const transportH = 40; // mt-2 + 32px button row
   const waveHeight = Math.max(
-    48,
-    Math.min(140, Math.round(scenePlate.height * z * 0.48))
+    28,
+    Math.min(140, Math.round(layoutH - padY * 2 - transportH))
   );
 
   useEffect(() => {
@@ -306,7 +325,14 @@ function AudioPlate({
       },
       getMediaTime: () => waveRef.current?.getCurrentTime() || 0,
       play: () => {
-        void waveRef.current?.play().catch(() => undefined);
+        async function tryPlay() {
+          try {
+            await waveRef.current?.play();
+          } catch {
+            /* ignore play rejection */
+          }
+        }
+        void tryPlay();
       },
       pause: () => waveRef.current?.pause(),
       isPaused: () => Boolean(waveRef.current?.isPaused() ?? true),
@@ -396,16 +422,21 @@ function AudioPlate({
       return;
     }
     seekBeforePlay(wave);
-    void wave.play().catch(() => setPlaying(false));
+    async function tryPlay() {
+      try {
+        await wave.play();
+      } catch {
+        setPlaying(false);
+      }
+    }
+    void tryPlay();
   };
 
-  return (
+  return createPortal(
     <div
       data-audio-node={nodeId}
-      className="pointer-events-none absolute overflow-hidden"
+      className="pointer-events-none absolute inset-0 overflow-hidden"
       style={{
-        ...scenePlate,
-        zIndex: stackZ,
         visibility: hidden ? 'hidden' : undefined,
       }}
       aria-hidden={hidden || undefined}
@@ -423,77 +454,91 @@ function AudioPlate({
           boxShadow: 'inset 0 0 0 1px var(--line)',
         }}
       >
-        <div className="flex h-full w-full flex-col px-3 pb-2.5 pt-2.5">
-          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-[var(--rail)] px-3">
-            {playSrc ? (
-              <div className="w-full" style={{ height: waveHeight }}>
-                <AudioWaveform
-                  ref={waveRef}
-                  url={playSrc}
-                  height={waveHeight}
-                  waveColor={waveColors.wave}
-                  progressColor={waveColors.progress}
-                  cursorColor={waveColors.cursor}
-                  barWidth={3}
-                  barGap={2}
-                  barRadius={2}
-                  interact={false}
-                  className="h-full w-full"
-                  onReady={onWaveReady}
-                  onPlay={() => setPlaying(true)}
-                  onPause={() => setPlaying(false)}
-                  onTimeUpdate={clampIntoWindow}
-                  onFinish={resetToWindowStart}
-                />
-              </div>
-            ) : (
-              <div
-                className="w-full animate-pulse rounded-md bg-[var(--line)]/50"
-                style={{ height: waveHeight }}
-              />
-            )}
-          </div>
+        <div
+          className="pointer-events-none absolute left-0 top-0"
+          style={{
+            width: layoutW,
+            height: layoutH,
+            transform: `scale(${uiFit})`,
+            transformOrigin: '0 0',
+          }}
+        >
           <div
-            data-audio-playback-bar
-            className="mt-2 flex shrink-0 items-center justify-between gap-2"
-            onPointerDown={stopChromePointer}
+            className="flex h-full w-full flex-col"
+            style={{ padding: `${padY}px ${padX}px` }}
           >
-            <span className="tabular-nums text-[11px] text-[var(--muted)]">
-              {formatClock(wallPos)}
-              {' / '}
-              {formatClock(wallLen, { round: true })}
-            </span>
-            <button
-              type="button"
-              disabled={!ready || !playSrc}
-              className="pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-40"
-              onPointerDown={(e) => {
-                e.preventDefault();
-                stopChromePointer(e);
-              }}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                togglePlay();
-              }}
-              aria-label={playing ? 'Pause' : 'Play'}
-            >
-              {playing ? (
-                <HiOutlinePause className="h-4 w-4" strokeWidth={2} />
+            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-[var(--rail)] px-3">
+              {playSrc ? (
+                <div className="w-full" style={{ height: waveHeight }}>
+                  <AudioWaveform
+                    ref={waveRef}
+                    url={playSrc}
+                    height={waveHeight}
+                    waveColor={waveColors.wave}
+                    progressColor={waveColors.progress}
+                    cursorColor={waveColors.cursor}
+                    barWidth={3}
+                    barGap={2}
+                    barRadius={2}
+                    interact={false}
+                    className="h-full w-full"
+                    onReady={onWaveReady}
+                    onPlay={() => setPlaying(true)}
+                    onPause={() => setPlaying(false)}
+                    onTimeUpdate={clampIntoWindow}
+                    onFinish={resetToWindowStart}
+                  />
+                </div>
               ) : (
-                <HiOutlinePlay className="h-4 w-4 translate-x-[1px]" strokeWidth={2} />
+                <div
+                  className="w-full animate-pulse rounded-md bg-[var(--line)]/50"
+                  style={{ height: waveHeight }}
+                />
               )}
-            </button>
-            <span className="w-[4.5rem]" aria-hidden />
+            </div>
+            <div
+              data-audio-playback-bar
+              className="mt-2 grid h-8 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-1"
+              onPointerDown={stopChromePointer}
+            >
+              <span className="min-w-0 justify-self-start truncate text-[11px] tabular-nums text-[var(--muted)]">
+                {formatClock(wallPos)}
+                {' / '}
+                {formatClock(wallLen, { round: true })}
+              </span>
+              <button
+                type="button"
+                disabled={!ready || !playSrc}
+                className="pointer-events-auto col-start-2 inline-flex h-8 w-8 items-center justify-center justify-self-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90 disabled:opacity-40"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  stopChromePointer(e);
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  togglePlay();
+                }}
+                aria-label={playing ? 'Pause' : 'Play'}
+              >
+                {playing ? (
+                  <HiOutlinePause className="h-4 w-4" strokeWidth={2} />
+                ) : (
+                  <HiOutlinePlay className="h-4 w-4 translate-x-[1px]" strokeWidth={2} />
+                )}
+              </button>
+              <span aria-hidden className="min-w-0" />
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    svgMount
   );
 }
 
 /**
- * Idle = HTML waveform over SVG plate underlay.
+ * Idle = HTML waveform portaled into the SVG foreignObject mount (unified stack).
  * Stays mounted/visible during move — `geometryOverrides` tracks the chrome.
  */
 function AudioNodeOverlay({
@@ -526,54 +571,73 @@ function AudioNodeOverlay({
   return (
     <>
       <AudioZoomSync onZoom={onZoom} />
-      {ids.map((nodeId) => {
-        const node = document?.deltaSetLike?.[nodeId];
-        if (!node) return null;
-        const src = String(node.attrs?.src || '').trim();
-        if (!src) return null;
-        const ov = geometryOverrides?.[nodeId];
-        const { left, top } = nodeLeftTop(document, node);
-        const width = Math.max(1, Number(ov?.width ?? node.width) || 1);
-        const height = Math.max(1, Number(ov?.height ?? node.height) || 1);
-        const angle = Number.isFinite(ov?.angle) ? Number(ov!.angle) : readNodeAngle(node);
-        const radii = radiiFromAttrs(node.attrs || {});
-        const scenePlate: CSSProperties & {
-          left: number;
-          top: number;
-          width: number;
-          height: number;
-        } = {
-          left: ov?.left ?? left,
-          top: ov?.top ?? top,
-          width,
-          height,
-          borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
-          transform: plateTransform(angle),
-          transformOrigin: 'center center',
-        };
-        return (
-          <AudioPlate
-            key={nodeId}
-            nodeId={nodeId}
-            scenePlate={scenePlate}
-            zoom={zoom}
-            stackZ={stackZIndex(document, 'node', nodeId)}
-            src={src}
-            uploadKey={
-              String(node.attrs?.uploadKey || node.attrs?.key || '').trim() || null
-            }
-            plateFill={resolveThemeSurfaceFill(
-              node.attrs?.['fill-color'] || node.attrs?.fill
-            )}
-            hidden={Boolean(hidden) || isNodeHidden(node)}
-            trimStart={readOptionalNumber(node.attrs?.trimStart)}
-            trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
-            knownDuration={readOptionalNumber(node.attrs?.duration)}
-            speed={clampSpeed(node.attrs?.audioSpeed)}
-          />
-        );
-      })}
+      {ids.map((nodeId) => (
+        <AudioPlateHost
+          key={nodeId}
+          nodeId={nodeId}
+          document={document}
+          zoom={zoom}
+          hidden={hidden}
+          geometryOverrides={geometryOverrides}
+        />
+      ))}
     </>
+  );
+}
+
+function AudioPlateHost({
+  nodeId,
+  document,
+  zoom,
+  hidden,
+  geometryOverrides,
+}: {
+  nodeId: string;
+  document: any;
+  zoom: number;
+  hidden?: boolean;
+  geometryOverrides?: Record<string, AudioGeomOverride> | null;
+}) {
+  const mount = useHtmlMediaMount(nodeId);
+  const node = document?.deltaSetLike?.[nodeId];
+  if (!node || !mount) return null;
+  const src = String(node.attrs?.src || '').trim();
+  if (!src) return null;
+  const ov = geometryOverrides?.[nodeId];
+  const { left, top } = nodeLeftTop(document, node);
+  const width = Math.max(1, Number(ov?.width ?? node.width) || 1);
+  const height = Math.max(1, Number(ov?.height ?? node.height) || 1);
+  const angle = Number.isFinite(ov?.angle) ? Number(ov!.angle) : readNodeAngle(node);
+  const radii = radiiFromAttrs(node.attrs || {});
+  const scenePlate: CSSProperties & {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } = {
+    left: ov?.left ?? left,
+    top: ov?.top ?? top,
+    width,
+    height,
+    borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
+    transform: plateTransform(angle),
+    transformOrigin: 'center center',
+  };
+  return (
+    <AudioPlate
+      nodeId={nodeId}
+      scenePlate={scenePlate}
+      zoom={zoom}
+      svgMount={mount}
+      src={src}
+      uploadKey={String(node.attrs?.uploadKey || node.attrs?.key || '').trim() || null}
+      plateFill={resolveThemeSurfaceFill(node.attrs?.['fill-color'] || node.attrs?.fill)}
+      hidden={Boolean(hidden) || isNodeHidden(node)}
+      trimStart={readOptionalNumber(node.attrs?.trimStart)}
+      trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
+      knownDuration={readOptionalNumber(node.attrs?.duration)}
+      speed={clampSpeed(node.attrs?.audioSpeed)}
+    />
   );
 }
 

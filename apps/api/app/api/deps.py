@@ -36,9 +36,11 @@ OptionalTokenDep = Annotated[str | None, Depends(optional_oauth2)]
 def get_current_user(session: SessionDep, token: TokenDep) -> SessionUser:
     user = get_session(token, db=session)
     if not user:
+        # 401 (not 403): axios / App treat this as session death and clear local auth.
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     user_status = (getattr(user, "status", None) or "active").strip().lower()
     if user_status == "disabled":

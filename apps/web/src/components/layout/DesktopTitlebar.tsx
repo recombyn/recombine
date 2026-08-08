@@ -116,13 +116,25 @@ function DesktopTitlebar() {
   }, []);
 
   const onMinimize = useCallback(() => {
-    void getWin().then((w) => w?.minimize());
+    async function minimize() {
+      const w = await getWin();
+      w?.minimize();
+    }
+    void minimize();
   }, []);
   const onToggleMax = useCallback(() => {
-    void getWin().then((w) => w?.toggleMaximize());
+    async function toggleMaximize() {
+      const w = await getWin();
+      w?.toggleMaximize();
+    }
+    void toggleMaximize();
   }, []);
   const onClose = useCallback(() => {
-    void getWin().then((w) => w?.close());
+    async function closeWindow() {
+      const w = await getWin();
+      w?.close();
+    }
+    void closeWindow();
   }, []);
 
   if (!isTauriShell()) return null;

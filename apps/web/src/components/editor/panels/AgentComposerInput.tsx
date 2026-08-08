@@ -369,7 +369,8 @@ export function libraryAssetAttachmentKey(assetId: string): string {
 
 /**
  * Ensure a library asset is present as a composer attachment chip.
- * Shared by AgentDock + generator `@` pickers (5 call sites).
+ * Used by generator `@` pickers (image/video/audio/lottie) so refs stay in the strip.
+ * AgentDock chat `@` library picks insert an inline mention only (no strip row).
  */
 export function upsertLibraryAssetAttachment(
   existing: ComposerContext[],

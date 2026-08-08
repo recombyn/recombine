@@ -61,9 +61,6 @@ if (!existsSync(cargoExe)) {
 const pathKey = win ? 'Path' : 'PATH';
 const prev = process.env[pathKey] || process.env.PATH || '';
 
-const cloudApi =
-  (process.env.VITE_API_BASE_URL || 'https://recombyn.com').replace(/\/$/, '');
-
 const env = {
   ...process.env,
   [pathKey]: `${cargoBin}${path.delimiter}${prev}`,
@@ -72,9 +69,11 @@ const env = {
   VITE_DESKTOP_MODE: desktopMode,
 };
 
-if (desktopMode === 'cloud') {
-  env.VITE_API_BASE_URL = cloudApi;
-} else if (!env.VITE_API_BASE_URL) {
+// Optional hosted override only (no default public host — recombyn.com is not assumed deployed).
+// Cloud/browser both use relative `/api` → Vite proxy → local :8000 when unset.
+if (process.env.VITE_API_BASE_URL) {
+  env.VITE_API_BASE_URL = String(process.env.VITE_API_BASE_URL).replace(/\/$/, '');
+} else {
   delete env.VITE_API_BASE_URL;
 }
 
@@ -82,6 +81,11 @@ let apiChild = null;
 
 async function main() {
   console.log(`[dev:desktop] flavor=${desktopMode}${isBuild ? ' (build)' : ' (dev)'}`);
+  if (desktopMode === 'cloud') {
+    console.log(
+      `[dev:desktop] API=${env.VITE_API_BASE_URL || 'relative /api → Vite proxy → :8000 (same as browser)'}`
+    );
+  }
 
   if (desktopMode === 'local' && isBuild) {
     const force = args.includes('rebuild-sidecar') || process.env.RECOMBYN_REBUILD_SIDECAR === '1';
@@ -92,10 +96,10 @@ async function main() {
     }
   }
 
-  if (desktopMode === 'local' && !isBuild) {
-    // Dev: prefer live Python API (hot reload). Bundled sidecar used in release builds.
+  if (!isBuild) {
+    // local → SQLite auto-login; cloud → apps/api/.env stack (same as browser), never SQLite rewrite.
     try {
-      const res = await ensureDesktopApi();
+      const res = await ensureDesktopApi({ flavor: desktopMode });
       apiChild = res.child;
     } catch (err) {
       console.error(err?.message || err);
@@ -148,7 +152,11 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+void (async () => {
+  try {
+    await main();
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
+})();

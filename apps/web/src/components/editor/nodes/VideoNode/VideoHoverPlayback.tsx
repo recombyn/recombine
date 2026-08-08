@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -6,6 +7,7 @@ import {
   type ReactNode,
   memo,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { usePlayableVideoSrc } from '@/components/editor/nodes/VideoNode/VideoJsPlayer';
 import VideoPlaybackBar, {
   videoMediaFromElement,
@@ -104,7 +106,8 @@ type VideoHoverPlaybackProps = {
   nodeId: string;
   scenePlate: ScenePlate;
   zoom: number;
-  stackZ?: number;
+  /** Portal into shared SVG layer mount (unified stackOrder). */
+  svgMount?: HTMLElement | null;
   src: string;
   poster?: string;
   uploadKey?: string | null;
@@ -130,7 +133,7 @@ function VideoHoverPlayback({
   nodeId,
   scenePlate,
   zoom,
-  stackZ = 0,
+  svgMount = null,
   src,
   poster,
   uploadKey,
@@ -152,6 +155,8 @@ function VideoHoverPlayback({
   const freezeUrlRef = useRef(String(poster || '').trim());
   const freezeAtRef = useRef(0);
   const mediaTimeRef = useRef(0);
+  /** Track mount — public URLs set playSrc before the <video> ref exists. */
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const [media, setMedia] = useState<VideoMediaControl | null>(null);
   const [barHovered, setBarHovered] = useState(false);
   const [plateHovered, setPlateHovered] = useState(false);
@@ -173,6 +178,11 @@ function VideoHoverPlayback({
   mediaTimeRef.current = mediaTime;
   const showUiRef = useRef(showUi);
   showUiRef.current = showUi;
+
+  const setVideoNodeRef = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    setVideoEl(el);
+  }, []);
 
   // Flip media pixels only — keep the playback bar upright.
   const mediaFlip =
@@ -202,9 +212,9 @@ function VideoHoverPlayback({
     setFreeze((prev) => (prev.url ? prev : { url: next, at: 0 }));
   }, [poster]);
 
-  // Bind src once — never via React `src={}`.
+  // Bind src once — never via React `src={}`. Re-run when the element mounts.
   useEffect(() => {
-    const el = videoRef.current;
+    const el = videoEl;
     if (!el || !playSrc) return;
     if (el.getAttribute('src') === playSrc || el.currentSrc === playSrc) return;
     try {
@@ -217,13 +227,13 @@ function VideoHoverPlayback({
     freezeGenRef.current += 1;
     setFreeze({ url: posterUrl, at: 0 });
     el.src = playSrc;
-  }, [playSrc, posterUrl]);
+  }, [playSrc, posterUrl, videoEl]);
 
   useEffect(() => {
-    const el = videoRef.current;
+    const el = videoEl;
     if (!el) return;
     setMedia(videoMediaFromElement(el));
-  }, []);
+  }, [videoEl]);
 
   // Capture still after pause / seek — wait for a decoded frame, briefly reveal video if hidden.
   useEffect(() => {
@@ -328,6 +338,8 @@ function VideoHoverPlayback({
   }, [media]);
 
   if (!src) return null;
+  // Wait for SVG foreignObject mount so we never fall back to a parallel CSS stack.
+  if (!svgMount) return null;
 
   // Still only when it matches scrubber time — otherwise show paused video at currentTime.
   const freezeMatches = Boolean(freeze.url) && Math.abs(mediaTime - freeze.at) <= 0.12;
@@ -338,19 +350,12 @@ function VideoHoverPlayback({
   const screenH = Math.max(1, scenePlate.height * z);
   const chrome = videoChromeLayout(screenW, screenH);
 
-  return (
+  const plate = (
     <div
       ref={plateRef}
-      className="pointer-events-none absolute overflow-hidden"
+      className="pointer-events-none absolute inset-0 overflow-hidden"
       style={{
-        left: scenePlate.left,
-        top: scenePlate.top,
-        width: scenePlate.width,
-        height: scenePlate.height,
         borderRadius: scenePlate.borderRadius,
-        transform: scenePlate.transform,
-        transformOrigin: scenePlate.transformOrigin || 'center center',
-        zIndex: Math.max(0, stackZ),
         // opacity — not visibility. Child visibility:visible punches through
         // parent visibility:hidden (freeze / playing video wrap).
         opacity: showUi ? 1 : 0,
@@ -385,7 +390,7 @@ function VideoHoverPlayback({
         }}
       >
         <video
-          ref={videoRef}
+          ref={setVideoNodeRef}
           className="pointer-events-none block h-full w-full"
           style={{
             objectFit: 'fill',
@@ -402,15 +407,14 @@ function VideoHoverPlayback({
       </div>
 
       {showUi && chrome.visible ? (
+        // Full plate + overflow visible so the vertical volume slider above mute isn’t clipped
+        // by a bar-height-only wrapper (overflow-hidden + short height hid it entirely).
         <div
-          className="pointer-events-none absolute bottom-0 left-0 z-[2] overflow-hidden"
-          style={{
-            width: scenePlate.width,
-            height: Math.min(scenePlate.height, chrome.barScreenH / z),
-          }}
+          className="pointer-events-none absolute inset-0 z-[2] overflow-visible"
+          style={{ width: scenePlate.width, height: scenePlate.height }}
         >
           <div
-            className="pointer-events-none absolute bottom-0 left-0"
+            className="pointer-events-none absolute bottom-0 left-0 overflow-visible"
             style={{
               width: chrome.layoutW,
               height: VIDEO_PLAYBACK_BAR_H,
@@ -454,13 +458,15 @@ function VideoHoverPlayback({
       />
     </div>
   );
+
+  return createPortal(plate, svgMount);
 }
 
 function propsEqual(prev: VideoHoverPlaybackProps, next: VideoHoverPlaybackProps): boolean {
   return (
     prev.nodeId === next.nodeId &&
     prev.zoom === next.zoom &&
-    prev.stackZ === next.stackZ &&
+    prev.svgMount === next.svgMount &&
     prev.src === next.src &&
     prev.poster === next.poster &&
     prev.uploadKey === next.uploadKey &&

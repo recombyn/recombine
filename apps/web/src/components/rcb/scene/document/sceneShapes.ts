@@ -18,8 +18,10 @@ export const MAX_ELLIPSE_INNER_RATIO = 0.92;
 export const DEFAULT_ELLIPSE_ARC_PERCENT = 100;
 export const MIN_ELLIPSE_ARC_PERCENT = 0.5;
 export const MAX_ELLIPSE_ARC_PERCENT = 100;
-/** Snap to full circle when remaining is within this % of ±100. */
-export const ELLIPSE_ARC_SNAP_FULL_PCT = 3;
+/** Snap shut when gap to full is within this % (enter). */
+export const ELLIPSE_ARC_SNAP_FULL_PCT = 5;
+/** Must open past this % gap before leaving a snapped-full state (hysteresis). */
+export const ELLIPSE_ARC_UNSNAP_FULL_PCT = 11;
 /**
  * Snap inner hole → solid disk when ratio is within this.
  * Generous so dragging the hole closed is easy (was 3.5% ≈ 1–2px on small shapes).
@@ -29,7 +31,7 @@ export const ELLIPSE_INNER_SNAP_SOLID = 0.12;
 export const ELLIPSE_INNER_SNAP_SOLID_PX = 18;
 /**
  * Fixed cut-end “开始位置” in atan2 degrees (0 = east, 90 = south).
- * Arc end sweeps from here; start knob does not drag.
+ * Start knob does not drag; arc end must not cross past this ray.
  */
 export const DEFAULT_ELLIPSE_START_DEG = 90;
 
@@ -75,7 +77,7 @@ export function snapEllipseInnerRatio(
   return v;
 }
 
-/** Near ±100 → full circle (drag end back to 开始位置). */
+/** Near ±100 → full circle (commit / non-drag helpers). Live drag uses hysteresis instead. */
 export function snapEllipseArcPercent(n: unknown): number {
   const v = clampEllipseArcPercent(n);
   if (Math.abs(v) >= MAX_ELLIPSE_ARC_PERCENT - ELLIPSE_ARC_SNAP_FULL_PCT) {
@@ -91,8 +93,9 @@ export function ellipseArcLockSign(
 ): 1 | -1 {
   const prev = Number.isFinite(prevPercent) ? prevPercent : 100;
   if (Math.abs(prev) >= 99.95) {
+    // From full: end on pointer side with near-full remaining (CW → +, CCW → −).
     if (Math.abs(deltaFromStart) < 1e-6) return 1;
-    return deltaFromStart < 0 ? -1 : 1;
+    return deltaFromStart < 0 ? 1 : -1;
   }
   return prev < 0 ? -1 : 1;
 }
@@ -109,11 +112,43 @@ export function clampEllipseStartDeg(
 }
 
 /** Normalize angle delta into (−π, π]. */
-function wrapAngleDelta(delta: number): number {
+export function wrapAngleDelta(delta: number): number {
   let d = delta;
   while (d > Math.PI) d -= Math.PI * 2;
   while (d <= -Math.PI) d += Math.PI * 2;
   return d;
+}
+
+const TWO_PI = Math.PI * 2;
+
+function minEllipseArcAlong(): number {
+  return (MIN_ELLIPSE_ARC_PERCENT / 100) * TWO_PI;
+}
+
+/** Remaining sweep from start → pointer along ``lockSign``, in (0, 2π]. */
+function ellipseArcAlongFromDelta(delta: number, lockSign: 1 | -1): number {
+  if (lockSign > 0) {
+    if (delta > 1e-6) return delta;
+    if (delta < -1e-6) return delta + TWO_PI;
+    return TWO_PI;
+  }
+  if (delta < -1e-6) return -delta;
+  if (delta > 1e-6) return TWO_PI - delta;
+  return TWO_PI;
+}
+
+/** Remaining sweep radians from signed arc percent. */
+export function ellipseArcAlongRadFromPercent(percent: number): number {
+  return (Math.abs(clampEllipseArcPercent(percent)) / 100) * TWO_PI;
+}
+
+/** Signed arc % from remaining radians + locked direction. */
+export function ellipseArcPercentFromAlongRad(
+  alongRad: number,
+  sign: 1 | -1
+): number {
+  const along = Math.min(TWO_PI, Math.max(minEllipseArcAlong(), alongRad));
+  return clampEllipseArcPercent(sign * (along / TWO_PI) * 100);
 }
 
 /**
@@ -131,61 +166,6 @@ export function ellipseArcEndAngles(
   const a0 = startRad;
   const a1 = startRad + signed;
   return { a0, a1, mid: startRad + signed / 2, startRad };
-}
-
-/**
- * Map pointer → signed remaining % from fixed 开始位置.
- * - `lockSign`: keep one sweep direction for the gesture (no flip past start).
- * - Near-full continuity: small gap from ±100 stays near-full (not a tiny pie).
- * - Approaching 开始位置 snaps via {@link snapEllipseArcPercent} at the call site.
- */
-export function ellipseArcPercentFromPointer(
-  localX: number,
-  localY: number,
-  cx: number,
-  cy: number,
-  prevPercent: number,
-  startDeg: number = DEFAULT_ELLIPSE_START_DEG,
-  opts?: { lockSign?: 1 | -1 | null }
-): number {
-  const startRad = (clampEllipseStartDeg(startDeg) * Math.PI) / 180;
-  const end = Math.atan2(localY - cy, localX - cx);
-  const delta = wrapAngleDelta(end - startRad); // (−π, π]
-  const prev = Number.isFinite(prevPercent) ? prevPercent : 100;
-  const prevAbs = Math.abs(prev);
-
-  const sign: 1 | -1 =
-    opts?.lockSign === 1 || opts?.lockSign === -1
-      ? opts.lockSign
-      : ellipseArcLockSign(prev, delta);
-
-  // Distance along locked direction from start, in (0, 2π].
-  let along: number;
-  if (sign > 0) {
-    if (delta > 1e-6) along = delta;
-    else if (delta < -1e-6) along = delta + Math.PI * 2;
-    else along = Math.PI * 2;
-  } else if (delta < -1e-6) {
-    along = -delta;
-  } else if (delta > 1e-6) {
-    along = Math.PI * 2 - delta;
-  } else {
-    along = Math.PI * 2;
-  }
-
-  // Near full: a short `along` past start is a small *gap* → large remaining.
-  // Small pie (low prev): short `along` is a small remaining — do not complement.
-  const nearFullGate = Math.PI / 6; // 30°
-  let sweep = along;
-  if (prevAbs >= 70 && along < nearFullGate) {
-    sweep = Math.PI * 2 - along;
-  }
-  // Closing a partial arc: long sweep near 2π → treat as full (at 开始位置).
-  if (prevAbs < 70 && along > Math.PI * 2 - nearFullGate) {
-    sweep = Math.PI * 2;
-  }
-
-  return clampEllipseArcPercent(sign * (sweep / (Math.PI * 2)) * 100);
 }
 
 /** Read ellipse hole ratio (0 = solid disk). */
@@ -216,6 +196,61 @@ export function ellipseStartDegFromAttrs(
     attrs?.ellipseStartDeg ?? attrs?.circleStartDeg ?? attrs?.['start-deg'],
     DEFAULT_ELLIPSE_START_DEG
   );
+}
+
+/**
+ * Map pointer angle → remaining sweep so the end handle sits under the cursor.
+ * ``prevAlong`` blocks jumping across 开始位置 (near-full ↔ tiny).
+ */
+export function ellipseArcAlongFromPointerAngle(
+  pointerAngle: number,
+  startRad: number,
+  lockSign: 1 | -1,
+  prevAlong: number
+): number {
+  const delta = wrapAngleDelta(pointerAngle - startRad);
+  let along = ellipseArcAlongFromDelta(delta, lockSign);
+
+  // Crossed the start ray from near-full → stay closed (only when already nearly full).
+  if (prevAlong > TWO_PI * 0.85 && along < TWO_PI * 0.25) {
+    along = TWO_PI;
+  }
+  // Crossed from a tiny pie → stay at minimum open.
+  if (prevAlong < TWO_PI * 0.25 && along > TWO_PI * 0.85) {
+    along = minEllipseArcAlong();
+  }
+
+  return Math.min(TWO_PI, Math.max(minEllipseArcAlong(), along));
+}
+
+/**
+ * Open/close hysteresis so snapping to full does not chatter.
+ * First open from full: no snap until gap > UNSNAP; then snap in / hold out.
+ */
+export function ellipseArcApplyFullHysteresis(
+  alongRad: number,
+  state: { openedOnce: boolean; heldFull: boolean }
+): { along: number; openedOnce: boolean; heldFull: boolean } {
+  const snapIn = (ELLIPSE_ARC_SNAP_FULL_PCT / 100) * TWO_PI;
+  const snapOut = (ELLIPSE_ARC_UNSNAP_FULL_PCT / 100) * TWO_PI;
+  const gap = Math.max(0, TWO_PI - alongRad);
+  let { openedOnce, heldFull } = state;
+  let along = alongRad;
+
+  if (!openedOnce) {
+    if (gap > snapOut) openedOnce = true;
+    return { along, openedOnce, heldFull: false };
+  }
+
+  if (heldFull) {
+    if (gap <= snapOut) along = TWO_PI;
+    else heldFull = false;
+  } else if (gap <= snapIn) {
+    along = TWO_PI;
+    heldFull = true;
+  }
+
+  return { along, openedOnce, heldFull };
 }
 
 /** Fixed arrowhead length in local (pre-rotation) units. */

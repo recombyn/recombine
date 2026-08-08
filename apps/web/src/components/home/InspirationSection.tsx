@@ -39,6 +39,27 @@ import { cn } from '@/utils/classnames';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import { imageSrcToFile } from '@/utils/uploadImage';
 
+/** Dedupe StrictMode double-mount + remount within the same session. */
+let likedIdsCacheUserId: string | null = null;
+let likedIdsCache: string[] = [];
+let likedIdsInflight: Promise<string[]> | null = null;
+
+async function loadLikedIdsOnce(userId: string): Promise<string[]> {
+  if (likedIdsCacheUserId === userId) return likedIdsCache;
+  if (likedIdsInflight) return likedIdsInflight;
+  likedIdsInflight = (async () => {
+    try {
+      const likedRes = await fetchMyLikedIds();
+      likedIdsCache = likedRes.ids || [];
+      likedIdsCacheUserId = userId;
+      return likedIdsCache;
+    } finally {
+      likedIdsInflight = null;
+    }
+  })();
+  return likedIdsInflight;
+}
+
 type Props = {
   onOpenCase: (meta: OfficialCaseMeta) => void;
   disabled?: boolean;
@@ -197,7 +218,13 @@ function InspirationCaseCard({
       const ok = await copyTextToClipboard(prompt);
       if (ok) {
         message.success(t('home.cases.promptCopied'));
-        recordPlazaUse(meta.id).catch(() => undefined);
+        void (async () => {
+          try {
+            await recordPlazaUse(meta.id);
+          } catch {
+            /* ignore */
+          }
+        })();
       } else {
         message.error(t('home.cases.copyFailed'));
       }
@@ -212,7 +239,13 @@ function InspirationCaseCard({
       const ok = await copyImageToClipboard(url);
       if (ok) {
         message.success(t('home.cases.imageCopied'));
-        recordPlazaUse(meta.id).catch(() => undefined);
+        void (async () => {
+          try {
+            await recordPlazaUse(meta.id);
+          } catch {
+            /* ignore */
+          }
+        })();
       } else {
         message.error(t('home.cases.copyFailed'));
       }
@@ -346,14 +379,15 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
       return;
     }
     let cancelled = false;
-    void fetchMyLikedIds()
-      .then((likedRes) => {
-        if (cancelled) return;
-        setLikedIds(new Set(likedRes.ids || []));
-      })
-      .catch(() => {
+    async function hydrateLikedIds() {
+      try {
+        const ids = await loadLikedIdsOnce(userId!);
+        if (!cancelled) setLikedIds(new Set(ids));
+      } catch {
         if (!cancelled) setLikedIds(new Set());
-      });
+      }
+    }
+    void hydrateLikedIds();
     return () => {
       cancelled = true;
     };
@@ -403,10 +437,11 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
     [t]
   );
 
-  // Tab change / first mount → single feed page (no per-item document calls).
+  // First enter Inspiration — one feed page (no per-item document calls).
   useEffect(() => {
     void loadPage(tab, 1, false);
-  }, [tab, loadPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount hydrate only; tabs load via click
+  }, []);
 
   const onLoadMore = useCallback(() => {
     if (!hasMore || loading || loadingMore) return;
@@ -420,8 +455,9 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
     let cancelled = false;
     const meta = cases.find((c) => c.id === previewId);
     if (!meta) return;
-    void fetchPlazaItem(meta.id)
-      .then((res) => {
+    async function loadPreviewDoc() {
+      try {
+        const res = await fetchPlazaItem(meta.id);
         if (cancelled) return;
         const item = res.item;
         setDocs((prev) =>
@@ -434,11 +470,12 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
             )
           );
         }
-      })
-      .catch(() => {
+      } catch {
         if (cancelled) return;
         setDocs((prev) => (prev[previewId] !== undefined ? prev : { ...prev, [previewId]: null }));
-      });
+      }
+    }
+    void loadPreviewDoc();
     return () => {
       cancelled = true;
     };
@@ -459,15 +496,18 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
     if (disabled || openingId) return;
     setOpeningId(meta.id);
     try {
-      void recordPlazaUse(meta.id)
-        .then((res) => {
+      void (async () => {
+        try {
+          const res = await recordPlazaUse(meta.id);
           const n = Number(res.useCount);
           if (!Number.isFinite(n)) return;
           setCases((prev) =>
             prev.map((c) => (c.id === meta.id ? { ...c, useCount: n } : c))
           );
-        })
-        .catch(() => undefined);
+        } catch {
+          /* ignore */
+        }
+      })();
       setPreviewId(null);
       // Skill chip → chat; blank canvas (handled by HomePage). No document clone.
       onOpenCase(meta);
@@ -527,6 +567,7 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
     setHasMore(false);
     setPage(1);
     setTab(next);
+    void loadPage(next, 1, false);
   };
 
   return (

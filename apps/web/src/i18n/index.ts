@@ -27,32 +27,32 @@ function detectLngFromUrl(): string | undefined {
   return DEFAULT_I18N_LANG;
 }
 
-i18n
-  .use(LanguageDetector)
-  .use(initReactI18next)
-  .init({
-    resources,
-    fallbackLng: DEFAULT_I18N_LANG,
-    lng: detectLngFromUrl(),
-    defaultNS: 'common',
-    detection: {
-      // URL is source of truth at boot via `lng`; keep detector for caches.
-      order: ['localStorage', 'navigator'],
-      lookupLocalStorage: 'language',
-      caches: ['localStorage'],
-    },
-    interpolation: { escapeValue: false },
-  })
-  .then(() => {
-    const fromUrl = detectLngFromUrl();
-    if (fromUrl && i18n.language !== fromUrl) {
-      void i18n.changeLanguage(fromUrl);
-    }
-    if (typeof document !== 'undefined') {
-      document.documentElement.lang =
-        i18n.resolvedLanguage || i18n.language || DEFAULT_I18N_LANG;
-    }
-  });
+void (async () => {
+  await i18n
+    .use(LanguageDetector)
+    .use(initReactI18next)
+    .init({
+      resources,
+      fallbackLng: DEFAULT_I18N_LANG,
+      lng: detectLngFromUrl(),
+      defaultNS: 'common',
+      detection: {
+        // URL is source of truth at boot via `lng`; keep detector for caches.
+        order: ['localStorage', 'navigator'],
+        lookupLocalStorage: 'language',
+        caches: ['localStorage'],
+      },
+      interpolation: { escapeValue: false },
+    });
+  const fromUrl = detectLngFromUrl();
+  if (fromUrl && i18n.language !== fromUrl) {
+    void i18n.changeLanguage(fromUrl);
+  }
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang =
+      i18n.resolvedLanguage || i18n.language || DEFAULT_I18N_LANG;
+  }
+})();
 
 i18n.on('languageChanged', (lng) => {
   if (typeof document !== 'undefined') {

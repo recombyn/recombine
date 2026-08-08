@@ -36,9 +36,11 @@ function FontFamilyPicker({ value, onChange, className }: Props): ReactNode {
 
   useEffect(() => {
     let cancelled = false;
-    loadFontCatalog().then((list) => {
+    async function loadCatalog() {
+      const list = await loadFontCatalog();
       if (!cancelled) setCatalog(list);
-    });
+    }
+    void loadCatalog();
     return () => {
       cancelled = true;
     };

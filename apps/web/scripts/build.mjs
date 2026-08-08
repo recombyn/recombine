@@ -27,5 +27,5 @@ if (tsc.status !== 0) {
   );
 }
 
-const vite = run(['vite', 'build']);
+const vite = run(['vite', 'build', ...process.argv.slice(2)]);
 process.exit(vite.status ?? 1);

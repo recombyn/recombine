@@ -1,6 +1,6 @@
 /**
- * HTML Lottie plates over SVG hit-targets (same pattern as VideoNodeOverlay).
- * Agent / tool-strip store Bodymovin JSON in attrs.animationData.
+ * Lottie ink portals into the node’s SVG foreignObject mount so paint order
+ * follows shared `stackOrder` / `data-z` (same as images & generators).
  */
 import {
   useCallback,
@@ -12,16 +12,18 @@ import {
   type ReactNode,
   memo,
 } from 'react';
+import { createPortal } from 'react-dom';
 import lottie, { type AnimationItem } from 'lottie-web';
 import { useRcbCamera } from '@/components/rcb';
 import {
   isLottieNode,
   isNodeHidden,
   parseLottieAnimationData,
-  stackZIndex,
+  resolveThemeSurfaceFill,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { useHtmlMediaMount } from '@/components/editor/nodes/useHtmlMediaMount';
 
 export type LottieGeomOverride = {
   left: number;
@@ -76,32 +78,40 @@ function LottieZoomSync({ onZoom }: { onZoom: (zoom: number) => void }) {
   return null;
 }
 
+function resolveLottiePlateFill(raw: string): string {
+  const s = String(raw || '').trim();
+  // Default / legacy transparent → theme surface plate (not black).
+  if (!s || s === 'transparent') return resolveThemeSurfaceFill('');
+  return resolveThemeSurfaceFill(s);
+}
+
 function LottiePlate({
   nodeId,
   scenePlate,
-  stackZ,
   animationJson,
   loop,
   speed,
   plateFill,
   hidden,
+  mount,
 }: {
   nodeId: string;
   scenePlate: CSSProperties & { left: number; top: number; width: number; height: number };
-  stackZ: number;
   animationJson: string;
   loop: boolean;
   speed: number;
   plateFill: string;
   hidden?: boolean;
+  mount: HTMLElement;
 }) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const animRef = useRef<AnimationItem | null>(null);
   const camera = useRcbCamera();
   const z = Math.max(0.05, camera.zoom || 1);
+  const fill = resolveLottiePlateFill(plateFill);
 
   useEffect(() => {
-    const host = hostRef.current;
+    const host = hostEl;
     if (!host) return undefined;
     const data = parseLottieAnimationData(animationJson);
     if (!data) return undefined;
@@ -110,6 +120,8 @@ function LottiePlate({
     try {
       anim = lottie.loadAnimation({
         container: host,
+        // SVG renderer: canvas missed some LLM path/group fills (blank heart).
+        // FO + CSS zoom scale still works for path ink; dock/lightbox also use SVG.
         renderer: 'svg',
         loop,
         autoplay: true,
@@ -118,9 +130,8 @@ function LottiePlate({
           : JSON.parse(JSON.stringify(data)),
         rendererSettings: {
           preserveAspectRatio: 'xMidYMid meet',
-          progressiveLoad: true,
-          // Keep SVG inside the counter-scaled wrap.
-          viewBoxOnly: true,
+          progressiveLoad: false,
+          viewBoxOnly: false,
         },
       });
     } catch (err) {
@@ -146,7 +157,9 @@ function LottiePlate({
       if (lottieHosts.get(nodeId) === api) lottieHosts.delete(nodeId);
       host.innerHTML = '';
     };
-  }, [animationJson, nodeId]);
+    // loop/speed applied below — avoid remounting on toolbar toggles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+  }, [hostEl, animationJson, nodeId]);
 
   useEffect(() => {
     const anim = animRef.current;
@@ -160,19 +173,18 @@ function LottiePlate({
     anim.setSpeed(speed);
   }, [speed]);
 
-  return (
+  return createPortal(
     <div
       data-lottie-node={nodeId}
-      className="pointer-events-none absolute overflow-hidden"
+      className="pointer-events-none absolute inset-0 overflow-hidden"
       style={{
-        ...scenePlate,
-        zIndex: stackZ,
-        background: plateFill,
+        borderRadius: scenePlate.borderRadius,
+        background: fill,
+        boxShadow: fill === 'transparent' ? undefined : 'inset 0 0 0 1px var(--line)',
         visibility: hidden ? 'hidden' : undefined,
       }}
       aria-hidden
     >
-      {/* Counter-scale like video plates so SVG ink stays sharp under camera zoom. */}
       <div
         className="pointer-events-none absolute left-0 top-0 overflow-hidden"
         style={{
@@ -182,9 +194,10 @@ function LottiePlate({
           transformOrigin: '0 0',
         }}
       >
-        <div ref={hostRef} className="h-full w-full" />
+        <div ref={setHostEl} className="h-full w-full" />
       </div>
-    </div>
+    </div>,
+    mount
   );
 }
 
@@ -217,50 +230,67 @@ function LottieNodeOverlay({
   return (
     <>
       <LottieZoomSync onZoom={onZoom} />
-      {ids.map((nodeId) => {
-        const node = document?.deltaSetLike?.[nodeId];
-        if (!node) return null;
-        const animationJson = String(node.attrs?.animationData || '').trim();
-        if (!parseLottieAnimationData(animationJson)) return null;
-        const layerHidden = isNodeHidden(node);
-        const { left, top } = nodeLeftTop(document, node);
-        const ov = geometryOverrides?.[nodeId];
-        const width = Math.max(1, ov ? ov.width : Number(node.width) || 1);
-        const height = Math.max(1, ov ? ov.height : Number(node.height) || 1);
-        const angle =
-          ov && Number.isFinite(ov.angle) ? Number(ov.angle) : readNodeAngle(node);
-        const radii = radiiFromAttrs(node.attrs || {});
-        const scenePlate: CSSProperties & {
-          left: number;
-          top: number;
-          width: number;
-          height: number;
-        } = {
-          left: ov ? ov.left : left,
-          top: ov ? ov.top : top,
-          width,
-          height,
-          borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
-          transform: plateTransform(angle),
-          transformOrigin: 'center center',
-        };
-        return (
-          <LottiePlate
-            key={nodeId}
-            nodeId={nodeId}
-            scenePlate={scenePlate}
-            stackZ={stackZIndex(document, 'node', nodeId)}
-            animationJson={animationJson}
-            loop={readLoop(node.attrs)}
-            speed={readSpeed(node.attrs)}
-            plateFill={
-              String(node.attrs?.['fill-color'] || node.attrs?.fill || '').trim() || '#FFFFFF'
-            }
-            hidden={Boolean(hidden) || layerHidden}
-          />
-        );
-      })}
+      {ids.map((nodeId) => (
+        <LottiePlateHost
+          key={nodeId}
+          nodeId={nodeId}
+          document={document}
+          hidden={hidden}
+          geometryOverrides={geometryOverrides}
+        />
+      ))}
     </>
+  );
+}
+
+function LottiePlateHost({
+  nodeId,
+  document,
+  hidden,
+  geometryOverrides,
+}: {
+  nodeId: string;
+  document: any;
+  hidden?: boolean;
+  geometryOverrides?: Record<string, LottieGeomOverride> | null;
+}) {
+  const mount = useHtmlMediaMount(nodeId);
+  const node = document?.deltaSetLike?.[nodeId];
+  if (!node || !mount) return null;
+  const animationJson = String(node.attrs?.animationData || '').trim();
+  if (!parseLottieAnimationData(animationJson)) return null;
+  const layerHidden = isNodeHidden(node);
+  const { left, top } = nodeLeftTop(document, node);
+  const ov = geometryOverrides?.[nodeId];
+  const width = Math.max(1, ov ? ov.width : Number(node.width) || 1);
+  const height = Math.max(1, ov ? ov.height : Number(node.height) || 1);
+  const angle = ov && Number.isFinite(ov.angle) ? Number(ov.angle) : readNodeAngle(node);
+  const radii = radiiFromAttrs(node.attrs || {});
+  const scenePlate: CSSProperties & {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } = {
+    left: ov ? ov.left : left,
+    top: ov ? ov.top : top,
+    width,
+    height,
+    borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
+    transform: plateTransform(angle),
+    transformOrigin: 'center center',
+  };
+  return (
+    <LottiePlate
+      nodeId={nodeId}
+      scenePlate={scenePlate}
+      animationJson={animationJson}
+      loop={readLoop(node.attrs)}
+      speed={readSpeed(node.attrs)}
+      plateFill={String(node.attrs?.['fill-color'] || node.attrs?.fill || '').trim()}
+      hidden={Boolean(hidden) || layerHidden}
+      mount={mount}
+    />
   );
 }
 

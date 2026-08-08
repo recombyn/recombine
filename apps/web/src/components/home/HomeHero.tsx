@@ -124,6 +124,15 @@ function HomeHero({ onSubmit }: Props): ReactNode {
           </span>
           <span>{t('home.heroGenerateSuffix')}</span>
         </h1>
+        <p
+          className={cn(
+            'mt-3 max-w-[36rem] text-[14px] leading-[1.55] text-[var(--muted)] sm:text-[15px]',
+            (isZh || isJa) && 'tracking-[0.02em]'
+          )}
+          data-home-hero-subtitle=""
+        >
+          {t('home.heroSubtitle')}
+        </p>
       </div>
 
       <div className="rcb-home-composer-glow relative mx-auto w-full max-w-[760px]">

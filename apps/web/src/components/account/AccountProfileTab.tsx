@@ -102,9 +102,11 @@ function AccountProfileTab({
       message.warning(t('me.avatarSizeError', { mb: MAX_AVATAR_MB }));
       return;
     }
-    void readAvatarDataUrl(file).then((url) => {
+    async function loadAvatarUrl() {
+      const url = await readAvatarDataUrl(file);
       if (url) setAvatar(url);
-    });
+    }
+    void loadAvatarUrl();
   };
 
   const onSave = async () => {

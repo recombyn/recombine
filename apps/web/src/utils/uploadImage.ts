@@ -162,10 +162,14 @@ export function waitForImageReady(
     opts?.signal?.addEventListener('abort', onAbort, { once: true });
     img.onload = () => {
       if (typeof img.decode === 'function') {
-        void img
-          .decode()
-          .then(() => finish(true))
-          .catch(() => finish(true));
+        void (async () => {
+          try {
+            await img.decode!();
+          } catch {
+            /* decode optional — still treat as loaded */
+          }
+          finish(true);
+        })();
         return;
       }
       finish(true);
@@ -187,9 +191,21 @@ export function isOurStoredImageUrl(src: string): boolean {
   }
 }
 
+/** Local storage keys / auth download routes cannot be used as raw <img>/<video> src. */
+export function mediaSrcNeedsAuthFetch(src: string): boolean {
+  const s = String(src || '').trim();
+  if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
+  if (isOurStoredImageUrl(s)) return true;
+  return /^(assets|uploads|projects|font-tasks)\//.test(s);
+}
+
 export function resolveUploadObjectKey(src: string): string | null {
   const s = (src || '').trim();
   if (!s || s.startsWith('data:') || s.startsWith('blob:')) return null;
+
+  if (/^(assets|uploads|projects|font-tasks)\//.test(s)) {
+    return s.split('?')[0] || s;
+  }
 
   const fromPath = (pathname: string): string | null => {
     const apiPrefix = '/api/v1/uploads/files/';
@@ -319,7 +335,7 @@ export async function uploadImageFromSrc(
   const s = (src || '').trim();
   if (!s) throw new Error('empty image src');
   if (opts?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-  if (isOurStoredImageUrl(s)) return { url: s };
+  if (isOurStoredImageUrl(s) && !opts?.uploadKey) return { url: s };
   const file = await imageSrcToFile(s, filename, { uploadKey: opts?.uploadKey });
   if (opts?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   return uploadImageFile(file, { signal: opts?.signal });

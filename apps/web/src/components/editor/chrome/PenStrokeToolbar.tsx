@@ -351,45 +351,51 @@ function PenStrokeToolbar({
     hydrateCustomPencilBrushes();
     setBrushRev((n) => n + 1);
     let cancelled = false;
-    void fetchDesignBrushes().then((res) => {
-      const items = Array.isArray(res?.items) ? res.items : [];
-      if (cancelled || !items.length) return;
-      const builtinById = new Map(PENCIL_BRUSHES.map((b) => [b.id, b]));
-      const mapped: PencilBrushDef[] = items.map((b) => {
-        const builtin = builtinById.get(b.id);
-        const apiStamp =
-          typeof b.stampSrc === 'string' && b.stampSrc ? b.stampSrc : undefined;
-        const stampSrc = apiStamp || builtin?.stampSrc || undefined;
-        const kind: PencilBrushDef['kind'] =
-          b.kind === 'stamp' || stampSrc ? 'stamp' : 'freehand';
-        return {
-          id: b.id,
-          label: b.label || builtin?.label || b.id,
-          sizeFactor: Number(b.sizeFactor) || builtin?.sizeFactor || 1,
-          simulatePressure: Boolean(b.simulatePressure),
-          kind,
-          stampSrc,
-          spacingFactor:
-            b.spacingFactor != null
-              ? Number(b.spacingFactor)
-              : builtin?.spacingFactor,
-          options: {
-            thinning: Number(b.options?.thinning ?? 0.05),
-            smoothing: Number(b.options?.smoothing ?? 0.45),
-            streamline: Number(b.options?.streamline ?? 0.35),
-            easing: (x: number) => x,
-            start: { taper: 0, cap: true },
-            end: { taper: 0, cap: true },
-          },
-        };
-      });
-      // Library freehand-only rows must not replace tip builtins.
-      const libraryHasTips = items.some(
-        (b) => b.kind === 'stamp' || (typeof b.stampSrc === 'string' && b.stampSrc)
-      );
-      setOfficialPencilBrushes(libraryHasTips ? mapped : null);
-      setBrushRev((n) => n + 1);
-    }).catch(() => undefined);
+    async function loadBrushes() {
+      try {
+        const res = await fetchDesignBrushes();
+        const items = Array.isArray(res?.items) ? res.items : [];
+        if (cancelled || !items.length) return;
+        const builtinById = new Map(PENCIL_BRUSHES.map((b) => [b.id, b]));
+        const mapped: PencilBrushDef[] = items.map((b) => {
+          const builtin = builtinById.get(b.id);
+          const apiStamp =
+            typeof b.stampSrc === 'string' && b.stampSrc ? b.stampSrc : undefined;
+          const stampSrc = apiStamp || builtin?.stampSrc || undefined;
+          const kind: PencilBrushDef['kind'] =
+            b.kind === 'stamp' || stampSrc ? 'stamp' : 'freehand';
+          return {
+            id: b.id,
+            label: b.label || builtin?.label || b.id,
+            sizeFactor: Number(b.sizeFactor) || builtin?.sizeFactor || 1,
+            simulatePressure: Boolean(b.simulatePressure),
+            kind,
+            stampSrc,
+            spacingFactor:
+              b.spacingFactor != null
+                ? Number(b.spacingFactor)
+                : builtin?.spacingFactor,
+            options: {
+              thinning: Number(b.options?.thinning ?? 0.05),
+              smoothing: Number(b.options?.smoothing ?? 0.45),
+              streamline: Number(b.options?.streamline ?? 0.35),
+              easing: (x: number) => x,
+              start: { taper: 0, cap: true },
+              end: { taper: 0, cap: true },
+            },
+          };
+        });
+        // Library freehand-only rows must not replace tip builtins.
+        const libraryHasTips = items.some(
+          (b) => b.kind === 'stamp' || (typeof b.stampSrc === 'string' && b.stampSrc)
+        );
+        setOfficialPencilBrushes(libraryHasTips ? mapped : null);
+        setBrushRev((n) => n + 1);
+      } catch {
+        /* ignore brush catalog errors */
+      }
+    }
+    void loadBrushes();
     return () => {
       cancelled = true;
     };

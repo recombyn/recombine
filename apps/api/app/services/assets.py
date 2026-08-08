@@ -19,6 +19,79 @@ from app.services.db import init_schema
 from app.services.storage import delete_object, get_storage, put_bytes
 
 
+def _display_url(
+    object_key: str,
+    *,
+    source_url: str | None = None,
+    kind: str | None = None,
+    image_bytes: bytes | None = None,
+    mime: str | None = None,
+) -> str:
+    """URL clients can load without auth when possible.
+
+    - Remote COS/S3 → public object URL
+    - Local images → ``data:image/…;base64,…`` (SVG / ``<img>`` cannot send Bearer)
+    - Local video/audio → keep public https source when present, else auth download route
+    """
+    key = (object_key or "").replace("\\", "/").lstrip("/")
+    storage = get_storage()
+    if storage.enabled_remote():
+        return storage.url_for(key)
+
+    kind_n = (kind or "").strip().lower()
+    if kind_n == "image" and image_bytes:
+        return _image_data_url(image_bytes, mime or "image/png")
+
+    src = (source_url or "").strip()
+    if src.startswith(("http://", "https://", "data:")):
+        return src
+    return f"/api/v1/uploads/files/{key}"
+
+
+def _image_data_url(data: bytes, mime: str) -> str:
+    """Inline image for local storage — thumbs stay small; full object stays on disk."""
+    raw = bytes(data or b"")
+    if not raw:
+        raise ValueError("empty image")
+    try:
+        from app.services.design.admin.blob_codec import make_webp_thumb
+
+        # Large enough for dock thumbs + light canvas; full fidelity via object_key fetch.
+        thumb = make_webp_thumb(raw, max_edge=1536, quality=85)
+        return f"data:image/webp;base64,{base64.b64encode(thumb).decode('ascii')}"
+    except Exception:
+        mt = (mime or "image/png").split(";")[0].strip() or "image/png"
+        # Cap runaway DB rows if webp thumb fails.
+        if len(raw) > 1_800_000:
+            from io import BytesIO
+
+            from PIL import Image
+
+            im = Image.open(BytesIO(raw))
+            im.thumbnail((1280, 1280))
+            buf = BytesIO()
+            im.convert("RGB").save(buf, format="JPEG", quality=85)
+            raw = buf.getvalue()
+            mt = "image/jpeg"
+        return f"data:{mt};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+def _normalize_asset_url(url: str | None, object_key: str | None) -> str:
+    """Rewrite legacy bare storage keys so FE can hydrate via /uploads/files."""
+    raw = (url or "").strip()
+    key = (object_key or "").replace("\\", "/").lstrip("/")
+    if not raw and key:
+        return _display_url(key)
+    if raw.startswith(("http://", "https://", "data:", "/")):
+        return raw
+    # Local storage.url_for used to return the bare key (assets/…, uploads/…).
+    if key and (raw == key or raw.startswith(("assets/", "uploads/", "projects/", "font-tasks/"))):
+        return _display_url(key)
+    if raw.startswith(("assets/", "uploads/", "projects/", "font-tasks/")):
+        return _display_url(raw)
+    return raw
+
+
 def _row_to_asset(row: Any) -> dict[str, Any]:
     def _get(key: str) -> Any:
         return getattr(row, key) if hasattr(row, key) else row[key]
@@ -30,11 +103,12 @@ def _row_to_asset(row: Any) -> dict[str, Any]:
             meta = json.loads(raw_meta)
         except json.JSONDecodeError:
             meta = None
+    object_key = _get("object_key")
     return {
         "id": _get("id"),
         "kind": _get("kind"),
-        "url": _get("url"),
-        "objectKey": _get("object_key"),
+        "url": _normalize_asset_url(_get("url"), object_key),
+        "objectKey": object_key,
         "mime": _get("mime"),
         "width": _get("width"),
         "height": _get("height"),
@@ -43,6 +117,9 @@ def _row_to_asset(row: Any) -> dict[str, Any]:
         "meta": meta,
         "createdAt": int(float(_get("created_at") or 0) * 1000),
     }
+
+
+_ASSET_KINDS = ("image", "video", "audio", "font", "lottie")
 
 
 def list_assets(
@@ -57,7 +134,7 @@ def list_assets(
     page_size_n = max(1, min(int(page_size or 24), 100))
     offset = (page_n - 1) * page_size_n
     kind_n = (kind or "").strip().lower() or None
-    if kind_n not in ("image", "video", "audio", "font"):
+    if kind_n not in _ASSET_KINDS:
         kind_n = None
     with Session(engine) as session:
         total = crud.count_user_assets(
@@ -155,6 +232,97 @@ def _probe_image_size(data: bytes) -> tuple[int | None, int | None]:
         return None, None
 
 
+def create_asset_from_remote_url(
+    user_id: str,
+    url: str,
+    *,
+    kind: str = "video",
+    source: str = "ai_video",
+    prompt: str | None = None,
+    mime: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
+    """Register a public CDN/http URL without re-downloading (video rehost fallback)."""
+    init_schema()
+    kind_n = (kind or "video").strip().lower()
+    if kind_n not in _ASSET_KINDS:
+        kind_n = "video"
+    src = (url or "").strip()
+    if not src.startswith(("http://", "https://", "data:")):
+        raise ValueError("remote url required")
+    ext, guessed = _guess_ext_mime(src, mime)
+    mime_n = (mime or guessed or "application/octet-stream").split(";")[0].strip()
+    asset_id = f"asset_{uuid.uuid4().hex[:16]}"
+    # No local blob — keep a stable key for deletes / bookkeeping.
+    object_key = f"assets/{user_id}/{asset_id}.{ext or 'bin'}"
+    now = time.time()
+    with Session(engine) as session:
+        row = crud.create_asset(
+            session=session,
+            asset_id=asset_id,
+            user_id=user_id,
+            kind=kind_n,
+            object_key=object_key,
+            url=src,
+            mime=mime_n,
+            width=width,
+            height=height,
+            source=(source or "ai_video")[:32],
+            prompt=(prompt or None),
+            created_at=now,
+        )
+    return _row_to_asset(row)
+
+
+def create_asset_from_stored(
+    user_id: str,
+    *,
+    kind: str,
+    url: str,
+    object_key: str | None = None,
+    mime: str | None = None,
+    source: str = "upload",
+    prompt: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
+    """Register an already-uploaded storage object (canvas video/audio upload)."""
+    init_schema()
+    kind_n = (kind or "image").strip().lower()
+    if kind_n not in _ASSET_KINDS:
+        kind_n = "image"
+    src = (url or "").strip()
+    key = (object_key or "").replace("\\", "/").lstrip("/")
+    if not src and not key:
+        raise ValueError("url or object_key required")
+    if not key:
+        key = f"assets/{user_id}/asset_{uuid.uuid4().hex[:16]}.bin"
+    if not src:
+        src = _display_url(key, kind=kind_n, mime=mime)
+    mime_n = (mime or "").split(";")[0].strip() or None
+    if not mime_n:
+        mime_n = _guess_ext_mime(src or key, None)[1]
+    asset_id = f"asset_{uuid.uuid4().hex[:16]}"
+    now = time.time()
+    with Session(engine) as session:
+        row = crud.create_asset(
+            session=session,
+            asset_id=asset_id,
+            user_id=user_id,
+            kind=kind_n,
+            object_key=key,
+            url=src,
+            mime=mime_n,
+            width=width,
+            height=height,
+            source=(source or "upload")[:32],
+            prompt=(prompt or None),
+            created_at=now,
+        )
+    return _row_to_asset(row)
+
+
 def create_asset_from_url(
     user_id: str,
     url: str,
@@ -165,7 +333,7 @@ def create_asset_from_url(
 ) -> dict[str, Any]:
     init_schema()
     kind_n = (kind or "image").strip().lower()
-    if kind_n not in ("image", "video", "audio", "font"):
+    if kind_n not in _ASSET_KINDS:
         kind_n = "image"
     data, ctype = _fetch_bytes(url)
     ext, mime = _guess_ext_mime(url, ctype)
@@ -176,7 +344,13 @@ def create_asset_from_url(
     asset_id = f"asset_{uuid.uuid4().hex[:16]}"
     object_key = f"assets/{user_id}/{asset_id}.{ext}"
     put_bytes(object_key, data, content_type=mime)
-    public_url = get_storage().url_for(object_key)
+    public_url = _display_url(
+        object_key,
+        source_url=url,
+        kind=kind_n,
+        image_bytes=data if kind_n == "image" else None,
+        mime=mime,
+    )
     now = time.time()
 
     with Session(engine) as session:
@@ -206,11 +380,13 @@ def create_asset_from_bytes(
     source: str = "ai_audio",
     prompt: str | None = None,
     filename_ext: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
 ) -> dict[str, Any]:
-    """Persist raw bytes (e.g. OpenRouter TTS) without a round-trip URL fetch."""
+    """Persist raw bytes (e.g. OpenRouter TTS / Lottie JSON) without a round-trip URL fetch."""
     init_schema()
     kind_n = (kind or "audio").strip().lower()
-    if kind_n not in ("image", "video", "audio", "font"):
+    if kind_n not in _ASSET_KINDS:
         kind_n = "audio"
     raw = bytes(data or b"")
     if not raw:
@@ -224,14 +400,31 @@ def create_asset_from_bytes(
         ext, mime_n = _guess_ext_mime("", ctype)
         if kind_n == "audio" and ext in ("png", "bin") and not ctype:
             ext, mime_n = "mp3", "audio/mpeg"
-    width, height = (None, None)
+        if kind_n == "lottie" and ext in ("png", "bin") and not ctype:
+            ext, mime_n = "json", "application/json"
+    out_w, out_h = width, height
     if kind_n in ("image", "font"):
-        width, height = _probe_image_size(raw)
+        out_w, out_h = _probe_image_size(raw)
+    elif kind_n == "lottie" and (out_w is None or out_h is None):
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+            if isinstance(parsed, dict):
+                if out_w is None:
+                    out_w = int(parsed.get("w") or 0) or None
+                if out_h is None:
+                    out_h = int(parsed.get("h") or 0) or None
+        except Exception:
+            pass
 
     asset_id = f"asset_{uuid.uuid4().hex[:16]}"
     object_key = f"assets/{user_id}/{asset_id}.{ext}"
     put_bytes(object_key, raw, content_type=mime_n)
-    public_url = get_storage().url_for(object_key)
+    public_url = _display_url(
+        object_key,
+        kind=kind_n,
+        image_bytes=raw if kind_n == "image" else None,
+        mime=mime_n,
+    )
     now = time.time()
 
     with Session(engine) as session:
@@ -243,8 +436,8 @@ def create_asset_from_bytes(
             object_key=object_key,
             url=public_url,
             mime=mime_n,
-            width=width,
-            height=height,
+            width=out_w,
+            height=out_h,
             source=(source or "ai_audio")[:32],
             prompt=(prompt or None),
             created_at=now,

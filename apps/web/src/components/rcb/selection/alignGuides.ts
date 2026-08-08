@@ -6,7 +6,10 @@ export type { ResizeHandle, SceneBox };
 /** Pixel snap step. Override via document.gridSize. */
 export const DEFAULT_GRID_SIZE = 1;
 
-/** Screen-px threshold for object-to-object smart guides. */
+/**
+ * Screen-px threshold for object-to-object smart guides.
+ * Runtime magnet radius is `SMART_SNAP_PX / zoom` (constant on-screen feel).
+ */
 export const SMART_SNAP_PX = 8;
 
 /** Alignment + spacing guide color. */
@@ -39,12 +42,22 @@ export type SmartGuideGap = {
 export type SmartGuideLine = SmartGuideAlign | SmartGuideGap;
 
 /**
- * Scene snap radius — screen pixels converted by zoom so magnet feel
- * stays constant (8 CSS px at every zoom, including 5%).
+ * Object-guide magnet radius in scene units (`SMART_SNAP_PX / zoom`).
+ * Grid quantize is a separate pass and must not widen this.
  */
 export function smartSnapThreshold(zoom: number): number {
   const z = Math.max(0.05, Number(zoom) || 1);
   return SMART_SNAP_PX / z;
+}
+
+/**
+ * Inflate the moving box when spatially filtering guide targets — wide enough
+ * for gap chrome beside neighbors, tight enough that distant posters cannot
+ * steal center-align magnets.
+ */
+export function smartGuideTargetPad(threshold: number): number {
+  const t = Math.max(0, Number(threshold) || 0);
+  return Math.max(t * 3, 180);
 }
 
 type AxisMark = { value: number; role: 'min' | 'mid' | 'max' };
@@ -63,6 +76,28 @@ function boxYMarks(box: SceneBox): AxisMark[] {
     { value: box.top + box.height / 2, role: 'mid' },
     { value: box.top + box.height, role: 'max' },
   ];
+}
+
+/**
+ * Oversized billboard / artboard / poster — skip its **center** magnet so a
+ * small mover is not glued to a page plate. Edges (corners) stay snappable.
+ */
+export function isOversizedMidSnapTarget(box: SceneBox, target: SceneBox): boolean {
+  if (!(box.width > 0) || !(box.height > 0) || !(target.width > 0) || !(target.height > 0)) {
+    return false;
+  }
+  return target.width >= box.width * 2 && target.height >= box.height * 2;
+}
+
+/** @deprecated Use {@link isOversizedMidSnapTarget}. */
+export function isLargeContainingSnapTarget(box: SceneBox, target: SceneBox): boolean {
+  if (!isOversizedMidSnapTarget(box, target)) return false;
+  return (
+    target.left <= box.left + 1e-6 &&
+    target.top <= box.top + 1e-6 &&
+    target.left + target.width >= box.left + box.width - 1e-6 &&
+    target.top + target.height >= box.top + box.height - 1e-6
+  );
 }
 
 function mergeGuideExtent(a0: number, a1: number, b0: number, b1: number): { from: number; to: number } {
@@ -421,12 +456,6 @@ function collectGapGuides(box: SceneBox, targets: SceneBox[]): SmartGuideGap[] {
 /** Scene epsilon: path marks must nearly coincide (do not scale with zoom snap threshold). */
 export const GUIDE_COINCIDE_EPS = 0.51;
 
-function isOnGrid(value: number, gridSize: number): boolean {
-  if (!(gridSize > 0) || !Number.isFinite(value)) return true;
-  const q = Math.round(value / gridSize) * gridSize;
-  return Math.abs(value - q) <= 1e-6;
-}
-
 /** After snap: coincide path marks (fixed scene epsilon). */
 function finishSmartGuides(
   box: SceneBox,
@@ -468,13 +497,14 @@ function finishSmartGuides(
       marks: marksAlongGuide(box, targets, g.axis, g.at, GUIDE_COINCIDE_EPS),
     };
   }
-  const gaps = collectGapGuides(box, targets);
-  return [...aligns, ...gaps];
+  // Indicators only from exact post-nudge coincides — never free gap chrome.
+  return aligns;
 }
 
 /**
- * Paint-only guides for the current box — gaps always; aligns when edges
+ * Paint-only guides for inspect / idle helpers — gaps always; aligns when edges
  * coincide within `eps` (does not move the box).
+ * Move/resize drag must use {@link collectMoveSnapIndicators} instead.
  */
 export function collectSmartGuidesAt(
   box: SceneBox,
@@ -491,29 +521,51 @@ export function collectSmartGuidesAt(
   return [...aligns, ...collectGapGuides(box, targets)];
 }
 
+/**
+ * Drag indicators after settle: only exact coincide align lines.
+ * No free gap badges during drag.
+ */
+export function collectMoveSnapIndicators(
+  box: SceneBox,
+  targets: SceneBox[],
+  eps: number = GUIDE_COINCIDE_EPS
+): SmartGuideLine[] {
+  const coincide = Math.max(GUIDE_COINCIDE_EPS, Number(eps) || 0);
+  return collectAlignGuides(box, targets, coincide).map((g) => ({
+    ...g,
+    marks: g.marks?.length
+      ? g.marks
+      : marksAlongGuide(box, targets, g.axis, g.at, GUIDE_COINCIDE_EPS),
+  }));
+}
+
 /** Snap a moving AABB to sibling path edges / centers. */
 export function snapMoveToSmartGuides(opts: {
   box: SceneBox;
   targets: SceneBox[];
   threshold: number;
-  /** Skip snaps that leave the box origin off the document grid. */
+  /**
+   * @deprecated Grid is not part of object magnets. Callers should quantize with
+   * `snapBoxToGrid` after smart. Ignored when provided.
+   */
   gridSize?: number;
   /**
-   * Prior frame guide positions (`at`). Prefer staying on the same guides so
-   * nearby candidates (e.g. flush vs gap-4) do not flip-flop while dragging.
+   * Which axes may magnetize. Default both. Pass `{ x:false }` / `{ y:false }`
+   * for shift-locked axis.
    */
-  stickyAt?: { x?: number; y?: number } | null;
-}): { box: SceneBox; guides: SmartGuideLine[]; stickyAt: { x?: number; y?: number } } {
+  axes?: { x?: boolean; y?: boolean } | null;
+}): { box: SceneBox; guides: SmartGuideLine[] } {
   const { box, targets, threshold } = opts;
-  const gridSize = opts.gridSize ?? 0;
-  const stickyAt = opts.stickyAt || null;
+  void opts.gridSize; // lattice pin is a separate pass — never filters magnets
+  const allowX = opts.axes?.x !== false;
+  const allowY = opts.axes?.y !== false;
   if (!(threshold > 0) || !targets.length) {
-    return { box, guides: [], stickyAt: {} };
+    return { box, guides: [] };
   }
 
+  // Closest offset per axis; prefer edges over mid on ties.
   type Cand = {
     abs: number;
-    score: number;
     delta: number;
     at: number;
     from: number;
@@ -524,11 +576,6 @@ export function snapMoveToSmartGuides(opts: {
   let bestY: Cand | null = null;
 
   const roleRank = (r: AxisMark['role']) => (r === 'mid' ? 1 : 0);
-  // Tie-break / anti-chatter only (±jitter around a midpoint). Do NOT use a
-  // large bonus: hysteresis=2 kept the first flush when the competing guide was
-  // already ~1px closer ("first snap OK, later stuck until I nudge Y").
-  // Do NOT scale with snap threshold / low zoom either.
-  const hysteresis = Math.max(gridSize > 0 ? gridSize : 1, 1);
 
   const mx = boxXMarks(box);
   const my = boxYMarks(box);
@@ -537,71 +584,43 @@ export function snapMoveToSmartGuides(opts: {
     if (!(t.width > 0) || !(t.height > 0)) continue;
     const tx = boxXMarks(t);
     const ty = boxYMarks(t);
-    for (const m of mx) {
-      for (const tm of tx) {
-        const delta = tm.value - m.value;
-        const abs = Math.abs(delta);
-        if (abs > threshold) continue;
-        const nextLeft = box.left + delta;
-        // Path control box / visual outer must stay on grid — reject snaps that leave it.
-        if (gridSize > 0 && !isOnGrid(nextLeft, gridSize)) continue;
-        let score = abs;
-        if (stickyAt?.x != null && Math.abs(tm.value - stickyAt.x) <= 1e-6) {
-          score = Math.max(0, score - hysteresis);
+    if (allowX) {
+      for (const m of mx) {
+        for (const tm of tx) {
+          if (tm.role === 'mid' && isOversizedMidSnapTarget(box, t)) continue;
+          if (m.role === 'mid' && isOversizedMidSnapTarget(box, t)) continue;
+          const delta = tm.value - m.value;
+          const abs = Math.abs(delta);
+          if (abs > threshold) continue;
+          if (bestX && abs > bestX.abs + 1e-9) continue;
+          if (bestX && Math.abs(abs - bestX.abs) <= 1e-9 && roleRank(tm.role) > roleRank(bestX.role)) {
+            continue;
+          }
+          const ext = mergeGuideExtent(box.top, box.top + box.height, t.top, t.top + t.height);
+          bestX = { abs, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
         }
-        if (bestX && score > bestX.score + 1e-9) continue;
-        if (
-          bestX &&
-          Math.abs(score - bestX.score) <= 1e-9 &&
-          roleRank(tm.role) > roleRank(bestX.role)
-        ) {
-          continue;
-        }
-        if (
-          bestX &&
-          Math.abs(score - bestX.score) <= 1e-9 &&
-          roleRank(tm.role) === roleRank(bestX.role) &&
-          abs > bestX.abs + 1e-9
-        ) {
-          continue;
-        }
-        const ext = mergeGuideExtent(box.top, box.top + box.height, t.top, t.top + t.height);
-        bestX = { abs, score, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
       }
     }
-    for (const m of my) {
-      for (const tm of ty) {
-        const delta = tm.value - m.value;
-        const abs = Math.abs(delta);
-        if (abs > threshold) continue;
-        const nextTop = box.top + delta;
-        if (gridSize > 0 && !isOnGrid(nextTop, gridSize)) continue;
-        let score = abs;
-        if (stickyAt?.y != null && Math.abs(tm.value - stickyAt.y) <= 1e-6) {
-          score = Math.max(0, score - hysteresis);
+    if (allowY) {
+      for (const m of my) {
+        for (const tm of ty) {
+          if (tm.role === 'mid' && isOversizedMidSnapTarget(box, t)) continue;
+          if (m.role === 'mid' && isOversizedMidSnapTarget(box, t)) continue;
+          const delta = tm.value - m.value;
+          const abs = Math.abs(delta);
+          if (abs > threshold) continue;
+          if (bestY && abs > bestY.abs + 1e-9) continue;
+          if (bestY && Math.abs(abs - bestY.abs) <= 1e-9 && roleRank(tm.role) > roleRank(bestY.role)) {
+            continue;
+          }
+          const ext = mergeGuideExtent(box.left, box.left + box.width, t.left, t.left + t.width);
+          bestY = { abs, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
         }
-        if (bestY && score > bestY.score + 1e-9) continue;
-        if (
-          bestY &&
-          Math.abs(score - bestY.score) <= 1e-9 &&
-          roleRank(tm.role) > roleRank(bestY.role)
-        ) {
-          continue;
-        }
-        if (
-          bestY &&
-          Math.abs(score - bestY.score) <= 1e-9 &&
-          roleRank(tm.role) === roleRank(bestY.role) &&
-          abs > bestY.abs + 1e-9
-        ) {
-          continue;
-        }
-        const ext = mergeGuideExtent(box.left, box.left + box.width, t.left, t.left + t.width);
-        bestY = { abs, score, delta, at: tm.value, from: ext.from, to: ext.to, role: tm.role };
       }
     }
   }
 
+  // Nudge first, then paint only exact coincides.
   const next: SceneBox = {
     ...box,
     left: bestX ? box.left + bestX.delta : box.left,
@@ -631,10 +650,6 @@ export function snapMoveToSmartGuides(opts: {
           }
         : undefined,
     }),
-    stickyAt: {
-      x: bestX?.at,
-      y: bestY?.at,
-    },
   };
 }
 
@@ -647,11 +662,14 @@ export function snapResizeToSmartGuides(opts: {
   targets: SceneBox[];
   threshold: number;
   min?: number;
-  /** Skip target marks that are off the document grid. */
+  /**
+   * @deprecated Grid is not part of object magnets. Quantize with
+   * `snapResizeToGrid` after smart. Ignored when provided.
+   */
   gridSize?: number;
 }): { box: SceneBox; guides: SmartGuideLine[] } {
   const { box, handle, targets, threshold } = opts;
-  const gridSize = opts.gridSize ?? 0;
+  void opts.gridSize;
   const min = Math.max(1, opts.min ?? 1);
   if (!(threshold > 0) || !targets.length) return { box, guides: [] };
 
@@ -674,9 +692,10 @@ export function snapResizeToSmartGuides(opts: {
   ): EdgeCand | null => {
     let best: EdgeCand | null = null;
     for (const tm of targetsMarks) {
+      // Resize may use target mids; skip only oversized billboard centers.
+      if (tm.role === 'mid' && isOversizedMidSnapTarget(box, tm.box)) continue;
       const abs = Math.abs(tm.value - edge);
       if (abs > threshold) continue;
-      if (gridSize > 0 && !isOnGrid(tm.value, gridSize)) continue;
       if (best && abs > best.abs + 1e-9) continue;
       if (best && Math.abs(abs - best.abs) <= 1e-9 && roleRank(tm.role) > roleRank(best.role)) {
         continue;

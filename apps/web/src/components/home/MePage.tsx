@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { HiOutlinePhoto, HiOutlineTrash } from 'react-icons/hi2';
-import { LuAudioLines, LuFilm } from 'react-icons/lu';
 import { Icon } from '@/components/base/icon';
 import EditProfileDialog from '@/components/home/EditProfileDialog';
 import EmptyState from '@/components/home/EmptyState';
@@ -12,7 +10,15 @@ import {
   InspirationCaseCard,
 } from '@/components/home/InspirationSection';
 import { FlowScrollSection } from '@/components/home/FlowScrollSection';
-import { InfiniteScrollSection } from '@/components/home/InfiniteScroll';
+import {
+  InfiniteScrollSection,
+  GRID_SKELETON_COUNT,
+} from '@/components/home/InfiniteScroll';
+import {
+  UserAssetCard,
+  UserAssetCardSkeleton,
+  UserAssetMediaPreview,
+} from '@/components/home/UserAssetMediaCard';
 import SegmentTabs from '@/components/home/SegmentTabs';
 import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import { buildLoginUrl } from '@/utils/authReturnTo';
@@ -36,82 +42,19 @@ import {
   normalizeCaseCategory,
   type OfficialCaseMeta,
 } from '@/utils/officialCases';
-import { message } from '@/components/base';
+import { Button, Dialog, message } from '@/components/base';
 import { getToken } from '@/utils/token';
 
 /** Me profile feed — same scale as Skills: 2 → 3 → 4 → 5 (2xl). */
 const ME_FLOW_COLUMNS =
   'w-full columns-2 gap-4 md:columns-3 lg:columns-4 2xl:columns-5';
 
-const ME_ASSET_GRID =
-  'grid w-full grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5';
-
 const ASSETS_PAGE_SIZE = 30;
 
 type ProfileTab = 'published' | 'liked' | 'assets';
 
-function isMediaAssetKind(kind: string): kind is 'image' | 'video' | 'audio' {
-  return kind === 'image' || kind === 'video' || kind === 'audio';
-}
-
-function formatAssetRelativeTime(ms: number | null | undefined, locale: string): string {
-  const t = Number(ms);
-  if (!Number.isFinite(t) || t <= 0) return '';
-  const diffSec = Math.round((Date.now() - t) / 1000);
-  if (diffSec < 60) return locale.startsWith('zh') ? '刚刚' : 'just now';
-  if (diffSec < 3600) {
-    const m = Math.floor(diffSec / 60);
-    return locale.startsWith('zh') ? `${m} 分钟前` : `${m}m ago`;
-  }
-  if (diffSec < 86400) {
-    const h = Math.floor(diffSec / 3600);
-    return locale.startsWith('zh') ? `${h} 小时前` : `${h}h ago`;
-  }
-  const d = Math.floor(diffSec / 86400);
-  return locale.startsWith('zh') ? `${d} 天前` : `${d}d ago`;
-}
-
-function MeAssetThumb({ asset }: { asset: UserAsset }): ReactNode {
-  const url = String(asset.url || '').trim();
-  if (asset.kind === 'image' && url) {
-    return (
-      <img
-        src={url}
-        alt=""
-        className="h-full w-full object-cover"
-        loading="lazy"
-        draggable={false}
-      />
-    );
-  }
-  if (asset.kind === 'video' && url) {
-    return (
-      <video
-        src={url}
-        className="h-full w-full object-cover"
-        muted
-        playsInline
-        preload="metadata"
-      />
-    );
-  }
-  return (
-    <span className="inline-flex h-full w-full items-center justify-center text-[var(--muted)]">
-      {asset.kind === 'audio' ? (
-        <LuAudioLines className="h-7 w-7" strokeWidth={1.75} />
-      ) : asset.kind === 'video' ? (
-        <LuFilm className="h-7 w-7" strokeWidth={1.75} />
-      ) : (
-        <HiOutlinePhoto className="h-7 w-7" strokeWidth={1.75} />
-      )}
-    </span>
-  );
-}
-
-function assetKindLabelKey(kind: string): string {
-  if (kind === 'video') return 'me.assetKindVideo';
-  if (kind === 'audio') return 'me.assetKindAudio';
-  return 'me.assetKindImage';
+function isMediaAssetKind(kind: string): kind is 'image' | 'video' | 'audio' | 'lottie' {
+  return kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'lottie';
 }
 
 type LikedCaseItem = OfficialCaseMeta & { likedAt: number };
@@ -259,6 +202,8 @@ function MePage({ onOpenCase }: Props): ReactNode {
   /** First fetch done — skip skeleton when switching back to Assets. */
   const [assetsReady, setAssetsReady] = useState(false);
   const [assetBusyId, setAssetBusyId] = useState<string | null>(null);
+  const [assetPreview, setAssetPreview] = useState<UserAsset | null>(null);
+  const [assetDeleteTarget, setAssetDeleteTarget] = useState<UserAsset | null>(null);
 
   const [likedIds, setLikedIds] = useState<Set<string>>(() => new Set());
   const [likeBusyId, setLikeBusyId] = useState<string | null>(null);
@@ -269,6 +214,9 @@ function MePage({ onOpenCase }: Props): ReactNode {
   const likedMigratedRef = useRef(false);
   const likedFetchGen = useRef(0);
   const assetsFetchGen = useRef(0);
+  const likedLoadedUserRef = useRef<string | null>(null);
+  const publishedLoadedUserRef = useRef<string | null>(null);
+  const assetsLoadedUserRef = useRef<string | null>(null);
 
   const displayName = user?.name || user?.email?.split('@')[0] || t('home.account');
   const userId = user?.id as string | undefined;
@@ -276,12 +224,17 @@ function MePage({ onOpenCase }: Props): ReactNode {
 
   useEffect(() => {
     // New account session — allow first-fetch skeletons again.
+    likedLoadedUserRef.current = null;
+    publishedLoadedUserRef.current = null;
+    assetsLoadedUserRef.current = null;
     setLikedReady(false);
     setPublishedReady(false);
     setAssetsReady(false);
     setLiked([]);
     setPublishedAll([]);
     setAssets([]);
+    setAssetPreview(null);
+    setAssetDeleteTarget(null);
     likedMigratedRef.current = false;
   }, [userId]);
 
@@ -291,20 +244,21 @@ function MePage({ onOpenCase }: Props): ReactNode {
       return;
     }
     let cancelled = false;
-    void fetchMyLikedIds()
-      .then((res) => {
+    async function hydrateLikedIds() {
+      try {
+        const res = await fetchMyLikedIds();
         if (!cancelled) setLikedIds(new Set(res.ids || []));
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setLikedIds(new Set());
-      });
+      }
+    }
+    void hydrateLikedIds();
     return () => {
       cancelled = true;
     };
   }, [authed, userId]);
 
-  useEffect(() => {
-    if (tab !== 'liked') return;
+  const loadLikedOnce = useCallback(async () => {
     if (!authed || !userId) {
       setLiked([]);
       setLikedHasMore(false);
@@ -312,60 +266,132 @@ function MePage({ onOpenCase }: Props): ReactNode {
       setLikedReady(true);
       return;
     }
-    // Already loaded once — keep list visible; no skeleton flash on tab switch.
-    if (likedReady) return;
-    let cancelled = false;
+    if (likedLoadedUserRef.current === userId) return;
+    likedLoadedUserRef.current = userId;
     const gen = ++likedFetchGen.current;
     setLikedLoading(true);
     setLikedLoadingMore(false);
-    async function loadLiked() {
-      try {
-        if (!likedMigratedRef.current) {
-          const localIds = loadLocalLikedIds(userId);
-          if (localIds.length) {
-            await syncMyLiked(localIds);
-            clearLocalLiked(userId);
-          }
-          likedMigratedRef.current = true;
+    try {
+      if (!likedMigratedRef.current) {
+        const localIds = loadLocalLikedIds(userId);
+        if (localIds.length) {
+          await syncMyLiked(localIds);
+          clearLocalLiked(userId);
         }
-        if (cancelled || gen !== likedFetchGen.current) return;
-        const res = await fetchMyLiked({ page: 1, pageSize: PAGE_SIZE });
-        if (cancelled || gen !== likedFetchGen.current) return;
-        const items = (res.items || []).map(mapLikedItem);
-        setLiked(items);
-        setLikedIds((prev) => {
-          const next = new Set(prev);
-          for (const item of items) next.add(item.id);
-          return next;
-        });
-        setLikedPage(1);
-        setLikedHasMore(Boolean(res.hasMore));
-      } catch {
-        if (!cancelled && gen === likedFetchGen.current) {
-          setLiked([]);
-          setLikedHasMore(false);
-          message.error(t('home.casesLoadFailed'));
-        }
-      } finally {
-        if (!cancelled && gen === likedFetchGen.current) {
-          setLikedLoading(false);
-          setLikedReady(true);
-        }
+        likedMigratedRef.current = true;
+      }
+      if (gen !== likedFetchGen.current) return;
+      const res = await fetchMyLiked({ page: 1, pageSize: PAGE_SIZE });
+      if (gen !== likedFetchGen.current) return;
+      const items = (res.items || []).map(mapLikedItem);
+      setLiked(items);
+      setLikedIds((prev) => {
+        const next = new Set(prev);
+        for (const item of items) next.add(item.id);
+        return next;
+      });
+      setLikedPage(1);
+      setLikedHasMore(Boolean(res.hasMore));
+    } catch {
+      if (gen === likedFetchGen.current) {
+        likedLoadedUserRef.current = null;
+        setLiked([]);
+        setLikedHasMore(false);
+        message.error(t('home.casesLoadFailed'));
+      }
+    } finally {
+      if (gen === likedFetchGen.current) {
+        setLikedLoading(false);
+        setLikedReady(true);
       }
     }
-    loadLiked();
-    return () => {
-      cancelled = true;
-    };
-  }, [tab, authed, userId, t, likedReady]);
+  }, [authed, userId, t]);
+
+  const loadPublishedOnce = useCallback(async () => {
+    if (!userId) {
+      setPublishedAll([]);
+      setPublishedLoading(false);
+      setPublishedReady(true);
+      return;
+    }
+    if (publishedLoadedUserRef.current === userId) return;
+    publishedLoadedUserRef.current = userId;
+    setPublishedLoading(true);
+    setPublishedVisible(PAGE_SIZE);
+    setPublishedLoadingMore(false);
+    try {
+      const res = await fetchMyPlazaSubmissions();
+      const approved = (res.items || [])
+        .filter((x) => x.status === 'approved')
+        .map(mapPublishedSubmission);
+      setPublishedAll(approved);
+    } catch {
+      publishedLoadedUserRef.current = null;
+      setPublishedAll([]);
+    } finally {
+      setPublishedLoading(false);
+      setPublishedReady(true);
+    }
+  }, [userId]);
+
+  const loadAssetsOnce = useCallback(async () => {
+    if (!userId) {
+      setAssets([]);
+      setAssetsHasMore(false);
+      setAssetsLoading(false);
+      setAssetsReady(true);
+      return;
+    }
+    if (assetsLoadedUserRef.current === userId) return;
+    assetsLoadedUserRef.current = userId;
+    const gen = ++assetsFetchGen.current;
+    setAssetsLoading(true);
+    setAssetsLoadingMore(false);
+    try {
+      const res = await listAssets({ page: 1, pageSize: ASSETS_PAGE_SIZE });
+      if (gen !== assetsFetchGen.current) return;
+      const media = (res.items || []).filter((a) =>
+        isMediaAssetKind(String(a.kind || ''))
+      );
+      setAssets(media);
+      setAssetsPage(res.page || 1);
+      setAssetsHasMore(Boolean(res.hasMore));
+    } catch {
+      if (gen !== assetsFetchGen.current) return;
+      assetsLoadedUserRef.current = null;
+      setAssets([]);
+      setAssetsHasMore(false);
+      message.error(t('me.assetsLoadFail'));
+    } finally {
+      if (gen === assetsFetchGen.current) {
+        setAssetsLoading(false);
+        setAssetsReady(true);
+      }
+    }
+  }, [userId, t]);
+
+  // First enter「我的」(only mounted when nav=account) → 已发布 list.
+  // Projects 页 (nav=mine) must never mount this component / call plaza/mine.
+  useEffect(() => {
+    void loadPublishedOnce();
+  }, [userId, loadPublishedOnce]);
+
+  const onProfileTabChange = (id: string) => {
+    const next = id as ProfileTab;
+    setTab(next);
+    if (next === 'liked') void loadLikedOnce();
+    else if (next === 'published') void loadPublishedOnce();
+    else if (next === 'assets') void loadAssetsOnce();
+  };
 
   const loadMoreLiked = useCallback(() => {
     if (!authed || !likedHasMore || likedLoading || likedLoadingMore) return;
     const nextPage = likedPage + 1;
     const gen = likedFetchGen.current;
     setLikedLoadingMore(true);
-    void fetchMyLiked({ page: nextPage, pageSize: PAGE_SIZE })
-      .then((res) => {
+    async function loadMore() {
+      try {
+        const res = await fetchMyLiked({ page: nextPage, pageSize: PAGE_SIZE });
         if (gen !== likedFetchGen.current) return;
         const items = (res.items || []).map(mapLikedItem);
         setLiked((prev) => {
@@ -379,50 +405,14 @@ function MePage({ onOpenCase }: Props): ReactNode {
         });
         setLikedPage(nextPage);
         setLikedHasMore(Boolean(res.hasMore));
-      })
-      .catch(() => {
+      } catch {
         if (gen === likedFetchGen.current) message.error(t('home.casesLoadFailed'));
-      })
-      .finally(() => {
+      } finally {
         if (gen === likedFetchGen.current) setLikedLoadingMore(false);
-      });
-  }, [authed, likedHasMore, likedLoading, likedLoadingMore, likedPage, t]);
-
-  useEffect(() => {
-    if (tab !== 'published') return;
-    if (!userId) {
-      setPublishedAll([]);
-      setPublishedLoading(false);
-      setPublishedReady(true);
-      return;
+      }
     }
-    // Already loaded once — keep list visible; no skeleton flash on tab switch.
-    if (publishedReady) return;
-    let cancelled = false;
-    setPublishedLoading(true);
-    setPublishedVisible(PAGE_SIZE);
-    setPublishedLoadingMore(false);
-    void fetchMyPlazaSubmissions()
-      .then((res) => {
-        if (cancelled) return;
-        const approved = (res.items || [])
-          .filter((x) => x.status === 'approved')
-          .map(mapPublishedSubmission);
-        setPublishedAll(approved);
-      })
-      .catch(() => {
-        if (!cancelled) setPublishedAll([]);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setPublishedLoading(false);
-          setPublishedReady(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tab, userId, publishedReady]);
+    void loadMore();
+  }, [authed, likedHasMore, likedLoading, likedLoadingMore, likedPage, t]);
 
   const publishedSlice = publishedAll.slice(0, publishedVisible);
   const publishedHasMore = publishedVisible < publishedAll.length;
@@ -436,54 +426,14 @@ function MePage({ onOpenCase }: Props): ReactNode {
     }, 180);
   }, [publishedAll.length, publishedHasMore, publishedLoading, publishedLoadingMore]);
 
-  useEffect(() => {
-    if (tab !== 'assets') return;
-    if (!userId) {
-      setAssets([]);
-      setAssetsHasMore(false);
-      setAssetsLoading(false);
-      setAssetsReady(true);
-      return;
-    }
-    if (assetsReady) return;
-    let cancelled = false;
-    const gen = ++assetsFetchGen.current;
-    setAssetsLoading(true);
-    setAssetsLoadingMore(false);
-    void listAssets({ page: 1, pageSize: ASSETS_PAGE_SIZE })
-      .then((res) => {
-        if (cancelled || gen !== assetsFetchGen.current) return;
-        const media = (res.items || []).filter((a) =>
-          isMediaAssetKind(String(a.kind || ''))
-        );
-        setAssets(media);
-        setAssetsPage(res.page || 1);
-        setAssetsHasMore(Boolean(res.hasMore));
-      })
-      .catch(() => {
-        if (cancelled || gen !== assetsFetchGen.current) return;
-        setAssets([]);
-        setAssetsHasMore(false);
-        message.error(t('me.assetsLoadFail'));
-      })
-      .finally(() => {
-        if (!cancelled && gen === assetsFetchGen.current) {
-          setAssetsLoading(false);
-          setAssetsReady(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tab, userId, assetsReady, t]);
-
   const loadMoreAssets = useCallback(() => {
     if (!userId || !assetsHasMore || assetsLoading || assetsLoadingMore) return;
     const nextPage = assetsPage + 1;
     const gen = assetsFetchGen.current;
     setAssetsLoadingMore(true);
-    void listAssets({ page: nextPage, pageSize: ASSETS_PAGE_SIZE })
-      .then((res) => {
+    async function loadMore() {
+      try {
+        const res = await listAssets({ page: nextPage, pageSize: ASSETS_PAGE_SIZE });
         if (gen !== assetsFetchGen.current) return;
         const media = (res.items || []).filter((a) =>
           isMediaAssetKind(String(a.kind || ''))
@@ -494,13 +444,13 @@ function MePage({ onOpenCase }: Props): ReactNode {
         });
         setAssetsPage(nextPage);
         setAssetsHasMore(Boolean(res.hasMore));
-      })
-      .catch(() => {
+      } catch {
         if (gen === assetsFetchGen.current) message.error(t('me.assetsLoadFail'));
-      })
-      .finally(() => {
+      } finally {
         if (gen === assetsFetchGen.current) setAssetsLoadingMore(false);
-      });
+      }
+    }
+    void loadMore();
   }, [userId, assetsHasMore, assetsLoading, assetsLoadingMore, assetsPage, t]);
 
   const onDeleteAsset = async (asset: UserAsset) => {
@@ -510,6 +460,9 @@ function MePage({ onOpenCase }: Props): ReactNode {
     try {
       await deleteAsset(id);
       setAssets((prev) => prev.filter((a) => a.id !== id));
+      if (assetPreview?.id === id) setAssetPreview(null);
+      setAssetDeleteTarget(null);
+      message.destructive(t('me.deleteAssetOk'));
     } catch {
       message.error(t('me.deleteAssetFail'));
     } finally {
@@ -519,8 +472,8 @@ function MePage({ onOpenCase }: Props): ReactNode {
 
   const openAssetPreview = (asset: UserAsset) => {
     const url = String(asset.url || '').trim();
-    if (!url) return;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    if (!url && asset.kind !== 'audio') return;
+    setAssetPreview(asset);
   };
 
   const listForPreview = tab === 'liked' ? liked : publishedAll;
@@ -529,8 +482,9 @@ function MePage({ onOpenCase }: Props): ReactNode {
     if (!previewId) return;
     if (docs[previewId] !== undefined) return;
     let cancelled = false;
-    void fetchPlazaItem(previewId)
-      .then((res) => {
+    async function loadPreviewDoc() {
+      try {
+        const res = await fetchPlazaItem(previewId);
         if (cancelled) return;
         const item = res.item;
         setDocs((prev) =>
@@ -545,12 +499,13 @@ function MePage({ onOpenCase }: Props): ReactNode {
             prev.map((c) => (c.id === previewId ? { ...c, panelUrls: panels } : c))
           );
         }
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) {
           setDocs((prev) => (prev[previewId] !== undefined ? prev : { ...prev, [previewId]: null }));
         }
-      });
+      }
+    }
+    void loadPreviewDoc();
     return () => {
       cancelled = true;
     };
@@ -617,7 +572,13 @@ function MePage({ onOpenCase }: Props): ReactNode {
     if (remixingId) return;
     setRemixingId(meta.id);
     try {
-      void recordPlazaUse(meta.id).catch(() => undefined);
+      void (async () => {
+        try {
+          await recordPlazaUse(meta.id);
+        } catch {
+          /* ignore */
+        }
+      })();
       setPreviewId(null);
       onOpenCase(meta);
     } catch {
@@ -678,160 +639,108 @@ function MePage({ onOpenCase }: Props): ReactNode {
             size="md"
             tabs={profileTabs}
             value={tab}
-            onChange={(id) => setTab(id as ProfileTab)}
+            onChange={onProfileTabChange}
           />
         </div>
 
-        {/* Keep both panels mounted (hidden) so empty ↔ empty doesn't remount / jump. */}
         <div className="mt-6 w-full">
-          <div
-            className={tab === 'published' ? 'block' : 'hidden'}
-            role="tabpanel"
-            aria-hidden={tab !== 'published'}
-          >
-            {!userId ? (
-              <EmptyState hint={t('plaza.needLogin')} />
-            ) : (
-              <FlowScrollSection
-                loading={publishedLoading}
-                loadingMore={publishedLoadingMore}
-                hasMore={publishedHasMore}
-                onLoadMore={loadMorePublished}
-                isEmpty={publishedAll.length === 0}
-                empty={<EmptyState hint={t('me.emptyPublished')} />}
-                columnsClassName={ME_FLOW_COLUMNS}
-              >
-                {publishedSlice.map((c) => (
-                  <InspirationCaseCard
-                    key={c.id}
-                    meta={c}
-                    liked={likedIds.has(c.id)}
-                    likes={Math.max(0, Number(c.likeCount) || 0)}
-                    title={resolveCaseTitle(c, t)}
-                    author={caseAuthorLabel(c, t)}
-                    likeBusy={likeBusyId === c.id}
-                    onOpenPreview={openPreview}
-                    onToggleLike={onToggleLike}
-                    t={t}
-                  />
-                ))}
-              </FlowScrollSection>
-            )}
-          </div>
+          {tab === 'published' ? (
+            <div role="tabpanel">
+              {!userId ? (
+                <EmptyState hint={t('plaza.needLogin')} />
+              ) : (
+                <FlowScrollSection
+                  loading={publishedLoading}
+                  loadingMore={publishedLoadingMore}
+                  hasMore={publishedHasMore}
+                  onLoadMore={loadMorePublished}
+                  isEmpty={publishedAll.length === 0}
+                  empty={<EmptyState hint={t('me.emptyPublished')} />}
+                  columnsClassName={ME_FLOW_COLUMNS}
+                >
+                  {publishedSlice.map((c) => (
+                    <InspirationCaseCard
+                      key={c.id}
+                      meta={c}
+                      liked={likedIds.has(c.id)}
+                      likes={Math.max(0, Number(c.likeCount) || 0)}
+                      title={resolveCaseTitle(c, t)}
+                      author={caseAuthorLabel(c, t)}
+                      likeBusy={likeBusyId === c.id}
+                      onOpenPreview={openPreview}
+                      onToggleLike={onToggleLike}
+                      t={t}
+                    />
+                  ))}
+                </FlowScrollSection>
+              )}
+            </div>
+          ) : null}
 
-          <div
-            className={tab === 'liked' ? 'block' : 'hidden'}
-            role="tabpanel"
-            aria-hidden={tab !== 'liked'}
-          >
-            {!userId ? (
-              <EmptyState hint={t('home.cases.likeNeedLogin')} />
-            ) : (
-              <FlowScrollSection
-                loading={likedLoading}
-                loadingMore={likedLoadingMore}
-                hasMore={likedHasMore}
-                onLoadMore={loadMoreLiked}
-                isEmpty={liked.length === 0}
-                empty={<EmptyState hint={t('me.emptyLiked')} />}
-                columnsClassName={ME_FLOW_COLUMNS}
-              >
-                {liked.map((c) => (
-                  <InspirationCaseCard
-                    key={c.id}
-                    meta={c}
-                    liked={likedIds.has(c.id)}
-                    likes={Math.max(0, Number(c.likeCount) || 0)}
-                    title={resolveCaseTitle(c, t)}
-                    author={caseAuthorLabel(c, t)}
-                    likeBusy={likeBusyId === c.id}
-                    onOpenPreview={openPreview}
-                    onToggleLike={onToggleLike}
-                    t={t}
-                  />
-                ))}
-              </FlowScrollSection>
-            )}
-          </div>
+          {tab === 'liked' ? (
+            <div role="tabpanel">
+              {!userId ? (
+                <EmptyState hint={t('home.cases.likeNeedLogin')} />
+              ) : (
+                <FlowScrollSection
+                  loading={likedLoading}
+                  loadingMore={likedLoadingMore}
+                  hasMore={likedHasMore}
+                  onLoadMore={loadMoreLiked}
+                  isEmpty={liked.length === 0}
+                  empty={<EmptyState hint={t('me.emptyLiked')} />}
+                  columnsClassName={ME_FLOW_COLUMNS}
+                >
+                  {liked.map((c) => (
+                    <InspirationCaseCard
+                      key={c.id}
+                      meta={c}
+                      liked={likedIds.has(c.id)}
+                      likes={Math.max(0, Number(c.likeCount) || 0)}
+                      title={resolveCaseTitle(c, t)}
+                      author={caseAuthorLabel(c, t)}
+                      likeBusy={likeBusyId === c.id}
+                      onOpenPreview={openPreview}
+                      onToggleLike={onToggleLike}
+                      t={t}
+                    />
+                  ))}
+                </FlowScrollSection>
+              )}
+            </div>
+          ) : null}
 
-          <div
-            className={tab === 'assets' ? 'block' : 'hidden'}
-            role="tabpanel"
-            aria-hidden={tab !== 'assets'}
-          >
-            {!userId ? (
-              <EmptyState hint={t('plaza.needLogin')} />
-            ) : (
-              <InfiniteScrollSection
-                loading={assetsLoading}
-                loadingMore={assetsLoadingMore}
-                hasMore={assetsHasMore}
-                onLoadMore={loadMoreAssets}
-                isEmpty={assets.length === 0}
-                empty={<EmptyState hint={t('me.emptyAssets')} />}
-                gridClassName={ME_ASSET_GRID}
-                skeleton={Array.from({ length: 10 }, (_, i) => (
-                  <div
-                    key={i}
-                    className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--rail)]"
-                  >
-                    <div className="aspect-square animate-pulse bg-[var(--canvas)]" />
-                    <div className="space-y-1.5 px-2.5 py-2">
-                      <div className="h-3 w-2/3 animate-pulse rounded bg-[var(--canvas)]" />
-                      <div className="h-2.5 w-1/3 animate-pulse rounded bg-[var(--canvas)]" />
-                    </div>
-                  </div>
-                ))}
-              >
-                {assets.map((asset) => {
-                  const prompt = String(asset.prompt || '').trim();
-                  const when = formatAssetRelativeTime(
-                    asset.createdAt,
-                    i18n.language || 'zh'
-                  );
-                  return (
-                    <div
+          {tab === 'assets' ? (
+            <div role="tabpanel">
+              {!userId ? (
+                <EmptyState hint={t('plaza.needLogin')} />
+              ) : (
+                <InfiniteScrollSection
+                  loading={assetsLoading}
+                  loadingMore={assetsLoadingMore}
+                  hasMore={assetsHasMore}
+                  onLoadMore={loadMoreAssets}
+                  isEmpty={assets.length === 0}
+                  empty={<EmptyState hint={t('me.emptyAssets')} />}
+                  gridClassName={ME_FLOW_COLUMNS}
+                  skeleton={Array.from({ length: GRID_SKELETON_COUNT }, (_, i) => (
+                    <UserAssetCardSkeleton key={i} index={i} />
+                  ))}
+                >
+                  {assets.map((asset) => (
+                    <UserAssetCard
                       key={asset.id}
-                      className="group relative overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--rail)]"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => openAssetPreview(asset)}
-                        className="block w-full text-left"
-                        title={prompt || t(assetKindLabelKey(asset.kind))}
-                      >
-                        <div className="aspect-square w-full overflow-hidden bg-[var(--canvas)]">
-                          <MeAssetThumb asset={asset} />
-                        </div>
-                        <div className="space-y-0.5 px-2.5 py-2">
-                          <p className="truncate text-[12px] font-medium text-[var(--ink)]">
-                            {prompt || t(assetKindLabelKey(asset.kind))}
-                          </p>
-                          {when ? (
-                            <p className="truncate text-[11px] text-[var(--muted)]">
-                              {when}
-                            </p>
-                          ) : null}
-                        </div>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={assetBusyId === asset.id}
-                        aria-label={t('me.deleteAsset')}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void onDeleteAsset(asset);
-                        }}
-                        className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface)]/90 text-[var(--muted)] opacity-0 shadow-sm ring-1 ring-[var(--line)] transition hover:text-[var(--ink)] group-hover:opacity-100 disabled:opacity-40"
-                      >
-                        <HiOutlineTrash className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </InfiniteScrollSection>
-            )}
-          </div>
+                      asset={asset}
+                      locale={i18n.language || 'zh'}
+                      deleteBusy={assetBusyId === asset.id}
+                      onActivate={openAssetPreview}
+                      onDelete={(a) => setAssetDeleteTarget(a)}
+                    />
+                  ))}
+                </InfiniteScrollSection>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -846,6 +755,50 @@ function MePage({ onOpenCase }: Props): ReactNode {
         onRemix={(meta) => void remix(meta)}
         onToggleLike={(meta) => onToggleLike(meta)}
       />
+
+      <UserAssetMediaPreview
+        asset={assetPreview}
+        onClose={() => setAssetPreview(null)}
+      />
+
+      <Dialog
+        show={Boolean(assetDeleteTarget)}
+        onClose={() => {
+          if (assetBusyId) return;
+          setAssetDeleteTarget(null);
+        }}
+        width={400}
+        title={t('me.deleteAssetConfirmTitle')}
+        titleClassName="!text-[16px] !font-semibold !pb-2"
+        className="!bg-[var(--surface)] !p-5"
+        footer={
+          <>
+            <Button
+              size="small"
+              type="default"
+              disabled={Boolean(assetBusyId)}
+              onClick={() => setAssetDeleteTarget(null)}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              destructive
+              disabled={Boolean(assetBusyId)}
+              onClick={() => {
+                if (assetDeleteTarget) void onDeleteAsset(assetDeleteTarget);
+              }}
+            >
+              {t('me.deleteAsset')}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-[13px] leading-relaxed text-[var(--muted)]">
+          {t('me.deleteAssetConfirmBody')}
+        </p>
+      </Dialog>
 
       <EditProfileDialog open={editOpen} onClose={() => setEditOpen(false)} />
     </main>

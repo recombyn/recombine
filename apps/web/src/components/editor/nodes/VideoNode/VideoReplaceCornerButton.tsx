@@ -1,317 +1,126 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode, memo } from 'react';
-import { useDispatch } from 'react-redux';
-import { HiOutlineArrowUpTray } from 'react-icons/hi2';
 import { message } from '@/components/base';
-import Tooltip from '@/components/base/tooltip';
 import { uploadImageFile, readFileAsDataUrl } from '@/utils/uploadImage';
-import {
-  RcbOverlayPortal,
-  useRcbCamera,
-  rcbSceneToScreen,
-  rcbAlignInBox,
-  type RcbAlign,
-} from '@/components/rcb';
 import {
   captureVideoPosterFrame,
   measureVideoNaturalSize,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { finishImageProcess, patchDocumentNode } from '@/store/modules/editor';
-import { videoChromeLayout } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 
-type SceneBox = { left: number; top: number; width: number; height: number };
-
-type Props = {
-  nodeId: string;
-  box: SceneBox;
-  align?: RcbAlign;
-  angle?: number;
-  /** True while the pointer is over this video (selection hover). */
-  videoHovered?: boolean;
-};
-
-/** Inset from the visible edge to the button outer edge (screen px). */
-const EDGE_PAD_MAX = 10;
-const BTN_MAX = 20;
-
-/** Cap at BTN_MAX; shrink with the plate (hide is owned by videoChromeLayout). */
-function replaceBtnScale(stageW: number, stageH: number): { scale: number; pad: number } {
-  const minSide = Math.min(stageW, stageH);
-  const btn = Math.min(BTN_MAX, Math.max(1, minSide * 0.28));
-  return {
-    scale: btn / BTN_MAX,
-    pad: Math.min(EDGE_PAD_MAX, Math.max(2, btn * 0.45)),
-  };
-}
+type DispatchLike = (action: unknown) => unknown;
 
 /**
- * Bare replace control (button + file input) for embedding in a shared corner bar.
+ * Replace a video node's media (upload to COS). Keeps node width; height follows aspect.
+ * Clears prior crop / trim for the new source.
  */
-function VideoReplaceUploadControl({
-  nodeId,
-  sceneBox,
-  onLoadingChange,
-}: {
+export async function replaceVideoNodeFromFile(opts: {
+  dispatch: DispatchLike;
   nodeId: string;
-  sceneBox: SceneBox;
-  onLoadingChange?: (loading: boolean) => void;
-}): ReactNode {
-  const dispatch = useDispatch();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const nodeIdRef = useRef(nodeId);
-  const boxRef = useRef(sceneBox);
-  const aliveRef = useRef(true);
-  const [loading, setLoading] = useState(false);
+  keepWidth: number;
+  file: File;
+  isAlive?: () => boolean;
+}): Promise<void> {
+  const { dispatch, nodeId, file } = opts;
+  const keepWidth = Math.max(1, Math.round(opts.keepWidth));
+  const alive = opts.isAlive ?? (() => true);
+  if (!file.type.startsWith('video/')) return;
 
-  useEffect(() => {
-    nodeIdRef.current = nodeId;
-  }, [nodeId]);
-
-  useEffect(() => {
-    boxRef.current = sceneBox;
-  }, [sceneBox]);
-
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => {
-      aliveRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    onLoadingChange?.(loading);
-  }, [loading, onLoadingChange]);
-
-  const onFile = async (file: File | null) => {
-    if (!file || !file.type.startsWith('video/') || loading) return;
-    const targetId = nodeId;
-    const keepWidth = Math.max(1, Math.round(boxRef.current.width));
-    setLoading(true);
-
+  try {
+    const preview = await readFileAsDataUrl(file);
+    const naturalPreview = await measureVideoNaturalSize(preview);
+    const previewH = Math.max(
+      1,
+      Math.round((keepWidth * naturalPreview.height) / Math.max(1, naturalPreview.width))
+    );
+    let previewPoster = '';
     try {
-      const preview = await readFileAsDataUrl(file);
-        const naturalPreview = await measureVideoNaturalSize(preview);
-        const previewH = Math.max(
-          1,
-          Math.round((keepWidth * naturalPreview.height) / Math.max(1, naturalPreview.width))
-        );
-        let previewPoster = '';
-        try {
-          previewPoster = await captureVideoPosterFrame(preview);
-        } catch {
-          /* optional */
-        }
-        if (!aliveRef.current || nodeIdRef.current !== targetId) return;
-        dispatch(
-          patchDocumentNode({
-            nodeId: targetId,
-            patch: {
-              width: keepWidth,
-              height: previewH,
-              attrs: {
-                src: preview,
-                ...(previewPoster ? { poster: previewPoster } : {}),
-                processStatus: 'running',
-                processKind: 'upload',
-                processLabel: '上传中',
-                // New media — drop prior display crop / trim.
-                cropX: 0,
-                cropY: 0,
-                cropW: 1,
-                cropH: 1,
-                trimStart: '',
-                trimEnd: '',
-              },
-            },
-          })
-        );
+      previewPoster = await captureVideoPosterFrame(preview);
+    } catch {
+      /* optional */
+    }
+    if (!alive()) return;
+    dispatch(
+      patchDocumentNode({
+        nodeId,
+        patch: {
+          width: keepWidth,
+          height: previewH,
+          attrs: {
+            src: preview,
+            ...(previewPoster ? { poster: previewPoster } : {}),
+            processStatus: 'running',
+            processKind: 'upload',
+            processLabel: '上传中',
+            // Local replace — drop AI prompt so Quick Edit stays empty.
+            genPrompt: '',
+            cropX: 0,
+            cropY: 0,
+            cropW: 1,
+            cropH: 1,
+            trimStart: '',
+            trimEnd: '',
+          },
+        },
+      })
+    );
 
-        const uploaded = await uploadImageFile(file);
-        const src = uploaded.url;
-        if (!aliveRef.current || nodeIdRef.current !== targetId) return;
+    const uploaded = await uploadImageFile(file);
+    const src = uploaded.url;
+    if (!alive()) return;
 
-        let naturalW = Number(uploaded.width) || 0;
-        let naturalH = Number(uploaded.height) || 0;
-        if (!(naturalW > 0 && naturalH > 0)) {
-          const natural = await measureVideoNaturalSize(src);
-          naturalW = natural.width;
-          naturalH = natural.height;
-        }
-        const height = Math.max(1, Math.round((keepWidth * naturalH) / Math.max(1, naturalW)));
+    let naturalW = Number(uploaded.width) || 0;
+    let naturalH = Number(uploaded.height) || 0;
+    if (!(naturalW > 0 && naturalH > 0)) {
+      const natural = await measureVideoNaturalSize(src);
+      naturalW = natural.width;
+      naturalH = natural.height;
+    }
+    const height = Math.max(1, Math.round((keepWidth * naturalH) / Math.max(1, naturalW)));
 
-        let poster = previewPoster;
-        if (!poster) {
-          try {
-            poster = await captureVideoPosterFrame(src);
-          } catch {
-            /* optional */
-          }
-        }
-
-        dispatch(
-          finishImageProcess({
-            nodeId: targetId,
-            src,
-            attrs: {
-              assetKind: 'video',
-              ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
-            },
-          })
-        );
-        dispatch(
-          patchDocumentNode({
-            nodeId: targetId,
-            patch: {
-              width: keepWidth,
-              height,
-              attrs: {
-                ...(poster ? { poster } : { poster: '' }),
-                cropX: 0,
-                cropY: 0,
-                cropW: 1,
-                cropH: 1,
-                trimStart: '',
-                trimEnd: '',
-              },
-            },
-            skipHistory: true,
-          })
-        );
-      } catch (err: any) {
-        if (aliveRef.current) {
-          dispatch(finishImageProcess({ nodeId: targetId }));
-          const detail = err?.response?.data?.detail || err?.message || '替换视频失败';
-          message.error(typeof detail === 'string' ? detail : '替换视频失败');
-        }
-      } finally {
-        if (aliveRef.current && nodeIdRef.current === targetId) setLoading(false);
+    let poster = previewPoster;
+    if (!poster) {
+      try {
+        poster = await captureVideoPosterFrame(src);
+      } catch {
+        /* optional */
       }
-  };
+    }
 
-  return (
-    <>
-      <Tooltip tip={loading ? '上传中…' : '替换视频'} placement="top">
-        <button
-          type="button"
-          disabled={loading}
-          aria-label={loading ? '上传中…' : '替换视频'}
-          className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[3px] bg-[#1a1a1a] text-white shadow-[0_2px_8px_rgba(15,23,42,0.2)] transition hover:bg-[#2a2a2a] disabled:cursor-wait disabled:opacity-80"
-          aria-busy={loading}
-          onClick={() => {
-            if (!loading) inputRef.current?.click();
-          }}
-        >
-          {loading ? (
-            <span
-              className="h-2.5 w-2.5 animate-spin rounded-full border-[1.5px] border-white/30 border-t-white"
-              aria-hidden
-            />
-          ) : (
-            <HiOutlineArrowUpTray className="h-3 w-3" />
-          )}
-        </button>
-      </Tooltip>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="video/*"
-        className="hidden"
-        disabled={loading}
-        onChange={(e) => {
-          onFile(e.target.files?.[0] ?? null);
-          e.target.value = '';
-        }}
-      />
-    </>
-  );
-}
-
-/**
- * Replace control for selected video nodes — top-right corner, 10px inset.
- * Uploads via backend COS; keeps node width; height follows new video aspect.
- */
-function VideoReplaceCornerButton({
-  nodeId,
-  box,
-  align = 'top-right',
-  angle = 0,
-  videoHovered = false,
-}: Props): ReactNode {
-  const [loading, setLoading] = useState(false);
-  const [btnHovered, setBtnHovered] = useState(false);
-  const camera = useRcbCamera();
-  const tl = rcbSceneToScreen(camera, box.left, box.top);
-  const br = rcbSceneToScreen(camera, box.left + box.width, box.top + box.height);
-  const stageBox = {
-    left: Math.min(tl.x, br.x),
-    top: Math.min(tl.y, br.y),
-    width: Math.abs(br.x - tl.x),
-    height: Math.abs(br.y - tl.y),
-  };
-  // Same gate as VideoHoverPlayback chrome.visible — hide together when tiny.
-  if (!videoChromeLayout(stageBox.width, stageBox.height).visible && !loading) {
-    return null;
+    dispatch(
+      finishImageProcess({
+        nodeId,
+        src,
+        attrs: {
+          assetKind: 'video',
+          genPrompt: '',
+          ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
+        },
+      })
+    );
+    dispatch(
+      patchDocumentNode({
+        nodeId,
+        patch: {
+          width: keepWidth,
+          height,
+          attrs: {
+            ...(poster ? { poster } : { poster: '' }),
+            genPrompt: '',
+            cropX: 0,
+            cropY: 0,
+            cropW: 1,
+            cropH: 1,
+            trimStart: '',
+            trimEnd: '',
+          },
+        },
+        skipHistory: true,
+      })
+    );
+  } catch (err: any) {
+    if (alive()) {
+      dispatch(finishImageProcess({ nodeId }));
+      const detail = err?.response?.data?.detail || err?.message || '替换视频失败';
+      message.error(typeof detail === 'string' ? detail : '替换视频失败');
+    }
   }
-  const { scale, pad } = replaceBtnScale(stageBox.width, stageBox.height);
-  const { x, y } =
-    align === 'top-right'
-      ? {
-          x: Math.max(0, stageBox.width - pad - BTN_MAX),
-          y: pad,
-        }
-      : rcbAlignInBox(
-          { left: 0, top: 0, width: stageBox.width, height: stageBox.height },
-          { width: BTN_MAX, height: BTN_MAX },
-          align,
-          pad
-        );
-  const visible = loading || videoHovered || btnHovered;
-
-  const frameStyle: CSSProperties = {
-    position: 'absolute',
-    left: stageBox.left,
-    top: stageBox.top,
-    width: stageBox.width,
-    height: stageBox.height,
-    transform: Math.abs(angle) > 0.001 ? `rotate(${angle}deg)` : undefined,
-    transformOrigin: 'center center',
-  };
-
-  const btnWrapStyle: CSSProperties = {
-    position: 'absolute',
-    left: x,
-    top: y,
-    width: BTN_MAX,
-    height: BTN_MAX,
-    transform: scale < 0.999 ? `scale(${scale})` : undefined,
-    transformOrigin: align === 'top-right' ? 'top right' : 'top left',
-  };
-
-  return (
-    <RcbOverlayPortal>
-      <div className="pointer-events-none absolute z-[40]" style={frameStyle}>
-        <div
-          data-sel-toolbar
-          data-video-replace
-          data-video-node-id={nodeId}
-          className={
-            visible
-              ? 'pointer-events-auto absolute opacity-100 transition-opacity duration-150'
-              : 'pointer-events-none absolute opacity-0 transition-opacity duration-150'
-          }
-          style={btnWrapStyle}
-          onPointerDown={(e) => e.stopPropagation()}
-          onPointerEnter={() => setBtnHovered(true)}
-          onPointerLeave={() => setBtnHovered(false)}
-        >
-          <VideoReplaceUploadControl
-            nodeId={nodeId}
-            sceneBox={box}
-            onLoadingChange={setLoading}
-          />
-        </div>
-      </div>
-    </RcbOverlayPortal>
-  );
 }
-
-export default memo(VideoReplaceCornerButton);

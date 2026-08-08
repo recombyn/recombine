@@ -56,9 +56,11 @@ function TemplateThumbnail({
     setSrc(null);
     const edge =
       maxEdge ?? (format === 'png' ? PREVIEW_PNG_MAX_EDGE : undefined);
-    void renderDocumentThumbnail(document, { format, maxEdge: edge }).then((url) => {
+    async function renderThumb() {
+      const url = await renderDocumentThumbnail(document, { format, maxEdge: edge });
       if (!cancelled) setSrc(url);
-    });
+    }
+    void renderThumb();
     return () => {
       cancelled = true;
     };

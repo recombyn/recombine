@@ -166,6 +166,7 @@ function LoginSliderCaptcha({
     }
   };
 
+  // First enter captcha panel (parent only mounts when showCaptcha) — not open-listen refetch.
   useEffect(() => {
     void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -412,22 +413,7 @@ function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
 
   const startResendCooldown = () => setResendLeft(CODE_RESEND_COOLDOWN_SEC);
 
-  useEffect(() => {
-    if (!open) {
-      setEmail('');
-      setCode('');
-      setCodeSent(false);
-      setResendLeft(0);
-      setBusy(false);
-      setShowCaptcha(false);
-      setPendingCaptchaToken(null);
-      setCaptchaResume(null);
-      agreedTermsRef.current = false;
-      setAgreedTerms(false);
-      setShowAgreeModal(false);
-      pendingAfterAgreeRef.current = null;
-    }
-  }, [open]);
+  // Host unmounts this dialog when closed — no useEffect([open]) reset/refetch.
 
   useEffect(() => {
     if (resendLeft <= 0) return;
@@ -592,12 +578,16 @@ function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
             setShowCaptcha(false);
             setCaptchaResume(null);
             setBusy(true);
-            void trySendCode(token)
-              .catch((err: unknown) => {
+            void (async () => {
+              try {
+                await trySendCode(token);
+              } catch (err: unknown) {
                 if (isNeedCaptcha(err)) openCaptcha('send-code');
                 else message.error(apiDetail(err) || t('auth.sendFailed'));
-              })
-              .finally(() => setBusy(false));
+              } finally {
+                setBusy(false);
+              }
+            })();
           }}
         />
       ) : null}
@@ -846,12 +836,14 @@ function LoginDialogHost() {
     [navigate]
   );
 
+  // Already signed in while ?login=1 — bounce to returnTo (routing, not data prefetch).
   useEffect(() => {
     if (open && user && hasToken) {
       navigate(returnTo, { replace: true });
     }
   }, [open, user, hasToken, navigate, returnTo]);
 
+  // Mount LoginDialog only while the login modal is open (click / ?login=1).
   if (!open || (user && hasToken)) return null;
 
   return (

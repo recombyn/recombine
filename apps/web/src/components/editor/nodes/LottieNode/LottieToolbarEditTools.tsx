@@ -1,26 +1,21 @@
 /**
- * Selection toolbar for Lottie plates — play/loop/speed, replace JSON, download.
+ * Selection toolbar for Lottie plates — play/loop/speed + export.
+ * Replace JSON / labeled download removed (export icon covers download).
  */
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useState, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
-  HiOutlineArrowDownTray,
   HiOutlineArrowPath,
   HiOutlinePause,
   HiOutlinePlay,
   HiOutlineSparkles,
 } from 'react-icons/hi2';
-import { LuFileJson2 } from 'react-icons/lu';
-import { Dropdown, message } from '@/components/base';
+import { Dropdown } from '@/components/base';
 import type { MenuItemType } from '@/components/base/dropdown';
 import Tooltip from '@/components/base/tooltip';
 import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelectionPanel';
 import { imageToolBtn, ImageToolSep } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
-import {
-  parseLottieAnimationData,
-  serializeLottieAnimationData,
-} from '@/components/rcb/scene/document/sceneDocument';
 import { getLottieHost } from '@/components/editor/nodes/LottieNode/LottieNodeOverlay';
 import { openImageToolPanel, patchDocumentNode } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
@@ -63,40 +58,17 @@ function Tool({
   );
 }
 
-function downloadLottieJson(animationData: unknown, name: string) {
-  const raw = serializeLottieAnimationData(animationData);
-  if (!raw) throw new Error('invalid lottie');
-  const blob = new Blob([raw], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const base = String(name || 'lottie')
-    .replace(/[\\/:*?"<>|]+/g, '_')
-    .trim() || 'lottie';
-  a.href = url;
-  a.download = base.toLowerCase().endsWith('.json') ? base : `${base}.json`;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 function LottieToolbarEditTools({
   nodeId,
-  animationData,
-  name,
   loop,
   speed,
 }: {
   nodeId: string;
-  animationData: unknown;
-  name: string;
   loop: boolean;
   speed: number;
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
-  const fileRef = useRef<HTMLInputElement | null>(null);
   const [paused, setPaused] = useState(false);
 
   useEffect(() => {
@@ -140,50 +112,14 @@ function LottieToolbarEditTools({
     getLottieHost(nodeId)?.setSpeed(next);
   };
 
-  const onReplaceFile = async (file: File | null) => {
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const parsed = parseLottieAnimationData(text);
-      if (!parsed) throw new Error('invalid');
-      const json = serializeLottieAnimationData(parsed);
-      if (!json) throw new Error('invalid');
-      const w = Math.max(1, Math.round(Number(parsed.w) || 0));
-      const h = Math.max(1, Math.round(Number(parsed.h) || 0));
-      dispatch(
-        patchDocumentNode({
-          nodeId,
-          patch: {
-            ...(w > 0 && h > 0 ? { width: w, height: h } : {}),
-            attrs: {
-              animationData: json,
-              ...(file.name ? { name: file.name.replace(/\.json$/i, '') } : {}),
-            },
-          },
-        })
-      );
-      message.success(t('editor.lottieToolbar.replaced', { defaultValue: '已替换 Lottie' }));
-    } catch {
-      message.error(t('editor.lottieToolbar.replaceFail', { defaultValue: '无效的 Lottie JSON' }));
-    }
-  };
-
-  const onDownload = () => {
-    try {
-      downloadLottieJson(animationData, name);
-    } catch {
-      message.error(t('editor.exportFailed'));
-    }
-  };
-
   const speedLabel = `${Number.isFinite(speed) && speed > 0 ? speed : 1}×`;
 
   return (
     <>
       <Tool
-        label={t('editor.lottieToolbar.adjust', { defaultValue: '调整' })}
-        tip={t('editor.lottieToolbar.adjustTip', { defaultValue: '循环 / 速度 / 替换 JSON' })}
-        onClick={() => dispatch(openImageToolPanel({ nodeId, kind: 'lottieEdit' }))}
+        label={t('editor.imageToolbar.chat')}
+        tip={t('editor.imageToolbar.chat', { defaultValue: '快速编辑' })}
+        onClick={() => dispatch(openImageToolPanel({ nodeId, kind: 'quickEdit' }))}
       >
         <HiOutlineSparkles className="h-4 w-4" strokeWidth={2} />
       </Tool>
@@ -223,31 +159,7 @@ function LottieToolbarEditTools({
         </button>
       </Dropdown>
       <ImageToolSep />
-      <Tool
-        label={t('editor.lottieToolbar.replace', { defaultValue: '替换' })}
-        tip={t('editor.lottieToolbar.replaceTip', { defaultValue: '上传 .json 替换动画' })}
-        onClick={() => fileRef.current?.click()}
-      >
-        <LuFileJson2 className="h-4 w-4" strokeWidth={1.75} />
-      </Tool>
-      <Tool
-        label={t('editor.lottieToolbar.download', { defaultValue: '下载' })}
-        onClick={onDownload}
-      >
-        <HiOutlineArrowDownTray className="h-4 w-4" strokeWidth={1.75} />
-      </Tool>
       <ExportSelectionPopover nodeIds={[nodeId]} triggerClassName={imageToolBtn} />
-      <input
-        ref={fileRef}
-        type="file"
-        accept="application/json,.json"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0] || null;
-          e.target.value = '';
-          void onReplaceFile(file);
-        }}
-      />
     </>
   );
 }

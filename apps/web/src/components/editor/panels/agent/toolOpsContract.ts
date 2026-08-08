@@ -60,3 +60,81 @@ export function filterAllowedToolOps(
   }
   return out;
 }
+
+function tryParseJson(text: string): unknown | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function coerceRawOp(raw: unknown): AgentToolOp | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Record<string, unknown>;
+  const name = String(row.name || row.tool || row.type || row.op || '').trim();
+  if (!name) return null;
+  const argsRaw = row.args ?? row.parameters ?? row.arguments;
+  const args =
+    argsRaw && typeof argsRaw === 'object' && !Array.isArray(argsRaw)
+      ? { ...(argsRaw as Record<string, unknown>) }
+      : {};
+  const op_id = String(row.op_id || row.opId || args.op_id || '').trim() || undefined;
+  if (op_id) args.op_id = op_id;
+  return { name, args, ...(op_id ? { op_id } : {}) };
+}
+
+function coerceOpsPayload(data: unknown): AgentToolOp[] {
+  if (!data) return [];
+  if (Array.isArray(data)) {
+    return data.map(coerceRawOp).filter((x): x is AgentToolOp => Boolean(x));
+  }
+  if (typeof data !== 'object') return [];
+  const obj = data as Record<string, unknown>;
+  const list = obj.ops ?? obj.tools ?? obj.actions ?? obj.tool_ops;
+  if (Array.isArray(list)) {
+    return list.map(coerceRawOp).filter((x): x is AgentToolOp => Boolean(x));
+  }
+  const single = coerceRawOp(obj);
+  return single ? [single] : [];
+}
+
+/** Pull canvas tool_ops from coding-CLI / LLM prose (fenced JSON or embedded object). */
+export function extractToolOpsFromText(text: string): AgentToolOp[] {
+  const raw = String(text || '');
+  if (!raw.trim()) return [];
+
+  const fenced = [...raw.matchAll(/```(?:json|JSON)?\s*([\s\S]*?)```/g)];
+  for (let i = fenced.length - 1; i >= 0; i -= 1) {
+    const body = String(fenced[i]?.[1] || '').trim();
+    if (!body) continue;
+    const ops = filterAllowedToolOps(coerceOpsPayload(tryParseJson(body)));
+    if (ops.length) return ops;
+  }
+
+  const marker = raw.search(/\{\s*"(?:ops|tools|actions|tool_ops)"\s*:/);
+  if (marker >= 0) {
+    const slice = raw.slice(marker);
+    const end = slice.lastIndexOf('}');
+    if (end > 0) {
+      const ops = filterAllowedToolOps(
+        coerceOpsPayload(tryParseJson(slice.slice(0, end + 1)))
+      );
+      if (ops.length) return ops;
+    }
+  }
+
+  const arrMarker = raw.lastIndexOf('[');
+  if (arrMarker >= 0) {
+    const slice = raw.slice(arrMarker);
+    const end = slice.lastIndexOf(']');
+    if (end > 0) {
+      const ops = filterAllowedToolOps(
+        coerceOpsPayload(tryParseJson(slice.slice(0, end + 1)))
+      );
+      if (ops.length) return ops;
+    }
+  }
+
+  return [];
+}

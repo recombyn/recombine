@@ -87,7 +87,7 @@ npm run dev:desktop
 npm run build:desktop:sidecar
 npm run build:desktop
 
-# Cloud — https://recombyn.com (override with VITE_API_BASE_URL)
+# Cloud desktop — same local API as the browser (:8000 / .env; set VITE_API_BASE_URL only when hosted)
 npm run dev:desktop:cloud
 npm run build:desktop:cloud
 ```

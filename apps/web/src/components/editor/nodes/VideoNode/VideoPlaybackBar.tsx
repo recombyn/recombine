@@ -148,7 +148,11 @@ async function probeElementDuration(el: HTMLVideoElement): Promise<number> {
       window.setTimeout(done, 600);
     });
     if (!wasPaused) {
-      void el.play()?.catch(() => undefined);
+      try {
+        await el.play();
+      } catch {
+        /* ignore play rejection */
+      }
     }
     if (Number.isFinite(probed) && probed > 0) return probed;
   } catch {
@@ -191,7 +195,14 @@ export function videoMediaFromElement(el: HTMLVideoElement): VideoMediaControl {
     probeDuration: () => probeElementDuration(el),
     isPaused: () => el.paused,
     play: () => {
-      void el.play()?.catch(() => undefined);
+      async function tryPlay() {
+        try {
+          await el.play();
+        } catch {
+          /* ignore play rejection */
+        }
+      }
+      void tryPlay();
     },
     pause: () => el.pause(),
     isMuted: () => el.muted,
@@ -311,12 +322,14 @@ function VideoPlaybackBar({
         setFallbackDuration(live);
       } else {
         probingRef.current = true;
-        void media.probeDuration().then((probed) => {
+        async function probeFallbackDuration() {
+          const probed = await media.probeDuration();
           probingRef.current = false;
           if (cancelled || !(probed > 0)) return;
           setFallbackDuration(probed);
           setCurrent(media.getCurrentTime());
-        });
+        }
+        void probeFallbackDuration();
       }
     }
 
@@ -451,7 +464,8 @@ function VideoPlaybackBar({
       data-video-playback-bar
       data-video-node-id={nodeId}
       className={cn(
-        'flex max-w-full min-w-0 items-center overflow-hidden text-white transition-opacity duration-150',
+        // overflow-visible: vertical volume popover sits above the mute button.
+        'flex max-w-full min-w-0 items-center overflow-visible text-white transition-opacity duration-150',
         interactive ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
         className
       )}
@@ -541,7 +555,10 @@ function VideoPlaybackBar({
         }}
       >
         {volOpen ? (
-          <div className="absolute bottom-full left-1/2 z-10 flex -translate-x-1/2 flex-col items-center">
+          <div
+            className="absolute bottom-full left-1/2 z-20 flex -translate-x-1/2 flex-col items-center pb-0"
+            data-video-volume-popover=""
+          >
             <div
               className="flex items-center justify-center rounded-md bg-black/70 shadow-md"
               style={{
@@ -589,6 +606,7 @@ function VideoPlaybackBar({
                 />
               </div>
             </div>
+            {/* Hover bridge so the popover doesn’t close between slider and mute. */}
             <div style={{ height: 8, width: 32 }} aria-hidden />
           </div>
         ) : null}

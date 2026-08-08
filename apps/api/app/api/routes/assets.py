@@ -1,10 +1,11 @@
-"""User assets API — AI-generated images/videos."""
+"""User assets API — AI-generated images/videos/audio/lottie."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 from app.api.deps import CurrentUser
 
 from app.services import assets as asset_store
@@ -12,8 +13,17 @@ from app.services import assets as asset_store
 router = APIRouter(prefix="/assets", tags=["assets"])
 
 
+class RegisterAssetIn(BaseModel):
+    """Register an already-uploaded media object into the Assets dock."""
 
-
+    kind: str = Field(..., min_length=1, max_length=16)
+    url: str = Field(..., min_length=1, max_length=4000)
+    objectKey: str | None = Field(default=None, max_length=512)
+    mime: str | None = Field(default=None, max_length=128)
+    prompt: str | None = Field(default=None, max_length=500)
+    width: int | None = None
+    height: int | None = None
+    source: str | None = Field(default="upload", max_length=32)
 
 
 @router.get("")
@@ -31,6 +41,30 @@ def list_my_assets(
     )
 
 
+@router.post("/register")
+def register_my_asset(
+    current_user: CurrentUser,
+    body: RegisterAssetIn,
+) -> dict[str, Any]:
+    kind = (body.kind or "").strip().lower()
+    if kind not in ("image", "video", "audio", "lottie"):
+        raise HTTPException(status_code=400, detail="kind must be image|video|audio|lottie")
+    try:
+        return asset_store.create_asset_from_stored(
+            current_user.id,
+            kind=kind,
+            url=body.url.strip(),
+            object_key=(body.objectKey or None),
+            mime=body.mime,
+            source=(body.source or "upload"),
+            prompt=(body.prompt or None),
+            width=body.width,
+            height=body.height,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
 @router.delete("/{asset_id}")
 def delete_my_asset(
     current_user: CurrentUser,
@@ -40,3 +74,5 @@ def delete_my_asset(
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+

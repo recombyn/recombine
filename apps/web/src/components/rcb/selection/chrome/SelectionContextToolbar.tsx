@@ -32,6 +32,8 @@ import {
 import FlipRotateToolbar from '@/components/editor/nodes/ImageNode/FlipRotateToolbar';
 import ImageQuickEditComposer from '@/components/editor/nodes/ImageNode/ImageQuickEditComposer';
 import LottieQuickEditComposer from '@/components/editor/nodes/LottieNode/LottieQuickEditComposer';
+import VideoQuickEditComposer from '@/components/editor/nodes/VideoNode/VideoQuickEditComposer';
+import AudioQuickEditComposer from '@/components/editor/nodes/AudioNode/AudioQuickEditComposer';
 import LottieToolbarEditTools from '@/components/editor/nodes/LottieNode/LottieToolbarEditTools';
 import { ExportSelectionPopover } from '@/components/editor/panels/ExportSelectionPanel';
 import { ImageToolSep, imageToolBtn } from '@/components/editor/nodes/ImageNode/imageToolbarShared';
@@ -177,17 +179,18 @@ function SelectionContextToolbar(props: Props): ReactNode {
     imageToolPanel?.kind === 'flipRotate' &&
     imageToolPanel?.nodeId === nodeId;
   const quickEditOpen =
-    kind === 'image' &&
     imageToolPanel?.kind === 'quickEdit' &&
-    imageToolPanel?.nodeId === nodeId;
+    imageToolPanel?.nodeId === nodeId &&
+    (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'lottie');
   const lottieEditOpen =
     kind === 'lottie' &&
     imageToolPanel?.kind === 'lottieEdit' &&
     imageToolPanel?.nodeId === nodeId;
-  // Side panels (Eraser / Replace text / …) own the chrome — hide the selection pill.
+  // Side panels (Eraser / Opacity / Replace text / …) own the chrome — hide the selection pill.
   const imageSidePanelOpen =
     Boolean(imageToolPanel?.nodeId) &&
     (imageToolPanel?.kind === 'eraser' ||
+      imageToolPanel?.kind === 'opacity' ||
       imageToolPanel?.kind === 'replaceText' ||
       imageToolPanel?.kind === 'multiAngle' ||
       imageToolPanel?.kind === 'adjust');
@@ -207,9 +210,11 @@ function SelectionContextToolbar(props: Props): ReactNode {
 
   useEffect(() => {
     let cancelled = false;
-    loadFontCatalog().then(() => {
+    async function loadCatalog() {
+      await loadFontCatalog();
       if (!cancelled) setFontCatalogTick((n) => n + 1);
-    });
+    }
+    void loadCatalog();
     return () => {
       cancelled = true;
     };
@@ -291,14 +296,25 @@ function SelectionContextToolbar(props: Props): ReactNode {
       onOpacityChange={(opacity) =>
         dispatch(patchDocumentNode({ nodeId, patch: { attrs: { opacity } } }))
       }
+      onOpacityOpen={
+        kind === 'image'
+          ? () => dispatch(openImageToolPanel({ nodeId, kind: 'opacity' }))
+          : undefined
+      }
     />
   ) : null;
 
-  if (quickEditOpen) {
+  if (quickEditOpen || lottieEditOpen) {
+    if (kind === 'video') {
+      return <VideoQuickEditComposer document={document} nodeId={nodeId} box={box} />;
+    }
+    if (kind === 'audio') {
+      return <AudioQuickEditComposer document={document} nodeId={nodeId} box={box} />;
+    }
+    if (kind === 'lottie') {
+      return <LottieQuickEditComposer document={document} nodeId={nodeId} box={box} />;
+    }
     return <ImageQuickEditComposer document={document} nodeId={nodeId} box={box} />;
-  }
-  if (lottieEditOpen) {
-    return <LottieQuickEditComposer document={document} nodeId={nodeId} box={box} />;
   }
 
   return (
@@ -649,6 +665,9 @@ function SelectionContextToolbar(props: Props): ReactNode {
                       onOpacityChange={(opacity) =>
                         dispatch(patchDocumentNode({ nodeId, patch: { attrs: { opacity } } }))
                       }
+                      onOpacityOpen={() =>
+                        dispatch(openImageToolPanel({ nodeId, kind: 'opacity' }))
+                      }
                       afterBlendSlot={
                         supportsCornerRadius(node) ? (
                           <Tooltip tip={t('editor.imageToolbar.cornerRadius')} placement="top">
@@ -751,6 +770,9 @@ function SelectionContextToolbar(props: Props): ReactNode {
             ) : (
               <VideoToolbarEditTools
                 nodeId={nodeId}
+                onQuickEdit={() =>
+                  dispatch(openImageToolPanel({ nodeId, kind: 'quickEdit' }))
+                }
                 onTrim={() => {
                   // Capture playhead before trim UI hides the hover host / remounts preview.
                   const host = getVideoHoverHost(nodeId);
@@ -809,8 +831,6 @@ function SelectionContextToolbar(props: Props): ReactNode {
           {kind === 'lottie' ? (
             <LottieToolbarEditTools
               nodeId={nodeId}
-              animationData={node?.attrs?.animationData}
-              name={String(node?.attrs?.name || 'Lottie')}
               loop={!(
                 node?.attrs?.lottieLoop === false ||
                 node?.attrs?.lottieLoop === 'false' ||
@@ -823,6 +843,9 @@ function SelectionContextToolbar(props: Props): ReactNode {
 
           {kind === 'audio' ? (
             <AudioToolbarEditTools
+              onQuickEdit={() =>
+                dispatch(openImageToolPanel({ nodeId, kind: 'quickEdit' }))
+              }
               onTrim={() => {
                 const host = getAudioHost(nodeId);
                 const keepTime = Math.max(0, Number(host?.getMediaTime()) || 0);

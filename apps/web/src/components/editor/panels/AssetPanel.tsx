@@ -12,20 +12,20 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import {
-  HiOutlineTrash,
-  HiOutlineArrowPath,
-  HiOutlineXMark,
-} from 'react-icons/hi2';
-import { LuAudioLines, LuFilm, LuImages, LuPanelLeft } from 'react-icons/lu';
+import { HiOutlineArrowPath } from 'react-icons/hi2';
+import { LuImages, LuPanelLeft } from 'react-icons/lu';
 import Tooltip from '@/components/base/tooltip';
-import { message } from '@/components/base';
-import Image from '@/components/base/image';
-import { VideoFullscreenPreview } from '@/components/editor/nodes/VideoNode/VideoFullscreenPreviewButton';
+import { Button, Dialog, message } from '@/components/base';
+import { InfiniteScrollSection } from '@/components/home/InfiniteScroll';
+import {
+  UserAssetCard,
+  UserAssetCardSkeleton,
+  UserAssetMediaPreview,
+  USER_ASSET_SKELETON_COUNT,
+} from '@/components/home/UserAssetMediaCard';
 import { deleteAsset, listAssets, type UserAsset } from '@/apis/assets';
-import { setMediaAssetDragData } from '@/utils/chatImageDrag';
+import { setMediaAssetDragData, clearMediaAssetDragData } from '@/utils/chatImageDrag';
 import { cn } from '@/utils/classnames';
 
 const ASSET_DOCK_WIDTH_KEY = 'asset-dock-width';
@@ -33,6 +33,8 @@ const ASSET_DOCK_MIN_W = 200;
 const ASSET_DOCK_MAX_W = 420;
 const ASSET_DOCK_DEFAULT_W = 240;
 const PAGE_SIZE = 30;
+/** Plaza-style CSS columns waterfall (natural card heights — not CSS grid rows). */
+const ASSET_DOCK_FLOW = 'w-full columns-2 gap-1.5';
 
 function clampAssetDockWidth(width: number): number {
   const viewportCap =
@@ -58,226 +60,18 @@ function readStoredAssetDockWidth(): number {
   }
 }
 
-function isMediaKind(kind: string): kind is 'image' | 'video' | 'audio' {
-  return kind === 'image' || kind === 'video' || kind === 'audio';
+function isMediaKind(kind: string): kind is 'image' | 'video' | 'audio' | 'lottie' {
+  return kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'lottie';
 }
 
-function formatRelativeTime(ms: number | null | undefined, locale: string): string {
-  const t = Number(ms);
-  if (!Number.isFinite(t) || t <= 0) return '';
-  const diffSec = Math.round((Date.now() - t) / 1000);
-  if (diffSec < 60) return locale.startsWith('zh') ? '刚刚' : 'just now';
-  if (diffSec < 3600) {
-    const m = Math.floor(diffSec / 60);
-    return locale.startsWith('zh') ? `${m} 分钟前` : `${m}m ago`;
-  }
-  if (diffSec < 86400) {
-    const h = Math.floor(diffSec / 3600);
-    return locale.startsWith('zh') ? `${h} 小时前` : `${h}h ago`;
-  }
-  const d = Math.floor(diffSec / 86400);
-  return locale.startsWith('zh') ? `${d} 天前` : `${d}d ago`;
+function isDraggableMediaKind(kind: string): kind is 'image' | 'video' | 'audio' | 'lottie' {
+  return kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'lottie';
 }
 
 function assetDurationSeconds(asset: UserAsset): number | undefined {
   const fromMeta = Number((asset.meta as { duration?: unknown } | null)?.duration);
   if (Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
   return undefined;
-}
-
-function AssetThumb({ asset }: { asset: UserAsset }): ReactNode {
-  const url = String(asset.url || '').trim();
-  if (asset.kind === 'image' && url) {
-    return (
-      <img
-        src={url}
-        alt=""
-        className="pointer-events-none h-full w-full object-cover"
-        loading="lazy"
-        draggable={false}
-      />
-    );
-  }
-  if (asset.kind === 'video' && url) {
-    return (
-      <video
-        src={url}
-        className="pointer-events-none h-full w-full object-cover"
-        muted
-        playsInline
-        preload="metadata"
-        draggable={false}
-      />
-    );
-  }
-  return (
-    <span className="inline-flex h-full w-full items-center justify-center text-[var(--muted)]">
-      {asset.kind === 'audio' ? (
-        <LuAudioLines className="h-6 w-6" strokeWidth={1.75} />
-      ) : asset.kind === 'video' ? (
-        <LuFilm className="h-6 w-6" strokeWidth={1.75} />
-      ) : (
-        <LuImages className="h-6 w-6" strokeWidth={1.75} />
-      )}
-    </span>
-  );
-}
-
-function AudioAssetPreview({
-  open,
-  src,
-  title,
-  onClose,
-}: {
-  open: boolean;
-  src: string;
-  title: string;
-  onClose: () => void;
-}): ReactNode {
-  const { t } = useTranslation();
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
-  if (!open || typeof document === 'undefined') return null;
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[800] flex items-center justify-center bg-black/55 p-4"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t('editor.assets.preview', { defaultValue: '预览' })}
-    >
-      <div
-        className="relative w-full max-w-md rounded-2xl bg-[var(--surface)] p-5 shadow-[0_18px_48px_rgba(12,12,13,0.28)] ring-1 ring-[var(--line)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          aria-label={t('common.close', { defaultValue: '关闭' })}
-          onClick={onClose}
-          className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-        >
-          <HiOutlineXMark className="h-4 w-4" strokeWidth={1.75} />
-        </button>
-        <div className="mb-4 flex items-center gap-3 pr-8">
-          <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--rail)] text-[var(--ink)]">
-            <LuAudioLines className="h-5 w-5" strokeWidth={1.75} />
-          </span>
-          <p className="min-w-0 truncate text-[14px] font-medium text-[var(--ink)]">
-            {title}
-          </p>
-        </div>
-        <audio src={src} controls autoPlay className="w-full" />
-      </div>
-    </div>,
-    document.body
-  );
-}
-
-function AssetCard({
-  asset,
-  busy,
-  locale,
-  onPreview,
-  onDelete,
-}: {
-  asset: UserAsset;
-  busy: boolean;
-  locale: string;
-  onPreview: (asset: UserAsset) => void;
-  onDelete: (asset: UserAsset) => void;
-}): ReactNode {
-  const { t } = useTranslation();
-  const draggedRef = useRef(false);
-  const url = String(asset.url || '').trim();
-  const prompt = String(asset.prompt || '').trim();
-  const when = formatRelativeTime(asset.createdAt, locale);
-  const canDrag = isMediaKind(asset.kind) && Boolean(url);
-
-  const onDragStart = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (!canDrag || !isMediaKind(asset.kind)) {
-      e.preventDefault();
-      return;
-    }
-    draggedRef.current = true;
-    setMediaAssetDragData(e.dataTransfer, {
-      kind: asset.kind,
-      src: url,
-      uploadKey: asset.objectKey || undefined,
-      width: asset.width,
-      height: asset.height,
-      prompt: prompt || undefined,
-      name: prompt.slice(0, 40) || undefined,
-      duration: assetDurationSeconds(asset),
-    });
-  };
-
-  return (
-    <div className="group relative overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--rail)]">
-      <div
-        draggable={canDrag}
-        onDragStart={onDragStart}
-        onDragEnd={() => {
-          window.setTimeout(() => {
-            draggedRef.current = false;
-          }, 0);
-        }}
-        onClick={() => {
-          if (draggedRef.current) {
-            draggedRef.current = false;
-            return;
-          }
-          if (!url) return;
-          onPreview(asset);
-        }}
-        className={cn(
-          'block w-full text-left',
-          canDrag && 'cursor-grab active:cursor-grabbing'
-        )}
-        title={
-          prompt ||
-          t('editor.assets.placeHint', {
-            defaultValue: '点击预览，拖到画布添加',
-          })
-        }
-      >
-        <div className="aspect-square w-full overflow-hidden bg-[var(--canvas)]">
-          <AssetThumb asset={asset} />
-        </div>
-        <div className="space-y-0.5 px-2 py-1.5">
-          <p className="truncate text-[11px] font-medium text-[var(--ink)]">
-            {prompt ||
-              t(`editor.assets.kind.${asset.kind}`, {
-                defaultValue: asset.kind,
-              })}
-          </p>
-          {when ? (
-            <p className="truncate text-[10px] text-[var(--muted)]">{when}</p>
-          ) : null}
-        </div>
-      </div>
-      <Tooltip tip={t('editor.assets.delete', { defaultValue: '删除' })} placement="top">
-        <button
-          type="button"
-          disabled={busy}
-          aria-label={t('editor.assets.delete', { defaultValue: '删除' })}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(asset);
-          }}
-          className="absolute right-1.5 top-1.5 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[var(--surface)]/90 text-[var(--muted)] opacity-0 shadow-sm ring-1 ring-[var(--line)] transition hover:text-[var(--ink)] group-hover:opacity-100 disabled:opacity-40"
-        >
-          <HiOutlineTrash className="h-3.5 w-3.5" strokeWidth={1.75} />
-        </button>
-      </Tooltip>
-    </div>
-  );
 }
 
 function AssetPanel({
@@ -292,11 +86,14 @@ function AssetPanel({
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dockWidth, setDockWidth] = useState(ASSET_DOCK_DEFAULT_W);
   const [preview, setPreview] = useState<UserAsset | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UserAsset | null>(null);
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const loadSeq = useRef(0);
+  const draggedRef = useRef(false);
 
   useEffect(() => {
     setDockWidth(readStoredAssetDockWidth());
@@ -311,7 +108,8 @@ function AssetPanel({
   const loadPage = useCallback(
     async (nextPage: number, replace: boolean) => {
       const seq = ++loadSeq.current;
-      setLoading(true);
+      if (replace) setLoading(true);
+      else setLoadingMore(true);
       try {
         const res = await listAssets({
           page: nextPage,
@@ -330,12 +128,16 @@ function AssetPanel({
         );
         if (replace) setItems([]);
       } finally {
-        if (seq === loadSeq.current) setLoading(false);
+        if (seq === loadSeq.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [t]
   );
 
+  // Parent mounts AssetPanel only when the assets dock is opened (click).
   useEffect(() => {
     void loadPage(1, true);
   }, [loadPage]);
@@ -386,6 +188,10 @@ function AssetPanel({
       await deleteAsset(id);
       setItems((prev) => prev.filter((a) => a.id !== id));
       if (preview?.id === id) setPreview(null);
+      setDeleteTarget(null);
+      message.destructive(
+        t('editor.assets.deleteOk', { defaultValue: '已删除' })
+      );
     } catch (err) {
       console.warn('[assets] delete failed', err);
       message.error(
@@ -396,12 +202,35 @@ function AssetPanel({
     }
   };
 
-  const previewUrl = String(preview?.url || '').trim();
-  const previewTitle =
-    String(preview?.prompt || '').trim() ||
-    (preview
-      ? t(`editor.assets.kind.${preview.kind}`, { defaultValue: preview.kind })
-      : '');
+  const onCardActivate = (asset: UserAsset) => {
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    const url = String(asset.url || '').trim();
+    if (!url && asset.kind !== 'audio') return;
+    setPreview(asset);
+  };
+
+  const onCardDragStart = (e: ReactDragEvent<HTMLDivElement>, asset: UserAsset) => {
+    const url = String(asset.url || '').trim();
+    if (!isDraggableMediaKind(asset.kind) || !url) {
+      e.preventDefault();
+      return;
+    }
+    draggedRef.current = true;
+    const prompt = String(asset.prompt || '').trim();
+    setMediaAssetDragData(e.dataTransfer, {
+      kind: asset.kind,
+      src: url,
+      uploadKey: asset.objectKey || undefined,
+      width: asset.width,
+      height: asset.height,
+      prompt: prompt || undefined,
+      name: prompt.slice(0, 40) || undefined,
+      duration: assetDurationSeconds(asset),
+    });
+  };
 
   return (
     <aside
@@ -460,75 +289,97 @@ function AssetPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {!loading && items.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-3 py-10 text-center">
-            <LuImages className="h-8 w-8 text-[var(--muted)]" strokeWidth={1.5} />
-            <p className="text-[12px] leading-relaxed text-[var(--muted)]">
-              {t('editor.assets.empty')}
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-2">
-            {items.map((asset) => (
-              <AssetCard
-                key={asset.id}
-                asset={asset}
-                busy={busyId === asset.id}
-                locale={i18n.language || 'zh'}
-                onPreview={setPreview}
-                onDelete={(a) => void onDelete(a)}
-              />
-            ))}
-          </div>
-        )}
-        {hasMore ? (
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => void loadPage(page + 1, false)}
-            className="mt-3 flex h-8 w-full items-center justify-center rounded-lg text-[12px] text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:opacity-40"
-          >
-            {loading
-              ? t('editor.assets.loading', { defaultValue: '加载中…' })
-              : t('editor.assets.loadMore', { defaultValue: '加载更多' })}
-          </button>
-        ) : null}
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        <InfiniteScrollSection
+          loading={loading && items.length === 0}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+          onLoadMore={() => {
+            if (loading || loadingMore || !hasMore) return;
+            void loadPage(page + 1, false);
+          }}
+          isEmpty={items.length === 0}
+          empty={
+            <div className="flex flex-col items-center gap-2 px-3 py-10 text-center">
+              <LuImages className="h-8 w-8 text-[var(--muted)]" strokeWidth={1.5} />
+              <p className="text-[12px] leading-relaxed text-[var(--muted)]">
+                {t('editor.assets.empty')}
+              </p>
+            </div>
+          }
+          gridClassName={ASSET_DOCK_FLOW}
+          skeleton={Array.from({ length: USER_ASSET_SKELETON_COUNT }, (_, i) => (
+            <UserAssetCardSkeleton key={i} index={i} dense />
+          ))}
+        >
+          {items.map((asset) => (
+            <UserAssetCard
+              key={asset.id}
+              asset={asset}
+              dense
+              locale={i18n.language || 'zh'}
+              deleteBusy={busyId === asset.id}
+              onActivate={onCardActivate}
+              onDelete={(a) => setDeleteTarget(a)}
+              onDragStart={
+                isDraggableMediaKind(asset.kind) ? onCardDragStart : undefined
+              }
+              onDragEnd={() => {
+                // drop → dragend; defer clear so drop still sees pending payload.
+                window.setTimeout(() => {
+                  clearMediaAssetDragData();
+                  draggedRef.current = false;
+                }, 0);
+              }}
+            />
+          ))}
+        </InfiniteScrollSection>
       </div>
 
-      {preview?.kind === 'image' && previewUrl ? (
-        <Image
-          src={previewUrl}
-          alt=""
-          lazy={false}
-          preview={{
-            open: true,
-            onOpenChange: (open) => {
-              if (!open) setPreview(null);
-            },
-            previewOnClick: false,
-          }}
-          className="pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0"
-          imgClassName="!hidden"
-        />
-      ) : null}
+      <UserAssetMediaPreview asset={preview} onClose={() => setPreview(null)} />
 
-      <VideoFullscreenPreview
-        open={preview?.kind === 'video' && Boolean(previewUrl)}
-        onClose={() => setPreview(null)}
-        src={previewUrl}
-        uploadKey={preview?.objectKey}
-        aspectWidth={preview?.width || undefined}
-        aspectHeight={preview?.height || undefined}
-        duration={preview ? assetDurationSeconds(preview) : undefined}
-      />
-
-      <AudioAssetPreview
-        open={preview?.kind === 'audio' && Boolean(previewUrl)}
-        src={previewUrl}
-        title={previewTitle}
-        onClose={() => setPreview(null)}
-      />
+      <Dialog
+        show={Boolean(deleteTarget)}
+        onClose={() => {
+          if (busyId) return;
+          setDeleteTarget(null);
+        }}
+        width={400}
+        title={t('editor.assets.deleteConfirmTitle', {
+          defaultValue: '删除资产？',
+        })}
+        titleClassName="!text-[16px] !font-semibold !pb-2"
+        className="!bg-[var(--surface)] !p-5"
+        footer={
+          <>
+            <Button
+              size="small"
+              type="default"
+              disabled={Boolean(busyId)}
+              onClick={() => setDeleteTarget(null)}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              destructive
+              disabled={Boolean(busyId)}
+              onClick={() => {
+                if (deleteTarget) void onDelete(deleteTarget);
+              }}
+            >
+              {t('editor.assets.delete', { defaultValue: '删除' })}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-[13px] leading-relaxed text-[var(--muted)]">
+          {t('editor.assets.deleteConfirmBody', {
+            defaultValue: '删除后无法恢复，确定删除该资产吗？',
+          })}
+        </p>
+      </Dialog>
     </aside>
   );
 }
