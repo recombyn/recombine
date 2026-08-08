@@ -1,7 +1,7 @@
 /**
  * External docs site (help guides + standalone legal). Not served by the main app.
  *
- * - Production: GitHub Pages https://recombyn.github.io/help (or VITE_DOCS_URL)
+ * - Production: GitHub Pages https://recombyn.github.io/recombyn (or VITE_DOCS_URL)
  * - Local web (localhost / 127.0.0.1): local docs on :5175 unless VITE_DOCS_URL
  *   already points at a local origin (custom port).
  * - Tauri desktop: always prefer hosted docs (local :5175 is a web-dev convenience).
@@ -9,7 +9,7 @@
 
 declare const __DOCS_URL__: string;
 
-const PROD_DOCS = 'https://recombyn.github.io/help';
+const PROD_DOCS = 'https://recombyn.github.io/recombyn';
 const LOCAL_DOCS_PORT = 5175;
 
 function bakedOrigin(): string {

@@ -5,7 +5,7 @@
 <p align="center">
   <a href="docs/self-hosting.md"><strong>Self Host</strong></a> ·
   <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
-  <a href="https://recombyn.github.io/help/"><strong>Docs</strong></a>
+  <a href="https://recombyn.github.io/recombyn/"><strong>Docs</strong></a>
 </p>
 
 <p align="center">
@@ -107,7 +107,7 @@ deploy/            Dockerfile / Nginx
 e2e/               Playwright
 ```
 
-ユーザー向けヘルプは**プライベート**リポジトリで管理し、[recombyn.github.io/help](https://recombyn.github.io/help/) に公開しています。
+ユーザー向けヘルプの**ソース**はプライベート管理。CI がビルド成果物だけを本リポジトリの `gh-pages` に載せ、[recombyn.github.io/recombyn/](https://recombyn.github.io/recombyn/) で公開します。
 
 ## ドキュメント / コミュニティ
 
@@ -132,7 +132,7 @@ e2e/               Playwright
 - Recombyn（または実質同種の平台）を一般向け登録サイト / SaaS として提供する（有償・無償問わず）
 - 公式ブランド・サイト・サポートを装う（名称、ロゴ、ドメインなど）
 
-公式: [recombyn.com](https://recombyn.com) · ヘルプ: [docs](https://recombyn.github.io/help/) · ソース: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+公式: [recombyn.com](https://recombyn.com) · ヘルプ: [docs](https://recombyn.github.io/recombyn/) · ソース: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
 
 模倣・無断ホスティングは `702680355@qq.com` へ（リンクとスクショ添付）。全文は [LICENSE](./LICENSE)。
 
