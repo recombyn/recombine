@@ -7,9 +7,11 @@ import './styles/global.css'
 import './styles/docs.css'
 import './styles/legal.css'
 
+const routerBasename = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || undefined
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={routerBasename}>
       <App />
     </BrowserRouter>
   </StrictMode>,

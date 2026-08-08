@@ -2,6 +2,7 @@ const zhTW = {
   brandDocs: 'Docs',
   navHome: '首頁',
   navDocs: '文件',
+  navSponsor: '贊助',
   navAria: '站點導覽',
   openMenu: '開啟選單',
   startCreating: '開始創作',
@@ -14,6 +15,7 @@ const zhTW = {
     guide: '使用指南',
     features: '產品功能',
     faq: '常見問題',
+    support: '支持專案',
   },
   pages: {
     'getting-started': '快速入門',
@@ -28,6 +30,7 @@ const zhTW = {
     import: '匯入檔案',
     'export-share': '匯出與分享',
     faq: 'FAQ',
+    sponsor: '贊助',
     terms: '服務條款',
     privacy: '隱私權政策',
     'ai-terms': 'AI 說明',

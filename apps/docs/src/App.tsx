@@ -15,6 +15,7 @@ export default function App() {
         <Route path="/features/:slug" element={<DocPage />} />
         <Route path="/faq" element={<Navigate to="/faq/" replace />} />
         <Route path="/faq/" element={<DocPage />} />
+        <Route path="/sponsor" element={<DocPage />} />
       </Route>
 
       <Route path="/legal" element={<LegalLayout />}>

@@ -12,6 +12,8 @@ Turn “what you want” into a workable design. The Agent breaks down intent, p
 
 recombyn is built by an independent developer in spare time. The goal is simple: make conversation-driven design genuinely useful.
 
+If you’d like to help keep the project going, see the [Sponsor](/sponsor) page (voluntary — no pressure).
+
 ## What you can do
 
 - From a single poster or icon set to mobile / web layouts

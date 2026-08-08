@@ -2,6 +2,7 @@ const zhCN = {
   brandDocs: 'Docs',
   navHome: '首页',
   navDocs: '文档',
+  navSponsor: '赞助',
   navAria: '站点导航',
   openMenu: '打开菜单',
   startCreating: '开始创作',
@@ -14,6 +15,7 @@ const zhCN = {
     guide: '使用指南',
     features: '产品功能',
     faq: '常见问题',
+    support: '支持项目',
   },
   pages: {
     'getting-started': '快速入门',
@@ -28,6 +30,7 @@ const zhCN = {
     import: '导入文件',
     'export-share': '导出与分享',
     faq: 'FAQ',
+    sponsor: '赞助',
     terms: '服务条款',
     privacy: '隐私政策',
     'ai-terms': 'AI 说明',

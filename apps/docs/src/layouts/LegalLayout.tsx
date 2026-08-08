@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { LEGAL_LINK_DEFS } from '@/data/nav'
+import { LEGAL_LINK_DEFS, withDocsBase } from '@/data/nav'
 import { LangSwitcher } from '@/components/LangSwitcher'
 
 export function LegalLayout() {
@@ -11,7 +11,7 @@ export function LegalLayout() {
       <header className="legal-top">
         <div className="legal-top-inner">
           <Link className="legal-brand" to="/guide/getting-started">
-            <img className="legal-mark" src="/logo-mark-light.png" width={22} height={22} alt="" />
+            <img className="legal-mark" src={withDocsBase('/logo-mark-light.png')} width={22} height={22} alt="" />
             <span>recombyn</span>
           </Link>
           <div className="legal-top-actions">

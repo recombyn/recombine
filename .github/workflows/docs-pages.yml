@@ -1,0 +1,59 @@
+name: Deploy Docs (GitHub Pages)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'apps/docs/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/docs-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build docs
+        run: npm run build --workspace=apps/docs
+        env:
+          VITE_DOCS_BASE: /recombyn/
+          VITE_APP_URL: https://recombyn.com
+
+      # GitHub Pages SPA fallback: unknown paths serve index
+      - name: SPA 404 fallback
+        run: cp apps/docs/dist/index.html apps/docs/dist/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/docs/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

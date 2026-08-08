@@ -18,7 +18,7 @@ export default defineConfig(({ mode }) => {
   const docsUrl = (
     envWeb.VITE_DOCS_URL ||
     envRoot.VITE_DOCS_URL ||
-    (mode === 'development' ? 'http://localhost:5175' : 'https://docs.recombyn.com')
+    (mode === 'development' ? 'http://localhost:5175' : 'https://recombyn.github.io/recombyn')
   ).replace(/\/$/, '');
   // Desktop flavors: local (sidecar SQLite API) | cloud (remote API). Browser builds leave empty.
   const desktopMode = (

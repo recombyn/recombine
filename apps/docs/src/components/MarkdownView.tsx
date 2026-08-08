@@ -1,7 +1,9 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import { Link } from 'react-router-dom'
 import type { Components } from 'react-markdown'
+import { withDocsBase } from '@/data/nav'
 
 type Props = {
   markdown: string
@@ -23,12 +25,20 @@ const components: Components = {
       </a>
     )
   },
+  img({ src, alt, ...rest }) {
+    const resolved = src && src.startsWith('/') ? withDocsBase(src) : src
+    return <img src={resolved} alt={alt ?? ''} {...rest} />
+  },
 }
 
 export function MarkdownView({ markdown, className }: Props) {
   return (
     <div className={className}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw]}
+        components={components}
+      >
         {markdown}
       </ReactMarkdown>
     </div>

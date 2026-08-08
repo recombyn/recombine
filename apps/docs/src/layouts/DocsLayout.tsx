@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { DOC_GROUP_DEFS, findDocMeta, isHelpDocPath } from '@/data/nav'
+import { DOC_GROUP_DEFS, findDocMeta, isHelpDocPath, isSponsorPath, withDocsBase } from '@/data/nav'
 import { LangSwitcher } from '@/components/LangSwitcher'
 
 const APP_URL = __APP_URL__
+const GITHUB_URL = 'https://github.com/recombyn/recombyn'
 
 export function DocsLayout() {
   const { pathname } = useLocation()
@@ -31,7 +32,7 @@ export function DocsLayout() {
             </svg>
           </button>
           <Link to="/guide/getting-started" className="docs-brand">
-            <img src="/logo-mark.png" width={22} height={22} alt="" />
+            <img src={withDocsBase('/logo-mark.png')} width={22} height={22} alt="" />
             <span className="docs-brand-text">
               <span className="docs-brand-name">recombyn</span>
               <span className="docs-brand-sub">{t('brandDocs')}</span>
@@ -47,6 +48,15 @@ export function DocsLayout() {
           >
             {t('navDocs')}
           </Link>
+          <Link
+            to="/sponsor"
+            className={isSponsorPath(pathname) ? 'active docs-nav-sponsor' : 'docs-nav-sponsor'}
+          >
+            {t('navSponsor')}
+          </Link>
+          <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
+            GitHub
+          </a>
         </nav>
 
         <div className="docs-top-actions">
