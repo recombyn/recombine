@@ -34,6 +34,7 @@ import {
   type RcbCamera as CanvasCamera,
 } from '@/components/rcb';
 import LayerPanel from '@/components/editor/panels/LayerPanel';
+import AssetPanel from '@/components/editor/panels/AssetPanel';
 import EditorToolStrip from '@/components/editor/chrome/EditorToolStrip';
 import type { PathEditSubtool } from '@/components/editor/chrome/PathEditToolbar';
 import { getDocumentGridSize } from '@/components/rcb/selection/alignGuides';
@@ -533,8 +534,9 @@ function EditorPage() {
     'website' | 'mobile' | 'image' | 'poster' | 'drawing' | null
   >(null);
   const [attachToChat, setAttachToChat] = useState<string | string[] | null>(null);
-  // Layers dock stays closed by default (open only via HUD toggle).
+  // Layers / assets docks stay closed by default (open only via HUD toggle).
   const [layersOpen, setLayersOpen] = useState(false);
+  const [assetsOpen, setAssetsOpen] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [canvasBgOpen, setCanvasBgOpen] = useState(false);
   /** Enter page / fit-to-canvas — menu highlights「适应画布」until user picks another zoom. */
@@ -952,6 +954,7 @@ function EditorPage() {
         setAgentOpen(false);
         setInspectOpen(false);
         setLayersOpen(false);
+        setAssetsOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -960,13 +963,34 @@ function EditorPage() {
 
   useEffect(() => {
     if (!isMobileViewport) return;
-    if (agentOpen) setLayersOpen(false);
+    if (agentOpen) {
+      setLayersOpen(false);
+      setAssetsOpen(false);
+    }
   }, [agentOpen, isMobileViewport]);
 
+  // Entering mobile: collapse left docks (they become sheets on demand).
   useEffect(() => {
     if (!isMobileViewport) return;
-    if (layersOpen) setLayersOpen(false);
-  }, [isMobileViewport, layersOpen]);
+    setLayersOpen(false);
+    setAssetsOpen(false);
+  }, [isMobileViewport]);
+
+  const toggleLayersOpen = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    setLayersOpen((prev) => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      if (next) setAssetsOpen(false);
+      return next;
+    });
+  }, []);
+
+  const toggleAssetsOpen = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    setAssetsOpen((prev) => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      if (next) setLayersOpen(false);
+      return next;
+    });
+  }, []);
 
   const finishBoot = () => {
     if (!bootOpenRef.current || bootFinishingRef.current) return;
@@ -1323,7 +1347,6 @@ function EditorPage() {
 
   const zoomPercent = Math.round(camera.zoom * 100);
   const projectName = currentTemplate?.name || t('home.untitled');
-
   return (
     <CollabRoomProvider stageEl={stageEl} camera={camera} onCameraChange={setCamera}>
       <div
@@ -1341,6 +1364,12 @@ function EditorPage() {
                 onSelectNode={focusLayerNode}
                 onSelectFrame={focusLayerFrame}
               />
+            </div>
+          ) : null}
+
+          {assetsOpen && !isMobileViewport ? (
+            <div className="relative z-30 h-full shrink-0">
+              <AssetPanel onClose={() => setAssetsOpen(false)} />
             </div>
           ) : null}
 
@@ -1448,7 +1477,9 @@ function EditorPage() {
               isDevMode={isDevMode}
               useCompactTooling={useCompactTooling}
               layersOpen={layersOpen}
-              setLayersOpen={setLayersOpen}
+              setLayersOpen={toggleLayersOpen}
+              assetsOpen={assetsOpen}
+              setAssetsOpen={toggleAssetsOpen}
               minimapOpen={minimapOpen}
               setMinimapOpen={setMinimapOpen}
               shortcutsOpen={shortcutsOpen}
@@ -1536,9 +1567,11 @@ function EditorPage() {
                     height: b.height,
                   };
                 },
-                setLayersOpen,
+                setLayersOpen: toggleLayersOpen,
+                setAssetsOpen: toggleAssetsOpen,
                 setMinimapOpen,
                 getLayersOpen: () => layersOpen,
+                getAssetsOpen: () => assetsOpen,
                 getMinimapOpen: () => minimapOpen,
                 openAccountAgent: () => {
                   const from = `${location.pathname}${location.search}${location.hash}`;
@@ -1569,6 +1602,23 @@ function EditorPage() {
                   focusLayerFrame(frameId);
                   setLayersOpen(false);
                 }}
+              />
+            </div>
+          </>
+        ) : null}
+
+        {isMobileViewport && assetsOpen ? (
+          <>
+            <button
+              type="button"
+              aria-label={t('editor.closePanel')}
+              className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
+              onClick={() => setAssetsOpen(false)}
+            />
+            <div className="fixed inset-y-0 left-0 z-50">
+              <AssetPanel
+                mobile
+                onClose={() => setAssetsOpen(false)}
               />
             </div>
           </>

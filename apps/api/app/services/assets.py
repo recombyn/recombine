@@ -57,7 +57,7 @@ def list_assets(
     page_size_n = max(1, min(int(page_size or 24), 100))
     offset = (page_n - 1) * page_size_n
     kind_n = (kind or "").strip().lower() or None
-    if kind_n not in ("image", "video", "font"):
+    if kind_n not in ("image", "video", "audio", "font"):
         kind_n = None
     with Session(engine) as session:
         total = crud.count_user_assets(
@@ -82,10 +82,16 @@ def list_assets(
 
 def _guess_ext_mime(url: str, content_type: str | None) -> tuple[str, str]:
     ctype = (content_type or "").split(";")[0].strip().lower()
-    if ctype.startswith("image/") or ctype.startswith("video/"):
+    if (
+        ctype.startswith("image/")
+        or ctype.startswith("video/")
+        or ctype.startswith("audio/")
+    ):
         ext = mimetypes.guess_extension(ctype) or ".bin"
         if ext == ".jpe":
             ext = ".jpg"
+        if ctype == "audio/mpeg" and ext in (".mp2", ".mpga", ".bin"):
+            ext = ".mp3"
         return ext.lstrip("."), ctype
     path = urlparse(url).path.lower()
     for ext, mime in (
@@ -96,6 +102,10 @@ def _guess_ext_mime(url: str, content_type: str | None) -> tuple[str, str]:
         (".gif", "image/gif"),
         (".mp4", "video/mp4"),
         (".webm", "video/webm"),
+        (".mp3", "audio/mpeg"),
+        (".wav", "audio/wav"),
+        (".ogg", "audio/ogg"),
+        (".m4a", "audio/mp4"),
     ):
         if path.endswith(ext):
             return ext.lstrip("."), mime
@@ -155,7 +165,7 @@ def create_asset_from_url(
 ) -> dict[str, Any]:
     init_schema()
     kind_n = (kind or "image").strip().lower()
-    if kind_n not in ("image", "video", "font"):
+    if kind_n not in ("image", "video", "audio", "font"):
         kind_n = "image"
     data, ctype = _fetch_bytes(url)
     ext, mime = _guess_ext_mime(url, ctype)
@@ -181,6 +191,61 @@ def create_asset_from_url(
             width=width,
             height=height,
             source=(source or "ai_image")[:32],
+            prompt=(prompt or None),
+            created_at=now,
+        )
+    return _row_to_asset(row)
+
+
+def create_asset_from_bytes(
+    user_id: str,
+    data: bytes,
+    *,
+    kind: str = "audio",
+    mime: str | None = None,
+    source: str = "ai_audio",
+    prompt: str | None = None,
+    filename_ext: str | None = None,
+) -> dict[str, Any]:
+    """Persist raw bytes (e.g. OpenRouter TTS) without a round-trip URL fetch."""
+    init_schema()
+    kind_n = (kind or "audio").strip().lower()
+    if kind_n not in ("image", "video", "audio", "font"):
+        kind_n = "audio"
+    raw = bytes(data or b"")
+    if not raw:
+        raise ValueError("empty body")
+    ctype = (mime or "").split(";")[0].strip().lower() or None
+    if filename_ext:
+        ext = str(filename_ext).lstrip(".").lower() or "bin"
+        guessed = mimetypes.guess_type(f"x.{ext}")[0]
+        mime_n = ctype or guessed or "application/octet-stream"
+    else:
+        ext, mime_n = _guess_ext_mime("", ctype)
+        if kind_n == "audio" and ext in ("png", "bin") and not ctype:
+            ext, mime_n = "mp3", "audio/mpeg"
+    width, height = (None, None)
+    if kind_n in ("image", "font"):
+        width, height = _probe_image_size(raw)
+
+    asset_id = f"asset_{uuid.uuid4().hex[:16]}"
+    object_key = f"assets/{user_id}/{asset_id}.{ext}"
+    put_bytes(object_key, raw, content_type=mime_n)
+    public_url = get_storage().url_for(object_key)
+    now = time.time()
+
+    with Session(engine) as session:
+        row = crud.create_asset(
+            session=session,
+            asset_id=asset_id,
+            user_id=user_id,
+            kind=kind_n,
+            object_key=object_key,
+            url=public_url,
+            mime=mime_n,
+            width=width,
+            height=height,
+            source=(source or "ai_audio")[:32],
             prompt=(prompt or None),
             created_at=now,
         )

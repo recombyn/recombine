@@ -5,21 +5,31 @@
 import { useEffect, useRef, useState, type ReactNode, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
-import { HiChevronLeft, HiChevronRight, HiOutlineTrash } from 'react-icons/hi2';
-import { listModels, type LlmModel } from '@/apis/chat';
+import { HiChevronLeft, HiChevronRight, HiOutlinePlus, HiOutlineTrash } from 'react-icons/hi2';
+import {
+  invalidateChatModelsCache,
+  listModels,
+  type LlmModel,
+  type ByokPlatform,
+} from '@/apis/chat';
 import { modelAllowsRouteSlot } from '@/components/editor/panels/agent/llmModelMeta';
 import { fetchDesignCatalog } from '@/apis/design';
 import { Dropdown, SegmentedControl, Select, Tooltip } from '@/components/base';
 import AccountSettingsDialog from '@/components/layout/AccountSettingsDialog';
 import { cn } from '@/utils/classnames';
 import { isDesktopLocal } from '@/utils/apiBase';
+import { readFileAsDataUrl } from '@/utils/uploadImage';
 import { planAllowsCustomModels, type PlanId } from '@/utils/wallet';
 import {
   createCustomLlmProviderId,
+  createPlatformModelId,
   customProvidersAsModels,
   hydrateCustomLlmProviders,
   isCustomModelId,
+  isPlatformByokId,
+  isPlatformModelId,
   persistCustomLlmProvider,
+  platformProviderFromModelId,
   removeCustomLlmProvider,
   type CustomLlmProvider,
   type CustomModelKind,
@@ -27,6 +37,7 @@ import {
 import ModelPickerPanel, {
   AGENT_ROUTE_POPOVER_PANEL,
   AGENT_ROUTE_SUBMENU_PANEL,
+  CUSTOM_MODEL_ICON_OPTIONS,
   ModelBrandIcon,
   ModelMetaBadge,
   ModelPriceTag,
@@ -360,7 +371,175 @@ const selectFieldClass =
 
 function parseCustomModelKind(value: string): CustomModelKind {
   if (value === 'vision') return 'vision';
+  if (value === 'image') return 'image';
+  if (value === 'video') return 'video';
   return 'text';
+}
+
+/** Sentinel provider option: fall back to the free-text form. */
+const MANUAL_PROVIDER_ID = '__manual__';
+
+function platformModelKindOptions(t: (key: string) => string) {
+  return [
+    { value: 'text', label: t('agent.providerModelKindText') },
+    { value: 'image', label: t('agent.providerModelKindImage') },
+    { value: 'video', label: t('agent.providerModelKindVideo') },
+    { value: 'vision', label: t('agent.providerModelKindVision') },
+  ];
+}
+
+function AddPlatformModelFields(props: {
+  fieldClass: string;
+  selectFieldClass: string;
+  apiId: string;
+  name: string;
+  kind: CustomModelKind;
+  iconKey: string;
+  iconUrl: string;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+  onApiId: (v: string) => void;
+  onName: (v: string) => void;
+  onKind: (v: CustomModelKind) => void;
+  onIconKey: (v: string) => void;
+  onIconUrl: (v: string) => void;
+}): ReactNode {
+  const {
+    fieldClass,
+    selectFieldClass,
+    apiId,
+    name,
+    kind,
+    iconKey,
+    iconUrl,
+    t,
+    onApiId,
+    onName,
+    onKind,
+    onIconKey,
+    onIconUrl,
+  } = props;
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const pickPreset = (key: string) => {
+    if (iconKey === key && !iconUrl) onIconKey('');
+    else {
+      onIconUrl('');
+      onIconKey(key);
+    }
+  };
+
+  const onUploadIcon = (file: File | null) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    void readFileAsDataUrl(file)
+      .then((dataUrl) => {
+        onIconKey('');
+        onIconUrl(dataUrl);
+      })
+      .catch(() => {
+        /* ignore read errors */
+      });
+  };
+
+  return (
+    <>
+      <label className="mb-4 block">
+        <span className="text-[13px] font-medium text-[var(--ink)]">
+          {t('agent.providerApiModel')}
+          <span className="text-red-500"> *</span>
+        </span>
+        <input
+          className={fieldClass}
+          value={apiId}
+          onChange={(e) => onApiId(e.target.value)}
+          placeholder={t('agent.providerApiModelPh')}
+          autoComplete="off"
+        />
+      </label>
+      <label className="mb-4 block">
+        <span className="text-[13px] font-medium text-[var(--ink)]">
+          {t('agent.providerPlatformModelName')}
+          <span className="text-red-500"> *</span>
+        </span>
+        <input
+          className={fieldClass}
+          value={name}
+          onChange={(e) => onName(e.target.value)}
+          placeholder={t('agent.providerPlatformModelNamePh')}
+          autoComplete="off"
+        />
+      </label>
+      <div className="mb-4">
+        <span className="text-[13px] font-medium text-[var(--ink)]">
+          {t('agent.providerModelIcon')}
+          <span className="text-red-500"> *</span>
+        </span>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            title={t('agent.providerModelIconUpload')}
+            aria-label={t('agent.providerModelIconUpload')}
+            className={cn(
+              'inline-flex h-9 w-9 items-center justify-center rounded-lg ring-1 transition',
+              iconUrl
+                ? 'ring-2 ring-[var(--ink)] ring-offset-1 ring-offset-[var(--account-card)]'
+                : 'ring-[var(--line)] hover:bg-[var(--accent-soft)]'
+            )}
+            onClick={() => fileRef.current?.click()}
+          >
+            {iconUrl ? (
+              <img src={iconUrl} alt="" className="h-5 w-5 rounded object-cover" />
+            ) : (
+              <HiOutlinePlus className="h-4 w-4 text-[var(--ink)]" />
+            )}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              onUploadIcon(e.target.files?.[0] || null);
+              e.target.value = '';
+            }}
+          />
+          {CUSTOM_MODEL_ICON_OPTIONS.map((opt) => {
+            const selected = !iconUrl && iconKey === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                title={opt.label}
+                aria-label={opt.label}
+                aria-pressed={selected}
+                className={cn(
+                  'inline-flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--account-card)] ring-1 transition',
+                  selected
+                    ? 'ring-2 ring-[var(--ink)] ring-offset-1 ring-offset-[var(--account-card)]'
+                    : 'ring-[var(--line)] hover:bg-[var(--accent-soft)]'
+                )}
+                onClick={() => pickPreset(opt.key)}
+              >
+                <ModelBrandIcon model={{ iconKey: opt.key, label: opt.label }} size={18} />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <label className="mb-4 block">
+        <span className="text-[13px] font-medium text-[var(--ink)]">
+          {t('agent.providerModelKind')}
+          <span className="text-red-500"> *</span>
+        </span>
+        <Select
+          size="large"
+          className={selectFieldClass}
+          value={kind === 'platform' ? 'text' : kind}
+          options={platformModelKindOptions(t)}
+          onChange={(v) => onKind(parseCustomModelKind(String(v)))}
+        />
+      </label>
+    </>
+  );
 }
 
 type RouteLaneT = (key: string, opts?: Record<string, unknown>) => string;
@@ -438,10 +617,11 @@ function routePresetNoteText(preset: AgentRoutePreset, t: RouteLaneT): string {
   }
 }
 
-function customModelKindLabelKey(
-  kind: CustomModelKind
-): 'agent.providerModelKindText' | 'agent.providerModelKindVision' {
+function customModelKindLabelKey(kind: CustomModelKind): string {
   if (kind === 'vision') return 'agent.providerModelKindVision';
+  if (kind === 'image') return 'agent.providerModelKindImage';
+  if (kind === 'video') return 'agent.providerModelKindVideo';
+  if (kind === 'platform') return 'agent.providerModelKindPlatform';
   return 'agent.providerModelKindText';
 }
 
@@ -1109,6 +1289,9 @@ function AgentModelsPanel({
   // Local desktop: BYOK is always allowed (no cloud membership).
   const canCustom = isDesktopLocal() || planAllowsCustomModels(planId);
   const [providers, setProviders] = useState<CustomLlmProvider[]>([]);
+  const [platforms, setPlatforms] = useState<ByokPlatform[]>([]);
+  // '' = nothing picked yet; MANUAL_PROVIDER_ID = free-text; else a platform id.
+  const [presetId, setPresetId] = useState('');
   const [name, setName] = useState('');
   const [website, setWebsite] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -1117,6 +1300,20 @@ function AgentModelsPanel({
   const [modelKind, setModelKind] = useState<CustomModelKind>('text');
   const [error, setError] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Optional extra model id while adding a platform key (also reused for「添加模型」on saved rows).
+  const [addModelForId, setAddModelForId] = useState('');
+  const [addModelName, setAddModelName] = useState('');
+  const [addModelApiId, setAddModelApiId] = useState('');
+  const [addModelKind, setAddModelKind] = useState<CustomModelKind>('text');
+  const [addModelIconKey, setAddModelIconKey] = useState('');
+  const [addModelIconUrl, setAddModelIconUrl] = useState('');
+  const [addModelError, setAddModelError] = useState('');
+
+  const selectedPlatform =
+    presetId && presetId !== MANUAL_PROVIDER_ID
+      ? platforms.find((p) => p.id === presetId) ?? null
+      : null;
+  const isManualProvider = presetId === MANUAL_PROVIDER_ID;
 
   const askUpgrade = () => {
     if (isDesktopLocal()) return;
@@ -1129,6 +1326,23 @@ function AgentModelsPanel({
     void hydrateCustomLlmProviders().then((list) => {
       if (!cancelled) setProviders(list);
     });
+    void listModels()
+      .then((res) => {
+        if (cancelled) return;
+        const list = res.byokPlatforms?.length
+          ? res.byokPlatforms
+          : (res.byokPresets as ByokPlatform[] | undefined) ?? [];
+        setPlatforms(
+          list.map((p) => ({
+            ...p,
+            rowId: p.rowId || `platform:${p.id}`,
+            kinds: p.kinds?.length ? p.kinds : ['text'],
+          }))
+        );
+      })
+      .catch(() => {
+        /* platforms optional — manual form still works */
+      });
     return () => {
       cancelled = true;
     };
@@ -1137,16 +1351,67 @@ function AgentModelsPanel({
   const persistProviders = (next: CustomLlmProvider[]) => {
     setProviders(next);
     onProvidersChange?.();
+    invalidateChatModelsCache();
   };
+
+  const onPickPlatform = (id: string) => {
+    setPresetId(id);
+    setError('');
+    setAddModelApiId('');
+    setAddModelName('');
+    setAddModelKind('text');
+    setAddModelIconKey('');
+    setAddModelIconUrl('');
+    setAddModelError('');
+    if (id === MANUAL_PROVIDER_ID || !id) {
+      setModelKind('text');
+      setApiModel('');
+      return;
+    }
+    const platform = platforms.find((p) => p.id === id);
+    if (!platform) return;
+    setBaseUrl(platform.baseUrl);
+    setWebsite(platform.website || '');
+    setName(platform.name);
+    setApiModel('*');
+    setModelKind('platform');
+  };
+
+  const resetForm = () => {
+    setPresetId('');
+    setName('');
+    setWebsite('');
+    setApiKey('');
+    setBaseUrl('');
+    setApiModel('');
+    setModelKind('text');
+    setAddModelApiId('');
+    setAddModelName('');
+    setAddModelKind('text');
+    setAddModelIconKey('');
+    setAddModelIconUrl('');
+    setAddModelError('');
+  };
+
+  const providerSelectOptions = [
+    ...platforms.map((p) => ({
+      value: p.id,
+      label: p.name,
+    })),
+    { value: MANUAL_PROVIDER_ID, label: t('agent.providerPresetManual') },
+  ];
 
   const onSaveProvider = () => {
     if (!canCustom) {
       askUpgrade();
       return;
     }
-    const n = name.trim();
-    const url = baseUrl.trim().replace(/\/+$/, '');
-    if (!modelKind) {
+    const isPlatform = Boolean(selectedPlatform) || modelKind === 'platform';
+    // Platform presets always carry name / baseUrl — refill if the user cleared an autofilled field.
+    const n = (name.trim() || selectedPlatform?.name || '').trim();
+    const url = (baseUrl.trim() || selectedPlatform?.baseUrl || '').trim().replace(/\/+$/, '');
+    const site = (website.trim() || selectedPlatform?.website || '').trim();
+    if (!isPlatform && !modelKind) {
       setError(t('agent.providerModelKindRequired'));
       return;
     }
@@ -1162,7 +1427,8 @@ function AgentModelsPanel({
       setError(t('agent.providerBaseUrlInvalid'));
       return;
     }
-    const mid = apiModel.trim();
+    // Aggregators: one key unlocks the catalog (apiModel sentinel). Model IDs only via「添加模型」or manual.
+    const mid = isPlatform ? '*' : apiModel.trim();
     if (!mid) {
       setError(t('agent.providerApiModelRequired', { defaultValue: '请填写模型 ID（如 gpt-4o）' }));
       return;
@@ -1174,24 +1440,63 @@ function AgentModelsPanel({
     }
     setError('');
     const draft: CustomLlmProvider = {
-      id: createCustomLlmProviderId(),
+      id: selectedPlatform
+        ? selectedPlatform.rowId || `platform:${selectedPlatform.id}`
+        : createCustomLlmProviderId(),
       name: n,
-      website: website.trim(),
+      website: site,
       apiKey: key,
       baseUrl: url,
       apiModel: mid,
-      modelKind,
+      modelKind: isPlatform ? 'platform' : modelKind,
       createdAt: Date.now(),
     };
+    const extraMid = isPlatform ? addModelApiId.trim() : '';
+    const extraName = addModelName.trim();
+    const extraIconKey = addModelIconKey.trim();
+    const extraIconUrl = addModelIconUrl.trim();
+    const extraKind = addModelKind === 'platform' ? 'text' : addModelKind;
+    if (extraMid) {
+      if (!extraName) {
+        setError(t('agent.providerPlatformModelNameRequired'));
+        return;
+      }
+      if (!extraIconKey && !extraIconUrl) {
+        setError(t('agent.providerModelIconRequired'));
+        return;
+      }
+      if (!extraKind) {
+        setError(t('agent.providerModelKindRequired'));
+        return;
+      }
+    }
     void persistCustomLlmProvider(draft)
-      .then((saved) => {
-        persistProviders([saved, ...providers.filter((p) => p.id !== saved.id)]);
-        setName('');
-        setWebsite('');
-        setApiKey('');
-        setBaseUrl('');
-        setApiModel('');
-        setModelKind('text');
+      .then(async (saved) => {
+        let next = [saved, ...providers.filter((p) => p.id !== saved.id)];
+        if (extraMid && selectedPlatform) {
+          const child: CustomLlmProvider = {
+            id: createPlatformModelId(selectedPlatform.id),
+            name: extraName,
+            website: site,
+            apiKey: '',
+            baseUrl: url,
+            apiModel: extraMid,
+            modelKind: extraKind,
+            iconKey: extraIconKey,
+            iconUrl: extraIconUrl,
+            createdAt: Date.now(),
+          };
+          try {
+            const savedChild = await persistCustomLlmProvider(child);
+            next = [savedChild, ...next.filter((p) => p.id !== savedChild.id)];
+          } catch {
+            setError(t('agent.providerPlatformModelFailed'));
+            persistProviders(next);
+            return;
+          }
+        }
+        persistProviders(next);
+        resetForm();
       })
       .catch(() => {
         setError(t('agent.providerSaveFailed', { defaultValue: 'Failed to save provider' }));
@@ -1203,10 +1508,111 @@ function AgentModelsPanel({
       askUpgrade();
       return;
     }
-    void removeCustomLlmProvider(id).then(() => {
-      persistProviders(providers.filter((p) => p.id !== id));
+    const removeIds = new Set<string>([id]);
+    if (isPlatformByokId(id) || providers.find((p) => p.id === id)?.modelKind === 'platform') {
+      for (const child of childModelsOf(id)) removeIds.add(child.id);
+    }
+    void Promise.all([...removeIds].map((rid) => removeCustomLlmProvider(rid))).then(() => {
+      persistProviders(providers.filter((p) => !removeIds.has(p.id)));
+      if (addModelForId === id) closeAddModel();
     });
   };
+
+  const openAddModel = (platformRowId: string) => {
+    setAddModelForId(platformRowId);
+    setAddModelName('');
+    setAddModelApiId('');
+    setAddModelKind('text');
+    setAddModelIconKey('');
+    setAddModelIconUrl('');
+    setAddModelError('');
+  };
+
+  const closeAddModel = () => {
+    setAddModelForId('');
+    setAddModelName('');
+    setAddModelApiId('');
+    setAddModelKind('text');
+    setAddModelIconKey('');
+    setAddModelIconUrl('');
+    setAddModelError('');
+  };
+
+  const onSavePlatformModel = (platformRow: CustomLlmProvider) => {
+    if (!canCustom) {
+      askUpgrade();
+      return;
+    }
+    const mid = addModelApiId.trim();
+    const n = addModelName.trim();
+    const iconKey = addModelIconKey.trim();
+    const iconUrl = addModelIconUrl.trim();
+    const kind = addModelKind === 'platform' ? 'text' : addModelKind;
+    if (!mid) {
+      setAddModelError(t('agent.providerApiModelRequired', { defaultValue: '请填写模型 ID' }));
+      return;
+    }
+    if (!n) {
+      setAddModelError(t('agent.providerPlatformModelNameRequired'));
+      return;
+    }
+    if (!iconKey && !iconUrl) {
+      setAddModelError(t('agent.providerModelIconRequired'));
+      return;
+    }
+    if (!kind) {
+      setAddModelError(t('agent.providerModelKindRequired'));
+      return;
+    }
+    const providerKey =
+      platformProviderFromModelId(platformRow.id) ||
+      (isPlatformByokId(platformRow.id)
+        ? platformRow.id.slice('platform:'.length)
+        : platforms.find((x) => x.rowId === platformRow.id)?.id || '');
+    if (!providerKey) {
+      setAddModelError(t('agent.providerPlatformModelFailed'));
+      return;
+    }
+    setAddModelError('');
+    const draft: CustomLlmProvider = {
+      id: createPlatformModelId(providerKey),
+      name: n,
+      website: platformRow.website || '',
+      apiKey: '',
+      baseUrl: platformRow.baseUrl,
+      apiModel: mid,
+      modelKind: kind,
+      iconKey,
+      iconUrl,
+      createdAt: Date.now(),
+    };
+    void persistCustomLlmProvider(draft)
+      .then((saved) => {
+        persistProviders([saved, ...providers.filter((p) => p.id !== saved.id)]);
+        closeAddModel();
+      })
+      .catch(() => {
+        setAddModelError(t('agent.providerPlatformModelFailed'));
+      });
+  };
+
+  const platformRows = providers.filter(
+    (p) => isPlatformByokId(p.id) || p.modelKind === 'platform'
+  );
+  const childModelsOf = (platformRowId: string) => {
+    const key = isPlatformByokId(platformRowId)
+      ? platformRowId.slice('platform:'.length)
+      : platforms.find((x) => x.rowId === platformRowId)?.id || '';
+    return providers.filter(
+      (p) => isPlatformModelId(p.id) && platformProviderFromModelId(p.id) === key
+    );
+  };
+  const otherProviders = providers.filter(
+    (p) =>
+      !isPlatformByokId(p.id) &&
+      p.modelKind !== 'platform' &&
+      !isPlatformModelId(p.id)
+  );
 
   return (
     <>
@@ -1240,104 +1646,160 @@ function AgentModelsPanel({
           <fieldset disabled={!canCustom} className={cn(!canCustom && 'opacity-50')}>
             <label className="mb-4 block">
               <span className="text-[13px] font-medium text-[var(--ink)]">
-                {t('agent.providerModelKind')}
+                {t('agent.providerPresetLabel')}
                 <span className="text-red-500"> *</span>
               </span>
               <Select
                 size="large"
                 className={selectFieldClass}
-                value={modelKind}
-                options={[
-                  { value: 'text', label: t('agent.providerModelKindText') },
-                  { value: 'vision', label: t('agent.providerModelKindVision') },
-                ]}
-                onChange={(v) => setModelKind(parseCustomModelKind(String(v)))}
+                value={presetId}
+                placeholder={t('agent.providerPresetPlaceholder')}
+                options={providerSelectOptions}
+                onChange={(v) => onPickPlatform(String(v))}
               />
               <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
-                {t('agent.providerModelKindHint')}
+                {t('agent.providerPlatformHint')}
               </span>
             </label>
 
-            <label className="mb-4 block">
-              <span className="text-[13px] font-medium text-[var(--ink)]">
-                {t('agent.providerName')}
-                <span className="text-red-500"> *</span>
-              </span>
-              <input
-                className={fieldClass}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t('agent.providerNamePh')}
-                autoComplete="off"
-                required
-              />
-            </label>
+            {presetId ? (
+              <>
+                <label className="mb-4 block">
+                  <span className="text-[13px] font-medium text-[var(--ink)]">
+                    API Key
+                    <span className="text-red-500"> *</span>
+                  </span>
+                  <input
+                    className={fieldClass}
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={t('agent.providerApiKeyPh')}
+                    autoComplete="off"
+                  />
+                  <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
+                    {t('agent.providerApiKeyHint')}
+                  </span>
+                </label>
 
-            <label className="mb-4 block">
-              <span className="text-[13px] font-medium text-[var(--ink)]">{t('agent.providerWebsite')}</span>
-              <input
-                className={fieldClass}
-                value={website}
-                onChange={(e) => setWebsite(e.target.value)}
-                placeholder="https://"
-                autoComplete="off"
-              />
-            </label>
+                {selectedPlatform ? (
+                  <AddPlatformModelFields
+                    fieldClass={fieldClass}
+                    selectFieldClass={selectFieldClass}
+                    t={t}
+                    apiId={addModelApiId}
+                    name={addModelName}
+                    iconKey={addModelIconKey}
+                    iconUrl={addModelIconUrl}
+                    kind={addModelKind}
+                    onApiId={setAddModelApiId}
+                    onName={setAddModelName}
+                    onIconKey={setAddModelIconKey}
+                    onIconUrl={setAddModelIconUrl}
+                    onKind={setAddModelKind}
+                  />
+                ) : null}
 
-            <label className="mb-4 block">
-              <span className="text-[13px] font-medium text-[var(--ink)]">API Key</span>
-              <input
-                className={fieldClass}
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={t('agent.providerApiKeyPh')}
-                autoComplete="off"
-              />
-              <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
-                {t('agent.providerApiKeyHint')}
-              </span>
-            </label>
+                {isManualProvider ? (
+                  <>
+                    <label className="mb-4 block">
+                      <span className="text-[13px] font-medium text-[var(--ink)]">
+                        {t('agent.providerModelKind')}
+                        <span className="text-red-500"> *</span>
+                      </span>
+                      <Select
+                        size="large"
+                        className={selectFieldClass}
+                        value={modelKind === 'platform' ? 'text' : modelKind}
+                        options={[
+                          { value: 'text', label: t('agent.providerModelKindText') },
+                          { value: 'vision', label: t('agent.providerModelKindVision') },
+                          { value: 'image', label: t('agent.providerModelKindImage') },
+                        ]}
+                        onChange={(v) => setModelKind(parseCustomModelKind(String(v)))}
+                      />
+                      <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
+                        {t('agent.providerModelKindHint')}
+                      </span>
+                    </label>
 
-            <label className="mb-4 block">
-              <span className="text-[13px] font-medium text-[var(--ink)]">
-                {t('agent.providerBaseUrl')}
-                <span className="text-red-500"> *</span>
-              </span>
-              <input
-                className={fieldClass}
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://api.example.com"
-                autoComplete="off"
-                required
-              />
-              <span className="mt-1.5 block rounded-lg bg-[#FFF8E6] px-2.5 py-2 text-[12px] leading-relaxed text-[#8A6D1D] dark:bg-[#3A3218] dark:text-[#E8D48A]">
-                {t('agent.providerBaseUrlHint')}
-              </span>
-            </label>
+                    <label className="mb-4 block">
+                      <span className="text-[13px] font-medium text-[var(--ink)]">
+                        {t('agent.providerApiModel', { defaultValue: '模型 ID' })}
+                        <span className="text-red-500"> *</span>
+                      </span>
+                      <input
+                        className={fieldClass}
+                        value={apiModel}
+                        onChange={(e) => setApiModel(e.target.value)}
+                        placeholder={t('agent.providerApiModelPh', {
+                          defaultValue: '例如 gpt-4o / deepseek-chat',
+                        })}
+                        autoComplete="off"
+                        required
+                      />
+                      <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
+                        {t('agent.providerApiModelHint', {
+                          defaultValue: '上游 chat/completions 使用的 model 字段，不是供应商显示名。',
+                        })}
+                      </span>
+                    </label>
+                  </>
+                ) : null}
 
-            <label className="mb-4 block">
-              <span className="text-[13px] font-medium text-[var(--ink)]">
-                {t('agent.providerApiModel', { defaultValue: '模型 ID' })}
-                <span className="text-red-500"> *</span>
-              </span>
-              <input
-                className={fieldClass}
-                value={apiModel}
-                onChange={(e) => setApiModel(e.target.value)}
-                placeholder={t('agent.providerApiModelPh', {
-                  defaultValue: '例如 gpt-4o / deepseek-chat',
-                })}
-                autoComplete="off"
-                required
-              />
-              <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
-                {t('agent.providerApiModelHint', {
-                  defaultValue: '上游 chat/completions 使用的 model 字段，不是供应商显示名。',
-                })}
-              </span>
-            </label>
+                <label className="mb-4 block">
+                  <span className="text-[13px] font-medium text-[var(--ink)]">
+                    {t('agent.providerName')}
+                    {isManualProvider ? <span className="text-red-500"> *</span> : null}
+                  </span>
+                  <input
+                    className={fieldClass}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={t('agent.providerNamePh')}
+                    autoComplete="off"
+                    required={isManualProvider}
+                  />
+                </label>
+
+                <label className="mb-4 block">
+                  <span className="text-[13px] font-medium text-[var(--ink)]">
+                    {t('agent.providerBaseUrl')}
+                    {isManualProvider ? <span className="text-red-500"> *</span> : null}
+                  </span>
+                  <input
+                    className={fieldClass}
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder="https://api.example.com"
+                    autoComplete="off"
+                    required={isManualProvider}
+                  />
+                  {isManualProvider ? (
+                    <span className="mt-1.5 block rounded-lg bg-[#FFF8E6] px-2.5 py-2 text-[12px] leading-relaxed text-[#8A6D1D] dark:bg-[#3A3218] dark:text-[#E8D48A]">
+                      {t('agent.providerBaseUrlHint')}
+                    </span>
+                  ) : (
+                    <span className="mt-1.5 block text-[12px] text-[var(--muted)]">
+                      {t('agent.providerPlatformAutofillHint')}
+                    </span>
+                  )}
+                </label>
+
+                <label className="mb-4 block">
+                  <span className="text-[13px] font-medium text-[var(--ink)]">
+                    {t('agent.providerWebsite')}
+                  </span>
+                  <input
+                    className={fieldClass}
+                    value={website}
+                    onChange={(e) => setWebsite(e.target.value)}
+                    placeholder="https://"
+                    autoComplete="off"
+                  />
+                </label>
+              </>
+            ) : null}
           </fieldset>
 
           {error ? <p className="mb-3 text-[13px] text-red-500">{error}</p> : null}
@@ -1359,15 +1821,129 @@ function AgentModelsPanel({
             <h2 className="mb-4 text-[15px] font-semibold text-[var(--ink)]">
               {t('agent.providerSaved')}
             </h2>
-            <ul className="flex flex-col gap-2">
-              {providers.map((p) => (
+            <ul className="flex flex-col gap-3">
+              {platformRows.map((p) => {
+                const children = childModelsOf(p.id);
+                const adding = addModelForId === p.id;
+                return (
+                  <li
+                    key={p.id}
+                    className="rounded-lg bg-[var(--account-main)] px-3 py-2.5 ring-1 ring-[var(--line)]"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[14px] font-medium text-[var(--ink)]">
+                          {p.name}
+                        </div>
+                        <div className="truncate text-[12px] text-[var(--muted)]">
+                          {p.baseUrl}
+                          {p.apiKeyHint ? ` · ${p.apiKeyHint}` : ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--accent-soft)]"
+                        onClick={() => (adding ? closeAddModel() : openAddModel(p.id))}
+                      >
+                        {adding ? t('common.cancel') : t('agent.providerAddPlatformModel')}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={t('common.delete')}
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+                        onClick={() => onRemove(p.id)}
+                      >
+                        <HiOutlineTrash className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {children.length ? (
+                      <ul className="mt-2 space-y-1 border-t border-[var(--line)] pt-2">
+                        {children.map((child) => (
+                          <li
+                            key={child.id}
+                            className="flex items-center gap-2 rounded-md px-1.5 py-1"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <ModelBrandIcon
+                                  model={{
+                                    iconKey: child.iconKey,
+                                    iconUrl: child.iconUrl,
+                                    label: child.name,
+                                    id: child.apiModel,
+                                  }}
+                                  size={16}
+                                />
+                                <span className="truncate text-[13px] text-[var(--ink)]">
+                                  {child.name}
+                                </span>
+                                <span className="shrink-0 rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
+                                  {t(customModelKindLabelKey(child.modelKind))}
+                                </span>
+                              </div>
+                              <div className="truncate text-[11px] text-[var(--muted)]">
+                                {child.apiModel}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              aria-label={t('common.delete')}
+                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+                              onClick={() => onRemove(child.id)}
+                            >
+                              <HiOutlineTrash className="h-3.5 w-3.5" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+
+                    {adding ? (
+                      <div className="mt-2 border-t border-[var(--line)] pt-2">
+                        <AddPlatformModelFields
+                          fieldClass={fieldClass}
+                          selectFieldClass={selectFieldClass}
+                          t={t}
+                          apiId={addModelApiId}
+                          name={addModelName}
+                          iconKey={addModelIconKey}
+                          iconUrl={addModelIconUrl}
+                          kind={addModelKind}
+                          onApiId={setAddModelApiId}
+                          onName={setAddModelName}
+                          onIconKey={setAddModelIconKey}
+                          onIconUrl={setAddModelIconUrl}
+                          onKind={setAddModelKind}
+                        />
+                        {addModelError ? (
+                          <p className="mb-3 text-[12px] text-red-500">{addModelError}</p>
+                        ) : null}
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            className="inline-flex h-8 items-center rounded-lg bg-[var(--ink)] px-3 text-[12px] font-medium text-[var(--on-brand)] hover:opacity-90"
+                            onClick={() => onSavePlatformModel(p)}
+                          >
+                            {t('agent.providerAddPlatformModelSave')}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+
+              {otherProviders.map((p) => (
                 <li
                   key={p.id}
                   className="flex items-center gap-2 rounded-lg bg-[var(--account-main)] px-3 py-2.5 ring-1 ring-[var(--line)]"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
-                      <div className="truncate text-[14px] font-medium text-[var(--ink)]">{p.name}</div>
+                      <div className="truncate text-[14px] font-medium text-[var(--ink)]">
+                        {p.name}
+                      </div>
                       <span className="shrink-0 rounded-lg bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] text-[var(--muted)]">
                         {t(customModelKindLabelKey(p.modelKind))}
                       </span>

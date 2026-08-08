@@ -24,9 +24,14 @@ import {
   WorldScreenChromeRoot,
 } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import AgentComposerInput, {
+  buildAttachRefMentionContext,
+  buildComposerContext,
   chipBaseKey,
+  enrichComposerContextThumb,
   parseAtMentionQuery,
+  rasterizeNodesToPngDataUrl,
   stripTrailingAtQuery,
+  upsertLibraryAssetAttachment,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -34,10 +39,10 @@ import {
   ComposerAttachmentChip,
   composerAttachActionClass,
 } from '@/components/editor/panels/agent/AgentComposerShell';
-import { buildComposerContext, enrichComposerContextThumb, rasterizeNodesToPngDataUrl } from '@/components/editor/panels/AgentComposerInput';
 import MentionAttachPanel, {
   type MentionAttachItem,
 } from '@/components/editor/panels/agent/MentionAttachPanel';
+import type { UserAsset } from '@/apis/assets';
 import ImageAspectRatioPicker, {
   DEFAULT_IMAGE_COUNT,
   DEFAULT_IMAGE_QUALITY,
@@ -50,6 +55,7 @@ import ModelPickerPanel, {
   ModelBrandIcon,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
 import { modelIsImageGenerator } from '@/components/editor/panels/agent/llmModelMeta';
+import { customProvidersAsModels } from '@/components/editor/panels/agent/customLlmProviders';
 import {
   canAttachNodeToChat,
   captureVideoPosterFrame,
@@ -530,9 +536,11 @@ function ImageGeneratorCard({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const pool = [...(res?.models || []), ...(res?.imageModels || [])].filter(
-          (m) => modelIsImageGenerator(m) || m.kind === 'image'
-        );
+        const pool = [
+          ...(res?.models || []),
+          ...(res?.imageModels || []),
+          ...customProvidersAsModels(),
+        ].filter((m) => modelIsImageGenerator(m) || m.kind === 'image');
         const seen = new Set<string>();
         const unique = pool.filter((m) => {
           if (!m?.id || seen.has(m.id)) return false;
@@ -624,22 +632,12 @@ function ImageGeneratorCard({
     [attachments, t]
   );
 
-  const pickMentionAttach = (pickId: string) => {
-    const list = contextsRef.current.filter((c) => c.kind === 'attachment');
-    const idx = list.findIndex((c) => c.key === pickId);
-    if (idx < 0) return;
-    const att = list[idx]!;
-    const n = idx + 1;
-    const ctx: ComposerContext = {
-      key: `attach-ref:${chipBaseKey(att.key)}`,
-      label: t('agent.mentionAttachImageN', { n }),
-      kind: 'image',
-      payload: att.payload || `[User attachment ${n}]`,
-      ...(att.dataUrl ? { dataUrl: att.dataUrl } : {}),
-      ...(att.thumbUrl || att.dataUrl
-        ? { thumbUrl: String(att.thumbUrl || att.dataUrl) }
-        : {}),
-    };
+  const insertMentionFromAttachment = (att: ComposerContext, n: number) => {
+    const ctx = buildAttachRefMentionContext(
+      att,
+      t('agent.mentionAttachImageN', { n }),
+      att.payload || `[User attachment ${n}]`
+    );
     setPrompt(stripTrailingAtQuery(prompt));
     setMentionOpen(false);
     setMentionQuery('');
@@ -647,6 +645,26 @@ function ImageGeneratorCard({
       inputRef.current?.insertContextAtCaret(ctx);
       inputRef.current?.focus();
     });
+  };
+
+  const pickMentionAttach = (pickId: string) => {
+    const list = contextsRef.current.filter((c) => c.kind === 'attachment');
+    const idx = list.findIndex((c) => c.key === pickId);
+    if (idx < 0) return;
+    insertMentionFromAttachment(list[idx]!, idx + 1);
+  };
+
+  const pickMentionLibraryAsset = (asset: UserAsset) => {
+    if (asset.kind !== 'image') return;
+    const upserted = upsertLibraryAssetAttachment(
+      contextsRef.current,
+      asset,
+      t('me.assetKindImage')
+    );
+    if (!upserted) return;
+    setContexts(upserted.contexts);
+    contextsRef.current = upserted.contexts;
+    insertMentionFromAttachment(upserted.attachment, upserted.ordinal);
   };
 
   const mentionFloating = useFloating({
@@ -1087,6 +1105,8 @@ function ImageGeneratorCard({
               items={mentionItems}
               query={mentionQuery}
               onPick={pickMentionAttach}
+              onPickLibraryAsset={pickMentionLibraryAsset}
+              assetKinds={['image']}
             />
           </div>
         </FloatingPortal>

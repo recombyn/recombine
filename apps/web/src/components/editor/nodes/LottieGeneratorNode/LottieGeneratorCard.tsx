@@ -44,9 +44,11 @@ import {
   WorldScreenChromeRoot,
 } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import AgentComposerInput, {
+  buildAttachRefMentionContext,
   chipBaseKey,
   parseAtMentionQuery,
   stripTrailingAtQuery,
+  upsertLibraryAssetAttachment,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -57,6 +59,7 @@ import {
 import MentionAttachPanel, {
   type MentionAttachItem,
 } from '@/components/editor/panels/agent/MentionAttachPanel';
+import type { UserAsset } from '@/apis/assets';
 import { AspectRatioGlyph } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
 import ModelPickerPanel, {
   ModelBrandIcon,
@@ -507,22 +510,12 @@ function LottieGeneratorCard({
     [attachments, t]
   );
 
-  const pickMentionAttach = (pickId: string) => {
-    const list = contextsRef.current.filter((c) => c.kind === 'attachment');
-    const idx = list.findIndex((c) => c.key === pickId);
-    if (idx < 0) return;
-    const att = list[idx]!;
-    const n = idx + 1;
-    const ctx: ComposerContext = {
-      key: `attach-ref:${chipBaseKey(att.key)}`,
-      label: t('agent.mentionAttachImageN', { n }),
-      kind: 'image',
-      payload: att.payload || `[User attachment ${n}]`,
-      ...(att.dataUrl ? { dataUrl: att.dataUrl } : {}),
-      ...(att.thumbUrl || att.dataUrl
-        ? { thumbUrl: String(att.thumbUrl || att.dataUrl) }
-        : {}),
-    };
+  const insertMentionFromAttachment = (att: ComposerContext, n: number) => {
+    const ctx = buildAttachRefMentionContext(
+      att,
+      t('agent.mentionAttachImageN', { n }),
+      att.payload || `[User attachment ${n}]`
+    );
     setPrompt(stripTrailingAtQuery(prompt));
     setMentionOpen(false);
     setMentionQuery('');
@@ -530,6 +523,26 @@ function LottieGeneratorCard({
       inputRef.current?.insertContextAtCaret(ctx);
       inputRef.current?.focus();
     });
+  };
+
+  const pickMentionAttach = (pickId: string) => {
+    const list = contextsRef.current.filter((c) => c.kind === 'attachment');
+    const idx = list.findIndex((c) => c.key === pickId);
+    if (idx < 0) return;
+    insertMentionFromAttachment(list[idx]!, idx + 1);
+  };
+
+  const pickMentionLibraryAsset = (asset: UserAsset) => {
+    if (asset.kind !== 'image') return;
+    const upserted = upsertLibraryAssetAttachment(
+      contextsRef.current,
+      asset,
+      t('me.assetKindImage')
+    );
+    if (!upserted) return;
+    setContexts(upserted.contexts);
+    contextsRef.current = upserted.contexts;
+    insertMentionFromAttachment(upserted.attachment, upserted.ordinal);
   };
 
   const mentionFloating = useFloating({
@@ -940,6 +953,8 @@ function LottieGeneratorCard({
             items={mentionItems}
             query={mentionQuery}
             onPick={pickMentionAttach}
+            onPickLibraryAsset={pickMentionLibraryAsset}
+            assetKinds={['image']}
           />
         </div>
       </FloatingPortal>

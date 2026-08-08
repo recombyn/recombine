@@ -63,7 +63,7 @@ function nodeUsesPathChrome(node: any): boolean {
   if (key === 'text' || key === 'frame') return false;
   // Media plates share the host lattice so chrome tracks SVG `__sceneLeft` —
   // world SelectionChrome from Redux alone drifts after sticky re-align.
-  if (key === 'image' || key === 'video' || key === 'lottie') return true;
+  if (key === 'image' || key === 'video' || key === 'lottie' || key === 'audio') return true;
   if (key === 'shape' || key === 'path' || key === 'rect' || key === 'ellipse') return true;
   return Boolean(node.attrs?.shapeType);
 }

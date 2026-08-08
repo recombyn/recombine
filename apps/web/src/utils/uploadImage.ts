@@ -62,9 +62,10 @@ export async function uploadImageFile(
 ): Promise<UploadedFileItem> {
   const form = new FormData();
   form.append('files', file, file.name);
-  const isVideo = String(file.type || '').startsWith('video/');
+  const kind = String(file.type || '');
+  const isHeavy = kind.startsWith('video/') || kind.startsWith('audio/');
   const res = await uploadFiles(form, {
-    timeout: isVideo ? 600000 : 120000,
+    timeout: isHeavy ? 600000 : 120000,
     signal: opts?.signal,
   });
   const item = res?.items?.[0];
@@ -222,6 +223,10 @@ function extForMime(mime: string): string {
   if (m.includes('svg')) return 'svg';
   if (m.includes('mp4') || m.includes('quicktime')) return 'mp4';
   if (m.includes('webm')) return 'webm';
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+  if (m.includes('wav')) return 'wav';
+  if (m.includes('ogg')) return 'ogg';
+  if (m.includes('aac') || m.includes('m4a')) return 'm4a';
   return 'png';
 }
 
@@ -259,7 +264,7 @@ async function fetchUploadBytesByDisplayUrl(src: string): Promise<Blob> {
 export async function imageSrcToFile(
   src: string,
   filename = 'image.png',
-  opts?: { uploadKey?: string | null }
+  opts?: { uploadKey?: string | null; fallbackMime?: string }
 ): Promise<File> {
   const s = (src || '').trim();
   if (!s) throw new Error('empty image src');
@@ -299,7 +304,8 @@ export async function imageSrcToFile(
   }
 
   if (!blob || blob.size < 8) throw new Error('empty image body');
-  const mime = blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'image/png';
+  const fallback = String(opts?.fallbackMime || '').trim() || 'image/png';
+  const mime = blob.type && blob.type !== 'application/octet-stream' ? blob.type : fallback;
   const ext = extForMime(mime);
   const name = filename.includes('.') ? filename : `${filename}.${ext}`;
   return new File([blob], name, { type: mime });

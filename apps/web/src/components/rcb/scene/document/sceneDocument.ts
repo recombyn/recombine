@@ -909,13 +909,28 @@ export function isLottieGeneratorNode(node: any): boolean {
   return Boolean(node) && node.key === 'lottie' && attrFlagTrue(node.attrs?.lottieGenerator);
 }
 
-/** Image / video / Lottie generator plates — not real scene content (no hide / lock / export). */
+/** Canvas audio-generator plate (empty audio + composer until promote). */
+export function isAudioGeneratorNode(node: any): boolean {
+  return Boolean(node) && node.key === 'audio' && attrFlagTrue(node.attrs?.audioGenerator);
+}
+
+/** Image / video / Lottie / audio generator plates — not real scene content (no hide / lock / export). */
 export function isGeneratorNode(node: any): boolean {
-  return isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node);
+  return (
+    isImageGeneratorNode(node) ||
+    isVideoGeneratorNode(node) ||
+    isLottieGeneratorNode(node) ||
+    isAudioGeneratorNode(node)
+  );
 }
 
 export function isVideoNode(node: any): boolean {
   return Boolean(node) && node.key === 'video' && !isVideoGeneratorNode(node);
+}
+
+/** Finished audio plate (not a generator composer). */
+export function isAudioNode(node: any): boolean {
+  return Boolean(node) && node.key === 'audio' && !isAudioGeneratorNode(node);
 }
 
 /** Layer hidden — skipped in SVG render + hit-test. */
@@ -987,7 +1002,9 @@ export function canAttachNodeToChat(
   if (!node) return false;
   if (isGeneratorNode(node)) return false;
   if (isImageProcessRunning(node)) return false;
-  if (opts?.imagesOnly && (node.key === 'video' || node.key === 'lottie')) return false;
+  if (opts?.imagesOnly && (node.key === 'video' || node.key === 'lottie' || node.key === 'audio')) {
+    return false;
+  }
   return true;
 }
 
@@ -1676,6 +1693,221 @@ export function serializeLottieAnimationData(data: unknown): string | null {
 /** Finished Lottie plate (not a generator composer). */
 export function isLottieNode(node: any): boolean {
   return Boolean(node) && node.key === 'lottie' && !isLottieGeneratorNode(node);
+}
+
+/**
+ * Spawn an Audio Generator plate. Same `audio` key so hit-test / select
+ * keep working; `attrs.audioGenerator` flips on the HTML composer overlay.
+ * After upload/generate, call `promoteAudioGeneratorToAudio`.
+ */
+export function createAudioGeneratorNode({
+  x = 40,
+  y = 40,
+  width = 360,
+  height = 200,
+  name = 'Audio Generator',
+}: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+} = {}) {
+  const id = nanoid(10);
+  const iw = Math.max(1, Math.round(Number(width) || 360));
+  const ih = Math.max(1, Math.round(Number(height) || 200));
+  const ix = Math.round(Number(x) || 0);
+  const iy = Math.round(Number(y) || 0);
+  return {
+    id,
+    node: {
+      id,
+      key: 'audio',
+      x: ix,
+      y: iy,
+      z: 0,
+      width: iw,
+      height: ih,
+      attrs: {
+        src: '',
+        name: name || 'Audio Generator',
+        assetKind: 'audio',
+        audioGenerator: true,
+        mode: 'FIT',
+        lockAspect: 'true',
+        radiusTL: 8,
+        radiusTR: 8,
+        radiusBR: 8,
+        radiusBL: 8,
+        radiusLinked: 'true',
+      } as Record<string, unknown>,
+      children: [],
+    },
+  };
+}
+
+/** Theme surface fill — maps legacy baked `#FFFFFF` / empty to `var(--surface)`. */
+export function resolveThemeSurfaceFill(raw: unknown): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return 'var(--surface)';
+  if (s.toLowerCase() === 'white') return 'var(--surface)';
+  if (/^#fff(fff)?$/i.test(s)) return 'var(--surface)';
+  return s;
+}
+
+/**
+ * Clone an audio node to the right (trim / speed confirm).
+ * Returns null when source is missing.
+ */
+export function cloneAudioNodeSibling(
+  doc: any,
+  sourceNode: any,
+  {
+    attrsPatch,
+    defaultName,
+    gap = 16,
+  }: {
+    attrsPatch: Record<string, unknown>;
+    defaultName?: string;
+    gap?: number;
+  }
+): { document: any; id: string } | null {
+  if (!doc || !sourceNode || sourceNode.key !== 'audio') return null;
+  const w = Math.max(1, Math.round(Number(sourceNode.width) || 360));
+  const h = Math.max(1, Math.round(Number(sourceNode.height) || 200));
+  const id = nanoid(10);
+  const clone = JSON.parse(JSON.stringify(sourceNode));
+  clone.id = id;
+  clone.x = Math.round((Number(sourceNode.x) || 0) + w + gap);
+  clone.y = Math.round(Number(sourceNode.y) || 0);
+  clone.width = w;
+  clone.height = h;
+  const attrs = { ...(clone.attrs || {}), ...attrsPatch };
+  const name = String(attrs.name || '').trim();
+  if (!name && defaultName) attrs.name = defaultName;
+  delete attrs.processStatus;
+  delete attrs.processKind;
+  delete attrs.processLabel;
+  delete attrs.processSourceId;
+  clone.attrs = attrs;
+  return { document: addNodeToDocument(doc, id, clone), id };
+}
+
+export function createAudioNode({
+  x = 40,
+  y = 40,
+  width = 360,
+  height = 200,
+  src = '',
+  name = 'Audio',
+  duration,
+  uploadKey,
+}: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  src?: string;
+  name?: string;
+  /** Media length in seconds — set at upload so players need not seek-probe. */
+  duration?: number;
+  uploadKey?: string;
+} = {}) {
+  const id = nanoid(10);
+  const d = Number(duration);
+  const key = String(uploadKey || '').trim();
+  const iw = Math.max(1, Math.round(Number(width) || 360));
+  const ih = Math.max(1, Math.round(Number(height) || 200));
+  const ix = Math.round(Number(x) || 0);
+  const iy = Math.round(Number(y) || 0);
+  return {
+    id,
+    node: {
+      id,
+      key: 'audio',
+      x: ix,
+      y: iy,
+      z: 0,
+      width: iw,
+      height: ih,
+      attrs: {
+        src,
+        name: name || 'Audio',
+        assetKind: 'audio',
+        mode: 'FIT',
+        lockAspect: 'true',
+        audioSpeed: 1,
+        'fill-color': 'var(--surface)',
+        ...(Number.isFinite(d) && d > 0 ? { duration: d } : {}),
+        ...(key ? { uploadKey: key } : {}),
+        radiusTL: 8,
+        radiusTR: 8,
+        radiusBR: 8,
+        radiusBL: 8,
+        radiusLinked: 'true',
+      } as Record<string, unknown>,
+      children: [],
+    },
+  };
+}
+
+/** Turn an audio-generator plate into a normal audio node (same id / selection). */
+export function promoteAudioGeneratorToAudio(
+  doc: any,
+  nodeId: string,
+  {
+    src,
+    width,
+    height,
+    x,
+    y,
+    name,
+    genPrompt,
+    duration,
+    uploadKey,
+  }: {
+    src: string;
+    width?: number;
+    height?: number;
+    x?: number;
+    y?: number;
+    name?: string;
+    genPrompt?: string;
+    duration?: number;
+    uploadKey?: string;
+  }
+) {
+  if (!doc || !nodeId || !src) return doc;
+  const next = normalizeDocument(doc);
+  const node = next.deltaSetLike?.[nodeId];
+  if (!node || node.key !== 'audio') return doc;
+  const attrs = { ...(node.attrs || {}) };
+  delete attrs.audioGenerator;
+  delete attrs.processStatus;
+  delete attrs.processKind;
+  delete attrs.processLabel;
+  delete attrs.processSourceId;
+  delete attrs.processTargetWidth;
+  delete attrs.processTargetHeight;
+  delete attrs.processMeta;
+  attrs.src = src;
+  attrs.assetKind = 'audio';
+  if (attrs.audioSpeed == null) attrs.audioSpeed = 1;
+  attrs['fill-color'] = resolveThemeSurfaceFill(attrs['fill-color'] || attrs.fill);
+  if (name) attrs.name = name;
+  const key = String(uploadKey || '').trim();
+  if (key) attrs.uploadKey = key;
+  const d = Number(duration);
+  if (Number.isFinite(d) && d > 0) attrs.duration = d;
+  const prompt = String(genPrompt || '').trim();
+  if (prompt) attrs.genPrompt = prompt;
+  else delete attrs.genPrompt;
+  node.attrs = attrs;
+  if (width != null) node.width = Math.max(1, Math.round(width));
+  if (height != null) node.height = Math.max(1, Math.round(height));
+  if (x != null) node.x = Math.round(x);
+  if (y != null) node.y = Math.round(y);
+  return next;
 }
 
 /**
@@ -2416,6 +2648,7 @@ export function supportsAspectPresets(node: any) {
     node.key === 'image' ||
     node.key === 'video' ||
     node.key === 'lottie' ||
+    node.key === 'audio' ||
     node.key === 'frame' ||
     node.key === 'svg'
   )
@@ -2441,6 +2674,7 @@ export function supportsFill(node: any) {
     node.key === 'image' ||
     node.key === 'video' ||
     node.key === 'lottie' ||
+    node.key === 'audio' ||
     node.key === 'svg'
   )
     return true;
@@ -2477,6 +2711,7 @@ export function supportsStroke(node: any) {
     node.key === 'image' ||
     node.key === 'video' ||
     node.key === 'lottie' ||
+    node.key === 'audio' ||
     node.key === 'text' ||
     node.key === 'frame' ||
     node.key === 'svg'

@@ -24,9 +24,12 @@ import {
   WorldScreenChromeRoot,
 } from '@/components/rcb/selection/chrome/SelectionToolbarShell';
 import AgentComposerInput, {
+  buildAttachRefMentionContext,
   chipBaseKey,
+  composerAttachmentMediaKind,
   parseAtMentionQuery,
   stripTrailingAtQuery,
+  upsertLibraryAssetAttachment,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -37,6 +40,7 @@ import {
 import MentionAttachPanel, {
   type MentionAttachItem,
 } from '@/components/editor/panels/agent/MentionAttachPanel';
+import type { UserAsset } from '@/apis/assets';
 import { AspectRatioGlyph } from '@/components/editor/panels/agent/ImageAspectRatioPicker';
 import ModelPickerPanel, {
   ModelBrandIcon,
@@ -576,48 +580,30 @@ function VideoGeneratorCard({
   };
 
   const mentionItems = useMemo((): MentionAttachItem[] => {
-    const isVideoAtt = (c: ComposerContext) => {
-      const data = String(c.dataUrl || '');
-      const thumb = String(c.thumbUrl || '');
-      const blob = `${data} ${thumb} ${c.payload || ''}`;
-      if (data.startsWith('data:video/')) return true;
-      if (/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(blob)) return true;
-      if (/\[Canvas video\]/i.test(String(c.payload || ''))) return true;
-      return false;
-    };
-    return attachments.map((c, i) => ({
-      id: c.key,
-      label: isVideoAtt(c)
-        ? t('agent.mentionAttachVideoN', { n: i + 1 })
-        : t('agent.mentionAttachImageN', { n: i + 1 }),
-      ...(c.thumbUrl || c.dataUrl ? { thumbUrl: String(c.thumbUrl || c.dataUrl) } : {}),
-    }));
+    return attachments.map((c, i) => {
+      const kind = composerAttachmentMediaKind(c);
+      return {
+        id: c.key,
+        label:
+          kind === 'video'
+            ? t('agent.mentionAttachVideoN', { n: i + 1 })
+            : t('agent.mentionAttachImageN', { n: i + 1 }),
+        ...(kind === 'image' && (c.thumbUrl || c.dataUrl)
+          ? { thumbUrl: String(c.thumbUrl || c.dataUrl) }
+          : {}),
+      };
+    });
   }, [attachments, t]);
 
-  const pickMentionAttach = (pickId: string) => {
-    const list = contextsRef.current.filter((c) => c.kind === 'attachment');
-    const idx = list.findIndex((c) => c.key === pickId);
-    if (idx < 0) return;
-    const att = list[idx]!;
-    const n = idx + 1;
-    const data = String(att.dataUrl || '');
-    const blob = `${data} ${att.thumbUrl || ''} ${att.payload || ''}`;
-    const isVideo =
-      data.startsWith('data:video/') ||
-      /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(blob) ||
-      /\[Canvas video\]/i.test(String(att.payload || ''));
-    const ctx: ComposerContext = {
-      key: `attach-ref:${chipBaseKey(att.key)}`,
-      label: isVideo
+  const insertMentionFromAttachment = (att: ComposerContext, n: number) => {
+    const kind = composerAttachmentMediaKind(att);
+    const ctx = buildAttachRefMentionContext(
+      att,
+      kind === 'video'
         ? t('agent.mentionAttachVideoN', { n })
         : t('agent.mentionAttachImageN', { n }),
-      kind: 'image',
-      payload: att.payload || `[User attachment ${n}]`,
-      ...(att.dataUrl ? { dataUrl: att.dataUrl } : {}),
-      ...(att.thumbUrl || att.dataUrl
-        ? { thumbUrl: String(att.thumbUrl || att.dataUrl) }
-        : {}),
-    };
+      att.payload || `[User attachment ${n}]`
+    );
     setPrompt(stripTrailingAtQuery(prompt));
     setMentionOpen(false);
     setMentionQuery('');
@@ -625,6 +611,26 @@ function VideoGeneratorCard({
       inputRef.current?.insertContextAtCaret(ctx);
       inputRef.current?.focus();
     });
+  };
+
+  const pickMentionAttach = (pickId: string) => {
+    const list = contextsRef.current.filter((c) => c.kind === 'attachment');
+    const idx = list.findIndex((c) => c.key === pickId);
+    if (idx < 0) return;
+    insertMentionFromAttachment(list[idx]!, idx + 1);
+  };
+
+  const pickMentionLibraryAsset = (asset: UserAsset) => {
+    if (asset.kind !== 'image' && asset.kind !== 'video') return;
+    const upserted = upsertLibraryAssetAttachment(
+      contextsRef.current,
+      asset,
+      asset.kind === 'video' ? t('me.assetKindVideo') : t('me.assetKindImage')
+    );
+    if (!upserted) return;
+    setContexts(upserted.contexts);
+    contextsRef.current = upserted.contexts;
+    insertMentionFromAttachment(upserted.attachment, upserted.ordinal);
   };
 
   const mentionFloating = useFloating({
@@ -1048,6 +1054,8 @@ function VideoGeneratorCard({
               items={mentionItems}
               query={mentionQuery}
               onPick={pickMentionAttach}
+              onPickLibraryAsset={pickMentionLibraryAsset}
+              assetKinds={['image', 'video']}
             />
           </div>
         </FloatingPortal>

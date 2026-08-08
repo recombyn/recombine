@@ -46,6 +46,12 @@ def _mime_for_key(key: str) -> str:
         (".webm", "video/webm"),
         (".mov", "video/quicktime"),
         (".m4v", "video/mp4"),
+        (".mp3", "audio/mpeg"),
+        (".wav", "audio/wav"),
+        (".ogg", "audio/ogg"),
+        (".m4a", "audio/mp4"),
+        (".aac", "audio/aac"),
+        (".flac", "audio/flac"),
     ):
         if lower.endswith(ext):
             return ctype
