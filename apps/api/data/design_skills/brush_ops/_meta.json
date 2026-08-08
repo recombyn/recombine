@@ -1,0 +1,30 @@
+{
+  "skill_key": "brush_ops",
+  "name": "brush_ops",
+  "displayName": "Brush / pencil",
+  "description": "Pressure brush, pencil, and freehand tip-stamp strokes on canvas",
+  "when_to_use": "Brush / pencil / 板绘 / 线稿 / 压感 / freehand illustration strokes (not geometric shape collage)",
+  "category": "draw",
+  "scenes": "all",
+  "sort_weight": 65,
+  "version": "1.0.0",
+  "preferred_tools": [
+    "create_shape",
+    "update_node",
+    "create_frame"
+  ],
+  "allowed_resources": ["tools"],
+  "triggers": [],
+  "mutex_group": "",
+  "prompt_negative": "Do not fake brush work with circle/ellipse piles; do not use C/Q curves when pathPressure tip-stamp is required.",
+  "locales": {
+    "zh-CN": {
+      "displayName": "笔刷 / 铅笔",
+      "description": "压感笔刷、铅笔与自由手绘 tip-stamp 描边"
+    },
+    "en": {
+      "displayName": "Brush / pencil",
+      "description": "Pressure brush, pencil, and freehand tip-stamp strokes"
+    }
+  }
+}

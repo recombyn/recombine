@@ -1,16 +1,8 @@
 # Notices
 
 Recombyn is licensed under the **Recombyn Source Available License v1.0**
-— see [LICENSE](./LICENSE).
-
-Summary (not a substitute for the full license):
-
-- **Personal / private-group self-host**: free under the license terms.
-- **Internal use within a single organization**: permitted.
-- **Hosted / managed service** of Recombyn (or a substantially similar
-  platform) to third parties — paid or free — **requires commercial
-  authorization** from the Licensor (`702680355@qq.com`).
-- Brand / copyright notices must be preserved.
+— see [LICENSE](./LICENSE) for all terms (self-host, commercial hosting,
+white-label, trademark). This file is not a substitute for the license.
 
 This product may bundle or depend on third-party software. Notable runtime
 stacks used in self-hosting docs (each retains its own license):

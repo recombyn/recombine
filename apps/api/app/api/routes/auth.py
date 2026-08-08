@@ -242,11 +242,15 @@ def _user_payload(user: SessionUser) -> dict[str, Any]:
 
 @router.get("/config", response_model=AuthConfigOut)
 def auth_config() -> AuthConfigOut:
+    from app.services.wallet.db import is_wallet_billing_enabled
+
     return AuthConfigOut(
         googleEnabled=bool((settings.google_client_id or "").strip()),
         googleClientId=(settings.google_client_id or "").strip() or None,
         emailEnabled=ses_configured(),
+        billingEnabled=is_wallet_billing_enabled(),
     )
+
 
 
 @router.post("/google", response_model=AuthSessionOut)

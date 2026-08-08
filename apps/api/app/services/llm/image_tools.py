@@ -27,6 +27,15 @@ IMAGE_PROCESS_KINDS = frozenset(
 # Vision split / cutout — not Seedream re-render.
 DECOMPOSE_KINDS = frozenset({"editText", "editElements"})
 CUTOUT_KINDS = frozenset({"removeBg"})
+# Local rembg / OCR decompose — no LLM → never charge platform credits.
+NO_LLM_KINDS = CUTOUT_KINDS | DECOMPOSE_KINDS
+
+
+def uses_llm_for_kind(kind: str | None) -> bool:
+    """True when ``process_image_tool`` will call Seedream / image LLM."""
+    k = (kind or "").strip()
+    return bool(k) and k in IMAGE_PROCESS_KINDS and k not in NO_LLM_KINDS
+
 
 
 def _prompt_for(

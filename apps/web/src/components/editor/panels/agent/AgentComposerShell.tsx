@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode, type Ref, memo } from 'react';
+import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
   FloatingPortal,
@@ -43,6 +44,7 @@ import {
   formatCanvasSizeChipLabel,
   isCanvasSizeAutoHint,
 } from '@/components/editor/chrome/SizePresetPanel';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { cn } from '@/utils/classnames';
 
 /** Run mode — Auto toggle = agent; image/video models still use composerMode for gen UI. */
@@ -1022,6 +1024,7 @@ function AgentComposerShell({
   aspectButtonPlacement = 'start',
 }: Props): ReactNode {
   const { t } = useTranslation();
+  const billingEnabled = useSelector(selectBillingEnabled);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [aspectOpen, setAspectOpen] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
@@ -1518,11 +1521,11 @@ function AgentComposerShell({
                   aria-label={t('agent.stop')}
                   title={t('agent.stop')}
                   onClick={() => onStop?.()}
-                  className={creditSendBtn}
+                  className={billingEnabled ? creditSendBtn : cn(squareSendBtn, 'hover:opacity-90')}
                 >
                   <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
                 </button>
-              ) : (
+              ) : billingEnabled ? (
                 <button
                   type="button"
                   aria-label={t('agent.send')}
@@ -1535,6 +1538,17 @@ function AgentComposerShell({
                 >
                   <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
                   <span className="tabular-nums">{imageModeControls.creditCost}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  aria-label={t('agent.send')}
+                  title={t('agent.send')}
+                  disabled={!canSend}
+                  onClick={onSubmit}
+                  className={cn(squareSendBtn, 'hover:opacity-90 disabled:opacity-35')}
+                >
+                  <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                 </button>
               )}
             </>
@@ -1572,11 +1586,11 @@ function AgentComposerShell({
                   aria-label={t('agent.stop')}
                   title={t('agent.stop')}
                   onClick={() => onStop?.()}
-                  className={creditSendBtn}
+                  className={billingEnabled ? creditSendBtn : cn(squareSendBtn, 'hover:opacity-90')}
                 >
                   <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
                 </button>
-              ) : (
+              ) : billingEnabled ? (
                 <button
                   type="button"
                   aria-label={t('agent.send')}
@@ -1589,6 +1603,17 @@ function AgentComposerShell({
                 >
                   <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
                   <span className="tabular-nums">{videoModeControls.creditCost}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  aria-label={t('agent.send')}
+                  title={t('agent.send')}
+                  disabled={!canSend}
+                  onClick={onSubmit}
+                  className={cn(squareSendBtn, 'hover:opacity-90 disabled:opacity-35')}
+                >
+                  <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                 </button>
               )}
             </>

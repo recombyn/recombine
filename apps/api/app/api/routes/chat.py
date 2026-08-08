@@ -30,9 +30,11 @@ from app.services.wallet.db import (
     get_user_image_credits,
     get_user_plan,
     get_user_tokens,
+    is_wallet_billing_enabled,
     spend_image_credits,
     spend_tokens,
 )
+
 from app.services.wallet.billing import DEFAULT_IMAGE_CREDITS, image_model_credit_cost
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -140,7 +142,7 @@ class VideoGenerateIn(BaseModel):
 
 
 def _charge(user_id: str, amount: int, detail: str) -> None:
-    if _desktop_local():
+    if amount <= 0 or not is_wallet_billing_enabled():
         return
     try:
         spend_tokens(user_id, amount, detail)
@@ -151,7 +153,7 @@ def _charge(user_id: str, amount: int, detail: str) -> None:
 
 
 def _charge_image_credits(user_id: str, amount: int, detail: str) -> None:
-    if _desktop_local():
+    if amount <= 0 or not is_wallet_billing_enabled():
         return
     try:
         spend_image_credits(user_id, amount, detail)
@@ -159,6 +161,8 @@ def _charge_image_credits(user_id: str, amount: int, detail: str) -> None:
         if str(err) == "insufficient_image_credits":
             raise HTTPException(status_code=402, detail="Insufficient credits") from err
         raise HTTPException(status_code=400, detail=str(err)) from err
+
+
 
 
 def _charge_image(
@@ -279,12 +283,21 @@ async def post_message(
             detail="Selected model is an image model. Use POST /api/v1/chat/image instead.",
         )
 
-    _charge(current_user.id, _MESSAGE_TOKEN_COST, "AI chat message")
+    # BYOK / local / wallet-off → no platform credits (upstream uses user's key).
+    msg_cost = (
+        0
+        if (not is_wallet_billing_enabled())
+        or _uses_user_platform_byok(current_user.id, body.model)
+        else _MESSAGE_TOKEN_COST
+    )
+
+    _charge(current_user.id, msg_cost, "AI chat message")
     bind_usage_context(
         user_id=current_user.id,
         source="chat",
-        credits_charged=_MESSAGE_TOKEN_COST,
+        credits_charged=msg_cost,
     )
+
 
     async def event_gen():
         byok_token = set_byok_user_id(current_user.id)
@@ -339,12 +352,20 @@ async def post_agent_turn(
     if mode not in ("turn", "react"):
         raise HTTPException(status_code=400, detail="mode must be turn|react")
 
-    _charge(current_user.id, _AGENT_TOKEN_COST, "AI agent turn")
+    agent_cost = (
+        0
+        if (not is_wallet_billing_enabled())
+        or _uses_user_platform_byok(current_user.id, body.model)
+        else _AGENT_TOKEN_COST
+    )
+
+    _charge(current_user.id, agent_cost, "AI agent turn")
     bind_usage_context(
         user_id=current_user.id,
         source="agent",
-        credits_charged=_AGENT_TOKEN_COST,
+        credits_charged=agent_cost,
     )
+
 
     async def event_gen():
         byok_token = set_byok_user_id(current_user.id)

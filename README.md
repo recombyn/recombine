@@ -102,7 +102,7 @@ apps/web/          React canvas + Agent UI + Yjs client
 apps/api/          FastAPI — Scene, Agent, plaza, wallet, collab tokens
 apps/collab/       Yjs WebSocket server (y-websocket)
 packages/          Shared builders & schemas
-docs/              Architecture + self-hosting + desktop (engineering)
+docs/              self-hosting + desktop (engineering)
 deploy/            Dockerfiles / Nginx
 e2e/               Playwright
 ```
@@ -111,16 +111,13 @@ User-facing help **source** is private; CI publishes only the built static site 
 
 ## Documentation
 
-| Doc | Link |
-|-----|------|
-| Self-hosting | [docs/self-hosting.md](docs/self-hosting.md) |
-| Desktop (Tauri) | [docs/desktop.md](docs/desktop.md) |
-| PostgreSQL switch | [docs/postgres-switch.md](docs/postgres-switch.md) |
-| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Security | [SECURITY.md](SECURITY.md) |
-| Code of Conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
-| Architecture | [docs/architecture.md](docs/architecture.md) |
-| Maintainer OSS checklist | [docs/open-source-checklist.md](docs/open-source-checklist.md) |
+| | |
+|--|--|
+| User docs | [recombyn.github.io/recombyn](https://recombyn.github.io/recombyn/) |
+| Self-host / architecture | [docs/self-hosting.md](docs/self-hosting.md) |
+| Desktop | [docs/desktop.md](docs/desktop.md) |
+| Postgres | [docs/postgres-switch.md](docs/postgres-switch.md) |
+| Contributing · Security · CoC | [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
 
 ## Community
 
@@ -128,27 +125,13 @@ User-facing help **source** is private; CI publishes only the built static site 
 - **PRs** — see [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Security** — report privately per [SECURITY.md](SECURITY.md)
 
-## License & model
+## License
 
 [Recombyn Source Available License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-Source-available terms (not OSI open source):
+Terms (self-host, commercial hosting, white-label / brand) live in **[LICENSE](./LICENSE)** — not OSI open source.
 
-- **Personal / private self-host** — free
-- **Internal org use** — permitted
-- **Hosted / managed service** of Recombyn to third parties (paid or free) — **requires commercial authorization** (`702680355@qq.com`)
-
-### No white-label / impersonation
-
-Learning, personal use, and single-org internal deploy are fine. **Without authorization you may not:**
-
-- Reskin / white-label and sell it as your own product, or mislead users that you built it from scratch
-- Offer Recombyn (or a substantially similar platform) as a public sign-up site / SaaS — paid or free
-- Impersonate the official brand, site, or support (name, logo, domain, etc.)
-
-Official: [recombyn.com](https://recombyn.com) · Help: [docs](https://recombyn.github.io/recombyn/) · Source: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
-
-Report clones or unauthorized hosting to `702680355@qq.com` (include links and screenshots). Full terms: [LICENSE](./LICENSE).
+Official: [recombyn.com](https://recombyn.com) · Docs: [recombyn.github.io/recombyn](https://recombyn.github.io/recombyn/) · Source: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
 
 ## Star us on GitHub ⭐
 

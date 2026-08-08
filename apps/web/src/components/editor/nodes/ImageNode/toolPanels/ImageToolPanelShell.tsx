@@ -1,9 +1,11 @@
 import { memo, type ReactNode } from 'react';
+import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { BiExit } from 'react-icons/bi';
 import { HiOutlineBolt } from 'react-icons/hi2';
 import Slider from '@/components/base/slider';
 import Tooltip from '@/components/base/tooltip';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { cn } from '@/utils/classnames';
 import './imageToolPanel.css';
 
@@ -12,20 +14,22 @@ const panelBtn =
   'inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-xl px-2 text-[12px] font-medium leading-none transition-colors';
 
 /**
- * Image-tool 积分 costs — sync with apps/api/api/v1/image_tools.py `_KIND_CREDIT_COST`.
- * (Wallet image_credits, not LLM tokens.)
+ * Image-tool 积分 costs — sync with apps/api `image_tools.py` `_KIND_CREDIT_COST`.
+ * No LLM (removeBg / editText / editElements / CSS adjust) → 0.
+ * Local desktop / BYOK also skip platform credits on the server.
  */
 export const IMAGE_TOOL_TOKEN_COST = {
   upscale: 20,
-  removeBg: 10,
+  removeBg: 0,
   multiAngle: 30,
   expand: 30,
-  editText: 20,
-  editElements: 30,
+  editText: 0,
+  editElements: 0,
   replaceText: 30,
   vector: 20,
-  adjust: 20,
+  adjust: 0,
 } as const;
+
 
 /** Alias — same map as IMAGE_TOOL_TOKEN_COST. */
 export const IMAGE_TOOL_CREDIT_COST = IMAGE_TOOL_TOKEN_COST;
@@ -125,7 +129,10 @@ function PanelConfirmCost({
   unit?: 'credits' | 'tokens';
 }) {
   const { t } = useTranslation();
+  const billingEnabled = useSelector(selectBillingEnabled);
   const n = Number.isFinite(amount) ? Math.round(amount) : 0;
+  // Billing off, or no-LLM / free tools — don't show a credit chip.
+  if (!billingEnabled || n <= 0) return null;
   const display = String(n);
   const tip =
     unit === 'tokens'
@@ -140,6 +147,7 @@ function PanelConfirmCost({
     </Tooltip>
   );
 }
+
 
 function PanelFooterActions({
   onCancel,

@@ -11,10 +11,11 @@ import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import AgentModelsPanel from '@/components/editor/panels/agent/AgentModelsPanel';
 import AccountProfileTab from '@/components/account/AccountProfileTab';
 import { setSession, type AuthUser } from '@/store/modules/auth';
-import { syncFromServer } from '@/store/modules/wallet';
+import { selectBillingEnabled, syncFromServer } from '@/store/modules/wallet';
 import type { LedgerEntry } from '@/utils/wallet';
 import { getToken } from '@/utils/token';
 import { readReturnToParam } from '@/utils/authReturnTo';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { cn } from '@/utils/classnames';
 
 type AccountTab = 'profile' | 'usage' | 'agent';
@@ -60,15 +61,30 @@ function AccountSettingsPage(): ReactNode {
   const user = useSelector((s: any) => s.auth.user as AuthUser | null);
   const tokens = useSelector((s: any) => s.wallet?.tokens ?? 0);
   const creditsIncluded = useSelector((s: any) => s.wallet?.creditsIncluded ?? 150);
+  const billingEnabled = useSelector(selectBillingEnabled);
+  const hideBillingUi = isDesktopLocal() || !billingEnabled;
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const setTab = (next: AccountTab) => {
+    if (hideBillingUi && next === 'usage') return;
     const from = searchParams.get('from');
     const nextParams = new URLSearchParams();
     if (next !== 'profile') nextParams.set('tab', next);
     if (from) nextParams.set('from', from);
     setSearchParams(nextParams, { replace: true });
   };
+
+  useEffect(() => {
+    if (!hideBillingUi || tab !== 'usage') return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('tab');
+        return next;
+      },
+      { replace: true }
+    );
+  }, [hideBillingUi, tab, setSearchParams]);
 
   useEffect(() => {
     if (!getToken()) return;
@@ -101,6 +117,7 @@ function AccountSettingsPage(): ReactNode {
         dispatch(
           syncFromServer({
             tokens: res.tokens,
+            billingEnabled: res.billingEnabled,
             planId: res.planId,
             planExpiresAt: res.planExpiresAt ?? null,
             planLocked: Boolean(res.planLocked),
@@ -123,7 +140,7 @@ function AccountSettingsPage(): ReactNode {
   const navItems: { id: AccountTab; label: string }[] = [
     { id: 'profile', label: t('account.navProfile') },
     { id: 'agent', label: t('account.navAgent') },
-    { id: 'usage', label: t('account.navUsage') },
+    ...(!hideBillingUi ? [{ id: 'usage' as const, label: t('account.navUsage') }] : []),
   ];
 
   const pageTitle = accountPageTitle(tab, t);
@@ -189,7 +206,7 @@ function AccountSettingsPage(): ReactNode {
             ) : null}
           </header>
 
-          {tab === 'usage' ? <WalletLedgerPanel /> : null}
+          {tab === 'usage' && !hideBillingUi ? <WalletLedgerPanel /> : null}
           {tab === 'agent' ? <AgentModelsPanel /> : null}
           {tab === 'profile' ? (
             <AccountProfileTab

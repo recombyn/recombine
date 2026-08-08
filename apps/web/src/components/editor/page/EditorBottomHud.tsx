@@ -13,10 +13,9 @@ import {
   HiOutlineChevronDown,
   HiOutlineChevronUp,
   HiOutlineMap,
-  HiOutlinePhoto,
   HiOutlineSquare3Stack3D,
 } from 'react-icons/hi2';
-import { LuKeyboard } from 'react-icons/lu';
+import { LuImages, LuKeyboard } from 'react-icons/lu';
 import { Dropdown, Tooltip } from '@/components/base';
 import type { MenuItemType } from '@/components/base';
 import EditorMinimap from '@/components/editor/chrome/EditorMinimap';
@@ -393,7 +392,7 @@ function EditorBottomHud({
                       active={assetsOpen}
                       onClick={() => setAssetsOpen((v) => !v)}
                     >
-                      <HiOutlinePhoto className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                      <LuImages className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
                     </HudBtn>
                     <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
                       <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
@@ -439,7 +438,7 @@ function EditorBottomHud({
                   active={assetsOpen}
                   onClick={() => setAssetsOpen((v) => !v)}
                 >
-                  <HiOutlinePhoto className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
+                  <LuImages className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
                 </HudBtn>
                 <HudBtn tip={t('editor.minimap')} active={minimapOpen} onClick={toggleMinimap}>
                   <HiOutlineMap className={HUD_ICON} strokeWidth={HUD_ICON_STROKE} />
