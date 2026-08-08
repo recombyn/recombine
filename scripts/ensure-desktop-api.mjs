@@ -191,8 +191,12 @@ const isMain =
   Boolean(process.argv[1]) &&
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
-  ensureDesktopApi().catch((err) => {
-    console.error(err?.message || err);
-    process.exit(1);
-  });
+  void (async () => {
+    try {
+      await ensureDesktopApi();
+    } catch (err) {
+      console.error(err?.message || err);
+      process.exit(1);
+    }
+  })();
 }

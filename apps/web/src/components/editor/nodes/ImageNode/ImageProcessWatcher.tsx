@@ -62,13 +62,15 @@ async function persistProcessedSrc(src: string, filename: string): Promise<strin
 }
 
 function refreshWallet(dispatch: (action: unknown) => void) {
-  void fetchWallet()
-    .then((res) => {
+  async function loadWallet() {
+    try {
+      const res = await fetchWallet();
       dispatch(syncFromServer({ tokens: res.tokens }));
-    })
-    .catch(() => {
+    } catch {
       /* ignore wallet refresh errors */
-    });
+    }
+  }
+  void loadWallet();
 }
 
 function processFailMessage(err: any): string {

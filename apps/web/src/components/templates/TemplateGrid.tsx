@@ -9,10 +9,6 @@ import {
 import { RiDeleteBinLine } from 'react-icons/ri';
 import { Button, Dialog, Input, message } from '@/components/base';
 import {
-  fetchMyPlazaSubmissions,
-  type PlazaSubmissionDto,
-} from '@/apis/plaza';
-import {
   removeProjectFromCloud,
   removeProjectsFromCloud,
   renameProjectOnCloud,
@@ -163,6 +159,10 @@ function ProjectBatchBottomBar(props: ProjectBatchControlsProps) {
 const DEFAULT_PROJECTS_GRID =
   'grid w-full grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5';
 
+/**
+ * Projects grid (侧栏「项目」). Data = GET /projects only.
+ * Do NOT call GET /plaza/mine here — that is Me → 已发布 only.
+ */
 function TemplateGrid({
   templates,
   title,
@@ -194,42 +194,14 @@ function TemplateGrid({
 }) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
-  const user = useSelector((s: any) => s.auth?.user);
   const currentId = useSelector((s: any) => s.editor?.currentId as string | null);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [renameTarget, setRenameTarget] = useState<any | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const [plazaByProject, setPlazaByProject] = useState<Record<string, PlazaSubmissionDto>>({});
 
   const handleLoadMore = onLoadMore ?? (() => undefined);
-  const reloadPlaza = async (signal?: { cancelled: boolean }) => {
-    if (!user?.id) {
-      if (!signal?.cancelled) setPlazaByProject({});
-      return;
-    }
-    try {
-      const res = await fetchMyPlazaSubmissions();
-      if (signal?.cancelled) return;
-      const map: Record<string, PlazaSubmissionDto> = {};
-      for (const item of res.items || []) {
-        if (item.projectId) map[item.projectId] = item;
-      }
-      setPlazaByProject(map);
-    } catch {
-      /* ignore — offline / not logged in */
-    }
-  };
-
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void reloadPlaza(signal);
-    return () => {
-      signal.cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when user changes
-  }, [user?.id]);
 
   useEffect(() => {
     const ids = new Set(templates.map((item) => item.id));
@@ -394,7 +366,6 @@ function TemplateGrid({
             item={item}
             selected={selected.includes(item.id)}
             selectMode={selectMode}
-            plazaStatus={plazaByProject[item.id]}
             onToggle={() => toggle(item.id)}
             onRename={() => setRenameTarget(item)}
             onCommitRename={(name) => commitRenameFor(item, name)}

@@ -210,9 +210,11 @@ function SelectionContextToolbar(props: Props): ReactNode {
 
   useEffect(() => {
     let cancelled = false;
-    loadFontCatalog().then(() => {
+    async function loadCatalog() {
+      await loadFontCatalog();
       if (!cancelled) setFontCatalogTick((n) => n + 1);
-    });
+    }
+    void loadCatalog();
     return () => {
       cancelled = true;
     };

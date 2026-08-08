@@ -137,6 +137,7 @@ function AssetPanel({
     [t]
   );
 
+  // Parent mounts AssetPanel only when the assets dock is opened (click).
   useEffect(() => {
     void loadPage(1, true);
   }, [loadPage]);

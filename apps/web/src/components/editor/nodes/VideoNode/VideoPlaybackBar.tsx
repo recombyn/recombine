@@ -148,7 +148,11 @@ async function probeElementDuration(el: HTMLVideoElement): Promise<number> {
       window.setTimeout(done, 600);
     });
     if (!wasPaused) {
-      void el.play()?.catch(() => undefined);
+      try {
+        await el.play();
+      } catch {
+        /* ignore play rejection */
+      }
     }
     if (Number.isFinite(probed) && probed > 0) return probed;
   } catch {
@@ -191,7 +195,14 @@ export function videoMediaFromElement(el: HTMLVideoElement): VideoMediaControl {
     probeDuration: () => probeElementDuration(el),
     isPaused: () => el.paused,
     play: () => {
-      void el.play()?.catch(() => undefined);
+      async function tryPlay() {
+        try {
+          await el.play();
+        } catch {
+          /* ignore play rejection */
+        }
+      }
+      void tryPlay();
     },
     pause: () => el.pause(),
     isMuted: () => el.muted,
@@ -311,12 +322,14 @@ function VideoPlaybackBar({
         setFallbackDuration(live);
       } else {
         probingRef.current = true;
-        void media.probeDuration().then((probed) => {
+        async function probeFallbackDuration() {
+          const probed = await media.probeDuration();
           probingRef.current = false;
           if (cancelled || !(probed > 0)) return;
           setFallbackDuration(probed);
           setCurrent(media.getCurrentTime());
-        });
+        }
+        void probeFallbackDuration();
       }
     }
 

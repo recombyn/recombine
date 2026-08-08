@@ -328,45 +328,59 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
     if (!open) setFlyout(null);
   }, [open]);
 
+  /** One hydrate per account session — reopen avatar menu must not re-hit getMe/wallet. */
+  const accountHydratedForUserRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!user?.id) accountHydratedForUserRef.current = null;
+  }, [user?.id]);
+
   useEffect(() => {
     if (!open || !user || !getToken()) return;
+    if (accountHydratedForUserRef.current === user.id) return;
+    accountHydratedForUserRef.current = user.id;
     let cancelled = false;
-    void getMe()
-      .then((res) => {
+    async function hydrateAccount() {
+      try {
+        const meRes = await getMe();
         if (cancelled || !getToken()) return;
         dispatch(
           setSession({
             user: {
-              id: res.user.id,
-              email: res.user.email,
-              name: res.user.name,
-              avatar: res.user.avatar,
-              provider: res.user.provider,
-              bio: res.user.bio,
-              role: res.user.role,
+              id: meRes.user.id,
+              email: meRes.user.email,
+              name: meRes.user.name,
+              avatar: meRes.user.avatar,
+              provider: meRes.user.provider,
+              bio: meRes.user.bio,
+              role: meRes.user.role,
             },
             token: getToken() || undefined,
           })
         );
-        if (typeof res.tokens === 'number') {
-          dispatch(syncFromServer({ tokens: res.tokens, planId: (res as any).planId }));
+        if (typeof meRes.tokens === 'number') {
+          dispatch(syncFromServer({ tokens: meRes.tokens, planId: (meRes as any).planId }));
         }
-      })
-      .catch(() => undefined);
-    void fetchWallet()
-      .then((res) => {
+      } catch {
+        /* ignore */
+      }
+      try {
+        const walletRes = await fetchWallet();
         if (cancelled || !getToken()) return;
         dispatch(
           syncFromServer({
-            tokens: res.tokens,
-            planId: res.planId,
-            planExpiresAt: res.planExpiresAt ?? null,
-            planLocked: Boolean(res.planLocked),
-            ledger: (res.ledger || []) as LedgerEntry[],
+            tokens: walletRes.tokens,
+            planId: walletRes.planId,
+            planExpiresAt: walletRes.planExpiresAt ?? null,
+            planLocked: Boolean(walletRes.planLocked),
+            ledger: (walletRes.ledger || []) as LedgerEntry[],
           })
         );
-      })
-      .catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    }
+    void hydrateAccount();
     return () => {
       cancelled = true;
     };
@@ -392,7 +406,13 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
     dispatch(clearWallet());
     dispatch(clearProjectsLibrary());
     clearSessionCaches();
-    void logoutRemote().catch(() => undefined);
+    void (async () => {
+      try {
+        await logoutRemote();
+      } catch {
+        /* ignore */
+      }
+    })();
     message.success(t('home.loggedOut'));
     close();
     navigate('/home', { replace: true });

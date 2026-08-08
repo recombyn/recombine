@@ -341,6 +341,8 @@ function HomeTemplateList({
   const [projectsTotal, setProjectsTotal] = useState(0);
   const [projectsLoadingMore, setProjectsLoadingMore] = useState(false);
   const projectsFetchGen = useRef(0);
+  /** Skip re-fetch when toggling Home ↔ Projects; Me/Skills must not pull projects. */
+  const projectsHydratedForUserRef = useRef<string | null>(null);
 
   /** Guest must not stay on Projects / Me — bounce home + open login. */
   useEffect(() => {
@@ -354,9 +356,17 @@ function HomeTemplateList({
     navigate(buildLoginUrl('/home'));
   }, [authed, nav, navigate, setNav]);
 
+  const showAccount = nav === 'account' && Boolean(authed);
+  const showMine = nav === 'mine' && Boolean(authed);
+  const showSkills = nav === 'skills' && Boolean(authed);
+  const showHome = !showAccount && !showMine && !showSkills;
+  /** GET /projects — Home recent + Projects only (never Me / Skills / plaza). */
+  const needsProjectsList = showHome || showMine;
+
   useEffect(() => {
     if (!authed) {
       // Logged out: wipe in-memory library (hydrate([]) can keep currentId rows).
+      projectsHydratedForUserRef.current = null;
       dispatch(clearProjectsLibrary());
       setProjectsReady(true);
       setProjectsPage(1);
@@ -364,6 +374,11 @@ function HomeTemplateList({
       setProjectsTotal(0);
       return;
     }
+    // Me / Skills: do not hit GET /projects.
+    if (!needsProjectsList) return;
+    const hydrateKey = userId || 'authed';
+    if (projectsHydratedForUserRef.current === hydrateKey) return;
+
     let cancelled = false;
     const gen = ++projectsFetchGen.current;
     setProjectsReady(false);
@@ -383,6 +398,7 @@ function HomeTemplateList({
         setProjectsPage(1);
         setProjectsHasMore(Boolean(res.hasMore));
         setProjectsTotal(Number(res.total) || (res.projects || []).length);
+        projectsHydratedForUserRef.current = hydrateKey;
       } catch {
         if (!cancelled && gen === projectsFetchGen.current) {
           dispatch(hydrateRemoteProjects([]));
@@ -393,11 +409,11 @@ function HomeTemplateList({
         if (!cancelled && gen === projectsFetchGen.current) setProjectsReady(true);
       }
     }
-    loadProjects();
+    void loadProjects();
     return () => {
       cancelled = true;
     };
-  }, [authed, dispatch]);
+  }, [authed, dispatch, needsProjectsList, userId]);
 
   const loadMoreProjects = useCallback(() => {
     if (!authed || !projectsHasMore || projectsLoadingMore || !projectsReady) return;
@@ -439,11 +455,6 @@ function HomeTemplateList({
     if (!q) return list;
     return list.filter((item) => (item.name || '').toLowerCase().includes(q));
   }, [templates, query]);
-
-  const showAccount = nav === 'account' && Boolean(authed);
-  const showMine = nav === 'mine' && Boolean(authed);
-  const showSkills = nav === 'skills' && Boolean(authed);
-  const showHome = !showAccount && !showMine && !showSkills;
 
   const homeProjectsLoading = Boolean(authed) && !projectsReady;
   const mineTitle = t('home.mine');
@@ -490,35 +501,31 @@ function HomeTemplateList({
         </main>
       ) : null}
 
-      <main
-        className={cn(
-          'relative min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent',
-          !showHome && 'hidden',
-        )}
-        aria-hidden={!showHome}
-      >
-        <div className="relative mx-auto flex w-full min-w-0 max-w-[1700px] flex-col items-stretch px-5 pb-10 pt-0 sm:px-8 md:px-24 lg:px-[100px] xl:px-[120px]">
-          <HomeHero onSubmit={onAgentSubmit} />
-          <div className="flex flex-col space-y-6 sm:space-y-12">
-            <RecentProjectsSection
-              projects={authed ? ownedProjects : []}
-              loading={homeProjectsLoading}
-              disabled={importing}
-              onCreate={onCreate}
-              onViewAll={() => {
-                if (!authed) {
-                  navigate(buildLoginUrl('/home'));
-                  return;
-                }
-                setNav('mine');
-              }}
-            />
-            {!isDesktopLocal() ? (
-              <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
-            ) : null}
+      {showHome ? (
+        <main className="relative min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent">
+          <div className="relative mx-auto flex w-full min-w-0 max-w-[1700px] flex-col items-stretch px-5 pb-10 pt-0 sm:px-8 md:px-24 lg:px-[100px] xl:px-[120px]">
+            <HomeHero onSubmit={onAgentSubmit} />
+            <div className="flex flex-col space-y-6 sm:space-y-12">
+              <RecentProjectsSection
+                projects={authed ? ownedProjects : []}
+                loading={homeProjectsLoading}
+                disabled={importing}
+                onCreate={onCreate}
+                onViewAll={() => {
+                  if (!authed) {
+                    navigate(buildLoginUrl('/home'));
+                    return;
+                  }
+                  setNav('mine');
+                }}
+              />
+              {!isDesktopLocal() ? (
+                <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
+              ) : null}
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      ) : null}
     </>
   );
 }

@@ -559,16 +559,16 @@ function SvgCanvas({
     (board as any).loadSeq = seq;
     // Drop stale wrappers immediately so in-place preview cannot re-attach detached ghosts.
     board.nodeEls = new Map();
-    loadSceneOntoSvg(board.root, board.layer, document, seq, board as any, {
-      infinite,
-      omitNonExportable,
-    }).then(
-      (map) => {
-        if (loadSeqRef.current !== seq) return;
-        board.nodeEls = map || new Map();
-        onReady?.();
-      }
-    );
+    async function loadScene() {
+      const map = await loadSceneOntoSvg(board.root, board.layer, document, seq, board as any, {
+        infinite,
+        omitNonExportable,
+      });
+      if (loadSeqRef.current !== seq) return;
+      board.nodeEls = map || new Map();
+      onReady?.();
+    }
+    void loadScene();
   }, [document, reloadToken, boardEpoch, onReady, infinite, omitNonExportable]);
 
   useEffect(() => {
@@ -2715,27 +2715,28 @@ function SvgCanvas({
         const frames = Array.isArray(doc?.frames) ? doc.frames : [];
         const frame = frames.find((f: any) => f?.id === exportFrameId);
         if (frame && frame.width > 0 && frame.height > 0) {
-          void exportCropSlots({
-            crop: {
-              x: Number(frame.x) || 0,
-              y: Number(frame.y) || 0,
-              width: Number(frame.width) || 1,
-              height: Number(frame.height) || 1,
-            },
-            backgroundColor: frame.backgroundColor,
-            baseName: String(frame.name || t('editor.pageExportName')),
-            compress: false,
-            document: doc,
-            slots: [
-              {
-                id: 'ctx',
-                scale: 1,
-                affixMode: 'suffix',
-                affix: '',
-                format,
+          async function exportFrame() {
+            const n = await exportCropSlots({
+              crop: {
+                x: Number(frame.x) || 0,
+                y: Number(frame.y) || 0,
+                width: Number(frame.width) || 1,
+                height: Number(frame.height) || 1,
               },
-            ],
-          }).then((n) => {
+              backgroundColor: frame.backgroundColor,
+              baseName: String(frame.name || t('editor.pageExportName')),
+              compress: false,
+              document: doc,
+              slots: [
+                {
+                  id: 'ctx',
+                  scale: 1,
+                  affixMode: 'suffix',
+                  affix: '',
+                  format,
+                },
+              ],
+            });
             if (n > 0) {
               message.success(
                 t(format === 'svg' ? 'editor.exportedSvg' : 'editor.exportedImage')
@@ -2743,7 +2744,8 @@ function SvgCanvas({
             } else {
               message.error(t('editor.exportFailed'));
             }
-          });
+          }
+          void exportFrame();
         }
       }
     }
@@ -2870,16 +2872,20 @@ function SvgCanvas({
           },
         })
       );
-      void registerAsset({
-        kind: 'video',
-        url: String(uploaded.url || '').trim(),
-        objectKey: uploaded.key || null,
-        mime: file.type || 'video/mp4',
-        prompt: prepared.name || null,
-        width,
-        height,
-        source: 'upload',
-      }).catch(() => undefined);
+      try {
+        await registerAsset({
+          kind: 'video',
+          url: String(uploaded.url || '').trim(),
+          objectKey: uploaded.key || null,
+          mime: file.type || 'video/mp4',
+          prompt: prepared.name || null,
+          width,
+          height,
+          source: 'upload',
+        });
+      } catch {
+        /* ignore asset registration errors */
+      }
     } catch (err: any) {
       dispatch(failImageProcess({}));
       const detail = err?.response?.data?.detail || err?.message || '视频上传失败';
@@ -2953,14 +2959,18 @@ function SvgCanvas({
             },
           })
         );
-        void registerAsset({
-          kind: 'audio',
-          url,
-          objectKey: uploaded.key || null,
-          mime: file.type || 'audio/mpeg',
-          prompt: file.name?.replace(/\.[^.]+$/, '') || null,
-          source: 'upload',
-        }).catch(() => undefined);
+        try {
+          await registerAsset({
+            kind: 'audio',
+            url,
+            objectKey: uploaded.key || null,
+            mime: file.type || 'audio/mpeg',
+            prompt: file.name?.replace(/\.[^.]+$/, '') || null,
+            source: 'upload',
+          });
+        } catch {
+          /* ignore asset registration errors */
+        }
       } finally {
         finishNodeUpload(spawnedId);
       }

@@ -205,12 +205,13 @@ function ShareDialog({ open, onClose }: Props) {
 
   const accessLabel = (access: LinkAccess) => t(accessLabelKey(access));
 
-  // Enter Share/Publish: refresh stored collage URLs and pin them to current origin.
+  // Parent mounts this dialog only when Share is opened (click) — hydrate once here.
   useEffect(() => {
-    if (!open || !currentId || !getToken()) return;
+    if (!currentId || !getToken()) return;
     let cancelled = false;
-    void fetchProject(currentId)
-      .then((res) => {
+    async function hydrateProjectThumbnail() {
+      try {
+        const res = await fetchProject(currentId);
         if (cancelled) return;
         const thumbs = normalizeProjectThumbnailUrls(
           res.project?.thumbnailUrl,
@@ -224,31 +225,18 @@ function ShareDialog({ open, onClose }: Props) {
             custom: Boolean(res.project?.thumbnailCustom),
           })
         );
-      })
-      .catch(() => {
+      } catch {
         /* keep in-memory collage if list fetch fails */
-      });
+      }
+    }
+    void hydrateProjectThumbnail();
     return () => {
       cancelled = true;
     };
-  }, [open, currentId, dispatch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- first enter Share panel only
+  }, []);
 
   useEffect(() => {
-    if (!open) {
-      createGenRef.current += 1;
-      createShareInflightRef.current = null;
-      setRecord(null);
-      setBusy(false);
-      setLinkEnabled(true);
-      setTab('share');
-      setPublishPhase('confirm');
-      setPublishing(false);
-      setInviteQuery('');
-      setSearchHits([]);
-      setSelectedInvite(null);
-      noDocWarnedRef.current = false;
-      return;
-    }
     if (!document) {
       createGenRef.current += 1;
       createShareInflightRef.current = null;
@@ -274,8 +262,9 @@ function ShareDialog({ open, onClose }: Props) {
         linkPublic: true,
       });
     }
-    void createShareInflightRef.current
-      .then((res) => {
+    async function createShareRecord() {
+      try {
+        const res = await createShareInflightRef.current!;
         if (createGenRef.current !== gen) return;
         const s = res.share;
         setRecord(s);
@@ -288,43 +277,41 @@ function ShareDialog({ open, onClose }: Props) {
         // Older rows were created with linkPublic:false while the UI still showed
         // "anyone with the link". Promote so Copy link actually works for viewers.
         if (enabled && access !== 'edit' && s.linkPublic === false) {
-          void updateShareMetaApi(s.id, { linkPublic: true })
-            .then((patched) => {
+          void (async () => {
+            try {
+              const patched = await updateShareMetaApi(s.id, { linkPublic: true });
               if (createGenRef.current !== gen) return;
               setRecord(patched.share);
-            })
-            .catch(() => {
+            } catch {
               /* keep local UI; copy still works for owner */
-            });
+            }
+          })();
         }
-      })
-      .catch(() => {
+      } catch {
         if (createGenRef.current !== gen) return;
         createShareInflightRef.current = null;
         setRecord(null);
         setLinkEnabled(false);
         message.error(t('editor.shareCopyFailed'));
-      })
-      .finally(() => {
+      } finally {
         if (createGenRef.current === gen) setBusy(false);
-      });
+      }
+    }
+    void createShareRecord();
     // No cleanup bump — StrictMode remount reuses the same in-flight create.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- first enter Share panel only
+  }, []);
 
   useEffect(() => {
-    if (!open) {
-      setCollaborators([]);
-      return;
-    }
     const ids = [...new Set([...editorIds, ...viewerIds])];
     if (!ids.length) {
       setCollaborators([]);
       return;
     }
     let cancelled = false;
-    void lookupUsersApi({ ids: ids.filter(Boolean).join(',') })
-      .then((res) => {
+    async function loadCollaborators() {
+      try {
+        const res = await lookupUsersApi({ ids: ids.filter(Boolean).join(',') });
         if (cancelled) return;
         const editorSet = new Set(editorIds);
         setCollaborators(
@@ -333,17 +320,18 @@ function ShareDialog({ open, onClose }: Props) {
             role: editorSet.has(u.id) ? ('edit' as const) : ('view' as const),
           }))
         );
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setCollaborators([]);
-      });
+      }
+    }
+    void loadCollaborators();
     return () => {
       cancelled = true;
     };
-  }, [open, editorIds, viewerIds]);
+  }, [editorIds, viewerIds]);
 
+  // Invite search — driven by typing, not by dialog open.
   useEffect(() => {
-    if (!open) return;
     const q = inviteQuery.trim();
     if (searchTimer.current) window.clearTimeout(searchTimer.current);
     if (q.length < 1) {
@@ -353,15 +341,21 @@ function ShareDialog({ open, onClose }: Props) {
     }
     setSearching(true);
     searchTimer.current = window.setTimeout(() => {
-      void searchUsersApi({ q, limit: 12 })
-        .then((res) => setSearchHits(res.items || []))
-        .catch(() => setSearchHits([]))
-        .finally(() => setSearching(false));
+      void (async () => {
+        try {
+          const res = await searchUsersApi({ q, limit: 12 });
+          setSearchHits(res.items || []);
+        } catch {
+          setSearchHits([]);
+        } finally {
+          setSearching(false);
+        }
+      })();
     }, 280);
     return () => {
       if (searchTimer.current) window.clearTimeout(searchTimer.current);
     };
-  }, [inviteQuery, open]);
+  }, [inviteQuery]);
 
   const patchMeta = async (next: {
     permission?: SharePermission;

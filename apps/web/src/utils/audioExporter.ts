@@ -31,10 +31,14 @@ async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance) return ffmpegInstance;
   if (ffmpegLoading) return ffmpegLoading;
 
-  ffmpegLoading = loadFfmpegOnce().catch((err) => {
-    ffmpegInstance = null;
-    throw err;
-  });
+  ffmpegLoading = (async () => {
+    try {
+      return await loadFfmpegOnce();
+    } catch (err) {
+      ffmpegInstance = null;
+      throw err;
+    }
+  })();
 
   try {
     return await ffmpegLoading;

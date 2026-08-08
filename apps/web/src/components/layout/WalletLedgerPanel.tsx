@@ -223,6 +223,7 @@ function WalletLedgerPanel({
     [dispatch]
   );
 
+  // First enter billing — hydrate ledger once; filter changes load via click below.
   useEffect(() => {
     const signal = { cancelled: false };
     setPage(1);
@@ -230,7 +231,8 @@ function WalletLedgerPanel({
     return () => {
       signal.cancelled = true;
     };
-  }, [filter, load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount hydrate only
+  }, [load]);
 
   const filters: { id: Filter; label: string }[] = [
     { id: 'all', label: t('wallet.filterAll') },
@@ -369,10 +371,14 @@ function WalletLedgerPanel({
             <h2 className="text-[15px] font-medium text-[var(--ink)]">
               {t('wallet.usageActivityTitle')}
             </h2>
-            <SegmentedControl
+            <SegmentedControl<Filter>
               aria-label={t('wallet.usageActivityTitle')}
               value={filter}
-              onChange={setFilter}
+              onChange={(next) => {
+                setFilter(next);
+                setPage(1);
+                void load(next, 1);
+              }}
               options={filters.map(({ id, label }) => ({ value: id, label }))}
             />
           </div>

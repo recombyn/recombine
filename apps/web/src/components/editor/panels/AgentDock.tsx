@@ -347,6 +347,11 @@ type FinishAssistant = (
 
 type AgentDockProps = {
   open: boolean;
+  /**
+   * Bump when the user opens the dock (click / shortcut / home boot).
+   * Hydrates catalog+models without `useEffect([open])` refetch on every reopen.
+   */
+  openSignal?: number;
   onClose: () => void;
   className?: string;
   floating?: boolean;
@@ -496,6 +501,7 @@ function interactionModeLabel(
 /** Agent panel: chat + model picker + Agent input. */
 function AgentDock({
   open,
+  openSignal = 0,
   onClose,
   className,
   floating = false,
@@ -654,33 +660,101 @@ function AgentDock({
     if (fid) lastAgentFrameIdRef.current = String(fid);
   }, [sessionId, taskState?.canvas?.last_agent_frame_id]);
 
-  useEffect(() => {
-    void fetchDesignCatalog()
-      .then((cat) => {
+  const catalogInflightRef = useRef<Promise<DesignCatalog | null> | null>(null);
+  const modelsInflightRef = useRef<Promise<LlmModel[]> | null>(null);
+  const skillsInflightRef = useRef<Promise<DesignSkillCard[]> | null>(null);
+  const codingClisInflightRef = useRef<Promise<CodingCliOption[]> | null>(null);
+  const lastHydrateSignalRef = useRef(0);
+
+  const ensureDesignCatalogLoaded = async (): Promise<DesignCatalog | null> => {
+    if (designCatalog) return designCatalog;
+    if (catalogInflightRef.current) return catalogInflightRef.current;
+    const pending = (async () => {
+      try {
+        const cat = await fetchDesignCatalog();
         setDesignCatalog(cat);
         void warmAgentRoutePresetRules(cat.global_rules);
         const keys = (cat.canvas_tools || []).map((t) => t.op_key).filter(Boolean);
         if (keys.length) setAllowedCanvasToolKeys(keys);
-        if (styleGroupId == null && cat.style_groups?.[0]) {
-          setStyleGroupId(cat.style_groups[0].id);
+        setStyleGroupId((prev) => prev ?? cat.style_groups?.[0]?.id ?? null);
+        return cat;
+      } catch {
+        return null;
+      } finally {
+        catalogInflightRef.current = null;
+      }
+    })();
+    catalogInflightRef.current = pending;
+    return pending;
+  };
+
+  const ensureModelsLoaded = async (): Promise<LlmModel[]> => {
+    if (modelsStatus === 'ready') return models;
+    if (modelsInflightRef.current) return modelsInflightRef.current;
+    setModelsStatus('loading');
+    const pending = (async () => {
+      try {
+        const res = await listModels();
+        warmOpenrouterAvailability(res?.openrouterAvailable);
+        const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
+        setModels(list);
+        setModelsStatus('ready');
+        setAvailable(Boolean(res?.available));
+        setModel((prev) => {
+          if (!canPickModel) return planAllowsModelId('free', prev) ? prev : 'auto';
+          if (prev === 'auto') return prev;
+          if (prev && list.some((m) => m.id === prev)) return prev;
+          return 'auto';
+        });
+        if (!res?.available) {
+          message.warning(
+            '未配置 API Key。请在 apps/api/.env 中设置 DEEPSEEK_API_KEY 或 LLM_API_KEY。'
+          );
         }
-      })
-      .catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
-  }, []);
+        return list;
+      } catch (err: any) {
+        setModels([]);
+        setModelsStatus('error');
+        setAvailable(false);
+        message.error(
+          err?.message ||
+            '无法加载模型列表。请先启动后端：npm run dev:api（端口 8000）'
+        );
+        return [] as LlmModel[];
+      } finally {
+        modelsInflightRef.current = null;
+      }
+    })();
+    modelsInflightRef.current = pending;
+    return pending;
+  };
 
-  useEffect(() => {
-    const onWinResize = () => setDockWidth((w) => clampAgentDockWidth(w));
-    window.addEventListener('resize', onWinResize);
-    return () => window.removeEventListener('resize', onWinResize);
-  }, []);
+  const loadSkillCatalog = async (): Promise<DesignSkillCard[]> => {
+    if (skillsInflightRef.current) return skillsInflightRef.current;
+    const pending = (async () => {
+      try {
+        const res = await fetchDesignSkills();
+        const items = res.items || [];
+        setSkillCatalog(items);
+        return items;
+      } catch {
+        setSkillCatalog([]);
+        return [] as DesignSkillCard[];
+      } finally {
+        skillsInflightRef.current = null;
+      }
+    })();
+    skillsInflightRef.current = pending;
+    return pending;
+  };
 
-  useEffect(() => {
-    if (!desktopShell) return;
-    let cancelled = false;
-    void listCodingClisDesktop()
-      .then((rows) => {
-        if (cancelled) return;
+  const ensureCodingClisLoaded = async (): Promise<CodingCliOption[]> => {
+    if (!desktopShell) return [];
+    if (codingClis.length) return codingClis;
+    if (codingClisInflightRef.current) return codingClisInflightRef.current;
+    const pending = (async () => {
+      try {
+        const rows = await listCodingClisDesktop();
         setCodingClis(rows);
         setCodingCliId((prev) => {
           if (prev && rows.some((r) => r.id === prev && r.available)) return prev;
@@ -688,14 +762,29 @@ function AgentDock({
           if (next) persistCodingCliId(next);
           return next;
         });
-      })
-      .catch(() => {
-        if (!cancelled) setCodingClis([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [desktopShell]);
+        return rows;
+      } catch {
+        setCodingClis([]);
+        return [] as CodingCliOption[];
+      } finally {
+        codingClisInflightRef.current = null;
+      }
+    })();
+    codingClisInflightRef.current = pending;
+    return pending;
+  };
+
+  const hydrateDockData = () => {
+    void ensureDesignCatalogLoaded();
+    void ensureModelsLoaded();
+    void ensureCodingClisLoaded();
+  };
+
+  useEffect(() => {
+    const onWinResize = () => setDockWidth((w) => clampAgentDockWidth(w));
+    window.addEventListener('resize', onWinResize);
+    return () => window.removeEventListener('resize', onWinResize);
+  }, []);
 
   useEffect(
     () => () => {
@@ -752,45 +841,20 @@ function AgentDock({
     });
   };
 
+  // UI-only when dock hides — do not fetch here.
   useEffect(() => {
-    if (!open) return;
+    if (!open) setModelPanelOpen(false);
+  }, [open]);
+
+  // openSignal bumped by EditorPage on first enter + each open click / shortcut.
+  useEffect(() => {
+    if (!open || openSignal < 1) return;
+    if (lastHydrateSignalRef.current === openSignal) return;
+    lastHydrateSignalRef.current = openSignal;
     setModelPanelOpen(false);
-    let cancelled = false;
-    setModelsStatus('loading');
-    listModels()
-      .then((res) => {
-        if (cancelled) return;
-        warmOpenrouterAvailability(res?.openrouterAvailable);
-        const list = normalizeModelList(res?.models, res?.imageModels, res?.videoModels);
-        setModels(list);
-        setModelsStatus('ready');
-        setAvailable(Boolean(res?.available));
-        setModel((prev) => {
-          if (!canPickModel) return planAllowsModelId('free', prev) ? prev : 'auto';
-          if (prev === 'auto') return prev;
-          if (prev && list.some((m) => m.id === prev)) return prev;
-          return 'auto';
-        });
-        if (!res?.available) {
-          message.warning(
-            '未配置 API Key。请在 apps/api/.env 中设置 DEEPSEEK_API_KEY 或 LLM_API_KEY。'
-          );
-        }
-      })
-      .catch((err: any) => {
-        if (cancelled) return;
-        setModels([]);
-        setModelsStatus('error');
-        setAvailable(false);
-        message.error(
-          err?.message ||
-            '无法加载模型列表。请先启动后端：npm run dev:api（端口 8000）'
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, canPickModel]);
+    hydrateDockData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- signal-driven hydrate; loaders short-circuit when ready
+  }, [open, openSignal]);
 
   useEffect(() => {
     if (canPickModel) return;
@@ -1185,7 +1249,13 @@ function AgentDock({
     if (opts?.purgeUploads) {
       for (const c of contextChips) {
         if (c.kind === 'attachment' && c.uploadKey) {
-          void deleteUploadedFile(c.uploadKey).catch(() => {});
+          void (async () => {
+            try {
+              await deleteUploadedFile(c.uploadKey);
+            } catch {
+              /* ignore */
+            }
+          })();
         }
       }
     }
@@ -1201,7 +1271,13 @@ function AgentDock({
       pinnedContextKeysRef.current.delete(c.key);
       contextDismissedKeyRef.current = c.key;
       if (c.kind === 'attachment' && c.uploadKey) {
-        void deleteUploadedFile(c.uploadKey).catch(() => {});
+        void (async () => {
+          try {
+            await deleteUploadedFile(c.uploadKey);
+          } catch {
+            /* ignore */
+          }
+        })();
       }
     }
     setContextChips(next);
@@ -1345,7 +1421,13 @@ function AgentDock({
           setContextChips((prev) => {
             if (!prev.some((c) => c.key === key)) {
               if (uploaded.uploadKey) {
-                void deleteUploadedFile(uploaded.uploadKey).catch(() => {});
+                void (async () => {
+                  try {
+                    await deleteUploadedFile(uploaded.uploadKey);
+                  } catch {
+                    /* ignore */
+                  }
+                })();
               }
               return prev;
             }
@@ -1589,13 +1671,24 @@ function AgentDock({
     const tid = liveDesignTaskRef.current;
     pauseRequestedRef.current = true;
     if (tid) {
-      void pauseDesignRun(tid).catch(() => undefined);
+      void (async () => {
+        try {
+          await pauseDesignRun(tid);
+        } catch {
+          /* ignore */
+        }
+      })();
     }
     abortRef.current?.abort();
     if (desktopShell && engineMode === 'cli') {
-      void import('@tauri-apps/api/core')
-        .then(({ invoke }) => invoke('kill_coding_cli'))
-        .catch(() => undefined);
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('kill_coding_cli');
+        } catch {
+          /* ignore */
+        }
+      })();
     }
     dispatch(setAgentBusy(false));
     setSending(false);
@@ -2649,9 +2742,14 @@ function AgentDock({
   const handleHeaderClose = () => {
     abortRef.current?.abort();
     if (desktopShell && engineMode === 'cli') {
-      void import('@tauri-apps/api/core')
-        .then(({ invoke }) => invoke('kill_coding_cli'))
-        .catch(() => undefined);
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('kill_coding_cli');
+        } catch {
+          /* ignore */
+        }
+      })();
     }
     dispatch(setAgentBusy(false));
     setSending(false);
@@ -2700,6 +2798,7 @@ function AgentDock({
       setMentionQuery('');
       setSkillQuery(slash.query);
       setSkillPanelOpen(true);
+      void loadSkillCatalog();
       return;
     }
     if (at.open) {
@@ -2740,21 +2839,6 @@ function AgentDock({
       ...(s.logo ? { thumbUrl: s.logo } : {}),
     }));
   }, [skillCatalog, t]);
-
-  useEffect(() => {
-    if (!skillPanelOpen) return;
-    let cancelled = false;
-    void fetchDesignSkills()
-      .then((res) => {
-        if (!cancelled) setSkillCatalog(res.items || []);
-      })
-      .catch(() => {
-        if (!cancelled) setSkillCatalog([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [skillPanelOpen]);
 
   const insertMentionAttachChip = (att: ComposerContext, ordinal: number) => {
     const kind = composerAttachmentMediaKind(att);
@@ -2895,6 +2979,7 @@ function AgentDock({
     onOpenChange: (open) => {
       setSkillPanelOpen(open);
       if (!open) setSkillQuery('');
+      else void loadSkillCatalog();
     },
     placement: 'bottom-start',
     strategy: 'fixed',
@@ -3025,11 +3110,14 @@ function AgentDock({
       }
       setModelPanelOpen(next);
     },
-    panel: (
+    // Dropdown keeps portal mounted when closed — only mount prefs (catalog/models) when open.
+    panel: modelPanelOpen ? (
       <AgentRoutePrefsEditor
         compact
         modeLabel={interactionModeLabel(interactionMode, t)}
       />
+    ) : (
+      <span className="hidden" aria-hidden />
     ),
     icon: <HiOutlineBookOpen className="h-4 w-4 shrink-0" strokeWidth={1.75} />,
   };

@@ -100,15 +100,15 @@ function request<T = unknown>(config: CustomAxiosRequestConfig): Promise<T> {
     }
     const existing = inflightGets.get(key);
     if (existing) return existing as Promise<T>;
-    const pending = http
-      .request<any, T>(config)
-      .then((data) => {
+    const pending = (async () => {
+      try {
+        const data = await http.request<any, T>(config);
         recentGets.set(key, { expires: Date.now() + RECENT_GET_TTL_MS, value: data });
         return data;
-      })
-      .finally(() => {
+      } finally {
         if (inflightGets.get(key) === pending) inflightGets.delete(key);
-      });
+      }
+    })();
     inflightGets.set(key, pending);
     return pending;
   }

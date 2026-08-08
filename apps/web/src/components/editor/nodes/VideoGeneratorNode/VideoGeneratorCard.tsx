@@ -445,18 +445,20 @@ function VideoGeneratorCard({
   useEffect(() => {
     let cancelled = false;
     setModelsStatus('loading');
-    listModels()
-      .then((res) => {
+    async function loadModels() {
+      try {
+        const res = await listModels();
         if (cancelled) return;
         const unique = buildVideoGeneratorModelList(res);
         setModels(unique);
         setModelsStatus('ready');
         const nextId = nextVideoModelId(unique, modelId);
         if (nextId) setModelId(nextId);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setModelsStatus('error');
-      });
+      }
+    }
+    void loadModels();
     return () => {
       cancelled = true;
       abortRef.current?.abort();

@@ -27,9 +27,14 @@ function isTauriShell(): boolean {
 /** Match Windows/macOS title-bar chrome to the app theme (Tauri only). */
 function syncDesktopWindowTheme(resolved: 'light' | 'dark') {
   if (!isTauriShell()) return;
-  void import('@tauri-apps/api/window')
-    .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(resolved))
-    .catch(() => undefined);
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().setTheme(resolved);
+    } catch {
+      /* ignore */
+    }
+  })();
 }
 
 /** Apply resolved theme via data-theme (CSS files own the tokens). */

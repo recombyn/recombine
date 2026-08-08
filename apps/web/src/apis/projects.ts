@@ -67,7 +67,10 @@ export function invalidateProjectsListCache() {
   _projectsPage1Cache = null;
 }
 
-export const fetchProjects = (params: { page: number; pageSize: number }) => {
+export async function fetchProjects(params: {
+  page: number;
+  pageSize: number;
+}): Promise<PaginatedProjects> {
   const key = `${params.page}:${params.pageSize}`;
   if (
     params.page === 1 &&
@@ -75,19 +78,18 @@ export const fetchProjects = (params: { page: number; pageSize: number }) => {
     _projectsPage1Cache.key === key &&
     Date.now() - _projectsPage1Cache.at < PROJECTS_LIST_TTL_MS
   ) {
-    return Promise.resolve(_projectsPage1Cache.data);
+    return _projectsPage1Cache.data;
   }
-  return request<PaginatedProjects>({
+  const data = await request<PaginatedProjects>({
     url: '/api/v1/projects',
     method: 'get',
     params,
-  }).then((data) => {
-    if (params.page === 1) {
-      _projectsPage1Cache = { key, at: Date.now(), data };
-    }
-    return data;
   });
-};
+  if (params.page === 1) {
+    _projectsPage1Cache = { key, at: Date.now(), data };
+  }
+  return data;
+}
 
 export const fetchProject = (id: string) =>
   request<{ project: ProjectDto }>({
@@ -95,52 +97,54 @@ export const fetchProject = (id: string) =>
     method: 'get',
   });
 
-export const upsertProjectApi = (
+export async function upsertProjectApi(
   data: UpsertProjectBody,
   headers?: Record<string, string>
-) =>
-  request<{ project: ProjectSummaryDto }>({
+): Promise<{ project: ProjectSummaryDto }> {
+  const res = await request<{ project: ProjectSummaryDto }>({
     url: '/api/v1/projects',
     method: 'put',
     headers,
     data,
-  }).then((res) => {
-    invalidateProjectsListCache();
-    return res;
   });
+  invalidateProjectsListCache();
+  return res;
+}
 
 /** Node-level incremental sync — server merges under the same revision lock. */
-export const patchProjectApi = (
+export async function patchProjectApi(
   id: string,
   data: PatchProjectBody,
   headers?: Record<string, string>
-) =>
-  request<{ project: ProjectSummaryDto }>({
+): Promise<{ project: ProjectSummaryDto }> {
+  const res = await request<{ project: ProjectSummaryDto }>({
     url: `/api/v1/projects/${encodeURIComponent(id)}`,
     method: 'patch',
     headers,
     data,
-  }).then((res) => {
-    invalidateProjectsListCache();
-    return res;
   });
+  invalidateProjectsListCache();
+  return res;
+}
 
-export const deleteProjectApi = (id: string) =>
-  request<{ ok: boolean }>({
+export async function deleteProjectApi(id: string): Promise<{ ok: boolean }> {
+  const res = await request<{ ok: boolean }>({
     url: `/api/v1/projects/${encodeURIComponent(id)}`,
     method: 'delete',
-  }).then((res) => {
-    invalidateProjectsListCache();
-    return res;
   });
+  invalidateProjectsListCache();
+  return res;
+}
 
 /** Batch delete — one request for many project ids. */
-export const deleteProjectsApi = (ids: string[]) =>
-  request<{ ok: boolean; deleted: number }>({
+export async function deleteProjectsApi(
+  ids: string[]
+): Promise<{ ok: boolean; deleted: number }> {
+  const res = await request<{ ok: boolean; deleted: number }>({
     url: '/api/v1/projects/batch-delete',
     method: 'post',
     data: { ids },
-  }).then((res) => {
-    invalidateProjectsListCache();
-    return res;
   });
+  invalidateProjectsListCache();
+  return res;
+}

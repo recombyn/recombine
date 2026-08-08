@@ -325,14 +325,16 @@ function ColorPanel({
               type="button"
               aria-label={'取色'}
               onClick={() => {
-                void pickScreenColor().then((picked) => {
+                async function pickColor() {
+                  const picked = await pickScreenColor();
                   if (!picked) return;
                   const next = normalizeHex(picked, solidHex);
                   onChange(next);
                   setHsv(rgbToHsv(hexToRgba(next)));
                   setDraft(next.replace(/^#/, ''));
                   if (showAlpha && opacityPct === 0) setOpacity(100);
-                });
+                }
+                void pickColor();
               }}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-[var(--accent-soft)] text-[var(--muted)] hover:text-[var(--ink)]"
             >

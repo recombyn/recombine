@@ -116,18 +116,20 @@ function VideoQuickEditComposer({
 
   useEffect(() => {
     let cancelled = false;
-    void listModels()
-      .then((res) => {
+    async function loadModels() {
+      try {
+        const res = await listModels();
         if (cancelled) return;
         const list = buildVideoModelList(res);
         setModels(list);
         if (list.length && !list.some((m) => m.id === modelId)) {
           setModelId(list[0]!.id);
         }
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setModels([]);
-      });
+      }
+    }
+    void loadModels();
     return () => {
       cancelled = true;
     };

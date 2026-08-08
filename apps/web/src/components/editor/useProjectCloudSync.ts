@@ -61,10 +61,21 @@ export type FlushProjectOptions = {
 export function flushCurrentProjectNow(opts?: FlushProjectOptions): Promise<void> {
   const run = flushRunner;
   if (!run) return flushChain;
-  const next = flushChain.then(() => run(opts));
+  const next = (async () => {
+    await flushChain;
+    await run(opts);
+  })();
   // Keep the queue alive even if one pass fails.
-  flushChain = next.catch(() => {});
-  return next.then(() => undefined);
+  flushChain = (async () => {
+    try {
+      await next;
+    } catch {
+      /* ignore */
+    }
+  })();
+  return (async () => {
+    await next;
+  })();
 }
 
 /** Multi-tab / stale client lost the race — server document is newer. */
@@ -642,7 +653,12 @@ export function useProjectCloudSync() {
         }
       } catch (err) {
         if (err instanceof ProjectRevisionConflictError) {
-          const local = await getProjectDraft(id).catch(() => null);
+          let local = null;
+          try {
+            local = await getProjectDraft(id);
+          } catch {
+            local = null;
+          }
           const localNewer =
             Boolean(local?.document) &&
             !local?.syncedAt &&

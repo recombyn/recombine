@@ -34,48 +34,47 @@ export function invalidateMyLikedIdsCache() {
   _likedIdsCache = null;
 }
 
-export const fetchMyLikedIds = () => {
+export async function fetchMyLikedIds(): Promise<{ ids: string[] }> {
   if (_likedIdsCache && Date.now() - _likedIdsCache.at < LIKED_IDS_TTL_MS) {
-    return Promise.resolve(_likedIdsCache.data);
+    return _likedIdsCache.data;
   }
-  return request<{ ids: string[] }>({
+  const data = await request<{ ids: string[] }>({
     url: '/api/v1/me/liked/ids',
     method: 'get',
     skipInflightDedupe: true,
-  }).then((data) => {
-    _likedIdsCache = { at: Date.now(), data };
-    return data;
   });
-};
+  _likedIdsCache = { at: Date.now(), data };
+  return data;
+}
 
-export const likePlazaItem = (submissionId: string) =>
-  request<{ ok: boolean; liked: boolean; id: string; likeCount?: number }>({
+export async function likePlazaItem(submissionId: string) {
+  const data = await request<{ ok: boolean; liked: boolean; id: string; likeCount?: number }>({
     url: `/api/v1/me/liked/${encodeURIComponent(submissionId)}`,
     method: 'put',
-  }).then((data) => {
-    invalidateMyLikedIdsCache();
-    return data;
   });
+  invalidateMyLikedIdsCache();
+  return data;
+}
 
-export const unlikePlazaItem = (submissionId: string) =>
-  request<{ ok: boolean; liked: boolean; id: string; likeCount?: number }>({
+export async function unlikePlazaItem(submissionId: string) {
+  const data = await request<{ ok: boolean; liked: boolean; id: string; likeCount?: number }>({
     url: `/api/v1/me/liked/${encodeURIComponent(submissionId)}`,
     method: 'delete',
-  }).then((data) => {
-    invalidateMyLikedIdsCache();
-    return data;
   });
+  invalidateMyLikedIdsCache();
+  return data;
+}
 
 /** Migrate legacy localStorage like ids → server. */
-export const syncMyLiked = (ids: string[]) =>
-  request<{ ok: boolean; ids: string[] }>({
+export async function syncMyLiked(ids: string[]) {
+  const data = await request<{ ok: boolean; ids: string[] }>({
     url: '/api/v1/me/liked/sync',
     method: 'post',
     data: { ids },
-  }).then((data) => {
-    invalidateMyLikedIdsCache();
-    return data;
   });
+  invalidateMyLikedIdsCache();
+  return data;
+}
 
 /** BYOK provider vault — list never includes plaintext apiKey. */
 export type ByokProviderDto = {
@@ -91,14 +90,16 @@ export type ByokProviderDto = {
   updatedAt?: number;
 };
 
-export const fetchByokProviders = () =>
-  request<{ items: ByokProviderDto[] }>({
+export async function fetchByokProviders(): Promise<ByokProviderDto[]> {
+  const data = await request<{ items: ByokProviderDto[] }>({
     url: '/api/v1/me/byok/providers',
     method: 'get',
     skipInflightDedupe: true,
-  }).then((data) => data.items || []);
+  });
+  return data.items || [];
+}
 
-export const upsertByokProvider = (body: {
+export async function upsertByokProvider(body: {
   id?: string;
   name: string;
   website?: string;
@@ -106,12 +107,14 @@ export const upsertByokProvider = (body: {
   apiModel: string;
   modelKind?: string;
   apiKey?: string;
-}) =>
-  request<{ item: ByokProviderDto }>({
+}): Promise<ByokProviderDto> {
+  const data = await request<{ item: ByokProviderDto }>({
     url: '/api/v1/me/byok/providers',
     method: 'put',
     data: body,
-  }).then((data) => data.item);
+  });
+  return data.item;
+}
 
 export const deleteByokProvider = (providerId: string) =>
   request<{ ok: boolean }>({

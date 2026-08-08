@@ -157,8 +157,9 @@ function AudioQuickEditComposer({
 
   useEffect(() => {
     let cancelled = false;
-    void listModels()
-      .then((res) => {
+    async function loadModels() {
+      try {
+        const res = await listModels();
         if (cancelled) return;
         const list = buildAudioModelList(res);
         setModels(list);
@@ -167,10 +168,11 @@ function AudioQuickEditComposer({
             (!isDesktopLocal() && list.find((m) => m.id === DEFAULT_AUDIO_MODEL_ID)) || list[0];
           if (preferred) setModelId(preferred.id);
         }
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setModels([]);
-      });
+      }
+    }
+    void loadModels();
     return () => {
       cancelled = true;
     };

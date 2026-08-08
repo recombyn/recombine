@@ -17,7 +17,7 @@ import VideoPlaybackBar, {
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import './VideoJsPlayer.css';
 
-/** Local `/api/v1/uploads/…` / bare storage keys need Bearer — `<video src>` cannot send it. */
+/** Upload files are public-read — use plain <video src>. */
 function videoSrcNeedsAuthFetch(src: string, uploadKey?: string | null): boolean {
   const s = String(src || '').trim();
   if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
@@ -83,18 +83,20 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
       return;
     }
     let cancelled = false;
-    void imageSrcToFile(s, 'play.mp4', { uploadKey })
-      .then((file) => {
+    async function resolvePlaySrc() {
+      try {
+        const file = await imageSrcToFile(s, 'play.mp4', { uploadKey });
         if (cancelled) return;
         const next = URL.createObjectURL(file);
         if (blobRef.current) URL.revokeObjectURL(blobRef.current);
         blobRef.current = next;
         cacheKeyRef.current = cacheKey;
         setPlaySrc(next);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[video] auth src resolve failed', err);
-      });
+      }
+    }
+    void resolvePlaySrc();
     return () => {
       cancelled = true;
     };
@@ -320,7 +322,14 @@ function VideoJsPlayer({
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !autoplay) return;
-    void el.play()?.catch(() => undefined);
+    async function tryAutoplay() {
+      try {
+        await el.play();
+      } catch {
+        /* ignore autoplay rejection */
+      }
+    }
+    void tryAutoplay();
   }, [autoplay, playable]);
 
   useEffect(() => {

@@ -175,18 +175,20 @@ function ImageQuickEditComposer({
   useEffect(() => {
     let cancelled = false;
     setModelsStatus('loading');
-    void listModels()
-      .then((res) => {
+    async function loadModels() {
+      try {
+        const res = await listModels();
         if (cancelled) return;
         const imgs = buildImageGeneratorModelList(res);
         setModels(imgs);
         setModelsStatus('ready');
         const nextId = nextQuickEditImageModelId(imgs, modelId, canPickModel);
         if (nextId) setModelId(nextId);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setModelsStatus('error');
-      });
+      }
+    }
+    void loadModels();
     return () => {
       cancelled = true;
     };

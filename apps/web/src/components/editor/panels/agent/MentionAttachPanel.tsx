@@ -172,17 +172,18 @@ function MentionAttachPanel({
     setAssetsLoading(true);
     const kindFilter: AssetKind | null =
       assetKinds?.length === 1 ? assetKinds[0]! : null;
-    void listAssets({ page: 1, pageSize: 48, kind: kindFilter })
-      .then((res) => {
+    async function loadLibraryAssets() {
+      try {
+        const res = await listAssets({ page: 1, pageSize: 48, kind: kindFilter });
         if (cancelled) return;
         setLibraryAssets((res.items || []).filter((a) => isAllowedAsset(a, assetKinds)));
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setLibraryAssets([]);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setAssetsLoading(false);
-      });
+      }
+    }
+    void loadLibraryAssets();
     return () => {
       cancelled = true;
     };

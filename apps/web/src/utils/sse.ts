@@ -54,7 +54,12 @@ export async function sse(config: SseConfig): Promise<void> {
   }
 
   if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => '');
+    let detail = '';
+    try {
+      detail = await res.text();
+    } catch {
+      detail = '';
+    }
     config.onerror?.(new Error(detail || `SSE HTTP ${res.status}`));
     return;
   }

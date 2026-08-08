@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
+import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlinePlus, HiOutlineQuestionMarkCircle } from 'react-icons/hi2';
 import { Button, Dialog, message, Switch, Tooltip } from '@/components/base';
@@ -24,6 +25,50 @@ import { cn } from '@/utils/classnames';
 /** Skills toolbox — same scale as Me / projects: 2 → 3 → 4 → 5 (2xl). */
 const DEFAULT_SKILL_GRID =
   'grid w-full grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5';
+
+/**
+ * Session cache — HomeBody unmounts this panel when leaving Skills, so without a
+ * cache every sidebar click remounts and re-hits manage. Same idea as projects hydrate.
+ */
+type SkillsSessionCache = {
+  userId: string | null;
+  mine: DesignSkillCard[];
+  official: DesignSkillCard[];
+};
+
+let skillsSessionCache: SkillsSessionCache | null = null;
+let skillsSessionInflight: Promise<SkillsSessionCache> | null = null;
+
+async function loadSkillsManageOnce(userId: string | null): Promise<SkillsSessionCache> {
+  if (skillsSessionCache && skillsSessionCache.userId === userId) {
+    return skillsSessionCache;
+  }
+  if (skillsSessionInflight) return skillsSessionInflight;
+  skillsSessionInflight = (async () => {
+    try {
+      const res = await fetchDesignSkills({ manage: true });
+      const items = res.items || [];
+      const next: SkillsSessionCache = {
+        userId,
+        mine: items.filter((x) => x.mine),
+        official: items.filter((x) => !x.mine),
+      };
+      skillsSessionCache = next;
+      return next;
+    } finally {
+      skillsSessionInflight = null;
+    }
+  })();
+  return skillsSessionInflight;
+}
+
+function rememberSkillsSession(
+  userId: string | null,
+  mine: DesignSkillCard[],
+  official: DesignSkillCard[]
+) {
+  skillsSessionCache = { userId, mine, official };
+}
 
 /** Loading placeholders only — not real totals (API count unknown until fetch). */
 const SKILL_SKELETON_MINE = 1;
@@ -259,12 +304,15 @@ function upsertMineCard(rows: DesignSkillCard[], card: DesignSkillCard): DesignS
  */
 function SkillsLibraryPanel(): ReactNode {
   const { t, i18n } = useTranslation();
+  const userId = useSelector((s: any) => (s.auth?.user?.id as string | undefined) || null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingFileRef = useRef<File | null>(null);
-  const [mine, setMine] = useState<DesignSkillCard[]>([]);
-  const [official, setOfficial] = useState<DesignSkillCard[]>([]);
-  const [loadingMine, setLoadingMine] = useState(true);
-  const [loadingOfficial, setLoadingOfficial] = useState(true);
+  const cached =
+    skillsSessionCache && skillsSessionCache.userId === userId ? skillsSessionCache : null;
+  const [mine, setMine] = useState<DesignSkillCard[]>(() => cached?.mine || []);
+  const [official, setOfficial] = useState<DesignSkillCard[]>(() => cached?.official || []);
+  const [loadingMine, setLoadingMine] = useState(() => !cached);
+  const [loadingOfficial, setLoadingOfficial] = useState(() => !cached);
   const [scanning, setScanning] = useState(false);
   const [overwrite, setOverwrite] = useState<DesignSkillImportExisting | null>(null);
   const [preview, setPreview] = useState<DesignSkillCard | null>(null);
@@ -273,26 +321,34 @@ function SkillsLibraryPanel(): ReactNode {
     setLoadingMine(true);
     try {
       const res = await fetchDesignSkills({ mine: true });
-      setMine(res.items || []);
+      const nextMine = res.items || [];
+      setMine(nextMine);
+      rememberSkillsSession(userId, nextMine, official);
     } catch {
       message.error(t('agent.requestFailed'));
     } finally {
       setLoadingMine(false);
     }
-  }, [t]);
+  }, [t, userId, official]);
 
-  /** One manage fetch fills both sections — avoids design rate-limit (20/min). */
+  /** First enter Skills — one manage fetch; reopen uses session cache (like Home projects). */
   useEffect(() => {
     let cancelled = false;
-    setLoadingMine(true);
-    setLoadingOfficial(true);
-    async function loadSkills() {
+    async function hydrateSkills() {
+      if (skillsSessionCache && skillsSessionCache.userId === userId) {
+        setMine(skillsSessionCache.mine);
+        setOfficial(skillsSessionCache.official);
+        setLoadingMine(false);
+        setLoadingOfficial(false);
+        return;
+      }
+      setLoadingMine(true);
+      setLoadingOfficial(true);
       try {
-        const res = await fetchDesignSkills({ manage: true });
+        const data = await loadSkillsManageOnce(userId);
         if (cancelled) return;
-        const items = res.items || [];
-        setMine(items.filter((x) => x.mine));
-        setOfficial(items.filter((x) => !x.mine));
+        setMine(data.mine);
+        setOfficial(data.official);
       } catch {
         if (!cancelled) message.error(t('agent.requestFailed'));
       } finally {
@@ -302,13 +358,17 @@ function SkillsLibraryPanel(): ReactNode {
         }
       }
     }
-    loadSkills();
+    void hydrateSkills();
     return () => {
       cancelled = true;
     };
-    // Mount-only: do not re-fetch when `t` identity changes (HMR / i18n).
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
-  }, []);
+  }, [userId, t]);
+
+  // Keep session cache in sync after toggles / import / delete (so reopen stays fresh).
+  useEffect(() => {
+    if (loadingMine || loadingOfficial) return;
+    rememberSkillsSession(userId, mine, official);
+  }, [userId, mine, official, loadingMine, loadingOfficial]);
 
   const patchMineFromImport = useCallback((card: DesignSkillCard | null | undefined) => {
     if (!card?.id) {

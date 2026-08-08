@@ -167,15 +167,17 @@ function useAuthMediaSrc(
     }
     let cancelled = false;
     let blobUrl: string | null = null;
-    void imageSrcToFile(url, fileName, { uploadKey })
-      .then((file) => {
+    async function loadSrc() {
+      try {
+        const file = await imageSrcToFile(url, fileName, { uploadKey });
         if (cancelled) return;
         blobUrl = URL.createObjectURL(file);
         setSrc(blobUrl);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setSrc('');
-      });
+      }
+    }
+    void loadSrc();
     return () => {
       cancelled = true;
       if (blobUrl) URL.revokeObjectURL(blobUrl);

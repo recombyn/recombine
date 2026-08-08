@@ -313,8 +313,9 @@ function SharePage() {
     setForbidden(false);
     setRecord(null);
     docFingerprintRef.current = '';
-    void fetchShareApi(shareId)
-      .then((res) => {
+    async function loadShare() {
+      try {
+        const res = await fetchShareApi(shareId);
         if (cancelled) return;
         const s = res.share;
         if (!s) {
@@ -341,13 +342,14 @@ function SharePage() {
         dispatch(setSelectedNodeIds([]));
         dispatch(setWorkspaceMode('dev'));
         dispatch(setActiveTool('select'));
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) {
           setMissing(true);
           setRecord(null);
         }
-      });
+      }
+    }
+    void loadShare();
     return () => {
       cancelled = true;
     };
@@ -364,19 +366,23 @@ function SharePage() {
     if (!shareId || !record?.viewerCanView || missing || forbidden) return undefined;
     if (record.permission === 'edit' && record.viewerCanEdit) return undefined;
     let cancelled = false;
+    async function pollShare() {
+      try {
+        const res = await fetchShareApi(shareId);
+        if (cancelled) return;
+        const s = res.share;
+        if (!s?.viewerCanView || !s.document) return;
+        const fp = shareDocumentFingerprint(s.document);
+        if (!fp || fp === docFingerprintRef.current) return;
+        docFingerprintRef.current = fp;
+        setRecord(s);
+        dispatch(applyCollabDocument(documentForSharePreview(normalizeDocument(s.document))));
+      } catch {
+        /* ignore */
+      }
+    }
     const poll = () => {
-      void fetchShareApi(shareId)
-        .then((res) => {
-          if (cancelled) return;
-          const s = res.share;
-          if (!s?.viewerCanView || !s.document) return;
-          const fp = shareDocumentFingerprint(s.document);
-          if (!fp || fp === docFingerprintRef.current) return;
-          docFingerprintRef.current = fp;
-          setRecord(s);
-          dispatch(applyCollabDocument(documentForSharePreview(normalizeDocument(s.document))));
-        })
-        .catch(() => undefined);
+      void pollShare();
     };
     const timer = window.setInterval(poll, SHARE_PREVIEW_POLL_MS);
     const onFocus = () => poll();

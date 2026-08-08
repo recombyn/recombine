@@ -165,11 +165,12 @@ function usePlayableAudioSrc(src: string, uploadKey?: string | null): string {
       return;
     }
     let cancelled = false;
-    void imageSrcToFile(s, 'play.mp3', {
-      uploadKey,
-      fallbackMime: 'audio/mpeg',
-    })
-      .then((file) => {
+    async function resolvePlaySrc() {
+      try {
+        const file = await imageSrcToFile(s, 'play.mp3', {
+          uploadKey,
+          fallbackMime: 'audio/mpeg',
+        });
         if (cancelled) return;
         let playable = file;
         if (!String(file.type || '').startsWith('audio/')) {
@@ -180,10 +181,11 @@ function usePlayableAudioSrc(src: string, uploadKey?: string | null): string {
         blobRef.current = next;
         cacheKeyRef.current = cacheKey;
         setPlaySrc(next);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[audio] auth src resolve failed', err);
-      });
+      }
+    }
+    void resolvePlaySrc();
     return () => {
       cancelled = true;
     };
@@ -323,7 +325,14 @@ function AudioPlate({
       },
       getMediaTime: () => waveRef.current?.getCurrentTime() || 0,
       play: () => {
-        void waveRef.current?.play().catch(() => undefined);
+        async function tryPlay() {
+          try {
+            await waveRef.current?.play();
+          } catch {
+            /* ignore play rejection */
+          }
+        }
+        void tryPlay();
       },
       pause: () => waveRef.current?.pause(),
       isPaused: () => Boolean(waveRef.current?.isPaused() ?? true),
@@ -413,7 +422,14 @@ function AudioPlate({
       return;
     }
     seekBeforePlay(wave);
-    void wave.play().catch(() => setPlaying(false));
+    async function tryPlay() {
+      try {
+        await wave.play();
+      } catch {
+        setPlaying(false);
+      }
+    }
+    void tryPlay();
   };
 
   return createPortal(

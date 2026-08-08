@@ -449,14 +449,15 @@ function AddPlatformModelFields(props: {
 
   const onUploadIcon = (file: File | null) => {
     if (!file || !file.type.startsWith('image/')) return;
-    void readFileAsDataUrl(file)
-      .then((dataUrl) => {
+    void (async () => {
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
         onIconKey('');
         onIconUrl(dataUrl);
-      })
-      .catch(() => {
+      } catch {
         /* ignore read errors */
-      });
+      }
+    })();
   };
 
   return (
@@ -741,14 +742,18 @@ function AgentRoutePrefsEditor({
   useEffect(() => {
     setRoutePrefs(loadAgentRoutePrefs());
     let cancelled = false;
-    void fetchDesignCatalog()
-      .then((cat) => {
+    async function loadDesignCatalog() {
+      try {
+        const cat = await fetchDesignCatalog();
         if (cancelled) return;
         const rules = cat.global_rules || {};
         cachedPresetRules = rules;
         setRoutePrefs(loadAgentRoutePrefs(rules));
-      })
-      .catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    }
+    void loadDesignCatalog();
     return () => {
       cancelled = true;
     };
@@ -756,8 +761,9 @@ function AgentRoutePrefsEditor({
 
   useEffect(() => {
     let cancelled = false;
-    void listModels()
-      .then((res) => {
+    async function loadRouteModels() {
+      try {
+        const res = await listModels();
         if (cancelled) return;
         const orOk = res?.openrouterAvailable !== false;
         cachedOpenrouterAvailable = orOk;
@@ -766,8 +772,11 @@ function AgentRoutePrefsEditor({
         setTextModels(text);
         setImageModels(image);
         setRoutePrefs(loadAgentRoutePrefs(cachedPresetRules));
-      })
-      .catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    }
+    void loadRouteModels();
     return () => {
       cancelled = true;
     };
@@ -777,12 +786,14 @@ function AgentRoutePrefsEditor({
   useEffect(() => {
     if (!desktopLocal) return;
     let cancelled = false;
-    void hydrateCustomLlmProviders().then(() => {
+    async function refreshByokRouteModels() {
+      await hydrateCustomLlmProviders();
       if (cancelled) return;
       const { text, image } = splitByokRouteModels(customProvidersAsModels());
       setTextModels(text);
       setImageModels(image);
-    });
+    }
+    void refreshByokRouteModels();
     return () => {
       cancelled = true;
     };
@@ -1336,11 +1347,15 @@ function AgentModelsPanel({
 
   useEffect(() => {
     let cancelled = false;
-    void hydrateCustomLlmProviders().then((list) => {
-      if (!cancelled) setProviders(list);
-    });
-    void listModels()
-      .then((res) => {
+    async function loadProviderData() {
+      try {
+        const list = await hydrateCustomLlmProviders();
+        if (!cancelled) setProviders(list);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const res = await listModels();
         if (cancelled) return;
         const list = res.byokPlatforms?.length
           ? res.byokPlatforms
@@ -1352,10 +1367,11 @@ function AgentModelsPanel({
             kinds: p.kinds?.length ? p.kinds : ['text'],
           }))
         );
-      })
-      .catch(() => {
+      } catch {
         /* platforms optional — manual form still works */
-      });
+      }
+    }
+    void loadProviderData();
     return () => {
       cancelled = true;
     };
@@ -1483,8 +1499,9 @@ function AgentModelsPanel({
         return;
       }
     }
-    void persistCustomLlmProvider(draft)
-      .then(async (saved) => {
+    void (async () => {
+      try {
+        const saved = await persistCustomLlmProvider(draft);
         let next = [saved, ...providers.filter((p) => p.id !== saved.id)];
         if (extraMid && selectedPlatform) {
           const child: CustomLlmProvider = {
@@ -1510,10 +1527,10 @@ function AgentModelsPanel({
         }
         persistProviders(next);
         resetForm();
-      })
-      .catch(() => {
+      } catch {
         setError(t('agent.providerSaveFailed', { defaultValue: 'Failed to save provider' }));
-      });
+      }
+    })();
   };
 
   const onRemove = (id: string) => {
@@ -1525,10 +1542,11 @@ function AgentModelsPanel({
     if (isPlatformByokId(id) || providers.find((p) => p.id === id)?.modelKind === 'platform') {
       for (const child of childModelsOf(id)) removeIds.add(child.id);
     }
-    void Promise.all([...removeIds].map((rid) => removeCustomLlmProvider(rid))).then(() => {
+    void (async () => {
+      await Promise.all([...removeIds].map((rid) => removeCustomLlmProvider(rid)));
       persistProviders(providers.filter((p) => !removeIds.has(p.id)));
       if (addModelForId === id) closeAddModel();
-    });
+    })();
   };
 
   const openAddModel = (platformRowId: string) => {
@@ -1599,14 +1617,15 @@ function AgentModelsPanel({
       iconUrl,
       createdAt: Date.now(),
     };
-    void persistCustomLlmProvider(draft)
-      .then((saved) => {
+    void (async () => {
+      try {
+        const saved = await persistCustomLlmProvider(draft);
         persistProviders([saved, ...providers.filter((p) => p.id !== saved.id)]);
         closeAddModel();
-      })
-      .catch(() => {
+      } catch {
         setAddModelError(t('agent.providerPlatformModelFailed'));
-      });
+      }
+    })();
   };
 
   const platformRows = providers.filter(

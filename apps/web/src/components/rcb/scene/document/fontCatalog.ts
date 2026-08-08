@@ -137,7 +137,12 @@ async function loadCatalogFromApi(): Promise<FontFamilyNode[]> {
 
 async function loadFontCatalogOnce(): Promise<FontFamilyNode[]> {
   try {
-    const data = await loadCatalogFromApi().catch(() => [] as FontFamilyNode[]);
+    let data: FontFamilyNode[];
+    try {
+      data = await loadCatalogFromApi();
+    } catch {
+      data = [];
+    }
     catalogCache = data;
     if (data.length) injectFontFaces(data);
     return data;

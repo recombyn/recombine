@@ -392,7 +392,12 @@ async function hydrateCloudProject(
   t: (key: string, opts?: Record<string, unknown>) => string,
   isCancelled: () => boolean
 ) {
-  const draft = await getProjectDraft(targetId).catch(() => null);
+  let draft: Awaited<ReturnType<typeof getProjectDraft>> | null = null;
+  try {
+    draft = await getProjectDraft(targetId);
+  } catch {
+    draft = null;
+  }
   // Local-only id (nanoid before first successful PUT): GET would always 404.
   if (draft?.document && !draft.syncedAt) {
     if (isCancelled()) return;
@@ -519,6 +524,8 @@ function EditorPage() {
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>();
   const [camera, setCamera] = useState<CanvasCamera>(DEFAULT_CAMERA);
   const [agentOpen, setAgentOpen] = useState(true);
+  /** Bumps AgentDock hydrate (catalog/models) — first enter starts at 1; reopen via openAgentPanel. */
+  const [agentOpenSignal, setAgentOpenSignal] = useState(1);
   const [inspectOpen, setInspectOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [agentDraft, setAgentDraft] = useState<string | null>(null);
@@ -597,7 +604,13 @@ function EditorPage() {
     if (shareSaveTimer.current) window.clearTimeout(shareSaveTimer.current);
     const id = currentId;
     shareSaveTimer.current = window.setTimeout(() => {
-      void updateShareDocumentApi(id, document).catch(() => undefined);
+      void (async () => {
+        try {
+          await updateShareDocumentApi(id, document);
+        } catch {
+          /* ignore */
+        }
+      })();
     }, 700);
     return () => {
       if (shareSaveTimer.current) window.clearTimeout(shareSaveTimer.current);
@@ -845,7 +858,12 @@ function EditorPage() {
     if (sessionReadyForIdRef.current === currentId) return;
     let cancelled = false;
     async function restoreSession() {
-      const session = await getProjectSession(currentId).catch(() => null);
+      let session: Awaited<ReturnType<typeof getProjectSession>> | null = null;
+      try {
+        session = await getProjectSession(currentId);
+      } catch {
+        session = null;
+      }
       if (cancelled) return;
       // Do not restore session.camera — enter page always fits content once after load.
       if (!gridUserTouchedRef.current) {
@@ -914,6 +932,7 @@ function EditorPage() {
     const hasPrompt = Boolean(boot!.prompt?.trim());
     homeAgentBootAppliedRef.current = true;
     setAgentOpen(true);
+    setAgentOpenSignal((n) => n + 1);
     setAgentDraft(hasPrompt ? boot!.prompt : '');
     setAgentAutoSubmit(Boolean(boot!.autoSubmit && hasPrompt));
     setAgentDraftAttachments(attachmentsFromBoot(boot!));
@@ -942,13 +961,35 @@ function EditorPage() {
     );
   }, [currentId, routeProjectId, navigate, location.search]);
 
+  const openAgentPanel = useCallback((opts?: { prompt?: string }) => {
+    setAgentOpen(true);
+    setAgentOpenSignal((n) => n + 1);
+    if (opts?.prompt) setAgentDraft(opts.prompt);
+  }, []);
+
+  const closeAgentPanel = useCallback(() => {
+    if (!isMobileViewport) setAgentOpen(false);
+  }, [isMobileViewport]);
+
+  const toggleAgentPanel = useCallback(() => {
+    if (agentOpen) {
+      setAgentOpen(false);
+      return;
+    }
+    openAgentPanel();
+  }, [agentOpen, openAgentPanel]);
+
+  const openShareDialog = useCallback(() => {
+    setShareOpen(true);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key.toLowerCase() === 'c' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         if (workspaceMode === 'dev') return;
         e.preventDefault();
-        setAgentOpen((v) => !v);
+        toggleAgentPanel();
       }
       if (e.key === 'Escape') {
         setAgentOpen(false);
@@ -959,7 +1000,7 @@ function EditorPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [workspaceMode]);
+  }, [workspaceMode, toggleAgentPanel]);
 
   useEffect(() => {
     if (!isMobileViewport) return;
@@ -1387,8 +1428,8 @@ function EditorPage() {
               agentOpen={agentOpen}
               onGoHome={() => void flushAndGoHome(navigate)}
               onRename={(name) => dispatch(renameTemplate(name))}
-              onShare={() => setShareOpen(true)}
-              onOpenAgent={() => setAgentOpen(true)}
+              onShare={openShareDialog}
+              onOpenAgent={() => openAgentPanel()}
             />
 
             <EditorToolDocks
@@ -1437,12 +1478,11 @@ function EditorPage() {
               onCanvasReady={onCanvasReady}
               onOpenAgent={(opts) => {
                 if (workspaceMode === 'dev') return;
-                setAgentOpen(true);
-                if (opts?.prompt) setAgentDraft(opts.prompt);
+                openAgentPanel({ prompt: opts?.prompt });
               }}
               onAddToChat={(target) => {
                 if (workspaceMode === 'dev') return;
-                setAgentOpen(true);
+                openAgentPanel();
                 setAttachToChat(target);
               }}
             />
@@ -1509,9 +1549,8 @@ function EditorPage() {
           ) : (
             <AgentDock
               open={isMobileViewport ? true : agentOpen}
-              onClose={() => {
-                if (!isMobileViewport) setAgentOpen(false);
-              }}
+              openSignal={agentOpenSignal}
+              onClose={closeAgentPanel}
               floating={isMobileViewport}
               allowedInteractionModes={isMobileViewport ? ['image', 'video'] : undefined}
               draftPrompt={agentDraft}
@@ -1641,7 +1680,7 @@ function EditorPage() {
           ready={!bootOpen}
           onOpenAgent={() => {
             dispatch(setWorkspaceMode('design'));
-            setAgentOpen(true);
+            openAgentPanel();
           }}
         />
       </div>

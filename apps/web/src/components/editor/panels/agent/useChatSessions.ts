@@ -232,20 +232,21 @@ export function useChatSessions(documentId: string | null | undefined) {
     if (!pending || !isChatLoggedIn() || apiDisabledRef.current) return;
     if (pending.payloadJson === lastSyncedJson.current) return;
     pendingSyncRef.current = null;
-    void upsertChatSessionApi({
-      projectId: pending.projectId || '__none__',
-      id: pending.id,
-      title: pending.title,
-      messages: pending.messages,
-      ...(pending.taskState != null ? { taskState: pending.taskState } : {}),
-    })
-      .then(() => {
+    void (async () => {
+      try {
+        await upsertChatSessionApi({
+          projectId: pending.projectId || '__none__',
+          id: pending.id,
+          title: pending.title,
+          messages: pending.messages,
+          ...(pending.taskState != null ? { taskState: pending.taskState } : {}),
+        });
         lastSyncedJson.current = pending.payloadJson;
-      })
-      .catch((err: any) => {
+      } catch (err: any) {
         if (err?.response?.status === 401) apiDisabledRef.current = true;
         if (!pendingSyncRef.current) pendingSyncRef.current = pending;
-      });
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -404,9 +405,13 @@ export function useChatSessions(documentId: string | null | undefined) {
     (id: string) => {
       setSessions((prev) => prev.filter((sess) => sess.id !== id));
       if (isChatLoggedIn()) {
-        deleteChatSessionApi(id).catch(() => {
-          /* ignore */
-        });
+        void (async () => {
+          try {
+            await deleteChatSessionApi(id);
+          } catch {
+            /* ignore */
+          }
+        })();
       }
       if (id === sessionId) {
         const nid = chatUid();

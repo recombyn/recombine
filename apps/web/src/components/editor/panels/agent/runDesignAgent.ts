@@ -2615,7 +2615,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       });
       return;
     }
-    paintChain = paintChain.then(async () => {
+    paintChain = (async () => {
+      await paintChain;
       if (params.signal?.aborted) return;
       // First paint replaces the import-style shimmer plate on the same frame.
       params.dispatch(cancelImportPlaceholder());
@@ -2987,7 +2988,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     if (deleteish.length) {
       console.info('[sse tool_ops delete]', deleteish);
     }
-    paintChain = paintChain.then(async () => {
+    paintChain = (async () => {
+      await paintChain;
       if (params.signal?.aborted) return;
       params.onEvent({ type: 'drawing', active: true, done: 0, total: ops.length });
       const pinned = explicitPinnedFrameId({
@@ -3128,7 +3130,8 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
     const round = typeof ev.round === 'number' ? ev.round : undefined;
     if (!taskId) return;
     // Wait until pending paints land, then POST real inventory via axios.
-    paintChain = paintChain.then(async () => {
+    paintChain = (async () => {
+      await paintChain;
       if (params.signal?.aborted) return;
       const docNow = params.getDocument();
       const nodes = buildSceneNodesForCanvas(docNow, {
@@ -3146,9 +3149,12 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
       });
       const opResults = pendingOpResults;
       pendingOpResults = [];
-      const previewImage = await captureCritiquePreview(docNow, focusId).catch(
-        () => null
-      );
+      let previewImage = null;
+      try {
+        previewImage = await captureCritiquePreview(docNow, focusId);
+      } catch {
+        previewImage = null;
+      }
       console.info('[scene_feedback] post', {
         taskId,
         round,
@@ -3159,20 +3165,24 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         opFailed: opResults.filter((r) => !r.ok).length,
         hasPreview: Boolean(previewImage),
       });
-      await postDesignSceneFeedback(
-        taskId,
-        {
-          scene_nodes: nodes as Array<Record<string, unknown>>,
-          ...(frames.length
-            ? { scene_frames: frames as Array<Record<string, unknown>> }
-            : {}),
-          spatial_summary: spatial as unknown as Record<string, unknown>,
-          ...(opResults.length ? { op_results: opResults } : {}),
-          ...(previewImage ? { preview_image: previewImage } : {}),
-          round,
-        },
-        params.signal
-      ).catch(() => undefined);
+      try {
+        await postDesignSceneFeedback(
+          taskId,
+          {
+            scene_nodes: nodes as Array<Record<string, unknown>>,
+            ...(frames.length
+              ? { scene_frames: frames as Array<Record<string, unknown>> }
+              : {}),
+            spatial_summary: spatial as unknown as Record<string, unknown>,
+            ...(opResults.length ? { op_results: opResults } : {}),
+            ...(previewImage ? { preview_image: previewImage } : {}),
+            round,
+          },
+          params.signal
+        );
+      } catch {
+        /* ignore */
+      }
     });
     return;
     
@@ -3497,7 +3507,11 @@ export async function runDesignAgent(params: RunDesignAgentParams): Promise<void
         },
       });
     }
-    await paintChain.catch(() => undefined);
+    try {
+      await paintChain;
+    } catch {
+      /* ignore */
+    }
     params.dispatch(cancelImportPlaceholder());
 
     if (pendingDone) {

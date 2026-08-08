@@ -216,7 +216,13 @@ export async function runCodingCliDesktop(opts: {
       fn();
     };
     const onAbort = () => {
-      void invoke('kill_coding_cli').catch(() => undefined);
+      void (async () => {
+        try {
+          await invoke('kill_coding_cli');
+        } catch {
+          /* ignore */
+        }
+      })();
       finish(() => reject(new DOMException('Aborted', 'AbortError')));
     };
 

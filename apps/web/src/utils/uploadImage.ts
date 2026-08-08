@@ -162,10 +162,14 @@ export function waitForImageReady(
     opts?.signal?.addEventListener('abort', onAbort, { once: true });
     img.onload = () => {
       if (typeof img.decode === 'function') {
-        void img
-          .decode()
-          .then(() => finish(true))
-          .catch(() => finish(true));
+        void (async () => {
+          try {
+            await img.decode!();
+          } catch {
+            /* decode optional — still treat as loaded */
+          }
+          finish(true);
+        })();
         return;
       }
       finish(true);

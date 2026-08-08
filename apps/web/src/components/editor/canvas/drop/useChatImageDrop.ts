@@ -46,7 +46,7 @@ type UseChatImageDropArgs = {
   finishToSelect: () => void;
 };
 
-function resolveAssetPlaceSize(
+async function resolveAssetPlaceSize(
   payload: MediaAssetDragPayload,
   imageSizeForViewport: (natural: { width: number; height: number }) => {
     width: number;
@@ -57,22 +57,21 @@ function resolveAssetPlaceSize(
   if (kind === 'audio') {
     const width = Math.max(1, Math.round(Number(payload.width) || 360));
     const height = Math.max(140, Math.round(Number(payload.height) || 200));
-    return Promise.resolve({ width, height });
+    return { width, height };
   }
   const ow = Math.max(0, Math.round(Number(payload.width) || 0));
   const oh = Math.max(0, Math.round(Number(payload.height) || 0));
   if (ow > 0 && oh > 0) {
-    return Promise.resolve(imageSizeForViewport({ width: ow, height: oh }));
+    return imageSizeForViewport({ width: ow, height: oh });
   }
   if (kind === 'video') {
-    return Promise.resolve(imageSizeForViewport({ width: 640, height: 360 }));
+    return imageSizeForViewport({ width: 640, height: 360 });
   }
   if (kind === 'lottie') {
-    return Promise.resolve(imageSizeForViewport({ width: 200, height: 200 }));
+    return imageSizeForViewport({ width: 200, height: 200 });
   }
-  return measureImageNaturalSize(payload.src).then((natural) =>
-    imageSizeForViewport(natural)
-  );
+  const natural = await measureImageNaturalSize(payload.src);
+  return imageSizeForViewport(natural);
 }
 
 /** Resolve a displayable canvas src. Prefer inline data: (list thumbs) — no extra fetch. */

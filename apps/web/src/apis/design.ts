@@ -360,19 +360,20 @@ let _designCatalogInflight: Promise<DesignCatalog> | null = null;
 export const fetchDesignCatalog = (opts?: { force?: boolean }) => {
   if (!opts?.force && _designCatalog) return Promise.resolve(_designCatalog);
   if (!opts?.force && _designCatalogInflight) return _designCatalogInflight;
-  const run = request<DesignCatalog>({
-    url: '/api/v1/design/catalog',
-    method: 'get',
-  })
-    .then((data) => {
+  const pending = (async () => {
+    try {
+      const data = await request<DesignCatalog>({
+        url: '/api/v1/design/catalog',
+        method: 'get',
+      });
       _designCatalog = data;
       return data;
-    })
-    .finally(() => {
-      if (_designCatalogInflight === run) _designCatalogInflight = null;
-    });
-  _designCatalogInflight = run;
-  return run;
+    } finally {
+      if (_designCatalogInflight === pending) _designCatalogInflight = null;
+    }
+  })();
+  _designCatalogInflight = pending;
+  return pending;
 };
 
 export function invalidateDesignCatalogCache() {

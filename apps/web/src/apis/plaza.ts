@@ -126,11 +126,17 @@ export const submitToPlaza = (data: {
   });
 };
 
-export const fetchMyPlazaSubmissions = () =>
-  request<{ items: PlazaSubmissionDto[] }>({
+/** Me → 已发布 only. Never call from Projects / Home / Skills. */
+export async function fetchMyPlazaSubmissions() {
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console -- trace stray Projects-page callers
+    console.info('[plaza/mine] caller stack', new Error().stack);
+  }
+  return request<{ items: PlazaSubmissionDto[] }>({
     url: '/api/v1/plaza/mine',
     method: 'get',
   });
+}
 
 export type PaginatedPlazaFeed = {
   items: PlazaFeedItemDto[];
@@ -144,27 +150,26 @@ export type PaginatedPlazaFeed = {
 const PLAZA_FEED_TTL_MS = 90_000;
 const _plazaFeedCache = new Map<string, { at: number; data: PaginatedPlazaFeed }>();
 
-export const fetchPlazaFeed = (params: {
+export async function fetchPlazaFeed(params: {
   page: number;
   pageSize: number;
   tab: PlazaFeedTab;
   category?: string;
   authorIds?: string;
-}) => {
+}): Promise<PaginatedPlazaFeed> {
   const key = JSON.stringify(params);
   const hit = _plazaFeedCache.get(key);
   if (hit && Date.now() - hit.at < PLAZA_FEED_TTL_MS) {
-    return Promise.resolve(hit.data);
+    return hit.data;
   }
-  return request<PaginatedPlazaFeed>({
+  const data = await request<PaginatedPlazaFeed>({
     url: '/api/v1/plaza/feed',
     method: 'get',
     params,
-  }).then((data) => {
-    _plazaFeedCache.set(key, { at: Date.now(), data });
-    return data;
   });
-};
+  _plazaFeedCache.set(key, { at: Date.now(), data });
+  return data;
+}
 
 export function invalidatePlazaFeedCache() {
   _plazaFeedCache.clear();
