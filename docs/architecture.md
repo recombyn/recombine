@@ -8,7 +8,6 @@
 | `apps/web/src-tauri` | Tauri v2 desktop shell (same UI; custom titlebar) |
 | `apps/api` | FastAPI: import, projects/plaza, Design Agent, collab room tokens |
 | `apps/collab` | Yjs WebSocket server (`y-websocket`); proxied as `/collab/` |
-| `apps/docs` | User help and legal docs site |
 | `packages/scene-schema` | Scene JSON protocol |
 | `packages/scene-builder-py` | Parse blocks → Scene JSON |
 
