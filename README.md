@@ -5,7 +5,7 @@
 <p align="center">
   <a href="docs/self-hosting.md"><strong>Self Host</strong></a> ·
   <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
-  <a href="https://recombyn.github.io/help/"><strong>Docs</strong></a>
+  <a href="https://recombyn.github.io/recombyn/"><strong>Docs</strong></a>
 </p>
 
 <p align="center">
@@ -107,7 +107,7 @@ deploy/            Dockerfiles / Nginx
 e2e/               Playwright
 ```
 
-User-facing help docs are maintained in a **private** repo and published at [recombyn.github.io/help](https://recombyn.github.io/help/).
+User-facing help **source** is private; CI publishes only the built static site to this repo’s `gh-pages` branch → [recombyn.github.io/recombyn/](https://recombyn.github.io/recombyn/).
 
 ## Documentation
 
@@ -146,7 +146,7 @@ Learning, personal use, and single-org internal deploy are fine. **Without autho
 - Offer Recombyn (or a substantially similar platform) as a public sign-up site / SaaS — paid or free
 - Impersonate the official brand, site, or support (name, logo, domain, etc.)
 
-Official: [recombyn.com](https://recombyn.com) · Help: [docs](https://recombyn.github.io/help/) · Source: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+Official: [recombyn.com](https://recombyn.com) · Help: [docs](https://recombyn.github.io/recombyn/) · Source: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
 
 Report clones or unauthorized hosting to `702680355@qq.com` (include links and screenshots). Full terms: [LICENSE](./LICENSE).
 
