@@ -35,7 +35,7 @@ Choose any of these:
 3. Upload or paste images first, then use `@` to reference attachments in the current conversation; pick **Auto** or a specific model via the model button.
 4. You can stop generation at any time. After results land on the artboard, you can still edit manually or use [Image editing tools](/guide/image-tools) for remove background, expand, multi-angle, and more.
 
-In Account, you can set Auto preference to **Standard / Pro / Max / Custom lanes**; members can add third-party models. See [Using Agent](/guide/agent) and [Account & credits](/guide/account).
+In Account, set Auto to **Standard / Pro / Max / Custom lanes**, and add third-party keys via [Custom & third-party models](/guide/custom-models). Desktop packaging: [Desktop app](/guide/desktop). Also [Using Agent](/guide/agent) and [Account & credits](/guide/account).
 
 ## Step 5: Export and share
 

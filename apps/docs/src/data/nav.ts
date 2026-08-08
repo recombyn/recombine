@@ -34,9 +34,11 @@ export const DOC_GROUP_DEFS: DocGroupDef[] = [
       { pageKey: 'canvas', path: '/guide/canvas' },
       { pageKey: 'shortcuts', path: '/guide/shortcuts' },
       { pageKey: 'agent', path: '/guide/agent' },
+      { pageKey: 'custom-models', path: '/guide/custom-models' },
       { pageKey: 'image-generation', path: '/guide/image-generation' },
       { pageKey: 'image-tools', path: '/guide/image-tools' },
       { pageKey: 'account', path: '/guide/account' },
+      { pageKey: 'desktop', path: '/guide/desktop' },
     ],
   },
   {
