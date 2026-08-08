@@ -124,7 +124,17 @@ e2e/               Playwright
 - **単一組織内利用** — 可
 - **第三者向けのホスト / マネージド提供**（有償・無償問わず）— **商用許諾が必要**（`702680355@qq.com`）
 
-全文は [LICENSE](./LICENSE) を参照。
+### ホワイトラベル / なりすまし禁止
+
+学習・個人利用・単一組織内デプロイは可。**許諾なしでは不可**:
+
+- 見た目だけ変えて自社製品として販売する、または自作と偽る
+- Recombyn（または実質同種の平台）を一般向け登録サイト / SaaS として提供する（有償・無償問わず）
+- 公式ブランド・サイト・サポートを装う（名称、ロゴ、ドメインなど）
+
+公式: [recombyn.com](https://recombyn.com) · ヘルプ: [docs](https://recombyn.github.io/help/) · ソース: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+
+模倣・無断ホスティングは `702680355@qq.com` へ（リンクとスクショ添付）。全文は [LICENSE](./LICENSE)。
 
 ## GitHub で ⭐ Star を
 
