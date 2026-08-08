@@ -224,6 +224,11 @@ class Settings(BaseSettings):
     # Desktop-local only: POST /auth/desktop-local auto-provisions OS user (loopback).
     # Tauri local sidecar sets true; keep false on Cloud / public API.
     desktop_local_auto_login: bool = False
+    # Master switch for platform 积分 (env: WALLET_BILLING_ENABLED).
+    # Default false (self-host / local). Cloud / SaaS must set true explicitly.
+    # Desktop-local auto-login always skips billing regardless of this flag.
+    wallet_billing_enabled: bool = False
+
 
     # Token wallet — card-key redeem (no WeChat/Alipay membership)
     # HMAC-SHA256(plaintext, CARD_KEY_SALT); never store plaintext in DB.

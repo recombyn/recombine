@@ -15,12 +15,11 @@ import {
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  HiOutlinePhoto,
   HiOutlineTrash,
   HiOutlineArrowPath,
   HiOutlineXMark,
 } from 'react-icons/hi2';
-import { LuAudioLines, LuFilm, LuPanelLeft } from 'react-icons/lu';
+import { LuAudioLines, LuFilm, LuImages, LuPanelLeft } from 'react-icons/lu';
 import Tooltip from '@/components/base/tooltip';
 import { message } from '@/components/base';
 import Image from '@/components/base/image';
@@ -118,7 +117,7 @@ function AssetThumb({ asset }: { asset: UserAsset }): ReactNode {
       ) : asset.kind === 'video' ? (
         <LuFilm className="h-6 w-6" strokeWidth={1.75} />
       ) : (
-        <HiOutlinePhoto className="h-6 w-6" strokeWidth={1.75} />
+        <LuImages className="h-6 w-6" strokeWidth={1.75} />
       )}
     </span>
   );
@@ -464,7 +463,7 @@ function AssetPanel({
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {!loading && items.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-3 py-10 text-center">
-            <HiOutlinePhoto className="h-8 w-8 text-[var(--muted)]" strokeWidth={1.5} />
+            <LuImages className="h-8 w-8 text-[var(--muted)]" strokeWidth={1.5} />
             <p className="text-[12px] leading-relaxed text-[var(--muted)]">
               {t('editor.assets.empty')}
             </p>

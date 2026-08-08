@@ -111,30 +111,18 @@ e2e/               Playwright
 
 ## ドキュメント / コミュニティ
 
-- [セルフホスト](docs/self-hosting.md) · [デスクトップ (Tauri)](docs/desktop.md) · [PostgreSQL 切り替え](docs/postgres-switch.md) · [コントリビュート](CONTRIBUTING.md) · [セキュリティ](SECURITY.md) · [行動規範](CODE_OF_CONDUCT.md)
+- ユーザー向け: [recombyn.github.io/recombyn](https://recombyn.github.io/recombyn/)
+- セルフホスト / 構成: [docs/self-hosting.md](docs/self-hosting.md) · [デスクトップ](docs/desktop.md) · [Postgres](docs/postgres-switch.md)
+- [コントリビュート](CONTRIBUTING.md) · [セキュリティ](SECURITY.md) · [行動規範](CODE_OF_CONDUCT.md)
 - Issue / PR テンプレートは `.github/`
 
 ## ライセンス
 
 [Recombyn Source Available License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-ソースアベイラブル条件（OSI オープンソースではありません）:
+セルフホスト・商用ホスト・ホワイトラベル / ブランド等の条項は **[LICENSE](./LICENSE)** にあります（OSI オープンソースではありません）。
 
-- **個人 / プライベートセルフホスト** — 無料
-- **単一組織内利用** — 可
-- **第三者向けのホスト / マネージド提供**（有償・無償問わず）— **商用許諾が必要**（`702680355@qq.com`）
-
-### ホワイトラベル / なりすまし禁止
-
-学習・個人利用・単一組織内デプロイは可。**許諾なしでは不可**:
-
-- 見た目だけ変えて自社製品として販売する、または自作と偽る
-- Recombyn（または実質同種の平台）を一般向け登録サイト / SaaS として提供する（有償・無償問わず）
-- 公式ブランド・サイト・サポートを装う（名称、ロゴ、ドメインなど）
-
-公式: [recombyn.com](https://recombyn.com) · ヘルプ: [docs](https://recombyn.github.io/recombyn/) · ソース: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
-
-模倣・無断ホスティングは `702680355@qq.com` へ（リンクとスクショ添付）。全文は [LICENSE](./LICENSE)。
+公式: [recombyn.com](https://recombyn.com) · Docs: [recombyn.github.io/recombyn](https://recombyn.github.io/recombyn/) · Source: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
 
 ## GitHub で ⭐ Star を
 

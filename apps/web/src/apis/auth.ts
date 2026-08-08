@@ -89,6 +89,18 @@ export const verifySliderCaptcha = (payload: {
     data: payload,
   });
 
+/** Public auth/feature flags (no login). */
+export const fetchAuthConfig = () =>
+  request<{
+    googleEnabled: boolean;
+    googleClientId?: string | null;
+    emailEnabled: boolean;
+    billingEnabled?: boolean;
+  }>({
+    url: '/api/v1/auth/config',
+    method: 'get',
+  });
+
 /** Get the current authenticated user (+ credit balance). */
 export const getMe = () =>
   request<{ user: AuthUserDto; tokens?: number }>({

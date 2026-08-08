@@ -58,6 +58,7 @@ from app.services.wallet.db import (
     credit_tokens,
     free_daily_remaining,
     get_user_tokens,
+    is_wallet_billing_enabled,
     spend_tokens,
 )
 
@@ -70,16 +71,25 @@ PARTIAL_HOLD = 10
 SINGLE_HOLD = 20
 
 
-def _reserve_design_hold(user_id: str, hold: int, *, mode: str) -> tuple[int, bool]:
+def _reserve_design_hold(
+    user_id: str,
+    hold: int,
+    *,
+    mode: str,
+    model: str | None = None,
+) -> tuple[int, bool]:
     """
     Spend ``hold`` credits, or reserve the free daily run when balance is short.
     Returns (hold_to_settle, free_daily). free_daily ⇒ hold 0 and force Auto.
+    Local desktop / wallet-off / BYOK model → no platform hold.
     """
-    from app.core.config import settings
+    from app.services.llm import is_byok_model_ref
 
-    # Local desktop (BYOK): no cloud wallet.
-    if bool(getattr(settings, "desktop_local_auto_login", False)):
+    if not is_wallet_billing_enabled():
         return 0, False
+    if is_byok_model_ref(model):
+        return 0, False
+
     need = max(0, int(hold or 0))
     if need <= 0:
         return 0, False
@@ -90,6 +100,7 @@ def _reserve_design_hold(user_id: str, hold: int, *, mode: str) -> tuple[int, bo
     if consume_free_daily_quota(user_id):
         return 0, True
     raise ValueError("insufficient_credits")
+
 
 
 def _refund_hold(user_id: str, hold: int, *, task_id: str) -> None:
@@ -219,20 +230,22 @@ async def run_design_job(
 
     # —— Agent / single_model: permission → ReAct controller ——
     if mode in ("agent", "single_model"):
-        from app.core.config import settings
+        from app.services.llm import is_byok_model_ref
 
-        desktop_local = bool(getattr(settings, "desktop_local_auto_login", False))
+        byok_run = is_byok_model_ref(user_selected_model)
+        skip_wallet = (not is_wallet_billing_enabled()) or byok_run
         hold_need = AGENT_HOLD if mode == "agent" else SINGLE_HOLD
         bal = int(get_user_tokens(user_id) or 0)
         free_left = int(free_daily_remaining(user_id) or 0)
-        can = desktop_local or bal >= hold_need or free_left > 0
+        can = skip_wallet or bal >= hold_need or free_left > 0
         yield {
             "type": "permission",
             "can_call_llm": bool(can),
             "balance": bal,
-            "need": 0 if desktop_local else hold_need,
+            "need": 0 if skip_wallet else hold_need,
             "free_daily": free_left > 0,
         }
+
         if not can:
             yield {
                 "type": "error",
@@ -263,7 +276,9 @@ async def run_design_job(
         )
         free_daily = False
         try:
-            hold, free_daily = _reserve_design_hold(user_id, hold_need, mode=mode)
+            hold, free_daily = _reserve_design_hold(
+                user_id, hold_need, mode=mode, model=user_selected_model
+            )
         except ValueError:
             yield {
                 "type": "error",
@@ -454,7 +469,9 @@ async def _run_partial(
     bal = get_user_tokens(user_id)
     free_daily = False
     try:
-        hold, free_daily = _reserve_design_hold(user_id, hold_need, mode="partial")
+        hold, free_daily = _reserve_design_hold(
+            user_id, hold_need, mode="partial", model=user_selected_model
+        )
     except ValueError:
         yield {
             "type": "error",
@@ -465,6 +482,7 @@ async def _run_partial(
         return
     if free_daily:
         user_selected_model = "auto"
+
 
     task_id = str(uuid.uuid4())
     scene_key = _scene_key(scene) or str(rules.get("canvas.default_scene") or "").strip()

@@ -8,25 +8,70 @@ from fastapi import APIRouter, HTTPException
 from app.api.deps import CurrentUser
 from pydantic import BaseModel, Field
 
-from app.services.llm.image_tools import IMAGE_PROCESS_KINDS, process_image_tool
+from app.services.llm.image_tools import (
+    IMAGE_PROCESS_KINDS,
+    process_image_tool,
+    uses_llm_for_kind,
+)
 from app.services.wallet.billing import DEFAULT_IMAGE_CREDITS, image_model_credit_cost
-from app.services.wallet.db import spend_image_credits
+from app.services.wallet.db import is_wallet_billing_enabled, spend_image_credits
 
 router = APIRouter(prefix="/image", tags=["image-tools"])
 
-# Wallet 积分 charged per image tool when not tied to a Seedream catalog price.
-# Scale: Standard ¥29 ≈ 200 积分 → tools cost a few 积分 each.
+# Wallet 积分 charged per LLM image tool when not tied to a Seedream catalog price.
+# Local CV kinds (removeBg / editText / editElements) are always 0.
 _KIND_CREDIT_COST: dict[str, int] = {
     "upscale": 20,
-    "removeBg": 10,
+    "removeBg": 0,
     "multiAngle": 30,
     "expand": 30,
-    "editText": 20,
-    "editElements": 30,
+    "editText": 0,
+    "editElements": 0,
     "replaceText": 30,
     "vector": 20,
-    "adjust": 20,
+    "adjust": 0,  # FE uses CSS filters; API adjust is legacy / unused
 }
+
+
+def _is_byok_model(model: str | None) -> bool:
+    low = str(model or "").strip().lower()
+    return low.startswith("custom:") or low.startswith("byok:")
+
+
+def _model_provider(model: str | None) -> str | None:
+    mid = (model or "").strip()
+    if not mid or _is_byok_model(mid):
+        return None
+    try:
+        from app.services.llm import list_image_models, list_llm_models, list_video_models
+        from app.services.llm.catalog_store import list_catalog
+
+        for kind in ("text", "image", "video", "audio"):
+            for m in list_catalog(kind=kind, enabled_only=False):
+                if m.get("id") == mid:
+                    return str(m.get("provider") or "") or None
+        for bucket in (list_llm_models(), list_image_models(), list_video_models()):
+            for m in bucket:
+                if m.get("id") == mid:
+                    return str(m.get("provider") or "") or None
+    except Exception:
+        return None
+    return None
+
+
+def _uses_user_platform_byok(user_id: str, model: str | None) -> bool:
+    if _is_byok_model(model):
+        return True
+    provider = _model_provider(model)
+    if not provider or not user_id:
+        return False
+    try:
+        from app.services.security import list_user_platform_byok
+
+        return provider in list_user_platform_byok(user_id)
+    except Exception:
+        return False
+
 
 
 class ImageProcessIn(BaseModel):
@@ -39,11 +84,9 @@ class ImageProcessIn(BaseModel):
     model: str | None = None
 
 
-
-
-
-
 def _charge(user_id: str, amount: int, detail: str) -> None:
+    if amount <= 0 or not is_wallet_billing_enabled():
+        return
     try:
         spend_image_credits(user_id, amount, detail)
     except ValueError as err:
@@ -52,12 +95,26 @@ def _charge(user_id: str, amount: int, detail: str) -> None:
         raise HTTPException(status_code=400, detail=str(err)) from err
 
 
-def token_cost_for_kind(kind: str, model: str | None = None) -> int:
-    """Wallet credits for an image tool. Prefer catalog 元/张 when model is set."""
+def token_cost_for_kind(
+    kind: str,
+    model: str | None = None,
+    *,
+    user_id: str | None = None,
+) -> int:
+    """Platform credits only when an LLM image path runs on the platform key."""
+    k = (kind or "").strip()
+    # No LLM call (rembg / OCR decompose / CSS adjust) → never charge.
+    if not uses_llm_for_kind(k):
+        return 0
+    if not is_wallet_billing_enabled():
+        return 0
+    # User's own key / platform BYOK → upstream billed to them, not our wallet.
+    if _is_byok_model(model) or (user_id and _uses_user_platform_byok(user_id, model)):
+        return 0
     mid = (model or "").strip()
     if mid:
         return image_model_credit_cost(mid)
-    return int(_KIND_CREDIT_COST.get((kind or "").strip(), DEFAULT_IMAGE_CREDITS))
+    return int(_KIND_CREDIT_COST.get(k, DEFAULT_IMAGE_CREDITS))
 
 
 # Back-compat alias for older callers.
@@ -82,8 +139,9 @@ async def post_image_process(
     body: ImageProcessIn,
 ) -> dict[str, Any]:
     kind = body.kind.strip()
-    cost = token_cost_for_kind(kind, body.model)
+    cost = token_cost_for_kind(kind, body.model, user_id=current_user.id)
     # Charge before the model call so insufficient balance fails fast.
+    # cost is 0 when no LLM / local desktop / BYOK / wallet billing off.
     _charge(current_user.id, cost, f"AI image tool: {kind}")
 
     try:

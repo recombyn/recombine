@@ -26,6 +26,7 @@ import {
   useInteractions,
 } from '@floating-ui/react';
 import {
+  HiArrowUp,
   HiOutlineBolt,
   HiOutlineChevronDown,
   HiOutlinePlus,
@@ -33,6 +34,7 @@ import {
 } from 'react-icons/hi2';
 import { listModels, type LlmModel } from '@/apis/chat';
 import { generateLottie } from '@/apis/design';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { Dropdown, DropdownPanel, message, Tooltip } from '@/components/base';
 import {
   rcbScreenPxToScene,
@@ -448,6 +450,7 @@ function LottieGeneratorCard({
     () => (needsVisionModel ? models.filter((m) => modelSupportsVisionInput(m)) : models),
     [models, needsVisionModel]
   );
+  const billingEnabled = useSelector(selectBillingEnabled);
   const creditCost = estimateLottieCredits(selectedModel, duration);
   const settingsSummary = `${aspectRatio} · ${duration}s`;
 
@@ -920,7 +923,14 @@ function LottieGeneratorCard({
               </Tooltip>
             </Dropdown>
 
-            <Tooltip tip={t('wallet.creditCostTip', { count: creditCost })} placement="top">
+            <Tooltip
+              tip={
+                billingEnabled
+                  ? t('wallet.creditCostTip', { count: creditCost })
+                  : t('agent.send')
+              }
+              placement="top"
+            >
               <button
                 type="button"
                 disabled={disabled || sending || !prompt.trim()}
@@ -928,11 +938,20 @@ function LottieGeneratorCard({
                 onClick={() => void onGenerate()}
                 className={cn(
                   'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition',
-                  'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40'
+                  'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40',
+                  !billingEnabled && 'h-7 w-7 justify-center px-0'
                 )}
               >
-                <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                {billingEnabled ? (
+                  <>
+                    <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
+                    {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                  </>
+                ) : sending ? (
+                  '…'
+                ) : (
+                  <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                )}
               </button>
             </Tooltip>
           </div>

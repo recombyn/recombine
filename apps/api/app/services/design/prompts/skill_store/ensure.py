@@ -322,15 +322,18 @@ def ensure_design_skills(*, force: bool = False) -> None:
 # Prefer bumping ``version`` in design_skills_seed.json; markers catch same-version drift.
 # Do not hardcode prior full bodies here.
 _SEED_SKILL_BODY_MARKERS: dict[str, tuple[str, ...]] = {
-    "design_methodology": (
-        "Prefer **1–3** tightly matched",
-        "create_lottie",
-        "MUST `create_frame`",
-        "Exception only if the user explicitly refuses",
-    ),
     "canvas_edit": (
         "boolean_op",
-        "create_lottie",
+        "brush_ops",
+        "motion_lottie",
+        "Clear / wipe board",
+    ),
+    "design_methodology": (
+        "Prefer **1–3** tightly matched",
+        "motion_lottie",
+        "brush_ops",
+        "MUST `create_frame`",
+        "Exception only if the user explicitly refuses",
     ),
     "vision_extract": (
         "Finished poster/design",

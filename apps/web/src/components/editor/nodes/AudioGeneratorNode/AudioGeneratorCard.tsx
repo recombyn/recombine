@@ -14,7 +14,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
   autoUpdate,
@@ -26,8 +26,9 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
-import { HiOutlineBolt, HiOutlinePlus } from 'react-icons/hi2';
+import { HiArrowUp, HiOutlineBolt, HiOutlinePlus } from 'react-icons/hi2';
 import { generateAudio, listModels, type LlmModel } from '@/apis/chat';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { Dropdown, message, Tooltip } from '@/components/base';
 import { rcbScreenPxToScene, useRcbCamera } from '@/components/rcb';
 import {
@@ -200,6 +201,7 @@ function AudioGeneratorCard({
   }, []);
 
   const selectedModel = models.find((m) => m.id === modelId);
+  const billingEnabled = useSelector(selectBillingEnabled);
   const creditCost = estimateAudioCredits(selectedModel);
 
   const removeContext = (key: string) =>
@@ -617,7 +619,9 @@ function AudioGeneratorCard({
               tip={
                 readyAudioAtt
                   ? t('editor.tools.audioGenerate')
-                  : t('wallet.creditCostTip', { count: creditCost })
+                  : billingEnabled
+                    ? t('wallet.creditCostTip', { count: creditCost })
+                    : t('agent.send')
               }
               placement="top"
             >
@@ -629,17 +633,25 @@ function AudioGeneratorCard({
                 className={cn(
                   'inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-[12px] font-medium',
                   'bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90',
-                  'disabled:opacity-45'
+                  'disabled:opacity-45',
+                  !billingEnabled && !readyAudioAtt && !sending && 'h-8 w-8 justify-center px-0'
                 )}
               >
-                <HiOutlineBolt className="h-4 w-4" strokeWidth={2} />
-                {sending
-                  ? t('editor.tools.audioGenerating')
-                  : readyAudioAtt
-                    ? t('editor.tools.audioGenerate')
-                    : (
-                        <span className="tabular-nums">{creditCost}</span>
-                      )}
+                {sending ? (
+                  t('editor.tools.audioGenerating')
+                ) : readyAudioAtt ? (
+                  <>
+                    <HiOutlineBolt className="h-4 w-4" strokeWidth={2} />
+                    {t('editor.tools.audioGenerate')}
+                  </>
+                ) : billingEnabled ? (
+                  <>
+                    <HiOutlineBolt className="h-4 w-4" strokeWidth={2} />
+                    <span className="tabular-nums">{creditCost}</span>
+                  </>
+                ) : (
+                  <HiArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                )}
               </button>
             </Tooltip>
           </div>
