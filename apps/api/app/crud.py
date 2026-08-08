@@ -934,7 +934,7 @@ def list_admin_assets(
 ) -> tuple[list[tuple[Asset, str | None, str | None]], int]:
     where: list[Any] = []
     kind_n = (kind or "").strip().lower()
-    if kind_n in ("image", "video", "font"):
+    if kind_n in ("image", "video", "audio", "font"):
         where.append(Asset.kind == kind_n)
     raw = (q or "").strip()
     if raw:
@@ -3825,7 +3825,7 @@ def list_llm_models(
 ) -> list[LlmModel]:
     stmt = select(LlmModel)
     k = (kind or "").strip().lower()
-    if k in ("text", "image", "video"):
+    if k in ("text", "image", "video", "audio"):
         stmt = stmt.where(LlmModel.kind == k)
     if enabled_only:
         stmt = stmt.where(LlmModel.enabled == 1)

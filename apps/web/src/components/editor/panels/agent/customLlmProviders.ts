@@ -9,8 +9,41 @@ import {
   type ByokProviderDto,
 } from '@/apis/me';
 
-/** User-facing model category when adding a custom provider (no image — not billed / not wired). */
-export type CustomModelKind = 'text' | 'vision';
+/**
+ * User-facing model category when adding a custom provider.
+ * ``platform`` = aggregator credential (one key unlocks catalog models).
+ */
+export type CustomModelKind = 'text' | 'vision' | 'image' | 'video' | 'platform';
+
+export const PLATFORM_BYOK_ID_PREFIX = 'platform:';
+export const PLATFORM_MODEL_ID_PREFIX = 'pm:';
+
+export function isPlatformByokId(id: string | null | undefined): boolean {
+  return Boolean(id && String(id).startsWith(PLATFORM_BYOK_ID_PREFIX));
+}
+
+export function isPlatformModelId(id: string | null | undefined): boolean {
+  return Boolean(id && String(id).startsWith(PLATFORM_MODEL_ID_PREFIX));
+}
+
+/** ``pm:openrouter:xxx`` → ``openrouter``. */
+export function platformProviderFromModelId(id: string): string | null {
+  if (!isPlatformModelId(id)) return null;
+  const rest = String(id).slice(PLATFORM_MODEL_ID_PREFIX.length);
+  const idx = rest.indexOf(':');
+  if (idx <= 0) return null;
+  const provider = rest.slice(0, idx).trim();
+  return provider || null;
+}
+
+export function createPlatformModelId(platformProvider: string) {
+  const p = String(platformProvider || '')
+    .trim()
+    .toLowerCase();
+  return `${PLATFORM_MODEL_ID_PREFIX}${p}:${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
 
 export type CustomLlmProvider = {
   id: string;
@@ -26,6 +59,10 @@ export type CustomLlmProvider = {
   apiModel: string;
   /** text | vision(multimodal). Legacy ``image`` is normalized to text. */
   modelKind: CustomModelKind;
+  /** Built-in brand icon key (openai / claude / doubao / …). */
+  iconKey?: string;
+  /** Custom uploaded icon (data URL or https). Takes precedence over iconKey in the picker. */
+  iconUrl?: string;
   createdAt: number;
   /** True when key lives in server AES vault (no local ciphertext). */
   serverBacked?: boolean;
@@ -45,6 +82,9 @@ function normalizeModelKind(raw: unknown): CustomModelKind {
     .trim()
     .toLowerCase();
   if (v === 'vision' || v === 'multimodal' || v === 'multi') return 'vision';
+  if (v === 'image' || v === 't2i' || v === 'i2i') return 'image';
+  if (v === 'video' || v === 't2v' || v === 'i2v') return 'video';
+  if (v === 'platform') return 'platform';
   return 'text';
 }
 
@@ -117,7 +157,10 @@ function apiKeyHint(plaintext: string): string {
   return `…${s.slice(-4)}`;
 }
 
-function mapDto(d: ByokProviderDto): CustomLlmProvider {
+function mapDto(
+  d: ByokProviderDto,
+  keep?: Pick<CustomLlmProvider, 'iconKey' | 'iconUrl'>
+): CustomLlmProvider {
   return {
     id: d.id,
     name: d.name || '',
@@ -127,6 +170,8 @@ function mapDto(d: ByokProviderDto): CustomLlmProvider {
     baseUrl: String(d.baseUrl || '').replace(/\/+$/, ''),
     apiModel: String(d.apiModel || '').trim(),
     modelKind: normalizeModelKind(d.modelKind),
+    iconKey: keep?.iconKey || '',
+    iconUrl: keep?.iconUrl || '',
     createdAt: Number(d.createdAt) || Date.now(),
     serverBacked: true,
   };
@@ -151,6 +196,8 @@ function readLocalRaw(): CustomLlmProvider[] {
         baseUrl: String(p.baseUrl || '').replace(/\/+$/, ''),
         apiModel: String(p.apiModel || p.model || '').trim(),
         modelKind: normalizeModelKind(p.modelKind ?? p.kind),
+        iconKey: String(p.iconKey || p.icon_key || '').trim(),
+        iconUrl: String(p.iconUrl || p.icon_url || '').trim(),
         createdAt: Number(p.createdAt) || Date.now(),
         serverBacked: Boolean(p.serverBacked),
       }));
@@ -171,6 +218,8 @@ function writeLocalEncrypted(list: CustomLlmProvider[]) {
       baseUrl: p.baseUrl,
       apiModel: p.apiModel || '',
       modelKind: p.modelKind,
+      iconKey: p.iconKey || '',
+      iconUrl: p.iconUrl || '',
       createdAt: p.createdAt,
       serverBacked: Boolean(p.serverBacked),
     }));
@@ -200,13 +249,51 @@ export function createCustomLlmProviderId() {
 /**
  * Persist a provider: server AES vault when logged in; else local AES-GCM.
  * Plaintext apiKey is never written to localStorage.
+ * Platform-linked models (``pm:<provider>:…``) may omit apiKey and inherit
+ * the parent platform credential's cipher.
  */
 export async function persistCustomLlmProvider(
   provider: CustomLlmProvider
 ): Promise<CustomLlmProvider> {
   const token = getToken();
-  const plain = String(provider.apiKey || '').trim();
-  if (token) {
+  let plain = String(provider.apiKey || '').trim();
+  const tokenOrLocal = Boolean(token);
+
+  if (!plain && isPlatformModelId(provider.id)) {
+    const parentProv = platformProviderFromModelId(provider.id);
+    const parentId = parentProv ? `${PLATFORM_BYOK_ID_PREFIX}${parentProv}` : '';
+    if (token) {
+      // Server copies the cipher from platform:<provider>.
+      const item = await upsertByokProvider({
+        id: provider.id,
+        name: provider.name,
+        website: provider.website,
+        baseUrl: provider.baseUrl,
+        apiModel: provider.apiModel,
+        modelKind: provider.modelKind,
+      });
+      const mapped = mapDto(item, { iconKey: provider.iconKey, iconUrl: provider.iconUrl });
+      const next = [mapped, ...loadCustomLlmProviders().filter((p) => p.id !== mapped.id)];
+      writeLocalEncrypted(next);
+      return mapped;
+    }
+    const parent = readLocalRaw().find((p) => p.id === parentId);
+    if (!parent?.apiKeyCipher) {
+      throw new Error('platform API key required first');
+    }
+    const stored: CustomLlmProvider = {
+      ...provider,
+      apiKey: '',
+      apiKeyCipher: parent.apiKeyCipher,
+      apiKeyHint: parent.apiKeyHint || provider.apiKeyHint,
+      serverBacked: false,
+    };
+    const next = [stored, ...loadCustomLlmProviders().filter((p) => p.id !== stored.id)];
+    writeLocalEncrypted(next);
+    return stored;
+  }
+
+  if (tokenOrLocal && token) {
     const item = await upsertByokProvider({
       id: provider.id,
       name: provider.name,
@@ -216,7 +303,7 @@ export async function persistCustomLlmProvider(
       modelKind: provider.modelKind,
       apiKey: plain || undefined,
     });
-    const mapped = mapDto(item);
+    const mapped = mapDto(item, { iconKey: provider.iconKey, iconUrl: provider.iconUrl });
     const next = [mapped, ...loadCustomLlmProviders().filter((p) => p.id !== mapped.id)];
     writeLocalEncrypted(next);
     return mapped;
@@ -270,7 +357,7 @@ export async function hydrateCustomLlmProviders(): Promise<CustomLlmProvider[]> 
             modelKind: p.modelKind,
             apiKey: plain,
           });
-          migrated.push(mapDto(item));
+          migrated.push(mapDto(item, { iconKey: p.iconKey, iconUrl: p.iconUrl }));
           continue;
         } catch {
           /* fall through to local encrypt */
@@ -294,7 +381,16 @@ export async function hydrateCustomLlmProviders(): Promise<CustomLlmProvider[]> 
   if (token) {
     try {
       const remote = await fetchByokProviders();
-      const byId = new Map(remote.map((d) => [d.id, mapDto(d)]));
+      const localById = new Map(local.map((p) => [p.id, p]));
+      const byId = new Map(
+        remote.map((d) => [
+          d.id,
+          mapDto(d, {
+            iconKey: localById.get(d.id)?.iconKey,
+            iconUrl: localById.get(d.id)?.iconUrl,
+          }),
+        ])
+      );
       for (const p of local) {
         if (!byId.has(p.id) && p.apiKeyCipher) {
           // Push remaining local-only encrypted keys if we can decrypt.
@@ -310,7 +406,7 @@ export async function hydrateCustomLlmProviders(): Promise<CustomLlmProvider[]> 
                 modelKind: p.modelKind,
                 apiKey: plain,
               });
-              byId.set(item.id, mapDto(item));
+              byId.set(item.id, mapDto(item, { iconKey: p.iconKey, iconUrl: p.iconUrl }));
             } catch {
               byId.set(p.id, p);
             }
@@ -331,25 +427,36 @@ export async function hydrateCustomLlmProviders(): Promise<CustomLlmProvider[]> 
 
 function referenceTypesFor(kind: CustomModelKind): ModelReferenceType[] {
   if (kind === 'vision') return ['text', 'vision'];
+  if (kind === 'image') return ['image'];
   return ['text'];
+}
+
+function llmKindFor(kind: CustomModelKind): NonNullable<LlmModel['kind']> {
+  if (kind === 'image') return 'image';
+  if (kind === 'video') return 'video';
+  return 'text';
 }
 
 /** Map saved providers → entries for the model picker / route prefs. */
 export function customProvidersAsModels(
   providers: CustomLlmProvider[] = loadCustomLlmProviders()
 ): LlmModel[] {
-  return providers.map((p) => {
-    const modelKind = normalizeModelKind(p.modelKind);
-    const isVision = modelKind === 'vision';
-    return {
-      id: `${CUSTOM_MODEL_ID_PREFIX}${p.id}`,
-      label: p.name || 'Custom',
-      provider: 'custom',
-      kind: 'text' as const,
-      referenceTypes: referenceTypesFor(modelKind),
-      maxAttachments: isVision ? 16 : 8,
-      description: undefined,
-      price: null,
-    };
-  });
+  return providers
+    .filter((p) => !isPlatformByokId(p.id) && normalizeModelKind(p.modelKind) !== 'platform')
+    .map((p) => {
+      const modelKind = normalizeModelKind(p.modelKind);
+      const isVision = modelKind === 'vision';
+      return {
+        id: `${CUSTOM_MODEL_ID_PREFIX}${p.id}`,
+        label: p.name || 'Custom',
+        provider: 'custom',
+        kind: llmKindFor(modelKind),
+        referenceTypes: referenceTypesFor(modelKind),
+        maxAttachments: isVision ? 16 : 8,
+        description: undefined,
+        price: null,
+        iconKey: p.iconKey || undefined,
+        iconUrl: p.iconUrl || undefined,
+      };
+    });
 }

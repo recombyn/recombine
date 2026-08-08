@@ -1,10 +1,15 @@
 # recombyn docs site
 
-Vite + React documentation site.
+Vite + React documentation site (user-facing help + legal + sponsor).
 
-- **Help docs**: light shell (top bar / sidebar / breadcrumbs), e.g. `/guide/getting-started`
-- **Legal pages**: standalone dark reading pages, e.g. `/legal/terms` (not nested in the help chrome)
-- **i18n**: top-bar language switch for `en` / `zh-CN` / `zh-TW` / `ja`; shares the main app localStorage key `language`. Default / fallback locale is **English**.
+Hosted on **GitHub Pages**: [https://recombyn.github.io/recombyn/](https://recombyn.github.io/recombyn/)
+
+- **Help docs**: `/guide/getting-started`, …
+- **Sponsor**: `/sponsor` (voluntary support; Alipay / WeChat QR)
+- **Legal**: `/legal/terms`, …
+- **i18n**: `en` / `zh-CN` / `zh-TW` / `ja`
+
+The main app opens docs via `docsUrl()` → that GitHub Pages origin (override with `VITE_DOCS_URL`).
 
 ## Local preview
 
@@ -14,7 +19,7 @@ npm install
 npm run dev:docs
 ```
 
-Default [http://localhost:5175](http://localhost:5175). For main-app local linking, set in `apps/web`:
+Default [http://localhost:5175](http://localhost:5175). For main-app local linking:
 
 ```bash
 VITE_DOCS_URL=http://localhost:5175
@@ -23,24 +28,27 @@ VITE_DOCS_URL=http://localhost:5175
 ## Build
 
 ```bash
+# local (base /)
 npm run build:docs
+
+# same as CI / GitHub Pages
+VITE_DOCS_BASE=/recombyn/ npm run build --workspace=apps/docs
 ```
 
 Output: `apps/docs/dist`.
 
+## Deploy (GitHub Pages)
+
+Workflow: [`.github/workflows/docs-pages.yml`](../../.github/workflows/docs-pages.yml)
+
+1. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**
+2. Push changes under `apps/docs/` to `main` (or run the workflow manually)
+3. Site URL: `https://recombyn.github.io/recombyn/`
+
 ## Content
 
-Markdown is split by locale under `content/{locale}/`:
+Markdown under `content/{locale}/` (`guide/`, `features/`, `faq/`, `legal/`, top-level `sponsor.md`).
 
-| Path | Content |
-|------|---------|
-| `content/en/` | English (default) |
-| `content/zh-CN/` | Simplified Chinese |
-| `content/zh-TW/` | Traditional Chinese |
-| `content/ja/` | Japanese |
+Chrome copy: `src/i18n/locales/`. Missing body falls back `en → zh-CN → zh-TW → ja`.
 
-Each locale mirrors the same structure: `guide/`, `features/`, `faq/`, `legal/`.
-
-Chrome copy lives in `src/i18n/locales/`. Missing body for a locale falls back `en → zh-CN → zh-TW → ja`.
-
-“Start creating / Home” links use `VITE_APP_URL` (default `https://recombyn.com`).
+“Start creating / Home” uses `VITE_APP_URL` (default `https://recombyn.com`).

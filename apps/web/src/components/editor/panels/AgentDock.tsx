@@ -43,6 +43,7 @@ import {
 import MentionAttachPanel, {
   type MentionAttachItem,
 } from '@/components/editor/panels/agent/MentionAttachPanel';
+import type { UserAsset } from '@/apis/assets';
 import {
   deleteChatSessionApi,
   fetchChatSessions,
@@ -63,9 +64,12 @@ import {
   stripTrailingAtQuery,
   stripTrailingSlashQuery,
   buildComposerContext,
+  buildAttachRefMentionContext,
+  composerAttachmentMediaKind,
   enrichComposerContextThumb,
   rasterizeNodesToPngDataUrl,
   rasterizeNodesToPngFile,
+  upsertLibraryAssetAttachment,
   type AgentComposerHandle,
   type ComposerContext,
 } from '@/components/editor/panels/AgentComposerInput';
@@ -1222,6 +1226,36 @@ function preferredChipThumbUrl(c: ComposerContext): string {
   if (dataRef.startsWith('data:image/')) return dataRef;
   if (thumb.startsWith('data:image/')) return thumb;
   return dataRef || thumb;
+}
+
+function mentionAttachKindLabel(
+  kind: 'image' | 'video' | 'audio',
+  n: number,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  if (kind === 'video') return t('agent.mentionAttachVideoN', { n });
+  if (kind === 'audio') return t('agent.mentionAttachAudioN', { n });
+  return t('agent.mentionAttachImageN', { n });
+}
+
+function normalizeMediaAssetKind(kind: string): 'image' | 'video' | 'audio' {
+  if (kind === 'video' || kind === 'audio' || kind === 'image') return kind;
+  return 'image';
+}
+
+function mediaAssetKindFallbackLabel(
+  kind: 'image' | 'video' | 'audio',
+  t: (key: string) => string
+): string {
+  if (kind === 'video') return t('me.assetKindVideo');
+  if (kind === 'audio') return t('me.assetKindAudio');
+  return t('me.assetKindImage');
+}
+
+function mentionAttachRefPayload(kind: 'image' | 'video' | 'audio', ordinal: number): string {
+  if (kind === 'video') return `[Ref: Attached video ${ordinal}]`;
+  if (kind === 'audio') return `[Ref: Attached audio ${ordinal}]`;
+  return `[Ref: Attached image ${ordinal}]`;
 }
 
 function chipToBubbleContext(c: ComposerContext) {
@@ -4210,13 +4244,15 @@ function AgentDock({
 
   const mentionItems = useMemo((): MentionAttachItem[] => {
     const attachments = contextChips.filter((c) => c.kind === 'attachment');
-    return attachments.map((c, i) => ({
-      id: c.key,
-      label: t('agent.mentionAttachImageN', { n: i + 1 }),
-      ...(c.thumbUrl || c.dataUrl
-        ? { thumbUrl: String(c.thumbUrl || c.dataUrl) }
-        : {}),
-    }));
+    return attachments.map((c, i) => {
+      const kind = composerAttachmentMediaKind(c);
+      const thumb = String(c.thumbUrl || c.dataUrl || '').trim();
+      return {
+        id: c.key,
+        label: mentionAttachKindLabel(kind, i + 1, t),
+        ...(kind === 'image' && thumb ? { thumbUrl: thumb } : {}),
+      };
+    });
   }, [contextChips, t]);
 
   const skillMentionItems = useMemo((): MentionAttachItem[] => {
@@ -4246,22 +4282,13 @@ function AgentDock({
     };
   }, [skillPanelOpen]);
 
-  const pickMentionAttach = (pickId: string) => {
-    const attachments = contextChipsRef.current.filter((c) => c.kind === 'attachment');
-    const idx = attachments.findIndex((c) => c.key === pickId);
-    if (idx < 0) return;
-    const att = attachments[idx]!;
-    const n = idx + 1;
-    const ctx: ComposerContext = {
-      key: `attach-ref:${chipBaseKey(att.key)}`,
-      label: t('agent.mentionAttachImageN', { n }),
-      kind: 'image',
-      payload: `[Ref: Attached image ${n}]`,
-      ...(att.dataUrl ? { dataUrl: att.dataUrl } : {}),
-      ...(att.thumbUrl || att.dataUrl
-        ? { thumbUrl: String(att.thumbUrl || att.dataUrl) }
-        : {}),
-    };
+  const insertMentionAttachChip = (att: ComposerContext, ordinal: number) => {
+    const kind = composerAttachmentMediaKind(att);
+    const ctx = buildAttachRefMentionContext(
+      att,
+      mentionAttachKindLabel(kind, ordinal, t),
+      mentionAttachRefPayload(kind, ordinal)
+    );
     pinnedContextKeysRef.current.add(ctx.key);
     contextDismissedKeyRef.current = null;
     if (editingUserId) setEditDraft(stripTrailingAtQuery);
@@ -4272,6 +4299,27 @@ function AgentDock({
       inputRef.current?.insertContextAtCaret(ctx);
       inputRef.current?.focus();
     });
+  };
+
+  const pickMentionAttach = (pickId: string) => {
+    const attachments = contextChipsRef.current.filter((c) => c.kind === 'attachment');
+    const idx = attachments.findIndex((c) => c.key === pickId);
+    if (idx < 0) return;
+    insertMentionAttachChip(attachments[idx]!, idx + 1);
+  };
+
+  const pickMentionLibraryAsset = (asset: UserAsset) => {
+    const kind = normalizeMediaAssetKind(asset.kind);
+    const upserted = upsertLibraryAssetAttachment(
+      contextChipsRef.current,
+      asset,
+      mediaAssetKindFallbackLabel(kind, t)
+    );
+    if (!upserted) return;
+    pinnedContextKeysRef.current.add(upserted.attachment.key);
+    setContextChips(upserted.contexts);
+    contextChipsRef.current = upserted.contexts;
+    insertMentionAttachChip(upserted.attachment, upserted.ordinal);
   };
 
   const pickSkillMention = (pickId: string) => {
@@ -4687,6 +4735,7 @@ function AgentDock({
               items={mentionItems}
               query={mentionQuery}
               onPick={pickMentionAttach}
+              onPickLibraryAsset={pickMentionLibraryAsset}
             />
           </div>
         </FloatingPortal>

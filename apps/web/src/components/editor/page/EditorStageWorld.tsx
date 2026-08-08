@@ -20,6 +20,8 @@ import CropExpandSessionHost from '@/components/editor/nodes/ImageNode/cropExpan
 import ImageToolPanelHost from '@/components/editor/nodes/ImageNode/toolPanels/ImageToolPanelHost';
 import ShapeStylePanelHost from '@/components/editor/nodes/ShapeNode/ShapeStylePanelHost';
 import VideoTrimSessionHost from '@/components/editor/nodes/VideoNode/VideoTrimSessionHost';
+import AudioTrimSessionHost from '@/components/editor/nodes/AudioNode/AudioTrimSessionHost';
+import AudioSpeedSessionHost from '@/components/editor/nodes/AudioNode/AudioSpeedSessionHost';
 import MeshHandlesOverlay from '@/components/editor/nodes/ShapeNode/MeshHandlesOverlay';
 import FrameContextToolbar from '@/components/editor/nodes/FrameNode/FrameContextToolbar';
 import type { ArtboardFrame } from '@/components/rcb/frames/types';
@@ -61,6 +63,9 @@ const EDITOR_PAN_BLOCK_SELECTOR = [
   '[data-shape-style-panel]',
   '[data-video-playback-bar]',
   '[data-video-trim-toolbar]',
+  '[data-audio-playback-bar]',
+  '[data-audio-trim-toolbar]',
+  '[data-audio-speed-toolbar]',
 ].join(',');
 
 function isEditableFocusTarget(el: HTMLElement | null | undefined): boolean {
@@ -356,6 +361,8 @@ function EditorStageWorld({
         <ShapeStylePanelHost document={document} />
         <CropExpandSessionHost document={document} />
         <VideoTrimSessionHost document={document} />
+        <AudioTrimSessionHost document={document} />
+        <AudioSpeedSessionHost document={document} />
 
         {showCanvasDiffuseMesh ? (
           <MeshHandlesOverlay

@@ -2,6 +2,7 @@ const ja = {
   brandDocs: 'Docs',
   navHome: 'ホーム',
   navDocs: 'ドキュメント',
+  navSponsor: 'スポンサー',
   navAria: 'サイトナビゲーション',
   openMenu: 'メニューを開く',
   startCreating: '作成を始める',
@@ -14,6 +15,7 @@ const ja = {
     guide: 'ガイド',
     features: '機能',
     faq: 'よくある質問',
+    support: 'サポート',
   },
   pages: {
     'getting-started': 'はじめに',
@@ -28,6 +30,7 @@ const ja = {
     import: 'ファイルのインポート',
     'export-share': '書き出しと共有',
     faq: 'FAQ',
+    sponsor: 'スポンサー',
     terms: '利用規約',
     privacy: 'プライバシーポリシー',
     'ai-terms': 'AI について',

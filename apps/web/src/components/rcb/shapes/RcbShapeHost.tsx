@@ -139,7 +139,9 @@ function RcbShapeHost({
     // Empty generator / process hairlines are screen-constant (css/zoom) — remount on zoom.
     String(node?.attrs?.processStatus || '') === 'running' ||
     node?.attrs?.imageGenerator ||
-    node?.attrs?.videoGenerator
+    node?.attrs?.videoGenerator ||
+    node?.attrs?.lottieGenerator ||
+    node?.attrs?.audioGenerator
       ? rcbCameraCssZoom(camera).toFixed(3)
       : '',
   ].join('|');

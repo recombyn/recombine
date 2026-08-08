@@ -52,6 +52,7 @@ import {
 } from '@/components/rcb/scene/document/sceneShapes';
 import {
   expandSelectionWithGroups,
+  isAudioGeneratorNode,
   isImageGeneratorNode,
   isLottieGeneratorNode,
   isVideoGeneratorNode,
@@ -105,10 +106,10 @@ function textResizeModeForHandle(handle: ResizeHandle): TextResizeMode {
  * - Image/video default locked; other nodes free unless `lockAspect` is set.
  */
 function nodeAspectLockDefault(key: string | undefined): boolean {
-  return key === 'image' || key === 'video' || key === 'lottie';
+  return key === 'image' || key === 'video' || key === 'lottie' || key === 'audio';
 }
 
-type MediaTitleIcon = 'image' | 'image-generator' | 'video' | 'video-generator';
+type MediaTitleIcon = 'image' | 'image-generator' | 'video' | 'video-generator' | 'audio';
 
 function mediaTitleChrome(opts: {
   key: string | undefined;
@@ -116,6 +117,7 @@ function mediaTitleChrome(opts: {
   isImageGen: boolean;
   isVideoGen: boolean;
   isLottieGen: boolean;
+  isAudioGen: boolean;
   isVideo: boolean;
 }): { name: string; icon: MediaTitleIcon; renameAriaLabel: string } {
   const key = String(opts.key || '');
@@ -124,6 +126,13 @@ function mediaTitleChrome(opts: {
       name: String(opts.name || 'Video'),
       icon: 'video-generator',
       renameAriaLabel: 'Video name',
+    };
+  }
+  if (opts.isAudioGen || key === 'audio') {
+    return {
+      name: String(opts.name || (opts.isAudioGen ? 'Audio Generator' : 'Audio')),
+      icon: 'audio',
+      renameAriaLabel: 'Audio name',
     };
   }
   if (opts.isLottieGen || key === 'lottie') {
@@ -190,7 +199,9 @@ function resolveLockAspect(
   });
   const allLocked =
     !hasExplicitUnlock &&
-    nodes.some((n) => n.key === 'image' || n.key === 'video' || n.key === 'lottie')
+    nodes.some(
+      (n) => n.key === 'image' || n.key === 'video' || n.key === 'lottie' || n.key === 'audio'
+    )
       ? true
       : nodes.length > 0 && nodes.every((n) => readNodeAspectLocked(n));
   return combineAspectLock(allLocked, shiftKey);
@@ -1381,7 +1392,10 @@ function buildShapeOutlines(opts: {
     const withHandles = handleIds.has(id);
     const nodeKey = String(node.key || '');
     const isGen =
-      isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node);
+      isImageGeneratorNode(node) ||
+      isVideoGeneratorNode(node) ||
+      isLottieGeneratorNode(node) ||
+      isAudioGeneratorNode(node);
     const edgeHandles: 'all' | 'horizontal' | 'none' = isGen
       ? 'none'
       : nodeKey === 'video'
@@ -1859,7 +1873,7 @@ function SelectionFeature({
       }
       if (
         target?.closest?.(
-          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props],[data-video-playback-bar],[data-video-trim-toolbar],[data-radius-handle],[data-star-handle],[data-poly-handle],[data-circle-handle]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props],[data-video-playback-bar],[data-video-trim-toolbar],[data-audio-playback-bar],[data-audio-trim-toolbar],[data-audio-speed-toolbar],[data-radius-handle],[data-star-handle],[data-poly-handle],[data-circle-handle]'
         )
       ) {
         applyHover(null);
@@ -2011,7 +2025,7 @@ function SelectionFeature({
       if (onOverlayKnob && !resizeUnderPointer()) return;
       if (
         target.closest(
-          '[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar]'
+          '[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar],[data-audio-playback-bar],[data-audio-trim-toolbar],[data-audio-speed-toolbar]'
         )
       )
         return;
@@ -2940,8 +2954,10 @@ function SelectionFeature({
   const selectedIsImageGen = Boolean(singleNodeData && isImageGeneratorNode(singleNodeData));
   const selectedIsVideoGen = Boolean(singleNodeData && isVideoGeneratorNode(singleNodeData));
   const selectedIsLottieGen = Boolean(singleNodeData && isLottieGeneratorNode(singleNodeData));
+  const selectedIsAudioGen = Boolean(singleNodeData && isAudioGeneratorNode(singleNodeData));
   const selectedIsVideo = Boolean(singleNodeData && singleNodeData.key === 'video' && !selectedIsVideoGen);
-  const selectedIsMediaGen = selectedIsImageGen || selectedIsVideoGen || selectedIsLottieGen;
+  const selectedIsMediaGen =
+    selectedIsImageGen || selectedIsVideoGen || selectedIsLottieGen || selectedIsAudioGen;
   const singleShapeType = singleNodeData
     ? String(singleNodeData?.attrs?.shapeType || '')
     : '';
@@ -3246,7 +3262,8 @@ function SelectionFeature({
       !suppressToolbars &&
       (singleNodeData?.key === 'image' ||
         singleNodeData?.key === 'video' ||
-        singleNodeData?.key === 'lottie') ? (
+        singleNodeData?.key === 'lottie' ||
+        singleNodeData?.key === 'audio') ? (
         <NodeTitleLabel
           box={chromeUnion}
           angle={chromeAngle}
@@ -3257,6 +3274,7 @@ function SelectionFeature({
               isImageGen: selectedIsImageGen,
               isVideoGen: selectedIsVideoGen,
               isLottieGen: selectedIsLottieGen,
+              isAudioGen: selectedIsAudioGen,
               isVideo: selectedIsVideo,
             }).name
           }
@@ -3270,6 +3288,7 @@ function SelectionFeature({
               isImageGen: selectedIsImageGen,
               isVideoGen: selectedIsVideoGen,
               isLottieGen: selectedIsLottieGen,
+              isAudioGen: selectedIsAudioGen,
               isVideo: selectedIsVideo,
             }).icon
           }
@@ -3289,6 +3308,7 @@ function SelectionFeature({
               isImageGen: selectedIsImageGen,
               isVideoGen: selectedIsVideoGen,
               isLottieGen: selectedIsLottieGen,
+              isAudioGen: selectedIsAudioGen,
               isVideo: selectedIsVideo,
             }).renameAriaLabel
           }

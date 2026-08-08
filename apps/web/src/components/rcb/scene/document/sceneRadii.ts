@@ -58,7 +58,15 @@ export function cornerVertexCount(node: any): number {
     }
     return Math.max(1, best);
   }
-  if (t === 'rect' || t === 'roundRect' || t === '' || key === 'rect' || key === 'image' || key === 'video') {
+  if (
+    t === 'rect' ||
+    t === 'roundRect' ||
+    t === '' ||
+    key === 'rect' ||
+    key === 'image' ||
+    key === 'video' ||
+    key === 'audio'
+  ) {
     return 4;
   }
   return 4;

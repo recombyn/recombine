@@ -23,8 +23,10 @@ import {
   updateNodeInDocument,
   isVideoNode,
   isLottieNode,
+  isAudioNode,
   isExportableSceneNode,
   isGeneratorNode,
+  parseLottieAnimationData,
   type SceneClipboardPayload,
 } from '@/components/rcb/scene/document/sceneDocument';
 import {
@@ -72,7 +74,9 @@ import {
   getShapeHost,
   listShapeHosts,
   rcbFitImageIntoViewport,
+  rcbLayoutGeneratorPlate,
   rcbScreenToScene,
+  GENERATOR_EMPTY_STROKE_OUTSET,
   type SvgBoardHandle,
 } from '@/components/rcb';
 import {
@@ -117,6 +121,12 @@ import {
   startVideoUploadPlaceholder,
   finishImageProcess,
   failImageProcess,
+  spawnImageGenerator,
+  spawnVideoGenerator,
+  spawnLottieGenerator,
+  spawnAudioGenerator,
+  spawnLottie,
+  spawnAudio,
   undo,
   redo,
   clearCanvasAttachPick,
@@ -176,6 +186,10 @@ import ImageProcessOverlay from '@/components/editor/nodes/ImageNode/ImageProces
 import ImageGeneratorOverlay from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorOverlay';
 import VideoGeneratorOverlay from '@/components/editor/nodes/VideoGeneratorNode/VideoGeneratorOverlay';
 import LottieGeneratorOverlay from '@/components/editor/nodes/LottieGeneratorNode/LottieGeneratorOverlay';
+import AudioGeneratorOverlay from '@/components/editor/nodes/AudioGeneratorNode/AudioGeneratorOverlay';
+import AudioNodeOverlay, {
+  type AudioGeomOverride,
+} from '@/components/editor/nodes/AudioNode/AudioNodeOverlay';
 import VideoNodeOverlay, {
   type VideoGeomOverride,
 } from '@/components/editor/nodes/VideoNode/VideoNodeOverlay';
@@ -199,6 +213,45 @@ import {
 type SceneBox = { left: number; top: number; width: number; height: number };
 
 const EMPTY_NODE_IDS: string[] = [];
+
+/** Fit generator plate to viewport, center on scene click (or fallback), snap to grid. */
+function layoutGeneratorPlateAtScene(opts: {
+  document: any;
+  camera: { zoom?: number };
+  stageEl: HTMLElement | null;
+  natural: { width: number; height: number };
+  center: { x: number; y: number } | null;
+  fit?: { minRatio?: number; maxRatio?: number };
+}): { x: number; y: number; width: number; height: number } {
+  const doc = opts.document;
+  const fallback = { x: 40, y: 40, width: 360, height: 360 };
+  if (!doc) return fallback;
+  const view = opts.stageEl?.getBoundingClientRect();
+  const zoom = Math.max(0.05, Number(opts.camera?.zoom) || 1);
+  const center =
+    opts.center && Number.isFinite(opts.center.x) && Number.isFinite(opts.center.y)
+      ? opts.center
+      : { x: 40 + fallback.width / 2, y: 40 + fallback.height / 2 };
+  if (!view || view.width <= 0 || view.height <= 0) {
+    const origin = sceneToDocumentCoords(
+      doc,
+      center.x - fallback.width / 2,
+      center.y - fallback.height / 2
+    );
+    return { ...fallback, x: origin.x, y: origin.y };
+  }
+  const laid = rcbLayoutGeneratorPlate({
+    natural: opts.natural,
+    viewport: { width: view.width, height: view.height },
+    zoom,
+    center,
+    gridSize: getDocumentGridSize(doc),
+    visualOutset: GENERATOR_EMPTY_STROKE_OUTSET,
+    fit: opts.fit,
+  });
+  const origin = sceneToDocumentCoords(doc, laid.left, laid.top);
+  return { x: origin.x, y: origin.y, width: laid.width, height: laid.height };
+}
 
 type SvgCanvasProps = {
   document: any;
@@ -333,6 +386,11 @@ function SvgCanvas({
     (s: any) => s.editor.videoToolPanel?.kind as string | undefined
   );
   const videoToolOpen = videoToolPanelKind === 'trim';
+  const audioToolPanelKind = useSelector(
+    (s: any) => s.editor.audioToolPanel?.kind as string | undefined
+  );
+  const audioToolOpen =
+    audioToolPanelKind === 'trim' || audioToolPanelKind === 'speed';
   const activeFrameId = useSelector(
     (s: any) => (s.editor.document?.activeFrameId as string | null) ?? null
   );
@@ -1371,7 +1429,7 @@ function SvgCanvas({
                 height: Math.max(1, Number(node.height) || p.height),
               }
             : p;
-        if (node?.key === 'video' || node?.key === 'lottie') {
+        if (node?.key === 'video' || node?.key === 'lottie' || node?.key === 'audio') {
           hasVideo = true;
           const pending = dragWriteCoalesceRef.current.getPendingVideoGeom()?.[p.nodeId];
           videoOverrides[p.nodeId] = {
@@ -1463,7 +1521,7 @@ function SvgCanvas({
         );
       }
       // HTML video / lottie plates read Redux doc — push live angle so rotate tracks chrome.
-      if (isVideoNode(node) || isLottieNode(node)) {
+      if (isVideoNode(node) || isLottieNode(node) || isAudioNode(node)) {
         const live = documentRef.current?.deltaSetLike?.[nodeId] || node;
         const { left, top } = nodeLeftTop(documentRef.current, live);
         const pending = dragWriteCoalesceRef.current.getPendingVideoGeom()?.[nodeId];
@@ -2284,6 +2342,59 @@ function SvgCanvas({
       imageInputRef.current?.click();
       return;
     }
+    if (
+      action === 'spawnImageGenerator' ||
+      action === 'spawnVideoGenerator' ||
+      action === 'spawnLottieGenerator' ||
+      action === 'spawnAudioGenerator'
+    ) {
+      const doc = documentRef.current;
+      if (!doc) return;
+      const specs = {
+        spawnImageGenerator: {
+          natural: { width: 1024, height: 1024 },
+          fit: { minRatio: 0.28, maxRatio: 0.42 },
+          nameKey: 'editor.tools.imageGenerator' as const,
+          dispatch: spawnImageGenerator,
+        },
+        spawnVideoGenerator: {
+          natural: { width: 1280, height: 720 },
+          fit: { minRatio: 0.28, maxRatio: 0.48 },
+          nameKey: 'editor.tools.videoGenerator' as const,
+          dispatch: spawnVideoGenerator,
+        },
+        spawnLottieGenerator: {
+          natural: { width: 200, height: 200 },
+          fit: { minRatio: 0.18, maxRatio: 0.32 },
+          nameKey: 'editor.tools.lottieGenerator' as const,
+          dispatch: spawnLottieGenerator,
+        },
+        spawnAudioGenerator: {
+          natural: { width: 720, height: 400 },
+          fit: { minRatio: 0.22, maxRatio: 0.4 },
+          nameKey: 'editor.tools.audioGenerator' as const,
+          dispatch: spawnAudioGenerator,
+        },
+      }[action];
+      const laid = layoutGeneratorPlateAtScene({
+        document: doc,
+        camera,
+        stageEl,
+        natural: specs.natural,
+        center: placeAt,
+        fit: specs.fit,
+      });
+      dispatch(
+        specs.dispatch({
+          x: laid.x,
+          y: laid.y,
+          width: laid.width,
+          height: laid.height,
+          name: t(specs.nameKey),
+        })
+      );
+      return;
+    }
     if (action === 'addToChat') {
       const clearAfter = () => {
         dispatch(setSelectedNodeIds([]));
@@ -2730,10 +2841,141 @@ function SvgCanvas({
     }
   };
 
+  const probeAudioDuration = (src: string): Promise<number | null> =>
+    new Promise((resolve) => {
+      // Scene `document` prop shadows the DOM global — use window.document.
+      const audio = window.document.createElement('audio');
+      audio.preload = 'metadata';
+      const done = (value: number | null) => {
+        audio.removeAttribute('src');
+        audio.load();
+        resolve(value);
+      };
+      audio.onloadedmetadata = () => {
+        const d = Number(audio.duration);
+        done(Number.isFinite(d) && d > 0 ? d : null);
+      };
+      audio.onerror = () => done(null);
+      audio.src = src;
+      window.setTimeout(() => done(null), 4000);
+    });
+
+  const onAudioFile = async (file: File | null) => {
+    if (!file) return;
+    const at = imagePlaceAtRef.current;
+    imagePlaceAtRef.current = null;
+    try {
+      const preview = await readFileAsDataUrl(file);
+      const duration = (await probeAudioDuration(preview)) || undefined;
+      const laid = layoutGeneratorPlateAtScene({
+        document: documentRef.current,
+        camera,
+        stageEl,
+        natural: { width: 720, height: 400 },
+        center: at,
+        fit: { minRatio: 0.22, maxRatio: 0.4 },
+      });
+      // Place immediately with local preview; swap to remote URL after upload.
+      dispatch(
+        spawnAudio({
+          src: preview,
+          width: laid.width,
+          height: laid.height,
+          x: laid.x,
+          y: laid.y,
+          name: file.name?.replace(/\.[^.]+$/, '') || t('editor.tools.audio', { defaultValue: 'Audio' }),
+          duration,
+        })
+      );
+      finishToSelect();
+      const spawnedId = String((store.getState() as any).editor?.selectedNodeId || '');
+      const signal = spawnedId ? beginNodeUpload(spawnedId) : undefined;
+      try {
+        const uploaded = await uploadImageFile(file, { signal });
+        if (signal?.aborted) return;
+        const url = String(uploaded.url || '').trim();
+        if (!url || !spawnedId) return;
+        dispatch(
+          patchDocumentNode({
+            nodeId: spawnedId,
+            patch: {
+              attrs: {
+                src: url,
+                ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
+                ...(duration ? { duration } : {}),
+              },
+            },
+          })
+        );
+      } finally {
+        finishNodeUpload(spawnedId);
+      }
+    } catch (err: any) {
+      if (isUploadAbortError(err)) return;
+      const detail = err?.response?.data?.detail || err?.message || '音频上传失败';
+      message.error(typeof detail === 'string' ? detail : '音频上传失败');
+    }
+  };
+
+  const onLottiePaste = async (payload: {
+    animationData: Record<string, unknown>;
+    name?: string;
+    anchor?: { x: number; y: number } | null;
+  }) => {
+    const data = parseLottieAnimationData(payload.animationData);
+    if (!data) {
+      message.error(t('editor.tools.lottieGenInvalidJson'));
+      return;
+    }
+    const natW = Math.max(1, Math.round(Number(data.w) || 200));
+    const natH = Math.max(1, Math.round(Number(data.h) || 200));
+    const { width, height } = imageSizeForViewport({ width: natW, height: natH });
+    const origin = placeOriginForSize({ width, height }, payload.anchor ?? null);
+    dispatch(
+      spawnLottie({
+        animationData: data,
+        width,
+        height,
+        x: origin?.x,
+        y: origin?.y,
+        name: payload.name || t('editor.tools.lottie'),
+      })
+    );
+    finishToSelect();
+  };
+
+  const onLottieFile = async (file: File | null) => {
+    if (!file) return;
+    const at = imagePlaceAtRef.current;
+    imagePlaceAtRef.current = null;
+    try {
+      const text = await file.text();
+      const animationData = parseLottieAnimationData(text);
+      if (!animationData) throw new Error('invalid lottie');
+      await onLottiePaste({
+        animationData,
+        name: file.name?.replace(/\.json$/i, '') || undefined,
+        anchor: at,
+      });
+    } catch {
+      message.error(t('editor.tools.lottieGenInvalidJson'));
+    }
+  };
+
   const onMediaFile = (file: File | null) => {
     if (!file) return;
-    if (file.type.startsWith('video/')) {
+    const mime = (file.type || '').toLowerCase();
+    const name = file.name || '';
+    if (mime.startsWith('video/')) {
       onVideoFile(file);
+      return;
+    }
+    if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(name)) {
+      void onAudioFile(file);
+      return;
+    }
+    if (mime === 'application/json' || mime === 'text/json' || /\.json$/i.test(name)) {
+      void onLottieFile(file);
       return;
     }
     onImageFile(file);
@@ -2756,6 +2998,8 @@ function SvgCanvas({
     finishToSelect,
     onImageFile,
     onVideoFile,
+    onAudioFile,
+    onLottiePaste,
   });
   clipboardApiRef.current = clipboardApi;
 
@@ -2923,6 +3167,13 @@ function SvgCanvas({
             geometryOverrides={videoLiveGeom as Record<string, LottieGeomOverride> | null}
           />
         ) : null}
+        {infinite ? (
+          <AudioNodeOverlay
+            document={document}
+            // Keep HTML waveform during drag — SVG underlay is plate-only (no poster).
+            geometryOverrides={videoLiveGeom as Record<string, AudioGeomOverride> | null}
+          />
+        ) : null}
         {/* Scene-space HTML overlays (selection / draw previews). Origin matches SVG. */}
         {/* Above frame/node stackOrder so preview select/hover strokes aren't covered. */}
         {/* Above HostPathChrome (z=1e6) so poly/star/radius knobs receive hits
@@ -2971,6 +3222,7 @@ function SvgCanvas({
               cropExpandOpen ||
               imageToolSidePanelOpen ||
               videoToolOpen ||
+              audioToolOpen ||
               // Keep chrome while editing radius so the outline can follow rounded corners.
               (shapeStylePanelOpen && shapeStylePanel?.kind !== 'radius')
             }
@@ -2999,6 +3251,11 @@ function SvgCanvas({
                     { left: number; top: number; width: number; height: number }
                   > | null
                 }
+              />
+              <AudioGeneratorOverlay
+                document={document}
+                hidden={geometryTransforming}
+                readOnly={readOnly}
               />
             </>
           ) : null}
@@ -3113,7 +3370,7 @@ function SvgCanvas({
       <input
         ref={imageInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept="image/*,video/*,audio/*,.json,application/json"
         className="hidden"
         onChange={(e) => {
           onMediaFile(e.target.files?.[0] || null);

@@ -617,6 +617,57 @@
       "thinking": 0,
       "enabled": 1,
       "sort_order": 430
+    },
+    {
+      "id": "or-gemini-3-1-flash-tts",
+      "label": "Gemini 3.1 Flash TTS",
+      "description": "OpenRouter 语音合成：Gemini 3.1 Flash TTS（多音色）",
+      "provider": "openrouter",
+      "kind": "audio",
+      "reference_types": [
+        "audio"
+      ],
+      "api_model": "google/gemini-3.1-flash-tts-preview",
+      "icon_key": "google",
+      "price": "2",
+      "max_attachments": 0,
+      "thinking": 0,
+      "enabled": 1,
+      "sort_order": 510
+    },
+    {
+      "id": "or-kokoro-82m",
+      "label": "Kokoro 82M",
+      "description": "OpenRouter 语音合成：Kokoro 82M（多语言 / 低成本）",
+      "provider": "openrouter",
+      "kind": "audio",
+      "reference_types": [
+        "audio"
+      ],
+      "api_model": "hexgrad/kokoro-82m",
+      "icon_key": "openrouter",
+      "price": "1",
+      "max_attachments": 0,
+      "thinking": 0,
+      "enabled": 1,
+      "sort_order": 520
+    },
+    {
+      "id": "or-fish-audio-s2-pro",
+      "label": "Fish Audio S2.1 Pro",
+      "description": "OpenRouter 语音合成：Fish Audio S2.1 Pro（支持参考音色克隆）",
+      "provider": "openrouter",
+      "kind": "audio",
+      "reference_types": [
+        "audio"
+      ],
+      "api_model": "fish-audio/s2.1-pro",
+      "icon_key": "openrouter",
+      "price": "3",
+      "max_attachments": 0,
+      "thinking": 0,
+      "enabled": 1,
+      "sort_order": 530
     }
   ],
   "droppedSeedModelIds": [

@@ -27,6 +27,7 @@ import {
   startImageProcess,
   openImageToolPanel,
   openVideoToolPanel,
+  openAudioToolPanel,
 } from '@/store/modules/editor';
 import FlipRotateToolbar from '@/components/editor/nodes/ImageNode/FlipRotateToolbar';
 import ImageQuickEditComposer from '@/components/editor/nodes/ImageNode/ImageQuickEditComposer';
@@ -49,6 +50,7 @@ import {
 } from '@/components/rcb/scene/document/sceneText';
 import { markdownToPlain } from '@/components/rcb/scene/document/sceneMarkdown';
 import {
+  isAudioGeneratorNode,
   isIconImageNode,
   isImageGeneratorNode,
   isLottieGeneratorNode,
@@ -75,6 +77,10 @@ import {
   VideoToolbarEditTools,
   getVideoHoverHost,
 } from '@/components/editor/nodes/VideoNode';
+import {
+  AudioToolbarEditTools,
+  getAudioHost,
+} from '@/components/editor/nodes/AudioNode';
 import ShapeSelectionToolbar from '@/components/editor/nodes/ShapeNode/ShapeSelectionToolbar';
 import { SelectionToolbarShell } from './SelectionToolbarShell';
 import {
@@ -126,7 +132,7 @@ function resolveImageAspectLocked(node: any, kind: string): boolean {
   const raw = node?.attrs?.lockAspect;
   if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
   if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
-  return kind === 'image' || kind === 'video' || kind === 'lottie';
+  return kind === 'image' || kind === 'video' || kind === 'lottie' || kind === 'audio';
 }
 
 /** Solid MD glyphs — outline bars-3 reads too light next to B/I/U. */
@@ -223,7 +229,12 @@ function SelectionContextToolbar(props: Props): ReactNode {
 
   if (!node || !box) return null;
   // Generator plate uses its own composer overlay — hide photo AI selection chrome.
-  if (isImageGeneratorNode(node) || isVideoGeneratorNode(node) || isLottieGeneratorNode(node)) {
+  if (
+    isImageGeneratorNode(node) ||
+    isVideoGeneratorNode(node) ||
+    isLottieGeneratorNode(node) ||
+    isAudioGeneratorNode(node)
+  ) {
     return null;
   }
   if (imageSidePanelOpen) return null;
@@ -295,7 +306,9 @@ function SelectionContextToolbar(props: Props): ReactNode {
       <SelectionToolbarShell
         box={box}
         edgePadScene={edgePadScene}
-        hasTitleLabel={kind === 'image' || kind === 'video' || kind === 'lottie'}
+        hasTitleLabel={
+          kind === 'image' || kind === 'video' || kind === 'lottie' || kind === 'audio'
+        }
         bare={kind === 'image' && isIconImageNode(node)}
       >
           {/* Order: Style/Edit → Geometry → Blend/Opacity → Actions */}
@@ -805,6 +818,17 @@ function SelectionContextToolbar(props: Props): ReactNode {
                 node?.attrs?.lottieLoop === '0'
               )}
               speed={Math.max(0.25, Number(node?.attrs?.lottieSpeed) || 1)}
+            />
+          ) : null}
+
+          {kind === 'audio' ? (
+            <AudioToolbarEditTools
+              onTrim={() => {
+                const host = getAudioHost(nodeId);
+                const keepTime = Math.max(0, Number(host?.getMediaTime()) || 0);
+                dispatch(openAudioToolPanel({ nodeId, kind: 'trim', keepTime }));
+              }}
+              onSpeed={() => dispatch(openAudioToolPanel({ nodeId, kind: 'speed' }))}
             />
           ) : null}
 

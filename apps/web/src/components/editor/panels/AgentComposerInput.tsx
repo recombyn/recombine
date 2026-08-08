@@ -338,6 +338,103 @@ export function chipBaseKey(key: string): string {
   return i >= 0 ? key.slice(0, i) : key;
 }
 
+/** Infer media kind from an attachment chip (payload / data URL / extension). */
+export function composerAttachmentMediaKind(
+  c: Pick<ComposerContext, 'dataUrl' | 'thumbUrl' | 'payload'>
+): 'image' | 'video' | 'audio' {
+  const data = String(c.dataUrl || '');
+  const payload = String(c.payload || '');
+  const blob = `${data} ${c.thumbUrl || ''} ${payload}`;
+  if (
+    data.startsWith('data:audio/') ||
+    /\[Attached audio\]/i.test(payload) ||
+    /\.(mp3|wav|m4a|aac|ogg|flac)(\?|#|$)/i.test(blob)
+  ) {
+    return 'audio';
+  }
+  if (
+    data.startsWith('data:video/') ||
+    /\[Attached video\]/i.test(payload) ||
+    /\[Canvas video\]/i.test(payload) ||
+    /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(blob)
+  ) {
+    return 'video';
+  }
+  return 'image';
+}
+
+export function libraryAssetAttachmentKey(assetId: string): string {
+  return `attachment:asset:${assetId}`;
+}
+
+/**
+ * Ensure a library asset is present as a composer attachment chip.
+ * Shared by AgentDock + generator `@` pickers (5 call sites).
+ */
+export function upsertLibraryAssetAttachment(
+  existing: ComposerContext[],
+  asset: {
+    id: string;
+    kind: string;
+    url?: string | null;
+    prompt?: string | null;
+    objectKey?: string | null;
+  },
+  fallbackLabel: string
+): { contexts: ComposerContext[]; attachment: ComposerContext; ordinal: number } | null {
+  const url = String(asset.url || '').trim();
+  if (!url) return null;
+  const kind =
+    asset.kind === 'video' || asset.kind === 'audio' || asset.kind === 'image'
+      ? asset.kind
+      : null;
+  if (!kind) return null;
+  const key = libraryAssetAttachmentKey(asset.id);
+  const found = existing.find((c) => c.key === key || chipBaseKey(c.key) === key);
+  let contexts = existing;
+  let attachment = found;
+  if (!attachment) {
+    const promptLabel = String(asset.prompt || '').trim();
+    attachment = {
+      key,
+      label: promptLabel.slice(0, 48) || fallbackLabel,
+      kind: 'attachment',
+      payload:
+        kind === 'video'
+          ? `[Attached video]\nid: ${asset.id}\nname: ${promptLabel || asset.id}`
+          : kind === 'audio'
+            ? `[Attached audio]\nid: ${asset.id}\nname: ${promptLabel || asset.id}`
+            : `[Attached image]\nid: ${asset.id}\nname: ${promptLabel || asset.id}`,
+      dataUrl: url,
+      thumbUrl: url,
+      uploadKey: asset.objectKey || undefined,
+      uploadStatus: 'ready',
+    };
+    contexts = [...existing, attachment];
+  }
+  const attachments = contexts.filter((c) => c.kind === 'attachment');
+  const ordinal = Math.max(1, attachments.findIndex((c) => c.key === key) + 1);
+  return { contexts, attachment, ordinal };
+}
+
+/** Inline `@` chip that references an attachment strip item. */
+export function buildAttachRefMentionContext(
+  att: ComposerContext,
+  label: string,
+  payload?: string
+): ComposerContext {
+  return {
+    key: `attach-ref:${chipBaseKey(att.key)}`,
+    label,
+    kind: 'image',
+    payload: payload || att.payload || '[User attachment]',
+    ...(att.dataUrl ? { dataUrl: att.dataUrl } : {}),
+    ...(att.thumbUrl || att.dataUrl
+      ? { thumbUrl: String(att.thumbUrl || att.dataUrl) }
+      : {}),
+  };
+}
+
 /** `@query` at end of composer text → open mention panel. */
 export function parseAtMentionQuery(next: string): { open: boolean; query: string } {
   const at = next.lastIndexOf('@');
@@ -494,7 +591,16 @@ function clipboardMediaFiles(data: DataTransfer | null): File[] {
   const push = (f: File | null) => {
     if (!f) return;
     const mime = (f.type || '').toLowerCase();
-    if (!mime.startsWith('image/') && !mime.startsWith('video/')) return;
+    if (
+      !mime.startsWith('image/') &&
+      !mime.startsWith('video/') &&
+      !mime.startsWith('audio/') &&
+      mime !== 'application/json' &&
+      mime !== 'text/json' &&
+      !/\.json$/i.test(f.name || '')
+    ) {
+      return;
+    }
     const id = `${f.name}:${f.size}:${f.type}:${f.lastModified}`;
     if (seen.has(id)) return;
     seen.add(id);
@@ -504,7 +610,13 @@ function clipboardMediaFiles(data: DataTransfer | null): File[] {
     for (const item of Array.from(data.items || [])) {
       if (item.kind !== 'file') continue;
       const t = (item.type || '').toLowerCase();
-      if (t.startsWith('image/') || t.startsWith('video/')) {
+      if (
+        t.startsWith('image/') ||
+        t.startsWith('video/') ||
+        t.startsWith('audio/') ||
+        t === 'application/json' ||
+        t === 'text/json'
+      ) {
         push(item.getAsFile());
       }
     }

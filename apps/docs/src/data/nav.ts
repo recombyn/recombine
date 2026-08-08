@@ -1,5 +1,13 @@
 import type { DocsLang } from '@/i18n'
 
+/** Prefix public asset / absolute path with Vite `base` (GitHub Pages `/recombyn/`). */
+export function withDocsBase(path: string): string {
+  const base = import.meta.env.BASE_URL || '/'
+  if (/^https?:\/\//i.test(path)) return path
+  const clean = path.startsWith('/') ? path.slice(1) : path
+  return `${base}${clean}`
+}
+
 export type DocLink = {
   /** i18n key under pages.* */
   pageKey: string
@@ -44,6 +52,10 @@ export const DOC_GROUP_DEFS: DocGroupDef[] = [
     groupKey: 'faq',
     items: [{ pageKey: 'faq', path: '/faq/' }],
   },
+  {
+    groupKey: 'support',
+    items: [{ pageKey: 'sponsor', path: '/sponsor' }],
+  },
 ]
 
 export const LEGAL_LINK_DEFS: LegalLinkDef[] = [
@@ -53,11 +65,19 @@ export const LEGAL_LINK_DEFS: LegalLinkDef[] = [
   { pageKey: 'about', path: '/legal/about' },
 ]
 
-const DOC_MODULES = import.meta.glob('../../content/{zh-CN,zh-TW,en,ja}/{guide,features,faq,legal}/**/*.md', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>
+const DOC_MODULES = {
+  ...import.meta.glob('../../content/{zh-CN,zh-TW,en,ja}/{guide,features,faq,legal}/**/*.md', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }),
+  // Top-level pages e.g. content/zh-CN/sponsor.md → /sponsor
+  ...import.meta.glob('../../content/{zh-CN,zh-TW,en,ja}/*.md', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }),
+} as Record<string, string>
 
 function filePathToRoute(file: string): { locale: DocsLang; path: string } | null {
   // ../../content/zh-CN/guide/getting-started.md → { locale, path: /guide/getting-started }
@@ -147,6 +167,10 @@ export function findLegalPageKey(pathname: string): string | null {
 export function isHelpDocPath(pathname: string): boolean {
   const p = normalizePath(pathname)
   return p.startsWith('/guide/') || p.startsWith('/features/') || p === '/faq' || p.startsWith('/faq/')
+}
+
+export function isSponsorPath(pathname: string): boolean {
+  return normalizePath(pathname) === '/sponsor'
 }
 
 export function isLegalPath(pathname: string): boolean {

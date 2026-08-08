@@ -41,7 +41,7 @@ export type LlmModel = {
   label: string;
   provider: string;
   description?: string | null;
-  kind?: 'text' | 'image' | 'svg' | 'video';
+  kind?: 'text' | 'image' | 'svg' | 'video' | 'audio';
   referenceTypes?: ModelReferenceType[];
   reference_types?: ModelReferenceType[];
   thinking?: boolean;
@@ -59,15 +59,56 @@ export type LlmModel = {
   image_limits?: ImageLimits | null;
 };
 
+/** Default generation params carried by image/video preset models. */
+export type ByokPresetDefaults = {
+  aspectRatios?: string[];
+  resolutions?: string[];
+  defaultResolution?: string;
+  durations?: number[];
+  defaultDuration?: number;
+};
+
+/** One selectable model under a legacy per-endpoint preset. */
+export type ByokPresetModel = {
+  apiModel: string;
+  label: string;
+  kind: 'text' | 'vision' | 'image' | 'video' | 'audio';
+  thinking?: boolean;
+  defaults?: ByokPresetDefaults;
+};
+
+/** Aggregator platform — one API key unlocks catalog models for that provider. */
+export type ByokPlatform = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  website?: string;
+  iconKey?: string;
+  kinds: Array<'text' | 'vision' | 'image' | 'video'>;
+  /** Stable vault id, e.g. ``platform:openrouter``. */
+  rowId: string;
+  hint?: string;
+};
+
+/** @deprecated Prefer ByokPlatform — older ``byokPresets`` field. */
+export type ByokPresetProvider = ByokPlatform & {
+  models?: ByokPresetModel[];
+};
+
 export type ChatModelsResponse = {
   models: LlmModel[];
   available: boolean;
   imageModels?: LlmModel[];
   videoModels?: LlmModel[];
+  audioModels?: LlmModel[];
   /** ISO country from GeoLite2 / edge headers when known. */
   clientRegion?: string | null;
   /** False on CN (and other blocked) networks — OpenRouter catalog hidden. */
   openrouterAvailable?: boolean;
+  /** Aggregator platforms (OpenRouter / Volcengine) — one key unlocks catalog models. */
+  byokPlatforms?: ByokPlatform[];
+  /** Alias of byokPlatforms for older clients. */
+  byokPresets?: ByokPresetProvider[];
 };
 
 export type GenerateImageInput = {
@@ -153,4 +194,33 @@ export const generateVideo = (
     data,
     signal: opts?.signal,
     timeout: 600000,
+  });
+
+export type GenerateAudioInput = {
+  prompt: string;
+  model?: string;
+  voice?: string;
+  response_format?: string;
+  speed?: number;
+};
+
+export type GenerateAudioResult = {
+  audios: string[];
+  model: string;
+  voice?: string;
+  mime?: string;
+  assets?: Array<{ url?: string | null; id?: string | null }> | null;
+};
+
+/** POST /api/v1/chat/audio — OpenRouter TTS / speech. */
+export const generateAudio = (
+  data: GenerateAudioInput,
+  opts?: { signal?: AbortSignal }
+) =>
+  request<GenerateAudioResult>({
+    url: '/api/v1/chat/audio',
+    method: 'post',
+    data,
+    signal: opts?.signal,
+    timeout: 180000,
   });
