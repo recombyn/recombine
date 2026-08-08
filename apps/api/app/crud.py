@@ -248,6 +248,30 @@ def update_project_if_revision(
     return int(getattr(result, "rowcount", 0) or 0) > 0
 
 
+def update_project_covers(
+    *,
+    session: Session,
+    user_id: str,
+    project_id: str,
+    thumbnail_key: str | None,
+    thumbnail_custom: bool,
+    updated_at: float,
+) -> bool:
+    """Update cover tiles only — does not bump document revision."""
+    stmt = (
+        sa_update(Project)
+        .where(Project.id == project_id, Project.user_id == user_id)
+        .values(
+            thumbnail_key=thumbnail_key,
+            thumbnail_custom=1 if thumbnail_custom else 0,
+            updated_at=updated_at,
+        )
+    )
+    result = session.execute(stmt)
+    session.commit()
+    return int(getattr(result, "rowcount", 0) or 0) > 0
+
+
 def delete_project_for_user(
     *,
     session: Session,
@@ -1037,6 +1061,7 @@ def create_asset(
     source: str,
     prompt: str | None,
     created_at: float,
+    meta_json: str | None = None,
 ) -> Asset:
     row = Asset(
         id=asset_id,
@@ -1049,9 +1074,26 @@ def create_asset(
         height=height,
         source=source,
         prompt=prompt,
-        meta_json=None,
+        meta_json=meta_json,
         created_at=created_at,
     )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def update_asset_meta_json(
+    *,
+    session: Session,
+    user_id: str,
+    asset_id: str,
+    meta_json: str,
+) -> Asset | None:
+    row = get_user_asset(session=session, user_id=user_id, asset_id=asset_id)
+    if not row:
+        return None
+    row.meta_json = meta_json
     session.add(row)
     session.commit()
     session.refresh(row)

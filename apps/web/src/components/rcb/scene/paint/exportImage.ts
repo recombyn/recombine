@@ -828,13 +828,14 @@ export function exportFabricImage(options: ExportImageOptions = {}): boolean {
     if (options.selectionOnly && !(options.nodeIds || []).length) {
       return false;
     }
-    void (async () => {
+    async function runExportOnce() {
       try {
         await exportOnce(options);
       } catch (err) {
         console.error(err);
       }
-    })();
+    }
+    void runExportOnce();
     return true;
   } catch (err) {
     console.error(err);

@@ -859,6 +859,8 @@ const ja = {
     shareMe: '自分',
     shareRemoveCollaborator: '削除',
     shareUpdateFailed: '共有設定の更新に失敗しました',
+    shareCreateFailed: '共有リンクの作成に失敗しました',
+    shareOpenFailed: '共有ファイルを開けませんでした',
     shareQrSoon: 'QRコードは近日公開',
     shareLink: '共有リンク',
     shareLinkPlaceholder: '生成中…',

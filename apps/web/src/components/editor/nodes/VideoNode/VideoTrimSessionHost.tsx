@@ -383,7 +383,7 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
       restoreKeepTime();
     }
 
-    void (async () => {
+    async function extractVideoFilmstrip() {
       try {
         await extractFilmstrip(src, total, uploadKey, {
           knownDuration: known || undefined,
@@ -405,7 +405,8 @@ function VideoTrimSessionHost({ document }: { document: any }): ReactNode {
         console.warn('[video trim filmstrip]', err);
         if (!cancelled) setFrames(Array.from({ length: total }, () => ''));
       }
-    })();
+    }
+    void extractVideoFilmstrip();
 
     return () => {
       cancelled = true;

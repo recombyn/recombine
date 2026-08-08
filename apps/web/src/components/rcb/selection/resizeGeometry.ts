@@ -208,6 +208,91 @@ export function scaleBoxesToUnion(
   }));
 }
 
+/**
+ * Scale child boxes with `from`→`to` in the local frame of a rotated control box.
+ * When angle≈0, identical to {@link scaleBoxesToUnion}.
+ */
+export function scaleBoxesToOrientedUnion(
+  origins: SceneBox[],
+  from: SceneBox,
+  to: SceneBox,
+  angleDeg: number
+): SceneBox[] {
+  if (Math.abs(angleDeg) < 0.01) return scaleBoxesToUnion(origins, from, to);
+
+  const sx = to.width / Math.max(1e-4, from.width);
+  const sy = to.height / Math.max(1e-4, from.height);
+  const rad = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const ic = Math.cos(-rad);
+  const isn = Math.sin(-rad);
+  const fromCx = from.left + from.width / 2;
+  const fromCy = from.top + from.height / 2;
+  const toCx = to.left + to.width / 2;
+  const toCy = to.top + to.height / 2;
+
+  return origins.map((o) => {
+    const ocx = o.left + o.width / 2;
+    const ocy = o.top + o.height / 2;
+    const dx = ocx - fromCx;
+    const dy = ocy - fromCy;
+    const lx = dx * ic - dy * isn;
+    const ly = dx * isn + dy * ic;
+    const nlx = lx * sx;
+    const nly = ly * sy;
+    const nw = Math.max(1, o.width * sx);
+    const nh = Math.max(1, o.height * sy);
+    const nx = toCx + nlx * cos - nly * sin;
+    const ny = toCy + nlx * sin + nly * cos;
+    return {
+      left: nx - nw / 2,
+      top: ny - nh / 2,
+      width: nw,
+      height: nh,
+    };
+  });
+}
+
+/** Axis-aligned bounds of a box after rotating about its center. */
+export function rotatedAabbBox(box: SceneBox, angleDeg: number): SceneBox {
+  if (Math.abs(angleDeg) < 0.01) {
+    return { left: box.left, top: box.top, width: box.width, height: box.height };
+  }
+  const w = Math.max(1, box.width);
+  const h = Math.max(1, box.height);
+  const cx = box.left + w / 2;
+  const cy = box.top + h / 2;
+  const rad = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [px, py] of [
+    [box.left, box.top],
+    [box.left + w, box.top],
+    [box.left + w, box.top + h],
+    [box.left, box.top + h],
+  ] as const) {
+    const dx = px - cx;
+    const dy = py - cy;
+    const rx = cx + dx * cos - dy * sin;
+    const ry = cy + dx * sin + dy * cos;
+    minX = Math.min(minX, rx);
+    minY = Math.min(minY, ry);
+    maxX = Math.max(maxX, rx);
+    maxY = Math.max(maxY, ry);
+  }
+  return {
+    left: minX,
+    top: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
 /** Rotate box centers around a point; sizes unchanged. Returns new boxes. */
 export function rotateBoxesAround(
   origins: SceneBox[],

@@ -5,19 +5,14 @@ import { Button, Dialog, message } from '@/components/base';
 import ProjectCoverCollage from '@/components/home/ProjectCoverCollage';
 import { checkPlazaCoverForPublish, coverDocumentHasContent } from '@/utils/plazaCover';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
-import { buildProjectCoverTiles, PREVIEW_PNG_MAX_EDGE } from '@/utils/renderProjectThumbnail';
 
-/** Publish modal preview — sharper than list-card 360px JPEG thumbs. */
-const PUBLISH_PREVIEW_TILE_EDGE = Math.max(960, Math.round(PREVIEW_PNG_MAX_EDGE / 2));
-
-/** `<img src>` cannot send Bearer — skip auth-only upload routes. */
 function canUseAsImgSrc(url: string): boolean {
   const raw = String(url || '').trim();
   if (!raw) return false;
   if (raw.startsWith('data:') || raw.startsWith('blob:')) return true;
+  if (raw.startsWith('/')) return true;
   try {
     const u = new URL(raw, typeof window !== 'undefined' ? window.location.origin : 'http://local');
-    if (u.pathname.startsWith('/api/v1/uploads/')) return false;
     return u.protocol === 'http:' || u.protocol === 'https:';
   } catch {
     return false;
@@ -75,53 +70,11 @@ function PlazaPublishForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Same source as Share / homepage: prefer saved collage URLs.
-  // Only live-raster when nothing is stored yet (or regenerate failed to
-  // load). Live element crops of white frames look blank in a 2×2 grid.
+  // Prefer server cover URLs (from /covers). Fallback: live document collage.
   useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      if (propUrls.length) {
-        if (!cancelled) {
-          setResolvedUrls(propUrls);
-          setResolvingCover(false);
-        }
-        return;
-      }
-      if (!document) {
-        if (!cancelled) {
-          setResolvedUrls([]);
-          setResolvingCover(false);
-        }
-        return;
-      }
-      if (!cancelled) setResolvingCover(true);
-      try {
-        const tiles = await buildProjectCoverTiles(document, {
-          maxEdge: PUBLISH_PREVIEW_TILE_EDGE,
-          fullBoardMaxEdge: PREVIEW_PNG_MAX_EDGE,
-          format: 'png',
-          compress: false,
-        });
-        if (cancelled) return;
-        const next = (tiles.dataUrls || tiles.urls || [])
-          .map((u) => String(u || '').trim())
-          .filter(Boolean)
-          .slice(0, 4);
-        setResolvedUrls(next);
-      } catch {
-        if (!cancelled) setResolvedUrls([]);
-      } finally {
-        if (!cancelled) setResolvingCover(false);
-      }
-    };
-
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [propUrls, document, projectId]);
+    setResolvedUrls(propUrls);
+    setResolvingCover(false);
+  }, [propUrls]);
 
   const goPhase = (next: 'confirm' | 'success') => {
     setPhase(next);
@@ -191,14 +144,13 @@ function PlazaPublishForm({
         <div className="aspect-[680/385] w-full overflow-hidden bg-[var(--canvas)]">
           {resolvingCover && !hasThumbCollage ? (
             <div className="h-full w-full animate-pulse bg-[var(--accent-soft)]" />
-          ) : hasThumbCollage ? (
+          ) : (
             <ProjectCoverCollage
               urls={resolvedUrls}
               version={coverVersion}
+              document={document}
               className="!h-full !rounded-none !border-0 !shadow-none"
             />
-          ) : (
-            <div className="h-full w-full bg-[var(--accent-soft)]" />
           )}
         </div>
       </div>

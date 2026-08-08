@@ -13,6 +13,8 @@ export type MediaAssetDragPayload = {
   prompt?: string | null;
   name?: string | null;
   duration?: number | null;
+  /** Inlined Bodymovin from list API — canvas drop must not refetch .json. */
+  animationData?: Record<string, unknown> | null;
 };
 
 /**
@@ -108,6 +110,8 @@ export function setMediaAssetDragData(
     prompt: payload.prompt || undefined,
     name: payload.name || undefined,
     duration: payload.duration || undefined,
+    // Keep in memory only — too large for DataTransfer JSON.
+    ...(payload.animationData ? { animationData: payload.animationData } : {}),
   };
 
   const slimSrc = slimDragSrc(pendingMediaAssetDrag);

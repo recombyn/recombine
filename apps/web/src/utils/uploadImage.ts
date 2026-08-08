@@ -162,14 +162,15 @@ export function waitForImageReady(
     opts?.signal?.addEventListener('abort', onAbort, { once: true });
     img.onload = () => {
       if (typeof img.decode === 'function') {
-        void (async () => {
+        async function decodeAndFinish() {
           try {
             await img.decode!();
           } catch {
             /* decode optional — still treat as loaded */
           }
           finish(true);
-        })();
+        }
+        void decodeAndFinish();
         return;
       }
       finish(true);
@@ -191,12 +192,9 @@ export function isOurStoredImageUrl(src: string): boolean {
   }
 }
 
-/** Local storage keys / auth download routes cannot be used as raw <img>/<video> src. */
-export function mediaSrcNeedsAuthFetch(src: string): boolean {
-  const s = String(src || '').trim();
-  if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
-  if (isOurStoredImageUrl(s)) return true;
-  return /^(assets|uploads|projects|font-tasks)\//.test(s);
+/** Display whatever URL the API/item already gave — no rewrite. */
+export function toDisplayMediaUrl(src: string, _uploadKey?: string | null): string {
+  return String(src || '').trim();
 }
 
 export function resolveUploadObjectKey(src: string): string | null {

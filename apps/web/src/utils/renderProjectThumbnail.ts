@@ -1,6 +1,6 @@
 /**
- * Rasterize project covers for list cards / cloud sync.
- * Save path: up to 4 per-element snapshots (not full-page, not raw image src).
+ * Rasterize project covers for list cards / Publish / cloud sync.
+ * Up to 4 tiles: per-artboard or per-element snapshots — never raw node src.
  */
 
 import { inlineSvgImages, renderExport } from '@/components/rcb/scene/paint/exportImage';
@@ -62,8 +62,6 @@ function canvasToDataUrl(canvas: HTMLCanvasElement, format: 'webp' | 'png' | 'jp
 /** Build a full-board WebP for project list / publish preview (contain, not cropped). */
 export async function renderProjectThumbnail(document: unknown): Promise<string | null> {
   if (!document || typeof document !== 'object') return null;
-  // Content-fit the artboard so list/publish covers center the design, not empty margins.
-  // Empty boards still render (paper / frame background) so list covers stay in sync.
   const cover = extractPlazaCoverDocument(document, { contentFit: true }) || document;
   return renderDocumentThumbnail(cover, { allowEmpty: true });
 }
@@ -84,9 +82,10 @@ function nodeOverlapsFrame(node: Record<string, unknown>, frame: PlazaCoverFrame
   return ow * oh >= w * h * 0.12;
 }
 
-/** image → shape/svg → text → other (collage prefers visual tiles). */
+/** Media → shape/svg → text → other (collage prefers visual tiles). */
 function coverElementTypeRank(key: string): number {
-  if (key === 'image') return 0;
+  if (key === 'image' || key === 'video') return 0;
+  if (key === 'lottie' || key === 'audio') return 1;
   if (
     key === 'svg' ||
     key === 'path' ||
@@ -96,10 +95,26 @@ function coverElementTypeRank(key: string): number {
     key === 'circle' ||
     key === 'line'
   ) {
-    return 1;
+    return 2;
   }
-  if (key === 'text') return 2;
-  return 3;
+  if (key === 'text') return 3;
+  return 4;
+}
+
+/** Skip empty media plates (#E5E7EB placeholders) — they steal collage slots from real shapes. */
+function coverElementHasVisual(node: Record<string, unknown>): boolean {
+  const key = String(node.key || '');
+  const attrs =
+    node.attrs && typeof node.attrs === 'object'
+      ? (node.attrs as Record<string, unknown>)
+      : {};
+  if (key === 'image' || key === 'video' || key === 'lottie') {
+    const src = String(attrs.src || '').trim();
+    const poster = String(attrs.poster || '').trim();
+    return Boolean(src || poster);
+  }
+  if (key === 'audio') return Boolean(String(attrs.src || '').trim());
+  return true;
 }
 
 /**
@@ -119,6 +134,7 @@ export function pickCoverElementIds(document: unknown): string[] {
   nodes.forEach(({ id, node }, z) => {
     if (!id || !node || typeof node !== 'object') return;
     if (!isExportableSceneNode(node)) return;
+    if (!coverElementHasVisual(node)) return;
     if (frame && !nodeOverlapsFrame(node, frame)) return;
     const w = Math.max(1, num(node.width, 1));
     const h = Math.max(1, num(node.height, 1));
@@ -141,33 +157,87 @@ export function pickCoverElementIds(document: unknown): string[] {
   return ranked.slice(0, MAX_TILES).map((r) => r.id);
 }
 
+/**
+ * Mini document with one element on a white board — same finite-board path as list thumbs.
+ * Avoids infinite-canvas selection export (shapes often rasterized to empty/gray tiles).
+ */
+function extractElementCoverDocument(document: unknown, nodeId: string): unknown | null {
+  const dsl = (document as { deltaSetLike?: Record<string, unknown> })?.deltaSetLike;
+  const raw = dsl?.[nodeId];
+  if (!raw || typeof raw !== 'object') return null;
+  const node = raw as Record<string, unknown>;
+  if (!isExportableSceneNode(node) || !coverElementHasVisual(node)) return null;
+
+  const w = Math.max(1, num(node.width, 1));
+  const h = Math.max(1, num(node.height, 1));
+  const pad = Math.max(12, Math.round(Math.max(w, h) * 0.08));
+  const boardW = Math.max(32, Math.round(w + pad * 2));
+  const boardH = Math.max(32, Math.round(h + pad * 2));
+  const id = String(nodeId);
+
+  return {
+    width: boardW,
+    height: boardH,
+    backgroundColor: '#ffffff',
+    backgroundFillType: 'solid',
+    frames: [
+      {
+        id: 'element-cover',
+        x: 0,
+        y: 0,
+        width: boardW,
+        height: boardH,
+        backgroundColor: '#ffffff',
+      },
+    ],
+    deltaSetLike: {
+      ROOT: { id: 'ROOT', key: 'entry', children: [id] },
+      [id]: {
+        ...node,
+        id,
+        x: pad,
+        y: pad,
+        width: w,
+        height: h,
+      },
+    },
+  };
+}
+
 /** Rasterize one element (cropped to its bbox) for a collage tile. */
 async function rasterizeElementTile(
   document: unknown,
   nodeId: string,
   opts?: { maxEdge?: number; format?: 'webp' | 'png' | 'jpeg'; compress?: boolean }
 ): Promise<string | null> {
-  const dsl = (document as { deltaSetLike?: Record<string, unknown> })?.deltaSetLike;
-  const node = dsl?.[nodeId];
-  if (!node || typeof node !== 'object') return null;
-  const w = Math.max(1, num((node as Record<string, unknown>).width, 1));
-  const h = Math.max(1, num((node as Record<string, unknown>).height, 1));
+  const slice = extractElementCoverDocument(document, nodeId);
+  if (!slice) return null;
+
   const maxEdge = Math.max(64, Math.round(opts?.maxEdge || TILE_MAX_EDGE));
-  // Allow >1× so small scene boxes still fill the tile sharply on retina.
-  const multiplier = Math.max(0.25, Math.min(2, maxEdge / Math.max(w, h)));
-  const format = opts?.format || 'jpeg';
-  // renderExport only accepts png|jpeg|svg — map webp tiles to png.
-  const exportFormat = format === 'webp' ? 'png' : format;
-  const compress = opts?.compress ?? exportFormat === 'jpeg';
+  let format: 'webp' | 'png' | 'jpeg' = 'webp';
+  if (opts?.format === 'png' || opts?.format === 'jpeg') format = opts.format;
 
   try {
+    const viaThumb = await renderDocumentThumbnail(slice, {
+      allowEmpty: true,
+      format,
+      maxEdge,
+    });
+    if (viaThumb) return viaThumb;
+  } catch {
+    /* fall through to export */
+  }
+
+  // Fallback: selection export (images with remote src sometimes need inline pass).
+  try {
+    const exportFormat = format === 'webp' ? 'png' : format;
     const result = await renderExport({
-      document,
+      document: slice,
       selectionOnly: true,
       nodeIds: [nodeId],
-      multiplier,
+      multiplier: 1,
       format: exportFormat,
-      compress,
+      compress: opts?.compress ?? exportFormat === 'jpeg',
       backgroundColor: '#ffffff',
     });
     if (result?.kind === 'raster' && result.dataUrl) return result.dataUrl;
@@ -180,7 +250,7 @@ async function rasterizeElementTile(
 export type ProjectCoverTiles = {
   /** Already-hosted image URLs — rare passthrough. */
   urls?: string[];
-  /** Raster data URLs to upload as project thumbs (preferred). */
+  /** Raster data URLs to upload as project thumbs. */
   dataUrls?: string[];
 };
 
@@ -210,9 +280,7 @@ function resolveCoverTileRasterOpts(opts?: ProjectCoverTileOptions) {
 
 /**
  * Up to 4 cover tiles for list collage / Publish / cloud sync.
- * Prefer one snapshot per artboard when there are 2+ boards;
- * else per-element crops; else one full-board cover.
- * Tile rasters run in parallel so sync sends all four in one request.
+ * 2+ artboards → one snapshot each; else up to 4 per-element rasters; else full board.
  */
 export async function buildProjectCoverTiles(
   document: unknown,
@@ -220,9 +288,9 @@ export async function buildProjectCoverTiles(
 ): Promise<ProjectCoverTiles> {
   if (!document || typeof document !== 'object') return {};
 
-  const { format: thumbFormat, tileMax, fullMax } = resolveCoverTileRasterOpts(opts);
-
+  const { format: thumbFormat, tileMax } = resolveCoverTileRasterOpts(opts);
   const frames = listArtboardFrames(document).slice(0, MAX_TILES);
+
   if (frames.length >= 2) {
     const slices = frames
       .map((frame) => extractFrameDocument(document, frame, { contentFit: true }))
@@ -240,13 +308,14 @@ export async function buildProjectCoverTiles(
     if (dataUrls.length) return { dataUrls };
   }
 
+  // Single board: up to 4 element tiles (square / image / circle each as one cover).
   const ids = pickCoverElementIds(document);
   if (ids.length) {
     const rendered = await Promise.all(
       ids.map((id) =>
         rasterizeElementTile(document, id, {
-          maxEdge: opts?.maxEdge,
-          format: opts?.format,
+          maxEdge: opts?.maxEdge ?? tileMax,
+          format: opts?.format ?? thumbFormat,
           compress: opts?.compress,
         })
       )
@@ -322,8 +391,6 @@ export async function renderDocumentThumbnail(
       omitNonExportable: true,
     });
 
-    // Same as export: blob-URL SVG→canvas cannot load external <image> hrefs.
-    // Inline rasters (auth/COS-aware) before rasterizing the cover.
     const xml = new XMLSerializer().serializeToString(root);
     const inlined = await inlineSvgImages(xml, previewDoc, { failClosed: false });
     const blob = new Blob([inlined], { type: 'image/svg+xml;charset=utf-8' });

@@ -649,13 +649,14 @@ export function CollabRoomProvider({
         const scene = sceneFromYDoc(ydoc);
         if (!id || !scene) return;
         if (id.startsWith('share_')) {
-          void (async () => {
+          async function persistShareDocument() {
             try {
               await updateShareDocumentApi(id, scene);
             } catch {
               /* ignore */
             }
-          })();
+          }
+          void persistShareDocument();
           return;
         }
         const ed = store.getState().editor as {

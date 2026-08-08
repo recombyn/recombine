@@ -6,10 +6,8 @@ import { rcbCenterOnPoint, type RcbCamera } from '@/components/rcb';
 import {
   beginNodeUpload,
   finishNodeUpload,
-  imageSrcToFile,
   isUploadAbortError,
-  mediaSrcNeedsAuthFetch,
-  readFileAsDataUrl,
+  toDisplayMediaUrl,
   uploadImageFromSrc,
   waitForImageReady,
 } from '@/utils/uploadImage';
@@ -83,47 +81,13 @@ async function hydrateAssetSrcForCanvas(
   if (!src) return { src, uploadKey };
 
   if (payload.kind === 'lottie') {
-    const file = await imageSrcToFile(src, 'asset-lottie.json', {
-      uploadKey,
-      fallbackMime: 'application/json',
-    });
-    const text = await file.text();
-    const animationData = parseLottieAnimationData(text);
-    if (!animationData) throw new Error('invalid lottie json');
-    return { src, uploadKey, animationData };
+    const fromList = parseLottieAnimationData(payload.animationData);
+    if (fromList) return { src, uploadKey, animationData: fromList };
+    throw new Error('lottie asset missing animationData');
   }
 
-  if (payload.kind === 'image') {
-    // List API already gives data: thumbs (local) — place as-is, no /uploads round-trip.
-    if (src.startsWith('data:') || src.startsWith('blob:')) {
-      return { src, uploadKey };
-    }
-    // Public CDN / COS https — also canvas-ready.
-    if (/^https?:\/\//i.test(src) && !mediaSrcNeedsAuthFetch(src)) {
-      return { src, uploadKey };
-    }
-    // Auth-gated path or bare storage key — hydrate via upload API.
-    const file = await imageSrcToFile(
-      uploadKey ? `/api/v1/uploads/files/${uploadKey}` : src,
-      'asset-image.png',
-      { uploadKey }
-    );
-    return { src: await readFileAsDataUrl(file), uploadKey };
-  }
-
-  if (payload.kind === 'video' || payload.kind === 'audio') {
-    if (!mediaSrcNeedsAuthFetch(src) && /^https?:\/\//i.test(src)) {
-      return { src, uploadKey };
-    }
-    if (mediaSrcNeedsAuthFetch(src)) return { src, uploadKey };
-    if (uploadKey && /^(assets|uploads|projects|font-tasks)\//.test(src)) {
-      return { src: `/api/v1/uploads/files/${uploadKey}`, uploadKey };
-    }
-    if (/^(assets|uploads|projects|font-tasks)\//.test(src)) {
-      return { src: `/api/v1/uploads/files/${src}`, uploadKey: uploadKey || src };
-    }
-  }
-  return { src, uploadKey };
+  // Place with the URL we got — no auth-fetch / blob round-trip.
+  return { src: toDisplayMediaUrl(src, uploadKey), uploadKey };
 }
 
 /** Drag chat gallery images / Assets dock media onto the canvas. */

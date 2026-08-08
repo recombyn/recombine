@@ -70,8 +70,15 @@ export function useGoEditor() {
           if (!opened) navigate(dest);
           return;
         }
-        const win = window.open(dest, '_blank', 'noopener,noreferrer');
-        if (!win) navigate(dest);
+        // Do not pass `noopener` to window.open — it makes the return value null in
+        // Chromium even when the tab opens, and we would wrongly navigate this window.
+        const win = window.open(dest, '_blank');
+        if (win) {
+          win.opener = null;
+          return;
+        }
+        // Popup blocked — fall back to same-tab navigation.
+        navigate(dest);
         return;
       }
       if (opts?.homeAgentBoot) saveHomeAgentBoot(opts.homeAgentBoot);

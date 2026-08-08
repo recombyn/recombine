@@ -852,6 +852,8 @@ const zhTW = {
     shareMe: '我',
     shareRemoveCollaborator: '移除',
     shareUpdateFailed: '更新分享設定失敗',
+    shareCreateFailed: '建立分享連結失敗',
+    shareOpenFailed: '開啟分享檔案失敗',
     shareQrSoon: '二維碼即將開放',
     shareLink: '分享連結',
     shareLinkPlaceholder: '產生中…',

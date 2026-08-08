@@ -216,17 +216,18 @@ export async function runCodingCliDesktop(opts: {
       fn();
     };
     const onAbort = () => {
-      void (async () => {
+      async function killCliOnAbort() {
         try {
           await invoke('kill_coding_cli');
         } catch {
           /* ignore */
         }
-      })();
+      }
+      void killCliOnAbort();
       finish(() => reject(new DOMException('Aborted', 'AbortError')));
     };
 
-    void (async () => {
+    async function startCodingCliRun() {
       try {
         unsubs.push(
           await listen<{ text?: string }>('coding-cli-chunk', (ev) => {
@@ -258,7 +259,8 @@ export async function runCodingCliDesktop(opts: {
       } catch (err) {
         finish(() => reject(err instanceof Error ? err : new Error(String(err))));
       }
-    })();
+    }
+    void startCodingCliRun();
   });
 }
 

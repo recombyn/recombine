@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, memo } from 'react';
+import { useCallback, useEffect, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiChevronDown, HiOutlineInformationCircle } from 'react-icons/hi2';
@@ -16,7 +16,7 @@ import { Dialog, Dropdown, Switch, message } from '@/components/base';
 import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import { PlazaPublishForm } from '@/components/templates/PlazaPublishDialog';
 import { submitToPlaza } from '@/apis/plaza';
-import { fetchProject } from '@/apis/projects';
+import { extractProjectCoversApi } from '@/apis/projects';
 import { coverDocumentHasContent } from '@/utils/plazaCover';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
 import { cn } from '@/utils/classnames';
@@ -39,18 +39,10 @@ function shareUrl(id: string, origin = typeof window !== 'undefined' ? window.lo
 }
 
 async function copyText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.position = 'fixed';
-  ta.style.left = '-9999px';
-  document.body.appendChild(ta);
-  ta.select();
-  document.execCommand('copy');
-  document.body.removeChild(ta);
+  const value = String(text || '');
+  if (!value) throw new Error('copy_empty');
+  if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
+  await navigator.clipboard.writeText(value);
 }
 
 function permissionFromLinkAccess(access: LinkAccess): SharePermission {
@@ -196,6 +188,8 @@ function ShareDialog({ open, onClose }: Props) {
   const noDocWarnedRef = useRef(false);
   /** Shared create promise — StrictMode remount must not fire /shares twice. */
   const createShareInflightRef = useRef<Promise<{ share: ShareDto }> | null>(null);
+  /** Dedupe cover extract (StrictMode / rapid Publish tab clicks). */
+  const coversInflightRef = useRef<Promise<void> | null>(null);
   /** Only the latest open-session applies results / clears busy. */
   const createGenRef = useRef(0);
 
@@ -205,14 +199,13 @@ function ShareDialog({ open, onClose }: Props) {
 
   const accessLabel = (access: LinkAccess) => t(accessLabelKey(access));
 
-  // Parent mounts this dialog only when Share is opened (click) — hydrate once here.
-  useEffect(() => {
-    if (!currentId || !getToken()) return;
-    let cancelled = false;
-    async function hydrateProjectThumbnail() {
+  /** Server builds ≤4 element cover tiles from the live document (Publish tab). */
+  const refreshCoversFromApi = useCallback(() => {
+    if (!currentId || !getToken() || !document) return;
+    if (coversInflightRef.current) return;
+    async function refreshCovers() {
       try {
-        const res = await fetchProject(currentId);
-        if (cancelled) return;
+        const res = await extractProjectCoversApi(currentId, document);
         const thumbs = normalizeProjectThumbnailUrls(
           res.project?.thumbnailUrl,
           res.project?.updatedAt
@@ -226,15 +219,13 @@ function ShareDialog({ open, onClose }: Props) {
           })
         );
       } catch {
-        /* keep in-memory collage if list fetch fails */
+        /* keep current collage */
+      } finally {
+        coversInflightRef.current = null;
       }
     }
-    void hydrateProjectThumbnail();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- first enter Share panel only
-  }, []);
+    coversInflightRef.current = refreshCovers();
+  }, [currentId, dispatch, document]);
 
   useEffect(() => {
     if (!document) {
@@ -277,7 +268,7 @@ function ShareDialog({ open, onClose }: Props) {
         // Older rows were created with linkPublic:false while the UI still showed
         // "anyone with the link". Promote so Copy link actually works for viewers.
         if (enabled && access !== 'edit' && s.linkPublic === false) {
-          void (async () => {
+          async function persistShareLinkPublic() {
             try {
               const patched = await updateShareMetaApi(s.id, { linkPublic: true });
               if (createGenRef.current !== gen) return;
@@ -285,14 +276,15 @@ function ShareDialog({ open, onClose }: Props) {
             } catch {
               /* keep local UI; copy still works for owner */
             }
-          })();
+          }
+          void persistShareLinkPublic();
         }
       } catch {
         if (createGenRef.current !== gen) return;
         createShareInflightRef.current = null;
         setRecord(null);
         setLinkEnabled(false);
-        message.error(t('editor.shareCopyFailed'));
+        message.error(t('editor.shareCreateFailed'));
       } finally {
         if (createGenRef.current === gen) setBusy(false);
       }
@@ -341,7 +333,7 @@ function ShareDialog({ open, onClose }: Props) {
     }
     setSearching(true);
     searchTimer.current = window.setTimeout(() => {
-      void (async () => {
+      async function runUserSearch() {
         try {
           const res = await searchUsersApi({ q, limit: 12 });
           setSearchHits(res.items || []);
@@ -350,7 +342,8 @@ function ShareDialog({ open, onClose }: Props) {
         } finally {
           setSearching(false);
         }
-      })();
+      }
+      void runUserSearch();
     }, 280);
     return () => {
       if (searchTimer.current) window.clearTimeout(searchTimer.current);
@@ -539,7 +532,10 @@ function ShareDialog({ open, onClose }: Props) {
                 onClick={() => {
                   if (publishing) return;
                   setTab(item.id);
-                  if (item.id === 'publish') setPublishPhase('confirm');
+                  if (item.id === 'publish') {
+                    setPublishPhase('confirm');
+                    refreshCoversFromApi();
+                  }
                 }}
                 className={cn(
                   'relative pb-2 text-[15px] font-medium transition-colors',

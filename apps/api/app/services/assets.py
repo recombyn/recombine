@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
 import time
 import uuid
@@ -16,7 +17,9 @@ from sqlmodel import Session
 from app import crud
 from app.core.db import engine
 from app.services.db import init_schema
-from app.services.storage import delete_object, get_storage, put_bytes
+from app.services.storage import delete_object, get_bytes, get_storage, put_bytes
+
+logger = logging.getLogger(__name__)
 
 
 def _display_url(
@@ -92,6 +95,44 @@ def _normalize_asset_url(url: str | None, object_key: str | None) -> str:
     return raw
 
 
+def _parse_lottie_animation(raw: bytes | str | dict[str, Any] | None) -> dict[str, Any] | None:
+    """Bodymovin dict with layers — used inline on list items (no per-card JSON fetch)."""
+    if raw is None:
+        return None
+    data: Any = raw
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            data = json.loads(bytes(raw).decode("utf-8"))
+        except Exception:
+            return None
+    elif isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return None
+    if not isinstance(data, dict):
+        return None
+    layers = data.get("layers")
+    if not isinstance(layers, list):
+        return None
+    return data
+
+
+def _animation_data_from_meta(meta: Any) -> dict[str, Any] | None:
+    if not isinstance(meta, dict):
+        return None
+    return _parse_lottie_animation(meta.get("animationData"))
+
+
+def _meta_json_with_animation(
+    animation: dict[str, Any],
+    existing: Any = None,
+) -> str:
+    meta: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    meta["animationData"] = animation
+    return json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+
+
 def _row_to_asset(row: Any) -> dict[str, Any]:
     def _get(key: str) -> Any:
         return getattr(row, key) if hasattr(row, key) else row[key]
@@ -104,9 +145,10 @@ def _row_to_asset(row: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             meta = None
     object_key = _get("object_key")
-    return {
+    kind = _get("kind")
+    out: dict[str, Any] = {
         "id": _get("id"),
-        "kind": _get("kind"),
+        "kind": kind,
         "url": _normalize_asset_url(_get("url"), object_key),
         "objectKey": object_key,
         "mime": _get("mime"),
@@ -117,6 +159,44 @@ def _row_to_asset(row: Any) -> dict[str, Any]:
         "meta": meta,
         "createdAt": int(float(_get("created_at") or 0) * 1000),
     }
+    if str(kind or "").lower() == "lottie":
+        anim = _animation_data_from_meta(meta)
+        if anim is not None:
+            out["animationData"] = anim
+    return out
+
+
+def _ensure_lottie_animation_on_item(
+    user_id: str,
+    row: Any,
+    item: dict[str, Any],
+) -> dict[str, Any]:
+    """Legacy rows only stored COS JSON — inline once and persist into meta_json."""
+    if str(item.get("kind") or "").lower() != "lottie":
+        return item
+    if isinstance(item.get("animationData"), dict):
+        return item
+    key = str(item.get("objectKey") or "").strip()
+    if not key:
+        return item
+    raw = get_bytes(key)
+    anim = _parse_lottie_animation(raw)
+    if not anim:
+        return item
+    item["animationData"] = anim
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else None
+    try:
+        with Session(engine) as session:
+            crud.update_asset_meta_json(
+                session=session,
+                user_id=user_id,
+                asset_id=str(item.get("id") or ""),
+                meta_json=_meta_json_with_animation(anim, meta),
+            )
+        item["meta"] = {**(meta or {}), "animationData": anim}
+    except Exception:
+        logger.exception("persist lottie animationData failed asset=%s", item.get("id"))
+    return item
 
 
 _ASSET_KINDS = ("image", "video", "audio", "font", "lottie")
@@ -147,7 +227,9 @@ def list_assets(
             offset=offset,
             limit=page_size_n,
         )
-    items = [_row_to_asset(r) for r in rows]
+    items = [
+        _ensure_lottie_animation_on_item(user_id, r, _row_to_asset(r)) for r in rows
+    ]
     return {
         "items": items,
         "page": page_n,
@@ -303,6 +385,16 @@ def create_asset_from_stored(
     mime_n = (mime or "").split(";")[0].strip() or None
     if not mime_n:
         mime_n = _guess_ext_mime(src or key, None)[1]
+    meta_json = None
+    out_w, out_h = width, height
+    if kind_n == "lottie":
+        anim = _parse_lottie_animation(get_bytes(key))
+        if anim is not None:
+            meta_json = _meta_json_with_animation(anim)
+            if out_w is None:
+                out_w = int(anim.get("w") or 0) or None
+            if out_h is None:
+                out_h = int(anim.get("h") or 0) or None
     asset_id = f"asset_{uuid.uuid4().hex[:16]}"
     now = time.time()
     with Session(engine) as session:
@@ -314,11 +406,12 @@ def create_asset_from_stored(
             object_key=key,
             url=src,
             mime=mime_n,
-            width=width,
-            height=height,
+            width=out_w,
+            height=out_h,
             source=(source or "upload")[:32],
             prompt=(prompt or None),
             created_at=now,
+            meta_json=meta_json,
         )
     return _row_to_asset(row)
 
@@ -337,9 +430,18 @@ def create_asset_from_url(
         kind_n = "image"
     data, ctype = _fetch_bytes(url)
     ext, mime = _guess_ext_mime(url, ctype)
+    if kind_n == "lottie" and ext in ("png", "bin"):
+        ext, mime = "json", "application/json"
     width, height = (None, None)
+    meta_json = None
     if kind_n in ("image", "font"):
         width, height = _probe_image_size(data)
+    elif kind_n == "lottie":
+        anim = _parse_lottie_animation(data)
+        if anim is not None:
+            meta_json = _meta_json_with_animation(anim)
+            width = int(anim.get("w") or 0) or None
+            height = int(anim.get("h") or 0) or None
 
     asset_id = f"asset_{uuid.uuid4().hex[:16]}"
     object_key = f"assets/{user_id}/{asset_id}.{ext}"
@@ -367,6 +469,7 @@ def create_asset_from_url(
             source=(source or "ai_image")[:32],
             prompt=(prompt or None),
             created_at=now,
+            meta_json=meta_json,
         )
     return _row_to_asset(row)
 
@@ -405,16 +508,15 @@ def create_asset_from_bytes(
     out_w, out_h = width, height
     if kind_n in ("image", "font"):
         out_w, out_h = _probe_image_size(raw)
-    elif kind_n == "lottie" and (out_w is None or out_h is None):
-        try:
-            parsed = json.loads(raw.decode("utf-8"))
-            if isinstance(parsed, dict):
-                if out_w is None:
-                    out_w = int(parsed.get("w") or 0) or None
-                if out_h is None:
-                    out_h = int(parsed.get("h") or 0) or None
-        except Exception:
-            pass
+    meta_json = None
+    if kind_n == "lottie":
+        anim = _parse_lottie_animation(raw)
+        if anim is not None:
+            meta_json = _meta_json_with_animation(anim)
+            if out_w is None:
+                out_w = int(anim.get("w") or 0) or None
+            if out_h is None:
+                out_h = int(anim.get("h") or 0) or None
 
     asset_id = f"asset_{uuid.uuid4().hex[:16]}"
     object_key = f"assets/{user_id}/{asset_id}.{ext}"
@@ -441,6 +543,7 @@ def create_asset_from_bytes(
             source=(source or "ai_audio")[:32],
             prompt=(prompt or None),
             created_at=now,
+            meta_json=meta_json,
         )
     return _row_to_asset(row)
 

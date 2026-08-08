@@ -27,7 +27,7 @@ function detectLngFromUrl(): string | undefined {
   return DEFAULT_I18N_LANG;
 }
 
-void (async () => {
+async function initI18n() {
   await i18n
     .use(LanguageDetector)
     .use(initReactI18next)
@@ -52,7 +52,8 @@ void (async () => {
     document.documentElement.lang =
       i18n.resolvedLanguage || i18n.language || DEFAULT_I18N_LANG;
   }
-})();
+}
+void initI18n();
 
 i18n.on('languageChanged', (lng) => {
   if (typeof document !== 'undefined') {

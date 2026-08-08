@@ -449,7 +449,7 @@ function AddPlatformModelFields(props: {
 
   const onUploadIcon = (file: File | null) => {
     if (!file || !file.type.startsWith('image/')) return;
-    void (async () => {
+    async function applyUploadedIcon() {
       try {
         const dataUrl = await readFileAsDataUrl(file);
         onIconKey('');
@@ -457,7 +457,8 @@ function AddPlatformModelFields(props: {
       } catch {
         /* ignore read errors */
       }
-    })();
+    }
+    void applyUploadedIcon();
   };
 
   return (
@@ -705,6 +706,12 @@ function submenuSelectedIdOf(
   return routePrefs.preset;
 }
 
+type SharedRouteCatalog = {
+  text: LlmModel[];
+  image: LlmModel[];
+  openrouterAvailable: boolean | null;
+};
+
 type AgentRoutePrefsEditorProps = {
   /** Popover in agent dock / home — Lovart-style card (not account form). */
   compact?: boolean;
@@ -713,6 +720,11 @@ type AgentRoutePrefsEditorProps = {
   className?: string;
   /** Fired after prefs are written to localStorage. */
   onChanged?: (prefs: AgentRoutePrefs) => void;
+  /**
+   * When set (Account Agent tab), parent owns GET /chat/models + BYOK hydrate —
+   * do not fetch again. `null` = still loading; object = ready.
+   */
+  sharedCatalog?: SharedRouteCatalog | null;
 };
 
 /**
@@ -724,9 +736,11 @@ function AgentRoutePrefsEditor({
   modeLabel,
   className,
   onChanged,
+  sharedCatalog,
 }: AgentRoutePrefsEditorProps): ReactNode {
   const { t } = useTranslation();
   const desktopLocal = isDesktopLocal();
+  const catalogFromParent = sharedCatalog !== undefined;
   const [routePrefs, setRoutePrefs] = useState<AgentRoutePrefs>(() =>
     desktopLocal ? emptyCustomRoutePrefs() : { preset: 'platform' }
   );
@@ -741,6 +755,8 @@ function AgentRoutePrefsEditor({
 
   useEffect(() => {
     setRoutePrefs(loadAgentRoutePrefs());
+    // Account Agent tab loads catalog once on the parent — skip duplicate design fetch there.
+    if (catalogFromParent) return;
     let cancelled = false;
     async function loadDesignCatalog() {
       try {
@@ -757,9 +773,20 @@ function AgentRoutePrefsEditor({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [catalogFromParent]);
 
   useEffect(() => {
+    if (catalogFromParent) {
+      if (!sharedCatalog) return;
+      setTextModels(sharedCatalog.text);
+      setImageModels(sharedCatalog.image);
+      setOpenrouterAvailable(sharedCatalog.openrouterAvailable);
+      if (sharedCatalog.openrouterAvailable != null) {
+        cachedOpenrouterAvailable = sharedCatalog.openrouterAvailable;
+      }
+      setRoutePrefs(loadAgentRoutePrefs(cachedPresetRules));
+      return;
+    }
     let cancelled = false;
     async function loadRouteModels() {
       try {
@@ -780,11 +807,11 @@ function AgentRoutePrefsEditor({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [catalogFromParent, sharedCatalog]);
 
-  // Refresh BYOK lane options when providers change (local desktop).
+  // Standalone popover on local desktop: refresh BYOK lanes (Account tab parent hydrates).
   useEffect(() => {
-    if (!desktopLocal) return;
+    if (!desktopLocal || catalogFromParent) return;
     let cancelled = false;
     async function refreshByokRouteModels() {
       await hydrateCustomLlmProviders();
@@ -797,7 +824,7 @@ function AgentRoutePrefsEditor({
     return () => {
       cancelled = true;
     };
-  }, [desktopLocal]);
+  }, [desktopLocal, catalogFromParent]);
 
   const commit = (next: AgentRoutePrefs) => {
     setRoutePrefs(next);
@@ -1314,6 +1341,8 @@ function AgentModelsPanel({
   const canCustom = isDesktopLocal() || planAllowsCustomModels(planId);
   const [providers, setProviders] = useState<CustomLlmProvider[]>([]);
   const [platforms, setPlatforms] = useState<ByokPlatform[]>([]);
+  /** Shared with RoutePrefsEditor — one GET /chat/models for the whole Agent tab. */
+  const [sharedCatalog, setSharedCatalog] = useState<SharedRouteCatalog | null>(null);
   // '' = nothing picked yet; MANUAL_PROVIDER_ID = free-text; else a platform id.
   const [presetId, setPresetId] = useState('');
   const [name, setName] = useState('');
@@ -1347,31 +1376,44 @@ function AgentModelsPanel({
 
   useEffect(() => {
     let cancelled = false;
-    async function loadProviderData() {
-      try {
-        const list = await hydrateCustomLlmProviders();
-        if (!cancelled) setProviders(list);
-      } catch {
-        /* ignore */
-      }
-      try {
-        const res = await listModels();
-        if (cancelled) return;
-        const list = res.byokPlatforms?.length
+    async function loadAgentTabData() {
+      // One parallel round: BYOK list + models (platforms + route catalog).
+      const [list, res] = await Promise.all([
+        hydrateCustomLlmProviders().catch(() => [] as CustomLlmProvider[]),
+        listModels().catch(() => null),
+      ]);
+      if (cancelled) return;
+      setProviders(list);
+      if (res) {
+        const plat = res.byokPlatforms?.length
           ? res.byokPlatforms
           : (res.byokPresets as ByokPlatform[] | undefined) ?? [];
         setPlatforms(
-          list.map((p) => ({
+          plat.map((p) => ({
             ...p,
             rowId: p.rowId || `platform:${p.id}`,
             kinds: p.kinds?.length ? p.kinds : ['text'],
           }))
         );
+        const orOk = res.openrouterAvailable !== false;
+        warmOpenrouterAvailability(orOk);
+        const { text, image } = routeCatalogFromListModels(res);
+        setSharedCatalog({ text, image, openrouterAvailable: orOk });
+      } else if (isDesktopLocal()) {
+        const { text, image } = splitByokRouteModels(customProvidersAsModels(list));
+        setSharedCatalog({ text, image, openrouterAvailable: cachedOpenrouterAvailable });
+      } else {
+        setSharedCatalog({ text: [], image: [], openrouterAvailable: null });
+      }
+      try {
+        const cat = await fetchDesignCatalog();
+        if (cancelled) return;
+        cachedPresetRules = cat.global_rules || {};
       } catch {
-        /* platforms optional — manual form still works */
+        /* route presets keep fallbacks */
       }
     }
-    void loadProviderData();
+    void loadAgentTabData();
     return () => {
       cancelled = true;
     };
@@ -1499,7 +1541,7 @@ function AgentModelsPanel({
         return;
       }
     }
-    void (async () => {
+    async function saveProvider() {
       try {
         const saved = await persistCustomLlmProvider(draft);
         let next = [saved, ...providers.filter((p) => p.id !== saved.id)];
@@ -1530,7 +1572,8 @@ function AgentModelsPanel({
       } catch {
         setError(t('agent.providerSaveFailed', { defaultValue: 'Failed to save provider' }));
       }
-    })();
+    }
+    void saveProvider();
   };
 
   const onRemove = (id: string) => {
@@ -1542,11 +1585,12 @@ function AgentModelsPanel({
     if (isPlatformByokId(id) || providers.find((p) => p.id === id)?.modelKind === 'platform') {
       for (const child of childModelsOf(id)) removeIds.add(child.id);
     }
-    void (async () => {
+    async function removeProviders() {
       await Promise.all([...removeIds].map((rid) => removeCustomLlmProvider(rid)));
       persistProviders(providers.filter((p) => !removeIds.has(p.id)));
       if (addModelForId === id) closeAddModel();
-    })();
+    }
+    void removeProviders();
   };
 
   const openAddModel = (platformRowId: string) => {
@@ -1617,7 +1661,7 @@ function AgentModelsPanel({
       iconUrl,
       createdAt: Date.now(),
     };
-    void (async () => {
+    async function savePlatformModel() {
       try {
         const saved = await persistCustomLlmProvider(draft);
         persistProviders([saved, ...providers.filter((p) => p.id !== saved.id)]);
@@ -1625,7 +1669,8 @@ function AgentModelsPanel({
       } catch {
         setAddModelError(t('agent.providerPlatformModelFailed'));
       }
-    })();
+    }
+    void savePlatformModel();
   };
 
   const platformRows = providers.filter(
@@ -1650,7 +1695,7 @@ function AgentModelsPanel({
     <>
       <div className="space-y-5">
         <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">
-          <AgentRoutePrefsEditor />
+          <AgentRoutePrefsEditor sharedCatalog={sharedCatalog} />
         </section>
 
         <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">

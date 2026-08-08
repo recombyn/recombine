@@ -200,6 +200,327 @@ def _normalize_incoming_urls(urls: list[str] | None) -> list[str]:
     return out
 
 
+_MAX_COVER_TILES = 4
+_COVER_EDGE = 360
+_MIN_COVER_EDGE = 40
+
+
+def _cov_num(value: Any, fallback: float = 0.0) -> float:
+    try:
+        n = float(value)
+        return n if n == n and abs(n) != float("inf") else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _cov_parse_rgba(raw: Any) -> tuple[int, int, int, int] | None:
+    """Parse #RGB / #RRGGBB / #RRGGBBAA / rgba() → RGBA 0–255. Skip transparent/none."""
+    text = str(raw or "").strip()
+    if not text or text.lower() in ("none", "transparent"):
+        return None
+    if text.startswith("#"):
+        h = text[1:]
+        if len(h) == 3 and all(c in "0123456789abcdefABCDEF" for c in h):
+            r, g, b = (int(c * 2, 16) for c in h)
+            return r, g, b, 255
+        if len(h) == 6 and all(c in "0123456789abcdefABCDEF" for c in h):
+            return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255
+        if len(h) == 8 and all(c in "0123456789abcdefABCDEF" for c in h):
+            return (
+                int(h[0:2], 16),
+                int(h[2:4], 16),
+                int(h[4:6], 16),
+                int(h[6:8], 16),
+            )
+        return None
+    lower = text.lower()
+    if lower.startswith("rgba(") or lower.startswith("rgb("):
+        inner = text[text.find("(") + 1 : text.rfind(")")]
+        parts = [p.strip() for p in inner.split(",")]
+        if len(parts) < 3:
+            return None
+        try:
+            r = int(float(parts[0]))
+            g = int(float(parts[1]))
+            b = int(float(parts[2]))
+            a = 255
+            if len(parts) >= 4:
+                af = float(parts[3])
+                a = int(round(af * 255)) if af <= 1.0 else int(round(af))
+            return max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)), max(
+                0, min(255, a)
+            )
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _cov_attr_flag(attrs: dict[str, Any], key: str) -> bool:
+    v = attrs.get(key)
+    if v is True or v == 1:
+        return True
+    if isinstance(v, str) and v.strip().lower() in ("1", "true", "yes"):
+        return True
+    return False
+
+
+def _cov_has_visual(node: dict[str, Any]) -> bool:
+    if not isinstance(node, dict):
+        return False
+    attrs = node.get("attrs") if isinstance(node.get("attrs"), dict) else {}
+    if _cov_attr_flag(attrs, "hidden"):
+        return False
+    if str(attrs.get("processStatus") or "") == "running":
+        return False
+    key = str(node.get("key") or "")
+    if key == "image" and _cov_attr_flag(attrs, "imageGenerator"):
+        return False
+    if key == "video" and _cov_attr_flag(attrs, "videoGenerator"):
+        return False
+    if key == "lottie" and _cov_attr_flag(attrs, "lottieGenerator"):
+        return False
+    if key == "audio" and _cov_attr_flag(attrs, "audioGenerator"):
+        return False
+    if key in ("image", "video", "lottie"):
+        src = str(attrs.get("src") or "").strip()
+        poster = str(attrs.get("poster") or "").strip()
+        return bool(src or poster)
+    if key == "audio":
+        return bool(str(attrs.get("src") or "").strip())
+    if key in ("shape", "rect", "text", "svg", "path"):
+        return True
+    return False
+
+
+def _cov_type_rank(key: str) -> int:
+    if key in ("image", "video"):
+        return 0
+    if key in ("lottie", "audio"):
+        return 1
+    if key in ("shape", "rect", "svg", "path"):
+        return 2
+    if key == "text":
+        return 3
+    return 4
+
+
+def _cov_pick_nodes(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Up to 4 latest visual elements — image-first, then area, then z (children order)."""
+    delta = document.get("deltaSetLike")
+    if not isinstance(delta, dict):
+        return []
+    root = delta.get("ROOT")
+    children = root.get("children") if isinstance(root, dict) else None
+    if not isinstance(children, list):
+        children = []
+    ranked: list[tuple[int, float, int, dict[str, Any]]] = []
+    for z, nid in enumerate(children):
+        node = delta.get(str(nid))
+        if not isinstance(node, dict) or not _cov_has_visual(node):
+            continue
+        w = max(1.0, _cov_num(node.get("width"), 1))
+        h = max(1.0, _cov_num(node.get("height"), 1))
+        if min(w, h) < _MIN_COVER_EDGE and w * h < _MIN_COVER_EDGE * _MIN_COVER_EDGE:
+            continue
+        key = str(node.get("key") or "")
+        ranked.append((_cov_type_rank(key), w * h, z, {**node, "id": str(nid)}))
+    # Prefer media, then larger, then later z (newer / on top).
+    ranked.sort(key=lambda t: (t[0], -t[1], -t[2]))
+    return [t[3] for t in ranked[:_MAX_COVER_TILES]]
+
+
+def _cov_media_src(node: dict[str, Any]) -> str | None:
+    attrs = node.get("attrs") if isinstance(node.get("attrs"), dict) else {}
+    for key in ("src", "poster"):
+        s = str(attrs.get(key) or "").strip()
+        if s and not s.startswith("data:"):
+            return s
+    return None
+
+
+def _cov_put_tile_bytes(
+    user_id: str, project_id: str, blob: bytes | None, *, index: int, ext: str = "webp"
+) -> str | None:
+    if not blob:
+        return None
+    stamp = int(time.time() * 1000)
+    suffix = f"-{index}" if index else ""
+    content_type = "image/webp" if ext == "webp" else f"image/{ext}"
+    thumb_key = f"projects/{user_id}/{project_id}/thumb-{stamp}{suffix}.{ext}"
+    try:
+        put_bytes(
+            thumb_key,
+            blob,
+            content_type=content_type,
+            cache_control="no-cache, max-age=0, must-revalidate",
+        )
+        return thumb_key
+    except Exception:
+        return None
+
+
+def _cov_raster_shape(node: dict[str, Any]) -> bytes | None:
+    """Pillow tile for shape/rect — white board, real fill/stroke (not gray plates)."""
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageDraw
+    except Exception:
+        return None
+
+    attrs = node.get("attrs") if isinstance(node.get("attrs"), dict) else {}
+    w = max(1.0, _cov_num(node.get("width"), 1))
+    h = max(1.0, _cov_num(node.get("height"), 1))
+    scale = min(1.0, float(_COVER_EDGE) / max(w, h))
+    out_w = max(32, int(round(w * scale)))
+    out_h = max(32, int(round(h * scale)))
+    pad = max(4, int(round(max(out_w, out_h) * 0.06)))
+    canvas_w = out_w + pad * 2
+    canvas_h = out_h + pad * 2
+
+    fill = _cov_parse_rgba(attrs.get("fill") or attrs.get("fill-color"))
+    stroke = _cov_parse_rgba(
+        attrs.get("stroke") or attrs.get("border-color") or attrs.get("borderColor")
+    )
+    sw_raw = attrs.get("borderWidth")
+    if sw_raw is None:
+        sw_raw = attrs.get("border-width")
+    if sw_raw is None:
+        sw_raw = attrs.get("strokeWidth")
+    stroke_w = max(0.0, _cov_num(sw_raw, 0)) * scale
+    if stroke is None and stroke_w <= 0:
+        stroke = (51, 51, 51, 255)
+        stroke_w = max(1.5, 2.0 * scale)
+
+    key = str(node.get("key") or "")
+    shape_type = str(attrs.get("shapeType") or attrs.get("type") or "").lower()
+    if not shape_type and key == "rect":
+        shape_type = "rect"
+    if not shape_type:
+        shape_type = "rect"
+
+    img = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    x0, y0 = float(pad), float(pad)
+    x1, y1 = float(pad + out_w), float(pad + out_h)
+    fill_c = fill  # may be None → outline only
+    stroke_c = stroke if stroke_w > 0 else None
+    outline_w = max(1, int(round(stroke_w))) if stroke_c else 0
+
+    is_ellipse = shape_type in ("circle", "ellipse", "oval")
+    if is_ellipse:
+        if fill_c:
+            draw.ellipse([x0, y0, x1, y1], fill=fill_c)
+        if stroke_c and outline_w:
+            draw.ellipse([x0, y0, x1, y1], outline=stroke_c, width=outline_w)
+        if not fill_c and not stroke_c:
+            draw.ellipse([x0, y0, x1, y1], outline=(51, 51, 51, 255), width=2)
+    else:
+        # rect / polygon / triangle / star → bounding rect (best-effort)
+        if fill_c:
+            draw.rectangle([x0, y0, x1, y1], fill=fill_c)
+        if stroke_c and outline_w:
+            draw.rectangle([x0, y0, x1, y1], outline=stroke_c, width=outline_w)
+        if not fill_c and not stroke_c:
+            draw.rectangle([x0, y0, x1, y1], outline=(51, 51, 51, 255), width=2)
+
+    buf = BytesIO()
+    img.convert("RGB").save(buf, format="WEBP", quality=82, method=4)
+    return buf.getvalue()
+
+
+def _cov_raster_text(node: dict[str, Any]) -> bytes | None:
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+    attrs = node.get("attrs") if isinstance(node.get("attrs"), dict) else {}
+    text = str(
+        attrs.get("text") or attrs.get("content") or node.get("text") or ""
+    ).strip()
+    if not text:
+        return None
+    w = max(64.0, _cov_num(node.get("width"), 160))
+    h = max(40.0, _cov_num(node.get("height"), 48))
+    scale = min(1.0, float(_COVER_EDGE) / max(w, h))
+    out_w = max(48, int(round(w * scale)))
+    out_h = max(32, int(round(h * scale)))
+    fill = _cov_parse_rgba(attrs.get("fill") or attrs.get("color")) or (30, 30, 30, 255)
+    img = Image.new("RGB", (out_w, out_h), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.load_default()
+    except Exception:
+        font = None
+    draw.text((8, 8), text[:80], fill=fill[:3], font=font)
+    buf = BytesIO()
+    img.save(buf, format="WEBP", quality=82, method=4)
+    return buf.getvalue()
+
+
+def _cov_tile_for_node(
+    user_id: str, project_id: str, node: dict[str, Any], *, index: int
+) -> str | None:
+    """Return hosted URL or uploaded thumb key for one element tile."""
+    key = str(node.get("key") or "")
+    if key in ("image", "video", "lottie", "audio"):
+        src = _cov_media_src(node)
+        return src
+    if key in ("shape", "rect", "path"):
+        return _cov_put_tile_bytes(user_id, project_id, _cov_raster_shape(node), index=index)
+    if key == "text":
+        return _cov_put_tile_bytes(user_id, project_id, _cov_raster_text(node), index=index)
+    if key == "svg":
+        return _cov_put_tile_bytes(
+            user_id,
+            project_id,
+            _cov_raster_shape(
+                {
+                    **node,
+                    "attrs": {
+                        **(node.get("attrs") if isinstance(node.get("attrs"), dict) else {}),
+                        "shapeType": "rect",
+                        "fill": "#E8E8E8",
+                    },
+                }
+            ),
+            index=index,
+        )
+    return None
+
+
+def _build_auto_cover_key(
+    user_id: str,
+    project_id: str,
+    document: dict[str, Any] | None,
+    existing_key: str | None,
+) -> str | None:
+    """Build ≤4 cover tiles from the latest visual elements in ``document``."""
+    if not isinstance(document, dict):
+        return None
+    nodes = _cov_pick_nodes(document)
+    if not nodes:
+        return None
+    entries: list[str] = []
+    for i, node in enumerate(nodes):
+        entry = _cov_tile_for_node(user_id, project_id, node, index=i)
+        if entry and entry not in entries:
+            entries.append(entry)
+        if len(entries) >= _MAX_COVER_TILES:
+            break
+    if not entries:
+        return None
+    _delete_thumb_entries(existing_key)
+    encoded = _encode_thumb_entries(entries)
+    print(
+        f"[projects.thumb] auto ok project={project_id} n={len(entries)}",
+        flush=True,
+    )
+    return encoded
+
+
 def _next_thumbnail(
     user_id: str,
     project_id: str,
@@ -210,23 +531,57 @@ def _next_thumbnail(
     mark_custom: bool | None,
     thumbnail_data_urls: list[str] | None = None,
     thumbnail_urls: list[str] | None = None,
+    document: dict[str, Any] | None = None,
 ) -> tuple[str | None, bool]:
     """Resolve next thumbnail_key (+ JSON array) and custom flag.
 
-    Priority: hosted ``thumbnail_urls`` → raster ``thumbnail_data_urls`` /
-    ``thumbnail_data_url`` → keep existing.
+    Priority: custom client urls/data → keep custom lock → server auto from
+    document elements → legacy client urls/data → keep existing.
     """
+    # User-uploaded / explicit custom cover.
+    if mark_custom is True:
+        hosted = _normalize_incoming_urls(thumbnail_urls)
+        if hosted:
+            _delete_thumb_entries(existing_key)
+            return _encode_thumb_entries(hosted), True
+        data_list = [
+            str(x).strip()
+            for x in (thumbnail_data_urls or [])
+            if str(x or "").strip().startswith("data:image/")
+        ]
+        if not data_list and thumbnail_data_url:
+            one = str(thumbnail_data_url).strip()
+            if one.startswith("data:image/"):
+                data_list = [one]
+        if data_list:
+            uploaded: list[str] = []
+            for i, data_url in enumerate(data_list[:4]):
+                key = _thumb_key_from_data_url(user_id, project_id, data_url, index=i)
+                if key:
+                    uploaded.append(key)
+            if uploaded:
+                _delete_thumb_entries(existing_key)
+                return _encode_thumb_entries(uploaded), True
+
+    if existing_custom and mark_custom is not False:
+        return existing_key, True
+
+    # Server: ≤4 tiles from latest document elements (image URL + shape rasters).
+    if document is not None and mark_custom is not True:
+        auto = _build_auto_cover_key(user_id, project_id, document, existing_key)
+        if auto:
+            return auto, False
+
+    # Legacy client thumbs (optional).
     hosted = _normalize_incoming_urls(thumbnail_urls)
-    if hosted:
+    if hosted and mark_custom is not True:
         _delete_thumb_entries(existing_key)
-        custom = True if mark_custom is True else False
         encoded = _encode_thumb_entries(hosted)
         print(
-            f"[projects.thumb] urls ok project={project_id} "
-            f"n={len(hosted)} custom={custom}",
+            f"[projects.thumb] urls ok project={project_id} n={len(hosted)} custom=False",
             flush=True,
         )
-        return encoded, custom
+        return encoded, False
 
     data_list = [
         str(x).strip()
@@ -237,44 +592,22 @@ def _next_thumbnail(
         one = str(thumbnail_data_url).strip()
         if one.startswith("data:image/"):
             data_list = [one]
-
-    if data_list:
-        from concurrent.futures import ThreadPoolExecutor
-
-        batch = list(enumerate(data_list[:4]))
-
-        def _one(item: tuple[int, str]) -> str | None:
-            i, data_url = item
-            return _thumb_key_from_data_url(user_id, project_id, data_url, index=i)
-
-        uploaded: list[str] = []
-        with ThreadPoolExecutor(max_workers=min(4, len(batch))) as pool:
-            for key in pool.map(_one, batch):
-                if key:
-                    uploaded.append(key)
+    if data_list and mark_custom is not True:
+        uploaded = []
+        for i, data_url in enumerate(data_list[:4]):
+            key = _thumb_key_from_data_url(user_id, project_id, data_url, index=i)
+            if key:
+                uploaded.append(key)
         if uploaded:
             _delete_thumb_entries(existing_key)
-            custom = True if mark_custom is True else False
-            encoded = _encode_thumb_entries(uploaded)
             print(
-                f"[projects.thumb] upload ok project={project_id} "
-                f"n={len(uploaded)} custom={custom} prev_custom={existing_custom}",
+                f"[projects.thumb] upload ok project={project_id} n={len(uploaded)}",
                 flush=True,
             )
-            return encoded, custom
+            return _encode_thumb_entries(uploaded), False
 
-    # No new bytes — keep key; explicit False clears the custom lock.
     if mark_custom is False:
-        print(
-            f"[projects.thumb] keep key, clear custom project={project_id} key={existing_key}",
-            flush=True,
-        )
         return existing_key, False
-    if existing_custom and (thumbnail_data_url or thumbnail_data_urls or thumbnail_urls):
-        print(
-            f"[projects.thumb] payload rejected project={project_id} keep={existing_key}",
-            flush=True,
-        )
     return existing_key, bool(existing_custom)
 
 
@@ -429,6 +762,7 @@ def patch_project(
             if name is not None and str(name).strip()
             else str(existing.name or "Untitled")
         )
+        # Incremental patch: keep existing covers; Publish / full upsert rebuilds.
         thumb_key, thumb_custom = _next_thumbnail(
             user_id,
             pid,
@@ -620,6 +954,7 @@ def upsert_project(
                 mark_custom=thumbnail_custom,
                 thumbnail_data_urls=thumbnail_data_urls,
                 thumbnail_urls=thumbnail_urls,
+                document=document,
             )
             old_doc_key = existing.document_key
             ok = crud.update_project_if_revision(
@@ -669,6 +1004,7 @@ def upsert_project(
                 mark_custom=thumbnail_custom,
                 thumbnail_data_urls=thumbnail_data_urls,
                 thumbnail_urls=thumbnail_urls,
+                document=document,
             )
             crud.create_project(
                 session=session,
@@ -707,6 +1043,72 @@ def upsert_project(
         "revision": revision,
         "updatedAt": int(now * 1000),
         "createdAt": int(created * 1000),
+    }
+
+
+def extract_project_covers(
+    user_id: str,
+    project_id: str,
+    *,
+    document: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build ≤4 cover tiles from document elements. Does not bump revision."""
+    from sqlmodel import Session
+
+    from app import crud
+    from app.core.db import engine
+
+    init_schema()
+    pid = (project_id or "").strip()
+    if not pid:
+        raise ProjectNotFoundError("")
+
+    with Session(engine) as session:
+        existing = crud.get_project_for_user(
+            session=session, user_id=user_id, project_id=pid
+        )
+        if not existing:
+            raise ProjectNotFoundError(pid)
+
+        name_n = str(existing.name or "Untitled")
+        created_at = float(existing.created_at)
+        revision = int(existing.revision or 1)
+        custom = _row_thumb_custom(existing)
+        thumb_key = existing.thumbnail_key
+        now = float(existing.updated_at)
+
+        if not custom:
+            doc = document if isinstance(document, dict) else _decode_document_row(existing)
+            now = time.time()
+            next_key, next_custom = _next_thumbnail(
+                user_id,
+                pid,
+                None,
+                existing.thumbnail_key,
+                existing_custom=False,
+                mark_custom=False,
+                document=doc,
+            )
+            if next_key and next_key != (existing.thumbnail_key or "").strip():
+                thumb_key = next_key
+                custom = bool(next_custom)
+                crud.update_project_covers(
+                    session=session,
+                    user_id=user_id,
+                    project_id=pid,
+                    thumbnail_key=thumb_key,
+                    thumbnail_custom=bool(next_custom),
+                    updated_at=now,
+                )
+
+    return {
+        "id": pid,
+        "name": name_n,
+        "thumbnailUrl": _thumbnail_urls_out(thumb_key),
+        "thumbnailCustom": bool(custom),
+        "revision": revision,
+        "updatedAt": int(now * 1000),
+        "createdAt": int(created_at * 1000),
     }
 
 
@@ -754,15 +1156,24 @@ def _url(key: str | None) -> str | None:
     text = str(key).strip()
     if not text:
         return None
-    # Already a public / absolute URL (image-node collage tiles).
-    if text.startswith("http://") or text.startswith("https://") or text.startswith("/"):
+    # Absolute http(s) — image-node collage tiles / CDN.
+    if text.startswith("http://") or text.startswith("https://"):
         return text
     # JSON array stored by mistake in a single-key call site.
     if text.startswith("["):
         urls = _thumbnail_urls_out(text)
         return urls[0] if urls else None
+    # Legacy rows sometimes stored the download path; peel to object key.
+    api_prefix = "/api/v1/uploads/files/"
+    if text.startswith(api_prefix):
+        text = text[len(api_prefix) :].lstrip("/")
+    elif text.startswith("/"):
+        return text
+    if not text:
+        return None
     storage = get_storage()
-    # Local disk keys need the authenticated download route (not a bare relative path).
+    # Local disk: browser loads via public project-thumb route (or auth for other keys).
     if not storage.enabled_remote():
         return f"/api/v1/uploads/files/{text}"
+    # COS/S3: return public object URL so list cards use bare <img src>.
     return storage.url_for(text)

@@ -785,13 +785,14 @@ function HomeAgentComposer({
           setContexts((prev) => {
             if (!prev.some((c) => c.key === key)) {
               if (uploaded.uploadKey) {
-                void (async () => {
+                async function purgeOrphanUpload() {
                   try {
                     await deleteUploadedFile(uploaded.uploadKey!);
                   } catch {
                     /* ignore */
                   }
-                })();
+                }
+                void purgeOrphanUpload();
               }
               return prev;
             }
@@ -819,13 +820,14 @@ function HomeAgentComposer({
     const removed = contexts.filter((c) => !next.some((n) => n.key === c.key));
     for (const c of removed) {
       if (c.kind === 'attachment' && c.uploadKey) {
-        void (async () => {
+        async function deleteRemovedAttachment() {
           try {
             await deleteUploadedFile(c.uploadKey!);
           } catch {
             /* ignore */
           }
-        })();
+        }
+        void deleteRemovedAttachment();
       }
     }
     setContexts(next);

@@ -1,9 +1,10 @@
 /**
  * Account settings — announcements & notifications inbox.
  * Content from admin-managed API; read state stays local.
+ * Each tab loads its own list via GET /notices?kind=…
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode, memo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiOutlineCheck, HiOutlineMegaphone } from 'react-icons/hi2';
 import { fetchNotices, type NoticeDto } from '@/apis/notices';
@@ -61,49 +62,53 @@ function AccountNotificationsPanel(): ReactNode {
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<NoticeTab>('announcement');
   const [readIds, setReadIds] = useState<Set<string>>(() => loadReadIds());
-  const [itemsAll, setItemsAll] = useState<NoticeDto[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [itemsByTab, setItemsByTab] = useState<Record<NoticeTab, NoticeDto[]>>({
+    announcement: [],
+    notification: [],
+  });
+  const [loading, setLoading] = useState(false);
+  const [loadedTabs, setLoadedTabs] = useState<Partial<Record<NoticeTab, boolean>>>({});
+  const loadGenRef = useRef(0);
 
-  const load = useCallback(async () => {
+  const loadTab = useCallback(async (kind: NoticeTab) => {
+    const gen = ++loadGenRef.current;
     setLoading(true);
     try {
-      const res = await fetchNotices();
-      setItemsAll(res.items || []);
+      const res = await fetchNotices({ kind });
+      if (gen !== loadGenRef.current) return;
+      const list = (res.items || [])
+        .filter((n) => n.kind === kind)
+        .sort((a, b) => toMs(b.createdAt) - toMs(a.createdAt));
+      setItemsByTab((prev) => ({ ...prev, [kind]: list }));
+      setLoadedTabs((prev) => ({ ...prev, [kind]: true }));
     } catch {
-      setItemsAll([]);
+      if (gen !== loadGenRef.current) return;
+      setItemsByTab((prev) => ({ ...prev, [kind]: [] }));
+      setLoadedTabs((prev) => ({ ...prev, [kind]: true }));
     } finally {
-      setLoading(false);
+      if (gen === loadGenRef.current) setLoading(false);
     }
   }, []);
 
+  // Enter panel / switch tab → request that kind (no prefetch of the other tab).
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadTab(tab);
+  }, [loadTab, tab]);
 
-  const items = useMemo(
-    () =>
-      itemsAll
-        .filter((n) => n.kind === tab)
-        .sort((a, b) => toMs(b.createdAt) - toMs(a.createdAt)),
-    [itemsAll, tab]
-  );
+  const items = itemsByTab[tab];
 
   const unreadByTab = useMemo(() => {
-    let announcement = 0;
-    let notification = 0;
-    for (const n of itemsAll) {
-      if (readIds.has(n.id)) continue;
-      if (n.kind === 'announcement') announcement += 1;
-      else if (n.kind === 'notification') notification += 1;
-    }
-    return { announcement, notification };
-  }, [itemsAll, readIds]);
+    const count = (kind: NoticeTab) =>
+      itemsByTab[kind].reduce((n, item) => (readIds.has(item.id) ? n : n + 1), 0);
+    return {
+      announcement: count('announcement'),
+      notification: count('notification'),
+    };
+  }, [itemsByTab, readIds]);
 
   const markAllRead = () => {
     const next = new Set(readIds);
-    for (const n of itemsAll) {
-      if (n.kind === tab) next.add(n.id);
-    }
+    for (const n of itemsByTab[tab]) next.add(n.id);
     setReadIds(next);
     saveReadIds(next);
   };
@@ -123,13 +128,14 @@ function AccountNotificationsPanel(): ReactNode {
 
   const unreadInTab = unreadByTab[tab];
   const lang = i18n.resolvedLanguage || i18n.language || 'zh-CN';
+  const showLoading = loading && !loadedTabs[tab];
 
   return (
     <div className="flex min-h-[360px] flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SegmentedControl
           value={tab}
-          onChange={setTab}
+          onChange={(next) => setTab(next as NoticeTab)}
           options={tabs.map((item) => ({
             value: item.id,
             label: item.label,
@@ -154,7 +160,7 @@ function AccountNotificationsPanel(): ReactNode {
       </div>
 
       <div className="mt-5 min-h-0 flex-1">
-        {loading ? (
+        {showLoading ? (
           <div className="flex h-[280px] items-center justify-center text-[13px] text-[var(--muted)]">
             {t('common.loading')}
           </div>

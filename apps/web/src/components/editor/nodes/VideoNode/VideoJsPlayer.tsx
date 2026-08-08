@@ -8,7 +8,7 @@ import {
   memo,
 } from 'react';
 import { cn } from '@/utils/classnames';
-import { imageSrcToFile, isOurStoredImageUrl, mediaSrcNeedsAuthFetch } from '@/utils/uploadImage';
+import { toDisplayMediaUrl } from '@/utils/uploadImage';
 import VideoPlaybackBar, {
   videoChromeLayout,
   videoMediaFromElement,
@@ -16,15 +16,6 @@ import VideoPlaybackBar, {
   type VideoMediaControl,
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import './VideoJsPlayer.css';
-
-/** Upload files are public-read — use plain <video src>. */
-function videoSrcNeedsAuthFetch(src: string, uploadKey?: string | null): boolean {
-  const s = String(src || '').trim();
-  if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
-  if (mediaSrcNeedsAuthFetch(s) || isOurStoredImageUrl(s)) return true;
-  // Bare key stored as src while object key is on the node.
-  return Boolean(uploadKey) && !/^https?:\/\//i.test(s);
-}
 
 function resolveAbsoluteHref(href: string): string {
   try {
@@ -44,75 +35,9 @@ function resolveVideoElementAbsSrc(el: HTMLVideoElement): string {
   }
 }
 
-/**
- * Resolve a canvas / upload video `src` into something the player can play.
- * Auth-gated uploads → blob URL; public / data / blob URLs pass through.
- * Keeps the last good URL while re-resolving so the player is not unmounted.
- * Never revoke/recreate a blob for the same src+key (avoids reload → frame 0).
- */
+/** Canvas / upload video `src` → browser-playable URL (no auth blob round-trip). */
 export function usePlayableVideoSrc(src: string, uploadKey?: string | null): string {
-  const [playSrc, setPlaySrc] = useState(() =>
-    videoSrcNeedsAuthFetch(src, uploadKey) ? '' : String(src || '').trim()
-  );
-  const blobRef = useRef<string | null>(null);
-  const cacheKeyRef = useRef<string>('');
-
-  useEffect(() => {
-    const s = String(src || '').trim();
-    if (!s) {
-      if (blobRef.current) {
-        URL.revokeObjectURL(blobRef.current);
-        blobRef.current = null;
-      }
-      cacheKeyRef.current = '';
-      setPlaySrc('');
-      return;
-    }
-    if (!videoSrcNeedsAuthFetch(s, uploadKey)) {
-      if (blobRef.current) {
-        URL.revokeObjectURL(blobRef.current);
-        blobRef.current = null;
-      }
-      cacheKeyRef.current = '';
-      setPlaySrc(s);
-      return;
-    }
-    const cacheKey = `${s}::${uploadKey || ''}`;
-    if (cacheKeyRef.current === cacheKey && blobRef.current) {
-      setPlaySrc(blobRef.current);
-      return;
-    }
-    let cancelled = false;
-    async function resolvePlaySrc() {
-      try {
-        const file = await imageSrcToFile(s, 'play.mp4', { uploadKey });
-        if (cancelled) return;
-        const next = URL.createObjectURL(file);
-        if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-        blobRef.current = next;
-        cacheKeyRef.current = cacheKey;
-        setPlaySrc(next);
-      } catch (err) {
-        console.warn('[video] auth src resolve failed', err);
-      }
-    }
-    void resolvePlaySrc();
-    return () => {
-      cancelled = true;
-    };
-  }, [src, uploadKey]);
-
-  useEffect(
-    () => () => {
-      if (blobRef.current) {
-        URL.revokeObjectURL(blobRef.current);
-        blobRef.current = null;
-      }
-    },
-    []
-  );
-
-  return playSrc;
+  return toDisplayMediaUrl(src, uploadKey);
 }
 
 export type VideoCropNorm = { x: number; y: number; w: number; h: number };

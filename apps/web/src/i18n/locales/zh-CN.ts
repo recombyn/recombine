@@ -873,6 +873,8 @@ const zhCN = {
     shareMe: '我',
     shareRemoveCollaborator: '移除',
     shareUpdateFailed: '更新分享设置失败',
+    shareCreateFailed: '创建分享链接失败',
+    shareOpenFailed: '打开分享文件失败',
     shareQrSoon: '二维码即将开放',
     shareLink: '分享链接',
     shareLinkPlaceholder: '生成中…',

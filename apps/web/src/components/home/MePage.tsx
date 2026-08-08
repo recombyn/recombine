@@ -25,7 +25,6 @@ import { buildLoginUrl } from '@/utils/authReturnTo';
 import { deleteAsset, listAssets, type UserAsset } from '@/apis/assets';
 import {
   fetchMyLiked,
-  fetchMyLikedIds,
   likePlazaItem,
   syncMyLiked,
   unlikePlazaItem,
@@ -231,32 +230,13 @@ function MePage({ onOpenCase }: Props): ReactNode {
     setPublishedReady(false);
     setAssetsReady(false);
     setLiked([]);
+    setLikedIds(new Set());
     setPublishedAll([]);
     setAssets([]);
     setAssetPreview(null);
     setAssetDeleteTarget(null);
     likedMigratedRef.current = false;
   }, [userId]);
-
-  useEffect(() => {
-    if (!authed || !userId) {
-      setLikedIds(new Set());
-      return;
-    }
-    let cancelled = false;
-    async function hydrateLikedIds() {
-      try {
-        const res = await fetchMyLikedIds();
-        if (!cancelled) setLikedIds(new Set(res.ids || []));
-      } catch {
-        if (!cancelled) setLikedIds(new Set());
-      }
-    }
-    void hydrateLikedIds();
-    return () => {
-      cancelled = true;
-    };
-  }, [authed, userId]);
 
   const loadLikedOnce = useCallback(async () => {
     if (!authed || !userId) {
@@ -572,13 +552,14 @@ function MePage({ onOpenCase }: Props): ReactNode {
     if (remixingId) return;
     setRemixingId(meta.id);
     try {
-      void (async () => {
+      async function trackRemixUse() {
         try {
           await recordPlazaUse(meta.id);
         } catch {
           /* ignore */
         }
-      })();
+      }
+      void trackRemixUse();
       setPreviewId(null);
       onOpenCase(meta);
     } catch {

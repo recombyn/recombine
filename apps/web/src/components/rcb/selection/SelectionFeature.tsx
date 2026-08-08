@@ -41,7 +41,14 @@ import CornerRadiusHandlesOverlay from './chrome/CornerRadiusHandlesOverlay';
 import PolygonShapeHandlesOverlay from './chrome/PolygonShapeHandlesOverlay';
 import StarShapeHandlesOverlay from './chrome/StarShapeHandlesOverlay';
 import CircleShapeHandlesOverlay from './chrome/CircleShapeHandlesOverlay';
-import { resizeFromHandle, rotateBoxesAround, scaleBoxesToUnion, unionOfBoxes, type ResizeHandle } from './resizeGeometry';
+import {
+  resizeFromHandle,
+  rotateBoxesAround,
+  rotatedAabbBox,
+  scaleBoxesToOrientedUnion,
+  unionOfBoxes,
+  type ResizeHandle,
+} from './resizeGeometry';
 import {
   HEAVY_PATH_D_CHARS,
   pathStrokeHitsSceneBox,
@@ -465,6 +472,152 @@ function unionBoxes(boxes: SceneBox[]): SceneBox | null {
   return { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
 }
 
+type ChromeOrigin = { nodeId: string; box: SceneBox; angle?: number };
+
+function rotAroundOrigin(x: number, y: number, deg: number): { x: number; y: number } {
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { x: x * cos - y * sin, y: x * sin + y * cos };
+}
+
+function memberAngle(document: any, o: ChromeOrigin): number {
+  if (o.angle != null && Number.isFinite(o.angle)) return Number(o.angle);
+  if (parseFrameSelId(o.nodeId)) return 0;
+  return readNodeAngle(document, o.nodeId);
+}
+
+/** Common member angle, or 0 when the selection is mixed. */
+function getSelectionSharedRotation(document: any, nodeIds: string[]): number {
+  let found = false;
+  let rotation = 0;
+  for (const id of nodeIds) {
+    if (parseFrameSelId(id)) continue;
+    const a = readNodeAngle(document, id);
+    if (!found) {
+      found = true;
+      rotation = a;
+    } else if (Math.abs(a - rotation) > 0.05) {
+      return 0;
+    }
+  }
+  return found ? rotation : 0;
+}
+
+function multiMembersKey(origins: Array<{ nodeId: string; box: SceneBox }>): string {
+  return origins
+    .map((o) => {
+      const b = o.box;
+      return `${o.nodeId}:${b.left.toFixed(1)}:${b.top.toFixed(1)}:${b.width.toFixed(1)}:${b.height.toFixed(1)}`;
+    })
+    .join('|');
+}
+
+/** Oriented control box when angles match; else page AABB of painted bounds. */
+function getSelectionRotatedUnion(
+  document: any,
+  origins: ChromeOrigin[],
+  sharedRotationDeg: number
+): SceneBox | null {
+  if (!origins.length) return null;
+  if (Math.abs(sharedRotationDeg) < 0.01) {
+    return unionBoxes(
+      origins.map((o) =>
+        parseFrameSelId(o.nodeId) ? o.box : rotatedAabbBox(o.box, memberAngle(document, o))
+      )
+    );
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const rad = (-sharedRotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  for (const o of origins) {
+    const ang = memberAngle(document, o);
+    const { left, top, width, height } = o.box;
+    const cx = left + width / 2;
+    const cy = top + height / 2;
+    const ar = (ang * Math.PI) / 180;
+    const ac = Math.cos(ar);
+    const as = Math.sin(ar);
+    for (const [lx, ly] of [
+      [left, top],
+      [left + width, top],
+      [left + width, top + height],
+      [left, top + height],
+    ] as const) {
+      const dx = lx - cx;
+      const dy = ly - cy;
+      const px = Math.abs(ang) < 0.01 ? lx : cx + dx * ac - dy * as;
+      const py = Math.abs(ang) < 0.01 ? ly : cy + dx * as + dy * ac;
+      const ux = px * cos - py * sin;
+      const uy = px * sin + py * cos;
+      minX = Math.min(minX, ux);
+      minY = Math.min(minY, uy);
+      maxX = Math.max(maxX, ux);
+      maxY = Math.max(maxY, uy);
+    }
+  }
+  const w = Math.max(1, maxX - minX);
+  const h = Math.max(1, maxY - minY);
+  const centerPage = rotAroundOrigin(minX + w / 2, minY + h / 2, sharedRotationDeg);
+  return {
+    left: centerPage.x - w / 2,
+    top: centerPage.y - h / 2,
+    width: w,
+    height: h,
+  };
+}
+
+/** Prefer live tilted chrome; else derive from shared member angles. */
+function resolveControlChrome(
+  document: any,
+  origins: ChromeOrigin[],
+  liveUnion?: SceneBox | null,
+  liveAngle?: number
+): { box: SceneBox; angle: number } {
+  const fallback = unionBoxes(origins.map((o) => o.box)) || {
+    left: 0,
+    top: 0,
+    width: 1,
+    height: 1,
+  };
+  if (!origins.length) return { box: fallback, angle: 0 };
+  if (origins.length === 1) {
+    const id = origins[0].nodeId;
+    return {
+      box: { ...(liveUnion || origins[0].box) },
+      angle:
+        liveAngle ||
+        (parseFrameSelId(id) ? 0 : readNodeAngle(document, id)),
+    };
+  }
+  if (liveUnion && Math.abs(Number(liveAngle) || 0) > 0.01) {
+    return { box: { ...liveUnion }, angle: Number(liveAngle) };
+  }
+  const angle =
+    Number(liveAngle) ||
+    getSelectionSharedRotation(
+      document,
+      origins.map((o) => o.nodeId)
+    );
+  return {
+    box: getSelectionRotatedUnion(document, origins, angle) || fallback,
+    angle,
+  };
+}
+
+function patchesAsOrigins(
+  patches: Array<{ nodeId: string; left: number; top: number; width: number; height: number }>
+): ChromeOrigin[] {
+  return patches.map((pt) => ({
+    nodeId: pt.nodeId,
+    box: { left: pt.left, top: pt.top, width: pt.width, height: pt.height },
+  }));
+}
+
 /**
  * Line/arrow nodes use a tall hit AABB (`STROKE_HIT` ≈ 24). Docking the
  * floating toolbar to that box's top puts it half a hit-height above the shaft
@@ -730,11 +883,23 @@ function buildMoveOriginsForHit(opts: {
   selectedIds: string[];
   expandedHit: string[];
   liveOriginsNow: Array<{ nodeId: string; box: SceneBox }> | null | undefined;
+  /** Current control box — keep oriented multi chrome instead of local AABB union. */
+  liveUnionNow?: SceneBox | null;
+  liveAngleNow?: number;
   getNodeBox: (id: string) => SceneBox | null | undefined;
   fallbackPoint: { x: number; y: number };
 }): { origins: Array<{ nodeId: string; box: SceneBox }>; union: SceneBox } {
-  const { document, hitId, selectedIds, expandedHit, liveOriginsNow, getNodeBox, fallbackPoint } =
-    opts;
+  const {
+    document,
+    hitId,
+    selectedIds,
+    expandedHit,
+    liveOriginsNow,
+    liveUnionNow,
+    liveAngleNow,
+    getNodeBox,
+    fallbackPoint,
+  } = opts;
   const moveNodeIds = expandSelectionWithGroups(
     document,
     selectedIds.includes(hitId) ? selectedIds.filter((id) => !parseFrameSelId(id)) : expandedHit
@@ -752,13 +917,21 @@ function buildMoveOriginsForHit(opts: {
       .filter(Boolean),
     ...frameOrigins.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })),
   ] as Array<{ nodeId: string; box: SceneBox }>;
-  const union = unionOfBoxes(origins.map((o) => o.box)) || {
-    left: fallbackPoint.x,
-    top: fallbackPoint.y,
-    width: 1,
-    height: 1,
+  if (!origins.length) {
+    return {
+      origins,
+      union: {
+        left: fallbackPoint.x,
+        top: fallbackPoint.y,
+        width: 1,
+        height: 1,
+      },
+    };
+  }
+  return {
+    origins,
+    union: resolveControlChrome(document, origins, liveUnionNow, liveAngleNow).box,
   };
-  return { origins, union };
 }
 
 function filterMarqueeContentHits(document: any, rawHits: string[], frameHitSet: Set<string>) {
@@ -1186,10 +1359,38 @@ function isStrokeShapeType(t: string) {
   return t === 'line' || t === 'arrow';
 }
 
+/** Point inside an oriented control box (local AABB + angle about center). */
+function pointInOrientedBox(
+  p: { x: number; y: number },
+  box: SceneBox,
+  angleDeg: number
+): boolean {
+  if (Math.abs(angleDeg) < 0.01) {
+    return (
+      p.x >= box.left &&
+      p.x <= box.left + box.width &&
+      p.y >= box.top &&
+      p.y <= box.top + box.height
+    );
+  }
+  const cx = box.left + box.width / 2;
+  const cy = box.top + box.height / 2;
+  const rad = (-angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = p.x - cx;
+  const dy = p.y - cy;
+  const lx = dx * cos - dy * sin;
+  const ly = dx * sin + dy * cos;
+  return Math.abs(lx) <= box.width / 2 && Math.abs(ly) <= box.height / 2;
+}
+
 /** Live angle while rotating / free-angle stroke resize; otherwise stored attrs. */
 function resolveChromeAngle(opts: {
   enabled: boolean;
   singleNode: boolean;
+  /** Multi-select: shared member angle (0 when angles differ). */
+  multiSelected: boolean;
   selectedNodeId: string | undefined;
   document: any;
   transforming: boolean;
@@ -1197,7 +1398,9 @@ function resolveChromeAngle(opts: {
   hasPathEndpoints: boolean;
   liveAngle: number;
 }): number {
-  if (!opts.enabled || !opts.singleNode || !opts.selectedNodeId) return 0;
+  if (!opts.enabled) return 0;
+  if (opts.multiSelected) return opts.liveAngle;
+  if (!opts.singleNode || !opts.selectedNodeId) return 0;
   const fromDoc = readNodeAngle(opts.document, opts.selectedNodeId);
   if (!opts.transforming) return fromDoc;
   if (opts.dragMode === 'rotate') return opts.liveAngle;
@@ -1326,6 +1529,9 @@ function buildShapeOutlines(opts: {
   selectedIsVideoGen: boolean;
   selectedIsLottieGen?: boolean;
   liveOrigins: Array<{ nodeId: string; box: SceneBox }> | null | undefined;
+  /** Oriented multi-select control box (session); falls back to member AABB union. */
+  multiUnionBox?: SceneBox | null;
+  multiUnionAngle?: number;
   getNodeBox: (id: string) => SceneBox | null;
 }): ShapeOutlineItem[] {
   if (!opts.enabled || opts.suppressChrome) return [];
@@ -1503,39 +1709,43 @@ function buildShapeOutlines(opts: {
     }
   }
 
-  // Multi path-only: union AABB + corner handles via host-mirrored chrome
+  // Multi path-only: oriented union box + corner handles via host-mirrored chrome
   // (same method as single — world SelectionChrome drifts at high zoom).
   const multiPathOnly =
     !opts.inspectDev &&
     !opts.readOnly &&
-    !opts.transforming &&
     opts.selectedFrameIds.length === 0 &&
     opts.selectedNodeIds.length > 1 &&
     opts.selectedNodeIds.every((id) => nodeUsesPathChrome(opts.document?.deltaSetLike?.[id]));
   if (multiPathOnly) {
-    const memberBoxes: SceneBox[] = [];
-    for (const id of opts.selectedNodeIds) {
-      const node = opts.document?.deltaSetLike?.[id];
-      const live = liveShapeGeomBox(id);
-      const fallback = opts.getNodeBox(id);
-      const geom =
-        live || (fallback ? deflateSelectionBox(fallback, node) : null);
-      if (geom) memberBoxes.push(inflateSelectionBox(geom, node));
+    let union = opts.multiUnionBox || null;
+    if (!union) {
+      const memberBoxes: SceneBox[] = [];
+      for (const id of opts.selectedNodeIds) {
+        const node = opts.document?.deltaSetLike?.[id];
+        const live = liveShapeGeomBox(id);
+        const fallback = opts.getNodeBox(id);
+        const geom =
+          live || (fallback ? deflateSelectionBox(fallback, node) : null);
+        if (geom) memberBoxes.push(inflateSelectionBox(geom, node));
+      }
+      union = unionBoxes(memberBoxes);
     }
-    const union = unionBoxes(memberBoxes);
     if (union) {
       out.push({
         id: '__rcb_sel_union__',
         mirrorHostId: opts.selectedNodeIds[0],
         pathD: '',
         box: union,
-        angle: 0,
+        angle: Number(opts.multiUnionAngle) || 0,
         color: '#3388ff',
+        // Keep the control box mounted while rotating (handles-key draws the stroke).
         withHandles: true,
         showPath: false,
         unionChrome: true,
         cornerHandlesOnly: true,
-        showRotate: false,
+        // Same multi-rotate as world chrome (orbit about union center).
+        showRotate: !opts.transforming,
       });
     }
   }
@@ -1562,9 +1772,19 @@ function resolveChromeUnion(opts: {
   selectedNodeIds: string[];
   selectedFrameIds: string[];
   document: any;
+  /** Multi session group angle — keep oriented liveUnion, do not swap in AABB. */
+  multiGroupAngle?: number;
 }): SceneBox | null {
-  const base = opts.transforming ? opts.liveUnion : opts.selectionUnion;
-  if (!base || opts.transforming) return base;
+  // Oriented multi control box (or any in-flight transform) uses liveUnion as-is.
+  if (opts.transforming) return opts.liveUnion;
+  if (
+    opts.selectedNodeIds.length > 1 &&
+    Math.abs(Number(opts.multiGroupAngle) || 0) > 0.01
+  ) {
+    return opts.liveUnion || opts.selectionUnion;
+  }
+  const base = opts.selectionUnion;
+  if (!base) return opts.liveUnion;
   // Prefer live host → path chrome (single + multi) so the box tracks remounts.
   if (opts.selectedFrameIds.length === 0 && opts.selectedNodeIds.length >= 1) {
     const lives: SceneBox[] = [];
@@ -1574,7 +1794,8 @@ function resolveChromeUnion(opts: {
       lives.push(inflateSelectionBox(live, opts.document?.deltaSetLike?.[id]));
     }
     if (lives.length === opts.selectedNodeIds.length) {
-      const liveUnion = opts.selectedNodeIds.length === 1 ? lives[0] : unionBoxes(lives);
+      const liveUnion =
+        opts.selectedNodeIds.length === 1 ? lives[0] : unionBoxes(lives);
       if (
         liveUnion &&
         Math.abs(liveUnion.left - base.left) < 2 &&
@@ -1688,6 +1909,28 @@ function SelectionFeature({
   const liveUnionRef = useRef<SceneBox | null>(null);
   const liveOriginsRef = useRef<Array<{ nodeId: string; box: SceneBox }> | null>(null);
   const liveAngleRef = useRef(0);
+  /** Held multi control pose until doc shared-angle catches up or members move (undo). */
+  const multiChromeRef = useRef<{
+    selKey: string;
+    box: SceneBox;
+    angle: number;
+    membersKey: string;
+  } | null>(null);
+  const idsKeyRef = useRef('');
+  const frameIdsKeyRef = useRef('');
+  const holdMultiChrome = (
+    box: SceneBox,
+    angle: number,
+    origins: Array<{ nodeId: string; box: SceneBox }>
+  ) => {
+    if (origins.length < 2 || Math.abs(angle) < 0.01) return;
+    multiChromeRef.current = {
+      selKey: `${idsKeyRef.current}#${frameIdsKeyRef.current}`,
+      box: { ...box },
+      angle,
+      membersKey: multiMembersKey(origins),
+    };
+  };
   /** Soft-click double-tap on text (counted on pointerup; native dblclick is the primary path). */
   const lastTextClickRef = useRef<{ id: string; at: number } | null>(null);
   const lastNodeTapRef = useRef<{ id: string; t: number; x: number; y: number } | null>(null);
@@ -1768,6 +2011,8 @@ function SelectionFeature({
 
   const idsKey = selectedNodeIds.join('|');
   const frameIdsKey = selectedFrameIds.join('|');
+  idsKeyRef.current = idsKey;
+  frameIdsKeyRef.current = frameIdsKey;
   /** Bust chrome memo when stroke band attrs change (align / width). */
   const strokeChromeKey = selectedNodeIds
     .map((id) => {
@@ -1823,24 +2068,78 @@ function SelectionFeature({
     return [...nodeOrigins, ...frameOrigins];
   }, [document, idsKey, frameIdsKey, getNodeBox, strokeChromeKey]);
 
-  /** Same-render selection bounds — avoids one-frame chrome flash when switching. */
-  const selectionUnion = useMemo(
-    () => unionBoxes(baseOrigins.map((o) => o.box)),
-    [baseOrigins]
-  );
+  const selectionSharedRotation = useMemo(() => {
+    if (selectedNodeIds.length <= 1) return 0;
+    return getSelectionSharedRotation(document, selectedNodeIds);
+  }, [document, selectedNodeIds]);
+
+  const selectionUnion = useMemo(() => {
+    if (!baseOrigins.length) return null;
+    return resolveControlChrome(
+      document,
+      baseOrigins,
+      null,
+      baseOrigins.length > 1 ? selectionSharedRotation : undefined
+    ).box;
+  }, [baseOrigins, document, selectionSharedRotation]);
 
   useEffect(() => {
     if (dragRef.current) return;
-    setLiveUnion(selectionUnion);
     setLiveOrigins(baseOrigins);
     const onlyNodeId =
       !frameIdsKey && idsKey && !idsKey.includes('|') ? idsKey : null;
     if (onlyNodeId) {
+      multiChromeRef.current = null;
+      setLiveUnion(selectionUnion);
       setLiveAngle(readNodeAngle(document, onlyNodeId));
-    } else {
-      setLiveAngle(0);
+      return;
     }
-  }, [baseOrigins, document, idsKey, frameIdsKey, selectionUnion]);
+    if (!selectionUnion || !idsKey) {
+      multiChromeRef.current = null;
+      setLiveUnion(selectionUnion);
+      setLiveAngle(0);
+      return;
+    }
+    const selKey = `${idsKey}#${frameIdsKey}`;
+    const membersKey = multiMembersKey(baseOrigins);
+    const shared = selectionSharedRotation;
+    if (Math.abs(shared) > 0.01) {
+      multiChromeRef.current = {
+        selKey,
+        box: { ...selectionUnion },
+        angle: shared,
+        membersKey,
+      };
+      setLiveUnion(selectionUnion);
+      setLiveAngle(shared);
+      return;
+    }
+    const prev = multiChromeRef.current;
+    if (
+      prev?.selKey === selKey &&
+      Math.abs(prev.angle) > 0.01 &&
+      prev.membersKey === membersKey
+    ) {
+      setLiveUnion(prev.box);
+      setLiveAngle(prev.angle);
+      return;
+    }
+    multiChromeRef.current = {
+      selKey,
+      box: { ...selectionUnion },
+      angle: 0,
+      membersKey,
+    };
+    setLiveUnion(selectionUnion);
+    setLiveAngle(0);
+  }, [
+    baseOrigins,
+    document,
+    idsKey,
+    frameIdsKey,
+    selectionUnion,
+    selectionSharedRotation,
+  ]);
 
   // Inspect: keep prior selection as pair target when clicking another element.
   useEffect(() => {
@@ -2074,15 +2373,16 @@ function SelectionFeature({
         if (readOnly || lockedSelection) return;
         e.preventDefault();
         e.stopPropagation();
+        const { box: union, angle: angle0 } = resolveControlChrome(
+          sceneDoc,
+          liveOriginsNow,
+          liveUnionNow,
+          liveAngleNow
+        );
         const center = {
-          x: liveUnionNow.left + liveUnionNow.width / 2,
-          y: liveUnionNow.top + liveUnionNow.height / 2,
+          x: union.left + union.width / 2,
+          y: union.top + union.height / 2,
         };
-        const angle0 =
-          liveAngleNow ||
-          (liveOriginsNow.length === 1
-            ? readNodeAngle(sceneDoc, liveOriginsNow[0].nodeId)
-            : 0);
         const pointerAngle0 = (Math.atan2(p.y - center.y, p.x - center.x) * 180) / Math.PI;
         dragRef.current = seed('rotate', e, p, {
           origins: liveOriginsNow.map((o) => ({
@@ -2090,11 +2390,13 @@ function SelectionFeature({
             box: { ...o.box },
             angle0: readNodeAngle(sceneDoc, o.nodeId),
           })),
-          union: { ...liveUnionNow },
+          union: { ...union },
           angle0,
           center,
           pointerAngle0,
         });
+        setLiveUnion(union);
+        setLiveAngle(angle0);
         setTransformingNotify(true);
         capture(e.pointerId);
         return;
@@ -2111,10 +2413,12 @@ function SelectionFeature({
         const singleId = liveOriginsNow.length === 1 ? liveOriginsNow[0].nodeId : '';
         const singleNode = singleId ? sceneDoc?.deltaSetLike?.[singleId] : null;
         const shapeType = singleNode ? String(singleNode.attrs?.shapeType || '') : '';
-        const angle0 =
-          liveOriginsNow.length === 1 && !parseFrameSelId(liveOriginsNow[0].nodeId)
-            ? liveAngleNow || readNodeAngle(sceneDoc, liveOriginsNow[0].nodeId)
-            : 0;
+        const { box: union, angle: shared } = resolveControlChrome(
+          sceneDoc,
+          liveOriginsNow,
+          liveUnionNow,
+          liveAngleNow
+        );
         let pathEpLocal0: [number, number] | undefined;
         let pathEpLocal1: [number, number] | undefined;
         // Open stroke tips: record path-local ends so resize tracks the grabbed tip.
@@ -2133,14 +2437,15 @@ function SelectionFeature({
         }
         dragRef.current = seed('resize', e, p, {
           origins: liveOriginsNow.map((o) => ({ nodeId: o.nodeId, box: { ...o.box } })),
-          union: { ...liveUnionNow },
+          union: { ...union },
           handle,
-          // Multi-select union is axis-aligned; single keeps node angle for local resize.
-          angle0,
-          aspectRatio: liveUnionNow.width / Math.max(1, liveUnionNow.height),
+          angle0: shared,
+          aspectRatio: union.width / Math.max(1, union.height),
           pathEpLocal0,
           pathEpLocal1,
         });
+        setLiveUnion(union);
+        setLiveAngle(shared);
         setTransformingNotify(true);
         capture(e.pointerId);
         return;
@@ -2164,11 +2469,7 @@ function SelectionFeature({
       };
 
       const pointInLiveUnion =
-        liveUnionNow &&
-        p.x >= liveUnionNow.left &&
-        p.x <= liveUnionNow.left + liveUnionNow.width &&
-        p.y >= liveUnionNow.top &&
-        p.y <= liveUnionNow.top + liveUnionNow.height;
+        liveUnionNow && pointInOrientedBox(p, liveUnionNow, liveAngleNow || 0);
       const selectionHasFrame = Boolean(
         liveOriginsNow?.some((o) => parseFrameSelId(o.nodeId))
       );
@@ -2275,6 +2576,8 @@ function SelectionFeature({
           selectedIds,
           expandedHit,
           liveOriginsNow,
+          liveUnionNow,
+          liveAngleNow,
           getNodeBox,
           fallbackPoint: p,
         });
@@ -2292,6 +2595,14 @@ function SelectionFeature({
         // Keep chrome rotation in sync ??transforming flips chromeAngle onto liveAngle.
         if (origins.length === 1 && !parseFrameSelId(origins[0].nodeId)) {
           setLiveAngle(readNodeAngle(sceneDoc, origins[0].nodeId));
+        } else if (origins.length > 1) {
+          const shared =
+            liveAngleNow ||
+            getSelectionSharedRotation(
+              sceneDoc,
+              origins.map((o) => o.nodeId)
+            );
+          setLiveAngle(shared);
         }
         // Locked layers stay selectable but cannot start a drag.
         if (isSelectionOriginsLocked(sceneDoc, origins)) {
@@ -2397,9 +2708,9 @@ function SelectionFeature({
           box: moved[i],
           angle0: o.angle0,
         }));
-        const nextUnion = unionOfBoxes(moved) || drag.union;
+        // Keep oriented control box (do not expand to AABB of orbited members).
         setLiveOrigins(nextOrigins.map((o) => ({ nodeId: o.nodeId, box: o.box })));
-        setLiveUnion(nextUnion);
+        setLiveUnion(drag.union);
         onGeometryPreview?.(
           nextOrigins.map((o) => ({
             nodeId: o.nodeId,
@@ -2523,10 +2834,11 @@ function SelectionFeature({
           );
           return;
         }
-        const scaled = scaleBoxesToUnion(
+        const scaled = scaleBoxesToOrientedUnion(
           drag.origins.map((o) => o.box),
           drag.union,
-          next
+          next,
+          drag.angle0 || 0
         );
         const nextOrigins = drag.origins.map((o, i) => ({
           nodeId: o.nodeId,
@@ -2705,18 +3017,18 @@ function SelectionFeature({
           width: moved[i].width,
           height: moved[i].height,
         }));
-        const nextUnion = unionOfBoxes(moved) || drag.union;
-        setLiveUnion(nextUnion);
-        setLiveOrigins(patches.map((pt) => ({ nodeId: pt.nodeId, box: pt })));
+        const origins = patchesAsOrigins(patches);
+        setLiveUnion(drag.union);
+        setLiveAngle(next);
+        setLiveOrigins(origins);
+        holdMultiChrome(drag.union, next, origins);
         if (Math.abs(delta) > 0.01) {
-          // One history entry for the whole multi-rotate (geometry + angles).
-          onGeometryCommit(patches);
+          // Angles first so geometry commit's document snapshot already carries them.
           drag.origins.forEach((o) => {
             onAngleCommit?.(o.nodeId, Number(o.angle0 || 0) + delta, { skipHistory: true });
           });
+          onGeometryCommit(patches);
         }
-        // Multi chrome is axis-aligned; reset visual group angle after commit.
-        setLiveAngle(0);
         endTransform();
         return;
       }
@@ -2767,8 +3079,10 @@ function SelectionFeature({
           width: o.box.width,
           height: o.box.height,
         }));
+        const origins = patchesAsOrigins(patches);
         setLiveUnion(nextUnion);
-        setLiveOrigins(patches.map((pt) => ({ nodeId: pt.nodeId, box: pt })));
+        setLiveOrigins(origins);
+        holdMultiChrome(nextUnion, liveAngleRef.current, origins);
         if (Math.hypot(sdx, sdy) > 0.01) {
           lastTextClickRef.current = null;
           onGeometryCommit(patches);
@@ -2844,10 +3158,11 @@ function SelectionFeature({
           endTransform();
           return;
         }
-        const scaled = scaleBoxesToUnion(
+        const scaled = scaleBoxesToOrientedUnion(
           drag.origins.map((o) => o.box),
           drag.union,
-          next
+          next,
+          drag.angle0 || 0
         );
         const patches = drag.origins.map((o, i) => ({
           nodeId: o.nodeId,
@@ -2856,8 +3171,12 @@ function SelectionFeature({
           width: scaled[i].width,
           height: scaled[i].height,
         }));
+        const groupAngle = drag.angle0 || 0;
+        const origins = patchesAsOrigins(patches);
         setLiveUnion(next);
-        setLiveOrigins(patches.map((pt) => ({ nodeId: pt.nodeId, box: pt })));
+        setLiveAngle(groupAngle);
+        setLiveOrigins(origins);
+        holdMultiChrome(next, groupAngle, origins);
         onGeometryCommit(patches);
       }
       endTransform();
@@ -3023,6 +3342,7 @@ function SelectionFeature({
   const chromeAngle = resolveChromeAngle({
     enabled,
     singleNode,
+    multiSelected: !single,
     selectedNodeId: selectedNodeIds[0],
     document,
     transforming,
@@ -3086,6 +3406,8 @@ function SelectionFeature({
     selectedIsVideoGen,
     selectedIsLottieGen,
     liveOrigins,
+    multiUnionBox: !single ? liveUnion || selectionUnion : null,
+    multiUnionAngle: !single ? chromeAngle : 0,
     getNodeBox,
   });
 
@@ -3135,6 +3457,7 @@ function SelectionFeature({
     selectedNodeIds,
     selectedFrameIds,
     document,
+    multiGroupAngle: !single ? chromeAngle : 0,
   });
 
   /** Radius / ellipse knobs sit on path geom (host-local), not visual-outer chrome. */
@@ -3171,24 +3494,27 @@ function SelectionFeature({
         sizeBox={measureSizeBox}
       />
 
-      {/* World SelectionChrome when idle — path single/multi use host-mirrored chrome. */}
+      {/* World SelectionChrome — path single/multi use host-mirrored chrome instead.
+          Multi non-path keeps chrome while rotating so the control box can tilt. */}
       {chromeUnion &&
       !suppressChrome &&
       selectionCount > 0 &&
-      !transforming &&
-      !skipWorldSelectionChrome ? (
+      !skipWorldSelectionChrome &&
+      (!transforming || !single) ? (
         <SelectionChrome
           box={chromeUnion}
           angle={chromeAngle}
-          showHandles={!inspectDev && !readOnly && !selectedIsMediaGen}
+          showHandles={!inspectDev && !readOnly && !selectedIsMediaGen && !transforming}
           cornerHandlesOnly={!single}
           variant={lineChrome ? 'line' : 'box'}
           showRotate={
             !inspectDev &&
             !readOnly &&
             !lineChrome &&
-            singleNode &&
-            !selectedIsMediaGen
+            !selectedIsMediaGen &&
+            !transforming &&
+            selectedNodeIds.length >= 1 &&
+            selectedFrameIds.length === 0
           }
           showBoxStroke={!lineChrome}
           interactiveBox={selectedFrameIds.length > 0}

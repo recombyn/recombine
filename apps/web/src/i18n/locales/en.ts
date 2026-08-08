@@ -880,6 +880,8 @@ const en = {
     shareMe: 'Me',
     shareRemoveCollaborator: 'Remove',
     shareUpdateFailed: 'Failed to update share settings',
+    shareCreateFailed: 'Failed to create share link',
+    shareOpenFailed: 'Failed to open shared file',
     shareQrSoon: 'QR code coming soon',
     shareLink: 'Share link',
     shareLinkPlaceholder: 'Generating…',

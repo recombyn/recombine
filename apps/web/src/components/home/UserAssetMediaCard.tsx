@@ -28,7 +28,7 @@ import type { UserAsset } from '@/apis/assets';
 import { FLOW_ITEM_CLASS, FLOW_SKELETON_COUNT } from '@/components/home/FlowScrollSection';
 import { parseLottieAnimationData } from '@/components/rcb/scene/document/sceneDocument';
 import { cn } from '@/utils/classnames';
-import { imageSrcToFile, mediaSrcNeedsAuthFetch } from '@/utils/uploadImage';
+import { toDisplayMediaUrl } from '@/utils/uploadImage';
 
 /** Varied aspects for flow skeletons (same rhythm as plaza). */
 const ASSET_SKELETON_RATIOS = ['3 / 4', '4 / 5', '1 / 1', '4 / 3', '5 / 6', '2 / 3', '5 / 4'] as const;
@@ -110,22 +110,10 @@ function clearAssetCardDragging(el: HTMLElement | null) {
   if (card instanceof HTMLElement) card.removeAttribute('data-dragging');
 }
 
-/** Load Bodymovin JSON from asset url / auth upload key. */
-async function loadAssetLottieData(
-  src: string,
-  uploadKey?: string | null
-): Promise<Record<string, unknown> | null> {
-  const url = String(src || '').trim();
-  if (!url) return null;
-  try {
-    const file = await imageSrcToFile(url, 'asset-lottie.json', {
-      uploadKey,
-      fallbackMime: 'application/json',
-    });
-    return parseLottieAnimationData(await file.text());
-  } catch {
-    return null;
-  }
+/** Prefer list-inlined ``animationData``; never refetch `.json` when present. */
+function resolveAssetLottieData(asset: UserAsset): Record<string, unknown> | null {
+  const embedded = asset.animationData ?? asset.meta?.animationData;
+  return parseLottieAnimationData(embedded);
 }
 
 function mountLottieOnHost(
@@ -145,46 +133,15 @@ function mountLottieOnHost(
 
 // ─── hooks ──────────────────────────────────────────────────────────────────
 
-/** Auth-gated local URLs → blob; public / data URLs pass through. */
-function useAuthMediaSrc(
+/** Display URL as-is (bare storage keys → /api/v1/uploads/files/…). */
+function useDisplayMediaSrc(
   url: string,
   uploadKey: string | undefined,
-  fileName: string,
+  _fileName?: string,
   enabled = true
 ): string {
-  const [src, setSrc] = useState(() =>
-    enabled && url && !mediaSrcNeedsAuthFetch(url) ? url : ''
-  );
-
-  useEffect(() => {
-    if (!enabled || !url) {
-      setSrc('');
-      return;
-    }
-    if (!mediaSrcNeedsAuthFetch(url)) {
-      setSrc(url);
-      return;
-    }
-    let cancelled = false;
-    let blobUrl: string | null = null;
-    async function loadSrc() {
-      try {
-        const file = await imageSrcToFile(url, fileName, { uploadKey });
-        if (cancelled) return;
-        blobUrl = URL.createObjectURL(file);
-        setSrc(blobUrl);
-      } catch {
-        if (!cancelled) setSrc('');
-      }
-    }
-    void loadSrc();
-    return () => {
-      cancelled = true;
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [enabled, url, uploadKey, fileName]);
-
-  return src;
+  if (!enabled || !url) return '';
+  return toDisplayMediaUrl(url, uploadKey);
 }
 
 function useEscapeToClose(open: boolean, onClose: () => void) {
@@ -270,8 +227,7 @@ function LottieAssetThumb({
 }): ReactNode {
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const [failed, setFailed] = useState(false);
-  const url = String(asset.url || '').trim();
-  const uploadKey = String(asset.objectKey || '').trim() || undefined;
+  const lottieData = resolveAssetLottieData(asset);
 
   useEffect(() => {
     const aspect = aspectFromAsset(asset);
@@ -279,39 +235,32 @@ function LottieAssetThumb({
   }, [asset.width, asset.height, onNaturalAspect]);
 
   useEffect(() => {
-    if (!hostEl || !url) {
-      setFailed(!url);
+    if (!hostEl) return undefined;
+    if (!lottieData) {
+      setFailed(true);
       return undefined;
     }
     let cancelled = false;
     let anim: AnimationItem | null = null;
     setFailed(false);
-    void (async () => {
-      const data = await loadAssetLottieData(url, uploadKey);
-      if (cancelled) return;
-      if (!data) {
-        setFailed(true);
-        return;
-      }
-      const aw = Number(data.w);
-      const ah = Number(data.h);
-      if (aw > 0 && ah > 0) onNaturalAspect?.(`${aw} / ${ah}`);
-      try {
-        anim = mountLottieOnHost(hostEl, data);
-        requestAnimationFrame(() => {
-          if (cancelled || !hostEl.isConnected) return;
-          if (!lottieHostHasInk(hostEl)) setFailed(true);
-        });
-      } catch {
-        setFailed(true);
-      }
-    })();
+    const aw = Number(lottieData.w);
+    const ah = Number(lottieData.h);
+    if (aw > 0 && ah > 0) onNaturalAspect?.(`${aw} / ${ah}`);
+    try {
+      anim = mountLottieOnHost(hostEl, lottieData);
+      requestAnimationFrame(() => {
+        if (cancelled || !hostEl.isConnected) return;
+        if (!lottieHostHasInk(hostEl)) setFailed(true);
+      });
+    } catch {
+      setFailed(true);
+    }
     return () => {
       cancelled = true;
       anim?.destroy();
       hostEl.innerHTML = '';
     };
-  }, [hostEl, url, uploadKey, onNaturalAspect]);
+  }, [hostEl, lottieData, onNaturalAspect]);
 
   return (
     <div className="relative h-full w-full bg-transparent" aria-hidden>
@@ -334,7 +283,7 @@ function UserAssetThumb({
 }): ReactNode {
   const url = String(asset.url || '').trim();
   const uploadKey = String(asset.objectKey || '').trim() || undefined;
-  const thumbSrc = useAuthMediaSrc(url, uploadKey, 'user-asset-thumb.bin');
+  const thumbSrc = useDisplayMediaSrc(url, uploadKey, 'user-asset-thumb.bin');
 
   const reportNatural = (w: number, h: number) => {
     if (w > 0 && h > 0) onNaturalAspect?.(`${w} / ${h}`);
@@ -574,7 +523,7 @@ function ImageAssetLightbox({
 }): ReactNode {
   const url = String(asset.url || '').trim();
   const uploadKey = String(asset.objectKey || '').trim() || undefined;
-  const src = useAuthMediaSrc(url, uploadKey, 'user-asset-preview.bin');
+  const src = useDisplayMediaSrc(url, uploadKey, 'user-asset-preview.bin');
   if (!src) return null;
   return (
     <Image
@@ -612,7 +561,7 @@ function AudioAssetPreview({
   onClose: () => void;
 }): ReactNode {
   const { t } = useTranslation();
-  const playSrc = useAuthMediaSrc(
+  const playSrc = useDisplayMediaSrc(
     src,
     uploadKey || undefined,
     'asset-audio.bin',
@@ -658,38 +607,31 @@ function AudioAssetPreview({
 
 function LottieAssetPreview({
   open,
-  src,
-  uploadKey,
+  asset,
   onClose,
 }: {
   open: boolean;
-  src: string;
-  uploadKey?: string | null;
+  asset: UserAsset;
   onClose: () => void;
 }): ReactNode {
   const { t } = useTranslation();
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
+  const lottieData = resolveAssetLottieData(asset);
   useEscapeToClose(open, onClose);
 
   useEffect(() => {
-    if (!open || !src || !hostEl) return undefined;
-    let cancelled = false;
+    if (!open || !hostEl || !lottieData) return undefined;
     let anim: AnimationItem | null = null;
-    void (async () => {
-      const data = await loadAssetLottieData(src, uploadKey);
-      if (cancelled || !data) return;
-      try {
-        anim = mountLottieOnHost(hostEl, data);
-      } catch {
-        /* empty */
-      }
-    })();
+    try {
+      anim = mountLottieOnHost(hostEl, lottieData);
+    } catch {
+      /* empty */
+    }
     return () => {
-      cancelled = true;
       anim?.destroy();
       hostEl.innerHTML = '';
     };
-  }, [open, src, uploadKey, hostEl]);
+  }, [open, hostEl, lottieData]);
 
   if (!open || typeof document === 'undefined') return null;
   return createPortal(
@@ -755,9 +697,8 @@ function UserAssetMediaPreview({
         onClose={onClose}
       />
       <LottieAssetPreview
-        open={asset.kind === 'lottie' && Boolean(url)}
-        src={url}
-        uploadKey={asset.objectKey}
+        open={asset.kind === 'lottie' && Boolean(resolveAssetLottieData(asset) || url)}
+        asset={asset}
         onClose={onClose}
       />
     </>

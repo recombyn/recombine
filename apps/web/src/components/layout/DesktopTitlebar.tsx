@@ -94,7 +94,7 @@ function DesktopTitlebar() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void (async () => {
+    async function subscribeWindowResize() {
       const win = await getWin();
       if (!win || cancelled) return;
       const sync = async () => {
@@ -108,7 +108,8 @@ function DesktopTitlebar() {
       unlisten = await win.onResized(() => {
         void sync();
       });
-    })();
+    }
+    void subscribeWindowResize();
     return () => {
       cancelled = true;
       unlisten?.();

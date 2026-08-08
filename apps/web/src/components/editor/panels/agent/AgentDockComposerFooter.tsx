@@ -89,7 +89,7 @@ function AgentDockComposerFooter({
                     type="button"
                     className="rounded bg-[var(--accent)] px-1.5 py-0.5 text-[11px] font-medium text-white hover:opacity-90"
                     onClick={() => {
-                      void (async () => {
+                      async function saveLongMemorySuggestion() {
                         try {
                           await fetch(resolveApiUrl('/api/v1/design/memory/long'), {
                             method: 'POST',
@@ -102,7 +102,8 @@ function AgentDockComposerFooter({
                         } catch {
                           /* silently ignore */
                         }
-                      })();
+                      }
+                      void saveLongMemorySuggestion();
                       onSavedLongSuggestion?.(i);
                     }}
                   >

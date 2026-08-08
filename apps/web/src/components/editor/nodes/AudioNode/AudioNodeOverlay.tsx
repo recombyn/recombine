@@ -24,7 +24,7 @@ import {
 import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
 import { useHtmlMediaMount } from '@/components/editor/nodes/useHtmlMediaMount';
-import { imageSrcToFile, isOurStoredImageUrl, mediaSrcNeedsAuthFetch } from '@/utils/uploadImage';
+import { toDisplayMediaUrl } from '@/utils/uploadImage';
 import AudioWaveform, { type AudioWaveformHandle } from './AudioWaveform';
 
 export type AudioGeomOverride = {
@@ -123,77 +123,9 @@ function formatClock(seconds: number, opts?: { round?: boolean }): string {
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
-function audioSrcNeedsAuthFetch(src: string, uploadKey?: string | null): boolean {
-  const s = String(src || '').trim();
-  if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
-  if (mediaSrcNeedsAuthFetch(s) || isOurStoredImageUrl(s)) return true;
-  return Boolean(uploadKey) && !/^https?:\/\//i.test(s);
-}
-
-function revokeBlobUrl(ref: { current: string | null }) {
-  if (!ref.current) return;
-  URL.revokeObjectURL(ref.current);
-  ref.current = null;
-}
-
-/** Auth-gated uploads → blob URL with audio/* mime (never image/png fallback). */
+/** Audio `src` → browser-playable URL (no auth blob round-trip). */
 function usePlayableAudioSrc(src: string, uploadKey?: string | null): string {
-  const [playSrc, setPlaySrc] = useState(() => {
-    if (audioSrcNeedsAuthFetch(src, uploadKey)) return '';
-    return String(src || '').trim();
-  });
-  const blobRef = useRef<string | null>(null);
-  const cacheKeyRef = useRef('');
-
-  useEffect(() => {
-    const s = String(src || '').trim();
-    if (!s) {
-      revokeBlobUrl(blobRef);
-      cacheKeyRef.current = '';
-      setPlaySrc('');
-      return;
-    }
-    if (!audioSrcNeedsAuthFetch(s, uploadKey)) {
-      revokeBlobUrl(blobRef);
-      cacheKeyRef.current = '';
-      setPlaySrc(s);
-      return;
-    }
-    const cacheKey = `${s}::${uploadKey || ''}`;
-    if (cacheKeyRef.current === cacheKey && blobRef.current) {
-      setPlaySrc(blobRef.current);
-      return;
-    }
-    let cancelled = false;
-    async function resolvePlaySrc() {
-      try {
-        const file = await imageSrcToFile(s, 'play.mp3', {
-          uploadKey,
-          fallbackMime: 'audio/mpeg',
-        });
-        if (cancelled) return;
-        let playable = file;
-        if (!String(file.type || '').startsWith('audio/')) {
-          playable = new File([file], 'play.mp3', { type: 'audio/mpeg' });
-        }
-        const next = URL.createObjectURL(playable);
-        revokeBlobUrl(blobRef);
-        blobRef.current = next;
-        cacheKeyRef.current = cacheKey;
-        setPlaySrc(next);
-      } catch (err) {
-        console.warn('[audio] auth src resolve failed', err);
-      }
-    }
-    void resolvePlaySrc();
-    return () => {
-      cancelled = true;
-    };
-  }, [src, uploadKey]);
-
-  useEffect(() => () => revokeBlobUrl(blobRef), []);
-
-  return playSrc;
+  return toDisplayMediaUrl(src, uploadKey);
 }
 
 function resolveTrimWindow(

@@ -406,13 +406,14 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
     dispatch(clearWallet());
     dispatch(clearProjectsLibrary());
     clearSessionCaches();
-    void (async () => {
+    async function logoutRemoteSession() {
       try {
         await logoutRemote();
       } catch {
         /* ignore */
       }
-    })();
+    }
+    void logoutRemoteSession();
     message.success(t('home.loggedOut'));
     close();
     navigate('/home', { replace: true });
