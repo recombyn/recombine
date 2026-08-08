@@ -167,6 +167,13 @@ export function estimateVideoCredits(model?: LlmModel | null): number {
   return Math.max(1, Math.ceil(price * (PLUS_FACE_CREDITS / PLUS_LIST_CNY) * DEFAULT_MARKUP));
 }
 
+/** TTS / speech catalog price (元/次) → wallet 积分. */
+export function estimateAudioCredits(model?: LlmModel | null): number {
+  const price = parsePriceAmount(model?.price);
+  if (price == null || price <= 0) return FALLBACK_CREDITS;
+  return Math.max(1, Math.ceil(price * (PLUS_FACE_CREDITS / PLUS_LIST_CNY) * DEFAULT_MARKUP));
+}
+
 /**
  * Lottie gen credit estimate — LLM structured JSON, billed like chat tokens.
  * Matches wallet `TOKENS_PER_CREDIT` (15k billed ≈ 1 积分). Catalog chat `price`

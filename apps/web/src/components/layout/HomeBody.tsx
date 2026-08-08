@@ -35,6 +35,7 @@ import { getToken } from '@/utils/token';
 import { docsUrl, openExternalUrl } from '@/utils/docsUrl';
 import { buildLoginUrl } from '@/utils/authReturnTo';
 import { useIsDesktopShell } from '@/components/layout/DesktopTitlebar';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { cn } from '@/utils/classnames';
 
 const PROJECT_PAGE_SIZE = 20;
@@ -129,6 +130,7 @@ function RailDivider() {
 
 function RailHelpMenu() {
   const { t } = useTranslation();
+  const desktopLocal = isDesktopLocal();
 
   const items = useMemo(
     () => [
@@ -150,17 +152,21 @@ function RailHelpMenu() {
           </span>
         ),
       },
-      {
-        key: 'updates',
-        label: (
-          <span className="inline-flex items-center gap-2">
-            <HiOutlineBell className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.75} />
-            {t('home.railHelpUpdates')}
-          </span>
-        ),
-      },
+      ...(desktopLocal
+        ? []
+        : [
+            {
+              key: 'updates',
+              label: (
+                <span className="inline-flex items-center gap-2">
+                  <HiOutlineBell className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.75} />
+                  {t('home.railHelpUpdates')}
+                </span>
+              ),
+            },
+          ]),
     ],
-    [t]
+    [t, desktopLocal]
   );
 
   return (
@@ -507,7 +513,9 @@ function HomeTemplateList({
                 setNav('mine');
               }}
             />
-            <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
+            {!isDesktopLocal() ? (
+              <InspirationSection onOpenCase={onOpenCase} disabled={importing} />
+            ) : null}
           </div>
         </div>
       </main>

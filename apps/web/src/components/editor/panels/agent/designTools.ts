@@ -126,8 +126,10 @@ export type CanvasUiBridge = {
   getCollabMode?: () => 'collaborative' | 'milestone' | 'auto';
   setCollabMode?: (mode: 'collaborative' | 'milestone' | 'auto') => void;
   setLayersOpen?: (open: boolean) => void;
+  setAssetsOpen?: (open: boolean) => void;
   setMinimapOpen?: (open: boolean) => void;
   getLayersOpen?: () => boolean;
+  getAssetsOpen?: () => boolean;
   getMinimapOpen?: () => boolean;
   openAccountAgent?: () => void;
 };

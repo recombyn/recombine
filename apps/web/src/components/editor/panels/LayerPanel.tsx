@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type PointerE
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuFrame, LuPanelLeft, LuPencil, LuFilm, LuClapperboard } from 'react-icons/lu';
+import { LuAudioLines, LuFrame, LuPanelLeft, LuPencil, LuFilm, LuClapperboard } from 'react-icons/lu';
 import { RiVideoAiLine } from 'react-icons/ri';
 import { RxText } from 'react-icons/rx';
 import {
@@ -23,6 +23,7 @@ import { VirtualList, type VirtualListHandle } from '@/components/base/VirtualLi
 import {
   isGeneratorNode,
   isImageGeneratorNode,
+  isAudioGeneratorNode,
   isLottieGeneratorNode,
   isVideoGeneratorNode,
   isNodeHidden,
@@ -206,6 +207,14 @@ function LayerIcon({
     );
   }
 
+  if (isAudioGeneratorNode(node) || node.key === 'audio') {
+    return (
+      <LayerGlyphFallback>
+        <LuAudioLines className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+      </LayerGlyphFallback>
+    );
+  }
+
   if (node.key === 'video') {
     const thumb = <LayerMediaThumb kind="video" src={src} poster={poster} />;
     if (thumb) return thumb;
@@ -256,18 +265,22 @@ function layerLabel(
       imageGenerator?: unknown;
       videoGenerator?: unknown;
       lottieGenerator?: unknown;
+      audioGenerator?: unknown;
       name?: unknown;
     };
   },
   imageGeneratorLabel: string,
   videoGeneratorLabel?: string,
-  lottieGeneratorLabel?: string
+  lottieGeneratorLabel?: string,
+  audioGeneratorLabel?: string
 ) {
   if (isImageGeneratorNode(node)) return imageGeneratorLabel;
   if (isVideoGeneratorNode(node)) return videoGeneratorLabel || 'Video Generator';
   if (isLottieGeneratorNode(node)) return lottieGeneratorLabel || 'Lottie Generator';
+  if (isAudioGeneratorNode(node)) return audioGeneratorLabel || 'Audio Generator';
   if (node.key === 'video') return String(node.attrs?.name || 'Video');
   if (node.key === 'lottie') return String(node.attrs?.name || 'Lottie');
+  if (node.key === 'audio') return String(node.attrs?.name || 'Audio');
   const kind = resolveLayerIconKind(node);
   const map: Record<string, string> = {
     text: '文字',
@@ -284,6 +297,7 @@ function layerLabel(
     path: '路径',
     svg: 'SVG',
     lottie: 'Lottie',
+    audio: '音频',
   };
   return map[kind] || kind;
 }
@@ -443,7 +457,8 @@ function LayerStackRowView({
             node,
             t('editor.tools.imageGenerator'),
             t('editor.tools.videoGenerator'),
-            t('editor.tools.lottieGenerator')
+            t('editor.tools.lottieGenerator'),
+            t('editor.tools.audioGenerator', { defaultValue: '音频生成器' })
           )}
         </span>
       </button>

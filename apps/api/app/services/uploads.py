@@ -31,6 +31,16 @@ _VIDEO_MIME = {
     ".m4v": "video/mp4",
 }
 
+_AUDIO_MIME = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".webm": "audio/webm",
+}
+
 
 def _ext_mime(filename: str | None, content_type: str | None) -> tuple[str, str]:
     ctype = (content_type or "").split(";")[0].strip().lower()
@@ -40,8 +50,10 @@ def _ext_mime(filename: str | None, content_type: str | None) -> tuple[str, str]
         ext = "." + name.rsplit(".", 1)[-1]
     if ext in _IMAGE_MIME:
         return ext.lstrip("."), _IMAGE_MIME[ext]
-    if ext in _VIDEO_MIME:
+    if ext in _VIDEO_MIME and not ctype.startswith("audio/"):
         return ext.lstrip("."), _VIDEO_MIME[ext]
+    if ext in _AUDIO_MIME:
+        return ext.lstrip("."), _AUDIO_MIME[ext]
     if ctype.startswith("image/"):
         guessed = mimetypes.guess_extension(ctype) or ".bin"
         if guessed == ".jpe":
@@ -49,6 +61,11 @@ def _ext_mime(filename: str | None, content_type: str | None) -> tuple[str, str]
         return guessed.lstrip("."), ctype
     if ctype.startswith("video/"):
         guessed = mimetypes.guess_extension(ctype) or ".mp4"
+        return guessed.lstrip("."), ctype
+    if ctype.startswith("audio/"):
+        guessed = mimetypes.guess_extension(ctype) or ".mp3"
+        if ctype == "audio/mpeg" and guessed in (".mp2", ".mpga", ".bin"):
+            guessed = ".mp3"
         return guessed.lstrip("."), ctype
     if ext:
         mime = mimetypes.guess_type(f"x{ext}")[0] or "application/octet-stream"
@@ -93,12 +110,16 @@ def upload_user_file(
         raise ValueError("empty file")
 
     ext, mime = _ext_mime(filename, content_type)
-    if not (mime.startswith("image/") or mime.startswith("video/")):
-        raise ValueError("only image or video uploads are supported")
+    if not (
+        mime.startswith("image/")
+        or mime.startswith("video/")
+        or mime.startswith("audio/")
+    ):
+        raise ValueError("only image, video, or audio uploads are supported")
 
     max_mb = max(1, int(settings.max_upload_mb or 20))
-    # Videos need a higher ceiling than stills (default 100MB unless configured higher).
-    if mime.startswith("video/"):
+    # Videos / audio need a higher ceiling than stills (default 100MB unless configured higher).
+    if mime.startswith("video/") or mime.startswith("audio/"):
         max_mb = max(max_mb, int(getattr(settings, "max_video_upload_mb", None) or 100))
     max_bytes = max_mb * 1024 * 1024
     if len(data) > max_bytes:

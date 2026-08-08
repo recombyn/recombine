@@ -35,6 +35,7 @@
     "react-router-dom": "^7.18.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0",
+    "wavesurfer.js": "^7.12.11",
     "y-indexeddb": "^9.0.12",
     "y-protocols": "^1.0.7",
     "y-websocket": "^3.0.0",

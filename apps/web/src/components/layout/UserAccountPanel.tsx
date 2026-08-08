@@ -1,4 +1,11 @@
-import { useEffect, useState, type ReactNode, memo } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  memo,
+} from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -241,6 +248,41 @@ function DrillBackRow({ label, onClick }: { label: string; onClick: () => void }
   );
 }
 
+/** Prefer opening to the right (chevron direction); flip left only when clipped. */
+function SideFlyout({ children }: { children: ReactNode }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [side, setSide] = useState<'right' | 'left'>('right');
+
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    const row = el?.parentElement;
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
+    const need = 160;
+    const spaceRight = window.innerWidth - rect.right - 8;
+    setSide(spaceRight >= need ? 'right' : 'left');
+  }, []);
+
+  const sideClass =
+    side === 'right'
+      ? 'left-full pl-[calc(0.5rem+10px)]'
+      : 'right-full pr-[calc(0.5rem+10px)]';
+
+  return (
+    <div ref={wrapRef} className={cn('absolute top-0 z-10', sideClass)}>
+      <div
+        className={cn(
+          'min-w-[148px] overflow-hidden rounded-lg bg-[var(--surface)] py-1',
+          'shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]'
+        )}
+        style={{ backgroundColor: 'var(--surface)' }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function UserAccountPanel({ open, onOpenChange, children }: Props) {
   const { t, i18n } = useTranslation();
   const user = useSelector((state: any) => state.auth.user);
@@ -398,7 +440,11 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
             )}
           >
             <div
-              className="overflow-hidden rounded-xl shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]"
+              className={cn(
+                'rounded-xl shadow-[0_12px_40px_rgba(12,12,13,0.16)] ring-1 ring-[var(--line)]',
+                // Narrow: drill-in; desktop: overflow-visible so side flyouts can paint outside.
+                narrow ? 'overflow-hidden' : 'overflow-visible'
+              )}
               style={{ backgroundColor: 'var(--surface)' }}
             >
               {/* Header */}
@@ -421,8 +467,8 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
                 </div>
               </div>
 
-              {/* Plan + upgrade — cloud / web only; hide while drilling into lang/theme */}
-              {!flyout && !desktopLocal ? (
+              {/* Plan + upgrade — cloud / web only; hide while narrow drill-in */}
+              {!(narrow && flyout) && !desktopLocal ? (
                 <div className="border-t border-[var(--line)] px-3.5 py-3">
                   <button
                     type="button"
@@ -448,14 +494,16 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
                 </div>
               ) : null}
 
-              {/* Menu — in-panel drill-in for lang/theme (side flyouts clip at window edge / Tauri). */}
+              {/* Menu — narrow: drill-in; desktop: side flyout */}
               <div
                 className={cn(
                   'border-t border-[var(--line)]',
-                  flyout === 'lang' || flyout === 'theme' ? 'px-2 py-2' : 'px-1.5 py-1.5'
+                  narrow && (flyout === 'lang' || flyout === 'theme')
+                    ? 'px-2 py-2'
+                    : 'px-1.5 py-1.5'
                 )}
               >
-                {flyout === 'lang' ? (
+                {narrow && flyout === 'lang' ? (
                   <>
                     <DrillBackRow label={t('common.back')} onClick={() => setFlyout(null)} />
                     {SUPPORTED_LANGS.map(({ code }) => (
@@ -467,7 +515,7 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
                       />
                     ))}
                   </>
-                ) : flyout === 'theme' ? (
+                ) : narrow && flyout === 'theme' ? (
                   <>
                     <DrillBackRow label={t('common.back')} onClick={() => setFlyout(null)} />
                     {themeOptions.map(({ mode, label }) => (
@@ -481,31 +529,87 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
                   </>
                 ) : (
                   <>
-                    <MenuRow
-                      icon={
-                        <HiOutlineGlobeAlt
-                          className={MENU_ICON}
-                          strokeWidth={MENU_STROKE}
-                          aria-hidden
-                        />
-                      }
-                      label={currentLangLabel}
-                      onClick={() => setFlyout('lang')}
-                      trailing={
-                        <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
-                      }
-                    />
+                    <div
+                      className="relative"
+                      onMouseEnter={() => {
+                        if (!narrow) setFlyout('lang');
+                      }}
+                      onMouseLeave={() => {
+                        if (!narrow) setFlyout((v) => (v === 'lang' ? null : v));
+                      }}
+                    >
+                      <MenuRow
+                        icon={
+                          <HiOutlineGlobeAlt
+                            className={MENU_ICON}
+                            strokeWidth={MENU_STROKE}
+                            aria-hidden
+                          />
+                        }
+                        label={currentLangLabel}
+                        active={flyout === 'lang'}
+                        onClick={() => setFlyout((v) => (v === 'lang' ? null : 'lang'))}
+                        trailing={
+                          <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                        }
+                      />
+                      {!narrow && flyout === 'lang' ? (
+                        <SideFlyout>
+                          {SUPPORTED_LANGS.map(({ code }) => (
+                            <button
+                              key={code}
+                              type="button"
+                              onClick={() => changeLang(code)}
+                              className={cn(
+                                'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+                                currentLang === code && 'font-medium'
+                              )}
+                            >
+                              {LANG_LABEL[code]}
+                            </button>
+                          ))}
+                        </SideFlyout>
+                      ) : null}
+                    </div>
 
-                    <MenuRow
-                      icon={
-                        <TbShirt className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
-                      }
-                      label={`${t('theme.label')} · ${themeLabel}`}
-                      onClick={() => setFlyout('theme')}
-                      trailing={
-                        <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
-                      }
-                    />
+                    <div
+                      className="relative"
+                      onMouseEnter={() => {
+                        if (!narrow) setFlyout('theme');
+                      }}
+                      onMouseLeave={() => {
+                        if (!narrow) setFlyout((v) => (v === 'theme' ? null : v));
+                      }}
+                    >
+                      <MenuRow
+                        icon={
+                          <TbShirt className={MENU_ICON} strokeWidth={MENU_STROKE} aria-hidden />
+                        }
+                        label={`${t('theme.label')} · ${themeLabel}`}
+                        active={flyout === 'theme'}
+                        onClick={() => setFlyout((v) => (v === 'theme' ? null : 'theme'))}
+                        trailing={
+                          <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                        }
+                      />
+                      {!narrow && flyout === 'theme' ? (
+                        <SideFlyout>
+                          {themeOptions.map(({ mode, label }) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => changeTheme(mode)}
+                              className={cn(
+                                'flex w-full items-center px-3 py-2 text-left text-[13px] text-[var(--ink)] transition hover:bg-[var(--accent-soft)]',
+                                themeMode === mode && 'font-medium'
+                              )}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </SideFlyout>
+                      ) : null}
+                    </div>
 
                     <MenuRow
                       icon={
@@ -537,8 +641,8 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
                 )}
               </div>
 
-              {/* Logout — hide while drilling */}
-              {!flyout ? (
+              {/* Logout — hide while narrow drill-in */}
+              {!(narrow && flyout) ? (
                 <div className="border-t border-[var(--line)] px-1.5 py-1.5">
                   <MenuRow
                     icon={

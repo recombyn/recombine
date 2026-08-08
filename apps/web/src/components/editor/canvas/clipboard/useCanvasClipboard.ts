@@ -64,6 +64,12 @@ type UseCanvasClipboardArgs = {
   finishToSelect: () => void;
   onImageFile: (file: File | null) => void | Promise<void>;
   onVideoFile: (file: File | null) => void | Promise<void>;
+  onAudioFile: (file: File | null) => void | Promise<void>;
+  onLottiePaste: (payload: {
+    animationData: Record<string, unknown>;
+    name?: string;
+    anchor?: { x: number; y: number } | null;
+  }) => void | Promise<void>;
 };
 
 export function useCanvasClipboard(args: UseCanvasClipboardArgs): CanvasClipboardApi {
@@ -83,6 +89,8 @@ export function useCanvasClipboard(args: UseCanvasClipboardArgs): CanvasClipboar
     finishToSelect,
     onImageFile,
     onVideoFile,
+    onAudioFile,
+    onLottiePaste,
   } = args;
   const dispatch = useDispatch();
 
@@ -303,9 +311,31 @@ export function useCanvasClipboard(args: UseCanvasClipboardArgs): CanvasClipboar
         onVideoFile(payload.file);
         return true;
       }
+      if (payload.kind === 'audio') {
+        imagePlaceAtRef.current = anchor;
+        onAudioFile(payload.file);
+        return true;
+      }
+      if (payload.kind === 'lottie') {
+        void onLottiePaste({
+          animationData: payload.animationData,
+          name: payload.name,
+          anchor,
+        });
+        return true;
+      }
       return false;
     },
-    [imagePlaceAtRef, insertPastedSvg, insertPastedText, onImageFile, onVideoFile, readOnly]
+    [
+      imagePlaceAtRef,
+      insertPastedSvg,
+      insertPastedText,
+      onAudioFile,
+      onImageFile,
+      onLottiePaste,
+      onVideoFile,
+      readOnly,
+    ]
   );
 
   const pasteFromOsOrInternal = useCallback(
@@ -391,7 +421,10 @@ export function useCanvasClipboard(args: UseCanvasClipboardArgs): CanvasClipboar
               if (
                 item.kind === 'file' ||
                 item.type.startsWith('image/') ||
-                item.type.startsWith('video/')
+                item.type.startsWith('video/') ||
+                item.type.startsWith('audio/') ||
+                item.type === 'application/json' ||
+                item.type === 'text/json'
               ) {
                 likelyOs = true;
                 break;

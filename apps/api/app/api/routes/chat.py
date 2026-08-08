@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from app.api.deps import CurrentUser
+from app.api.deps import CurrentUser, OptionalUser
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -52,6 +52,52 @@ def _desktop_local() -> bool:
     return bool(getattr(settings, "desktop_local_auto_login", False))
 
 
+def _is_byok_model(model: str | None) -> bool:
+    """True for user custom providers (``custom:<id>`` / ``byok:<id>``)."""
+    low = str(model or "").strip().lower()
+    return low.startswith("custom:") or low.startswith("byok:")
+
+
+def _user_byok_platforms(user_id: str | None) -> set[str]:
+    if not user_id:
+        return set()
+    try:
+        from app.services.security import list_user_platform_byok
+
+        return list_user_platform_byok(user_id)
+    except Exception:
+        return set()
+
+
+def _model_provider(model: str | None) -> str | None:
+    """Catalog provider for a model id (doubao / openrouter / …)."""
+    mid = (model or "").strip()
+    if not mid or _is_byok_model(mid):
+        return None
+    try:
+        from app.services.llm.catalog_store import list_catalog
+
+        for kind in ("text", "image", "video", "audio"):
+            for m in list_catalog(kind=kind, enabled_only=False):
+                if m.get("id") == mid:
+                    return str(m.get("provider") or "") or None
+    except Exception:
+        pass
+    for bucket in (list_llm_models(), list_image_models(), list_video_models()):
+        for m in bucket:
+            if m.get("id") == mid:
+                return str(m.get("provider") or "") or None
+    return None
+
+def _uses_user_platform_byok(user_id: str, model: str | None) -> bool:
+    """True when this request will hit the user's own aggregator key."""
+    if _is_byok_model(model):
+        return True
+    provider = _model_provider(model)
+    if not provider:
+        return False
+    return provider in _user_byok_platforms(user_id)
+
 class ChatMessageIn(BaseModel):
     message: str = Field(..., min_length=1)
     model: str | None = None
@@ -93,9 +139,6 @@ class VideoGenerateIn(BaseModel):
 
 
 
-
-
-
 def _charge(user_id: str, amount: int, detail: str) -> None:
     if _desktop_local():
         return
@@ -130,7 +173,10 @@ def _charge_image(
     Free plan: force Seedream 4.0; use 积分 or today's free daily run.
     Returns (model id to call, credits actually charged).
     """
-    if _desktop_local():
+    if _desktop_local() or _is_byok_model(requested_model) or _uses_user_platform_byok(
+        user_id, requested_model
+    ):
+        # BYOK / platform key uses the user's own quota — never platform credits.
         mid = (requested_model or "").strip() or None
         return mid, 0
     n = max(1, min(4, int(count or 1)))
@@ -159,18 +205,29 @@ def _charge_image(
 
 
 @router.get("/models")
-def get_models(request: Request) -> dict[str, Any]:
+def get_models(
+    request: Request,
+    current_user: OptionalUser,
+) -> dict[str, Any]:
     # Keep text/chat and image catalogs separate — FE merges with dedupe.
     # Do not use list_all_models() here or image ids appear twice under models + imageModels.
-    # Local desktop: no platform seed catalog — UI uses BYOK/custom providers only.
+    from app.services.llm.byok_presets import list_byok_platforms
+
+    uid = str(getattr(current_user, "id", "") or "").strip() or None
+    platforms = _user_byok_platforms(uid)
+    platforms_payload = list_byok_platforms()
+
+    # Local desktop: only catalog models for platforms the user unlocked (or env keys).
     if _desktop_local():
         return {
-            "models": [],
+            "models": list_llm_models(byok_platforms=platforms, strict=True),
             "available": True,
-            "imageModels": [],
-            "videoModels": [],
+            "imageModels": list_image_models(byok_platforms=platforms, strict=True),
+            "videoModels": list_video_models(byok_platforms=platforms, strict=True),
             "clientRegion": "local",
-            "openrouterAvailable": False,
+            "openrouterAvailable": "openrouter" in platforms,
+            "byokPlatforms": platforms_payload,
+            "byokPresets": platforms_payload,
         }
 
     from app.services.geoip import (
@@ -180,19 +237,21 @@ def get_models(request: Request) -> dict[str, Any]:
     )
 
     country = resolve_client_country(request)
-    or_ok = openrouter_allowed_for_country(country)
-    items = filter_catalog_models_for_region(list_llm_models(), country=country)
+    or_ok = openrouter_allowed_for_country(country) or "openrouter" in platforms
+    items = filter_catalog_models_for_region(
+        list_llm_models(byok_platforms=platforms), country=country
+    )
     image_models = filter_catalog_models_for_region(
-        list_image_models(), country=country
+        list_image_models(byok_platforms=platforms), country=country
     )
     video_models = filter_catalog_models_for_region(
-        list_video_models(), country=country
+        list_video_models(byok_platforms=platforms), country=country
     )
     available = True
     try:
         get_llm_endpoint()
     except Exception:
-        available = False
+        available = bool(platforms)
     return {
         "models": items,
         "available": available,
@@ -200,8 +259,9 @@ def get_models(request: Request) -> dict[str, Any]:
         "videoModels": video_models,
         "clientRegion": country,
         "openrouterAvailable": or_ok,
+        "byokPlatforms": platforms_payload,
+        "byokPresets": platforms_payload,
     }
-
 
 @router.post("/message")
 async def post_message(
@@ -346,6 +406,7 @@ async def post_image(
         count=int(body.n or 1),
     )
 
+    byok_token = set_byok_user_id(current_user.id)
     try:
         with usage_context(
             user_id=current_user.id,
@@ -365,7 +426,8 @@ async def post_image(
         if "No LLM API key" in msg:
             raise HTTPException(status_code=503, detail=msg) from err
         raise HTTPException(status_code=502, detail=msg) from err
-
+    finally:
+        reset_byok_user_id(byok_token)
     from app.services.assets import create_asset_from_url
 
     assets_out: list[dict[str, Any]] = []
@@ -399,12 +461,21 @@ async def post_video(
 
     requested = (body.model or "").strip() or None
     # Flat video charge from 积分 (reuse image-credit balance for now).
-    cost = image_model_credit_cost(requested, count=1, resolution=body.resolution) if requested else DEFAULT_IMAGE_CREDITS
-    cost = max(DEFAULT_IMAGE_CREDITS, int(cost or DEFAULT_IMAGE_CREDITS))
-    _charge_image_credits(current_user.id, cost, "AI video generation")
-    model_id = requested
-    credits_charged = cost
+    if _desktop_local() or _uses_user_platform_byok(current_user.id, requested):
+        model_id = requested
+        credits_charged = 0
+    else:
+        cost = (
+            image_model_credit_cost(requested, count=1, resolution=body.resolution)
+            if requested
+            else DEFAULT_IMAGE_CREDITS
+        )
+        cost = max(DEFAULT_IMAGE_CREDITS, int(cost or DEFAULT_IMAGE_CREDITS))
+        _charge_image_credits(current_user.id, cost, "AI video generation")
+        model_id = requested
+        credits_charged = cost
 
+    byok_token = set_byok_user_id(current_user.id)
     try:
         with usage_context(
             user_id=current_user.id,
@@ -424,7 +495,8 @@ async def post_video(
         if "No LLM API key" in msg or "No OpenRouter" in msg:
             raise HTTPException(status_code=503, detail=msg) from err
         raise HTTPException(status_code=502, detail=msg) from err
-
+    finally:
+        reset_byok_user_id(byok_token)
     from app.services.assets import create_asset_from_url
 
     assets_out: list[dict[str, Any]] = []

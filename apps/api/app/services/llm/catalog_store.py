@@ -12,7 +12,7 @@ from app.services.db import init_schema
 # - text: simple / medium / complex
 # - vision: multimodal slot; also allowed in text slots ("usable anywhere" except image)
 # - image: image-gen slot only
-REFERENCE_TYPES = ('text', 'vision', 'image', 'video')
+REFERENCE_TYPES = ('text', 'vision', 'image', 'video', 'audio')
 
 
 def _load_catalog_seed() -> dict[str, Any]:
@@ -78,6 +78,8 @@ def _normalize_reference_types(raw: Any, *, kind: str = 'text') -> list[str]:
         return ['image']
     if kind_n == 'video':
         return ['video']
+    if kind_n == 'audio':
+        return ['audio']
     return ['text']
 
 
@@ -430,6 +432,8 @@ def _backfill_empty_reference_types(session: Any) -> None:
             types = ['image']
         elif kind == 'video':
             types = ['video']
+        elif kind == 'audio':
+            types = ['audio']
         elif _heuristic_vision_id(mid):
             types = ['text', 'vision']
         else:
@@ -682,8 +686,8 @@ def upsert_model(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError('id required')
     label = str(payload.get('label') or mid).strip()
     kind = str(payload.get('kind') or 'text').strip().lower()
-    if kind not in ('text', 'image', 'video'):
-        raise ValueError('kind must be text|image|video')
+    if kind not in ('text', 'image', 'video', 'audio'):
+        raise ValueError('kind must be text|image|video|audio')
     ref_types = _normalize_reference_types(
         payload.get('referenceTypes')
         if payload.get('referenceTypes') is not None
@@ -695,6 +699,8 @@ def upsert_model(payload: dict[str, Any]) -> dict[str, Any]:
         ref_types = ['image', *[t for t in ref_types if t != 'image']]
     if kind == 'video' and 'video' not in ref_types:
         ref_types = ['video', *[t for t in ref_types if t != 'video']]
+    if kind == 'audio' and 'audio' not in ref_types:
+        ref_types = ['audio', *[t for t in ref_types if t != 'audio']]
     if kind == 'text' and ref_types == ['image']:
         raise ValueError('text models cannot be image-only; add text and/or vision')
     ref_types_json = _serialize_reference_types(ref_types)

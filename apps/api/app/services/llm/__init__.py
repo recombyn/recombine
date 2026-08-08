@@ -163,7 +163,17 @@ _ARK_IMAGE_MODELS: list[dict] = [
 
 
 def _api_key_for(provider: str) -> str:
-    """Per-provider key first; LLM_API_KEY as shared fallback."""
+    """Per-provider key: user platform BYOK (request-scoped) → env → LLM_API_KEY."""
+    uid = get_byok_user_id()
+    if uid:
+        try:
+            from app.services.security import get_platform_byok_api_key
+
+            byok = get_platform_byok_api_key(uid, provider)
+            if byok:
+                return byok
+        except Exception:
+            pass
     per = {
         "doubao": settings.doubao_api_key,
         "deepseek": settings.deepseek_api_key,
@@ -175,6 +185,35 @@ def _api_key_for(provider: str) -> str:
     return (settings.llm_api_key or "").strip()
 
 
+def _byok_platforms_arg(byok_platforms: set[str] | frozenset[str] | None) -> set[str]:
+    return set(byok_platforms or ())
+
+
+def _provider_unlocked(
+    provider: str,
+    byok_platforms: set[str],
+    *,
+    strict: bool = False,
+) -> bool:
+    """True when env has a key or the user saved a platform BYOK credential.
+
+    ``strict=True`` (desktop-local): do not fall back to “show doubao when no
+    deepseek key” — only real env keys or user BYOK unlock a provider.
+    """
+    p = (provider or "doubao").strip().lower()
+    if p in byok_platforms:
+        return True
+    if p == "openrouter":
+        return _has_openrouter_key()
+    if p == "deepseek":
+        if strict:
+            return _has_deepseek_key()
+        return _has_deepseek_key() or not _has_doubao_key()
+    if p == "doubao":
+        if strict:
+            return _has_doubao_key()
+        return _has_doubao_key() or not _has_deepseek_key()
+    return not strict
 def _has_doubao_key() -> bool:
     if (settings.doubao_api_key or "").strip():
         return True
@@ -203,8 +242,13 @@ def _has_openrouter_key() -> bool:
     return (settings.llm_provider or "").strip().lower() == "openrouter"
 
 
-def list_llm_models() -> list[dict]:
+def list_llm_models(
+    *,
+    byok_platforms: set[str] | frozenset[str] | None = None,
+    strict: bool = False,
+) -> list[dict]:
     """Catalog for the composer model picker (DB-backed with hardcoded fallback)."""
+    unlocked = _byok_platforms_arg(byok_platforms)
     models: list[dict] = []
     try:
         from app.services.llm.catalog_store import list_catalog
@@ -215,11 +259,7 @@ def list_llm_models() -> list[dict]:
     if catalog:
         for m in catalog:
             provider = str(m.get("provider") or "doubao")
-            if provider == "doubao" and not (_has_doubao_key() or not _has_deepseek_key()):
-                continue
-            if provider == "deepseek" and not (_has_deepseek_key() or not _has_doubao_key()):
-                continue
-            if provider == "openrouter" and not _has_openrouter_key():
+            if not _provider_unlocked(provider, unlocked, strict=strict):
                 continue
             models.append(
                 {
@@ -237,9 +277,9 @@ def list_llm_models() -> list[dict]:
                 }
             )
     else:
-        if _has_doubao_key() or not _has_deepseek_key():
+        if _provider_unlocked("doubao", unlocked, strict=strict):
             models.extend(dict(m) for m in _ARK_CHAT_MODELS)
-        if _has_deepseek_key() or not _has_doubao_key():
+        if _provider_unlocked("deepseek", unlocked, strict=strict):
             models.extend(
                 [
                     {
@@ -263,7 +303,7 @@ def list_llm_models() -> list[dict]:
             )
 
     seed = (settings.doubao_seed_model or "").strip()
-    if seed:
+    if seed and _provider_unlocked("doubao", unlocked, strict=strict):
         models.append(
             {
                 "id": "doubao-seed",
@@ -276,7 +316,7 @@ def list_llm_models() -> list[dict]:
         )
 
     pro = (settings.doubao_pro_model or "").strip()
-    if pro:
+    if pro and _provider_unlocked("doubao", unlocked, strict=strict):
         models.append(
             {
                 "id": "doubao-pro",
@@ -292,10 +332,13 @@ def list_llm_models() -> list[dict]:
     for m in models:
         by_id.setdefault(str(m["id"]), m)
     return list(by_id.values())
-
-
-def list_image_models() -> list[dict]:
+def list_image_models(
+    *,
+    byok_platforms: set[str] | frozenset[str] | None = None,
+    strict: bool = False,
+) -> list[dict]:
     """Doubao Seedream family via Ark /images/generations (DB-backed)."""
+    unlocked = _byok_platforms_arg(byok_platforms)
     try:
         from app.services.llm.catalog_store import list_catalog
         catalog = list_catalog(kind="image", enabled_only=True)
@@ -306,7 +349,7 @@ def list_image_models() -> list[dict]:
         models = []
         for m in catalog:
             provider = str(m.get("provider") or "doubao")
-            if provider == "openrouter" and not _has_openrouter_key():
+            if not _provider_unlocked(provider, unlocked, strict=strict):
                 continue
             mid = m["id"]
             api_model = m.get("api_model") or m.get("apiModel") or mid
@@ -335,8 +378,11 @@ def list_image_models() -> list[dict]:
                 }
             )
     else:
-        models = [dict(m) for m in _ARK_IMAGE_MODELS]
-
+        models = (
+            [dict(m) for m in _ARK_IMAGE_MODELS]
+            if _provider_unlocked("doubao", unlocked, strict=strict)
+            else []
+        )
     override = (settings.image_default_model or "").strip()
     if (
         override
@@ -357,8 +403,13 @@ def list_image_models() -> list[dict]:
     return models
 
 
-def list_video_models() -> list[dict]:
+def list_video_models(
+    *,
+    byok_platforms: set[str] | frozenset[str] | None = None,
+    strict: bool = False,
+) -> list[dict]:
     """OpenRouter Seedance / video catalog (DB-backed)."""
+    unlocked = _byok_platforms_arg(byok_platforms)
     try:
         from app.services.llm.catalog_store import list_catalog
 
@@ -369,7 +420,7 @@ def list_video_models() -> list[dict]:
     models: list[dict] = []
     for m in catalog:
         provider = str(m.get("provider") or "openrouter")
-        if provider == "openrouter" and not _has_openrouter_key():
+        if not _provider_unlocked(provider, unlocked, strict=strict):
             continue
         mid = m["id"]
         api_model = m.get("api_model") or m.get("apiModel") or mid
@@ -392,8 +443,51 @@ def list_video_models() -> list[dict]:
     return models
 
 
+def list_audio_models(
+    *,
+    byok_platforms: set[str] | frozenset[str] | None = None,
+    strict: bool = False,
+) -> list[dict]:
+    """OpenRouter TTS / speech catalog (DB-backed)."""
+    unlocked = _byok_platforms_arg(byok_platforms)
+    try:
+        from app.services.llm.catalog_store import list_catalog
+
+        catalog = list_catalog(kind="audio", enabled_only=True)
+    except Exception:
+        catalog = []
+
+    models: list[dict] = []
+    for m in catalog:
+        provider = str(m.get("provider") or "openrouter")
+        if not _provider_unlocked(provider, unlocked, strict=strict):
+            continue
+        mid = m["id"]
+        api_model = m.get("api_model") or m.get("apiModel") or mid
+        models.append(
+            {
+                "id": mid,
+                "label": m["label"],
+                "description": m.get("description"),
+                "provider": provider,
+                "kind": "audio",
+                "api_model": api_model,
+                "iconKey": m.get("iconKey"),
+                "iconUrl": m.get("iconUrl"),
+                "price": m.get("price"),
+                "max_attachments": int(
+                    m.get("max_attachments") or m.get("maxAttachments") or 0
+                ),
+            }
+        )
+    return models
 def list_all_models() -> list[dict]:
-    return [*list_llm_models(), *list_image_models(), *list_video_models()]
+    return [
+        *list_llm_models(),
+        *list_image_models(),
+        *list_video_models(),
+        *list_audio_models(),
+    ]
 
 
 def _base_url_for(provider: str) -> str:

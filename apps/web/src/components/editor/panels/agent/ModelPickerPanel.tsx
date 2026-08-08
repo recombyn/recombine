@@ -24,6 +24,19 @@ import sora from '@/assets/model/sora.png';
 import minimax from '@/assets/model/minimax_music.png';
 import elevenlabs from '@/assets/model/elevenlabs_turbo.png';
 import syncLipsync from '@/assets/model/sync_lipsync.png';
+import meta from '@/assets/model/meta.svg';
+import perplexity from '@/assets/model/perplexity.svg';
+import huggingface from '@/assets/model/huggingface.svg';
+import ollama from '@/assets/model/ollama.svg';
+import nvidia from '@/assets/model/nvidia.svg';
+import alibaba from '@/assets/model/alibaba.svg';
+import baidu from '@/assets/model/baidu.svg';
+import tencent from '@/assets/model/tencent.svg';
+import bytedance from '@/assets/model/bytedance.svg';
+import xai from '@/assets/model/x.svg';
+import replicate from '@/assets/model/replicate.svg';
+import vercel from '@/assets/model/vercel.svg';
+import github from '@/assets/model/github.svg';
 
 type ModelIconRef = {
   id?: string | null;
@@ -42,18 +55,31 @@ const MODEL_ICON_RULES: Array<{ test: (s: string) => boolean; src: string }> = [
   { test: (s) => s.includes('dreamina'), src: dreamina },
   { test: (s) => s.includes('glm') || s.includes('zhipu') || s.includes('智谱'), src: glm },
   { test: (s) => s.includes('doubao') || s.includes('豆包') || s.includes('seed-2'), src: doubao },
-  { test: (s) => s.includes('qwen') || s.includes('dashscope'), src: qwen },
+  { test: (s) => s.includes('qwen') || s.includes('dashscope') || s.includes('通义'), src: qwen },
   { test: (s) => s.includes('banana') || s.includes('gemini') || s.includes('google'), src: gemini },
   { test: (s) => s.includes('claude') || s.includes('anthropic'), src: claude },
   { test: (s) => s.includes('gpt') || s.includes('openai'), src: gptImage },
   { test: (s) => s.includes('flux'), src: flux },
   { test: (s) => s.includes('ideogram'), src: ideogram },
-  { test: (s) => s.includes('kling'), src: kling },
+  { test: (s) => s.includes('kling') || s.includes('可灵'), src: kling },
   { test: (s) => s.includes('sora'), src: sora },
   { test: (s) => s.includes('minimax'), src: minimax },
   { test: (s) => s.includes('eleven'), src: elevenlabs },
   { test: (s) => s.includes('lipsync') || s.includes('sync'), src: syncLipsync },
   { test: (s) => s.includes('moonshot') || s.includes('kimi'), src: kimi },
+  { test: (s) => s.includes('llama') || s.includes('meta'), src: meta },
+  { test: (s) => s.includes('perplexity'), src: perplexity },
+  { test: (s) => s.includes('hugging') || s.includes('hf.co'), src: huggingface },
+  { test: (s) => s.includes('ollama'), src: ollama },
+  { test: (s) => s.includes('nvidia') || s.includes('nemotron'), src: nvidia },
+  { test: (s) => s.includes('grok') || s.includes('xai'), src: xai },
+  { test: (s) => s.includes('baidu') || s.includes('ernie') || s.includes('文心'), src: baidu },
+  { test: (s) => s.includes('tencent') || s.includes('hunyuan') || s.includes('混元'), src: tencent },
+  { test: (s) => s.includes('bytedance') || s.includes('seed'), src: bytedance },
+  { test: (s) => s.includes('replicate'), src: replicate },
+  { test: (s) => s.includes('vercel') || s.includes('v0'), src: vercel },
+  { test: (s) => s.includes('github') || s.includes('copilot'), src: github },
+  { test: (s) => s.includes('alibaba') || s.includes('aliyun'), src: alibaba },
 ];
 
 const MODEL_ICON_BY_PROVIDER: Record<string, string> = {
@@ -69,6 +95,21 @@ const MODEL_ICON_BY_PROVIDER: Record<string, string> = {
   openai: gptImage,
   openrouter: gptImage,
   moonshot: kimi,
+  meta,
+  llama: meta,
+  perplexity,
+  huggingface,
+  ollama,
+  nvidia,
+  xai,
+  grok: xai,
+  baidu,
+  tencent,
+  bytedance,
+  replicate,
+  vercel,
+  github,
+  alibaba,
 };
 
 const MODEL_ICON_BY_KEY: Record<string, string> = {
@@ -93,7 +134,60 @@ const MODEL_ICON_BY_KEY: Record<string, string> = {
   minimax,
   elevenlabs,
   lipsync: syncLipsync,
+  meta,
+  llama: meta,
+  perplexity,
+  huggingface,
+  hf: huggingface,
+  ollama,
+  nvidia,
+  xai,
+  grok: xai,
+  baidu,
+  ernie: baidu,
+  tencent,
+  hunyuan: tencent,
+  bytedance,
+  replicate,
+  vercel,
+  github,
+  alibaba,
+  openrouter: gptImage,
 };
+
+/** Preset brand icons for BYOK / custom model forms. */
+export const CUSTOM_MODEL_ICON_OPTIONS: { key: string; label: string }[] = [
+  { key: 'openai', label: 'OpenAI' },
+  { key: 'claude', label: 'Claude' },
+  { key: 'gemini', label: 'Gemini' },
+  { key: 'deepseek', label: 'DeepSeek' },
+  { key: 'doubao', label: 'Doubao' },
+  { key: 'qwen', label: 'Qwen' },
+  { key: 'kimi', label: 'Kimi' },
+  { key: 'glm', label: 'GLM' },
+  { key: 'meta', label: 'Meta / Llama' },
+  { key: 'xai', label: 'xAI / Grok' },
+  { key: 'perplexity', label: 'Perplexity' },
+  { key: 'ollama', label: 'Ollama' },
+  { key: 'huggingface', label: 'Hugging Face' },
+  { key: 'nvidia', label: 'NVIDIA' },
+  { key: 'alibaba', label: 'Alibaba' },
+  { key: 'baidu', label: 'Baidu' },
+  { key: 'tencent', label: 'Tencent' },
+  { key: 'bytedance', label: 'ByteDance' },
+  { key: 'openrouter', label: 'OpenRouter' },
+  { key: 'flux', label: 'Flux' },
+  { key: 'ideogram', label: 'Ideogram' },
+  { key: 'kling', label: 'Kling' },
+  { key: 'sora', label: 'Sora' },
+  { key: 'dreamina', label: 'Dreamina' },
+  { key: 'minimax', label: 'MiniMax' },
+  { key: 'elevenlabs', label: 'ElevenLabs' },
+  { key: 'lipsync', label: 'Lipsync' },
+  { key: 'replicate', label: 'Replicate' },
+  { key: 'vercel', label: 'Vercel' },
+  { key: 'github', label: 'GitHub' },
+];
 
 /** Synthetic Auto row — same shape as API models. */
 export const AUTO_MODEL: LlmModel = {

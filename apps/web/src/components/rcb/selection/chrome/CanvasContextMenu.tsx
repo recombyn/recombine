@@ -27,9 +27,12 @@ import {
   HiOutlinePhoto,
   HiOutlineArrowDownTray,
   HiOutlineScissors,
+  HiOutlineSparkles,
   HiOutlineSquare2Stack,
   HiOutlineTrash,
 } from 'react-icons/hi2';
+import { LuAudioLines, LuClapperboard, LuImagePlus } from 'react-icons/lu';
+import { RiVideoAiLine } from 'react-icons/ri';
 import { Icon } from '@/components/base';
 
 /** Absorb the browser click that lands under a just-unmounted menu / backdrop. */
@@ -38,6 +41,10 @@ const CLICK_THROUGH_GUARD_MS = 320;
 type CtxAction =
   | 'upload'
   | 'addToChat'
+  | 'spawnImageGenerator'
+  | 'spawnVideoGenerator'
+  | 'spawnLottieGenerator'
+  | 'spawnAudioGenerator'
   | 'undo'
   | 'redo'
   | 'cut'
@@ -58,6 +65,12 @@ type CtxAction =
   | 'exportMp4'
   | 'exportMp3'
   | 'delete';
+
+type GeneratorPickAction =
+  | 'spawnImageGenerator'
+  | 'spawnVideoGenerator'
+  | 'spawnLottieGenerator'
+  | 'spawnAudioGenerator';
 
 export type ContextMenuState = {
   clientX: number;
@@ -203,6 +216,166 @@ function MenuItem({
         <kbd className="shrink-0 text-[10px] text-[var(--muted)]">{shortcut}</kbd>
       ) : null}
     </button>
+  );
+}
+
+function GeneratorFlyoutButtons({
+  onPick,
+}: {
+  onPick: (action: GeneratorPickAction) => void;
+}) {
+  const { t } = useTranslation();
+  const rows: Array<{ action: GeneratorPickAction; label: string; icon: ReactNode }> = [
+    {
+      action: 'spawnImageGenerator',
+      label: t('editor.tools.imageGenerator'),
+      icon: <LuImagePlus className={ICON_CLASS} strokeWidth={1.75} />,
+    },
+    {
+      action: 'spawnVideoGenerator',
+      label: t('editor.tools.videoGenerator'),
+      icon: <RiVideoAiLine className={`${ICON_CLASS} opacity-[0.72]`} />,
+    },
+    {
+      action: 'spawnLottieGenerator',
+      label: t('editor.tools.lottieGenerator'),
+      icon: <LuClapperboard className={ICON_CLASS} strokeWidth={1.75} />,
+    },
+    {
+      action: 'spawnAudioGenerator',
+      label: t('editor.tools.audioGenerator'),
+      icon: <LuAudioLines className={ICON_CLASS} strokeWidth={1.75} />,
+    },
+  ];
+  return (
+    <>
+      {rows.map((row) => (
+        <button
+          key={row.action}
+          type="button"
+          className={itemClass}
+          onClick={() => onPick(row.action)}
+        >
+          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+            {row.icon}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{row.label}</span>
+        </button>
+      ))}
+    </>
+  );
+}
+
+function GeneratorSubmenu({
+  onPick,
+}: {
+  onPick: (action: GeneratorPickAction) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const [flyoutPos, setFlyoutPos] = useState<{ left: number; top: number } | null>(null);
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current == null) return;
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  };
+
+  const scheduleClose = () => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setOpen(false);
+    }, 120);
+  };
+
+  const openMenu = () => {
+    clearCloseTimer();
+    setOpen(true);
+  };
+
+  useLayoutEffect(() => {
+    if (!open || !rowRef.current) {
+      setFlyoutPos(null);
+      return;
+    }
+    const rect = rowRef.current.getBoundingClientRect();
+    const flyoutW = 176;
+    const flyoutH = 152;
+    const preferRight = window.innerWidth - rect.right >= flyoutW + 8;
+    const left = preferRight ? rect.right + 4 : Math.max(PAD, rect.left - flyoutW - 4);
+    let top = rect.top;
+    if (top + flyoutH > window.innerHeight - PAD) {
+      top = Math.max(PAD, rect.bottom - flyoutH);
+    }
+    setFlyoutPos({ left, top });
+  }, [open]);
+
+  useEffect(
+    () => () => {
+      clearCloseTimer();
+    },
+    []
+  );
+
+  const pick = (action: GeneratorPickAction) => {
+    clearCloseTimer();
+    setOpen(false);
+    onPick(action);
+  };
+
+  const showFlyout = open && flyoutPos;
+
+  return (
+    <div
+      ref={rowRef}
+      className="relative"
+      onMouseEnter={openMenu}
+      onMouseLeave={scheduleClose}
+    >
+      <button
+        type="button"
+        className={itemClass}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          openMenu();
+        }}
+      >
+        <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+          <HiOutlineSparkles className={ICON_CLASS} strokeWidth={1.75} />
+        </span>
+        <span className="min-w-0 flex-1 truncate">{t('editor.contextMenu.generators')}</span>
+        <HiOutlineChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+      </button>
+      {showFlyout
+        ? createPortal(
+            <div
+              role="menu"
+              data-ctx-menu-flyout
+              className="fixed z-[80] min-w-[11rem] overflow-hidden rounded-xl bg-[var(--surface)] py-1 shadow-lg ring-1 ring-[var(--line)]"
+              style={{ left: flyoutPos.left, top: flyoutPos.top }}
+              onMouseEnter={openMenu}
+              onMouseLeave={scheduleClose}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            >
+              <GeneratorFlyoutButtons onPick={pick} />
+            </div>,
+            window.document.body
+          )
+        : null}
+    </div>
   );
 }
 
@@ -482,6 +655,7 @@ function CanvasContextMenu({
             disabled={Boolean(menu.nodeId)}
             onClick={() => runAction('upload')}
           />
+          <GeneratorSubmenu onPick={(action) => runAction(action)} />
           <MenuItem
             icon={<HiOutlineArrowUturnLeft className={ICON_CLASS} strokeWidth={1.75} />}
             label={t('editor.contextMenu.undo')}
