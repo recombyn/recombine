@@ -12,10 +12,10 @@ import { useRcbCamera } from '@/components/rcb';
 import {
   isNodeHidden,
   isVideoNode,
-  stackZIndex,
 } from '@/components/rcb/scene/document/sceneDocument';
 import { radiiFromAttrs } from '@/components/rcb/scene/document/sceneRadii';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
+import { useHtmlMediaMount } from '@/components/editor/nodes/useHtmlMediaMount';
 import VideoHoverPlayback from './VideoHoverPlayback';
 
 export type VideoGeomOverride = {
@@ -52,10 +52,10 @@ function VideoZoomSync({ onZoom }: { onZoom: (zoom: number) => void }) {
 }
 
 /**
- * Idle = freeze-frame / HTML <video> over SVG poster underlay.
- * During move/resize/rotate, parent sets `hidden` so only the SVG underlay
- * paints — same previewSvgNodeGeometry path as images (no HTML ghost).
- * `geometryOverrides` keeps HTML glued when visible again after commit.
+ * Idle = freeze-frame / HTML <video> portaled into the SVG foreignObject mount.
+ * Stays mounted during move/resize — FO is inside the SVG group that
+ * `previewSvgNodeGeometry` transforms (same as audio). `geometryOverrides`
+ * keeps plate width/height/angle chrome in sync while Redux is still pre-gesture.
  */
 function VideoNodeOverlay({
   document,
@@ -91,63 +91,87 @@ function VideoNodeOverlay({
   return (
     <>
       <VideoZoomSync onZoom={onZoom} />
-      {ids.map((nodeId) => {
-        const node = document?.deltaSetLike?.[nodeId];
-        if (!node) return null;
-        const src = String(node.attrs?.src || '').trim();
-        if (!src) return null;
-        // Keep mounted during trim / layer-hide — hide only (unmount resets currentTime).
-        const trimOpen = videoToolPanel?.nodeId === nodeId;
-        const cropSession =
-          imageToolPanel?.nodeId === nodeId && imageToolPanel.kind === 'crop';
-        const layerHidden = isNodeHidden(node);
-        const { left, top } = nodeLeftTop(document, node);
-        const ov = geometryOverrides?.[nodeId];
-        const width = Math.max(1, ov ? ov.width : Number(node.width) || 1);
-        const height = Math.max(1, ov ? ov.height : Number(node.height) || 1);
-        const angle =
-          ov && Number.isFinite(ov.angle) ? Number(ov.angle) : readNodeAngle(node);
-        const radii = radiiFromAttrs(node.attrs || {});
-        const scenePlate: CSSProperties & {
-          left: number;
-          top: number;
-          width: number;
-          height: number;
-        } = {
-          left: ov ? ov.left : left,
-          top: ov ? ov.top : top,
-          width,
-          height,
-          borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
-          transform: plateTransform(angle),
-          transformOrigin: 'center center',
-        };
-        return (
-          <VideoHoverPlayback
-            key={nodeId}
-            nodeId={nodeId}
-            scenePlate={scenePlate}
-            zoom={zoom}
-            stackZ={stackZIndex(document, 'node', nodeId)}
-            src={src}
-            poster={String(node.attrs?.poster || '').trim() || undefined}
-            uploadKey={
-              String(node.attrs?.uploadKey || node.attrs?.key || '').trim() || null
-            }
-            hidden={Boolean(hidden) || trimOpen || layerHidden || cropSession}
-            trimStart={readOptionalNumber(node.attrs?.trimStart)}
-            trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
-            knownDuration={readOptionalNumber(node.attrs?.duration)}
-            flipX={node.attrs?.flipX === true || node.attrs?.flipX === 'true'}
-            flipY={node.attrs?.flipY === true || node.attrs?.flipY === 'true'}
-            cropX={readOptionalNumber(node.attrs?.cropX)}
-            cropY={readOptionalNumber(node.attrs?.cropY)}
-            cropW={readOptionalNumber(node.attrs?.cropW)}
-            cropH={readOptionalNumber(node.attrs?.cropH)}
-          />
-        );
-      })}
+      {ids.map((nodeId) => (
+        <VideoPlateHost
+          key={nodeId}
+          nodeId={nodeId}
+          document={document}
+          zoom={zoom}
+          hidden={hidden}
+          geometryOverrides={geometryOverrides}
+          videoToolPanel={videoToolPanel}
+          imageToolPanel={imageToolPanel}
+        />
+      ))}
     </>
+  );
+}
+
+function VideoPlateHost({
+  nodeId,
+  document,
+  zoom,
+  hidden,
+  geometryOverrides,
+  videoToolPanel,
+  imageToolPanel,
+}: {
+  nodeId: string;
+  document: any;
+  zoom: number;
+  hidden?: boolean;
+  geometryOverrides?: Record<string, VideoGeomOverride> | null;
+  videoToolPanel: null | { nodeId: string; kind: string };
+  imageToolPanel: null | { nodeId: string; kind: string };
+}) {
+  const mount = useHtmlMediaMount(nodeId);
+  const node = document?.deltaSetLike?.[nodeId];
+  if (!node) return null;
+  const src = String(node.attrs?.src || '').trim();
+  if (!src) return null;
+  const trimOpen = videoToolPanel?.nodeId === nodeId;
+  const cropSession = imageToolPanel?.nodeId === nodeId && imageToolPanel.kind === 'crop';
+  const layerHidden = isNodeHidden(node);
+  const { left, top } = nodeLeftTop(document, node);
+  const ov = geometryOverrides?.[nodeId];
+  const width = Math.max(1, ov ? ov.width : Number(node.width) || 1);
+  const height = Math.max(1, ov ? ov.height : Number(node.height) || 1);
+  const angle = ov && Number.isFinite(ov.angle) ? Number(ov.angle) : readNodeAngle(node);
+  const radii = radiiFromAttrs(node.attrs || {});
+  const scenePlate: CSSProperties & {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } = {
+    left: ov ? ov.left : left,
+    top: ov ? ov.top : top,
+    width,
+    height,
+    borderRadius: `${radii.tl}px ${radii.tr}px ${radii.br}px ${radii.bl}px`,
+    transform: plateTransform(angle),
+    transformOrigin: 'center center',
+  };
+  return (
+    <VideoHoverPlayback
+      nodeId={nodeId}
+      scenePlate={scenePlate}
+      zoom={zoom}
+      svgMount={mount}
+      src={src}
+      poster={String(node.attrs?.poster || '').trim() || undefined}
+      uploadKey={String(node.attrs?.uploadKey || node.attrs?.key || '').trim() || null}
+      hidden={Boolean(hidden) || trimOpen || layerHidden || cropSession}
+      trimStart={readOptionalNumber(node.attrs?.trimStart)}
+      trimEnd={readOptionalNumber(node.attrs?.trimEnd)}
+      knownDuration={readOptionalNumber(node.attrs?.duration)}
+      flipX={node.attrs?.flipX === true || node.attrs?.flipX === 'true'}
+      flipY={node.attrs?.flipY === true || node.attrs?.flipY === 'true'}
+      cropX={readOptionalNumber(node.attrs?.cropX)}
+      cropY={readOptionalNumber(node.attrs?.cropY)}
+      cropW={readOptionalNumber(node.attrs?.cropW)}
+      cropH={readOptionalNumber(node.attrs?.cropH)}
+    />
   );
 }
 

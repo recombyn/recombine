@@ -451,7 +451,8 @@ function VideoPlaybackBar({
       data-video-playback-bar
       data-video-node-id={nodeId}
       className={cn(
-        'flex max-w-full min-w-0 items-center overflow-hidden text-white transition-opacity duration-150',
+        // overflow-visible: vertical volume popover sits above the mute button.
+        'flex max-w-full min-w-0 items-center overflow-visible text-white transition-opacity duration-150',
         interactive ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
         className
       )}
@@ -541,7 +542,10 @@ function VideoPlaybackBar({
         }}
       >
         {volOpen ? (
-          <div className="absolute bottom-full left-1/2 z-10 flex -translate-x-1/2 flex-col items-center">
+          <div
+            className="absolute bottom-full left-1/2 z-20 flex -translate-x-1/2 flex-col items-center pb-0"
+            data-video-volume-popover=""
+          >
             <div
               className="flex items-center justify-center rounded-md bg-black/70 shadow-md"
               style={{
@@ -589,6 +593,7 @@ function VideoPlaybackBar({
                 />
               </div>
             </div>
+            {/* Hover bridge so the popover doesn’t close between slider and mute. */}
             <div style={{ height: 8, width: 32 }} aria-hidden />
           </div>
         ) : null}

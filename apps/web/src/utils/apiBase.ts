@@ -4,7 +4,8 @@
  *
  * - local + prod Tauri → http://127.0.0.1:8000 (sidecar)
  * - local + dev Tauri → '' (Vite proxy on :3000)
- * - cloud desktop → VITE_API_BASE_URL or https://recombyn.com
+ * - cloud desktop → VITE_API_BASE_URL if set; else '' (same as browser — Vite/nginx proxy)
+ * - Never hardcode a public host; hosted API is opt-in via env when deployed
  */
 
 export type DesktopMode = 'local' | 'cloud';
@@ -41,6 +42,11 @@ export function isDesktopLocal(): boolean {
   return getDesktopMode() === 'local';
 }
 
+/** Tauri desktop shell (local or cloud flavor) — can spawn OS coding CLIs. */
+export function isDesktopShell(): boolean {
+  return getDesktopMode() !== null;
+}
+
 /** Origin for API calls; empty string → same-origin relative paths. */
 export function getApiBaseUrl(): string {
   const explicit = (
@@ -53,9 +59,11 @@ export function getApiBaseUrl(): string {
   if (explicit) return explicit;
 
   const mode = getDesktopMode();
-  if (mode === 'cloud') return 'https://recombyn.com';
-  // Local desktop production loads from the asset protocol — no Vite proxy.
-  if (mode === 'local' && import.meta.env.PROD) return 'http://127.0.0.1:8000';
+  // Only local desktop production uses the sidecar loopback (no Vite proxy).
+  if (mode === 'local' && import.meta.env.PROD) {
+    return 'http://127.0.0.1:8000';
+  }
+  // Browser + cloud desktop: relative `/api/...` (dev proxy or nginx).
   return '';
 }
 

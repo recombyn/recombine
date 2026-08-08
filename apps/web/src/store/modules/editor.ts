@@ -50,6 +50,7 @@ export type { ArtboardFrame } from '@/components/rcb/frames/types';
 /** Side panel / toolbar kinds for image tools. */
 export type ImageToolPanelKind =
   | 'eraser'
+  | 'opacity'
   | 'multiAngle'
   | 'expand'
   | 'crop'
@@ -1624,13 +1625,44 @@ const editorSlice = createSlice({
       state.activeTool = 'select';
     },
     /**
-     * Place a library / AI asset onto the canvas (image | video | audio).
+     * Place a library / AI asset onto the canvas (image | video | audio | lottie).
      * Used by the Assets dock — source URL already hosted.
      */
     placeMediaAsset(state, action) {
       if (!state.document) return;
       const kind = String(action.payload?.kind || '').trim().toLowerCase();
       const src = String(action.payload?.src || '').trim();
+      if (kind === 'lottie') {
+        const animationData = action.payload?.animationData;
+        if (!animationData && !src) return;
+        pushHistory(state);
+        try {
+          const x = Number(action.payload?.x);
+          const y = Number(action.payload?.y);
+          const name = String(action.payload?.name || '').trim() || undefined;
+          const prompt = String(action.payload?.prompt || '').trim();
+          const { id, node } = createLottieNode({
+            x: Number.isFinite(x) ? x : 40,
+            y: Number.isFinite(y) ? y : 40,
+            width: action.payload?.width,
+            height: action.payload?.height,
+            name: name || 'Lottie',
+            animationData: animationData || undefined,
+          });
+          if (prompt) node.attrs.genPrompt = prompt;
+          state.document = addNodeToDocument(state.document, id, node);
+          state.dirty = true;
+          state.sceneReloadToken += 1;
+          state.selectedNodeId = id;
+          state.selectedNodeIds = [id];
+          state.pendingImageSrc = null;
+          state.activeTool = 'select';
+          syncLibraryOnEdit(state);
+        } catch {
+          /* invalid animationData — no-op */
+        }
+        return;
+      }
       if (!src) return;
       if (kind !== 'image' && kind !== 'video' && kind !== 'audio') return;
       pushHistory(state);

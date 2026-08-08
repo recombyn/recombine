@@ -8,14 +8,18 @@ import { previewSvgNodeEllipseParams } from '@/components/rcb/scene/paint/sceneT
 import { useRcbCamera } from '@/components/rcb/camera/context';
 import {
   clampEllipseInnerRatio,
+  ellipseArcAlongFromPointerAngle,
+  ellipseArcAlongRadFromPercent,
+  ellipseArcApplyFullHysteresis,
   ellipseArcEndAngles,
   ellipseArcLockSign,
+  ellipseArcPercentFromAlongRad,
   ellipseArcPercentFromAttrs,
-  ellipseArcPercentFromPointer,
   ellipseInnerRatioFromAttrs,
   ellipseStartDegFromAttrs,
   snapEllipseArcPercent,
   snapEllipseInnerRatio,
+  wrapAngleDelta,
 } from '@/components/rcb/scene/document/sceneShapes';
 import { patchDocumentNode } from '@/store/modules/editor';
 import {
@@ -127,8 +131,14 @@ type DragState =
       mode: 'arc';
       startPercent: number;
       current: number;
-      /** Locked on first move — one direction only, cannot flip past 开始位置. */
+      /** Locked on first move — one direction; end cannot cross 开始位置. */
       lockSign: 1 | -1 | null;
+      /** Remaining sweep radians in (0, 2π]; 2π = closed at 开始位置. */
+      alongRad: number;
+      /** Hysteresis: has left the full-circle band once this gesture. */
+      openedOnce: boolean;
+      /** Hysteresis: currently latched to full (absorb pointer chatter). */
+      heldFull: boolean;
       startX: number;
       startY: number;
       moved: boolean;
@@ -224,8 +234,11 @@ function CircleShapeHandlesOverlay({
     const onMove = (e: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
-      const distSq = (e.clientX - d.startX) ** 2 + (e.clientY - d.startY) ** 2;
-      if (!d.moved && distSq <= DRAG_DISTANCE_SQUARED) return;
+      // Arc follows the pointer immediately; inner keeps a tiny slop before drag.
+      if (d.mode === 'inner') {
+        const distSq = (e.clientX - d.startX) ** 2 + (e.clientY - d.startY) ** 2;
+        if (!d.moved && distSq <= DRAG_DISTANCE_SQUARED) return;
+      }
       d.moved = true;
 
       const sc = toScene(e.clientX, e.clientY);
@@ -244,25 +257,29 @@ function CircleShapeHandlesOverlay({
         return;
       }
 
-      // Arc: lock one sweep direction; snap to ±100 when end meets 开始位置.
+      // Arc: end handle tracks the pointer angle (not Δθ accumulation).
+      const pointerAngle = Math.atan2(local.y - cy, local.x - cx);
       const startRad = (startDeg * Math.PI) / 180;
-      const delta = Math.atan2(local.y - cy, local.x - cx) - startRad;
-      let wrapped = delta;
-      while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-      while (wrapped <= -Math.PI) wrapped += Math.PI * 2;
+      const delta = wrapAngleDelta(pointerAngle - startRad);
       if (d.lockSign == null) {
-        d.lockSign = ellipseArcLockSign(d.startPercent, wrapped);
+        d.lockSign = ellipseArcLockSign(d.startPercent, delta);
       }
-      const raw = ellipseArcPercentFromPointer(
-        local.x,
-        local.y,
-        cx,
-        cy,
-        d.current,
-        startDeg,
-        { lockSign: d.lockSign }
+
+      const prevAlong = d.alongRad;
+      const mapped = ellipseArcAlongFromPointerAngle(
+        pointerAngle,
+        startRad,
+        d.lockSign,
+        prevAlong
       );
-      const next = snapEllipseArcPercent(raw);
+      const hyst = ellipseArcApplyFullHysteresis(mapped, {
+        openedOnce: d.openedOnce,
+        heldFull: d.heldFull,
+      });
+      d.openedOnce = hyst.openedOnce;
+      d.heldFull = hyst.heldFull;
+      d.alongRad = hyst.along;
+      const next = ellipseArcPercentFromAlongRad(d.alongRad, d.lockSign);
       d.current = next;
       setDragValue(Math.round(next * 10) / 10);
       setLiveArc(next);
@@ -413,6 +430,10 @@ function CircleShapeHandlesOverlay({
       startPercent: baseArc,
       current: baseArc,
       lockSign: Math.abs(baseArc) >= 99.95 ? null : baseArc < 0 ? -1 : 1,
+      alongRad: ellipseArcAlongRadFromPercent(baseArc),
+      // From full: follow pointer until clearly open, then enable close-snap hysteresis.
+      openedOnce: Math.abs(baseArc) < 99.95,
+      heldFull: false,
       startX: e.clientX,
       startY: e.clientY,
       moved: false,
@@ -421,6 +442,27 @@ function CircleShapeHandlesOverlay({
     setHoverStart(false);
     setDragValue(Math.round(baseArc * 10) / 10);
     setLiveArc(baseArc);
+  };
+
+  /** Double-click 弧度 → full circle (keep prior CW/CCW sign). */
+  const resetArcFull = (e: ReactPointerEvent<SVGElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const full = baseArc < 0 ? -100 : 100;
+    dragRef.current = null;
+    setActiveKey(null);
+    setDragValue(null);
+    setLiveInner(null);
+    setLiveArc(null);
+    commitEllipseParams({
+      dispatch,
+      nodeId,
+      innerRatio: baseInner,
+      arcPercent: full,
+      startDeg,
+    });
+    preview({ arc: full });
   };
 
   type KnobSpec = {
@@ -459,6 +501,7 @@ function CircleShapeHandlesOverlay({
       interactive: true,
       isActive: activeKey === 'arc',
       onDown: beginArc,
+      onDoubleClick: resetArcFull,
     });
   } else {
     knobs.push(
@@ -480,6 +523,7 @@ function CircleShapeHandlesOverlay({
         interactive: true,
         isActive: activeKey === 'arc',
         onDown: beginArc,
+        onDoubleClick: resetArcFull,
       }
     );
   }

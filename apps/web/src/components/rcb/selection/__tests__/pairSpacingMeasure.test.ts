@@ -105,11 +105,12 @@ describe('collectPairSpacingGuides', () => {
   });
 });
 
-describe('smartSnapThreshold screen-constant', () => {
-  it('keeps ~8 CSS px of magnet at every zoom including 5%', () => {
+describe('smartSnapThreshold (8/zoom)', () => {
+  it('keeps ~8 CSS px at every zoom — no scene cap', () => {
     for (const zoom of [0.05, 0.13, 0.25, 1, 2, 40]) {
       expect(smartSnapThreshold(zoom)).toBeCloseTo(SMART_SNAP_PX / zoom, 6);
-      expect(smartSnapThreshold(zoom) * zoom).toBeCloseTo(SMART_SNAP_PX, 6);
     }
+    expect(smartSnapThreshold(0.05)).toBeCloseTo(160, 9);
+    expect(smartSnapThreshold(1)).toBe(SMART_SNAP_PX);
   });
 });

@@ -1,7 +1,9 @@
 /**
- * Ensure a local FastAPI is listening on 127.0.0.1:8000 for desktop-local.
- * Spawns uvicorn from apps/api/.venv with SQLite + DESKTOP_LOCAL_AUTO_LOGIN.
- * Reuses an existing listener only if desktop-local auto-login succeeds (HTTP 200).
+ * Ensure FastAPI is listening on 127.0.0.1:8000 for desktop **dev**.
+ *
+ * - local: SQLite + DESKTOP_LOCAL_AUTO_LOGIN (BYOK offline)
+ * - cloud: reuse / spawn with apps/api/.env as-is (MySQL etc.) — same as browser `dev:api`
+ *          (no SQLite rewrite, no auto-login). Public host is optional via VITE_API_BASE_URL.
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -55,7 +57,7 @@ async function healthOk(timeoutMs = 800) {
   return res.status > 0 && res.status < 500;
 }
 
-/** Probe POST /auth/desktop-local — must return 200 for local flavor. */
+/** Probe POST /auth/desktop-local — 200 only when DESKTOP_LOCAL_AUTO_LOGIN is on. */
 async function probeDesktopLocalLogin(timeoutMs = 2500) {
   return request('POST', '/api/v1/auth/desktop-local', {
     timeoutMs,
@@ -69,26 +71,33 @@ function resolvePython() {
   return win ? 'python' : 'python3';
 }
 
-function desktopApiEnv() {
-  // Explicit sqlite URL — empty DATABASE_URL is dropped on some Windows spawn paths,
-  // which would fall back to cloud MySQL in apps/api/.env.
+function desktopApiEnv(flavor) {
+  if (flavor === 'local') {
+    // Offline BYOK — force SQLite; empty DATABASE_URL can fall through to MySQL on Windows.
+    return {
+      ...process.env,
+      DATABASE_URL: `sqlite:///${sqliteRel}`,
+      SQLITE_DB_PATH: sqliteRel,
+      DESKTOP_LOCAL_AUTO_LOGIN: 'true',
+      S3_ENABLED: 'false',
+      RECOMBYN_API_ROOT: apiRoot,
+    };
+  }
+  // Cloud desktop: same process env / apps/api/.env as browser `npm run dev:api`.
   return {
     ...process.env,
-    DATABASE_URL: `sqlite:///${sqliteRel}`,
-    SQLITE_DB_PATH: sqliteRel,
-    S3_ENABLED: 'false',
-    DESKTOP_LOCAL_AUTO_LOGIN: 'true',
+    DESKTOP_LOCAL_AUTO_LOGIN: 'false',
     RECOMBYN_API_ROOT: apiRoot,
   };
 }
 
-function spawnDesktopApi() {
+function spawnDesktopApi(flavor) {
   const py = resolvePython();
-  console.log(`[desktop:local] starting API via ${py} (cwd=${apiRoot})`);
+  console.log(`[desktop:${flavor}] starting API via ${py} (cwd=${apiRoot})`);
   return spawn(py, ['-m', 'uvicorn', 'app.main:app', '--host', HOST, '--port', String(PORT)], {
     cwd: apiRoot,
     stdio: 'inherit',
-    env: desktopApiEnv(),
+    env: desktopApiEnv(flavor),
     shell: false,
     detached: false,
     windowsHide: true,
@@ -115,37 +124,56 @@ function formatProbeFailure(res) {
   return `desktop-local probe HTTP ${res.status} body=${res.body.slice(0, 200)}`;
 }
 
-export async function ensureDesktopApi() {
+/**
+ * @param {{ flavor?: 'local' | 'cloud' }} [opts]
+ */
+export async function ensureDesktopApi(opts = {}) {
+  const flavor = opts.flavor === 'cloud' ? 'cloud' : 'local';
+
   if (await healthOk()) {
     const probe = await probeDesktopLocalLogin();
-    if (probe.status === 200) {
-      console.log(`[desktop:local] API already on http://${HOST}:${PORT} (auto-login ok)`);
-      return { started: false, child: null };
+    if (flavor === 'local') {
+      if (probe.status === 200) {
+        console.log(`[desktop:local] API already on http://${HOST}:${PORT} (auto-login ok)`);
+        return { started: false, child: null };
+      }
+      throw new Error(
+        `[desktop:local] something already listens on :${PORT} but auto-login failed — ` +
+          `${formatProbeFailure(probe)}. Stop that API and re-run npm run dev:desktop.`
+      );
     }
-    throw new Error(
-      `[desktop:local] something already listens on :${PORT} but auto-login failed — ` +
-        `${formatProbeFailure(probe)}. Stop that API and re-run npm run dev:desktop.`
-    );
+    // Cloud: refuse a BYOK-only auto-login API (wrong catalog / empty SQLite).
+    if (probe.status === 200) {
+      throw new Error(
+        `[desktop:cloud] :${PORT} is running desktop-local auto-login API (BYOK-only). ` +
+          'Stop it (`npm run dev:desktop` / process on 8000) and re-run npm run dev:desktop:cloud ' +
+          '(or `npm run dev:api` for the same MySQL/.env stack as the browser).'
+      );
+    }
+    console.log(`[desktop:cloud] reusing API on http://${HOST}:${PORT} (same as browser)`);
+    return { started: false, child: null };
   }
 
-  const child = spawnDesktopApi();
+  const child = spawnDesktopApi(flavor);
 
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (child.exitCode != null) {
-      throw new Error(`[desktop:local] API exited early (code ${child.exitCode})`);
+      throw new Error(`[desktop:${flavor}] API exited early (code ${child.exitCode})`);
     }
     if (await healthOk(1200)) {
-      const probe = await probeDesktopLocalLogin();
-      if (probe.status !== 200) {
-        try {
-          child.kill();
-        } catch {
-          /* ignore */
+      if (flavor === 'local') {
+        const probe = await probeDesktopLocalLogin();
+        if (probe.status !== 200) {
+          try {
+            child.kill();
+          } catch {
+            /* ignore */
+          }
+          throw new Error(`[desktop:local] API came up but ${formatProbeFailure(probe)}`);
         }
-        throw new Error(`[desktop:local] API came up but ${formatProbeFailure(probe)}`);
       }
-      console.log(`[desktop:local] API ready at http://${HOST}:${PORT}`);
+      console.log(`[desktop:${flavor}] API ready at http://${HOST}:${PORT}`);
       return { started: true, child };
     }
     await new Promise((r) => setTimeout(r, 400));
@@ -156,7 +184,7 @@ export async function ensureDesktopApi() {
   } catch {
     /* ignore */
   }
-  throw new Error('[desktop:local] timed out waiting for API health');
+  throw new Error(`[desktop:${flavor}] timed out waiting for API health`);
 }
 
 const isMain =

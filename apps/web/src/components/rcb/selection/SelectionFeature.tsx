@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { nodeLeftTop } from '@/components/rcb/scene/paint/sceneToSvg';
-import ImageReplaceCornerButton from '@/components/editor/nodes/ImageNode/ImageReplaceCornerButton';
 import ImageVariantsOverlay from '@/components/editor/nodes/ImageNode/ImageVariantsOverlay';
-import VideoReplaceCornerButton from '@/components/editor/nodes/VideoNode/VideoReplaceCornerButton';
 import {
   useRcbCamera,
   useRcbOverlayRoot,
@@ -25,7 +23,8 @@ import {
   snapMoveToSmartGuides,
   snapResizeToSmartGuides,
   smartSnapThreshold,
-  collectSmartGuidesAt,
+  smartGuideTargetPad,
+  collectMoveSnapIndicators,
   collectPairSpacingGuides,
   GUIDE_COINCIDE_EPS,
   SMART_GUIDE_COLOR,
@@ -109,7 +108,14 @@ function nodeAspectLockDefault(key: string | undefined): boolean {
   return key === 'image' || key === 'video' || key === 'lottie' || key === 'audio';
 }
 
-type MediaTitleIcon = 'image' | 'image-generator' | 'video' | 'video-generator' | 'audio';
+type MediaTitleIcon =
+  | 'image'
+  | 'image-generator'
+  | 'video'
+  | 'video-generator'
+  | 'lottie'
+  | 'lottie-generator'
+  | 'audio';
 
 function mediaTitleChrome(opts: {
   key: string | undefined;
@@ -135,9 +141,17 @@ function mediaTitleChrome(opts: {
       renameAriaLabel: 'Audio name',
     };
   }
-  if (opts.isLottieGen || key === 'lottie') {
+  if (opts.isLottieGen) {
     return {
-      name: String(opts.name || (opts.isLottieGen ? 'Lottie Generator' : 'Lottie')),
+      name: String(opts.name || 'Lottie Generator'),
+      icon: 'lottie-generator',
+      renameAriaLabel: 'Lottie name',
+    };
+  }
+  if (key === 'lottie') {
+    // Finished Lottie keeps the media play glyph; clapperboard is generator-only.
+    return {
+      name: String(opts.name || 'Lottie'),
       icon: 'video',
       renameAriaLabel: 'Lottie name',
     };
@@ -601,8 +615,6 @@ type DragState = {
   currentClientX: number;
   currentClientY: number;
   currentShift?: boolean;
-  /** Last move-snap guide `at` values — hysteresis across pointer frames. */
-  stickySnapAt?: { x?: number; y?: number };
 };
 
 /** Shared seed for blank / pointing_canvas / move / resize / rotate drags. */
@@ -809,7 +821,6 @@ type MoveSnapContext = {
   gridSize: number;
   targets: SceneBox[];
   threshold: number;
-  stickyAt?: { x?: number; y?: number } | null;
 };
 
 /**
@@ -844,7 +855,6 @@ function computeMovedUnion(ctx: MoveSnapContext): {
   sdx: number;
   sdy: number;
   guides: SmartGuideLine[];
-  stickyAt: { x?: number; y?: number };
 } {
   // Snap **painted outer ink** in 1px steps, then apply the same delta to path.
   // Never fall back to path/chrome as "visual" — that reintroduces half-cell drift.
@@ -860,7 +870,6 @@ function computeMovedUnion(ctx: MoveSnapContext): {
       sdx: ctx.dx,
       sdy: ctx.dy,
       guides: [],
-      stickyAt: {},
     };
   }
   let nextVisual = {
@@ -869,29 +878,23 @@ function computeMovedUnion(ctx: MoveSnapContext): {
     top: visualUnion.top + ctx.dy,
   };
   let guides: SmartGuideLine[] = [];
-  let stickyAt: { x?: number; y?: number } = {};
   if (!ctx.disableSnap) {
-    // Grid first so smart only chooses among lattice positions, then pin again.
-    if (ctx.gridSize > 0) {
-      nextVisual = snapBoxToGrid(nextVisual, ctx.gridSize);
-    }
+    // Find nearest within threshold → nudge → paint exact coincides only.
+    // Object magnets ≠ grid. Smart first, then lattice pin.
     if (ctx.threshold > 0 && ctx.targets.length) {
       const smart = snapMoveToSmartGuides({
         box: nextVisual,
         targets: ctx.targets,
         threshold: ctx.threshold,
-        gridSize: ctx.gridSize > 0 ? ctx.gridSize : 0,
-        stickyAt: ctx.stickyAt,
       });
       nextVisual = smart.box;
-      stickyAt = smart.stickyAt;
+      guides = smart.guides;
     }
     if (ctx.gridSize > 0) {
       nextVisual = snapBoxToGrid(nextVisual, ctx.gridSize);
+      // After lattice pin, re-collect align-only indicators (no free gaps).
+      guides = collectMoveSnapIndicators(nextVisual, ctx.targets, GUIDE_COINCIDE_EPS);
     }
-    // Paint only when edges truly coincide — never use snap threshold as paint
-    // eps (at 31% zoom that painted "aligned" across ~25 scene cells and felt blocked).
-    guides = collectSmartGuidesAt(nextVisual, ctx.targets, GUIDE_COINCIDE_EPS);
   }
   const sdx = nextVisual.left - visualUnion.left;
   const sdy = nextVisual.top - visualUnion.top;
@@ -921,7 +924,6 @@ function computeMovedUnion(ctx: MoveSnapContext): {
     sdx,
     sdy,
     guides,
-    stickyAt,
   };
 }
 
@@ -968,7 +970,6 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
           targets: ctx.targets,
           threshold: ctx.threshold,
           min: Math.max(8, Math.ceil(strokeVisualOutset(singleNode) * 2) + 1),
-          gridSize: ctx.gridSize > 0 ? ctx.gridSize : 0,
         }).box;
       }
       if (ctx.gridSize > 0) {
@@ -984,7 +985,7 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
         width: Math.max(1, visualNext.width - outset * 2),
         height: Math.max(1, visualNext.height - outset * 2),
       };
-      guides = collectSmartGuidesAt(visualNext, ctx.targets, GUIDE_COINCIDE_EPS);
+      guides = collectMoveSnapIndicators(visualNext, ctx.targets, GUIDE_COINCIDE_EPS);
       next = inflateSelectionBox(pathNext, singleNode);
     } else {
       if (ctx.threshold > 0 && ctx.targets.length) {
@@ -994,7 +995,6 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
           targets: ctx.targets,
           threshold: ctx.threshold,
           min: 8,
-          gridSize: ctx.gridSize > 0 ? ctx.gridSize : 0,
         }).box;
       }
       if (ctx.gridSize > 0) {
@@ -1003,7 +1003,7 @@ function computeResizedUnion(ctx: ResizeSnapContext): {
           aspectRatio: ctx.drag.aspectRatio,
         });
       }
-      guides = collectSmartGuidesAt(next, ctx.targets, GUIDE_COINCIDE_EPS);
+      guides = collectMoveSnapIndicators(next, ctx.targets, GUIDE_COINCIDE_EPS);
     }
   }
   next = {
@@ -1027,10 +1027,29 @@ function collectSmartGuideTargets(
   document: any,
   listNodeIds: () => string[],
   getNodeBox: (id: string) => SceneBox | null,
-  excludeIds: Set<string>
+  excludeIds: Set<string>,
+  opts?: {
+    nearBox?: SceneBox | null;
+    pad?: number;
+    queryNodeIdsInRect?: (box: SceneBox) => string[];
+  }
 ): SceneBox[] {
+  let ids = listNodeIds();
+  const near = opts?.nearBox;
+  const query = opts?.queryNodeIdsInRect;
+  if (near && query && near.width > 0 && near.height > 0) {
+    const pad = Math.max(0, opts?.pad ?? 0);
+    const nearby = query({
+      left: near.left - pad,
+      top: near.top - pad,
+      width: near.width + pad * 2,
+      height: near.height + pad * 2,
+    });
+    // Empty spatial hits → keep full list (index may be cold); never snap to nothing.
+    if (nearby.length) ids = nearby;
+  }
   const out: SceneBox[] = [];
-  for (const id of listNodeIds()) {
+  for (const id of ids) {
     if (excludeIds.has(id)) continue;
     const node = document?.deltaSetLike?.[id];
     if (!node || isNodeHidden(node) || isNodeLocked(node)) continue;
@@ -1038,6 +1057,28 @@ function collectSmartGuideTargets(
     if (box && box.width > 0 && box.height > 0) out.push(box);
   }
   return out;
+}
+
+function smartGuideTargetsForDrag(opts: {
+  document: any;
+  listNodeIds: () => string[];
+  getNodeBox: (id: string) => SceneBox | null;
+  excludeIds: Set<string>;
+  nearBox: SceneBox;
+  threshold: number;
+  queryNodeIdsInRect?: (box: SceneBox) => string[];
+}): SceneBox[] {
+  return collectSmartGuideTargets(
+    opts.document,
+    opts.listNodeIds,
+    opts.getNodeBox,
+    opts.excludeIds,
+    {
+      nearBox: opts.nearBox,
+      pad: smartGuideTargetPad(opts.threshold),
+      queryNodeIdsInRect: opts.queryNodeIdsInRect,
+    }
+  );
 }
 
 function computeRotateDelta(
@@ -1548,7 +1589,8 @@ function resolveChromeUnion(opts: {
   return base;
 }
 
-function resolveHoverImageReplaceId(opts: {
+/** Hovered (unselected) image with a multi-gen stack → show variants chrome. */
+function resolveHoverImageVariantsId(opts: {
   inspectDev: boolean;
   transforming: boolean;
   suppressToolbars: boolean;
@@ -1570,32 +1612,7 @@ function resolveHoverImageReplaceId(opts: {
     return null;
   }
   if (String(node?.attrs?.processStatus || '') === 'running') return null;
-  return opts.hoverNodeId;
-}
-
-function resolveHoverVideoReplaceId(opts: {
-  inspectDev: boolean;
-  transforming: boolean;
-  suppressToolbars: boolean;
-  readOnly: boolean;
-  hoverNodeId: string | null;
-  selectedNodeIds: string[];
-  document: any;
-}): string | null {
-  if (opts.inspectDev || opts.transforming || opts.suppressToolbars || opts.readOnly) {
-    return null;
-  }
-  if (
-    !opts.hoverNodeId ||
-    opts.selectedNodeIds.includes(opts.hoverNodeId) ||
-    parseFrameSelId(opts.hoverNodeId)
-  ) {
-    return null;
-  }
-  const node = opts.document?.deltaSetLike?.[opts.hoverNodeId];
-  if (node?.key !== 'video') return null;
-  if (isVideoGeneratorNode(node)) return null;
-  if (String(node?.attrs?.processStatus || '') === 'running') return null;
+  if (listImageVariantUrls(node).length <= 1) return null;
   return opts.hoverNodeId;
 }
 
@@ -1859,13 +1876,11 @@ function SelectionFeature({
         return;
       }
       const target = e.target as HTMLElement | null;
-      const replaceHost = target?.closest?.(
-        '[data-image-replace],[data-video-replace]'
+      const variantsHost = target?.closest?.(
+        '[data-image-variants-bar]'
       ) as HTMLElement | null;
-      if (replaceHost) {
-        const pinned =
-          replaceHost.getAttribute('data-image-node-id') ||
-          replaceHost.getAttribute('data-video-node-id');
+      if (variantsHost) {
+        const pinned = variantsHost.getAttribute('data-image-node-id');
         if (pinned) {
           applyHover(pinned);
           return;
@@ -1873,7 +1888,7 @@ function SelectionFeature({
       }
       if (
         target?.closest?.(
-          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props],[data-video-playback-bar],[data-video-trim-toolbar],[data-audio-playback-bar],[data-audio-trim-toolbar],[data-audio-speed-toolbar],[data-radius-handle],[data-star-handle],[data-poly-handle],[data-circle-handle]'
+          '[data-ctx-menu],[data-sel-toolbar],[data-export-panel],[data-frame-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-lottie-edit-composer],[data-video-quick-edit],[data-audio-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-dev-props],[data-video-playback-bar],[data-video-trim-toolbar],[data-audio-playback-bar],[data-audio-trim-toolbar],[data-audio-speed-toolbar],[data-radius-handle],[data-star-handle],[data-poly-handle],[data-circle-handle]'
         )
       ) {
         applyHover(null);
@@ -2025,7 +2040,7 @@ function SelectionFeature({
       if (onOverlayKnob && !resizeUnderPointer()) return;
       if (
         target.closest(
-          '[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar],[data-audio-playback-bar],[data-audio-trim-toolbar],[data-audio-speed-toolbar]'
+          '[data-ctx-menu],[data-export-panel],[data-image-label],[data-frame-label],[data-crop-expand-overlay],[data-crop-expand-toolbar],[data-image-tool-panel],[data-image-variants],[data-image-quick-edit],[data-lottie-edit-composer],[data-video-quick-edit],[data-audio-quick-edit],[data-shape-style-panel],[data-gradient-handles],[data-mesh-handles],[data-color-panel],[data-text-inline-editor],[data-frame-handle],[data-image-generator],[data-video-generator],[data-video-playback-bar],[data-video-trim-toolbar],[data-audio-playback-bar],[data-audio-trim-toolbar],[data-audio-speed-toolbar]'
         )
       )
         return;
@@ -2404,7 +2419,8 @@ function SelectionFeature({
         // Ignore pointer jitter until the pointer actually moves (protects dblclick).
         if (screenDistSq <= DRAG_DISTANCE_SQUARED) return;
         const exclude = new Set(drag.origins.map((o) => o.nodeId));
-        const { nextUnion, sdx, sdy, guides, stickyAt } = computeMovedUnion({
+        const threshold = smartSnapThreshold(zoom);
+        const { nextUnion, sdx, sdy, guides } = computeMovedUnion({
           union: drag.union,
           origins: drag.origins,
           document: sceneDoc,
@@ -2412,11 +2428,21 @@ function SelectionFeature({
           dy,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
-          threshold: smartSnapThreshold(zoom),
-          stickyAt: drag.stickySnapAt,
+          targets: smartGuideTargetsForDrag({
+            document: sceneDoc,
+            listNodeIds,
+            getNodeBox,
+            excludeIds: exclude,
+            nearBox: {
+              ...drag.union,
+              left: drag.union.left + dx,
+              top: drag.union.top + dy,
+            },
+            threshold,
+            queryNodeIdsInRect,
+          }),
+          threshold,
         });
-        drag.stickySnapAt = stickyAt;
         const nextOrigins = drag.origins.map((o) => ({
           nodeId: o.nodeId,
           box: { ...o.box, left: o.box.left + sdx, top: o.box.top + sdy },
@@ -2459,6 +2485,7 @@ function SelectionFeature({
           return;
         }
         const exclude = new Set(drag.origins.map((o) => o.nodeId));
+        const threshold = smartSnapThreshold(zoom);
         const { next, textMode, guides } = computeResizedUnion({
           document: sceneDoc,
           drag,
@@ -2467,8 +2494,16 @@ function SelectionFeature({
           shiftKey: e.shiftKey,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
-          threshold: smartSnapThreshold(zoom),
+          targets: smartGuideTargetsForDrag({
+            document: sceneDoc,
+            listNodeIds,
+            getNodeBox,
+            excludeIds: exclude,
+            nearBox: drag.union,
+            threshold,
+            queryNodeIdsInRect,
+          }),
+          threshold,
         });
         setSmartGuides(guides);
         if (drag.origins.length === 1) {
@@ -2701,6 +2736,7 @@ function SelectionFeature({
           return;
         }
         const exclude = new Set(drag.origins.map((o) => o.nodeId));
+        const threshold = smartSnapThreshold(zoom);
         const { nextUnion, sdx, sdy } = computeMovedUnion({
           union: drag.union,
           origins: drag.origins,
@@ -2709,9 +2745,20 @@ function SelectionFeature({
           dy,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, exclude),
-          threshold: smartSnapThreshold(zoom),
-          stickyAt: drag.stickySnapAt,
+          targets: smartGuideTargetsForDrag({
+            document: sceneDoc,
+            listNodeIds,
+            getNodeBox,
+            excludeIds: exclude,
+            nearBox: {
+              ...drag.union,
+              left: drag.union.left + dx,
+              top: drag.union.top + dy,
+            },
+            threshold,
+            queryNodeIdsInRect,
+          }),
+          threshold,
         });
         const patches = drag.origins.map((o) => ({
           nodeId: o.nodeId,
@@ -2759,6 +2806,7 @@ function SelectionFeature({
           return;
         }
         const excludeUp = new Set(drag.origins.map((o) => o.nodeId));
+        const thresholdUp = smartSnapThreshold(zoom);
         const { next, textMode } = computeResizedUnion({
           document: sceneDoc,
           drag,
@@ -2767,8 +2815,16 @@ function SelectionFeature({
           shiftKey,
           disableSnap: e.ctrlKey || e.metaKey,
           gridSize,
-          targets: collectSmartGuideTargets(sceneDoc, listNodeIds, getNodeBox, excludeUp),
-          threshold: smartSnapThreshold(zoom),
+          targets: smartGuideTargetsForDrag({
+            document: sceneDoc,
+            listNodeIds,
+            getNodeBox,
+            excludeIds: excludeUp,
+            nearBox: drag.union,
+            threshold: thresholdUp,
+            queryNodeIdsInRect,
+          }),
+          threshold: thresholdUp,
         });
         if (drag.origins.length === 1) {
           setLiveUnion(next);
@@ -3087,7 +3143,7 @@ function SelectionFeature({
       ? deflateSelectionBox(chromeUnion, singleNodeData)
       : chromeUnion;
 
-  const hoverImageReplaceId = resolveHoverImageReplaceId({
+  const hoverImageVariantsId = resolveHoverImageVariantsId({
     inspectDev,
     transforming,
     suppressToolbars,
@@ -3095,18 +3151,7 @@ function SelectionFeature({
     selectedNodeIds,
     document,
   });
-  const hoverImageReplaceBox = hoverImageReplaceId ? getNodeBox(hoverImageReplaceId) : null;
-
-  const hoverVideoReplaceId = resolveHoverVideoReplaceId({
-    inspectDev,
-    transforming,
-    suppressToolbars,
-    readOnly,
-    hoverNodeId,
-    selectedNodeIds,
-    document,
-  });
-  const hoverVideoReplaceBox = hoverVideoReplaceId ? getNodeBox(hoverVideoReplaceId) : null;
+  const hoverImageVariantsBox = hoverImageVariantsId ? getNodeBox(hoverImageVariantsId) : null;
 
   // Marquee only — path multi-select uses host silhouettes + world union box.
   // Vector ink uses host path chrome; non-path uses SelectionChrome (handles / box).
@@ -3324,74 +3369,28 @@ function SelectionFeature({
       singleNodeData?.key === 'image' &&
       !selectedIsImageGen &&
       String(singleNodeData?.attrs?.processStatus || '') !== 'running' ? (
-        listImageVariantUrls(singleNodeData).length > 1 ? (
-          <ImageVariantsOverlay
-            document={document}
-            nodeId={singleId}
-            box={liveUnion}
-            angle={chromeAngle}
-            imageHovered={hoverNodeId === singleId}
-            readOnly={readOnly}
-          />
-        ) : (
-          <ImageReplaceCornerButton
-            nodeId={singleId}
-            box={liveUnion}
-            angle={chromeAngle}
-            imageHovered={hoverNodeId === singleId}
-          />
-        )
-      ) : null}
-
-      {singleId &&
-      liveUnion &&
-      !readOnly &&
-      !transforming &&
-      !suppressToolbars &&
-      selectedIsVideo &&
-      String(singleNodeData?.attrs?.processStatus || '') !== 'running' ? (
-        <VideoReplaceCornerButton
+        <ImageVariantsOverlay
+          document={document}
           nodeId={singleId}
           box={liveUnion}
           angle={chromeAngle}
-          videoHovered={hoverNodeId === singleId}
+          imageHovered={hoverNodeId === singleId}
+          readOnly={readOnly}
         />
       ) : null}
 
       {!inspectDev &&
-      hoverImageReplaceId &&
-      hoverImageReplaceBox &&
+      hoverImageVariantsId &&
+      hoverImageVariantsBox &&
       !transforming &&
       !suppressToolbars ? (
-        listImageVariantUrls(document.deltaSetLike[hoverImageReplaceId]).length > 1 ? (
-          <ImageVariantsOverlay
-            document={document}
-            nodeId={hoverImageReplaceId}
-            box={hoverImageReplaceBox}
-            angle={readNodeAngle(document, hoverImageReplaceId)}
-            imageHovered
-            readOnly={readOnly}
-          />
-        ) : (
-          <ImageReplaceCornerButton
-            nodeId={hoverImageReplaceId}
-            box={hoverImageReplaceBox}
-            angle={readNodeAngle(document, hoverImageReplaceId)}
-            imageHovered
-          />
-        )
-      ) : null}
-
-      {!inspectDev &&
-      hoverVideoReplaceId &&
-      hoverVideoReplaceBox &&
-      !transforming &&
-      !suppressToolbars ? (
-        <VideoReplaceCornerButton
-          nodeId={hoverVideoReplaceId}
-          box={hoverVideoReplaceBox}
-          angle={readNodeAngle(document, hoverVideoReplaceId)}
-          videoHovered
+        <ImageVariantsOverlay
+          document={document}
+          nodeId={hoverImageVariantsId}
+          box={hoverImageVariantsBox}
+          angle={readNodeAngle(document, hoverImageVariantsId)}
+          imageHovered
+          readOnly={readOnly}
         />
       ) : null}
 

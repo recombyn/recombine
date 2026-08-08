@@ -904,7 +904,8 @@ function HomeAgentComposer({
             ? t('agent.attachMaxReached', { count: attachmentLimit })
             : t('agent.uploadImage')
         }
-        sendVariant="square"
+        sendVariant="circle"
+        sendTone="ink"
         showInteractionModePicker={false}
         leadingActions={homeExampleActions}
         interactionMode={interactionMode}

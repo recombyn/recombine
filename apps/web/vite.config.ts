@@ -20,9 +20,10 @@ export default defineConfig(({ mode }) => {
     envRoot.VITE_DOCS_URL ||
     (mode === 'development' ? 'http://localhost:5175' : 'https://recombyn.github.io/recombyn')
   ).replace(/\/$/, '');
-  // Desktop flavors: local (sidecar SQLite API) | cloud (remote API). Browser builds leave empty.
+  // Desktop flavors: local (auto-login BYOK) | cloud (local or hosted API, platform catalog).
   const desktopMode = (
     process.env.VITE_DESKTOP_MODE ||
+    process.env.RECOMBYN_DESKTOP_MODE ||
     envWeb.VITE_DESKTOP_MODE ||
     envRoot.VITE_DESKTOP_MODE ||
     ''
@@ -37,6 +38,13 @@ export default defineConfig(({ mode }) => {
   )
     .trim()
     .replace(/\/$/, '');
+
+  // Default proxy → local uvicorn. Only remote http(s) hosts override the target.
+  const apiProxyTarget =
+    apiBaseUrl && /^https?:\/\//i.test(apiBaseUrl) && !/127\.0\.0\.1|localhost/i.test(apiBaseUrl)
+      ? apiBaseUrl
+      : 'http://127.0.0.1:8000';
+  const apiProxySecure = /^https:\/\//i.test(apiProxyTarget);
 
   return {
     // Keep Rust compiler output visible when `tauri dev` runs Vite.
@@ -101,8 +109,9 @@ export default defineConfig(({ mode }) => {
       },
       proxy: {
         '/api': {
-          target: 'http://127.0.0.1:8000',
+          target: apiProxyTarget,
           changeOrigin: true,
+          secure: apiProxySecure,
           // 0 = no limit (http-proxy skips setTimeout when falsy). Design SSE can run many minutes.
           timeout: 0,
           proxyTimeout: 0,

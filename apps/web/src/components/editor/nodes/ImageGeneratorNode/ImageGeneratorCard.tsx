@@ -481,7 +481,9 @@ function ImageGeneratorCard({
     (state: any) => (state.editor?.selectedFrameIds as string[]) ?? EMPTY_ID_LIST
   );
 
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState(() =>
+    String(genAttrs?.genPrompt || '').trim()
+  );
   const [sending, setSending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -536,12 +538,15 @@ function ImageGeneratorCard({
     if (nextCount != null) setImageCount(nextCount);
     const nextModel = readGenAttrString(genAttrs, 'imageGenModel');
     if (nextModel) setModelId(nextModel);
+    const nextPrompt = String(genAttrs?.genPrompt || '').trim();
+    if (nextPrompt) setPrompt(nextPrompt);
   }, [
     nodeId,
     genAttrs?.imageGenAspect,
     genAttrs?.imageGenResolution,
     genAttrs?.imageGenCount,
     genAttrs?.imageGenModel,
+    genAttrs?.genPrompt,
   ]);
 
   // Auto-focus when the generator composer appears (select plate / show again).
@@ -721,6 +726,8 @@ function ImageGeneratorCard({
             processStatus: 'running',
             processKind: 'generate',
             processLabel: t('editor.tools.imageGenerating'),
+            // Durable on the node — quick-edit reads attrs.genPrompt after promote.
+            genPrompt: text,
           },
         },
       })
@@ -1105,10 +1112,8 @@ function ImageGeneratorCard({
                   {billingEnabled ? (
                     <>
                       <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                      {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                      <span className="tabular-nums">{creditCost}</span>
                     </>
-                  ) : sending ? (
-                    '…'
                   ) : (
                     <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                   )}

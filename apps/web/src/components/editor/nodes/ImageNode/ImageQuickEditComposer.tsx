@@ -562,7 +562,7 @@ function ImageQuickEditComposer({
                 )}
               >
                 <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                <span className="tabular-nums">{creditCost}</span>
               </button>
             </Tooltip>
           </div>

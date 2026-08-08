@@ -1,11 +1,11 @@
 /**
- * Audio selection toolbar — only 截取 / 变速 (per product scope).
+ * Audio selection toolbar — 快速编辑 / 截取 / 变速.
  */
 import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { HiOutlineClock, HiOutlineScissors } from 'react-icons/hi2';
+import { HiOutlineClock, HiOutlineScissors, HiOutlineSparkles } from 'react-icons/hi2';
 import { cn } from '@/utils/classnames';
-import { videoToolBtn } from '@/components/editor/nodes/VideoNode/videoToolbarShared';
+import { videoToolBtn, VideoToolSep } from '@/components/editor/nodes/VideoNode/videoToolbarShared';
 
 const TOOL_ICON_SLOT =
   'pointer-events-none inline-flex h-4 w-4 shrink-0 items-center justify-center [&>svg]:block [&>svg]:h-full [&>svg]:w-full';
@@ -39,9 +39,11 @@ function Tool({
 }
 
 function AudioToolbarEditTools({
+  onQuickEdit,
   onTrim,
   onSpeed,
 }: {
+  onQuickEdit?: () => void;
   onTrim?: () => void;
   onSpeed?: () => void;
 }) {
@@ -49,6 +51,14 @@ function AudioToolbarEditTools({
 
   return (
     <>
+      {onQuickEdit ? (
+        <>
+          <Tool label={t('editor.imageToolbar.chat')} onClick={onQuickEdit}>
+            <HiOutlineSparkles className="h-4 w-4" strokeWidth={2} />
+          </Tool>
+          <VideoToolSep />
+        </>
+      ) : null}
       <Tool
         label={t('editor.audioToolbar.trim', { defaultValue: '截取' })}
         onClick={onTrim}

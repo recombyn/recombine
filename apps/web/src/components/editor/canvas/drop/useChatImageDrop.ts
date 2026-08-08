@@ -1,12 +1,15 @@
 import { useEffect, type RefObject } from 'react';
 import { useDispatch } from 'react-redux';
-import { measureImageNaturalSize } from '@/components/rcb/scene/document/sceneDocument';
+import { measureImageNaturalSize, parseLottieAnimationData } from '@/components/rcb/scene/document/sceneDocument';
 import { sceneToDocumentCoords } from '@/components/rcb/scene/paint/svgToScene';
 import { rcbCenterOnPoint, type RcbCamera } from '@/components/rcb';
 import {
   beginNodeUpload,
   finishNodeUpload,
+  imageSrcToFile,
   isUploadAbortError,
+  mediaSrcNeedsAuthFetch,
+  readFileAsDataUrl,
   uploadImageFromSrc,
   waitForImageReady,
 } from '@/utils/uploadImage';
@@ -15,6 +18,7 @@ import {
   dataTransferHasMediaAsset,
   readChatImageDragUrl,
   readMediaAssetDragPayload,
+  clearMediaAssetDragData,
   type MediaAssetDragPayload,
 } from '@/utils/chatImageDrag';
 import { message } from '@/components/base';
@@ -52,7 +56,7 @@ function resolveAssetPlaceSize(
   const kind = payload.kind;
   if (kind === 'audio') {
     const width = Math.max(1, Math.round(Number(payload.width) || 360));
-    const height = Math.max(1, Math.round(Number(payload.height) || 200));
+    const height = Math.max(140, Math.round(Number(payload.height) || 200));
     return Promise.resolve({ width, height });
   }
   const ow = Math.max(0, Math.round(Number(payload.width) || 0));
@@ -63,9 +67,64 @@ function resolveAssetPlaceSize(
   if (kind === 'video') {
     return Promise.resolve(imageSizeForViewport({ width: 640, height: 360 }));
   }
+  if (kind === 'lottie') {
+    return Promise.resolve(imageSizeForViewport({ width: 200, height: 200 }));
+  }
   return measureImageNaturalSize(payload.src).then((natural) =>
     imageSizeForViewport(natural)
   );
+}
+
+/** Resolve a displayable canvas src. Prefer inline data: (list thumbs) — no extra fetch. */
+async function hydrateAssetSrcForCanvas(
+  payload: MediaAssetDragPayload
+): Promise<{ src: string; uploadKey?: string; animationData?: Record<string, unknown> }> {
+  const src = String(payload.src || '').trim();
+  const uploadKey = String(payload.uploadKey || '').trim() || undefined;
+  if (!src) return { src, uploadKey };
+
+  if (payload.kind === 'lottie') {
+    const file = await imageSrcToFile(src, 'asset-lottie.json', {
+      uploadKey,
+      fallbackMime: 'application/json',
+    });
+    const text = await file.text();
+    const animationData = parseLottieAnimationData(text);
+    if (!animationData) throw new Error('invalid lottie json');
+    return { src, uploadKey, animationData };
+  }
+
+  if (payload.kind === 'image') {
+    // List API already gives data: thumbs (local) — place as-is, no /uploads round-trip.
+    if (src.startsWith('data:') || src.startsWith('blob:')) {
+      return { src, uploadKey };
+    }
+    // Public CDN / COS https — also canvas-ready.
+    if (/^https?:\/\//i.test(src) && !mediaSrcNeedsAuthFetch(src)) {
+      return { src, uploadKey };
+    }
+    // Auth-gated path or bare storage key — hydrate via upload API.
+    const file = await imageSrcToFile(
+      uploadKey ? `/api/v1/uploads/files/${uploadKey}` : src,
+      'asset-image.png',
+      { uploadKey }
+    );
+    return { src: await readFileAsDataUrl(file), uploadKey };
+  }
+
+  if (payload.kind === 'video' || payload.kind === 'audio') {
+    if (!mediaSrcNeedsAuthFetch(src) && /^https?:\/\//i.test(src)) {
+      return { src, uploadKey };
+    }
+    if (mediaSrcNeedsAuthFetch(src)) return { src, uploadKey };
+    if (uploadKey && /^(assets|uploads|projects|font-tasks)\//.test(src)) {
+      return { src: `/api/v1/uploads/files/${uploadKey}`, uploadKey };
+    }
+    if (/^(assets|uploads|projects|font-tasks)\//.test(src)) {
+      return { src: `/api/v1/uploads/files/${src}`, uploadKey: uploadKey || src };
+    }
+  }
+  return { src, uploadKey };
 }
 
 /** Drag chat gallery images / Assets dock media onto the canvas. */
@@ -103,10 +162,28 @@ export function useChatImageDrop(args: UseChatImageDropArgs) {
       clientX: number,
       clientY: number
     ) => {
-      const { width, height } = await resolveAssetPlaceSize(
-        payload,
-        imageSizeForViewport
-      );
+      const hydrated = await hydrateAssetSrcForCanvas(payload);
+      const placePayload = {
+        ...payload,
+        src: hydrated.src,
+        uploadKey: hydrated.uploadKey,
+      };
+      let width: number;
+      let height: number;
+      if (payload.kind === 'lottie' && hydrated.animationData) {
+        const aw = Math.max(1, Math.round(Number(hydrated.animationData.w) || 0));
+        const ah = Math.max(1, Math.round(Number(hydrated.animationData.h) || 0));
+        if (aw > 0 && ah > 0) {
+          ({ width, height } = imageSizeForViewport({ width: aw, height: ah }));
+        } else {
+          ({ width, height } = await resolveAssetPlaceSize(placePayload, imageSizeForViewport));
+        }
+      } else {
+        ({ width, height } = await resolveAssetPlaceSize(
+          placePayload,
+          imageSizeForViewport
+        ));
+      }
       const world = pointerToWorld(
         camera,
         { viewportEl, stageEl, paperEl, artboard },
@@ -117,22 +194,25 @@ export function useChatImageDrop(args: UseChatImageDropArgs) {
       const latest = documentRef.current;
       if (!latest) return;
       const origin = sceneToDocumentCoords(latest, placed.left, placed.top);
-      const prompt = String(payload.prompt || '').trim();
+      const prompt = String(placePayload.prompt || '').trim();
       dispatch(
         placeMediaAsset({
-          kind: payload.kind,
-          src: payload.src,
-          uploadKey: payload.uploadKey || undefined,
+          kind: placePayload.kind,
+          src: placePayload.src,
+          uploadKey: placePayload.uploadKey || undefined,
           width,
           height,
           prompt: prompt || undefined,
           name:
-            String(payload.name || '').trim() ||
+            String(placePayload.name || '').trim() ||
             prompt.slice(0, 40) ||
             undefined,
-          duration: payload.duration,
+          duration: placePayload.duration,
           x: origin.x,
           y: origin.y,
+          ...(hydrated.animationData
+            ? { animationData: hydrated.animationData }
+            : {}),
         })
       );
       finishToSelect();
@@ -189,6 +269,7 @@ export function useChatImageDrop(args: UseChatImageDropArgs) {
       if (asset) {
         e.preventDefault();
         e.stopPropagation();
+        clearMediaAssetDragData();
         try {
           await placeHostedAsset(asset, e.clientX, e.clientY);
         } catch (err: any) {

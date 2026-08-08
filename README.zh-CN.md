@@ -86,7 +86,7 @@ npm run dev:desktop
 npm run build:desktop:sidecar
 npm run build:desktop
 
-# 云端 — https://recombyn.com（可用 VITE_API_BASE_URL 覆盖）
+# 云端桌面 — 与浏览器同一套本机 API（:8000 / .env；有公网部署时再设 VITE_API_BASE_URL）
 npm run dev:desktop:cloud
 npm run build:desktop:cloud
 ```

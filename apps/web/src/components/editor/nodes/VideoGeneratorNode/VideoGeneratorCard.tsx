@@ -596,15 +596,15 @@ function VideoGeneratorCard({
   const mentionItems = useMemo((): MentionAttachItem[] => {
     return attachments.map((c, i) => {
       const kind = composerAttachmentMediaKind(c);
+      const thumb = String(c.thumbUrl || c.dataUrl || '').trim();
       return {
         id: c.key,
         label:
           kind === 'video'
             ? t('agent.mentionAttachVideoN', { n: i + 1 })
             : t('agent.mentionAttachImageN', { n: i + 1 }),
-        ...(kind === 'image' && (c.thumbUrl || c.dataUrl)
-          ? { thumbUrl: String(c.thumbUrl || c.dataUrl) }
-          : {}),
+        mediaKind: kind === 'video' ? 'video' : 'image',
+        ...((kind === 'image' || kind === 'video') && thumb ? { thumbUrl: thumb } : {}),
       };
     });
   }, [attachments, t]);
@@ -689,6 +689,7 @@ function VideoGeneratorCard({
             processStatus: 'running',
             processKind: 'generate',
             processLabel: t('editor.tools.videoGenerating'),
+            genPrompt: text,
           },
         },
       })
@@ -1056,10 +1057,8 @@ function VideoGeneratorCard({
                   {billingEnabled ? (
                     <>
                       <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                      {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                      <span className="tabular-nums">{creditCost}</span>
                     </>
-                  ) : sending ? (
-                    '…'
                   ) : (
                     <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                   )}

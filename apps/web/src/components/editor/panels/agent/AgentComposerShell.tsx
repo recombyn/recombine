@@ -1018,7 +1018,7 @@ function AgentComposerShell({
   showInteractionModePicker = true,
   showModelButton = true,
   sendVariant = 'circle',
-  sendTone = 'cta',
+  sendTone = 'ink',
   trailingActions,
   attachIcon = 'plus',
   aspectButtonPlacement = 'start',
@@ -1137,20 +1137,24 @@ function AgentComposerShell({
       })
     : null;
 
-  const squareSendFill =
+  const sendFill =
     sendTone === 'ink'
       ? 'bg-[var(--ink)] text-[var(--on-brand)]'
       : 'bg-[var(--home-cta)] text-white';
   const squareSendBtn = cn(
     'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-opacity',
-    squareSendFill
+    sendFill
   );
-  /** Image / Video credit send — follow home CTA blue vs editor ink. */
+  const circleSendBtn = cn(
+    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-opacity',
+    sendFill
+  );
+  /** Icon send / stop — shape from sendVariant; color from sendTone. */
+  const iconSendBtn = sendVariant === 'square' ? squareSendBtn : circleSendBtn;
+  /** Credit send pill — same tone as icon send. */
   const creditSendBtn = cn(
     'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition disabled:opacity-40',
-    sendVariant === 'square' && sendTone !== 'ink'
-      ? 'bg-[var(--home-cta)] text-white'
-      : 'bg-[var(--ink)] text-[var(--on-brand)]'
+    sendFill
   );
 
   const aspectButton = showAspectBtn ? (
@@ -1481,7 +1485,9 @@ function AgentComposerShell({
             accept={
               isVideoMode
                 ? 'image/*,video/*,.mp4,.webm,.mov,.m4v'
-                : 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,video/*,audio/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm,.mov,.m4v,.mp3,.wav,.ogg,.m4a,.json,application/json'
+                : interactionMode === 'ask' || isImageMode
+                  ? 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,.png,.jpg,.jpeg,.webp,.gif,.svg'
+                  : 'image/png,image/jpeg,image/jpg,image/webp,image/gif,image/svg+xml,video/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm,.mov,.m4v'
             }
             multiple
             className="hidden"
@@ -1521,7 +1527,7 @@ function AgentComposerShell({
                   aria-label={t('agent.stop')}
                   title={t('agent.stop')}
                   onClick={() => onStop?.()}
-                  className={billingEnabled ? creditSendBtn : cn(squareSendBtn, 'hover:opacity-90')}
+                  className={billingEnabled ? creditSendBtn : cn(iconSendBtn, 'hover:opacity-90')}
                 >
                   <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
                 </button>
@@ -1546,7 +1552,7 @@ function AgentComposerShell({
                   title={t('agent.send')}
                   disabled={!canSend}
                   onClick={onSubmit}
-                  className={cn(squareSendBtn, 'hover:opacity-90 disabled:opacity-35')}
+                  className={cn(iconSendBtn, 'hover:opacity-90 disabled:opacity-35')}
                 >
                   <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                 </button>
@@ -1586,7 +1592,7 @@ function AgentComposerShell({
                   aria-label={t('agent.stop')}
                   title={t('agent.stop')}
                   onClick={() => onStop?.()}
-                  className={billingEnabled ? creditSendBtn : cn(squareSendBtn, 'hover:opacity-90')}
+                  className={billingEnabled ? creditSendBtn : cn(iconSendBtn, 'hover:opacity-90')}
                 >
                   <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
                 </button>
@@ -1611,7 +1617,7 @@ function AgentComposerShell({
                   title={t('agent.send')}
                   disabled={!canSend}
                   onClick={onSubmit}
-                  className={cn(squareSendBtn, 'hover:opacity-90 disabled:opacity-35')}
+                  className={cn(iconSendBtn, 'hover:opacity-90 disabled:opacity-35')}
                 >
                   <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                 </button>
@@ -1623,11 +1629,7 @@ function AgentComposerShell({
               aria-label={t('agent.stop')}
               title={t('agent.stop')}
               onClick={() => onStop?.()}
-              className={
-                sendVariant === 'square'
-                  ? cn(squareSendBtn, 'hover:opacity-90')
-                  : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition-opacity hover:opacity-90'
-              }
+              className={cn(iconSendBtn, 'hover:opacity-90')}
             >
               <span className="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden />
             </button>
@@ -1649,11 +1651,7 @@ function AgentComposerShell({
               title={t('agent.send')}
               disabled={!canSend}
               onClick={onSubmit}
-              className={
-                sendVariant === 'square'
-                  ? cn(squareSendBtn, 'hover:opacity-90 disabled:opacity-35')
-                  : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--on-brand)] transition-opacity disabled:opacity-35'
-              }
+              className={cn(iconSendBtn, 'hover:opacity-90 disabled:opacity-35')}
             >
               <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
             </button>

@@ -88,6 +88,7 @@ import {
   readFileAsDataUrl,
   waitForImageReady,
 } from '@/utils/uploadImage';
+import { registerAsset } from '@/apis/assets';
 import store from '@/store';
 import { message } from '@/components/base';
 import { exportFabricImage, exportCropSlots, type ExportImageFormat } from '@/components/rcb/scene/paint/exportImage';
@@ -197,6 +198,8 @@ import LottieNodeOverlay, {
   type LottieGeomOverride,
 } from '@/components/editor/nodes/LottieNode/LottieNodeOverlay';
 import { downloadVideoNodeAsset } from '@/components/editor/nodes/VideoNode/VideoDownloadButton';
+import { replaceImageNodeFromFile } from '@/components/editor/nodes/ImageNode/ImageReplaceUploadControl';
+import { replaceVideoNodeFromFile } from '@/components/editor/nodes/VideoNode/VideoReplaceCornerButton';
 import type { PencilEraseStroke } from '@/components/rcb';
 import { erasePencilNode } from '@/components/rcb';
 import TextInlineEditor from '@/components/editor/nodes/TextNode/TextInlineEditor';
@@ -2342,6 +2345,39 @@ function SvgCanvas({
       imageInputRef.current?.click();
       return;
     }
+    if (action === 'replace') {
+      if (readOnly) return;
+      const targetId = hitNodeId || (ids.length === 1 ? ids[0] : null);
+      if (!targetId) return;
+      const node = documentRef.current?.deltaSetLike?.[targetId];
+      if (!node || isGeneratorNode(node)) return;
+      if (String(node?.attrs?.processStatus || '') === 'running') return;
+      const isImage = node.key === 'image';
+      const isVideo = isVideoNode(node);
+      if (!isImage && !isVideo) return;
+      const keepWidth = Math.max(1, Number(node.width) || 1);
+      const input = window.document.createElement('input');
+      input.type = 'file';
+      input.accept = isVideo ? 'video/*' : 'image/*';
+      input.style.display = 'none';
+      window.document.body.appendChild(input);
+      input.onchange = () => {
+        const file = input.files?.[0] ?? null;
+        input.remove();
+        if (!file) return;
+        const opts = {
+          dispatch,
+          nodeId: targetId,
+          keepWidth,
+          file,
+        };
+        if (isVideo) void replaceVideoNodeFromFile(opts);
+        else void replaceImageNodeFromFile(opts);
+      };
+      input.oncancel = () => input.remove();
+      input.click();
+      return;
+    }
     if (
       action === 'spawnImageGenerator' ||
       action === 'spawnVideoGenerator' ||
@@ -2834,6 +2870,16 @@ function SvgCanvas({
           },
         })
       );
+      void registerAsset({
+        kind: 'video',
+        url: String(uploaded.url || '').trim(),
+        objectKey: uploaded.key || null,
+        mime: file.type || 'video/mp4',
+        prompt: prepared.name || null,
+        width,
+        height,
+        source: 'upload',
+      }).catch(() => undefined);
     } catch (err: any) {
       dispatch(failImageProcess({}));
       const detail = err?.response?.data?.detail || err?.message || '视频上传失败';
@@ -2902,11 +2948,19 @@ function SvgCanvas({
               attrs: {
                 src: url,
                 ...(uploaded.key ? { uploadKey: uploaded.key } : {}),
-                ...(duration ? { duration } : {}),
+                ...(duration ? { duration: duration } : {}),
               },
             },
           })
         );
+        void registerAsset({
+          kind: 'audio',
+          url,
+          objectKey: uploaded.key || null,
+          mime: file.type || 'audio/mpeg',
+          prompt: file.name?.replace(/\.[^.]+$/, '') || null,
+          source: 'upload',
+        }).catch(() => undefined);
       } finally {
         finishNodeUpload(spawnedId);
       }
@@ -3151,19 +3205,18 @@ function SvgCanvas({
             spatialIndex={nodeSpatialIndex}
           />
         ) : null}
-        {/* HTML <video>/Lottie covers SVG underlay while idle; hide during
-            transform so move uses the same previewSvgNodeGeometry path as images. */}
+        {/* HTML <video>/Lottie live in SVG foreignObject — keep visible during
+            transform (same as audio). FO rides previewSvgNodeGeometry with the
+            node; hiding globally made unrelated image drags blank every video. */}
         {infinite ? (
           <VideoNodeOverlay
             document={document}
-            hidden={geometryTransforming}
             geometryOverrides={videoLiveGeom}
           />
         ) : null}
         {infinite ? (
           <LottieNodeOverlay
             document={document}
-            hidden={geometryTransforming}
             geometryOverrides={videoLiveGeom as Record<string, LottieGeomOverride> | null}
           />
         ) : null}
@@ -3387,6 +3440,16 @@ function SvgCanvas({
             ctxMenu?.frameId ||
             activeFrameId
         )}
+        canReplace={(() => {
+          if (readOnly) return false;
+          const targetId =
+            ctxMenu?.nodeId || (ids.length === 1 ? ids[0] : null);
+          if (!targetId) return false;
+          const node = document?.deltaSetLike?.[targetId];
+          if (!node || isGeneratorNode(node)) return false;
+          if (String(node?.attrs?.processStatus || '') === 'running') return false;
+          return node.key === 'image' || isVideoNode(node);
+        })()}
         canAddToChat={(() => {
           const targetIds = resolveSelectionNodeIds(
             document,

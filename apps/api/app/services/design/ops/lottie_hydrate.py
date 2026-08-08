@@ -13,13 +13,49 @@ _LOTTIE_SYS = """You generate compact Bodymovin / Lottie JSON for UI motion grap
 Return ONLY a JSON object (no markdown) with keys:
 v, fr, ip, op, w, h, nm, ddd, assets (array), layers (array).
 Rules:
-- 1–3 shape layers max (ty=4); prefer ellipse or rect.
+- 1–3 shape layers max (ty=4); prefer ellipse, rect, or simple path.
+- Put shapes FLAT on the layer (ty=el/rc/sh + fl). Do NOT wrap in ty=gr groups.
 - Animate with ks.o (opacity) and/or ks.s (scale) keyframes; keep paths simple.
-- Match the user's brief (loading spinner, success check pulse, bounce, soft loop).
+- Match the user's brief (loading spinner, success check pulse, bounce, soft loop, heart, icon).
 - If reference image(s) are attached, match colors / motif / silhouette in vector shapes (no raster embeds).
+- Use vivid non-white fills (e.g. saturated red/pink/blue/orange). NEVER use pure white (#fff / [1,1,1]) as the only fill — ink must read on a light plate.
 - Use requested pixel size w/h when given; default fr=30.
 - No images/assets embeds; assets must be [].
 """
+
+# Generator plates can be huge at low zoom; LLM layer coords must match w/h.
+_LOTTIE_GEN_MAX_PX = 512
+
+
+def _clamp_lottie_design_size(width: int, height: int) -> tuple[int, int]:
+    w = max(32, int(width or 200))
+    h = max(32, int(height or 200))
+    m = max(w, h)
+    if m <= _LOTTIE_GEN_MAX_PX:
+        return w, h
+    scale = _LOTTIE_GEN_MAX_PX / float(m)
+    return max(32, int(round(w * scale))), max(32, int(round(h * scale)))
+
+
+def _keep_animation_canvas_size(
+    validated: dict[str, Any], *, design_w: int, design_h: int
+) -> dict[str, Any]:
+    """Prefer LLM-authored w/h so layer coords stay consistent.
+
+    Forcing plate-sized w/h (often 1000+) without scaling layers leaves ink as a
+    tiny speck in a huge viewBox — looks blank on the canvas.
+    """
+    try:
+        aw = int(validated.get("w") or 0)
+        ah = int(validated.get("h") or 0)
+    except (TypeError, ValueError):
+        aw, ah = 0, 0
+    if aw >= 8 and ah >= 8:
+        return validated
+    out = dict(validated)
+    out["w"] = design_w
+    out["h"] = design_h
+    return out
 
 
 def _normalize_lottie_ref_images(images: list[str] | None, *, limit: int = 4) -> list[str]:
@@ -78,6 +114,8 @@ def validate_lottie_animation(data: Any) -> dict[str, Any] | None:
         return None
     if w < 8 or h < 8:
         return None
+    if not _animation_has_visible_ink(layers):
+        return None
     out = dict(data)
     out.setdefault("v", "5.7.4")
     out.setdefault("fr", 30)
@@ -87,7 +125,98 @@ def validate_lottie_animation(data: Any) -> dict[str, Any] | None:
     out.setdefault("ddd", 0)
     out.setdefault("assets", [])
     out.setdefault("nm", "Lottie")
+    return _flatten_lottie_groups(out)
+
+
+def _color_luma(c: Any) -> float | None:
+    """Bodymovin RGB is usually 0–1; accept 0–255 too."""
+    if not isinstance(c, (list, tuple)) or len(c) < 3:
+        return None
+    try:
+        r, g, b = float(c[0]), float(c[1]), float(c[2])
+    except (TypeError, ValueError):
+        return None
+    if max(r, g, b) > 1.0:
+        r, g, b = r / 255.0, g / 255.0, b / 255.0
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _shapes_have_visible_ink(shapes: Any) -> bool:
+    if not isinstance(shapes, list):
+        return False
+    for sh in shapes:
+        if not isinstance(sh, dict):
+            continue
+        ty = str(sh.get("ty") or "")
+        if ty in ("fl", "st"):
+            raw_c = sh.get("c")
+            k = raw_c.get("k") if isinstance(raw_c, dict) else None
+            luma = _color_luma(k)
+            # Unknown color → accept; near-white-only fails at layer rollup.
+            if luma is None or luma < 0.92:
+                return True
+        if ty == "gr" and _shapes_have_visible_ink(sh.get("it")):
+            return True
+    return False
+
+
+def _flatten_lottie_shapes(shapes: Any) -> list[dict[str, Any]]:
+    """Lift drawable items out of `gr` groups — nested groups often paint blank in lottie-web."""
+    if not isinstance(shapes, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for sh in shapes:
+        if not isinstance(sh, dict):
+            continue
+        ty = str(sh.get("ty") or "")
+        if ty == "gr":
+            nested = _flatten_lottie_shapes(sh.get("it"))
+            out.extend(nested)
+            continue
+        # Drop group bookkeeping markers if they leaked.
+        if ty in ("tr",):
+            continue
+        out.append(sh)
     return out
+
+
+def _flatten_lottie_groups(anim: dict[str, Any]) -> dict[str, Any]:
+    layers = anim.get("layers")
+    if not isinstance(layers, list):
+        return anim
+    next_layers: list[Any] = []
+    changed = False
+    for layer in layers:
+        if not isinstance(layer, dict) or int(layer.get("ty") or -1) != 4:
+            next_layers.append(layer)
+            continue
+        shapes = layer.get("shapes")
+        flat = _flatten_lottie_shapes(shapes)
+        if flat != shapes:
+            changed = True
+            layer = dict(layer)
+            layer["shapes"] = flat
+        next_layers.append(layer)
+    if not changed:
+        return anim
+    out = dict(anim)
+    out["layers"] = next_layers
+    return out
+
+
+def _animation_has_visible_ink(layers: list[Any]) -> bool:
+    """Reject all-white / empty shape trees that paint as a blank plate."""
+    saw_shape = False
+    for layer in layers:
+        if not isinstance(layer, dict):
+            continue
+        if int(layer.get("ty") or -1) != 4:
+            continue
+        saw_shape = True
+        if _shapes_have_visible_ink(layer.get("shapes")):
+            return True
+    # No shape layers (e.g. unexpected ty) — keep for now; FE may still render.
+    return not saw_shape
 
 
 def build_fallback_lottie(
@@ -181,8 +310,7 @@ async def generate_lottie_animation(
 ) -> dict[str, Any]:
     """LLM Bodymovin when possible; always returns a valid animation dict."""
     text = str(prompt or "").strip()
-    w = max(32, int(width or 200))
-    h = max(32, int(height or 200))
+    w, h = _clamp_lottie_design_size(width, height)
     sec = max(0.5, float(duration_sec or 3.0))
     refs = _normalize_lottie_ref_images(images)
     fallback = build_fallback_lottie(
@@ -236,8 +364,9 @@ async def generate_lottie_animation(
             anim = raw if isinstance(raw, dict) else structured
         validated = validate_lottie_animation(anim)
         if validated:
-            validated["w"] = w
-            validated["h"] = h
+            validated = _keep_animation_canvas_size(
+                validated, design_w=w, design_h=h
+            )
             validated["nm"] = validated.get("nm") or text[:80]
             return validated
     except Exception:
@@ -272,8 +401,9 @@ async def generate_lottie_animation(
             )
         validated = validate_lottie_animation(_parse_json_object(str(content)))
         if validated:
-            validated["w"] = w
-            validated["h"] = h
+            validated = _keep_animation_canvas_size(
+                validated, design_w=w, design_h=h
+            )
             return validated
     except Exception:
         _log.exception("lottie freeform hydrate failed; using fallback")

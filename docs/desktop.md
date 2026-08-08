@@ -3,11 +3,13 @@
 | | Command | API | Product id |
 |--|---------|-----|------------|
 | **Local** | `npm run dev:desktop` / `build:desktop` | Bundled API sidecar + SQLite (app data) | `com.recombyn.app` · Recombyn |
-| **Cloud** | `npm run dev:desktop:cloud` / `build:desktop:cloud` | `VITE_API_BASE_URL` (default `https://recombyn.com`) | `com.recombyn.app.cloud` · Recombyn Cloud |
+| **Cloud** | `npm run dev:desktop:cloud` / `build:desktop:cloud` | Same as browser: local `:8000` + `apps/api/.env` (opt-in `VITE_API_BASE_URL` when a host is deployed) | `com.recombyn.app.cloud` · Recombyn Cloud |
 
 ## Local data & login
 
-UI still calls `/api/v1/...` on **`127.0.0.1:8000`**. Projects, skills, uploads, wallet live in app-data SQLite + `storage/uploads`.
+**Local desktop** UI talks to **`127.0.0.1:8000`** SQLite + `storage/uploads` (sidecar / `ensure-desktop-api` with auto-login).
+
+**Cloud desktop (dev)** uses the same API stack as `npm run dev:web` — Vite proxies `/api` → `:8000` with `apps/api/.env` (MySQL etc.). It does **not** rewrite to SQLite and does **not** assume `https://recombyn.com` (that host is optional; set `VITE_API_BASE_URL` only when you have a real deploy).
 
 **Login:** Local desktop auto-signs in as the OS user (`DESKTOP_LOCAL_AUTO_LOGIN`, loopback-only `POST /auth/desktop-local`). No email OTP. Cloud desktop / browser still use normal login.
 
@@ -38,9 +40,10 @@ npm run build:desktop
 # Force rebuild sidecar then app:
 # RECOMBYN_REBUILD_SIDECAR=1 npm run build:desktop
 
-# Cloud desktop (no sidecar)
+# Cloud desktop — same API as browser (no SQLite rewrite; optional hosted URL)
 npm run dev:desktop:cloud
 npm run build:desktop:cloud
+# VITE_API_BASE_URL=https://your.host npm run dev:desktop:cloud
 ```
 
 ### Output paths (after `build:desktop`)
@@ -66,8 +69,11 @@ Local dev
     → ensure-desktop-api.mjs (uvicorn from apps/api/.venv)
     → Tauri loads Vite :3000 (proxy /api → :8000)
 
-Cloud desktop
-  UI only → VITE_API_BASE_URL
+Cloud desktop (dev)
+  npm run dev:desktop:cloud
+    → ensure-desktop-api.mjs flavor=cloud (uvicorn with apps/api/.env; no auto-login)
+    → Tauri + Vite :3000 (proxy /api → :8000) — same as browser
+    → optional VITE_API_BASE_URL when a public API is deployed
 ```
 
 - **Sidecar entry:** `apps/api/scripts/desktop_sidecar_main.py`
@@ -85,7 +91,8 @@ Cloud desktop
 | Sidecar build fails | `cd apps/api && .venv\Scripts\activate && pip install -e ".[desktop]"` |
 | Release app won’t start API | Confirm `sidecars/recombyn-api/recombyn-api.exe` exists before/after build |
 | Port 8000 in use | Quit other API / previous desktop; `ensure-desktop-api` refuses a listener without working auto-login |
-| Want cloud MySQL in desktop | Use **cloud** flavor, not local |
+| Want browser’s MySQL/.env in desktop | Use **cloud** flavor (`dev:desktop:cloud`), not local |
+| Public `recombyn.com` unreachable | Expected until deployed — cloud desktop defaults to local `:8000`; set `VITE_API_BASE_URL` only for a live host |
 
 ## Related
 

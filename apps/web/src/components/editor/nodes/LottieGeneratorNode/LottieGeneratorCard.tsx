@@ -666,11 +666,13 @@ function LottieGeneratorCard({
     try {
       if (ac.signal.aborted) return;
 
+      const genW = Math.min(512, Math.max(32, Math.round(sceneBox.width)));
+      const genH = Math.min(512, Math.max(32, Math.round(sceneBox.height)));
       const res = await generateLottie(
         {
           prompt: text,
-          width: Math.max(32, Math.round(sceneBox.width)),
-          height: Math.max(32, Math.round(sceneBox.height)),
+          width: genW,
+          height: genH,
           duration_sec: duration,
           model: useModelId || undefined,
           ...(imageRefUrls.length ? { images: imageRefUrls } : {}),
@@ -681,12 +683,25 @@ function LottieGeneratorCard({
       if (!animationData) throw new Error(t('editor.tools.lottieGenEmpty'));
       if (ac.signal.aborted) return;
 
+      const aw = Math.max(1, Number(animationData.w) || genW);
+      const ah = Math.max(1, Number(animationData.h) || genH);
+      // Fit natural animation into current plate (keep center).
+      const fit = Math.min(sceneBox.width / aw, sceneBox.height / ah);
+      const outW = Math.max(32, Math.round(aw * fit));
+      const outH = Math.max(32, Math.round(ah * fit));
+      const outX = Math.round(sceneBox.x + (sceneBox.width - outW) / 2);
+      const outY = Math.round(sceneBox.y + (sceneBox.height - outH) / 2);
+
       dispatch(
         finishLottieGenerator({
           nodeId,
           animationData,
           genPrompt: text,
           name: text,
+          width: outW,
+          height: outH,
+          x: outX,
+          y: outY,
         })
       );
     } catch (err: any) {
@@ -955,10 +970,8 @@ function LottieGeneratorCard({
                 {billingEnabled ? (
                   <>
                     <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                    {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                    <span className="tabular-nums">{creditCost}</span>
                   </>
-                ) : sending ? (
-                  '…'
                 ) : (
                   <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                 )}

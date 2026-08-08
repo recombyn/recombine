@@ -934,7 +934,7 @@ def list_admin_assets(
 ) -> tuple[list[tuple[Asset, str | None, str | None]], int]:
     where: list[Any] = []
     kind_n = (kind or "").strip().lower()
-    if kind_n in ("image", "video", "audio", "font"):
+    if kind_n in ("image", "video", "audio", "font", "lottie"):
         where.append(Asset.kind == kind_n)
     raw = (q or "").strip()
     if raw:

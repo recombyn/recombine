@@ -11,7 +11,8 @@ import {
   type ReactNode,
   memo,
 } from 'react';
-import { LuAudioLines } from 'react-icons/lu';
+import { LuAudioLines, LuImagePlus } from 'react-icons/lu';
+import { RiClapperboardFill, RiVideoAiLine } from 'react-icons/ri';
 import { useRcbCamera, rcbCameraCssZoom } from '@/components/rcb';
 import {
   NODE_TITLE_LABEL_GAP_PX,
@@ -32,6 +33,8 @@ type NodeTitleIcon =
   | 'image-generator'
   | 'video'
   | 'video-generator'
+  | 'lottie'
+  | 'lottie-generator'
   | 'audio';
 
 type Props = {
@@ -141,16 +144,47 @@ export function nodeTitleScreenGapPx(
   return (boxTop - place.labelBottomScene) * z * sx;
 }
 
-/** 24×24 stroke icons at fixed screen size. */
+/** Same glyphs as context-menu Generators (LuImagePlus / RiVideoAiLine / RiClapperboardFill). */
 function TitleIcon({ kind }: { kind: NodeTitleIcon }): ReactNode {
-  // Match sibling title glyphs (strokeWidth 2 on 24 viewBox @ TITLE_ICON_PX).
+  const iconStyle = { color: MUTED } as const;
   if (kind === 'audio') {
     return (
       <LuAudioLines
         size={TITLE_ICON_PX}
         strokeWidth={2}
         className="shrink-0"
-        style={{ color: MUTED }}
+        style={iconStyle}
+        aria-hidden
+      />
+    );
+  }
+  if (kind === 'image-generator') {
+    return (
+      <LuImagePlus
+        size={TITLE_ICON_PX}
+        strokeWidth={2}
+        className="shrink-0"
+        style={iconStyle}
+        aria-hidden
+      />
+    );
+  }
+  if (kind === 'video-generator') {
+    return (
+      <RiVideoAiLine
+        size={TITLE_ICON_PX}
+        className="shrink-0"
+        style={{ ...iconStyle, opacity: 0.72 }}
+        aria-hidden
+      />
+    );
+  }
+  if (kind === 'lottie-generator') {
+    return (
+      <RiClapperboardFill
+        size={TITLE_ICON_PX}
+        className="shrink-0"
+        style={iconStyle}
         aria-hidden
       />
     );
@@ -169,24 +203,6 @@ function TitleIcon({ kind }: { kind: NodeTitleIcon }): ReactNode {
         <rect x={3} y={3} width={18} height={18} rx={2} {...common} />
         <path d="M3 9h18" {...common} />
         <path d="M9 21V9" {...common} />
-      </>
-    );
-  } else if (kind === 'image-generator') {
-    path = (
-      <>
-        <rect x={3} y={3} width={18} height={18} rx={2} {...common} />
-        <circle cx={9} cy={9} r={2} {...common} />
-        <path d="M21 15l-5-5L5 21" {...common} />
-        <path d="M16 5h5v5" {...common} />
-        <path d="M21 5l-6 6" {...common} />
-      </>
-    );
-  } else if (kind === 'video-generator') {
-    path = (
-      <>
-        <rect x={2} y={6} width={14} height={12} rx={2} {...common} />
-        <path d="M16 10l6-3v10l-6-3z" {...common} />
-        <path d="M8 3v3M12 3v3" {...common} />
       </>
     );
   } else if (kind === 'video') {

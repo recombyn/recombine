@@ -20,8 +20,13 @@ import {
   rcbSceneToScreen,
 } from '@/components/rcb';
 import { uploadImageFromSrc } from '@/utils/uploadImage';
+import {
+  layerOpacityToPct,
+  parseLayerOpacity,
+} from '@/components/rcb/selection/chrome/BlendModeControl';
 import EraserMaskOverlay, { type EraserMaskOverlayHandle } from './EraserMaskOverlay';
 import EraserToolPanel from './EraserToolPanel';
+import OpacityToolPanel from './OpacityToolPanel';
 import MultiAngleToolPanel from './MultiAngleToolPanel';
 import AdjustToolPanel, {
   parseAdjustValues,
@@ -127,9 +132,11 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   const [brushSize, setBrushSize] = useState(96);
   const [hasStrokes, setHasStrokes] = useState(false);
   const [eraseBusy, setEraseBusy] = useState(false);
+  const [opacityPct, setOpacityPct] = useState(100);
   const maskRef = useRef<EraserMaskOverlayHandle>(null);
   const adjustHistoryPushedRef = useRef(false);
   const adjustBaselineRef = useRef<{ cssFilter: string; adjustValues: unknown } | null>(null);
+  const opacityBaselineRef = useRef(1);
 
   useEffect(() => {
     if (!panel) return;
@@ -140,8 +147,15 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
 
   useEffect(() => {
     if (!panel) return;
-    // Crop / expand / flipRotate are owned by session hosts (image + video).
-    if (panel.kind === 'crop' || panel.kind === 'expand' || panel.kind === 'flipRotate') {
+    // Crop / expand / flipRotate / media quick-edit are owned outside this host
+    // (selection chrome). Do not force `node.key === 'image'` for those.
+    if (
+      panel.kind === 'crop' ||
+      panel.kind === 'expand' ||
+      panel.kind === 'flipRotate' ||
+      panel.kind === 'quickEdit' ||
+      panel.kind === 'lottieEdit'
+    ) {
       return;
     }
     const node = document?.deltaSetLike?.[panel.nodeId];
@@ -160,6 +174,16 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
     setEraseBusy(false);
     maskRef.current?.clear();
     // Only when opening / switching the eraser target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panel?.kind, panel?.nodeId]);
+
+  useEffect(() => {
+    if (panel?.kind !== 'opacity' || !panel.nodeId) return;
+    const node = document?.deltaSetLike?.[panel.nodeId];
+    const base = parseLayerOpacity(node?.attrs?.opacity, 1);
+    opacityBaselineRef.current = base;
+    setOpacityPct(layerOpacityToPct(base));
+    // Only when opening / switching the opacity target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panel?.kind, panel?.nodeId]);
 
@@ -190,6 +214,7 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
   if (
     panel.kind === 'flipRotate' ||
     panel.kind === 'quickEdit' ||
+    panel.kind === 'lottieEdit' ||
     panel.kind === 'crop' ||
     panel.kind === 'expand'
   ) {
@@ -257,8 +282,59 @@ function ImageToolPanelHost({ document }: { document: any }): ReactNode {
     );
   };
 
+  const writeOpacity = (pct: number, mode: 'preview' | 'commit') => {
+    const node = document?.deltaSetLike?.[panel!.nodeId];
+    const next01 = Math.min(1, Math.max(0, Math.round(pct) / 100));
+    dispatch(
+      patchDocumentNode({
+        nodeId: panel!.nodeId,
+        skipHistory: mode === 'preview',
+        patch: {
+          attrs: {
+            ...(node?.attrs || {}),
+            opacity: next01,
+          },
+        },
+      })
+    );
+  };
+
   let body: ReactNode = null;
-  if (panel.kind === 'eraser') {
+  if (panel.kind === 'opacity') {
+    body = (
+      <OpacityToolPanel
+        opacityPct={opacityPct}
+        onOpacityPctChange={(v) => {
+          setOpacityPct(v);
+          writeOpacity(v, 'preview');
+        }}
+        onReset={() => {
+          setOpacityPct(100);
+          writeOpacity(100, 'preview');
+        }}
+        onCancel={() => {
+          const node = document?.deltaSetLike?.[panel.nodeId];
+          dispatch(
+            patchDocumentNode({
+              nodeId: panel.nodeId,
+              skipHistory: true,
+              patch: {
+                attrs: {
+                  ...(node?.attrs || {}),
+                  opacity: opacityBaselineRef.current,
+                },
+              },
+            })
+          );
+          close();
+        }}
+        onConfirm={() => {
+          writeOpacity(opacityPct, 'commit');
+          close();
+        }}
+      />
+    );
+  } else if (panel.kind === 'eraser') {
     body = (
       <EraserToolPanel
         brushSize={brushSize}

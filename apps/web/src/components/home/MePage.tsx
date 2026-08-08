@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { HiOutlinePhoto, HiOutlineTrash } from 'react-icons/hi2';
-import { LuAudioLines, LuFilm } from 'react-icons/lu';
 import { Icon } from '@/components/base/icon';
 import EditProfileDialog from '@/components/home/EditProfileDialog';
 import EmptyState from '@/components/home/EmptyState';
@@ -12,7 +10,15 @@ import {
   InspirationCaseCard,
 } from '@/components/home/InspirationSection';
 import { FlowScrollSection } from '@/components/home/FlowScrollSection';
-import { InfiniteScrollSection } from '@/components/home/InfiniteScroll';
+import {
+  InfiniteScrollSection,
+  GRID_SKELETON_COUNT,
+} from '@/components/home/InfiniteScroll';
+import {
+  UserAssetCard,
+  UserAssetCardSkeleton,
+  UserAssetMediaPreview,
+} from '@/components/home/UserAssetMediaCard';
 import SegmentTabs from '@/components/home/SegmentTabs';
 import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import { buildLoginUrl } from '@/utils/authReturnTo';
@@ -36,82 +42,19 @@ import {
   normalizeCaseCategory,
   type OfficialCaseMeta,
 } from '@/utils/officialCases';
-import { message } from '@/components/base';
+import { Button, Dialog, message } from '@/components/base';
 import { getToken } from '@/utils/token';
 
 /** Me profile feed — same scale as Skills: 2 → 3 → 4 → 5 (2xl). */
 const ME_FLOW_COLUMNS =
   'w-full columns-2 gap-4 md:columns-3 lg:columns-4 2xl:columns-5';
 
-const ME_ASSET_GRID =
-  'grid w-full grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5';
-
 const ASSETS_PAGE_SIZE = 30;
 
 type ProfileTab = 'published' | 'liked' | 'assets';
 
-function isMediaAssetKind(kind: string): kind is 'image' | 'video' | 'audio' {
-  return kind === 'image' || kind === 'video' || kind === 'audio';
-}
-
-function formatAssetRelativeTime(ms: number | null | undefined, locale: string): string {
-  const t = Number(ms);
-  if (!Number.isFinite(t) || t <= 0) return '';
-  const diffSec = Math.round((Date.now() - t) / 1000);
-  if (diffSec < 60) return locale.startsWith('zh') ? '刚刚' : 'just now';
-  if (diffSec < 3600) {
-    const m = Math.floor(diffSec / 60);
-    return locale.startsWith('zh') ? `${m} 分钟前` : `${m}m ago`;
-  }
-  if (diffSec < 86400) {
-    const h = Math.floor(diffSec / 3600);
-    return locale.startsWith('zh') ? `${h} 小时前` : `${h}h ago`;
-  }
-  const d = Math.floor(diffSec / 86400);
-  return locale.startsWith('zh') ? `${d} 天前` : `${d}d ago`;
-}
-
-function MeAssetThumb({ asset }: { asset: UserAsset }): ReactNode {
-  const url = String(asset.url || '').trim();
-  if (asset.kind === 'image' && url) {
-    return (
-      <img
-        src={url}
-        alt=""
-        className="h-full w-full object-cover"
-        loading="lazy"
-        draggable={false}
-      />
-    );
-  }
-  if (asset.kind === 'video' && url) {
-    return (
-      <video
-        src={url}
-        className="h-full w-full object-cover"
-        muted
-        playsInline
-        preload="metadata"
-      />
-    );
-  }
-  return (
-    <span className="inline-flex h-full w-full items-center justify-center text-[var(--muted)]">
-      {asset.kind === 'audio' ? (
-        <LuAudioLines className="h-7 w-7" strokeWidth={1.75} />
-      ) : asset.kind === 'video' ? (
-        <LuFilm className="h-7 w-7" strokeWidth={1.75} />
-      ) : (
-        <HiOutlinePhoto className="h-7 w-7" strokeWidth={1.75} />
-      )}
-    </span>
-  );
-}
-
-function assetKindLabelKey(kind: string): string {
-  if (kind === 'video') return 'me.assetKindVideo';
-  if (kind === 'audio') return 'me.assetKindAudio';
-  return 'me.assetKindImage';
+function isMediaAssetKind(kind: string): kind is 'image' | 'video' | 'audio' | 'lottie' {
+  return kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'lottie';
 }
 
 type LikedCaseItem = OfficialCaseMeta & { likedAt: number };
@@ -259,6 +202,8 @@ function MePage({ onOpenCase }: Props): ReactNode {
   /** First fetch done — skip skeleton when switching back to Assets. */
   const [assetsReady, setAssetsReady] = useState(false);
   const [assetBusyId, setAssetBusyId] = useState<string | null>(null);
+  const [assetPreview, setAssetPreview] = useState<UserAsset | null>(null);
+  const [assetDeleteTarget, setAssetDeleteTarget] = useState<UserAsset | null>(null);
 
   const [likedIds, setLikedIds] = useState<Set<string>>(() => new Set());
   const [likeBusyId, setLikeBusyId] = useState<string | null>(null);
@@ -282,6 +227,8 @@ function MePage({ onOpenCase }: Props): ReactNode {
     setLiked([]);
     setPublishedAll([]);
     setAssets([]);
+    setAssetPreview(null);
+    setAssetDeleteTarget(null);
     likedMigratedRef.current = false;
   }, [userId]);
 
@@ -510,6 +457,9 @@ function MePage({ onOpenCase }: Props): ReactNode {
     try {
       await deleteAsset(id);
       setAssets((prev) => prev.filter((a) => a.id !== id));
+      if (assetPreview?.id === id) setAssetPreview(null);
+      setAssetDeleteTarget(null);
+      message.destructive(t('me.deleteAssetOk'));
     } catch {
       message.error(t('me.deleteAssetFail'));
     } finally {
@@ -519,8 +469,8 @@ function MePage({ onOpenCase }: Props): ReactNode {
 
   const openAssetPreview = (asset: UserAsset) => {
     const url = String(asset.url || '').trim();
-    if (!url) return;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    if (!url && asset.kind !== 'audio') return;
+    setAssetPreview(asset);
   };
 
   const listForPreview = tab === 'liked' ? liked : publishedAll;
@@ -769,66 +719,21 @@ function MePage({ onOpenCase }: Props): ReactNode {
                 onLoadMore={loadMoreAssets}
                 isEmpty={assets.length === 0}
                 empty={<EmptyState hint={t('me.emptyAssets')} />}
-                gridClassName={ME_ASSET_GRID}
-                skeleton={Array.from({ length: 10 }, (_, i) => (
-                  <div
-                    key={i}
-                    className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--rail)]"
-                  >
-                    <div className="aspect-square animate-pulse bg-[var(--canvas)]" />
-                    <div className="space-y-1.5 px-2.5 py-2">
-                      <div className="h-3 w-2/3 animate-pulse rounded bg-[var(--canvas)]" />
-                      <div className="h-2.5 w-1/3 animate-pulse rounded bg-[var(--canvas)]" />
-                    </div>
-                  </div>
+                gridClassName={ME_FLOW_COLUMNS}
+                skeleton={Array.from({ length: GRID_SKELETON_COUNT }, (_, i) => (
+                  <UserAssetCardSkeleton key={i} index={i} />
                 ))}
               >
-                {assets.map((asset) => {
-                  const prompt = String(asset.prompt || '').trim();
-                  const when = formatAssetRelativeTime(
-                    asset.createdAt,
-                    i18n.language || 'zh'
-                  );
-                  return (
-                    <div
-                      key={asset.id}
-                      className="group relative overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--rail)]"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => openAssetPreview(asset)}
-                        className="block w-full text-left"
-                        title={prompt || t(assetKindLabelKey(asset.kind))}
-                      >
-                        <div className="aspect-square w-full overflow-hidden bg-[var(--canvas)]">
-                          <MeAssetThumb asset={asset} />
-                        </div>
-                        <div className="space-y-0.5 px-2.5 py-2">
-                          <p className="truncate text-[12px] font-medium text-[var(--ink)]">
-                            {prompt || t(assetKindLabelKey(asset.kind))}
-                          </p>
-                          {when ? (
-                            <p className="truncate text-[11px] text-[var(--muted)]">
-                              {when}
-                            </p>
-                          ) : null}
-                        </div>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={assetBusyId === asset.id}
-                        aria-label={t('me.deleteAsset')}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void onDeleteAsset(asset);
-                        }}
-                        className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface)]/90 text-[var(--muted)] opacity-0 shadow-sm ring-1 ring-[var(--line)] transition hover:text-[var(--ink)] group-hover:opacity-100 disabled:opacity-40"
-                      >
-                        <HiOutlineTrash className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      </button>
-                    </div>
-                  );
-                })}
+                {assets.map((asset) => (
+                  <UserAssetCard
+                    key={asset.id}
+                    asset={asset}
+                    locale={i18n.language || 'zh'}
+                    deleteBusy={assetBusyId === asset.id}
+                    onActivate={openAssetPreview}
+                    onDelete={(a) => setAssetDeleteTarget(a)}
+                  />
+                ))}
               </InfiniteScrollSection>
             )}
           </div>
@@ -846,6 +751,50 @@ function MePage({ onOpenCase }: Props): ReactNode {
         onRemix={(meta) => void remix(meta)}
         onToggleLike={(meta) => onToggleLike(meta)}
       />
+
+      <UserAssetMediaPreview
+        asset={assetPreview}
+        onClose={() => setAssetPreview(null)}
+      />
+
+      <Dialog
+        show={Boolean(assetDeleteTarget)}
+        onClose={() => {
+          if (assetBusyId) return;
+          setAssetDeleteTarget(null);
+        }}
+        width={400}
+        title={t('me.deleteAssetConfirmTitle')}
+        titleClassName="!text-[16px] !font-semibold !pb-2"
+        className="!bg-[var(--surface)] !p-5"
+        footer={
+          <>
+            <Button
+              size="small"
+              type="default"
+              disabled={Boolean(assetBusyId)}
+              onClick={() => setAssetDeleteTarget(null)}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              destructive
+              disabled={Boolean(assetBusyId)}
+              onClick={() => {
+                if (assetDeleteTarget) void onDeleteAsset(assetDeleteTarget);
+              }}
+            >
+              {t('me.deleteAsset')}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-[13px] leading-relaxed text-[var(--muted)]">
+          {t('me.deleteAssetConfirmBody')}
+        </p>
+      </Dialog>
 
       <EditProfileDialog open={editOpen} onClose={() => setEditOpen(false)} />
     </main>

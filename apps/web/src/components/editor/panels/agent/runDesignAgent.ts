@@ -975,7 +975,8 @@ export type ToolOpResult = {
   error?: string;
 };
 
-async function applyAgentToolOps(opts: {
+/** Apply allowlisted canvas tool_ops (Design Agent SSE + coding-CLI bridge). */
+export async function applyAgentToolOps(opts: {
   ops: Array<{ name?: string; args?: Record<string, unknown>; op_id?: string }>;
   dispatch: Dispatch;
   getDocument: () => any;

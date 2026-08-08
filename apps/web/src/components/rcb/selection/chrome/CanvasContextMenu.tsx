@@ -26,6 +26,7 @@ import {
   HiOutlineLockOpen,
   HiOutlinePhoto,
   HiOutlineArrowDownTray,
+  HiOutlineArrowUpTray,
   HiOutlineScissors,
   HiOutlineSparkles,
   HiOutlineSquare2Stack,
@@ -40,6 +41,7 @@ const CLICK_THROUGH_GUARD_MS = 320;
 
 type CtxAction =
   | 'upload'
+  | 'replace'
   | 'addToChat'
   | 'spawnImageGenerator'
   | 'spawnVideoGenerator'
@@ -85,6 +87,8 @@ export type ContextMenuState = {
 type CanvasContextMenuProps = {
   menu: ContextMenuState | null;
   hasNode: boolean;
+  /** Enable 「替换」 for a single image / video node. */
+  canReplace?: boolean;
   /** Enable 「添加到 Chat」 for selected node or artboard. */
   canAddToChat?: boolean;
   /** Nodes or active artboard frame. */
@@ -503,6 +507,7 @@ function ExportSubmenu({
 function CanvasContextMenu({
   menu,
   hasNode,
+  canReplace = false,
   canAddToChat,
   canDelete,
   canLayerActions,
@@ -655,6 +660,13 @@ function CanvasContextMenu({
             disabled={Boolean(menu.nodeId)}
             onClick={() => runAction('upload')}
           />
+          {canReplace ? (
+            <MenuItem
+              icon={<HiOutlineArrowUpTray className={ICON_CLASS} strokeWidth={1.75} />}
+              label={t('editor.contextMenu.replaceMedia')}
+              onClick={() => runAction('replace')}
+            />
+          ) : null}
           <GeneratorSubmenu onPick={(action) => runAction(action)} />
           <MenuItem
             icon={<HiOutlineArrowUturnLeft className={ICON_CLASS} strokeWidth={1.75} />}

@@ -4,7 +4,7 @@
 
 import { request } from '@/utils/request';
 
-export type AssetKind = 'image' | 'video' | 'audio' | 'font';
+export type AssetKind = 'image' | 'video' | 'audio' | 'font' | 'lottie';
 
 export type UserAsset = {
   id: string;
@@ -41,6 +41,32 @@ export const listAssets = (params?: {
       page: params?.page ?? 1,
       pageSize: params?.pageSize ?? 24,
       ...(params?.kind ? { kind: params.kind } : {}),
+    },
+  });
+
+/** POST /api/v1/assets/register — canvas upload → Assets dock */
+export const registerAsset = (data: {
+  kind: Exclude<AssetKind, 'font'>;
+  url: string;
+  objectKey?: string | null;
+  mime?: string | null;
+  prompt?: string | null;
+  width?: number | null;
+  height?: number | null;
+  source?: string | null;
+}) =>
+  request<UserAsset>({
+    url: '/api/v1/assets/register',
+    method: 'post',
+    data: {
+      kind: data.kind,
+      url: data.url,
+      ...(data.objectKey ? { objectKey: data.objectKey } : {}),
+      ...(data.mime ? { mime: data.mime } : {}),
+      ...(data.prompt ? { prompt: data.prompt } : {}),
+      ...(data.width != null ? { width: data.width } : {}),
+      ...(data.height != null ? { height: data.height } : {}),
+      source: data.source || 'upload',
     },
   });
 

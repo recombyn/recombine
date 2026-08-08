@@ -33,8 +33,21 @@ http.interceptors.request.use(
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    // Stale / missing session — drop token so clients stop hammering 401s.
-    if (error?.response?.status === 401) {
+    // Stale / missing session — drop token so clients stop hammering auth errors.
+    // Backend historically returned 403 for bad tokens; treat that as logout too.
+    const status = error?.response?.status;
+    const detail = error?.response?.data?.detail;
+    const detailText =
+      typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d) => (typeof d === 'string' ? d : d?.msg)).join(' ')
+          : '';
+    const authDead =
+      status === 401 ||
+      (status === 403 &&
+        /could not validate credentials|not authenticated/i.test(detailText));
+    if (authDead) {
       setToken(null);
       try {
         window.dispatchEvent(new CustomEvent('recombine:auth-unauthorized'));

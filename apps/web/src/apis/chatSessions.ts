@@ -44,9 +44,9 @@ export type ChatSessionMessageDto = {
   choices?: string[] | null;
   applyChoice?: string | null;
   choiceUi?: {
-    mode?: string;
+    mode: 'confirm' | 'single' | 'multi' | 'buttons' | 'text';
     placeholder?: string;
-    options?: Array<{ label: string; action: string }>;
+    options: Array<{ label: string; action: 'apply' | 'reply' | 'dismiss' }>;
   } | null;
   proposalId?: string | null;
 };

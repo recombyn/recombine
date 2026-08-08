@@ -2,8 +2,15 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type PointerE
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { FiPenTool } from 'react-icons/fi';
-import { LuAudioLines, LuFrame, LuPanelLeft, LuPencil, LuFilm, LuClapperboard } from 'react-icons/lu';
-import { RiVideoAiLine } from 'react-icons/ri';
+import {
+  LuAudioLines,
+  LuFrame,
+  LuPanelLeft,
+  LuPencil,
+  LuFilm,
+  LuImagePlus,
+} from 'react-icons/lu';
+import { RiClapperboardFill, RiVideoAiLine } from 'react-icons/ri';
 import { RxText } from 'react-icons/rx';
 import {
   HiOutlineChevronDown,
@@ -14,7 +21,6 @@ import {
   HiOutlineLockOpen,
   HiOutlineMinus,
   HiOutlinePhoto,
-  HiOutlineSparkles,
   HiOutlineStop,
 } from 'react-icons/hi2';
 import { TbArrowUpRight, TbCircle, TbPolygon, TbStar, TbTriangle } from 'react-icons/tb';
@@ -184,13 +190,14 @@ function LayerIcon({
     if (thumb) return thumb;
     return (
       <LayerGlyphFallback>
-        <HiOutlineSparkles className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+        <LuImagePlus className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
       </LayerGlyphFallback>
     );
   }
 
   if (isVideoGeneratorNode(node)) {
-    const thumb = <LayerMediaThumb kind="video" src={src} poster={poster} />;
+    const thumb =
+      poster || src ? <LayerMediaThumb kind="video" src={src} poster={poster} /> : null;
     if (thumb) return thumb;
     return (
       <LayerGlyphFallback>
@@ -199,10 +206,18 @@ function LayerIcon({
     );
   }
 
-  if (isLottieGeneratorNode(node) || node.key === 'lottie') {
+  if (isLottieGeneratorNode(node)) {
     return (
       <LayerGlyphFallback>
-        <LuClapperboard className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
+        <RiClapperboardFill className="block h-[13px] w-[13px] shrink-0" />
+      </LayerGlyphFallback>
+    );
+  }
+
+  if (node.key === 'lottie') {
+    return (
+      <LayerGlyphFallback>
+        <LuFilm className="block h-[13px] w-[13px] shrink-0" strokeWidth={1.75} />
       </LayerGlyphFallback>
     );
   }
@@ -216,7 +231,8 @@ function LayerIcon({
   }
 
   if (node.key === 'video') {
-    const thumb = <LayerMediaThumb kind="video" src={src} poster={poster} />;
+    const thumb =
+      poster || src ? <LayerMediaThumb kind="video" src={src} poster={poster} /> : null;
     if (thumb) return thumb;
     return (
       <LayerGlyphFallback>

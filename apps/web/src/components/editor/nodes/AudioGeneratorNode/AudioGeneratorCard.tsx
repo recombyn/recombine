@@ -318,6 +318,7 @@ function AudioGeneratorCard({
     return attachments.map((c, i) => ({
       id: c.key,
       label: t('agent.mentionAttachAudioN', { n: i + 1 }),
+      mediaKind: 'audio' as const,
     }));
   }, [attachments, t]);
 

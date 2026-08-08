@@ -8,7 +8,7 @@ import {
   memo,
 } from 'react';
 import { cn } from '@/utils/classnames';
-import { imageSrcToFile, isOurStoredImageUrl } from '@/utils/uploadImage';
+import { imageSrcToFile, isOurStoredImageUrl, mediaSrcNeedsAuthFetch } from '@/utils/uploadImage';
 import VideoPlaybackBar, {
   videoChromeLayout,
   videoMediaFromElement,
@@ -17,11 +17,13 @@ import VideoPlaybackBar, {
 } from '@/components/editor/nodes/VideoNode/VideoPlaybackBar';
 import './VideoJsPlayer.css';
 
-/** Local `/api/v1/uploads/…` needs Bearer — `<video src>` cannot send it. */
-function videoSrcNeedsAuthFetch(src: string): boolean {
+/** Local `/api/v1/uploads/…` / bare storage keys need Bearer — `<video src>` cannot send it. */
+function videoSrcNeedsAuthFetch(src: string, uploadKey?: string | null): boolean {
   const s = String(src || '').trim();
   if (!s || s.startsWith('data:') || s.startsWith('blob:')) return false;
-  return isOurStoredImageUrl(s);
+  if (mediaSrcNeedsAuthFetch(s) || isOurStoredImageUrl(s)) return true;
+  // Bare key stored as src while object key is on the node.
+  return Boolean(uploadKey) && !/^https?:\/\//i.test(s);
 }
 
 function resolveAbsoluteHref(href: string): string {
@@ -50,7 +52,7 @@ function resolveVideoElementAbsSrc(el: HTMLVideoElement): string {
  */
 export function usePlayableVideoSrc(src: string, uploadKey?: string | null): string {
   const [playSrc, setPlaySrc] = useState(() =>
-    videoSrcNeedsAuthFetch(src) ? '' : String(src || '').trim()
+    videoSrcNeedsAuthFetch(src, uploadKey) ? '' : String(src || '').trim()
   );
   const blobRef = useRef<string | null>(null);
   const cacheKeyRef = useRef<string>('');
@@ -66,7 +68,7 @@ export function usePlayableVideoSrc(src: string, uploadKey?: string | null): str
       setPlaySrc('');
       return;
     }
-    if (!videoSrcNeedsAuthFetch(s)) {
+    if (!videoSrcNeedsAuthFetch(s, uploadKey)) {
       if (blobRef.current) {
         URL.revokeObjectURL(blobRef.current);
         blobRef.current = null;

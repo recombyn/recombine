@@ -62,41 +62,109 @@ describe('PathBuilder', () => {
   });
 });
 
-describe('ellipseArcPercentFromPointer', () => {
-  it('opens a small gap when dragging slightly from full', async () => {
-    const { ellipseArcPercentFromPointer } = await import(
-      '@/components/rcb/scene/document/sceneShapes'
+describe('ellipseArcApplyFullHysteresis', () => {
+  it('avoids chatter when closing and reopening near full', async () => {
+    const {
+      ellipseArcApplyFullHysteresis,
+      ELLIPSE_ARC_SNAP_FULL_PCT,
+      ELLIPSE_ARC_UNSNAP_FULL_PCT,
+    } = await import('@/components/rcb/scene/document/sceneShapes');
+    const twoPi = Math.PI * 2;
+    const snapIn = (ELLIPSE_ARC_SNAP_FULL_PCT / 100) * twoPi;
+    const snapOut = (ELLIPSE_ARC_UNSNAP_FULL_PCT / 100) * twoPi;
+
+    // First open from full: no snap yet.
+    let s = ellipseArcApplyFullHysteresis(twoPi - snapIn * 0.5, {
+      openedOnce: false,
+      heldFull: false,
+    });
+    expect(s.openedOnce).toBe(false);
+    expect(s.along).toBeLessThan(twoPi);
+
+    // Past unsnap → armed.
+    s = ellipseArcApplyFullHysteresis(twoPi - snapOut - 0.01, {
+      openedOnce: false,
+      heldFull: false,
+    });
+    expect(s.openedOnce).toBe(true);
+
+    // Close into snap band → latch full.
+    s = ellipseArcApplyFullHysteresis(twoPi - snapIn * 0.5, {
+      openedOnce: true,
+      heldFull: false,
+    });
+    expect(s.heldFull).toBe(true);
+    expect(s.along).toBeCloseTo(twoPi, 5);
+
+    // Still inside unsnap band → stay latched (no jitter).
+    s = ellipseArcApplyFullHysteresis(twoPi - snapOut * 0.5, {
+      openedOnce: true,
+      heldFull: true,
+    });
+    expect(s.heldFull).toBe(true);
+    expect(s.along).toBeCloseTo(twoPi, 5);
+
+    // Past unsnap → release and follow.
+    s = ellipseArcApplyFullHysteresis(twoPi - snapOut - 0.05, {
+      openedOnce: true,
+      heldFull: true,
+    });
+    expect(s.heldFull).toBe(false);
+    expect(s.along).toBeLessThan(twoPi);
+  });
+});
+
+describe('ellipseArcAlongFromPointerAngle', () => {
+  it('puts the end under the pointer and clamps past 开始位置', async () => {
+    const {
+      ellipseArcAlongFromPointerAngle,
+      ellipseArcEndAngles,
+      ellipseArcPercentFromAlongRad,
+    } = await import('@/components/rcb/scene/document/sceneShapes');
+    const start = Math.PI / 2; // south
+    const twoPi = Math.PI * 2;
+    // CW of south with + lock → near-full; end ≈ pointer.
+    const ptr = start - 0.2;
+    const along = ellipseArcAlongFromPointerAngle(ptr, start, 1, twoPi);
+    expect(along).toBeGreaterThan(twoPi * 0.9);
+    const pct = ellipseArcPercentFromAlongRad(along, 1);
+    const { a1 } = ellipseArcEndAngles(pct, 90);
+    let d = a1 - ptr;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    expect(Math.abs(d)).toBeLessThan(0.05);
+    // Crossing start from near-full stays full.
+    expect(ellipseArcAlongFromPointerAngle(start + 0.2, start, 1, along)).toBeCloseTo(
+      twoPi,
+      5
     );
-    // Start at south (90°); slight east of south → near-100% remaining.
-    const next = ellipseArcPercentFromPointer(60, 90, 50, 50, 100, 90);
-    expect(Math.abs(next)).toBeGreaterThan(90);
   });
 
-  it('keeps one locked direction and does not flip past start', async () => {
-    const { ellipseArcPercentFromPointer } = await import(
-      '@/components/rcb/scene/document/sceneShapes'
-    );
-    // Locked negative: east of south stays negative near-full, not positive.
-    const next = ellipseArcPercentFromPointer(60, 90, 50, 50, -95, 90, {
-      lockSign: -1,
-    });
-    expect(next).toBeLessThan(0);
-    expect(Math.abs(next)).toBeGreaterThan(90);
+  it('maps short vs long sides for a locked sign', async () => {
+    const {
+      ellipseArcAlongFromPointerAngle,
+      ellipseArcPercentFromAlongRad,
+    } = await import('@/components/rcb/scene/document/sceneShapes');
+    const start = Math.PI / 2;
+    const twoPi = Math.PI * 2;
+    // Start south; slightly CW → short remaining for − lock.
+    const shortAlong = ellipseArcAlongFromPointerAngle(start - 0.15, start, -1, 0.2);
+    expect(ellipseArcPercentFromAlongRad(shortAlong, -1)).toBeGreaterThan(-20);
+    // Slightly CCW → near-full for − lock.
+    const longAlong = ellipseArcAlongFromPointerAngle(start + 0.15, start, -1, twoPi);
+    expect(Math.abs(ellipseArcPercentFromAlongRad(longAlong, -1))).toBeGreaterThan(90);
   });
+});
 
-  it('sign follows sweep direction from fixed start when unlocked', async () => {
-    const { ellipseArcPercentFromPointer } = await import(
-      '@/components/rcb/scene/document/sceneShapes'
-    );
-    // From south: east end → negative (CW); west end → positive (CCW).
-    const neg = ellipseArcPercentFromPointer(90, 50, 50, 50, -50, 90, {
-      lockSign: -1,
-    });
-    const pos = ellipseArcPercentFromPointer(10, 50, 50, 50, 50, 90, {
-      lockSign: 1,
-    });
-    expect(neg).toBeLessThan(0);
-    expect(pos).toBeGreaterThan(0);
+describe('ellipseArcPercentFromAlongRad', () => {
+  it('covers a full turn without flipping sign', async () => {
+    const { ellipseArcPercentFromAlongRad, ellipseArcAlongRadFromPercent } =
+      await import('@/components/rcb/scene/document/sceneShapes');
+    const half = Math.PI;
+    expect(ellipseArcPercentFromAlongRad(half, 1)).toBeCloseTo(50, 5);
+    expect(ellipseArcPercentFromAlongRad(half, -1)).toBeCloseTo(-50, 5);
+    expect(ellipseArcAlongRadFromPercent(100)).toBeCloseTo(Math.PI * 2, 5);
+    expect(ellipseArcPercentFromAlongRad(Math.PI * 2, -1)).toBe(-100);
   });
 });
 
@@ -106,7 +174,7 @@ describe('snapEllipseArcPercent / snapEllipseInnerRatio', () => {
       '@/components/rcb/scene/document/sceneShapes'
     );
     expect(snapEllipseArcPercent(97.5)).toBe(100);
-    expect(snapEllipseArcPercent(-98)).toBe(-100);
+    expect(snapEllipseArcPercent(-95)).toBe(-100);
     expect(snapEllipseArcPercent(80)).toBe(80);
     expect(snapEllipseInnerRatio(0.02)).toBe(0);
     expect(snapEllipseInnerRatio(0.1)).toBe(0);

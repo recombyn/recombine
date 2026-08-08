@@ -1662,6 +1662,47 @@ export function buildGeneratedLottieAnimation(opts: {
 }
 
 
+/**
+ * Lift drawable items out of nested `gr` groups.
+ * LLM / Bodymovin groups often paint blank in lottie-web (empty `<g>`).
+ */
+function flattenLottieShapes(shapes: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(shapes)) return [];
+  const out: Record<string, unknown>[] = [];
+  for (const sh of shapes) {
+    if (!sh || typeof sh !== 'object' || Array.isArray(sh)) continue;
+    const item = sh as Record<string, unknown>;
+    const ty = String(item.ty || '');
+    if (ty === 'gr') {
+      out.push(...flattenLottieShapes(item.it));
+      continue;
+    }
+    if (ty === 'tr') continue;
+    out.push(item);
+  }
+  return out;
+}
+
+function flattenLottieGroups(anim: Record<string, unknown>): Record<string, unknown> {
+  const layers = anim.layers;
+  if (!Array.isArray(layers)) return anim;
+  let changed = false;
+  const nextLayers = layers.map((layer) => {
+    if (!layer || typeof layer !== 'object' || Array.isArray(layer)) return layer;
+    const L = layer as Record<string, unknown>;
+    if (Number(L.ty) !== 4) return layer;
+    const shapes = L.shapes;
+    const flat = flattenLottieShapes(shapes);
+    if (flat === shapes || (Array.isArray(shapes) && flat.length === shapes.length && flat.every((s, i) => s === shapes[i]))) {
+      return layer;
+    }
+    changed = true;
+    return { ...L, shapes: flat };
+  });
+  if (!changed) return anim;
+  return { ...anim, layers: nextLayers };
+}
+
 /** Parse Agent / attrs Lottie payload (object or JSON string). */
 export function parseLottieAnimationData(raw: unknown): Record<string, unknown> | null {
   let obj: unknown = raw;
@@ -1677,7 +1718,7 @@ export function parseLottieAnimationData(raw: unknown): Record<string, unknown> 
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
   const o = obj as Record<string, unknown>;
   if (!Array.isArray(o.layers)) return null;
-  return o;
+  return flattenLottieGroups(o);
 }
 
 export function serializeLottieAnimationData(data: unknown): string | null {
@@ -1817,7 +1858,8 @@ export function createAudioNode({
   const d = Number(duration);
   const key = String(uploadKey || '').trim();
   const iw = Math.max(1, Math.round(Number(width) || 360));
-  const ih = Math.max(1, Math.round(Number(height) || 200));
+  // Waveform + transport need room; shorter plates crush the rail and look “detached”.
+  const ih = Math.max(140, Math.round(Number(height) || 200));
   const ix = Math.round(Number(x) || 0);
   const iy = Math.round(Number(y) || 0);
   return {
@@ -2016,12 +2058,12 @@ export function createLottieNode({
         assetKind: 'lottie',
         mode: 'FIT',
         lockAspect: 'true',
-        // Plate fill so empty / transparent Lottie still reads as a card.
-        'fill-color': '#FFFFFF',
-        radiusTL: 0,
-        radiusTR: 0,
-        radiusBR: 0,
-        radiusBL: 0,
+        // Default surface plate so finished Lottie isn’t floating on the canvas.
+        'fill-color': 'var(--surface)',
+        radiusTL: 8,
+        radiusTR: 8,
+        radiusBR: 8,
+        radiusBL: 8,
         radiusLinked: 'true',
         opacity: 1,
         angle: 0,
@@ -2070,6 +2112,14 @@ export function promoteLottieGeneratorToLottie(
   delete attrs.processMeta;
   attrs.animationData = json;
   attrs.assetKind = 'lottie';
+  // Default readable plate under ink (never leave transparent).
+  if (!String(attrs['fill-color'] || attrs.fill || '').trim() || attrs['fill-color'] === 'transparent') {
+    attrs['fill-color'] = 'var(--surface)';
+  }
+  if (attrs.radiusTL == null) attrs.radiusTL = 8;
+  if (attrs.radiusTR == null) attrs.radiusTR = 8;
+  if (attrs.radiusBR == null) attrs.radiusBR = 8;
+  if (attrs.radiusBL == null) attrs.radiusBL = 8;
   if (name) attrs.name = name;
   const prompt = String(genPrompt || '').trim();
   if (prompt) attrs.genPrompt = prompt;
