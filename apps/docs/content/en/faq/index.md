@@ -20,7 +20,7 @@ Wait for next-day trial reset, or upgrade / redeem a card key.
 Remove background, upscale, adjust, expand, multi-angle have fixed reference costs; text-to-image by model and count. See [Image editing tools](/guide/image-tools) and the number beside the button.
 
 **Do third-party models spend platform credits?**  
-BYOK chat / multimodal calls do not. Platform image gen and image tools in the same session still bill platform credits. See [Using Agent](/guide/agent#third-party-models-bring-your-own-key) and [Account & credits](/guide/account).
+BYOK calls do not. Platform image gen and image tools in the same session still bill platform credits. See [Custom & third-party models](/guide/custom-models) and [Account & credits](/guide/account).
 
 **Where is the billing ledger?**  
 Account → Usage & billing (or similar). See [Account & credits](/guide/account).
@@ -54,7 +54,10 @@ Under Account → Agent (or the Auto routing card), switch Standard / Pro / Max,
 No. Each turn uses one chat lane (plus image steps when needed).
 
 **How do I add a third-party model?**  
-With a qualifying plan: Account → Agent → provider, API key, base URL, type (Chat / Multimodal). See [Using Agent · Third-party](/guide/agent#third-party-models-bring-your-own-key).
+Account → Agent → Third-party models: **platform catalog** (e.g. OpenRouter, often key-only) or **manual entry** (model ID, base URL; kinds include text / vision / image / video). Web usually needs Plus+. See [Custom & third-party models](/guide/custom-models).
+
+**Local desktop has no platform models / where are build outputs?**  
+Expected — configure BYOK yourself. Installer / EXE paths: [Desktop app](/guide/desktop).
 
 **Generation slow or failed?**  
 Check credits, network, and model status; try another model or lower resolution / count.
