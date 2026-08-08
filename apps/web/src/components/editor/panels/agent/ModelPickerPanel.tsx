@@ -1,7 +1,11 @@
 import { memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { HiOutlineBookOpen } from 'react-icons/hi2';
 import type { LlmModel } from '@/apis/chat';
 import {
+  dedupeModelsById,
+  isImageKind,
+  isVideoKind,
   modelIsImageGenerator,
   modelSupportsVisionInput,
 } from '@/components/editor/panels/agent/llmModelMeta';
@@ -25,6 +29,7 @@ import minimax from '@/assets/model/minimax_music.png';
 import elevenlabs from '@/assets/model/elevenlabs_turbo.png';
 import syncLipsync from '@/assets/model/sync_lipsync.png';
 
+export { isImageKind, isVideoKind };
 type ModelIconRef = {
   id?: string | null;
   provider?: string | null;
@@ -130,17 +135,18 @@ function resolveModelIconSrc(model?: ModelIconRef | null): string | null {
   if (remote) return remote;
   const key = String(model?.iconKey || model?.icon_key || '').toLowerCase().trim();
   if (key && MODEL_ICON_BY_KEY[key]) return MODEL_ICON_BY_KEY[key];
-  const id = String(model?.id || '').toLowerCase();
-  const provider = String(model?.provider || '').toLowerCase();
-  const label = String(model?.label || '').toLowerCase();
+  const id = String(model?.id || '').toLowerCase().trim();
+  const provider = String(model?.provider || '').toLowerCase().trim();
+  const label = String(model?.label || '').toLowerCase().trim();
+  // Empty / Auto / no brand → no invent DeepSeek/Doubao art.
+  if (!id && !provider && !label) return null;
   if (id === 'auto' || provider === 'system' || label === 'auto') return null;
   const blob = `${id} ${provider} ${label}`;
   for (const rule of MODEL_ICON_RULES) {
     if (rule.test(blob)) return rule.src;
   }
   if (provider && MODEL_ICON_BY_PROVIDER[provider]) return MODEL_ICON_BY_PROVIDER[provider];
-  if (model?.kind === 'image') return doubao;
-  return deepseek;
+  return null;
 }
 
 function ModelBrandIcon({
@@ -155,22 +161,11 @@ function ModelBrandIcon({
   const src = resolveModelIconSrc(model);
   if (!src) {
     return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 16 16"
-        fill="none"
-        className={cn('shrink-0 text-[var(--ink)]', className)}
+      <HiOutlineBookOpen
+        size={size}
+        className={cn('shrink-0 text-[var(--muted)]', className)}
         aria-hidden
-      >
-        <path
-          d="M8 1.5l1.2 3.6L13 6.3l-3.8 1.2L8 11.1 6.8 7.5 3 6.3l3.8-1.2L8 1.5z"
-          fill="currentColor"
-          opacity="0.9"
-        />
-        <circle cx="12.5" cy="3" r="1.1" fill="currentColor" opacity="0.55" />
-        <circle cx="3.5" cy="11.5" r="1" fill="currentColor" opacity="0.45" />
-      </svg>
+      />
     );
   }
   return (
@@ -291,18 +286,6 @@ export function modelPriceTagInfo(
   return { level, label: t('agent.priceCostly') };
 }
 
-export function isImageKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): boolean {
-  if (!m) return false;
-  if (m.kind === 'image') return true;
-  return Boolean(m.id && /seedream|image|i2i|t2i/i.test(m.id));
-}
-
-export function isVideoKind(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): boolean {
-  if (!m) return false;
-  if (m.kind === 'video') return true;
-  return Boolean(m.id && /seedance|kling|runway|luma|minimax.*video|sora/i.test(m.id));
-}
-
 export function modelTabOf(m: Pick<LlmModel, 'kind' | 'id'> | null | undefined): ModelPickerTab {
   if (isVideoKind(m)) return 'video';
   return isImageKind(m) ? 'image' : 'design';
@@ -361,15 +344,6 @@ function loadingKindForTab(tab: ModelPickerTab): LlmModel['kind'] {
   if (tab === 'image') return 'image';
   if (tab === 'video') return 'video';
   return 'text';
-}
-
-function dedupeModelsById(list: LlmModel[]): LlmModel[] {
-  const seen = new Set<string>();
-  return list.filter((m) => {
-    if (!m?.id || seen.has(m.id)) return false;
-    seen.add(m.id);
-    return true;
-  });
 }
 
 function filterPickerModels(opts: {

@@ -20,9 +20,14 @@ import {
   type LlmModel,
 } from '@/apis/chat';
 import {
-  isVolcanoCatalogModel,
-  maxAttachmentsFor,
   agentAttachmentLimit,
+  cloudImageFallbackId,
+  cloudVideoFallbackId,
+  isImageKind,
+  isVideoKind,
+  mergeSelectableModels,
+  pickPreferredImageModelId,
+  pickPreferredVideoModelId,
 } from '@/components/editor/panels/agent/llmModelMeta';
 import {
   peekHomeAgentBoot,
@@ -124,6 +129,7 @@ import { normalizeCanvasSizeChip } from '@/components/editor/chrome/SizePresetPa
 import {
   customProvidersAsModels,
 } from '@/components/editor/panels/agent/customLlmProviders';
+import { isDesktopLocal } from '@/utils/apiBase';
 import {
   routeOverridesForApi,
   warmAgentRoutePresetRules,
@@ -148,8 +154,6 @@ import {
 import ModelPickerPanel, {
   AUTO_MODEL,
   ModelBrandIcon,
-  isImageKind,
-  isVideoKind,
   modelDescription,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
 import { cn } from '@/utils/classnames';
@@ -949,7 +953,6 @@ type AgentDockProps = {
 const DEFAULT_VIDEO_ASPECT_RATIO = '16:9';
 const DEFAULT_VIDEO_RESOLUTION = '720p';
 const DEFAULT_VIDEO_DURATION = 5;
-const DEFAULT_VIDEO_MODEL_ID = 'or-seedance-2-0-fast';
 
 /** Merge catalog + imageModels + videoModels; normalize kind. */
 function normalizeModelList(
@@ -957,37 +960,12 @@ function normalizeModelList(
   imageModels?: LlmModel[] | null,
   videoModels?: LlmModel[] | null
 ): LlmModel[] {
-  const byId = new Map<string, LlmModel>();
-  for (const m of models || []) {
-    if (!m?.id) continue;
-    byId.set(m.id, m);
-  }
-  for (const m of imageModels || []) {
-    if (!m?.id) continue;
-    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'image' });
-  }
-  for (const m of videoModels || []) {
-    if (!m?.id) continue;
-    byId.set(m.id, { ...byId.get(m.id), ...m, kind: 'video' });
-  }
-  // Pro custom providers (local list) — selectable in design / Agent tab.
-  for (const m of customProvidersAsModels()) {
-    byId.set(m.id, m);
-  }
-  return [...byId.values()]
-    .filter((m) => m.provider === 'custom' || isVolcanoCatalogModel(m))
-    .map((m) => {
-    const maxAttachments = maxAttachmentsFor(m);
-    const base = { ...m, maxAttachments };
-    if (isVideoKind(m)) {
-      return { ...base, kind: 'video' as const };
-    }
-    if (isImageKind(m)) {
-      return { ...base, kind: 'image' as const };
-    }
-    // Former "画布" svg bucket → show under Agent text models
-    if (m.kind === 'svg') return { ...base, kind: 'text' as const };
-    return { ...base, kind: (m.kind || 'text') as LlmModel['kind'] };
+  return mergeSelectableModels({
+    models,
+    imageModels,
+    videoModels,
+    customModels: customProvidersAsModels(),
+    withMaxAttachments: true,
   });
 }
 
@@ -1429,11 +1407,15 @@ function pickModelWithFallback(
   selectedId: string,
   fallbackId: string
 ): LlmModel | undefined {
-  return (
-    pool.find((m) => m.id === selectedId) ||
-    pool.find((m) => m.id === fallbackId) ||
-    pool[0]
-  );
+  if (selectedId) {
+    const selected = pool.find((m) => m.id === selectedId);
+    if (selected) return selected;
+  }
+  if (fallbackId) {
+    const fallback = pool.find((m) => m.id === fallbackId);
+    if (fallback) return fallback;
+  }
+  return pool[0];
 }
 
 function clampComposerImageCount(n: number): 1 | 2 | 3 | 4 {
@@ -1488,9 +1470,10 @@ function buildImageModeControls(opts: {
 }): ImageModeComposerControls | null {
   if (!opts.active) return null;
   const pool = opts.models.filter((m) => isImageKind(m));
+  const fallbackId = cloudImageFallbackId();
   const selected =
-    pickModelWithFallback(pool, opts.modelId, FREE_IMAGE_MODEL_ID) ||
-    ({ id: opts.modelId || FREE_IMAGE_MODEL_ID } as LlmModel);
+    pickModelWithFallback(pool, opts.modelId, fallbackId) ||
+    ({ id: opts.modelId || fallbackId || '' } as LlmModel);
   return {
     resolution: opts.resolution,
     aspectRatio: opts.aspectRatio,
@@ -1500,7 +1483,7 @@ function buildImageModeControls(opts: {
     onImageCountChange: (n) => opts.onImageCountChange(clampComposerImageCount(n)),
     imageLimits: modelImageLimits(selected),
     creditCost: estimateImageCredits(selected, opts.imageCount, opts.resolution),
-    modelLabel: String(selected.label || opts.modelId || FREE_IMAGE_MODEL_ID),
+    modelLabel: String(selected.label || opts.modelId || fallbackId || selected.id || ''),
     modelIcon: (
       <ModelBrandIcon model={selected} className="h-3.5 w-3.5 shrink-0" />
     ),
@@ -1535,9 +1518,10 @@ function buildVideoModeControls(opts: {
 }): VideoModeComposerControls | null {
   if (!opts.active) return null;
   const pool = opts.models.filter((m) => isVideoKind(m));
+  const fallbackId = cloudVideoFallbackId();
   const selected =
-    pickModelWithFallback(pool, opts.modelId, DEFAULT_VIDEO_MODEL_ID) ||
-    ({ id: opts.modelId || DEFAULT_VIDEO_MODEL_ID } as LlmModel);
+    pickModelWithFallback(pool, opts.modelId, fallbackId) ||
+    ({ id: opts.modelId || fallbackId || '' } as LlmModel);
   return {
     resolution: opts.resolution,
     aspectRatio: opts.aspectRatio,
@@ -1546,7 +1530,7 @@ function buildVideoModeControls(opts: {
     onAspectRatioChange: opts.onAspectRatioChange,
     onDurationChange: opts.onDurationChange,
     creditCost: estimateVideoCredits(selected),
-    modelLabel: String(selected.label || opts.modelId || DEFAULT_VIDEO_MODEL_ID),
+    modelLabel: String(selected.label || opts.modelId || fallbackId || selected.id || ''),
     modelIcon: (
       <ModelBrandIcon model={selected} className="h-3.5 w-3.5 shrink-0" />
     ),
@@ -1588,7 +1572,7 @@ function buildImageGenRequestBody(opts: {
     resolution?: string;
     images?: string[];
   } = { prompt: opts.prompt };
-  if (!opts.canPickModel) body.model = FREE_IMAGE_MODEL_ID;
+  if (!opts.canPickModel) body.model = cloudImageFallbackId() || undefined;
   else if (opts.model) body.model = opts.model;
   if (opts.aspect) body.aspect_ratio = opts.aspect;
   if (opts.resolution) body.resolution = opts.resolution;
@@ -1773,19 +1757,20 @@ function buildStreamingAssistantSeed(opts: {
   'steps' | 'imagePendingCount' | 'imageAspectRatio' | 'imageModelId' | 'imageModelLabel'
 > {
   if (opts.imageGenCount) {
+    const fallbackId = cloudImageFallbackId();
     return {
       imagePendingCount: opts.imageGenCount,
       imageAspectRatio: opts.imageGenAspect || opts.imageGenAspectRatio,
       imageModelId: !opts.canPickModel
-        ? FREE_IMAGE_MODEL_ID
+        ? fallbackId
         : String(opts.model || opts.selectedModel?.id || ''),
       imageModelLabel: String(
         (!opts.canPickModel
-          ? opts.models.find((m) => m.id === FREE_IMAGE_MODEL_ID)?.label
+          ? opts.models.find((m) => m.id === fallbackId)?.label
           : opts.selectedModel?.label) ||
           opts.selectedModel?.id ||
           opts.model ||
-          FREE_IMAGE_MODEL_ID
+          fallbackId
       ),
       steps: [],
     };
@@ -1805,14 +1790,15 @@ function buildVideoAssistantSeed(opts: {
   ChatUiMessage,
   'videoPendingCount' | 'imageAspectRatio' | 'imageModelId' | 'imageModelLabel' | 'steps'
 > {
+  const fallbackId = cloudVideoFallbackId();
   return {
     videoPendingCount: 1,
     imageAspectRatio: opts.videoGenAspect || opts.videoGenAspectRatio,
     imageModelId: !opts.canPickModel
-      ? DEFAULT_VIDEO_MODEL_ID
-      : String(opts.model || opts.selectedModel?.id || DEFAULT_VIDEO_MODEL_ID),
+      ? fallbackId
+      : String(opts.model || opts.selectedModel?.id || fallbackId),
     imageModelLabel: String(
-      opts.selectedModel?.label || opts.model || DEFAULT_VIDEO_MODEL_ID
+      opts.selectedModel?.label || opts.model || fallbackId
     ),
     steps: [],
   };
@@ -2530,7 +2516,7 @@ function AgentDock({
     if (draftModelId) {
       if (!canPickModel) {
         if (planAllowsModelId('free', draftModelId) && isImageKind({ id: draftModelId })) {
-          setModel(FREE_IMAGE_MODEL_ID);
+          setModel(cloudImageFallbackId() || 'auto');
           setComposerMode('image');
         } else {
           setModel('auto');
@@ -2545,15 +2531,15 @@ function AgentDock({
     if (draftInteractionMode === 'image') {
       setInteractionMode('image');
       setComposerMode('image');
-      // Prefer the model chosen on Home; fall back to free Seedream.
+      // Prefer Home pick; else first available image model (Seedream only on cloud).
       if (!draftModelId || !planAllowsModelId(canPickModel ? planId : 'free', draftModelId)) {
-        setModel(FREE_IMAGE_MODEL_ID);
+        setModel(pickPreferredImageModelId(models) || cloudImageFallbackId());
       }
     } else if (draftInteractionMode === 'video') {
       setInteractionMode('video');
       setComposerMode('video');
       if (!draftModelId || !planAllowsModelId(canPickModel ? planId : 'free', draftModelId)) {
-        setModel(DEFAULT_VIDEO_MODEL_ID);
+        setModel(pickPreferredVideoModelId(models) || cloudVideoFallbackId());
       }
     } else if (draftInteractionMode === 'ask') {
       setInteractionMode('ask');
@@ -2923,7 +2909,7 @@ function AgentDock({
       isImageMode: isImageMode || isVideoMode,
       rules: designCatalog?.global_rules,
       routedImageId: routeOverridesForApi(loadAgentRoutePrefs(designCatalog?.global_rules))?.image,
-      freeImageId: FREE_IMAGE_MODEL_ID,
+      freeImageId: cloudImageFallbackId() || undefined,
       autoModel: AUTO_MODEL,
     });
     let remaining = Math.max(
@@ -3093,7 +3079,7 @@ function AgentDock({
     isImageMode: isImageModelSelected || isVideoModelSelected,
     rules,
     routedImageId: routeOverridesForApi(loadAgentRoutePrefs(rules))?.image,
-    freeImageId: FREE_IMAGE_MODEL_ID,
+    freeImageId: cloudImageFallbackId() || undefined,
     autoModel: AUTO_MODEL,
   });
   const attachmentCount = contextChips.filter((c) => c.kind === 'attachment').length;
@@ -3123,17 +3109,10 @@ function AgentDock({
       }
       setComposerMode('image');
       if (!canPickModel) {
-        setModel(FREE_IMAGE_MODEL_ID);
+        setModel(cloudImageFallbackId() || 'auto');
         return;
       }
-      const images = models.filter((m) => isImageKind(m));
-      setModel(
-        (
-          images.find((m) => m.id === FREE_IMAGE_MODEL_ID) ||
-          images.find((m) => /seedream/i.test(m.id)) ||
-          images[0]
-        )?.id || FREE_IMAGE_MODEL_ID
-      );
+      setModel(pickPreferredImageModelId(models));
     },
     aspectMenuPlacement: 'top-start' as const,
   };
@@ -3629,7 +3608,9 @@ function AgentDock({
       const aspect = videoGenAspect;
       const resolution = videoResolution;
       const duration = videoGenDuration;
-      const videoModel = !canPickModel ? DEFAULT_VIDEO_MODEL_ID : model || DEFAULT_VIDEO_MODEL_ID;
+      const videoModel = !canPickModel
+        ? cloudVideoFallbackId()
+        : model || pickPreferredVideoModelId(models) || cloudVideoFallbackId();
       const refImages = attachedImages.filter((u) => Boolean(u) && !u.startsWith('data:video/'));
       const patchAssistant = (
         pred: (m: ChatUiMessage) => boolean,
@@ -4365,29 +4346,19 @@ function AgentDock({
     if (mode === 'video') {
       setComposerMode('video');
       if (!canPickModel) {
-        setModel(DEFAULT_VIDEO_MODEL_ID);
+        setModel(cloudVideoFallbackId() || 'auto');
         return;
       }
-      const videos = models.filter((m) => isVideoKind(m));
-      const preferred =
-        videos.find((m) => m.id === model) ||
-        videos.find((m) => m.id === DEFAULT_VIDEO_MODEL_ID) ||
-        videos[0];
-      setModel(preferred?.id || DEFAULT_VIDEO_MODEL_ID);
+      setModel(pickPreferredVideoModelId(models, model));
       return;
     }
     if (mode === 'image') {
       setComposerMode('image');
       if (!canPickModel) {
-        setModel(FREE_IMAGE_MODEL_ID);
+        setModel(cloudImageFallbackId() || 'auto');
         return;
       }
-      const images = models.filter((m) => isImageKind(m));
-      const preferred =
-        images.find((m) => m.id === model) ||
-        images.find((m) => m.id === FREE_IMAGE_MODEL_ID) ||
-        images[0];
-      setModel(preferred?.id || FREE_IMAGE_MODEL_ID);
+      setModel(pickPreferredImageModelId(models, model));
       return;
     }
     setComposerMode('agent');

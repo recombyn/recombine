@@ -21,6 +21,7 @@ import {
 } from '@/components/editor/panels/agent/AgentComposerShell';
 import {
   applyCanvasPickToImageComposer,
+  buildImageGeneratorModelList,
 } from '@/components/editor/nodes/ImageGeneratorNode/ImageGeneratorCard';
 import ImageAspectRatioPicker, {
   DEFAULT_IMAGE_COUNT,
@@ -32,7 +33,7 @@ import ImageAspectRatioPicker, {
 import ModelPickerPanel, {
   ModelBrandIcon,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
-import { modelIsImageGenerator } from '@/components/editor/panels/agent/llmModelMeta';
+import { cloudImageFallbackId } from '@/components/editor/panels/agent/llmModelMeta';
 import {
   listImageVariantUrls,
   writeImageVariantsAttr,
@@ -49,11 +50,32 @@ import {
 } from '@/store/modules/editor';
 import { FREE_IMAGE_MODEL_ID, planAllowsModelPick, type PlanId } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { estimateImageCredits } from '@/utils/imageCredits';
 import { readFileAsDataUrl } from '@/utils/uploadImage';
 import store from '@/store';
 
 type SceneBox = { left: number; top: number; width: number; height: number };
+
+function nextQuickEditImageModelId(
+  models: LlmModel[],
+  currentId: string,
+  canPickModel: boolean
+): string | null {
+  if (!canPickModel) {
+    const fallback = cloudImageFallbackId();
+    if (!fallback || currentId === fallback) return null;
+    return fallback;
+  }
+  if (!models.length || models.some((m) => m.id === currentId)) return null;
+  if (!isDesktopLocal()) {
+    const preferred =
+      models.find((m) => m.id === FREE_IMAGE_MODEL_ID) ||
+      models.find((m) => /seedream/i.test(m.id));
+    if (preferred) return preferred.id;
+  }
+  return models[0]?.id ?? null;
+}
 
 function ratioSummaryLabel(aspectRatio: string, t: (k: string) => string) {
   const raw = String(aspectRatio || '').trim();
@@ -100,7 +122,7 @@ function ImageQuickEditComposer({
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     'idle'
   );
-  const [modelId, setModelId] = useState(FREE_IMAGE_MODEL_ID);
+  const [modelId, setModelId] = useState(() => cloudImageFallbackId());
   const [resolution, setResolution] = useState(DEFAULT_IMAGE_RESOLUTION);
   const [aspectRatio, setAspectRatio] = useState(DEFAULT_IMAGE_ASPECT_RATIO);
   const [imageCount, setImageCount] = useState(DEFAULT_IMAGE_COUNT);
@@ -156,28 +178,11 @@ function ImageQuickEditComposer({
     void listModels()
       .then((res) => {
         if (cancelled) return;
-        // Same pool as ImageGeneratorCard — image catalog lives in imageModels.
-        const pool = [...(res?.models || []), ...(res?.imageModels || [])].filter(
-          (m) => modelIsImageGenerator(m) || m.kind === 'image'
-        );
-        const seen = new Set<string>();
-        const imgs = pool.filter((m) => {
-          if (!m?.id || seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        });
+        const imgs = buildImageGeneratorModelList(res);
         setModels(imgs);
         setModelsStatus('ready');
-        if (!canPickModel) {
-          setModelId(FREE_IMAGE_MODEL_ID);
-          return;
-        }
-        const prefer =
-          imgs.find((m) => m.id === modelId) ||
-          imgs.find((m) => m.id === FREE_IMAGE_MODEL_ID) ||
-          imgs.find((m) => /seedream/i.test(m.id)) ||
-          imgs[0];
-        if (prefer?.id) setModelId(prefer.id);
+        const nextId = nextQuickEditImageModelId(imgs, modelId, canPickModel);
+        if (nextId) setModelId(nextId);
       })
       .catch(() => {
         if (!cancelled) setModelsStatus('error');
@@ -260,7 +265,7 @@ function ImageQuickEditComposer({
     try {
       const body: Parameters<typeof generateImage>[0] = {
         prompt: text,
-        model: canPickModel ? modelId : FREE_IMAGE_MODEL_ID,
+        model: canPickModel ? modelId : cloudImageFallbackId() || modelId,
         quality: DEFAULT_IMAGE_QUALITY,
         resolution,
         images: [
@@ -539,7 +544,10 @@ function ImageQuickEditComposer({
               </Dropdown>
             ) : (
               <span className="inline-flex h-7 w-7 items-center justify-center">
-                <ModelBrandIcon model={{ id: FREE_IMAGE_MODEL_ID }} className="h-3.5 w-3.5" />
+                <ModelBrandIcon
+                  model={{ id: cloudImageFallbackId() || modelId || '' }}
+                  className="h-3.5 w-3.5"
+                />
               </span>
             )}
 

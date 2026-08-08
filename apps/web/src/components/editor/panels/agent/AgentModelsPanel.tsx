@@ -12,7 +12,7 @@ import {
   type LlmModel,
   type ByokPlatform,
 } from '@/apis/chat';
-import { modelAllowsRouteSlot } from '@/components/editor/panels/agent/llmModelMeta';
+import { modelAllowsRouteSlot, modelIsImageGenerator } from '@/components/editor/panels/agent/llmModelMeta';
 import { fetchDesignCatalog } from '@/apis/design';
 import { Dropdown, SegmentedControl, Select, Tooltip } from '@/components/base';
 import AccountSettingsDialog from '@/components/layout/AccountSettingsDialog';
@@ -374,6 +374,25 @@ function parseCustomModelKind(value: string): CustomModelKind {
   if (value === 'image') return 'image';
   if (value === 'video') return 'video';
   return 'text';
+}
+
+function splitByokRouteModels(byok: LlmModel[]): { text: LlmModel[]; image: LlmModel[] } {
+  return {
+    text: byok.filter((m) => m.kind !== 'image' && m.kind !== 'video'),
+    image: byok.filter((m) => m.kind === 'image' || modelIsImageGenerator(m)),
+  };
+}
+
+/** Local desktop → BYOK lanes only; otherwise platform catalog. */
+function routeCatalogFromListModels(res?: {
+  models?: LlmModel[] | null;
+  imageModels?: LlmModel[] | null;
+} | null): { text: LlmModel[]; image: LlmModel[] } {
+  if (isDesktopLocal()) return splitByokRouteModels(customProvidersAsModels());
+  return {
+    text: res?.models || [],
+    image: res?.imageModels || [],
+  };
 }
 
 /** Sentinel provider option: fall back to the free-text form. */
@@ -743,17 +762,9 @@ function AgentRoutePrefsEditor({
         const orOk = res?.openrouterAvailable !== false;
         cachedOpenrouterAvailable = orOk;
         setOpenrouterAvailable(orOk);
-        const platformText = res?.models || [];
-        const platformImage = res?.imageModels || [];
-        // Local: API returns empty platform catalog — fill lanes from BYOK only.
-        if (isDesktopLocal()) {
-          const byok = customProvidersAsModels();
-          setTextModels(byok);
-          setImageModels([]);
-        } else {
-          setTextModels(platformText);
-          setImageModels(platformImage);
-        }
+        const { text, image } = routeCatalogFromListModels(res);
+        setTextModels(text);
+        setImageModels(image);
         setRoutePrefs(loadAgentRoutePrefs(cachedPresetRules));
       })
       .catch(() => undefined);
@@ -768,7 +779,9 @@ function AgentRoutePrefsEditor({
     let cancelled = false;
     void hydrateCustomLlmProviders().then(() => {
       if (cancelled) return;
-      setTextModels(customProvidersAsModels());
+      const { text, image } = splitByokRouteModels(customProvidersAsModels());
+      setTextModels(text);
+      setImageModels(image);
     });
     return () => {
       cancelled = true;

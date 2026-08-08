@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from app.api.deps import CurrentUser
 from pydantic import BaseModel, Field
 
+from app.services.llm import is_byok_model_ref, uses_user_platform_byok
 from app.services.llm.image_tools import (
     IMAGE_PROCESS_KINDS,
     process_image_tool,
@@ -31,47 +32,6 @@ _KIND_CREDIT_COST: dict[str, int] = {
     "vector": 20,
     "adjust": 0,  # FE uses CSS filters; API adjust is legacy / unused
 }
-
-
-def _is_byok_model(model: str | None) -> bool:
-    low = str(model or "").strip().lower()
-    return low.startswith("custom:") or low.startswith("byok:")
-
-
-def _model_provider(model: str | None) -> str | None:
-    mid = (model or "").strip()
-    if not mid or _is_byok_model(mid):
-        return None
-    try:
-        from app.services.llm import list_image_models, list_llm_models, list_video_models
-        from app.services.llm.catalog_store import list_catalog
-
-        for kind in ("text", "image", "video", "audio"):
-            for m in list_catalog(kind=kind, enabled_only=False):
-                if m.get("id") == mid:
-                    return str(m.get("provider") or "") or None
-        for bucket in (list_llm_models(), list_image_models(), list_video_models()):
-            for m in bucket:
-                if m.get("id") == mid:
-                    return str(m.get("provider") or "") or None
-    except Exception:
-        return None
-    return None
-
-
-def _uses_user_platform_byok(user_id: str, model: str | None) -> bool:
-    if _is_byok_model(model):
-        return True
-    provider = _model_provider(model)
-    if not provider or not user_id:
-        return False
-    try:
-        from app.services.security import list_user_platform_byok
-
-        return provider in list_user_platform_byok(user_id)
-    except Exception:
-        return False
-
 
 
 class ImageProcessIn(BaseModel):
@@ -109,7 +69,7 @@ def token_cost_for_kind(
     if not is_wallet_billing_enabled():
         return 0
     # User's own key / platform BYOK → upstream billed to them, not our wallet.
-    if _is_byok_model(model) or (user_id and _uses_user_platform_byok(user_id, model)):
+    if is_byok_model_ref(model) or (user_id and uses_user_platform_byok(user_id, model)):
         return 0
     mid = (model or "").strip()
     if mid:
