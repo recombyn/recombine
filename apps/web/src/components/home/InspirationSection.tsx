@@ -218,13 +218,14 @@ function InspirationCaseCard({
       const ok = await copyTextToClipboard(prompt);
       if (ok) {
         message.success(t('home.cases.promptCopied'));
-        void (async () => {
+        async function recordPlazaUseAfterPromptCopy() {
           try {
             await recordPlazaUse(meta.id);
           } catch {
             /* ignore */
           }
-        })();
+        }
+        void recordPlazaUseAfterPromptCopy();
       } else {
         message.error(t('home.cases.copyFailed'));
       }
@@ -239,13 +240,14 @@ function InspirationCaseCard({
       const ok = await copyImageToClipboard(url);
       if (ok) {
         message.success(t('home.cases.imageCopied'));
-        void (async () => {
+        async function recordPlazaUseAfterImageCopy() {
           try {
             await recordPlazaUse(meta.id);
           } catch {
             /* ignore */
           }
-        })();
+        }
+        void recordPlazaUseAfterImageCopy();
       } else {
         message.error(t('home.cases.copyFailed'));
       }
@@ -496,7 +498,7 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
     if (disabled || openingId) return;
     setOpeningId(meta.id);
     try {
-      void (async () => {
+      async function trackRemixUse() {
         try {
           const res = await recordPlazaUse(meta.id);
           const n = Number(res.useCount);
@@ -507,7 +509,8 @@ function InspirationSection({ onOpenCase, disabled }: Props): ReactNode {
         } catch {
           /* ignore */
         }
-      })();
+      }
+      void trackRemixUse();
       setPreviewId(null);
       // Skill chip → chat; blank canvas (handled by HomePage). No document clone.
       onOpenCase(meta);

@@ -232,7 +232,7 @@ export function useChatSessions(documentId: string | null | undefined) {
     if (!pending || !isChatLoggedIn() || apiDisabledRef.current) return;
     if (pending.payloadJson === lastSyncedJson.current) return;
     pendingSyncRef.current = null;
-    void (async () => {
+    async function upsertPendingSession() {
       try {
         await upsertChatSessionApi({
           projectId: pending.projectId || '__none__',
@@ -246,7 +246,8 @@ export function useChatSessions(documentId: string | null | undefined) {
         if (err?.response?.status === 401) apiDisabledRef.current = true;
         if (!pendingSyncRef.current) pendingSyncRef.current = pending;
       }
-    })();
+    }
+    void upsertPendingSession();
   }, []);
 
   useEffect(() => {
@@ -405,13 +406,14 @@ export function useChatSessions(documentId: string | null | undefined) {
     (id: string) => {
       setSessions((prev) => prev.filter((sess) => sess.id !== id));
       if (isChatLoggedIn()) {
-        void (async () => {
+        async function deleteRemoteSession() {
           try {
             await deleteChatSessionApi(id);
           } catch {
             /* ignore */
           }
-        })();
+        }
+        void deleteRemoteSession();
       }
       if (id === sessionId) {
         const nid = chatUid();

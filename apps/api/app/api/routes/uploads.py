@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import socket
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
-from app.api.deps import CurrentUser
+from app.api.deps import CurrentUser, OptionalUser
 from fastapi.responses import Response
 
 from app.core.config import settings
@@ -23,9 +24,15 @@ logger = logging.getLogger(__name__)
 _MAX_PROXY_BYTES = 25 * 1024 * 1024
 _PROXY_TIMEOUT = httpx.Timeout(60.0, connect=20.0)
 
+# List/home covers: <img src> cannot send Bearer — these keys are readable without login.
+_PUBLIC_PROJECT_COVER_KEY = re.compile(
+    r"^projects/[^/]+/[^/]+/thumb[^/]*\.(?:jpe?g|png|webp|gif)$",
+    re.IGNORECASE,
+)
 
 
-
+def _is_public_project_cover_key(key: str) -> bool:
+    return bool(_PUBLIC_PROJECT_COVER_KEY.match((key or "").lstrip("/")))
 
 
 def _mime_for_key(key: str) -> str:
@@ -101,14 +108,15 @@ def _object_key_from_url(raw: str) -> str | None:
     return None
 
 
-def _file_response(key: str) -> Response:
+def _file_response(key: str, *, public: bool = False) -> Response:
     data = get_bytes(key)
     if not data:
         raise HTTPException(status_code=404, detail="Not found")
+    cache = "public, max-age=86400" if public else "private, max-age=86400"
     return Response(
         content=data,
         media_type=_mime_for_key(key),
-        headers={"Cache-Control": "private, max-age=86400"},
+        headers={"Cache-Control": cache},
     )
 
 
@@ -253,14 +261,21 @@ def get_upload_content_by_url(
 
 @router.get("/files/{object_key:path}")
 def get_uploaded_file(
-    current_user: CurrentUser,
     object_key: str,
+    current_user: OptionalUser,
 ) -> Response:
     """
     Serve stored uploads by object key (local disk or S3/COS via get_bytes).
+
+    Project list covers (``projects/{user}/{project}/thumb-*``) are public so
+    ``<img src>`` works without Authorization. Other keys still require login + ownership.
     """
     key = (object_key or "").lstrip("/")
-    if ".." in key or not _user_owns_key(current_user.id, key):
+    if ".." in key or not key:
+        raise HTTPException(status_code=404, detail="Not found")
+    if _is_public_project_cover_key(key):
+        return _file_response(key, public=True)
+    if current_user is None or not _user_owns_key(current_user.id, key):
         raise HTTPException(status_code=404, detail="Not found")
     return _file_response(key)
 

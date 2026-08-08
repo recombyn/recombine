@@ -182,13 +182,14 @@ function AudioWaveformInner(
       }),
     ];
 
-    void (async () => {
+    async function loadWaveform() {
       try {
         await ws.load(src);
       } catch (err) {
         if (!cancelled) console.warn('[AudioWaveform] load failed', err);
       }
-    })();
+    }
+    void loadWaveform();
 
     return () => {
       cancelled = true;

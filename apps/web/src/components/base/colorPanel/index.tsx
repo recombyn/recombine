@@ -47,8 +47,8 @@ export const FILL_SOLID_PRESETS = [
 /** Same grid + transparent (artboard / alpha-capable pickers). */
 export const FILL_ALPHA_PRESETS = ['transparent', ...FILL_SOLID_PRESETS];
 
-/** Fixed panel width. */
-export const COLOR_PANEL_WIDTH = 250;
+/** Fixed panel width — same as opacity / eraser / font / blend popovers. */
+export const COLOR_PANEL_WIDTH = 240;
 /** Preset grid: 9 square swatches per row (2×9). */
 export const COLOR_PANEL_PRESET_COLS = 9;
 export const COLOR_PANEL_SWATCH_PX = 20;
@@ -216,7 +216,8 @@ function ColorPanel({
     <div
       data-color-panel
       className={cn(
-        'rounded bg-[var(--surface)] shadow-[0_12px_40px_rgba(15,23,42,0.16)] ring-1 ring-[var(--line)]',
+        // Same chrome as Fill/Stroke StylePanelShell (rounded-xl).
+        'rounded-xl bg-[var(--surface)] shadow-[0_12px_40px_rgba(15,23,42,0.16)] ring-1 ring-[var(--line)]',
         className
       )}
       style={{ width: fillWidth ? '100%' : COLOR_PANEL_WIDTH }}
@@ -258,64 +259,56 @@ function ColorPanel({
         )}
 
         {presetList.length > 0 ? (
-          <div className="flex w-full flex-col gap-1 pt-0.5">
-            {Array.from(
-              { length: Math.ceil(presetList.length / COLOR_PANEL_PRESET_COLS) },
-              (_, rowIndex) => {
-                const row = presetList.slice(
-                  rowIndex * COLOR_PANEL_PRESET_COLS,
-                  (rowIndex + 1) * COLOR_PANEL_PRESET_COLS
-                );
-                return (
-                  <div key={rowIndex} className="flex w-full justify-between">
-                    {row.map((c) => {
-                      const p = normalizeHex(c, c);
-                      const isTransparent = p === 'transparent';
-                      const active = isTransparent
-                        ? hex === 'transparent' || opacityPct === 0
-                        : hex === p && opacityPct > 0;
-                      return (
-                        <button
-                          key={String(c)}
-                          type="button"
-                          aria-label={isTransparent ? '透明' : p}
-                          onClick={() => {
-                            if (isTransparent) {
-                              onChange(solidHex);
-                              setOpacity(0);
-                              return;
-                            }
-                            onChange(p);
-                            setHsv(rgbToHsv(hexToRgba(p)));
-                            setDraft(p.replace(/^#/, ''));
-                            if (showAlpha && opacityPct === 0) setOpacity(100);
-                          }}
-                          className={cn(
-                            'rounded-[3px] transition-opacity hover:opacity-90',
-                            active && 'outline outline-2 outline-[var(--ink)] outline-offset-1'
-                          )}
-                          style={{
-                            width: COLOR_PANEL_SWATCH_PX,
-                            height: COLOR_PANEL_SWATCH_PX,
-                            ...(isTransparent
-                              ? {
-                                  backgroundImage: CHECKER,
-                                  backgroundSize: '5px 5px',
-                                  backgroundPosition: '0 0, 0 2.5px, 2.5px -2.5px, -2.5px 0',
-                                  boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)',
-                                }
-                              : {
-                                  background: p,
-                                  boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)',
-                                }),
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                );
-              }
-            )}
+          <div
+            className="grid w-full pt-0.5"
+            style={{
+              gridTemplateColumns: `repeat(${COLOR_PANEL_PRESET_COLS}, minmax(0, 1fr))`,
+              gap: COLOR_PANEL_SWATCH_GAP_PX,
+            }}
+          >
+            {presetList.map((c) => {
+              const p = normalizeHex(c, c);
+              const isTransparent = p === 'transparent';
+              const active = isTransparent
+                ? hex === 'transparent' || opacityPct === 0
+                : hex === p && opacityPct > 0;
+              return (
+                <button
+                  key={String(c)}
+                  type="button"
+                  aria-label={isTransparent ? '透明' : p}
+                  onClick={() => {
+                    if (isTransparent) {
+                      onChange(solidHex);
+                      setOpacity(0);
+                      return;
+                    }
+                    onChange(p);
+                    setHsv(rgbToHsv(hexToRgba(p)));
+                    setDraft(p.replace(/^#/, ''));
+                    if (showAlpha && opacityPct === 0) setOpacity(100);
+                  }}
+                  className={cn(
+                    // Same radius as hex / opacity / eyedropper chips in this panel.
+                    'aspect-square w-full rounded transition-opacity hover:opacity-90',
+                    active && 'outline outline-2 outline-[var(--ink)] outline-offset-1'
+                  )}
+                  style={
+                    isTransparent
+                      ? {
+                          backgroundImage: CHECKER,
+                          backgroundSize: '5px 5px',
+                          backgroundPosition: '0 0, 0 2.5px, 2.5px -2.5px, -2.5px 0',
+                          boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)',
+                        }
+                      : {
+                          background: p,
+                          boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)',
+                        }
+                  }
+                />
+              );
+            })}
           </div>
         ) : null}
 

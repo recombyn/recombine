@@ -17,6 +17,8 @@ export type UserAsset = {
   source?: string | null;
   prompt?: string | null;
   meta?: Record<string, unknown> | null;
+  /** Bodymovin JSON for lottie — list API inlines this; do not refetch .json url. */
+  animationData?: Record<string, unknown> | null;
   createdAt?: number | null;
 };
 

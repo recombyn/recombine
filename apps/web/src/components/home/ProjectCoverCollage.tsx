@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode, memo } from 'react';
+import { useMemo, type ReactNode, memo } from 'react';
 import TemplateThumbnail from '@/components/templates/TemplateThumbnail';
 import LazyTemplateThumb from '@/components/home/LazyTemplateThumb';
 import {
@@ -104,62 +104,45 @@ function ProjectCoverCollage({
   );
 }
 
-/** Multi-tile collage — CSS grid keeps row/column gutters equal. */
-function ImgCollage({
-  urls,
-  fallbackDocument,
-}: {
-  urls: string[];
-  fallbackDocument?: unknown;
-}) {
-  const [failed, setFailed] = useState(() => new Set<string>());
-  const visible = urls.filter((u) => !failed.has(u));
+/** Grid cell: min-h-0 so tall imgs cannot blow past the 170px frame; overflow clips. */
+function ImgTile({ src, className }: { src: string; className?: string }) {
+  return (
+    <div className={cn('relative min-h-0 min-w-0 overflow-hidden', className)}>
+      {/* object-contain keeps shape tiles uncropped; white fill matches tile board. */}
+      <img
+        src={src}
+        alt=""
+        className="absolute inset-0 h-full w-full bg-white object-contain"
+        loading="lazy"
+      />
+    </div>
+  );
+}
 
-  const onError = (src: string) => {
-    setFailed((prev) => {
-      if (prev.has(src)) return prev;
-      const next = new Set(prev);
-      next.add(src);
-      return next;
-    });
-  };
+/** Multi-tile collage — always map ``thumbnailUrl`` list to ``<img>`` (max 4). */
+function ImgCollage({ urls }: { urls: string[]; fallbackDocument?: unknown }) {
+  const list = urls.filter(Boolean).slice(0, MAX_TILES);
+  if (!list.length) return null;
 
-  if (!visible.length) {
-    if (fallbackDocument) {
-      return (
-        <div className="absolute inset-0 overflow-hidden">
-          <TemplateThumbnail document={fallbackDocument} fit="cover" />
-        </div>
-      );
-    }
-    return null;
-  }
-
-  const n = visible.length;
+  const n = list.length;
   if (n <= 1) {
     return (
-      <img
-        src={visible[0]}
-        alt=""
-        className="absolute inset-0 h-full w-full object-cover"
-        loading="lazy"
-        onError={() => onError(visible[0])}
-      />
+      <div className="absolute inset-0 overflow-hidden">
+        <img
+          src={list[0]}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          loading="lazy"
+        />
+      </div>
     );
   }
 
   if (n === 2) {
     return (
-      <div className="absolute inset-0 grid grid-cols-2 gap-1">
-        {visible.map((src) => (
-          <img
-            key={src}
-            src={src}
-            alt=""
-            className="h-full w-full object-cover"
-            loading="lazy"
-            onError={() => onError(src)}
-          />
+      <div className="absolute inset-0 grid grid-cols-2 gap-1 overflow-hidden">
+        {list.map((src) => (
+          <ImgTile key={src} src={src} />
         ))}
       </div>
     );
@@ -167,44 +150,18 @@ function ImgCollage({
 
   if (n === 3) {
     return (
-      <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1">
-        <img
-          src={visible[0]}
-          alt=""
-          className="row-span-2 h-full w-full object-cover"
-          loading="lazy"
-          onError={() => onError(visible[0])}
-        />
-        <img
-          src={visible[1]}
-          alt=""
-          className="h-full w-full object-cover"
-          loading="lazy"
-          onError={() => onError(visible[1])}
-        />
-        <img
-          src={visible[2]}
-          alt=""
-          className="h-full w-full object-cover"
-          loading="lazy"
-          onError={() => onError(visible[2])}
-        />
+      <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1 overflow-hidden">
+        <ImgTile src={list[0]} className="row-span-2" />
+        <ImgTile src={list[1]} />
+        <ImgTile src={list[2]} />
       </div>
     );
   }
 
-  // 2×2 — CSS grid so row/column gutters stay equal (h-1/2 + gap overflows and squeezes rows).
   return (
-    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1">
-      {visible.slice(0, 4).map((src) => (
-        <img
-          key={src}
-          src={src}
-          alt=""
-          className="h-full w-full object-cover"
-          loading="lazy"
-          onError={() => onError(src)}
-        />
+    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-1 overflow-hidden">
+      {list.slice(0, 4).map((src) => (
+        <ImgTile key={src} src={src} />
       ))}
     </div>
   );

@@ -229,6 +229,9 @@ function AssetPanel({
       prompt: prompt || undefined,
       name: prompt.slice(0, 40) || undefined,
       duration: assetDurationSeconds(asset),
+      ...(asset.kind === 'lottie' && asset.animationData
+        ? { animationData: asset.animationData }
+        : {}),
     });
   };
 

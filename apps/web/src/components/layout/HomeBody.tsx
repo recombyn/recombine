@@ -15,8 +15,9 @@ import { LuUserRound } from 'react-icons/lu';
 import { Dropdown, Tooltip } from '@/components/base';
 import AppLogo from '@/components/base/AppLogo';
 import { Icon } from '@/components/base/icon';
-import { fetchProjects } from '@/apis/projects';
+import type { PaginatedProjects } from '@/apis/projects';
 import HomeHero from '@/components/home/HomeHero';
+import { request } from '@/utils/request';
 import InspirationSection from '@/components/home/InspirationSection';
 import MePage from '@/components/home/MePage';
 import RecentProjectsSection from '@/components/home/RecentProjectsSection';
@@ -189,6 +190,9 @@ function RailHelpMenu() {
   );
 }
 
+/** Side rail click → HomeTemplateList force-refetch (same file; avoid prop drilling). */
+let openProjectsListHandler: (() => void) | null = null;
+
 /** Side rail — logo, Add, nav icons; help (?) stays at the bottom. */
 function HomeSidebar({
   nav,
@@ -210,6 +214,11 @@ function HomeSidebar({
   const goNav = (id: 'home' | 'mine' | 'account' | 'skills') => {
     if ((id === 'mine' || id === 'account' || id === 'skills') && !authed) {
       navigate(buildLoginUrl('/home'));
+      return;
+    }
+    // Already on Projects — effect won't re-run; force list refresh on click.
+    if (id === 'mine' && nav === 'mine') {
+      openProjectsListHandler?.();
       return;
     }
     setNav(id);
@@ -341,7 +350,7 @@ function HomeTemplateList({
   const [projectsTotal, setProjectsTotal] = useState(0);
   const [projectsLoadingMore, setProjectsLoadingMore] = useState(false);
   const projectsFetchGen = useRef(0);
-  /** Skip re-fetch when toggling Home ↔ Projects; Me/Skills must not pull projects. */
+  /** Home「最近」：同一登录会话只自动 hydrate 一次；进 Projects 点侧栏会 force 再拉. */
   const projectsHydratedForUserRef = useRef<string | null>(null);
 
   /** Guest must not stay on Projects / Me — bounce home + open login. */
@@ -360,8 +369,57 @@ function HomeTemplateList({
   const showMine = nav === 'mine' && Boolean(authed);
   const showSkills = nav === 'skills' && Boolean(authed);
   const showHome = !showAccount && !showMine && !showSkills;
-  /** GET /projects — Home recent + Projects only (never Me / Skills / plaza). */
-  const needsProjectsList = showHome || showMine;
+
+  const loadProjectsFirstPage = useCallback(
+    async (opts?: { force?: boolean }) => {
+      if (!authed) return;
+      const hydrateKey = userId || 'authed';
+      // Home「最近」同一会话只拉一次；进 Projects / 侧栏点击 force 再拉。
+      if (!opts?.force && projectsHydratedForUserRef.current === hydrateKey) return;
+
+      const gen = ++projectsFetchGen.current;
+      const showSkeleton = !projectsHydratedForUserRef.current;
+      if (showSkeleton) setProjectsReady(false);
+      setProjectsLoadingMore(false);
+      try {
+        await flushCurrentProjectNow({ force: true });
+      } catch {
+        /* list anyway */
+      }
+      if (gen !== projectsFetchGen.current) return;
+      try {
+        const res = await request<PaginatedProjects>({
+          url: '/api/v1/projects',
+          method: 'get',
+          params: { page: 1, pageSize: PROJECT_PAGE_SIZE },
+        });
+        if (gen !== projectsFetchGen.current) return;
+        dispatch(hydrateRemoteProjects(res.projects || []));
+        setProjectsPage(1);
+        setProjectsHasMore(Boolean(res.hasMore));
+        setProjectsTotal(Number(res.total) || (res.projects || []).length);
+        projectsHydratedForUserRef.current = hydrateKey;
+      } catch {
+        if (gen === projectsFetchGen.current) {
+          dispatch(hydrateRemoteProjects([]));
+          setProjectsHasMore(false);
+          setProjectsTotal(0);
+        }
+      } finally {
+        if (gen === projectsFetchGen.current) setProjectsReady(true);
+      }
+    },
+    [authed, dispatch, userId]
+  );
+
+  useEffect(() => {
+    openProjectsListHandler = () => {
+      void loadProjectsFirstPage({ force: true });
+    };
+    return () => {
+      if (openProjectsListHandler) openProjectsListHandler = null;
+    };
+  }, [loadProjectsFirstPage]);
 
   useEffect(() => {
     if (!authed) {
@@ -374,46 +432,16 @@ function HomeTemplateList({
       setProjectsTotal(0);
       return;
     }
-    // Me / Skills: do not hit GET /projects.
-    if (!needsProjectsList) return;
-    const hydrateKey = userId || 'authed';
-    if (projectsHydratedForUserRef.current === hydrateKey) return;
+    // Home recent strip — first enter only (Me / Skills never hit GET /projects).
+    if (!showHome) return;
+    void loadProjectsFirstPage();
+  }, [authed, dispatch, loadProjectsFirstPage, showHome]);
 
-    let cancelled = false;
-    const gen = ++projectsFetchGen.current;
-    setProjectsReady(false);
-    setProjectsLoadingMore(false);
-    async function loadProjects() {
-      // Wait for editor leave-flush (doc + cover) so list thumbs are not one revision behind.
-      try {
-        await flushCurrentProjectNow({ force: true });
-      } catch {
-        /* list anyway */
-      }
-      if (cancelled || gen !== projectsFetchGen.current) return;
-      try {
-        const res = await fetchProjects({ page: 1, pageSize: PROJECT_PAGE_SIZE });
-        if (cancelled || gen !== projectsFetchGen.current) return;
-        dispatch(hydrateRemoteProjects(res.projects || []));
-        setProjectsPage(1);
-        setProjectsHasMore(Boolean(res.hasMore));
-        setProjectsTotal(Number(res.total) || (res.projects || []).length);
-        projectsHydratedForUserRef.current = hydrateKey;
-      } catch {
-        if (!cancelled && gen === projectsFetchGen.current) {
-          dispatch(hydrateRemoteProjects([]));
-          setProjectsHasMore(false);
-          setProjectsTotal(0);
-        }
-      } finally {
-        if (!cancelled && gen === projectsFetchGen.current) setProjectsReady(true);
-      }
-    }
-    void loadProjects();
-    return () => {
-      cancelled = true;
-    };
-  }, [authed, dispatch, needsProjectsList, userId]);
+  // View all / deep-link into Projects (sidebar click also calls openProjectsListHandler).
+  useEffect(() => {
+    if (!showMine || !authed) return;
+    void loadProjectsFirstPage({ force: true });
+  }, [authed, loadProjectsFirstPage, showMine]);
 
   const loadMoreProjects = useCallback(() => {
     if (!authed || !projectsHasMore || projectsLoadingMore || !projectsReady) return;
@@ -422,7 +450,11 @@ function HomeTemplateList({
     setProjectsLoadingMore(true);
     async function loadNextPage() {
       try {
-        const res = await fetchProjects({ page: nextPage, pageSize: PROJECT_PAGE_SIZE });
+        const res = await request<PaginatedProjects>({
+          url: '/api/v1/projects',
+          method: 'get',
+          params: { page: nextPage, pageSize: PROJECT_PAGE_SIZE },
+        });
         if (gen !== projectsFetchGen.current) return;
         dispatch(appendRemoteProjects(res.projects || []));
         setProjectsPage(nextPage);
@@ -516,7 +548,8 @@ function HomeTemplateList({
                     navigate(buildLoginUrl('/home'));
                     return;
                   }
-                  setNav('mine');
+                  if (nav === 'mine') openProjectsListHandler?.();
+                  else setNav('mine');
                 }}
               />
               {!isDesktopLocal() ? (

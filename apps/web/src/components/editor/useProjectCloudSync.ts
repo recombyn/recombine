@@ -1,7 +1,6 @@
 /**
  * Debounced project sync: IndexedDB draft → incremental PATCH (or PUT) for document.
- * Cover tiles rebuild only on force leave / first save — existing thumbnailUrl is reused
- * so edits do not re-fetch scene PNGs or re-upload COS thumbs every debounce.
+ * Covers are generated on the API from the saved document (≤4 element tiles).
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -23,7 +22,6 @@ import {
 } from '@/store/modules/editor';
 import { isOwnedTemplate } from '@/utils/templatesStorage';
 import { getToken } from '@/utils/token';
-import { buildProjectCoverTiles } from '@/utils/renderProjectThumbnail';
 import { normalizeProjectThumbnailUrls } from '@/utils/projectThumb';
 import {
   buildProjectDocumentPatch,
@@ -126,22 +124,6 @@ type ThumbUpload = {
   thumbnailUrls?: string[];
 };
 
-function thumbPayloadFromTiles(tiles: {
-  dataUrls?: string[];
-  urls?: string[];
-}): ThumbUpload {
-  // Up to 4 tiles in one projects request (not separate cover PATCHes).
-  if (tiles.urls?.length) return { thumbnailUrls: tiles.urls.slice(0, 4) };
-  const dataUrls = (tiles.dataUrls || [])
-    .map((u) => String(u || '').trim())
-    .filter((u) => u.startsWith('data:image/'))
-    .slice(0, 4);
-  if (!dataUrls.length) return {};
-  return dataUrls.length === 1
-    ? { thumbnailDataUrl: dataUrls[0], thumbnailDataUrls: dataUrls }
-    : { thumbnailDataUrls: dataUrls };
-}
-
 function applyThumbUpload(
   data: { thumbnailDataUrl?: string | null; thumbnailDataUrls?: string[] | null; thumbnailUrls?: string[] | null },
   thumb: ThumbUpload
@@ -155,69 +137,6 @@ function ackThumbnail(url: string | string[] | null | undefined, version?: numbe
   const list = normalizeProjectThumbnailUrls(url, version);
   if (!list.length) return null;
   return list.length === 1 ? list[0] : list;
-}
-
-async function buildSyncCoverThumb(
-  document: unknown,
-  dispatch: ReturnType<typeof useDispatch>,
-  projectId: string
-): Promise<ThumbUpload> {
-  try {
-    const tiles = await buildProjectCoverTiles(document);
-    const thumb = thumbPayloadFromTiles(tiles);
-    const localPreview =
-      tiles.urls?.length ? tiles.urls : tiles.dataUrls?.length ? tiles.dataUrls : null;
-    if (import.meta.env.DEV) {
-      console.info('[project-sync] cover tiles', {
-        id: projectId,
-        urls: tiles.urls?.length || 0,
-        dataUrls: tiles.dataUrls?.length || 0,
-      });
-    }
-    if (localPreview) {
-      dispatch(
-        setTemplateThumbnail({
-          id: projectId,
-          thumbnail: localPreview.length === 1 ? localPreview[0] : localPreview,
-          custom: false,
-        })
-      );
-    }
-    return thumb;
-  } catch (err) {
-    if (import.meta.env.DEV) console.warn('[project-sync] cover tiles failed', err);
-    return {};
-  }
-}
-
-/** Prefer already-hosted cover URLs — skip raster + scene image fetches. */
-function existingCoverThumb(template: { thumbnail?: unknown } | null | undefined): ThumbUpload {
-  const urls = normalizeProjectThumbnailUrls(template?.thumbnail as string | string[] | null);
-  return urls.length ? { thumbnailUrls: urls.slice(0, 4) } : {};
-}
-
-/**
- * Rebuild covers only when forced (leave / Ctrl+S force) or the project has no cover yet.
- * Incremental edits keep server thumbnailUrl as-is (omit thumb payload).
- */
-async function resolveSyncCoverThumb(opts: {
-  force: boolean;
-  document: unknown;
-  template: { thumbnail?: unknown } | null | undefined;
-  dispatch: ReturnType<typeof useDispatch>;
-  projectId: string;
-}): Promise<ThumbUpload> {
-  const existing = existingCoverThumb(opts.template);
-  if (!opts.force && existing.thumbnailUrls?.length) {
-    if (import.meta.env.DEV) {
-      console.info('[project-sync] reuse thumbnailUrl', {
-        id: opts.projectId,
-        n: existing.thumbnailUrls.length,
-      });
-    }
-    return {};
-  }
-  return buildSyncCoverThumb(opts.document, opts.dispatch, opts.projectId);
 }
 
 /** Push one owned project to the API (no-op when logged out). */
@@ -545,14 +464,8 @@ export function useProjectCloudSync() {
         return;
       }
 
-      // Cover: reuse stored thumbnailUrl on normal debounce; rebuild ≤4 only on force / first save.
-      const thumb = await resolveSyncCoverThumb({
-        force,
-        document: pushedDoc,
-        template: tpl,
-        dispatch,
-        projectId: id,
-      });
+      // Covers: API builds ≤4 tiles from the saved document (not client raster).
+      const thumb: ThumbUpload = {};
 
       // Logged out: local draft (+ optional in-memory cover on first/force) is enough.
       if (!getToken()) {
@@ -757,11 +670,11 @@ export function useProjectCloudSync() {
     };
   }, []);
 
-  // Flush when tab hides (if dirty); unmount always force-saves doc + cover.
+  // Leave / hide: force doc + cover once (not every debounce). Unmount same.
   useEffect(() => {
     const onHide = () => {
       if (!dirtyRef.current) return;
-      void flushCurrentProjectNow();
+      void flushCurrentProjectNow({ force: true });
     };
     const onVisibility = () => {
       if (window.document.visibilityState === 'hidden') onHide();

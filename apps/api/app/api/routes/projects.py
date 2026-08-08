@@ -78,6 +78,11 @@ class BatchDeleteIn(BaseModel):
     ids: list[str] = Field(..., min_length=1, max_length=100)
 
 
+class ExtractCoversIn(BaseModel):
+    """Optional live document; otherwise server uses the stored project document."""
+    document: dict[str, Any] | None = None
+
+
 @router.get("", response_model=ProjectListOut)
 def list_my_projects(
     current_user: CurrentUser,
@@ -104,6 +109,24 @@ def get_one(
     row = project_store.get_project(current_user.id, project_id)
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
+    return {"project": row}
+
+
+@router.post("/{project_id}/covers", response_model=ProjectOneOut)
+def extract_covers(
+    current_user: CurrentUser,
+    project_id: str,
+    body: ExtractCoversIn | None = None,
+) -> dict[str, Any]:
+    """Build ≤4 cover tiles from document elements (Publish tab)."""
+    try:
+        row = project_store.extract_project_covers(
+            current_user.id,
+            project_id,
+            document=(body.document if body else None),
+        )
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Not found") from exc
     return {"project": row}
 
 

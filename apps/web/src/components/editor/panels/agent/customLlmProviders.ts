@@ -336,8 +336,24 @@ export async function removeCustomLlmProvider(id: string): Promise<void> {
   writeLocalEncrypted(loadCustomLlmProviders().filter((p) => p.id !== id));
 }
 
+/** Single-flight — Account Agent mounts RoutePrefs + panel both used to call this. */
+let _hydrateProvidersInflight: Promise<CustomLlmProvider[]> | null = null;
+
 /** Pull server vault + migrate legacy plaintext local keys. */
 export async function hydrateCustomLlmProviders(): Promise<CustomLlmProvider[]> {
+  if (_hydrateProvidersInflight) return _hydrateProvidersInflight;
+  const pending = (async () => {
+    try {
+      return await hydrateCustomLlmProvidersBody();
+    } finally {
+      if (_hydrateProvidersInflight === pending) _hydrateProvidersInflight = null;
+    }
+  })();
+  _hydrateProvidersInflight = pending;
+  return pending;
+}
+
+async function hydrateCustomLlmProvidersBody(): Promise<CustomLlmProvider[]> {
   const token = getToken();
   let local = readLocalRaw();
 

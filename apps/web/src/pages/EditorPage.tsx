@@ -381,7 +381,7 @@ async function hydrateShareTarget(
     dispatch(setWorkspaceMode('design'));
   } catch {
     if (isCancelled()) return;
-    message.error(t('editor.shareCopyFailed'));
+    message.error(t('editor.shareOpenFailed'));
     navigate(`/s/${encodeURIComponent(targetId)}`, { replace: true });
   }
 }
@@ -604,13 +604,14 @@ function EditorPage() {
     if (shareSaveTimer.current) window.clearTimeout(shareSaveTimer.current);
     const id = currentId;
     shareSaveTimer.current = window.setTimeout(() => {
-      void (async () => {
+      async function persistShareDocument() {
         try {
           await updateShareDocumentApi(id, document);
         } catch {
           /* ignore */
         }
-      })();
+      }
+      void persistShareDocument();
     }, 700);
     return () => {
       if (shareSaveTimer.current) window.clearTimeout(shareSaveTimer.current);

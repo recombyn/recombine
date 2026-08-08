@@ -1249,13 +1249,14 @@ function AgentDock({
     if (opts?.purgeUploads) {
       for (const c of contextChips) {
         if (c.kind === 'attachment' && c.uploadKey) {
-          void (async () => {
+          async function purgeContextAttachment() {
             try {
               await deleteUploadedFile(c.uploadKey);
             } catch {
               /* ignore */
             }
-          })();
+          }
+          void purgeContextAttachment();
         }
       }
     }
@@ -1271,13 +1272,14 @@ function AgentDock({
       pinnedContextKeysRef.current.delete(c.key);
       contextDismissedKeyRef.current = c.key;
       if (c.kind === 'attachment' && c.uploadKey) {
-        void (async () => {
+        async function deleteRemovedAttachmentUpload() {
           try {
             await deleteUploadedFile(c.uploadKey);
           } catch {
             /* ignore */
           }
-        })();
+        }
+        void deleteRemovedAttachmentUpload();
       }
     }
     setContextChips(next);
@@ -1421,13 +1423,14 @@ function AgentDock({
           setContextChips((prev) => {
             if (!prev.some((c) => c.key === key)) {
               if (uploaded.uploadKey) {
-                void (async () => {
+                async function purgeOrphanUpload() {
                   try {
                     await deleteUploadedFile(uploaded.uploadKey);
                   } catch {
                     /* ignore */
                   }
-                })();
+                }
+                void purgeOrphanUpload();
               }
               return prev;
             }
@@ -1671,24 +1674,26 @@ function AgentDock({
     const tid = liveDesignTaskRef.current;
     pauseRequestedRef.current = true;
     if (tid) {
-      void (async () => {
+      async function pauseLiveDesignRun() {
         try {
           await pauseDesignRun(tid);
         } catch {
           /* ignore */
         }
-      })();
+      }
+      void pauseLiveDesignRun();
     }
     abortRef.current?.abort();
     if (desktopShell && engineMode === 'cli') {
-      void (async () => {
+      async function killCodingCliOnStop() {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
           await invoke('kill_coding_cli');
         } catch {
           /* ignore */
         }
-      })();
+      }
+      void killCodingCliOnStop();
     }
     dispatch(setAgentBusy(false));
     setSending(false);
@@ -2742,14 +2747,15 @@ function AgentDock({
   const handleHeaderClose = () => {
     abortRef.current?.abort();
     if (desktopShell && engineMode === 'cli') {
-      void (async () => {
+      async function killCodingCliOnClose() {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
           await invoke('kill_coding_cli');
         } catch {
           /* ignore */
         }
-      })();
+      }
+      void killCodingCliOnClose();
     }
     dispatch(setAgentBusy(false));
     setSending(false);

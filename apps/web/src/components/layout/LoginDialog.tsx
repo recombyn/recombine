@@ -578,7 +578,7 @@ function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
             setShowCaptcha(false);
             setCaptchaResume(null);
             setBusy(true);
-            void (async () => {
+            async function retrySendCodeAfterCaptcha() {
               try {
                 await trySendCode(token);
               } catch (err: unknown) {
@@ -587,7 +587,8 @@ function LoginDialog({ open, onClose, returnTo, onSuccess }: LoginDialogProps) {
               } finally {
                 setBusy(false);
               }
-            })();
+            }
+            void retrySendCodeAfterCaptcha();
           }}
         />
       ) : null}

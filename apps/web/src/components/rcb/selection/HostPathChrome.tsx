@@ -82,7 +82,7 @@ export type ShapeOutlineItem = {
   showRotate?: boolean;
   /** When false, handles/edges only. */
   showPath?: boolean;
-  /** Multi-select union AABB; mirrors `mirrorHostId` viewport. */
+  /** Multi-select union control box; mirrors `mirrorHostId` viewport. */
   unionChrome?: boolean;
   mirrorHostId?: string;
   cornerHandlesOnly?: boolean;
@@ -582,7 +582,7 @@ function syncHostSelHandles(
   }
 }
 
-/** Multi-select union AABB; twin member host viewport. */
+/** Multi-select union control box; twin member host viewport. */
 function syncHostSelUnionChrome(
   o: ShapeOutlineItem,
   stroke: number,
@@ -643,9 +643,14 @@ function syncHostSelUnionChrome(
     chrome.setAttribute('pointer-events', 'none');
     root.appendChild(chrome);
   }
-  // Scene-absolute union box — translate to union origin for local handle math.
-  chrome.setAttribute('transform', `translate(${o.box.left} ${o.box.top})`);
-  syncHostSelHandlesIfNeeded(chrome, { ...o, showRotate: false }, stroke, inv, '');
+  const angle = Number(o.angle) || 0;
+  chrome.setAttribute(
+    'transform',
+    Math.abs(angle) > 0.01
+      ? `translate(${o.box.left} ${o.box.top}) rotate(${angle} ${w / 2} ${h / 2})`
+      : `translate(${o.box.left} ${o.box.top})`
+  );
+  syncHostSelHandlesIfNeeded(chrome, o, stroke, inv, '');
   return mirrored;
 }
 
