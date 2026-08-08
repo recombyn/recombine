@@ -47,6 +47,51 @@ def is_byok_model_ref(model_string: str | None) -> bool:
     return parse_byok_model_ref(model_string) is not None
 
 
+def user_byok_platforms(user_id: str | None) -> set[str]:
+    """Catalog providers the user has saved a platform-level BYOK key for."""
+    if not user_id:
+        return set()
+    try:
+        from app.services.security import list_user_platform_byok
+
+        return list_user_platform_byok(user_id)
+    except Exception:
+        return set()
+
+
+def catalog_provider_for_model(model: str | None) -> str | None:
+    """Catalog ``provider`` for a model id (doubao / openrouter / …)."""
+    mid = (model or "").strip()
+    if not mid or is_byok_model_ref(mid):
+        return None
+    try:
+        from app.services.llm.catalog_store import list_catalog
+
+        for kind in ("text", "image", "video", "audio"):
+            for m in list_catalog(kind=kind, enabled_only=False):
+                if m.get("id") == mid:
+                    return str(m.get("provider") or "") or None
+    except Exception:
+        pass
+    for bucket in (list_llm_models(), list_image_models(), list_video_models()):
+        for m in bucket:
+            if m.get("id") == mid:
+                return str(m.get("provider") or "") or None
+    return None
+
+
+def uses_user_platform_byok(user_id: str | None, model: str | None) -> bool:
+    """True when this request will hit the user's own aggregator / custom key."""
+    if is_byok_model_ref(model):
+        return True
+    if not user_id:
+        return False
+    provider = catalog_provider_for_model(model)
+    if not provider:
+        return False
+    return provider in user_byok_platforms(user_id)
+
+
 # OpenAI-compatible chat bases (`POST {base}/chat/completions`).
 PROVIDER_BASE_URLS: dict[str, str] = {
     "doubao": "https://ark.cn-beijing.volces.com/api/v3",

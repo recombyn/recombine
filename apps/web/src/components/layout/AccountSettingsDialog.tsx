@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode, memo } from 'react';
+import { useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
+
 import {
   HiOutlineBell,
   HiOutlineBolt,
@@ -142,6 +144,10 @@ function AccountSettingsDialog({
 }: Props) {
   const { t } = useTranslation();
   const desktopLocal = isDesktopLocal();
+  const billingEnabled = useSelector(
+    (state: any) => state.wallet?.billingEnabled === true
+  );
+  const hideBillingUi = desktopLocal || !billingEnabled;
   const [tab, setTab] = useState<ContentTab>(toContentTab(initialTab));
   const [plansOpen, setPlansOpen] = useState(false);
   const [redeemOpen, setRedeemOpen] = useState(false);
@@ -155,7 +161,7 @@ function AccountSettingsDialog({
     // Never auto-open plans/redeem — user clicks the left rail.
     let nextTab: AccountSettingsTab =
       initialTab === 'plans' || initialTab === 'redeem' ? 'billing' : initialTab;
-    if (desktopLocal && (nextTab === 'billing' || nextTab === 'plans' || nextTab === 'redeem')) {
+    if (hideBillingUi && (nextTab === 'billing' || nextTab === 'plans' || nextTab === 'redeem')) {
       nextTab = 'profile';
     }
     if (desktopLocal && nextTab === 'notices') {
@@ -164,7 +170,8 @@ function AccountSettingsDialog({
     setTab(toContentTab(nextTab));
     setPlansOpen(false);
     setRedeemOpen(false);
-  }, [open, initialTab, desktopLocal]);
+  }, [open, initialTab, desktopLocal, hideBillingUi]);
+
 
   const dismiss = useCallback(() => {
     const active = document.activeElement;
@@ -175,13 +182,14 @@ function AccountSettingsDialog({
   const contentNav: { id: ContentTab; label: string }[] = [
     { id: 'profile', label: t('wallet.settingsNavProfile') },
     { id: 'agent', label: t('wallet.settingsNavAgent') },
-    ...(desktopLocal
-      ? []
-      : [
-          { id: 'billing' as const, label: t('wallet.settingsNavBilling') },
-          { id: 'notices' as const, label: t('wallet.settingsNavNotices') },
-        ]),
+    ...(!hideBillingUi
+      ? [{ id: 'billing' as const, label: t('wallet.settingsNavBilling') }]
+      : []),
+    ...(!desktopLocal
+      ? [{ id: 'notices' as const, label: t('wallet.settingsNavNotices') }]
+      : []),
   ];
+
 
   const tabCopy: Record<ContentTab, { title: string; subtitle: string }> = {
     profile: { title: t('account.title'), subtitle: t('account.subtitle') },
@@ -233,7 +241,7 @@ function AccountSettingsDialog({
                       {t('wallet.settingsTitle')}
                     </h2>
                     <nav className="flex flex-1 flex-col gap-0.5">
-                      {!desktopLocal ? (
+                      {!hideBillingUi ? (
                         <>
                           <button
                             type="button"
@@ -258,6 +266,7 @@ function AccountSettingsDialog({
                           <div className="my-2 border-t border-[var(--line)]" />
                         </>
                       ) : null}
+
 
                       {contentNav.map((item) => {
                         const active = tab === item.id;
@@ -307,17 +316,18 @@ function AccountSettingsDialog({
                       {tab === 'agent' && (
                         <AgentModelsPanel
                           onRequestUpgrade={
-                            desktopLocal ? undefined : () => setPlansOpen(true)
+                            hideBillingUi ? undefined : () => setPlansOpen(true)
                           }
                         />
                       )}
-                      {tab === 'billing' && !desktopLocal ? (
+                      {tab === 'billing' && !hideBillingUi ? (
                         <WalletLedgerPanel
                           embedded
                           onRequestPlans={() => setPlansOpen(true)}
                           onRequestRedeem={() => setRedeemOpen(true)}
                         />
                       ) : null}
+
                       {tab === 'notices' && !desktopLocal ? <AccountNotificationsPanel /> : null}
                     </div>
                   </div>
@@ -327,10 +337,11 @@ function AccountSettingsDialog({
                     tab={tab}
                     contentNav={contentNav}
                     onSelectTab={setTab}
-                    hideCommerce={desktopLocal}
-                    onOpenPlans={desktopLocal ? undefined : () => setPlansOpen(true)}
-                    onOpenRedeem={desktopLocal ? undefined : () => setRedeemOpen(true)}
+                    hideCommerce={hideBillingUi}
+                    onOpenPlans={hideBillingUi ? undefined : () => setPlansOpen(true)}
+                    onOpenRedeem={hideBillingUi ? undefined : () => setRedeemOpen(true)}
                   />
+
                 </DialogPanel>
               </TransitionChild>
             </div>

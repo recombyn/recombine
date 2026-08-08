@@ -26,10 +26,13 @@ type WalletState = {
   planExpiresAt: number | null;
   /** True while paid plan term is still active — block plan switches. */
   planLocked: boolean;
+  /** From API ``billingEnabled`` — hide credit UI when false. */
+  billingEnabled: boolean;
   credits: number;
   creditsIncluded: number;
   demoUsageSeeded?: boolean;
 };
+
 
 function newId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -53,11 +56,14 @@ function defaultState(): WalletState {
     planId: 'free',
     planExpiresAt: null,
     planLocked: false,
+    // Default off until /auth/config or /wallet says true (Cloud).
+    billingEnabled: false,
     credits: 0,
     creditsIncluded: PLAN_CATALOG.free.creditsIncluded,
     demoUsageSeeded: true,
   };
 }
+
 
 function normalizeExpiresAt(raw: unknown): number | null {
   if (raw == null || raw === '') return null;
@@ -75,11 +81,13 @@ function persist(state: WalletState) {
         planId: state.planId,
         planExpiresAt: state.planExpiresAt,
         planLocked: state.planLocked,
+        billingEnabled: state.billingEnabled,
         credits: state.credits,
         creditsIncluded: state.creditsIncluded,
         demoUsageSeeded: state.demoUsageSeeded ?? true,
       })
     );
+
   } catch {
     /* ignore quota */
   }
@@ -105,11 +113,13 @@ function loadWallet(): WalletState {
         planId,
         planExpiresAt,
         planLocked,
+        billingEnabled: parsed?.billingEnabled === true,
         credits: tokens,
         creditsIncluded: Number(parsed?.creditsIncluded) || PLAN_CATALOG[planId].creditsIncluded,
         demoUsageSeeded: Boolean(parsed?.demoUsageSeeded ?? true),
       };
     }
+
 
     const legacy = localStorage.getItem(LEGACY_V2);
     if (legacy) {
@@ -124,10 +134,12 @@ function loadWallet(): WalletState {
           planId,
           planExpiresAt: null,
           planLocked: false,
+          billingEnabled: false,
           credits: tokens,
           creditsIncluded: Number(old?.creditsIncluded) || PLAN_CATALOG[planId].creditsIncluded,
           demoUsageSeeded: Boolean(old?.demoUsageSeeded ?? true),
         };
+
         persist(next);
         return next;
       } catch {
@@ -153,6 +165,7 @@ const walletSlice = createSlice({
         planId?: PlanId | string;
         planExpiresAt?: number | null;
         planLocked?: boolean;
+        billingEnabled?: boolean;
       }>
     ) {
       state.tokens = roundTokens(action.payload.tokens);
@@ -173,8 +186,18 @@ const walletSlice = createSlice({
       } else if (state.planId === 'free') {
         state.planLocked = false;
       }
+      if (action.payload.billingEnabled !== undefined) {
+        state.billingEnabled = Boolean(action.payload.billingEnabled);
+      }
       persist(state);
     },
+
+    /** From public ``GET /auth/config`` (no login required). */
+    setBillingEnabled(state, action: PayloadAction<boolean>) {
+      state.billingEnabled = Boolean(action.payload);
+      persist(state);
+    },
+
     /** Optimistic / local redeem row (prefer syncFromServer after API). */
     applyRedeem(state, action: PayloadAction<{ amount: number; detail?: string }>) {
       const amount = roundTokens(action.payload.amount);
@@ -266,10 +289,18 @@ const walletSlice = createSlice({
 
 export const {
   syncFromServer,
+  setBillingEnabled,
   applyRedeem,
   spend,
   clearWallet,
   setPlan,
 } = walletSlice.actions;
+
+/** Credits UI only when API reports billing on (default off). */
+export function selectBillingEnabled(state: {
+  wallet?: { billingEnabled?: boolean };
+}): boolean {
+  return state.wallet?.billingEnabled === true;
+}
 
 export default walletSlice.reducer;

@@ -14,7 +14,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
   autoUpdate,
@@ -26,8 +26,9 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
-import { HiOutlineBolt, HiOutlinePlus } from 'react-icons/hi2';
+import { HiArrowUp, HiOutlineBolt, HiOutlinePlus } from 'react-icons/hi2';
 import { generateAudio, listModels, type LlmModel } from '@/apis/chat';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { Dropdown, message, Tooltip } from '@/components/base';
 import { rcbScreenPxToScene, useRcbCamera } from '@/components/rcb';
 import {
@@ -63,8 +64,11 @@ import {
   setDocumentFromCanvas,
 } from '@/store/modules/editor';
 import { cn } from '@/utils/classnames';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { estimateAudioCredits } from '@/utils/imageCredits';
 import { readFileAsDataUrl, uploadComposerAttachment } from '@/utils/uploadImage';
+import { buildByokAwareModelList, cloudOnlyModelId } from '@/components/editor/panels/agent/llmModelMeta';
+import { customProvidersAsModels } from '@/components/editor/panels/agent/customLlmProviders';
 import store from '@/store';
 
 type Props = {
@@ -80,6 +84,27 @@ function modelIsAudioGenerator(model?: Pick<LlmModel, 'kind' | 'id'> | null): bo
   if (!model) return false;
   if (model.kind === 'audio') return true;
   return /tts|kokoro|fish-audio|speech|audio/i.test(model.id || '');
+}
+
+/** Local desktop: BYOK only. Cloud/web: platform audio catalog + BYOK. */
+function buildAudioGeneratorModelList(res?: {
+  models?: LlmModel[] | null;
+  audioModels?: LlmModel[] | null;
+} | null): LlmModel[] {
+  return buildByokAwareModelList({
+    byok: customProvidersAsModels(),
+    catalogs: [res?.models, res?.audioModels],
+    filter: (m) => modelIsAudioGenerator(m),
+  });
+}
+
+function nextAudioModelId(models: LlmModel[], currentId: string): string | null {
+  if (!models.length || models.some((m) => m.id === currentId)) return null;
+  if (!isDesktopLocal()) {
+    const preferred = models.find((m) => m.id === DEFAULT_AUDIO_MODEL_ID);
+    if (preferred) return preferred.id;
+  }
+  return models[0]?.id ?? null;
 }
 
 function probeAudioDuration(src: string): Promise<number | null> {
@@ -131,7 +156,7 @@ function AudioGeneratorCard({
   const [modelsStatus, setModelsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     'idle'
   );
-  const [modelId, setModelId] = useState(DEFAULT_AUDIO_MODEL_ID);
+  const [modelId, setModelId] = useState(() => cloudOnlyModelId(DEFAULT_AUDIO_MODEL_ID));
   const [modelOpen, setModelOpen] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -172,22 +197,11 @@ function AudioGeneratorCard({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const pool = [...(res?.models || []), ...(res?.audioModels || [])].filter((m) =>
-          modelIsAudioGenerator(m)
-        );
-        const seen = new Set<string>();
-        const unique = pool.filter((m) => {
-          if (!m?.id || seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        });
+        const unique = buildAudioGeneratorModelList(res);
         setModels(unique);
         setModelsStatus('ready');
-        if (unique.length && !unique.some((m) => m.id === modelId)) {
-          const preferred =
-            unique.find((m) => m.id === DEFAULT_AUDIO_MODEL_ID) || unique[0];
-          if (preferred) setModelId(preferred.id);
-        }
+        const nextId = nextAudioModelId(unique, modelId);
+        if (nextId) setModelId(nextId);
       })
       .catch(() => {
         if (!cancelled) setModelsStatus('error');
@@ -200,6 +214,7 @@ function AudioGeneratorCard({
   }, []);
 
   const selectedModel = models.find((m) => m.id === modelId);
+  const billingEnabled = useSelector(selectBillingEnabled);
   const creditCost = estimateAudioCredits(selectedModel);
 
   const removeContext = (key: string) =>
@@ -617,7 +632,9 @@ function AudioGeneratorCard({
               tip={
                 readyAudioAtt
                   ? t('editor.tools.audioGenerate')
-                  : t('wallet.creditCostTip', { count: creditCost })
+                  : billingEnabled
+                    ? t('wallet.creditCostTip', { count: creditCost })
+                    : t('agent.send')
               }
               placement="top"
             >
@@ -629,17 +646,25 @@ function AudioGeneratorCard({
                 className={cn(
                   'inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-[12px] font-medium',
                   'bg-[var(--ink)] text-[var(--on-brand)] transition hover:opacity-90',
-                  'disabled:opacity-45'
+                  'disabled:opacity-45',
+                  !billingEnabled && !readyAudioAtt && !sending && 'h-8 w-8 justify-center px-0'
                 )}
               >
-                <HiOutlineBolt className="h-4 w-4" strokeWidth={2} />
-                {sending
-                  ? t('editor.tools.audioGenerating')
-                  : readyAudioAtt
-                    ? t('editor.tools.audioGenerate')
-                    : (
-                        <span className="tabular-nums">{creditCost}</span>
-                      )}
+                {sending ? (
+                  t('editor.tools.audioGenerating')
+                ) : readyAudioAtt ? (
+                  <>
+                    <HiOutlineBolt className="h-4 w-4" strokeWidth={2} />
+                    {t('editor.tools.audioGenerate')}
+                  </>
+                ) : billingEnabled ? (
+                  <>
+                    <HiOutlineBolt className="h-4 w-4" strokeWidth={2} />
+                    <span className="tabular-nums">{creditCost}</span>
+                  </>
+                ) : (
+                  <HiArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                )}
               </button>
             </Tooltip>
           </div>

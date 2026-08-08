@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import { HiOutlinePencil } from 'react-icons/hi2';
 import { updateProfile } from '@/apis/auth';
 import { Button, message, ProgressBar } from '@/components/base';
 import { UserAvatar } from '@/components/layout/UserAccountPanel';
 import { setUser, type AuthUser } from '@/store/modules/auth';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { formatTokens } from '@/utils/wallet';
 import { docsUrl } from '@/utils/docsUrl';
 import { isDesktopLocal } from '@/utils/apiBase';
@@ -73,6 +74,8 @@ function AccountProfileTab({
 }: Props) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
+  const billingEnabled = useSelector(selectBillingEnabled);
+  const hideBillingUi = isDesktopLocal() || !billingEnabled;
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
@@ -247,7 +250,7 @@ function AccountProfileTab({
         </dl>
       </section>
 
-      {!isDesktopLocal() ? (
+      {!hideBillingUi ? (
       <section className="rounded-xl bg-[var(--account-card)] p-6 ring-1 ring-[var(--line)]">
         <h2 className="mb-5 text-[15px] font-semibold text-[var(--ink)]">
           {t('account.billingSection')}

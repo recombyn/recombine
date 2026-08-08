@@ -291,10 +291,16 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const desktopLocal = isDesktopLocal();
+  const billingEnabled = useSelector(
+    (state: any) => state.wallet?.billingEnabled === true
+  );
+  /** Hide plans / redeem / balance when local desktop or WALLET_BILLING_ENABLED=false. */
+  const hideBillingUi = desktopLocal || !billingEnabled;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<AccountSettingsTab>(
-    desktopLocal ? 'profile' : 'billing'
+    hideBillingUi ? 'profile' : 'billing'
   );
+
   const [plansOpen, setPlansOpen] = useState(false);
   const [flyout, setFlyout] = useState<FlyoutKind>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
@@ -407,10 +413,10 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
     close();
   };
 
-  const openSettings = (tab: AccountSettingsTab = desktopLocal ? 'profile' : 'billing') => {
+  const openSettings = (tab: AccountSettingsTab = hideBillingUi ? 'profile' : 'billing') => {
     close();
     setSettingsTab(
-      desktopLocal && (tab === 'billing' || tab === 'plans' || tab === 'redeem')
+      hideBillingUi && (tab === 'billing' || tab === 'plans' || tab === 'redeem')
         ? 'profile'
         : tab
     );
@@ -418,10 +424,11 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
   };
 
   const openPlans = () => {
-    if (desktopLocal) return;
+    if (hideBillingUi) return;
     close();
     setPlansOpen(true);
   };
+
 
   return (
     <>
@@ -468,7 +475,8 @@ function UserAccountPanel({ open, onOpenChange, children }: Props) {
               </div>
 
               {/* Plan + upgrade — cloud / web only; hide while narrow drill-in */}
-              {!(narrow && flyout) && !desktopLocal ? (
+              {!(narrow && flyout) && !hideBillingUi ? (
+
                 <div className="border-t border-[var(--line)] px-3.5 py-3">
                   <button
                     type="button"

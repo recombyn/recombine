@@ -20,8 +20,13 @@ export const MIN_ELLIPSE_ARC_PERCENT = 0.5;
 export const MAX_ELLIPSE_ARC_PERCENT = 100;
 /** Snap to full circle when remaining is within this % of ±100. */
 export const ELLIPSE_ARC_SNAP_FULL_PCT = 3;
-/** Snap inner hole to solid disk when ratio is within this. */
-export const ELLIPSE_INNER_SNAP_SOLID = 0.035;
+/**
+ * Snap inner hole → solid disk when ratio is within this.
+ * Generous so dragging the hole closed is easy (was 3.5% ≈ 1–2px on small shapes).
+ */
+export const ELLIPSE_INNER_SNAP_SOLID = 0.12;
+/** Also snap closed when the pointer is within this many screen px of the center. */
+export const ELLIPSE_INNER_SNAP_SOLID_PX = 18;
 /**
  * Fixed cut-end “开始位置” in atan2 degrees (0 = east, 90 = south).
  * Arc end sweeps from here; start knob does not drag.
@@ -52,10 +57,22 @@ export function clampEllipseArcPercent(
   return sign * mag;
 }
 
-/** Near-zero hole → solid disk (easy restore). */
-export function snapEllipseInnerRatio(n: unknown): number {
+/**
+ * Near-zero hole → solid disk (easy restore).
+ * Optional ``sceneDist`` + ``zoom`` also snap when the pointer is near the center in screen px.
+ */
+export function snapEllipseInnerRatio(
+  n: unknown,
+  opts?: { sceneDist?: number; zoom?: number }
+): number {
   const v = clampEllipseInnerRatio(n);
-  return v <= ELLIPSE_INNER_SNAP_SOLID ? 0 : v;
+  if (v <= ELLIPSE_INNER_SNAP_SOLID) return 0;
+  const sceneDist = opts?.sceneDist;
+  if (typeof sceneDist === 'number' && Number.isFinite(sceneDist)) {
+    const zoom = Math.max(0.05, Number(opts?.zoom) || 1);
+    if (sceneDist * zoom <= ELLIPSE_INNER_SNAP_SOLID_PX) return 0;
+  }
+  return v;
 }
 
 /** Near ±100 → full circle (drag end back to 开始位置). */

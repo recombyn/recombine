@@ -110,29 +110,17 @@ e2e/               Playwright
 
 ## 文档与社区
 
-- [自托管](docs/self-hosting.md) · [桌面端 Tauri](docs/desktop.md) · [PostgreSQL 切换](docs/postgres-switch.md) · [贡献指南](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
+- 用户文档：[recombyn.github.io/recombyn](https://recombyn.github.io/recombyn/)
+- 自托管 / 架构：[docs/self-hosting.md](docs/self-hosting.md) · [桌面端](docs/desktop.md) · [Postgres](docs/postgres-switch.md)
+- [贡献](CONTRIBUTING.md) · [安全](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
 - Issue / PR 模板见 `.github/`
 ## 协议
 
 [Recombyn Source Available License v1.0](./LICENSE) © Recombyn contributors · [NOTICE](./NOTICE)
 
-源码可得协议（非 OSI 开源）：
+自托管、商业托管、套壳 / 品牌等条款见 **[LICENSE](./LICENSE)**（非 OSI 开源）。
 
-- **个人 / 私有自托管** — 免费
-- **单一组织内部使用** — 允许
-- **将 Recombyn 作为托管/管理型服务提供给第三方**（无论收费与否）— **需商业授权**（`702680355@qq.com`）
-
-### 禁止套壳与仿冒
-
-允许学习、自用与组织内部部署，**不允许**在未获授权时：
-
-- 换皮 / 白牌后对外售卖，或宣称「自研」欺骗用户
-- 把 Recombyn（或其实质相同平台）做成面向公众注册的网站 / SaaS（收费或免费都不行）
-- 冒充官方品牌、官网或客服（名称、Logo、域名等）
-
-官方站点：[recombyn.com](https://recombyn.com) · 帮助文档：[docs](https://recombyn.github.io/recombyn/) · 源码仓库：[github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
-
-发现仿冒或违规托管，请发邮件至 `702680355@qq.com`（附链接与截图）。完整条款见 [LICENSE](./LICENSE)。
+官网：[recombyn.com](https://recombyn.com) · 文档：[recombyn.github.io/recombyn](https://recombyn.github.io/recombyn/) · 源码：[github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
 
 ## 帮忙点个 ⭐ Star
 

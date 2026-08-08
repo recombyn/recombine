@@ -125,10 +125,26 @@ __all__ = [
     "spend_tokens",
     "credit_tokens",
     "spend_image_credits",
+    "is_wallet_billing_enabled",
     "FREE_DAILY_LIMIT",
     "free_daily_remaining",
     "consume_free_daily_quota",
 ]
+
+
+def is_wallet_billing_enabled() -> bool:
+    """Master switch for platform credit holds / charges.
+
+    - Default / ``WALLET_BILLING_ENABLED=false`` → off (self-host)
+    - Desktop local auto-login → always off (BYOK / no cloud wallet)
+    - Cloud / SaaS → set ``WALLET_BILLING_ENABLED=true``
+    """
+    from app.core.config import is_desktop_local, settings
+
+    if is_desktop_local():
+        return False
+    return bool(getattr(settings, "wallet_billing_enabled", False))
+
 
 
 def ensure_user_balance(user_id: str, *, starting_tokens: int = 0) -> int:
@@ -157,6 +173,7 @@ def get_wallet(user_id: str) -> dict[str, Any]:
     from app.core.db import engine
 
     uid = (user_id or "").strip()
+    billing = is_wallet_billing_enabled()
     if not uid:
         return {
             "credits": 0,
@@ -165,6 +182,7 @@ def get_wallet(user_id: str) -> dict[str, Any]:
             "planId": "free",
             "planExpiresAt": None,
             "planLocked": False,
+            "billingEnabled": billing,
         }
     import time
 
@@ -186,7 +204,9 @@ def get_wallet(user_id: str) -> dict[str, Any]:
         "planStored": stored,
         "planExpiresAt": expires_at,
         "planLocked": active,
+        "billingEnabled": billing,
     }
+
 
 
 def get_user_tokens(user_id: str) -> int:
@@ -303,8 +323,18 @@ def consume_free_daily_quota(user_id: str, *, limit: int = FREE_DAILY_LIMIT) -> 
     return True
 
 
-def spend_tokens(user_id: str, amount: int, detail: str = "") -> int:
-    """Deduct unified 积分; write ledger kind=spend. Raises ValueError if insufficient."""
+def spend_tokens(
+    user_id: str,
+    amount: int,
+    detail: str = "",
+    *,
+    force: bool = False,
+) -> int:
+    """Deduct unified 积分; write ledger kind=spend. Raises ValueError if insufficient.
+
+    When wallet billing is off, this is a no-op (returns current balance) unless
+    ``force=True`` (admin adjustments).
+    """
     from sqlmodel import Session
 
     from app import crud
@@ -318,6 +348,8 @@ def spend_tokens(user_id: str, amount: int, detail: str = "") -> int:
         raise ValueError("user_id required")
     if amt <= 0:
         raise ValueError("amount must be > 0")
+    if not force and not is_wallet_billing_enabled():
+        return int(get_user_tokens(uid) or 0)
     import time
 
     now = time.time()

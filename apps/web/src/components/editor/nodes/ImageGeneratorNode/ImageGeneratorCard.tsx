@@ -11,7 +11,8 @@ import {
   useFloating,
   useInteractions,
 } from '@floating-ui/react';
-import { HiOutlineBolt, HiOutlineChevronDown, HiOutlinePlus, HiOutlineViewfinderCircle } from 'react-icons/hi2';
+import { HiArrowUp, HiOutlineBolt, HiOutlineChevronDown, HiOutlinePlus, HiOutlineViewfinderCircle } from 'react-icons/hi2';
+import { selectBillingEnabled } from '@/store/modules/wallet';
 import { generateImage, listModels, type LlmModel } from '@/apis/chat';
 import { Dropdown, DropdownPanel, message, Tooltip } from '@/components/base';
 import {
@@ -54,7 +55,7 @@ import ImageAspectRatioPicker, {
 import ModelPickerPanel, {
   ModelBrandIcon,
 } from '@/components/editor/panels/agent/ModelPickerPanel';
-import { modelIsImageGenerator } from '@/components/editor/panels/agent/llmModelMeta';
+import { modelIsImageGenerator, buildByokAwareModelList, cloudImageFallbackId } from '@/components/editor/panels/agent/llmModelMeta';
 import { customProvidersAsModels } from '@/components/editor/panels/agent/customLlmProviders';
 import {
   canAttachNodeToChat,
@@ -75,6 +76,7 @@ import {
 } from '@/store/modules/editor';
 import { FREE_IMAGE_MODEL_ID } from '@/utils/wallet';
 import { cn } from '@/utils/classnames';
+import { isDesktopLocal } from '@/utils/apiBase';
 import { estimateImageCredits } from '@/utils/imageCredits';
 import { readFileAsDataUrl } from '@/utils/uploadImage';
 import store from '@/store';
@@ -87,6 +89,27 @@ type Props = {
   showComposer?: boolean;
   disabled?: boolean;
 };
+
+/** Local desktop: BYOK only. Cloud/web: platform image catalog + BYOK. */
+export function buildImageGeneratorModelList(res?: {
+  models?: LlmModel[] | null;
+  imageModels?: LlmModel[] | null;
+} | null): LlmModel[] {
+  return buildByokAwareModelList({
+    byok: customProvidersAsModels(),
+    catalogs: [res?.models, res?.imageModels],
+    filter: (m) => modelIsImageGenerator(m) || m.kind === 'image',
+  });
+}
+
+function nextImageModelId(models: LlmModel[], currentId: string): string | null {
+  if (!models.length || models.some((m) => m.id === currentId)) return null;
+  if (!isDesktopLocal()) {
+    const free = models.find((m) => m.id === FREE_IMAGE_MODEL_ID);
+    if (free) return free.id;
+  }
+  return models[0]?.id ?? null;
+}
 
 function ratioSummaryLabel(aspectRatio: string, t: (k: string) => string) {
   const raw = String(aspectRatio || '').trim();
@@ -479,7 +502,7 @@ function ImageGeneratorCard({
     'idle' | 'loading' | 'ready' | 'error'
   >('idle');
   const [modelId, setModelId] = useState(() => {
-    return readGenAttrString(genAttrs, 'imageGenModel') || FREE_IMAGE_MODEL_ID;
+    return readGenAttrString(genAttrs, 'imageGenModel') || cloudImageFallbackId();
   });
   const [contexts, setContexts] = useState<ComposerContext[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -536,23 +559,11 @@ function ImageGeneratorCard({
     listModels()
       .then((res) => {
         if (cancelled) return;
-        const pool = [
-          ...(res?.models || []),
-          ...(res?.imageModels || []),
-          ...customProvidersAsModels(),
-        ].filter((m) => modelIsImageGenerator(m) || m.kind === 'image');
-        const seen = new Set<string>();
-        const unique = pool.filter((m) => {
-          if (!m?.id || seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        });
+        const unique = buildImageGeneratorModelList(res);
         setModels(unique);
         setModelsStatus('ready');
-        if (unique.length && !unique.some((m) => m.id === modelId)) {
-          const preferred = unique.find((m) => m.id === FREE_IMAGE_MODEL_ID) || unique[0];
-          if (preferred) setModelId(preferred.id);
-        }
+        const nextId = nextImageModelId(unique, modelId);
+        if (nextId) setModelId(nextId);
       })
       .catch(() => {
         if (!cancelled) setModelsStatus('error');
@@ -574,6 +585,7 @@ function ImageGeneratorCard({
     [contexts]
   );
   const selectedModel = models.find((m) => m.id === modelId);
+  const billingEnabled = useSelector(selectBillingEnabled);
   const creditCost = estimateImageCredits(selectedModel, imageCount, resolution);
   const settingsSummary = `${resolution} · ${ratioSummaryLabel(aspectRatio, t)} · ${t('agent.genCountN', { count: imageCount })}`;
 
@@ -1072,18 +1084,34 @@ function ImageGeneratorCard({
                 </Tooltip>
               </Dropdown>
 
-              <Tooltip tip={t('wallet.creditCostTip', { count: creditCost })} placement="top">
+              <Tooltip
+                tip={
+                  billingEnabled
+                    ? t('wallet.creditCostTip', { count: creditCost })
+                    : t('agent.send')
+                }
+                placement="top"
+              >
                 <button
                   type="button"
                   disabled={disabled || sending || !prompt.trim()}
                   onClick={() => void onGenerate()}
                   className={cn(
                     'inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold transition',
-                    'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40'
+                    'bg-[var(--ink)] text-[var(--on-brand)] disabled:opacity-40',
+                    !billingEnabled && 'h-7 w-7 justify-center px-0'
                   )}
                 >
-                  <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
-                  {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                  {billingEnabled ? (
+                    <>
+                      <HiOutlineBolt className="h-3.5 w-3.5" strokeWidth={2} />
+                      {sending ? '…' : <span className="tabular-nums">{creditCost}</span>}
+                    </>
+                  ) : sending ? (
+                    '…'
+                  ) : (
+                    <HiArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  )}
                 </button>
               </Tooltip>
             </div>
