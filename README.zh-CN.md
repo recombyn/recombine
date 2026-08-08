@@ -5,7 +5,7 @@
 <p align="center">
   <a href="docs/self-hosting.md"><strong>自托管</strong></a> ·
   <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
-  <a href="https://recombyn.github.io/recombyn/"><strong>文档</strong></a>
+  <a href="https://recombyn.github.io/help/"><strong>文档</strong></a>
 </p>
 
 <p align="center">
@@ -100,12 +100,13 @@ apps/web/          React 画布 + Agent UI + Yjs 客户端
   src-tauri/       Tauri v2 桌面壳（Recombyn）
 apps/api/          FastAPI（含 collab room-token）
 apps/collab/       Yjs WebSocket 服务（y-websocket）
-apps/docs/         帮助 / 法律站
 packages/          共享协议
-docs/              架构、自托管、桌面端（含 Postgres 切换）
+docs/              架构、自托管、桌面端（含 Postgres 切换，工程向）
 deploy/            Dockerfile / Nginx
 e2e/               Playwright
 ```
+
+面向用户的帮助文档在**私有**仓库维护，发布于 [recombyn.github.io/help](https://recombyn.github.io/help/)。
 
 ## 文档与社区
 

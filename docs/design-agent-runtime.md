@@ -291,4 +291,4 @@ Prompt pack `usedBy` stages: `intent` / `decide` / `paint` / `apply` / `observe`
 - LangGraph checkpointer: [postgres-switch.md](./postgres-switch.md#langgraph-checkpointer-design-agent--create_agent)
 - Architecture: [architecture.md](./architecture.md)
 - Skill namespaces: [design_skills/README.md](../apps/api/data/design_skills/README.md)
-- User-facing Agent guide: [apps/docs · guide/agent](../apps/docs/content/zh-CN/guide/agent.md)
+- User-facing Agent guide: [recombyn.github.io/help · Agent](https://recombyn.github.io/help/guide/agent)

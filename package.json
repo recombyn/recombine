@@ -6,7 +6,6 @@
   "license": "SEE LICENSE IN LICENSE",
   "workspaces": [
     "apps/web",
-    "apps/docs",
     "apps/collab"
   ],
   "scripts": {
@@ -14,9 +13,7 @@
     "dev:web": "npm run dev --workspace=apps/web",
     "dev:desktop": "node scripts/dev-desktop.mjs",
     "dev:desktop:cloud": "node scripts/dev-desktop.mjs cloud",
-    "dev:docs": "npm run dev --workspace=apps/docs",
     "dev:collab": "npm run dev --workspace=apps/collab",
-    "build:docs": "npm run build --workspace=apps/docs",
     "build:desktop": "node scripts/dev-desktop.mjs build",
     "build:desktop:cloud": "node scripts/dev-desktop.mjs build cloud",
     "build:desktop:sidecar": "node scripts/dev-desktop.mjs sidecar",
