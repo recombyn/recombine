@@ -5,7 +5,7 @@
 <p align="center">
   <a href="docs/self-hosting.md"><strong>Self Host</strong></a> ·
   <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
-  <a href="https://recombyn.github.io/recombyn/"><strong>Docs</strong></a>
+  <a href="https://recombyn.github.io/help/"><strong>Docs</strong></a>
 </p>
 
 <p align="center">
@@ -101,12 +101,13 @@ apps/web/          React canvas + Agent UI + Yjs client
   src-tauri/       Tauri v2 desktop shell (Recombyn)
 apps/api/          FastAPI — Scene, Agent, plaza, wallet, collab tokens
 apps/collab/       Yjs WebSocket server (y-websocket)
-apps/docs/         Help / legal site
 packages/          Shared builders & schemas
-docs/              Architecture + self-hosting + desktop
+docs/              Architecture + self-hosting + desktop (engineering)
 deploy/            Dockerfiles / Nginx
 e2e/               Playwright
 ```
+
+User-facing help docs are maintained in a **private** repo and published at [recombyn.github.io/help](https://recombyn.github.io/help/).
 
 ## Documentation
 
