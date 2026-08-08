@@ -122,7 +122,17 @@ e2e/               Playwright
 - **单一组织内部使用** — 允许
 - **将 Recombyn 作为托管/管理型服务提供给第三方**（无论收费与否）— **需商业授权**（`702680355@qq.com`）
 
-完整条款见 [LICENSE](./LICENSE)。
+### 禁止套壳与仿冒
+
+允许学习、自用与组织内部部署，**不允许**在未获授权时：
+
+- 换皮 / 白牌后对外售卖，或宣称「自研」欺骗用户
+- 把 Recombyn（或其实质相同平台）做成面向公众注册的网站 / SaaS（收费或免费都不行）
+- 冒充官方品牌、官网或客服（名称、Logo、域名等）
+
+官方站点：[recombyn.com](https://recombyn.com) · 帮助文档：[docs](https://recombyn.github.io/help/) · 源码仓库：[github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+
+发现仿冒或违规托管，请发邮件至 `702680355@qq.com`（附链接与截图）。完整条款见 [LICENSE](./LICENSE)。
 
 ## 帮忙点个 ⭐ Star
 

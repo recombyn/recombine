@@ -138,7 +138,17 @@ Source-available terms (not OSI open source):
 - **Internal org use** — permitted
 - **Hosted / managed service** of Recombyn to third parties (paid or free) — **requires commercial authorization** (`702680355@qq.com`)
 
-See [LICENSE](./LICENSE) for the full text.
+### No white-label / impersonation
+
+Learning, personal use, and single-org internal deploy are fine. **Without authorization you may not:**
+
+- Reskin / white-label and sell it as your own product, or mislead users that you built it from scratch
+- Offer Recombyn (or a substantially similar platform) as a public sign-up site / SaaS — paid or free
+- Impersonate the official brand, site, or support (name, logo, domain, etc.)
+
+Official: [recombyn.com](https://recombyn.com) · Help: [docs](https://recombyn.github.io/help/) · Source: [github.com/recombyn/recombyn](https://github.com/recombyn/recombyn)
+
+Report clones or unauthorized hosting to `702680355@qq.com` (include links and screenshots). Full terms: [LICENSE](./LICENSE).
 
 ## Star us on GitHub ⭐
 
