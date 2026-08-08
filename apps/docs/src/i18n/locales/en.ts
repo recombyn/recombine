@@ -2,6 +2,7 @@ const en = {
   brandDocs: 'Docs',
   navHome: 'Home',
   navDocs: 'Docs',
+  navSponsor: 'Sponsor',
   navAria: 'Site navigation',
   openMenu: 'Open menu',
   startCreating: 'Start creating',
@@ -14,6 +15,7 @@ const en = {
     guide: 'Guides',
     features: 'Features',
     faq: 'FAQ',
+    support: 'Support',
   },
   pages: {
     'getting-started': 'Getting started',
@@ -28,6 +30,7 @@ const en = {
     import: 'Import files',
     'export-share': 'Export & share',
     faq: 'FAQ',
+    sponsor: 'Sponsor',
     terms: 'Terms of Service',
     privacy: 'Privacy Policy',
     'ai-terms': 'AI terms',

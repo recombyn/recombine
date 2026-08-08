@@ -5,7 +5,7 @@
 <p align="center">
   <a href="docs/self-hosting.md"><strong>自托管</strong></a> ·
   <a href="https://recombyn.com"><strong>Cloud</strong></a> ·
-  <a href="apps/docs"><strong>文档</strong></a>
+  <a href="https://recombyn.github.io/recombyn/"><strong>文档</strong></a>
 </p>
 
 <p align="center">
