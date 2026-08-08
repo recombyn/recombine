@@ -66,6 +66,11 @@ def _run(**kwargs):
 
 @pytest.mark.integration
 def test_permission_gate_denies_when_broke(monkeypatch):
+    # Platform credit gate only applies when wallet billing is on (SaaS).
+    monkeypatch.setattr(
+        "app.services.design.runtime.orchestrator.is_wallet_billing_enabled",
+        lambda: True,
+    )
     monkeypatch.setattr(
         "app.services.design.runtime.orchestrator.get_user_tokens",
         lambda _uid: 0,
